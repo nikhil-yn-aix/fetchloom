@@ -79,6 +79,20 @@ pub(crate) fn command_words(command: &str, windows: bool) -> Option<Vec<String>>
                 } else {
                     word.get_or_insert_default().push(c);
                 }
+            } else if delimiter == '"' && c == '\\' && windows {
+                // a program reads backslashes before a double quote as escapes, two for one
+                let mut run = 1;
+                while chars.next_if_eq(&'\\').is_some() {
+                    run += 1;
+                }
+                let closing = chars.peek() == Some(&'"');
+                if closing && run % 2 == 1 {
+                    // powershell ends the string there, a program reads on: never a command
+                    return None;
+                }
+                let kept = if closing { run / 2 } else { run };
+                word.get_or_insert_default()
+                    .extend(std::iter::repeat_n('\\', kept));
             } else if delimiter == '"'
                 && (matches!(c, '$' | '\u{60}')
                     || (windows && matches!(c, '\u{201c}'..='\u{201e}')))
@@ -232,9 +246,13 @@ pub(crate) fn unmarked(text: &str) -> Cow<'_, str> {
 }
 
 /// [`shell_word`] for powershell and cmd on windows, or for bash, zsh and fish. a word starting
-/// with `~` or `=`, which zsh expands, or `@`, which powershell splats, is quoted. on windows a
-/// word [`safe_on_windows`] is double-quoted, which powershell and cmd both read as written; any
-/// other is withheld between marks for [`withheld`]. elsewhere double
+/// with `~` or `=`, which zsh expands, `@`, which powershell splats, or `%`, as fish's `%self`,
+/// is quoted, as is one holding `~` after an `=`, which bash expands as in an assignment. on
+/// windows a word [`safe_on_windows`] is double-quoted, which powershell and cmd both read as
+/// written, and so is one holding a comma, which powershell 5.1 reads as a list and joins again
+/// with its numbers rewritten; a backslash ending it is doubled inside the quotes, since a program
+/// reads `\"` as a quote.
+/// any other is withheld between marks for [`withheld`]. elsewhere double
 /// quotes keep a word literal unless it holds `$`, a backtick, a double quote, `!` (history) or a
 /// backslash; then it is single-quoted, a single quote or backslash escaped outside the quotes,
 /// since fish reads a backslash inside them as an escape.
@@ -250,16 +268,24 @@ pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
         let kind = if file { FILE } else { NAME };
         return Cow::Owned(format!("{OPEN}{kind}{word}{CLOSE}"));
     }
+    let assigned_home = word
+        .split_once('=')
+        .is_some_and(|(_, value)| value.contains('~'));
     if !word.is_empty()
-        && !word.starts_with(['~', '=', '@'])
-        && word
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,~".contains(c))
+        && !word.starts_with(['~', '=', '@', '%'])
+        && !assigned_home
+        && word.chars().all(|c| {
+            c.is_ascii_alphanumeric() || "-_./:@%+=~".contains(c) || (c == ',' && !windows)
+        })
     {
         return Cow::Borrowed(word);
     }
+    if windows {
+        let ending = word.len() - word.trim_end_matches('\\').len();
+        return Cow::Owned(format!("\"{word}{}\"", "\\".repeat(ending)));
+    }
     let literal = |c: char| !matches!(c, '$' | '\u{60}' | '"' | '!' | '\\');
-    if windows || word.chars().all(literal) {
+    if word.chars().all(literal) {
         return Cow::Owned(format!("\"{word}\""));
     }
     let mut quoted = String::with_capacity(word.len() + 2);
@@ -308,7 +334,7 @@ pub(crate) mod tests {
     /// a word a shell would expand or split, quoted for bash, zsh and fish, then for powershell
     /// and cmd on windows: double quotes, which both read as written, or none for a word holding
     /// what cmd acts on or powershell's quoting cannot keep, which a command never holds there.
-    pub(crate) const QUOTED: [(&str, &str, Option<&str>); 16] = [
+    pub(crate) const QUOTED: [(&str, &str, Option<&str>); 19] = [
         ("hi!.csv", "'hi!.csv'", None),
         ("$notes", "'$notes'", None),
         ("a`b`", "'a`b`'", None),
@@ -333,6 +359,11 @@ pub(crate) mod tests {
             None,
         ),
         ("a%PATH%b.csv", "a%PATH%b.csv", None),
+        // powershell 5.1 reads a bare `x,1kb` as x and 1024 and passes on `x,1024`
+        ("x,1kb", "x,1kb", Some("\"x,1kb\"")),
+        // bash expands `~` after the `=` of a word shaped like an assignment, fish expands %self
+        ("k=~", "\"k=~\"", Some("\"k=~\"")),
+        ("%self", "\"%self\"", None),
     ];
 
     #[test]
@@ -354,6 +385,31 @@ pub(crate) mod tests {
                     "{line}"
                 );
             }
+        }
+    }
+
+    /// cmd hands a program its line, which reads a backslash before a double quote as an
+    /// escape, as powershell 5.1 does for a word it quotes for the program itself: a word ending
+    /// in a backslash keeps it only doubled inside the quotes.
+    #[test]
+    fn a_trailing_backslash_stays_in_its_word_on_windows() {
+        for (word, quoted) in [
+            (r"D:\", r#""D:\\""#),
+            (r"D:\my data\", r#""D:\my data\\""#),
+            (r"a\b\\", r#""a\b\\\\""#),
+        ] {
+            assert_eq!(shell_word_for(word, true), quoted, "{word}");
+            let line = format!("fetchloom -C {quoted} status");
+            assert_eq!(
+                command_words(&line, true),
+                Some(vec![
+                    "fetchloom".to_owned(),
+                    "-C".to_owned(),
+                    word.to_owned(),
+                    "status".to_owned()
+                ]),
+                "{line}"
+            );
         }
     }
 
