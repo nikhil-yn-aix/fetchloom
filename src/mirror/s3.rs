@@ -20,7 +20,7 @@ use url::Url;
 
 use super::folder::{Item, Put, State, There};
 use super::web::joined;
-use super::{MARKER, MARKER_LINE, Refusal, below};
+use super::{MARKER, MARKER_LINE, Refusal, below, is_marker};
 use crate::digest::{Hasher, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::Net;
@@ -224,9 +224,7 @@ pub(crate) async fn probe(net: &Net, top: &Top) -> Result<Look, Error> {
         }
         let code = said.as_ref().and_then(|said| said.text_of("Code"));
         return Ok(match answer.status {
-            200 if answer.text().lines().next().map(str::trim) == Some(MARKER_LINE) => {
-                Look::There(base)
-            }
+            200 if is_marker(&answer.text()) => Look::There(base),
             404 | 410 if code == Some("NoSuchBucket") => Look::NoBucket,
             200 | 404 | 410 => Look::NoMarker,
             401 | 403 => Look::Refused(answer.keyed),
@@ -424,14 +422,7 @@ impl Pusher {
             .send(Method::GET, &[MARKER], None, Body::Empty, true)
             .await?;
         match answer.status {
-            200 if String::from_utf8_lossy(&answer.body)
-                .lines()
-                .next()
-                .map(str::trim)
-                == Some(MARKER_LINE) =>
-            {
-                Ok(State::Mirror)
-            }
+            200 if is_marker(&String::from_utf8_lossy(&answer.body)) => Ok(State::Mirror),
             200 => Err(Error::new(
                 Kind::SourceInvalid,
                 format!(

@@ -23,6 +23,11 @@ use crate::digest::Sha256;
 pub(crate) const MARKER: &str = "fetchloom-mirror";
 /// the first line of that file.
 const MARKER_LINE: &str = "fetchloom mirror 1";
+
+/// whether `text`, what a marker file holds, starts as a mirror's marker does.
+fn is_marker(text: &str) -> bool {
+    text.lines().next().map(str::trim) == Some(MARKER_LINE)
+}
 /// the largest tree read from a mirror, about 600,000 files. a bigger archive comes as itself.
 const LARGEST_TREE: u64 = 64 * 1024 * 1024;
 pub(crate) const OBJECTS: &str = "objects";

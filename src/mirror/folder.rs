@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use super::{LARGEST_TREE, MARKER, MARKER_LINE, Wanted, below};
+use super::{LARGEST_TREE, MARKER, MARKER_LINE, Wanted, below, is_marker};
 use crate::cache::{Cache, Copied, Stored};
 use crate::digest::{Block, Hasher, Sha256};
 use crate::place::Placer;
@@ -72,7 +72,7 @@ pub(crate) fn probe(root: &Path) -> Result<(), Missing> {
     let mut first = String::new();
     // a marker that is not text is no marker
     let _ = file.take(256).read_to_string(&mut first);
-    if first.lines().next().map(str::trim) == Some(MARKER_LINE) {
+    if is_marker(&first) {
         Ok(())
     } else {
         Err(Missing::Marker)

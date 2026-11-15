@@ -3,7 +3,7 @@
 
 use url::Url;
 
-use super::{MARKER, MARKER_LINE, Wanted, below};
+use super::{MARKER, Wanted, below, is_marker};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch, Net};
@@ -35,7 +35,7 @@ pub(crate) async fn probe(net: &Net, base: &Url) -> Result<Look, Error> {
         Err(error) => return Ok(Look::Failed(error)),
     };
     Ok(match answer.status {
-        200 if answer.text().lines().next().map(str::trim) == Some(MARKER_LINE) => Look::There,
+        200 if is_marker(&answer.text()) => Look::There,
         200 | 404 | 410 => Look::NoMarker,
         status => Look::Answered(status),
     })
