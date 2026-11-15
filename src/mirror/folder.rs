@@ -583,7 +583,7 @@ impl Target {
             stop,
             shard_from: SHARD_FROM,
             sharded: false,
-            id: format!("{:016x}", fastrand::u64(..)),
+            id: push_id(),
             held: None,
         };
         if state == State::Mirror {
@@ -658,17 +658,28 @@ impl Target {
     }
 
     /// locks a file in `tmp/` named for this push, for as long as it writes, so a later push can
-    /// tell its unfinished files from those of a push that stopped.
+    /// tell its unfinished files from those of a push that stopped. when another push holds that
+    /// name, as one started at the same moment can draw the same id, this push takes a new id and
+    /// leaves the other's lock as it is.
     fn hold(&mut self) -> io::Result<()> {
         if self.held.is_some() {
             return Ok(());
         }
-        let lock = self.root.join(TMP).join(format!(".{}{LOCK}", self.id));
-        let file = self.placer.create_file(&lock, false)?;
-        // a push that sweeps may hold it a moment to see whether it is free
-        file.lock()?;
-        self.held = Some((lock, file));
-        Ok(())
+        loop {
+            let lock = self.root.join(TMP).join(format!(".{}{LOCK}", self.id));
+            match self.placer.create_file(&lock, false) {
+                Ok(file) => {
+                    // a push that sweeps may hold it a moment to see whether it is free
+                    file.lock()?;
+                    self.held = Some((lock, file));
+                    return Ok(());
+                }
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                    self.id = push_id();
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     /// gives `temp`, holding `item`'s checked bytes, the item's name without taking it from another
@@ -990,6 +1001,12 @@ fn is_unfinished(name: &str) -> bool {
 fn writer(name: &str) -> Option<&str> {
     let (id, _) = name.strip_prefix('.')?.split_once('-')?;
     is_id(id).then_some(id)
+}
+
+/// a new id for a push, 16 hex digits. the generator is seeded from the clock and the thread, so
+/// two pushes started at the same moment can draw alike, and the process number goes in too.
+fn push_id() -> String {
+    format!("{:016x}", fastrand::u64(..) ^ u64::from(std::process::id()))
 }
 
 fn is_id(text: &str) -> bool {
@@ -1824,6 +1841,37 @@ pub(crate) mod tests {
             ]
         );
         drop(held);
+    }
+
+    /// a push that drew the id of a push still writing, as two started together can, takes
+    /// another and names its unfinished files with it, and the other's lock stays its own: the
+    /// same file, still held.
+    #[test]
+    fn a_push_whose_id_is_taken_takes_another() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        let (mut target, _) = Target::open(&root, Arc::default()).unwrap();
+        let theirs = root.join(TMP).join(format!(".{}{LOCK}", target.id));
+        let held = File::create_new(&theirs).unwrap();
+        held.lock().unwrap();
+        target.prepare(&[]).unwrap();
+        let ours = root.join(TMP).join(format!(".{}{LOCK}", target.id));
+        assert_ne!(ours, theirs);
+        assert!(!unlocked(&ours));
+        let temp = target.temporary(None).unwrap();
+        let name = temp
+            .path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(writer(&name), Some(target.id.as_str()));
+        drop(temp);
+        drop(target);
+        assert!(!ours.exists());
+        let found = read_unfollowed(&theirs).unwrap();
+        assert!(identity(&found).unwrap() == identity(&held).unwrap());
+        assert!(!unlocked(&theirs));
     }
 
     /// each file stays under its temporary name, which no reader asks for and a later push sweeps.
