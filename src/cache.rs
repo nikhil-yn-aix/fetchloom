@@ -166,6 +166,31 @@ pub(crate) struct Cache {
     held: Option<Arc<File>>,
     /// the url records as this run read them, shared by every clone.
     urls: Arc<urls::Shards>,
+    /// on windows, what removes the cache's files, shared by every clone.
+    #[cfg(not(unix))]
+    remover: Arc<Remover>,
+}
+
+/// the placer windows removes the cache's files through, made at the first removal and kept, so
+/// each removal does not open the cache's root and the folders above it again.
+#[cfg(not(unix))]
+#[derive(Default)]
+// it keeps only folder handles, which a panic cannot leave half changed
+struct Remover(std::panic::AssertUnwindSafe<std::sync::OnceLock<crate::place::Placer>>);
+
+#[cfg(not(unix))]
+impl Remover {
+    fn placer(&self, root: &Path) -> &crate::place::Placer {
+        self.0
+            .get_or_init(|| crate::place::Placer::in_named_folder(root))
+    }
+}
+
+#[cfg(not(unix))]
+impl std::fmt::Debug for Remover {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Remover")
+    }
 }
 
 /// a file's bytes on their way into the cache from a folder on this machine, and how they came.
@@ -298,6 +323,8 @@ impl Cache {
             deferred: Arc::default(),
             held: None,
             urls: Arc::default(),
+            #[cfg(not(unix))]
+            remover: Arc::default(),
         };
         cache.tag(|tag, bytes| cache.write_atomically(tag, bytes))?;
         Ok(cache)
@@ -347,6 +374,8 @@ impl Cache {
             deferred: Arc::default(),
             held: None,
             urls: Arc::default(),
+            #[cfg(not(unix))]
+            remover: Arc::default(),
         })
     }
 

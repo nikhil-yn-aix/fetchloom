@@ -247,11 +247,21 @@ impl Cache {
     /// link or a file since the cache opened, so a sweep never deletes outside the cache.
     pub(super) fn remove_inside(&self, path: &Path) -> io::Result<()> {
         self.check_inside(path)?;
+        self.volume.remove_with(path, &|| self.unlink_inside(path))
+    }
+
+    /// removes the file at `path` through its folder, reached from the cache's root without
+    /// following a link, so a folder swapped for one since [`Cache::check_inside`] sends it
+    /// nowhere else: on windows through the cache's placer, which holds the folders on the way.
+    pub(super) fn unlink_inside(&self, path: &Path) -> io::Result<()> {
         #[cfg(unix)]
-        let unlink = || crate::place::remove_below(&self.root, path);
+        {
+            crate::place::remove_below(&self.root, path)
+        }
         #[cfg(not(unix))]
-        let unlink = || fs::remove_file(path);
-        self.volume.remove_with(path, &unlink)
+        {
+            self.remover.placer(&self.root).delete_file(path)
+        }
     }
 
     /// refuses `path` when a folder between it and the cache root is not a real folder.

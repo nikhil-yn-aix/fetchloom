@@ -221,6 +221,57 @@ fn a_removal_inside_the_cache_never_follows_a_linked_folder() {
     assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
 }
 
+/// on windows a removal inside the cache goes through the cache's placer, which holds each folder
+/// on its way, so a folder swapped for a junction after gc checked it sends the removal nowhere
+/// else, and the file the junction leads to stays.
+#[cfg(windows)]
+#[test]
+fn a_removal_inside_the_cache_never_follows_a_junction() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let kept = outside.join("notes.txt");
+    fs::write(&kept, b"keep these bytes").unwrap();
+    let folder = cache.root.join("imported");
+    fs::rename(&folder, cache.root.join("old-imported")).unwrap();
+    crate::test_links::link_folder(&outside, &folder).unwrap();
+
+    assert!(cache.unlink_inside(&folder.join("notes.txt")).is_err());
+    assert!(cache.remove_inside(&folder.join("notes.txt")).is_err());
+
+    assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
+}
+
+/// a folder in a build swapped for a junction while its folders are held is removed as itself,
+/// never entered, so the folder it leads to keeps its files.
+#[cfg(windows)]
+#[test]
+fn a_junction_swapped_into_a_build_mid_clear_keeps_what_it_points_at() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let kept = outside.join("notes.txt");
+    fs::write(&kept, b"keep these bytes").unwrap();
+    let build = cache.root.join("tmp/0123456789abcdef.build");
+    fs::create_dir_all(build.join("out")).unwrap();
+    fs::write(build.join("out/result.csv"), b"a,b\n").unwrap();
+
+    let cleared = super::staging::clear_held(&cache.root, &build, || {
+        fs::rename(build.join("out"), dir.path().join("moved")).unwrap();
+        crate::test_links::link_folder(&outside, &build.join("out")).unwrap();
+    });
+
+    cleared.unwrap();
+    assert!(!build.exists());
+    assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
+}
+
 #[test]
 fn a_swept_folder_swapped_for_a_link_keeps_what_it_points_at() {
     let (dir, cache) = super::tests::cache();

@@ -383,11 +383,19 @@ fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
 }
 
 /// [`clear_tree`] for `folder`, with the folders from `root` down to it held so none is a link or
-/// becomes one meanwhile.
+/// becomes one meanwhile. windows says no owner of a build folder safely, so the tree is removed
+/// through handles that never follow a reparse point, as std's `remove_dir_all` does there.
 #[cfg(windows)]
 fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
+    clear_held(root, folder, || {})
+}
+
+/// [`clear_below`], running `meanwhile` once the folders on the way are held.
+#[cfg(windows)]
+pub(super) fn clear_held(root: &Path, folder: &Path, meanwhile: impl FnOnce()) -> io::Result<()> {
     let _held = crate::place::hold_below(root, folder)?;
-    clear_tree(folder)
+    meanwhile();
+    fs::remove_dir_all(folder)
 }
 
 /// removes `name`, in the folder `parent` holds open, and all it holds, a link as itself, never
