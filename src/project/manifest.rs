@@ -1630,7 +1630,7 @@ fn shift_positions(table: &mut Table, from: isize) {
 
 /// data.toml's text without one dataset. comments touching its header go with it, and comments
 /// a blank line above stay, such as a note at the top of the file.
-pub(crate) fn without_dataset(text: &str, name: &str) -> Result<String, Error> {
+fn without_dataset(text: &str, name: &str) -> Result<String, Error> {
     let mut document = editable(text)?;
     remove(&mut document, name);
     Ok(document.to_string().trim_start_matches('\n').to_owned())
