@@ -1412,3 +1412,21 @@ fn a_candidates_facts_beside_its_title_show_control_characters_escaped() {
         ]
     );
 }
+
+/// every character past ASCII leaves as an escape, a surrogate pair past U+FFFF, so a reader that
+/// decodes stdout with another code page, as powershell 5.1 does with the console's, reads the
+/// same document; it parses back to the same names.
+#[test]
+fn json_leaves_as_ascii_and_reads_back_the_same() {
+    let named = serde_json::json!({"file": "数据/数据.csv", "note": "ok 🧪", "数据": [1]});
+    for indented in [false, true] {
+        let pieces = super::encoded(&named, indented).unwrap();
+        let bytes: Vec<u8> = pieces.slices().flatten().copied().collect();
+        assert!(bytes.is_ascii(), "{}", String::from_utf8_lossy(&bytes));
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains(r"\u6570\u636e.csv"), "{text}");
+        assert!(text.contains(r"\ud83e\uddea"), "{text}");
+        let back: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, named);
+    }
+}

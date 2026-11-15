@@ -1150,14 +1150,7 @@ impl Output {
             },
         };
         // encoding can fail on a non-unicode path; stdout cannot retract a partial document
-        let encoded = if self.indented {
-            serde_json::to_vec_pretty(&document)
-                .map(|bytes| Pieces::from(escaped_for_terminal(bytes)))
-        } else {
-            let mut pieces = Pieces::default();
-            serde_json::to_writer(&mut pieces, &document).map(|()| pieces)
-        };
-        let pieces = match encoded {
+        let pieces = match encoded(&document, self.indented) {
             Ok(pieces) => pieces,
             Err(cause) => {
                 let error = Error::new(
@@ -2131,22 +2124,96 @@ impl Write for Pieces {
 
 /// `json` as it goes to a terminal, with c1 and bidi controls, which a terminal may act on or show
 /// out of order, written as `\u` escapes, which json holds only in strings and reads back alike.
-fn escaped_for_terminal(json: Vec<u8>) -> Vec<u8> {
-    let steers = |c: char| matches!(c, '\u{80}'..='\u{9f}') || crate::name::is_bidi_control(c);
-    let text = match String::from_utf8(json) {
-        Ok(text) if text.contains(steers) => text,
-        Ok(text) => return text.into_bytes(),
-        Err(err) => return err.into_bytes(),
-    };
-    let mut escaped = String::with_capacity(text.len() + 16);
-    for c in text.chars() {
-        if steers(c) {
-            let _ = write!(escaped, "\\u{:04x}", u32::from(c));
-        } else {
-            escaped.push(c);
-        }
+/// `document` as `--json` prints it, `indented` for a person at a terminal, in ASCII alone.
+fn encoded(document: &impl Serialize, indented: bool) -> serde_json::Result<Pieces> {
+    let mut pieces = Pieces::default();
+    if indented {
+        let formatter = Ascii(serde_json::ser::PrettyFormatter::new());
+        document.serialize(&mut serde_json::Serializer::with_formatter(
+            &mut pieces,
+            formatter,
+        ))?;
+    } else {
+        let formatter = Ascii(serde_json::ser::CompactFormatter);
+        document.serialize(&mut serde_json::Serializer::with_formatter(
+            &mut pieces,
+            formatter,
+        ))?;
     }
-    escaped.into_bytes()
+    Ok(pieces)
+}
+
+/// the JSON a formatter writes, with each character past ASCII as `\uXXXX`, a surrogate pair past
+/// U+FFFF: a reader that decodes stdout with another code page, as powershell 5.1 does with the
+/// console's, reads the same document, and no control or bidi mark reaches a terminal raw.
+struct Ascii<F>(F);
+
+impl<F: serde_json::ser::Formatter> serde_json::ser::Formatter for Ascii<F> {
+    fn write_string_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> std::io::Result<()>
+    where
+        W: ?Sized + Write,
+    {
+        let mut plain = 0;
+        for (at, c) in fragment.char_indices() {
+            if c.is_ascii() {
+                continue;
+            }
+            writer.write_all(&fragment.as_bytes()[plain..at])?;
+            for unit in c.encode_utf16(&mut [0; 2]) {
+                write!(writer, "\\u{unit:04x}")?;
+            }
+            plain = at + c.len_utf8();
+        }
+        writer.write_all(&fragment.as_bytes()[plain..])
+    }
+
+    fn begin_array<W: ?Sized + Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.begin_array(writer)
+    }
+
+    fn end_array<W: ?Sized + Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_array(writer)
+    }
+
+    fn begin_array_value<W: ?Sized + Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        self.0.begin_array_value(writer, first)
+    }
+
+    fn end_array_value<W: ?Sized + Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_array_value(writer)
+    }
+
+    fn begin_object<W: ?Sized + Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.begin_object(writer)
+    }
+
+    fn end_object<W: ?Sized + Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_object(writer)
+    }
+
+    fn begin_object_key<W: ?Sized + Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        self.0.begin_object_key(writer, first)
+    }
+
+    fn end_object_key<W: ?Sized + Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_object_key(writer)
+    }
+
+    fn begin_object_value<W: ?Sized + Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.begin_object_value(writer)
+    }
+
+    fn end_object_value<W: ?Sized + Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.0.end_object_value(writer)
+    }
 }
 
 #[cfg(test)]
