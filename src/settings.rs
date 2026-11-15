@@ -264,7 +264,7 @@ impl File {
 }
 
 /// the text of the settings file at `path`, past a link to it: only a plain file's, since reading
-/// a device or a pipe there would never end, and only up to MOST_BYTES. `InvalidData`, saying
+/// a device or a pipe there would never end, and only up to `MOST_BYTES`. `InvalidData`, saying
 /// what is there, for anything else.
 fn text_at(path: &Path) -> io::Result<String> {
     plain(path)?;

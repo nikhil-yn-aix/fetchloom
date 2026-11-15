@@ -271,7 +271,7 @@ fn a_settings_file_that_cannot_be_read_is_an_error_not_a_missing_file() {
 fn only_a_plain_settings_file_of_a_sensible_size_is_read() {
     let folder = tempfile::tempdir().unwrap();
     let large = folder.path().join("settings.toml");
-    std::fs::write(&large, "#".repeat(MOST_BYTES as usize + 1)).unwrap();
+    std::fs::write(&large, "#".repeat(usize::try_from(MOST_BYTES).unwrap() + 1)).unwrap();
     let mut odd = vec![(
         large.to_str().unwrap().to_owned(),
         "it holds more than 1.0 MiB, far more than any settings take",
@@ -329,7 +329,10 @@ fn a_table_in_the_settings_file_is_told_as_one() {
     let path = folder.path().join("settings.toml");
     std::fs::write(&path, "jobs = 4\n\n[mystuff]\na = 1\n").unwrap();
     let named = path.to_str().unwrap();
-    edit::unset(&env(&[("FETCHLOOM_SETTINGS", named)]), "mystuff", &|_| Ok(())).unwrap();
+    edit::unset(&env(&[("FETCHLOOM_SETTINGS", named)]), "mystuff", &|_| {
+        Ok(())
+    })
+    .unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "jobs = 4\n");
 }
 

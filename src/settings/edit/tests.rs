@@ -24,9 +24,7 @@ fn settings(
 }
 
 /// a check past reading that every settings file passes.
-fn fine(_: &Settings) -> Result<(), Error> {
-    Ok(())
-}
+const FINE: Usable<'static> = &|_| Ok(());
 
 fn values(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
@@ -43,7 +41,7 @@ fn read(path: &Path) -> Vec<(String, Value)> {
 fn a_set_keeps_comments_and_the_other_keys() {
     let text = "# the lab's settings\n\n# downloads at once\njobs = 8 # the default\nmirrors = [\"/mnt/lab\"]\n";
     let (_folder, path, var) = settings("settings.toml", Some(text));
-    let changed = set(&var, "jobs", &values(&["16"]), None, &fine).unwrap();
+    let changed = set(&var, "jobs", &values(&["16"]), None, FINE).unwrap();
     assert_eq!(
         (changed.written, changed.created),
         (true, false),
@@ -53,7 +51,7 @@ fn a_set_keeps_comments_and_the_other_keys() {
         changed.before.as_ref().and_then(read_as),
         Some(Value::Text("8".to_owned()))
     );
-    set(&var, "mirrors_only", &values(&["true"]), None, &fine).unwrap();
+    set(&var, "mirrors_only", &values(&["true"]), None, FINE).unwrap();
     assert_eq!(
         fs::read_to_string(&path).unwrap(),
         "# the lab's settings\n\n# downloads at once\njobs = 16 # the default\nmirrors = [\"/mnt/lab\"]\nmirrors_only = true\n"
@@ -109,7 +107,7 @@ fn a_value_runs_refuse_is_refused_with_the_readers_message() {
             "push_to is \"https://lab.example/data\", which is a web address, and push writes to folders and S3 buckets".to_owned(),
         ),
     ] {
-        let error = set(&var, key, &values(&[value]), None, &fine).unwrap_err();
+        let error = set(&var, key, &values(&[value]), None, FINE).unwrap_err();
         assert_eq!(error.kind, Kind::Usage, "{key}");
         assert_eq!(error.message, message, "{key}");
         assert_eq!(error.details, ["nothing was saved"], "{key}");
@@ -140,7 +138,7 @@ fn a_list_takes_several_values_and_replaces_the_list() {
             "s3://lab-data/fetchloom",
         ]),
         Some(&here),
-        &fine,
+        FINE,
     )
     .unwrap();
     assert!(changed.written);
@@ -162,7 +160,7 @@ fn a_list_takes_several_values_and_replaces_the_list() {
             ])
         )]
     );
-    let error = set(&var, "jobs", &values(&["8", "16"]), Some(&here), &fine).unwrap_err();
+    let error = set(&var, "jobs", &values(&["8", "16"]), Some(&here), FINE).unwrap_err();
     assert_eq!(error.message, "jobs takes one value, and 2 were given");
 }
 
@@ -186,12 +184,12 @@ fn a_tilde_is_the_home_folder_and_a_missing_folder_is_named() {
         "mirrors",
         &values(&["~/lab", "~/gone"]),
         Some(&here),
-        &fine,
+        FINE,
     )
     .unwrap();
     assert_eq!(changed.missing, [home.join("gone")]);
-    set(&var, "cache", &values(&["~"]), Some(&here), &fine).unwrap();
-    let changed = set(&var, "push_to", &values(&["~/out"]), Some(&here), &fine).unwrap();
+    set(&var, "cache", &values(&["~"]), Some(&here), FINE).unwrap();
+    let changed = set(&var, "push_to", &values(&["~/out"]), Some(&here), FINE).unwrap();
     assert_eq!(changed.missing, [home.join("out")]);
     let shown = |path: PathBuf| Value::Text(path.display().to_string());
     assert_eq!(
@@ -208,12 +206,12 @@ fn a_tilde_is_the_home_folder_and_a_missing_folder_is_named() {
             ("push_to".to_owned(), shown(home.join("out"))),
         ]
     );
-    let error = set(&var, "push_to", &values(&["~ada/lab"]), Some(&here), &fine).unwrap_err();
+    let error = set(&var, "push_to", &values(&["~ada/lab"]), Some(&here), FINE).unwrap_err();
     assert_eq!(
         error.message,
         "push_to cannot take the folder ~ada/lab: fetchloom takes ~ for your own home folder alone, not another's"
     );
-    let changed = set(&var, "cache", &values(&["./gone"]), Some(&here), &fine).unwrap();
+    let changed = set(&var, "cache", &values(&["./gone"]), Some(&here), FINE).unwrap();
     assert!(changed.missing.is_empty(), "a run makes its cache");
 }
 
@@ -230,7 +228,7 @@ fn each_value_is_written_as_toml_reads_it() {
         ("push_to", "2024"),
         ("jobs", "+5"),
     ] {
-        set(&var, key, &values(&[value]), Some(folder.path()), &fine).unwrap();
+        set(&var, key, &values(&[value]), Some(folder.path()), FINE).unwrap();
     }
     let text = fs::read_to_string(&path).unwrap();
     assert!(text.ends_with("\njobs = 5\n"), "{text}");
@@ -254,9 +252,9 @@ fn each_value_is_written_as_toml_reads_it() {
 #[test]
 fn a_change_to_what_is_there_writes_nothing() {
     let (_folder, path, var) = settings("settings.toml", Some("jobs = \"16\"\n"));
-    let changed = set(&var, "jobs", &values(&["16"]), None, &fine).unwrap();
+    let changed = set(&var, "jobs", &values(&["16"]), None, FINE).unwrap();
     assert!(!changed.written && !changed.created, "{changed:?}");
-    let changed = unset(&var, "mirrors", &fine).unwrap();
+    let changed = unset(&var, "mirrors", FINE).unwrap();
     assert!(!changed.written, "{changed:?}");
     assert_eq!(fs::read_to_string(&path).unwrap(), "jobs = \"16\"\n");
 }
@@ -268,13 +266,13 @@ fn unset_takes_the_key_out_and_keeps_the_comments() {
     let text =
         "# the lab's settings\njobs = 16 # fast\nmirrors = [\"/mnt/lab\"]\n# a typo\njbos = 4\n";
     let (_folder, path, var) = settings("settings.toml", Some(text));
-    let changed = unset(&var, "jobs", &fine).unwrap();
+    let changed = unset(&var, "jobs", FINE).unwrap();
     assert!(changed.written && changed.after.is_none(), "{changed:?}");
     assert_eq!(
         changed.before.as_ref().and_then(read_as),
         Some(Value::Text("16".to_owned()))
     );
-    unset(&var, "jbos", &fine).unwrap();
+    unset(&var, "jbos", FINE).unwrap();
     assert_eq!(
         fs::read_to_string(&path).unwrap(),
         "# the lab's settings\nmirrors = [\"/mnt/lab\"]\n# a typo\n"
@@ -301,8 +299,8 @@ fn an_unknown_key_names_the_nearest_setting() {
         ),
     ] {
         for error in [
-            set(&var, key, &values(&["1"]), None, &fine).unwrap_err(),
-            unset(&var, key, &fine).unwrap_err(),
+            set(&var, key, &values(&["1"]), None, FINE).unwrap_err(),
+            unset(&var, key, FINE).unwrap_err(),
         ] {
             assert_eq!(error.kind, Kind::Usage, "{key}");
             assert_eq!(error.message, message, "{key}");
@@ -317,7 +315,7 @@ fn an_unknown_key_names_the_nearest_setting() {
 fn a_file_that_is_not_toml_is_left_alone() {
     let text = "jobs = 8\nmirrors = [\n";
     let (_folder, path, var) = settings("settings.toml", Some(text));
-    let error = set(&var, "jobs", &values(&["16"]), None, &fine).unwrap_err();
+    let error = set(&var, "jobs", &values(&["16"]), None, FINE).unwrap_err();
     assert!(
         error.message.starts_with(&format!(
             "the settings file {} is not valid TOML at line 2",
@@ -337,12 +335,12 @@ fn the_file_is_made_when_missing_and_keeps_its_permissions() {
     use std::os::unix::fs::PermissionsExt;
     let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
     let (_folder, path, var) = settings("new/fetchloom/settings.toml", None);
-    let changed = set(&var, "jobs", &values(&["16"]), None, &fine).unwrap();
+    let changed = set(&var, "jobs", &values(&["16"]), None, FINE).unwrap();
     assert!(changed.created && changed.written, "{changed:?}");
     assert_eq!(fs::read_to_string(&path).unwrap(), "jobs = 16\n");
     assert_eq!(mode(&path), 0o600);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    set(&var, "jobs", &values(&["8"]), None, &fine).unwrap();
+    set(&var, "jobs", &values(&["8"]), None, FINE).unwrap();
     assert_eq!(mode(&path), 0o644);
 
     let (folder, target, _) = settings("dotfiles/settings.toml", Some("jobs = 8\n"));
@@ -350,7 +348,7 @@ fn the_file_is_made_when_missing_and_keeps_its_permissions() {
     std::os::unix::fs::symlink(&target, &link).unwrap();
     let named = link.clone().into_os_string();
     let var = move |name: &str| (name == "FETCHLOOM_SETTINGS").then(|| named.clone());
-    let changed = set(&var, "jobs", &values(&["4"]), None, &fine).unwrap();
+    let changed = set(&var, "jobs", &values(&["4"]), None, FINE).unwrap();
     assert_eq!(changed.path, fs::canonicalize(&target).unwrap());
     assert!(
         fs::symlink_metadata(&link)
@@ -370,7 +368,7 @@ fn a_read_only_file_is_refused_and_left_as_it_was() {
     let mut permissions = fs::metadata(&path).unwrap().permissions();
     permissions.set_readonly(true);
     fs::set_permissions(&path, permissions).unwrap();
-    let error = set(&var, "jobs", &values(&["12"]), None, &fine).unwrap_err();
+    let error = set(&var, "jobs", &values(&["12"]), None, FINE).unwrap_err();
     assert_eq!(
         error.message,
         format!(
@@ -382,7 +380,7 @@ fn a_read_only_file_is_refused_and_left_as_it_was() {
         error.help.as_deref().unwrap().contains("chmod u+w"),
         "{error:?}"
     );
-    assert!(unset(&var, "jobs", &fine).is_err());
+    assert!(unset(&var, "jobs", FINE).is_err());
     assert_eq!(fs::read_to_string(&path).unwrap(), text);
     assert!(fs::metadata(&path).unwrap().permissions().readonly());
 }
@@ -410,7 +408,7 @@ fn changes_at_once_keep_every_key() {
             let (start, var) = (&start, &var);
             scope.spawn(move || {
                 start.wait();
-                set(var, key, &values(&[value]), None, &fine).unwrap();
+                set(var, key, &values(&[value]), None, FINE).unwrap();
             });
         }
     });
@@ -418,7 +416,10 @@ fn changes_at_once_keep_every_key() {
     assert!(text.starts_with("# race test\n"), "{text}");
     let kept: Vec<String> = read(&path).into_iter().map(|(key, _)| key).collect();
     for (key, _) in changes {
-        assert!(kept.iter().any(|kept| kept == key), "{key} was lost: {text}");
+        assert!(
+            kept.iter().any(|kept| kept == key),
+            "{key} was lost: {text}"
+        );
     }
 }
 

@@ -163,7 +163,7 @@ pub(super) fn change(
     })
 }
 
-/// what every run checks of its settings once each is read: that mirrors_only has a mirror to
+/// what every run checks of its settings once each is read: that `mirrors_only` has a mirror to
 /// ask, where no `--mirror` gives one.
 fn usable(settings: &crate::settings::Settings) -> Result<(), Error> {
     super::fetch::mirrors::read(&[], settings)

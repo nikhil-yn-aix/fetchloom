@@ -18,7 +18,7 @@ use crate::machine::{Machine, Var};
 /// the keys whose text stays text even when it is a whole number.
 const WORDS: [&str; 3] = ["cache", "push_to", "resources"];
 
-/// what a run checks of its settings past reading each one, as that mirrors_only has mirrors to
+/// what a run checks of its settings past reading each one, as that `mirrors_only` has mirrors to
 /// ask, so a change that would leave every run stopping there is refused.
 pub(crate) type Usable<'a> = &'a dyn Fn(&Settings) -> Result<(), Error>;
 
@@ -139,7 +139,12 @@ pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Chan
 /// what stops every run reading the settings file at `path` once it holds `after`, where it was
 /// there with `before` too, so a change cannot be blamed for it; a usage error where the change
 /// brings it, so nothing is written.
-fn whole(path: &Path, before: &str, after: &str, usable: Usable<'_>) -> Result<Option<Error>, Error> {
+fn whole(
+    path: &Path,
+    before: &str,
+    after: &str,
+    usable: Usable<'_>,
+) -> Result<Option<Error>, Error> {
     let Err(stops) = reads(path, after, usable) else {
         return Ok(None);
     };
@@ -190,7 +195,9 @@ fn known(name: &str) -> Result<&'static str, Error> {
     // a variable's name, as FETCHLOOM_JOBS, or the key in capitals, means the key
     let meant = KEYS
         .iter()
-        .find(|(key, variable)| variable.eq_ignore_ascii_case(name) || key.eq_ignore_ascii_case(name))
+        .find(|(key, variable)| {
+            variable.eq_ignore_ascii_case(name) || key.eq_ignore_ascii_case(name)
+        })
         .map(|(key, _)| *key)
         .or_else(|| crate::name::closest(name, KEYS.map(|(key, _)| key)));
     Err(match meant {

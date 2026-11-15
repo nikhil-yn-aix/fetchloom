@@ -735,7 +735,7 @@ fn settings_unset_fixes_a_file_that_stops_every_run() -> Result {
     Ok(())
 }
 
-/// a change that would leave a file every run stops at, as mirrors_only with no mirror to ask, is
+/// a change that would leave a file every run stops at, as `mirrors_only` with no mirror to ask, is
 /// refused, set or unset, naming the way out; a file a problem stops already still takes a change,
 /// with a warning that the problem is there.
 #[test]
