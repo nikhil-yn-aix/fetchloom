@@ -311,14 +311,12 @@ impl<'a> Loop<'a> {
         )?;
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let placing = Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
-        let mut waiting: BTreeSet<String> = placing
-            .missing(&self.cache)?
+        // a result whose bytes a download that failed was to bring waits with it
+        let waiting: BTreeSet<String> = placing
+            .short(|digest, size| self.cache.find(digest, Some(size)).is_some())
             .into_iter()
-            .chain(placing.unknown())
-            .map(|(dataset, _)| dataset)
+            .chain(placing.unknown().into_iter().map(|(dataset, _)| dataset))
             .collect();
-        waiting
-            .extend(placing.unbuilt(|digest, size| self.cache.find(digest, Some(size)).is_some()));
         let whole: BTreeSet<String> = manifest
             .datasets
             .iter()
@@ -357,12 +355,15 @@ impl<'a> Loop<'a> {
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
         self.ask_room(lock, &placing)?;
+        // the first failure that leaves files for a later run waits until the rest is in
+        let mut failed = None;
         let unknown = archives::of(lock, placing.unknown());
         if !unknown.is_empty() {
             let unknown = fetch::mirrors::trees(self.context, &self.net, &self.cache, unknown)
                 .await
                 .map_err(|error| self.as_left(error))?;
-            self.unpack_locked(manifest, lock, &unknown).await?;
+            let unpacked = self.unpack_locked(manifest, lock, &unknown).await;
+            failed = first_left(failed, unpacked)?;
             let survey = placing.into_survey();
             placing = Placing::new(
                 self.project,
@@ -401,11 +402,17 @@ impl<'a> Loop<'a> {
             }
             available.push(cached == place::Cached::Here);
         }
-        self.download_prepared(manifest, lock, &files, Some(&available))
-            .await?;
-        self.unpack_locked(manifest, lock, &archives::of(lock, unpacking))
-            .await?;
-        Ok(placing)
+        let downloaded = self
+            .download_prepared(manifest, lock, &files, Some(&available))
+            .await;
+        failed = first_left(failed, downloaded.map(drop))?;
+        let unpacked = self
+            .unpack_locked(manifest, lock, &archives::of(lock, unpacking))
+            .await;
+        match first_left(failed, unpacked)? {
+            Some(error) => Err(*error),
+            None => Ok(placing),
+        }
     }
 
     /// leaves out the results `placing` needs that `holds` says the cache lacks, with a warning;
@@ -1541,7 +1548,16 @@ impl<'a> Loop<'a> {
             .filter(|(_, available)| !**available)
             .map(|((dataset, file), _)| (dataset.as_str(), *file))
             .collect();
-        self.refuse_unfetchable(manifest, &lacking)?;
+        self.refuse_unreachable(manifest, &lacking)?;
+        // an import no link fetches waits with its own error until the other files are in
+        let unimported = self.unimported(manifest, &lacking).map(Box::new);
+        let (fetchable, held): (Vec<(String, &LockedFile)>, Vec<bool>) = files
+            .iter()
+            .zip(available)
+            .filter(|((_, file), available)| **available || !file.url.is_empty())
+            .map(|(entry, available)| (entry.clone(), *available))
+            .unzip();
+        let (files, available) = (fetchable.as_slice(), held.as_slice());
         let mut descriptions = Vec::with_capacity(files.len());
         let mut urls = Vec::with_capacity(files.len());
         for (dataset, file) in files {
@@ -1593,7 +1609,7 @@ impl<'a> Loop<'a> {
             Some(told) => self.tell_downloaded(told.fetched.iter().chain(&fetched), told.started),
             None => self.tell_downloaded(&fetched, started),
         }
-        Ok(fetched)
+        unimported.map_or(Ok(fetched), |error| Err(*error))
     }
 
     fn tell_downloaded<'f>(
@@ -1689,26 +1705,51 @@ impl<'a> Loop<'a> {
         manifest: &Manifest,
         lacking: &[(&str, &LockedFile)],
     ) -> Result<(), Error> {
+        self.refuse_unreachable(manifest, lacking)?;
+        self.unimported(manifest, lacking).map_or(Ok(()), Err)
+    }
+
+    /// refuses what `lacking` still lacks when no download may fetch anything of it: offline, or
+    /// a source only a mirror may stand in for.
+    fn refuse_unreachable(
+        &self,
+        manifest: &Manifest,
+        lacking: &[(&str, &LockedFile)],
+    ) -> Result<(), Error> {
         let named: Vec<(String, Option<Sha256>)> = lacking
             .iter()
             .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
             .collect();
-        let imports: BTreeSet<&str> = lacking
-            .iter()
-            .filter(|(_, file)| file.url.is_empty())
-            .map(|(dataset, _)| *dataset)
-            .collect();
         if self.net.offline().enabled() && !named.is_empty() {
-            if let Some(import) = imports.first() {
+            if let Some(import) = lacking
+                .iter()
+                .filter(|(_, file)| file.url.is_empty())
+                .map(|(dataset, _)| *dataset)
+                .min()
+            {
                 return Err(self.offline_imported(manifest, import, lacking));
             }
             let labels: Vec<&str> = named.iter().map(|(label, _)| label.as_str()).collect();
             return Err(self.offline_missing(&labels));
         }
-        fetch::mirrors::sources_allowed(self.context, &named)?;
+        fetch::mirrors::sources_allowed(self.context, &named)
+    }
+
+    /// the error for the imports among `lacking`, whose files no link fetches, naming each one's
+    /// files, or none when it holds no import.
+    fn unimported(&self, manifest: &Manifest, lacking: &[(&str, &LockedFile)]) -> Option<Error> {
+        let imports: BTreeSet<&str> = lacking
+            .iter()
+            .filter(|(_, file)| file.url.is_empty())
+            .map(|(dataset, _)| *dataset)
+            .collect();
+        let named: Vec<(String, Option<Sha256>)> = lacking
+            .iter()
+            .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
+            .collect();
         let mirrored = !self.context.mirrors.mirrors.list.is_empty();
-        let mut error = match imports.iter().copied().collect::<Vec<_>>().as_slice() {
-            [] => return Ok(()),
+        let error = match imports.iter().copied().collect::<Vec<_>>().as_slice() {
+            [] => return None,
             [import] => {
                 local::imported_elsewhere(import, &plan::folder(manifest, import), mirrored)
             }
@@ -1728,27 +1769,11 @@ impl<'a> Loop<'a> {
             .collect();
         imported.sort_by_key(|(order, _)| *order);
         let imported: Vec<_> = imported.into_iter().map(|(_, named)| named).collect();
-        let others: Vec<&str> = manifest
-            .datasets
-            .iter()
-            .filter(|(name, entry)| {
-                entry.source().is_some()
-                    && self.scope.includes(name)
-                    && !imports.contains(name.as_str())
-            })
-            .map(|(name, _)| name.as_str())
-            .collect();
-        if !others.is_empty()
-            && let Some(help) = error.help.take()
-        {
-            error = error.help(format!(
-                "{help}, or run `{}`, which places what this machine has",
-                super::project::command(&format!("sync {}", others.join(" ")))
-            ));
-        }
-        Err(fetch::mirrors::lacked(self.context, &imported)
-            .into_iter()
-            .fold(error, Error::detail))
+        Some(
+            fetch::mirrors::lacked(self.context, &imported)
+                .into_iter()
+                .fold(error, Error::detail),
+        )
     }
 
     /// the error for files an offline run lacks, with ways that need no network. offline asks no
@@ -2393,6 +2418,20 @@ struct Partial {
 /// network failing, no network, a key needed or bytes other than the pins, never a person's no.
 fn lacks_files(error: &Error) -> bool {
     matches!(error.kind.exit_code(), 10 | 20 | 30 | 40)
+}
+
+/// `failed`, else the failure of `result` when it [`lacks_files`], so the run goes on getting
+/// what it can; any other failure stops the run at once. the one kept is boxed, as it waits
+/// across downloads in the run's future.
+fn first_left(
+    failed: Option<Box<Error>>,
+    result: Result<(), Error>,
+) -> Result<Option<Box<Error>>, Error> {
+    match result {
+        Ok(()) => Ok(failed),
+        Err(error) if lacks_files(&error) => Ok(failed.or_else(|| Some(Box::new(error)))),
+        Err(error) => Err(error),
+    }
 }
 
 /// what placing downloads: the `files` `available` says the cache lacks, described by

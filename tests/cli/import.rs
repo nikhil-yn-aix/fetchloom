@@ -176,8 +176,8 @@ fn a_clone_without_the_bytes_recovers_by_copying_them() -> Result {
     Ok(())
 }
 
-/// a clone lacking the files of several imports hears of every one in one error, with the command
-/// that places, meanwhile, what this machine has.
+/// a clone lacking the files of several imports hears of every one in one error, once it placed
+/// what this machine has.
 #[test]
 fn a_clone_lacking_several_imports_names_each_and_what_it_can_place() -> Result {
     let sandbox = Sandbox::new()?;
@@ -222,7 +222,7 @@ fn a_clone_lacking_several_imports_names_each_and_what_it_can_place() -> Result 
     );
     assert_eq!(
         error["help"],
-        "copy each one's files to its folder by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as <name>` where they are, or run `fetchloom sync flowers`, which places what this machine has"
+        "copy each one's files to its folder by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as <name>` where they are"
     );
     assert_eq!(error["fix"], serde_json::Value::Null);
     let named = sync(&["sync", "flowers"])?;

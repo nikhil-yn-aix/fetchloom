@@ -56,6 +56,40 @@ pub(crate) fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
     cache.join("objects").join(&hex[..2]).join(&hex[2..])
 }
 
+/// a recipe's result holding the bytes of a file the run could not get waits with that file's
+/// dataset, so the datasets the run has whole are placed and told, and the result gets no folder.
+#[test]
+fn a_result_a_missing_download_would_bring_waits_with_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(
+        &sandbox,
+        &server,
+        "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n",
+    )?;
+    let other = Server::start("/files/other.csv", vec![file(b"other\n", "\"o1\"")])?;
+    sandbox.allow(&other.url);
+    let added = sandbox.run(&["add", &other.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    // the copy recipe's result is iris's bytes, one object in the cache
+    delete(&object(&sandbox.cache(), IRIS))?;
+    let (fresh, _) = cloned(&sandbox, "fresh")?;
+
+    let output = sandbox
+        .command_in(&fresh, &["--json", "sync", "--offline"])
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(20), "{document}");
+    let result = &document["result"];
+    assert_eq!(result["datasets"], json!(["other"]), "{document}");
+    assert_eq!(result["waiting"], json!(["clean", "iris"]), "{document}");
+    assert_eq!(fs::read(fresh.join("data/other/other.csv"))?, b"other\n");
+    assert!(!fresh.join("data/clean").exists(), "{document}");
+    Ok(())
+}
+
 /// a sync that names the recipe fails instead, as `path` does.
 #[test]
 fn sync_warns_of_a_recipe_not_built_yet() -> Result {

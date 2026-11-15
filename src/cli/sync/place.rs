@@ -528,6 +528,38 @@ impl<'a> Placing<'a> {
         })
     }
 
+    /// the datasets with a file placing needs whose bytes `holds` says the cache lacks, whatever was
+    /// to bring them, as a run that could not get them leaves each such dataset waiting.
+    pub(crate) fn short(&self, holds: impl Fn(&Sha256, u64) -> bool + Sync) -> BTreeSet<String> {
+        let needed: Vec<&Target> = self
+            .targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(_, action)| needs_bytes(action))
+            .map(|(target, _)| target)
+            .collect();
+        let mut unique = HashSet::new();
+        let objects: Vec<(Sha256, u64)> = needed
+            .iter()
+            .filter(|target| unique.insert(target.sha256))
+            .map(|target| (target.sha256, target.size))
+            .collect();
+        let found = place::run_all(&objects, self.survey.threads, |(digest, size)| {
+            holds(digest, *size)
+        });
+        let absent: HashSet<Sha256> = objects
+            .iter()
+            .zip(found)
+            .filter(|(_, found)| !found)
+            .map(|((digest, _), _)| *digest)
+            .collect();
+        needed
+            .into_iter()
+            .filter(|target| absent.contains(&target.sha256))
+            .map(|target| target.dataset.to_owned())
+            .collect()
+    }
+
     /// what [`Placing::missing`] lists, found without sealing or marking any cached object, for
     /// a dry run, less the objects `held` names, which come from elsewhere than a download.
     pub(crate) fn missing_as_is(

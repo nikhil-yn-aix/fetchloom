@@ -3646,6 +3646,88 @@ fn a_sync_that_lacks_some_files_places_the_datasets_it_has_whole() -> Result {
     Ok(())
 }
 
+/// a `--json` sync of a fresh clone of the work folder's project, with an empty cache of its own.
+fn synced_fresh(sandbox: &Sandbox) -> Result<(std::path::PathBuf, std::process::Output)> {
+    let fresh = clone(sandbox, "fresh")?;
+    let output = sandbox
+        .command_in(&fresh, &["--json", "sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("empty-cache")?)
+        .env("FETCHLOOM_RETRIES", "0")
+        .output()?;
+    Ok((fresh, output))
+}
+
+/// an archive no source serves now fails before the other files download, and they still do.
+#[test]
+fn an_archive_that_cannot_be_got_stops_no_other_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zipped = zip_of(&[("a.csv", b"a\n"), ("b.csv", b"b\n")])?;
+    let one = Server::start(
+        "/one.csv",
+        vec![file(b"one\n", "\"o\""), file(b"one\n", "\"o\"")],
+    )?;
+    let gone = reply("404 Not Found", &[("Content-Length", "0")], b"");
+    let archive = Server::start("/arch.zip", vec![file(&zipped, "\"z\""), gone])?;
+    for server in [&one, &archive] {
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+
+    let (fresh, output) = synced_fresh(&sandbox)?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(10), "{document}");
+    let placed = fresh.join("data/one/one.csv");
+    assert!(placed.exists(), "{document}");
+    assert_eq!(fs::read(placed)?, b"one\n", "{document}");
+    let result = &document["result"];
+    assert_eq!(result["datasets"], serde_json::json!(["one"]), "{document}");
+    assert_eq!(result["waiting"], serde_json::json!(["arch"]), "{document}");
+    Ok(())
+}
+
+/// an import this machine lacks waits with its own error, and the other files still download.
+#[test]
+fn an_import_the_cache_lacks_stops_no_other_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    let one = Server::start(
+        "/one.csv",
+        vec![file(b"one\n", "\"o\""), file(b"one\n", "\"o\"")],
+    )?;
+    sandbox.allow(&one.url);
+    let flowers = sandbox.folder("flowers")?;
+    fs::write(flowers.join("petals.csv"), b"length\n1.4\n")?;
+    for reference in [one.url.as_str(), "../flowers"] {
+        let output = sandbox.run(&["add", reference])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+
+    let (fresh, output) = synced_fresh(&sandbox)?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(10), "{document}");
+    let placed = fresh.join("data/one/one.csv");
+    assert!(placed.exists(), "{document}");
+    assert_eq!(fs::read(placed)?, b"one\n", "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(
+        error["message"],
+        "flowers was imported from files, and this machine's cache does not hold them",
+        "{document}"
+    );
+    assert!(
+        !error["help"].to_string().contains("sync one"),
+        "{document}"
+    );
+    let result = &document["result"];
+    assert_eq!(result["datasets"], serde_json::json!(["one"]), "{document}");
+    assert_eq!(
+        result["waiting"],
+        serde_json::json!(["flowers"]),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// freeing space cannot help, so the refusal comes before the question about room.
 #[test]
 fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Result {

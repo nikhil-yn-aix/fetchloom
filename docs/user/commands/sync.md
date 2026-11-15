@@ -51,7 +51,7 @@ error: iris/iris.csv is not the file data.lock records
 
 a [folder mirror](../guides/mirrors.md) that holds the pinned bytes gives them back. upgrade only when you mean to change the input, since it pins what the source serves now. with `--json` the error's `fix` is null. [recovery](../concepts/offline-and-recovery.md#recovery) covers expired download links and interrupted transfers.
 
-a failed sync reports the step it stopped in, not every problem. archives are fetched and unpacked before other files, so a missing archive stops the run before other files are asked for. files that did download wait in the cache, since nothing is placed while a file failed. to place the datasets you need now, [name them](#named-datasets), as `fetchloom sync tips`.
+a sync that cannot get every file still gets and places the rest. an archive that cannot be fetched, an import this machine's cache lacks or a file that fails to download leaves its own dataset waiting, with a recipe whose result holds the same bytes, and the run downloads and places every other dataset before it fails. the error names each file that failed, as `errors[0].failures` does in JSON, then the datasets it placed and those that wait, which `result.datasets` and `result.waiting` give. a server that stops answering ends the downloads still running, so their datasets wait too, and the file that failed first in the run's order gives the [exit code](../reference/exit-codes.md).
 
 ## named datasets
 
