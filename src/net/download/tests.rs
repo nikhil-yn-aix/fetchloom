@@ -1144,6 +1144,46 @@ fn a_download_moves_its_whole_size_and_a_cached_file_nothing() {
     );
 }
 
+/// a download stopped partway, as a refused question stops it, keeps its bytes only where a
+/// later run can go on from them: here an `ETag` and ranges, not a body of no length or version.
+#[test]
+fn a_stopped_download_keeps_only_bytes_a_later_run_can_continue() {
+    let body = pattern(0, 1 << 20);
+    let endless = [
+        b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".as_slice(),
+        &body,
+    ]
+    .concat();
+    let ranged = reply(
+        "200 OK",
+        &[("ETag", "\"v1\""), ("Accept-Ranges", "bytes")],
+        &body,
+    );
+    for (answer, kept) in [(endless, false), (ranged, true)] {
+        let (url, _) = serve(vec![answer]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let chunks = std::sync::atomic::AtomicU32::new(0);
+        let refuse = |event: Event| match event {
+            Event::Bytes(_) if chunks.fetch_add(1, Ordering::Relaxed) == 2 => {
+                Err(Error::new(Kind::Unconfirmed, "did not download it"))
+            }
+            _ => Ok(()),
+        };
+        let error =
+            block_on(net(&url).download(&Fetch::new(url.clone()), &cache, &refuse)).unwrap_err();
+        assert_eq!(error.kind, Kind::Unconfirmed);
+        let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+            panic!("nothing else holds the download");
+        };
+        assert_eq!(
+            partial.resumable().is_some_and(|(bytes, _)| bytes > 0),
+            kept,
+            "kept: {kept}"
+        );
+    }
+}
+
 fn md5(bytes: &[u8]) -> Md5 {
     let mut hasher = crate::digest::Hasher::with_md5();
     hasher.update(bytes);

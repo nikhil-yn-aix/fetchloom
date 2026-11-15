@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -397,6 +397,28 @@ impl Chunks for reqwest::Response {
     }
 }
 
+/// a claimed download until it ends. one that fails, or whose run drops it, forgets bytes no
+/// later run could go on from, which would only take room on the disk until a gc.
+struct Unfinished<'a> {
+    partial: &'a Partial,
+    /// whether the last answer, or the bytes an earlier run kept, let a later run go on.
+    continuable: AtomicBool,
+    done: bool,
+}
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        if *self.continuable.get_mut() {
+            self.partial.discard_unstarted();
+        } else {
+            self.partial.discard();
+        }
+    }
+}
+
 /// how one stream of an answer ended.
 enum Run {
     /// every byte arrived.
@@ -624,10 +646,20 @@ impl Net {
         {
             return recalled(record, Origin::Cache, on);
         }
-        let done = self.transfer(fetch, cache, &partial, known, on).await;
-        if done.is_err() {
-            partial.discard_unstarted();
-        }
+        let mut unfinished = Unfinished {
+            partial: &partial,
+            continuable: AtomicBool::new(true),
+            done: false,
+        };
+        let heard = |event: Event| {
+            if let Event::Kept { resumable, .. } | Event::Started { resumable, .. } = &event {
+                let continuable = *resumable != Resumable::No;
+                unfinished.continuable.store(continuable, Ordering::Relaxed);
+            }
+            on(event)
+        };
+        let done = self.transfer(fetch, cache, &partial, known, &heard).await;
+        unfinished.done = done.is_ok();
         done
     }
 

@@ -1207,7 +1207,7 @@ impl Held {
 }
 
 /// tells a person who stopped, or whose network failed, what the unfinished downloads in `held`
-/// keep, an earlier run's bytes included, and whether the next run can go on from them.
+/// keep, an earlier run's bytes included, and that bytes no later run can go on from are deleted.
 fn kept(error: Error, held: &[Held]) -> Error {
     if !matches!(error.kind, Kind::Interrupted | Kind::NetworkUnreachable) {
         return error;
@@ -1237,11 +1237,11 @@ fn kept(error: Error, held: &[Held]) -> Error {
     match (lost, going_on) {
         (0, _) => error,
         (_, 0) => error.detail(format!(
-            "the server cannot continue from the {} downloaded so far, so the next run starts over",
+            "the {} downloaded so far is deleted, since the server cannot continue from it",
             units::size(lost)
         )),
         _ => error.detail(format!(
-            "the other {} starts over in the next run, since its server cannot continue from it",
+            "the other {} is deleted, since its server cannot continue from it",
             units::size(lost)
         )),
     }
@@ -2282,15 +2282,13 @@ mod tests {
         );
         assert_eq!(
             said(&[(3 * mib, Resumable::No)]),
-            [
-                "the server cannot continue from the 3.0 MiB downloaded so far, so the next run starts over"
-            ]
+            ["the 3.0 MiB downloaded so far is deleted, since the server cannot continue from it"]
         );
         assert_eq!(
             said(&[(3 * mib, Resumable::Yes), (mib, Resumable::No)]),
             [
                 "the 3.0 MiB downloaded so far is kept, and the next run continues from there",
-                "the other 1.0 MiB starts over in the next run, since its server cannot continue from it"
+                "the other 1.0 MiB is deleted, since its server cannot continue from it"
             ]
         );
         assert_eq!(said(&[(0, Resumable::Yes)]), Vec::<String>::new());

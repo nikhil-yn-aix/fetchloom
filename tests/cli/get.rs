@@ -953,8 +953,10 @@ fn a_stop_promises_only_what_the_server_allows() -> Result {
     assert_eq!(output.status.code(), Some(130), "{stderr}");
     let kept = stderr.lines().last().unwrap_or_default();
     assert!(
-        kept.starts_with("            the server cannot continue from the ")
-            && kept.ends_with(" downloaded so far, so the next run starts over"),
+        kept.starts_with("            the ")
+            && kept.ends_with(
+                " downloaded so far is deleted, since the server cannot continue from it"
+            ),
         "{stderr}"
     );
     let rerun = sandbox.run(&["get", &server.url])?;
@@ -964,9 +966,10 @@ fn a_stop_promises_only_what_the_server_allows() -> Result {
         .lines()
         .filter(|line| line.contains("Restarting"))
         .collect();
+    // the stop deleted what it could not go on from, so only this run's own broken try restarts
     assert!(
         matches!(restarts.as_slice(), [line] if line.starts_with(" Restarting big.bin · the ")
-            && line.ends_with(" an earlier run kept cannot be continued")),
+            && line.ends_with(" downloaded so far cannot be continued, since the server cannot continue from them")),
         "{stderr}"
     );
     assert_eq!(server.requests().len(), 3, "{stderr}");
