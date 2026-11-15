@@ -1757,26 +1757,27 @@ fn decide(
                 Action::Replace
             })
         }
-        Some(_) if holds_target(target, look, destination) => {
-            Ok(if !target.copy || now_writable(destination) {
+        Some(placed) => match held(target, placed, look, destination) {
+            Held::Pinned => Ok(if !target.copy || now_writable(destination) {
                 Action::Adopt(*look)
             } else {
                 Action::Replace
-            })
-        }
-        Some(placed) => {
-            let reason = if placed.method == Method::Hardlink && place::has_other_names(destination)
-            {
-                Reason::Shared
-            } else {
-                Reason::Changed
-            };
-            Ok(if force {
-                Action::Overwrite(reason)
-            } else {
-                Action::Leave(reason)
-            })
-        }
+            }),
+            Held::Earlier => Ok(Action::Replace),
+            Held::Other => {
+                let reason =
+                    if placed.method == Method::Hardlink && place::has_other_names(destination) {
+                        Reason::Shared
+                    } else {
+                        Reason::Changed
+                    };
+                Ok(if force {
+                    Action::Overwrite(reason)
+                } else {
+                    Action::Leave(reason)
+                })
+            }
+        },
         None => {
             let block = Block::sized(target.size.saturating_add(1));
             let same = look.size == target.size
@@ -2068,6 +2069,32 @@ pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
     look.size == target.size
         && Sha256::of_file(path, Block::sized(look.size.saturating_add(1)))
             .is_ok_and(|digest| digest == target.sha256)
+}
+
+/// what a file fetchloom placed holds once it no longer looks as placed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Held {
+    /// the bytes data.lock pins there.
+    Pinned,
+    /// the bytes placed there for another pin, as a touch or a restore from a backup leaves them,
+    /// so no edit.
+    Earlier,
+    /// other bytes: an edit.
+    Other,
+}
+
+/// what the file at `path`, recorded as `placed` and seen as `look`, holds. only a readable file of
+/// the target's size or of the placed size is hashed, and once.
+pub(crate) fn held(target: &Target, placed: &Placed, look: &Look, path: &Path) -> Held {
+    let earlier = placed.sha256 != target.sha256 && look.size == placed.look.size;
+    if look.size != target.size && !earlier {
+        return Held::Other;
+    }
+    match Sha256::of_file(path, Block::sized(look.size.saturating_add(1))) {
+        Ok(digest) if look.size == target.size && digest == target.sha256 => Held::Pinned,
+        Ok(digest) if earlier && digest == placed.sha256 => Held::Earlier,
+        _ => Held::Other,
+    }
 }
 
 pub(crate) fn now_writable(path: &Path) -> bool {

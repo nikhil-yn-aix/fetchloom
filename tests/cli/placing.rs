@@ -532,6 +532,43 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
     Ok(())
 }
 
+/// a copy whose time moved while its bytes stayed as placed, as `touch` or a restore from a backup
+/// leaves it, is no edit, so a new pin replaces it.
+#[test]
+fn a_touched_copy_of_an_older_pin_is_replaced() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V2, "\"v2\"")],
+    )?;
+    copy_iris(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    // the start of 2001, a time every disk keeps
+    set_time(&placed, UNIX_EPOCH + Duration::from_hours(271_752))?;
+    let upgraded = sandbox.run(&["lock", "--upgrade", "iris"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        status["result"]["outdated"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{status}"
+    );
+    let synced = sandbox.run(&["--json", "sync", "--offline"])?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    let placement = &document["result"]["placement"];
+    assert_eq!(placement["kept"], serde_json::json!([]), "{document}");
+    assert_eq!(placement["replaced"], 1, "{document}");
+    assert_eq!(fs::read(&placed)?, V2, "{document}");
+    Ok(())
+}
+
 /// settling writes the state again, and the sync after it writes nothing.
 #[test]
 fn a_sync_settles_files_as_new_as_the_state_and_then_hashes_nothing() -> Result {

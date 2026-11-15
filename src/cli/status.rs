@@ -977,22 +977,26 @@ fn compare(
                 }
                 &mut status.outdated
             }
-            // sync takes a changed file that holds the locked bytes as placed
-            (Some(seen), Some(_)) if place::holds_target(target, seen, &file) => {
-                if !target.copy || place::now_writable(&file) {
-                    status.holding.insert(target.sha256);
-                    continue;
+            // sync takes a changed file that holds the locked bytes as placed, and replaces one
+            // that still holds the bytes placed for another pin
+            (Some(seen), Some(record)) => match place::held(target, record, seen, &file) {
+                place::Held::Pinned => {
+                    if !target.copy || place::now_writable(&file) {
+                        status.holding.insert(target.sha256);
+                        continue;
+                    }
+                    &mut status.outdated
                 }
-                &mut status.outdated
-            }
-            (Some(_), Some(record)) => {
-                if record.method == crate::place::Method::Hardlink
-                    && crate::place::has_other_names(&file)
-                {
-                    status.shared.insert(target.path.clone());
+                place::Held::Earlier => &mut status.outdated,
+                place::Held::Other => {
+                    if record.method == crate::place::Method::Hardlink
+                        && crate::place::has_other_names(&file)
+                    {
+                        status.shared.insert(target.path.clone());
+                    }
+                    &mut status.edited
                 }
-                &mut status.edited
-            }
+            },
             // sync adopts it, and a build copies its bytes from here as from a placed file
             (Some(seen), None) if place::holds_target(target, seen, &file) => {
                 status.holding.insert(target.sha256);

@@ -47,7 +47,7 @@ warning: data/penguins/penguins.csv has changed, so it stays
      Synced 2 datasets into data, 1 file left unchanged; see the warnings above
 ```
 
-once data.lock pins other bytes for that file, as after `fetchloom lock --upgrade` or a rebuild of a recipe's result, the warning adds that the file is an edit of an earlier version, not what data.lock pins now.
+once data.lock pins other bytes for that file, as after `fetchloom lock --upgrade` or a rebuild of a recipe's result, the warning adds that the file is an edit of an earlier version, not what data.lock pins now. a file whose time moved while its bytes stayed as fetchloom placed them, as `touch` or a restore from a backup leaves it, is no edit: `status` lists it as outdated, and `sync` replaces it with the new pin.
 
 the edit lives on this machine only. a teammate's sync places the pinned bytes, so a change others need belongs in a recipe, or, for a file that should not be there at all, in an [exclude](../commands/exclude.md).
 
