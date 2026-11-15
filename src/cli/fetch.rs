@@ -2789,10 +2789,13 @@ mod tests {
         };
         let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
         let advice = watch.page_refused(true).help.unwrap_or_default();
-        assert!(
-            advice.contains("`fetchloom auth login 'x$(id).example'`"),
-            "{advice}"
-        );
+        // windows withholds a name its shells would run and shows a placeholder instead
+        let suggested = if cfg!(windows) {
+            "`fetchloom auth login <name>`"
+        } else {
+            "`fetchloom auth login 'x$(id).example'`"
+        };
+        assert!(advice.contains(suggested), "{advice}");
     }
 
     /// a page that names no file, at a link that names none either, is a folder listing or a
