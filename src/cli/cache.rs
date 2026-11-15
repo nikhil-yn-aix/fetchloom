@@ -1272,9 +1272,8 @@ fn add_with_stop(
     for result in lock.still_waiting().filter_map(lock::Waiting::result) {
         stop.check()?;
         needed.results.insert((result.key, result.tree));
-        let built = cache.results(&result.key);
-        let members = built.iter().filter(|built| built.tree == result.tree);
-        for member in members.flat_map(|built| &built.members) {
+        let members = cache.result_files(&result.key, &result.tree);
+        for member in members.iter().flatten() {
             needed.add(member.sha256, Use::Output);
         }
     }
@@ -2085,6 +2084,39 @@ mod tests {
             !needed.objects.contains(&fetched.digest),
             "only what was imported"
         );
+    }
+
+    /// a result waiting for its file list keeps its files by the record its pinned tree names,
+    /// whoever wrote it: the tree is the record's own hash, so its files are what data.lock pins.
+    /// a build reuses only its own user's records; gc reading another's takes nothing on trust.
+    #[cfg(unix)]
+    #[test]
+    fn a_waiting_result_keeps_its_files_by_any_record_its_tree_names() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let root = folder.path().join("p");
+        fs::create_dir(&root).unwrap();
+        let (_, lock, stored) = pinned(&root, &cache, RAW_AND_CLEAN, &["raw"], &["clean"]);
+        let result = &lock.derived[0];
+        let tree = cache.record_result(&result.key, &result.files).unwrap();
+        assert_eq!(tree, result.tree);
+        // as a record another member wrote, which a build of this user's never reuses
+        let record = cache
+            .root()
+            .join("builds")
+            .join(result.key.hex())
+            .join(tree.hex());
+        fs::set_permissions(&record, fs::Permissions::from_mode(0o664)).unwrap();
+        assert_eq!(cache.results(&result.key), []);
+        fs::write(root.join("data.toml"), RAW_AND_CLEAN).unwrap();
+        // the result's list is never written beside data.lock, so it waits for it
+        fs::write(root.join("data.lock"), lock.render()).unwrap();
+        cache.register(&root).unwrap();
+
+        let needed = needed_by_all(&cache, None, &Stop::default()).unwrap();
+
+        assert!(needed.objects.contains(&stored["clean"].digest));
     }
 
     /// a registered project's data.toml that a clone or someone sharing the cache made a fifo, a

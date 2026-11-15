@@ -15,6 +15,11 @@ use crate::stop::Stop;
 /// how often a build waiting for another one of the same key looks again.
 const KEY_WAIT: Duration = Duration::from_millis(50);
 
+/// the most bytes gc reads of a result's record: a line of about a hundred bytes for each of more
+/// files than any result holds, and short of what would take a machine's memory, since anyone
+/// sharing the cache may put a large file under a record's name.
+const RECORD_MOST: u64 = 1 << 30;
+
 /// a result of a key this machine holds whole: its record and every object it names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Built {
@@ -97,6 +102,23 @@ impl Cache {
             .collect();
         built.sort_by(|a, b| b.recorded.cmp(&a.recorded).then(a.tree.cmp(&b.tree)));
         built
+    }
+
+    /// the files of the result of `key` recorded as `tree`, whoever wrote its record, when it
+    /// hashes to `tree`: a tree data.lock pins is its record's own hash, so gc keeps what a
+    /// waiting result needs on no one's word. a record larger than [`RECORD_MOST`] names none.
+    pub(crate) fn result_files(&self, key: &Sha256, tree: &Sha256) -> Option<Vec<Member>> {
+        let path = self.root.join("builds").join(key.hex()).join(tree.hex());
+        let file = crate::volume::read_unfollowed(&path).ok()?;
+        if file.metadata().ok()?.len() > RECORD_MOST {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        file.take(RECORD_MOST).read_to_end(&mut bytes).ok()?;
+        if digest::sha256(&bytes) != *tree {
+            return None;
+        }
+        unpacked::parse(std::str::from_utf8(&bytes).ok()?)
     }
 
     /// the result recorded at `path` as `tree`, when it is whole and this user's alone.
