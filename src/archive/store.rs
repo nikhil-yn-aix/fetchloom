@@ -112,12 +112,15 @@ pub(super) fn store_all(
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);
     let threads = cap.map_or(threads, |cap| threads.min(cap));
-    store_with(cache, threads, read)
+    // a capped run starts no thread past its cap
+    store_with(cache, threads, cap.is_none(), read)
 }
 
+/// with `ahead`, a large archive's flush starts on xfs while its members are still written.
 fn store_with(
     cache: &Cache,
     threads: usize,
+    ahead: bool,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
     let staging = cache.staging().map_err(|err| {
@@ -139,6 +142,9 @@ fn store_with(
     let flush_each = true;
     let few = Few::new();
     let keeps = (cfg!(target_os = "linux") && !flush_each).then_some(&few);
+    #[cfg(not(target_os = "linux"))]
+    let _ = ahead;
+    let done = AtomicBool::new(false);
     let (jobs, queue) = sync_channel::<Job>(threads * 2);
     let queue = Mutex::new(queue);
     let failed = AtomicBool::new(false);
@@ -175,6 +181,10 @@ fn store_with(
             .map(|_| crate::threads::scoped(scope, &write))
             .collect();
         let threaded = workers.iter().any(crate::threads::Scoped::is_threaded);
+        #[cfg(target_os = "linux")]
+        let flusher = (ahead && threaded)
+            .then(|| flushing_ahead(scope, batch.as_ref(), &sealed, &done))
+            .flatten();
         let writers = Writers {
             staging: &staging,
             jobs: threaded.then_some(jobs),
@@ -190,6 +200,13 @@ fn store_with(
         for worker in workers {
             worker.join();
         }
+        done.store(true, Ordering::Relaxed);
+        #[cfg(target_os = "linux")]
+        let result = result.and(
+            flusher
+                .map_or(Ok(()), crate::threads::Scoped::join)
+                .map_err(|err| Error::io("could not flush the unpacked files to disk", &err)),
+        );
         result
     });
     let sealed = sealed.into_inner().unwrap_or_else(PoisonError::into_inner);
@@ -367,6 +384,43 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// starts [`flush_ahead`] beside the writers when the cache is on xfs.
+#[cfg(target_os = "linux")]
+fn flushing_ahead<'scope>(
+    scope: &'scope thread::Scope<'scope, '_>,
+    batch: Option<&'scope Batch>,
+    sealed: &'scope Mutex<Vec<(String, Sealed)>>,
+    done: &'scope AtomicBool,
+) -> Option<crate::threads::Scoped<'scope, impl FnMut() -> io::Result<()> + Send, io::Result<()>>> {
+    let batch = batch.filter(|batch| batch.is_xfs())?;
+    let written = move || locked(sealed).len();
+    Some(crate::threads::scoped(scope, move || {
+        flush_ahead(written, || batch.flush(), done)
+    }))
+}
+
+/// flushes the cache's filesystem whenever more members than are flushed one by one were written
+/// since the last flush, until `done`: on xfs a flush of many new files allocates their blocks
+/// one file at a time, so the flush after the last member then finds little left to write.
+#[cfg(target_os = "linux")]
+fn flush_ahead(
+    written: impl Fn() -> usize,
+    flush: impl Fn() -> io::Result<()>,
+    done: &AtomicBool,
+) -> io::Result<()> {
+    let mut flushed = 0;
+    while !done.load(Ordering::Relaxed) {
+        let count = written();
+        if count > flushed + MOST_FLUSHED_ALONE {
+            flushed = count;
+            flush()?;
+        } else {
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    Ok(())
+}
+
 /// what the reading thread sees once a writer failed. the writer's own error is the one reported.
 fn stopped() -> Error {
     Error::new(Kind::LocalIo, "storing the archive's files stopped")
@@ -474,6 +528,46 @@ mod tests {
                 "{flushed:?}"
             );
         }
+    }
+
+    /// runs a flush ahead that finds `counts` members written, one count a look, then is done,
+    /// and says how many times it flushed, or the error it kept.
+    #[cfg(target_os = "linux")]
+    fn flushed_ahead(counts: &[usize], fails: bool) -> io::Result<usize> {
+        use std::cell::Cell;
+
+        let done = AtomicBool::new(false);
+        let looks = Cell::new(0);
+        let written = || {
+            let next = counts.get(looks.replace(looks.get() + 1)).copied();
+            done.store(next.is_none(), Ordering::Relaxed);
+            next.unwrap_or(0)
+        };
+        let flushes = Cell::new(0);
+        let flush = || {
+            flushes.set(flushes.get() + 1);
+            if fails {
+                Err(io::Error::other("write-back failed"))
+            } else {
+                Ok(())
+            }
+        };
+        flush_ahead(written, flush, &done).map(|()| flushes.get())
+    }
+
+    /// a flush ahead waits until more members than are flushed one by one were written since the
+    /// last flush, and keeps the error a flush reports, which the flush after the last member
+    /// would not report again.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_flush_ahead_waits_for_many_new_members_and_keeps_its_error() {
+        let alone = MOST_FLUSHED_ALONE;
+        assert_eq!(flushed_ahead(&[10, alone, alone], false).unwrap(), 0);
+        assert_eq!(flushed_ahead(&[alone + 1], false).unwrap(), 1);
+        let paced = [alone + 1, 2 * alone + 1, 2 * alone + 2];
+        assert_eq!(flushed_ahead(&paced, false).unwrap(), 2);
+        let failed = flushed_ahead(&[alone + 1, alone + 1], true);
+        assert_eq!(failed.unwrap_err().to_string(), "write-back failed");
     }
 
     #[test]
@@ -775,7 +869,7 @@ mod tests {
             }
         }
         let scratch = Scratch::new();
-        let (members, _) = store_with(&scratch.cache, 2, |writers| {
+        let (members, _) = store_with(&scratch.cache, 2, false, |writers| {
             let releases = paused_writers(writers, 2);
             let (ahead, reached) = sync_channel(1);
             let files = thread::scope(|scope| {
@@ -842,7 +936,7 @@ mod tests {
         let read = Cell::new(0);
         let stopped = |_| read.get() > SMALL + (64 << 10);
         let mut guard = Guard::new(&limits, &stopped, &meter);
-        let error = store_with(&scratch.cache, 2, |writers| {
+        let error = store_with(&scratch.cache, 2, false, |writers| {
             writers.keep(
                 &mut guard,
                 "large.bin".to_owned(),
@@ -862,7 +956,7 @@ mod tests {
         let scratch = Scratch::new();
         let bytes = vec![b'a'; SMALL + (64 << 10)];
         for (size, threads) in [(bytes.len() as u64, 2), (8 << 20, 1)] {
-            let (members, _) = store_with(&scratch.cache, threads, |writers| {
+            let (members, _) = store_with(&scratch.cache, threads, false, |writers| {
                 let releases = paused_writers(writers, threads);
                 let limits = Limits::default();
                 let meter = Meter::default();
