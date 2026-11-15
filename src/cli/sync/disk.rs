@@ -639,14 +639,19 @@ impl Survey {
     }
 
     /// what removing the files in `going`, with the folders that leaves empty, takes out of the
-    /// way, worked out once for every blocker a run asks about.
+    /// way, worked out once for every blocker a run asks about. files a system made go with the
+    /// folder their last other file leaves, so they keep none.
     pub(crate) fn freeing<'s>(&'s self, going: &'s HashSet<String>) -> Freeing<'s> {
         let mut holding_going = HashSet::new();
         for path in going.iter().filter(|path| self.disk.contains_key(*path)) {
             gather_folders(&mut holding_going, path);
         }
         let mut holding_others = HashSet::new();
-        for path in self.disk.keys().filter(|path| !going.contains(*path)) {
+        for path in self
+            .disk
+            .keys()
+            .filter(|path| !going.contains(*path) && !self.made_by_system(path))
+        {
             gather_folders(&mut holding_others, path);
         }
         for (path, entry) in &self.entries {

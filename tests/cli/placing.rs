@@ -2624,6 +2624,42 @@ fn a_force_cut_off_at_once_keeps_an_edit_that_kept_its_look() -> Result {
     Ok(())
 }
 
+/// a folder whose path data.lock now gives a file goes with its files, though finder left a
+/// `.DS_Store` in it, which goes with it, so the file takes its place in the same run.
+#[test]
+fn a_folder_holding_only_system_files_frees_the_path_it_held() -> Result {
+    let sandbox = Sandbox::new()?;
+    let before = zip_of(&[("top.csv", b"top\n"), ("x/a.csv", b"first\n")])?;
+    let after = zip_of(&[("top.csv", b"top\n"), ("x", b"a file now\n")])?;
+    let server = Server::start(
+        "/files.zip",
+        vec![file(&before, "\"v1\""), file(&after, "\"v2\"")],
+    )?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.d]\nref = \"{}\"\n", server.url),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let x = sandbox.work().join("data").join("d").join("x");
+    fs::write(x.join(".DS_Store"), b"finder")?;
+    let upgraded = sandbox.run(&["lock", "--upgrade", "d"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+
+    let output = sandbox.run(&["sync", "--offline"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("warning"), "{stderr}");
+    assert_eq!(fs::read(&x)?, b"a file now\n", "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn status_names_a_file_in_a_folders_way_once() -> Result {
     let sandbox = Sandbox::new()?;
