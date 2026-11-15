@@ -38,13 +38,14 @@ const SECRET_NAMES: [&str; 12] = [
 
 /// names whose values show as written, ignoring case. dropbox's `rlkey` and drive's `resourcekey`
 /// are in data.toml anyway; a paging cursor stays masked, since some apis hand back a token there.
-const HARMLESS: [&str; 16] = [
+const HARMLESS: [&str; 17] = [
     "dl",
     "raw",
     "download",
     "format",
     "version",
     "versionid",
+    "datasetversionnumber",
     "generation",
     "persistentid",
     "rlkey",
@@ -390,6 +391,10 @@ mod tests {
             (
                 "https://api.example.org/files?page=2&per_page=100&page_size=50&limit=10&offset=20&size=5&cursor=c1",
                 "https://api.example.org/files?page=2&per_page=100&page_size=50&limit=10&offset=20&size=5&cursor=***",
+            ),
+            (
+                "https://api.kaggle.com/v1/datasets/download/a/b/c.csv?datasetVersionNumber=2&raw=true&token=t1",
+                "https://api.kaggle.com/v1/datasets/download/a/b/c.csv?datasetVersionNumber=2&raw=true&token=***",
             ),
         ] {
             assert_eq!(mask_query(text), shown, "{text}");
