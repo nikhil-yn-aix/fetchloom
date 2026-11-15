@@ -49,7 +49,11 @@ pub(crate) fn command_words(command: &str, windows: bool) -> Option<Vec<String>>
                 } else {
                     word.get_or_insert_default().push(c);
                 }
-            } else if delimiter == '"' && matches!(c, '$' | '\u{60}') {
+            } else if delimiter == '"'
+                && (matches!(c, '$' | '\u{60}')
+                    || (windows && matches!(c, '\u{201c}'..='\u{201e}')))
+            {
+                // powershell ends a double-quoted string at a curly double quote too
                 return None;
             } else {
                 word.get_or_insert_default().push(c);
@@ -64,6 +68,8 @@ pub(crate) fn command_words(command: &str, windows: bool) -> Option<Vec<String>>
                 | '?' | '[' | ']' => return None,
                 c if c.is_whitespace() => words.extend(word.take()),
                 '\\' if !windows => word.get_or_insert_default().push(chars.next()?),
+                // powershell starts a quoted string at a curly quote too
+                '\u{2018}'..='\u{201e}' if windows => return None,
                 _ => word.get_or_insert_default().push(c),
             }
         }
@@ -143,7 +149,7 @@ fn is_single_quote(c: char) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -159,7 +165,7 @@ mod tests {
 
     /// a word a shell would expand or split, quoted for bash, zsh and fish, then for powershell,
     /// and for cmd but with `$`, a backtick or a double quote, which nothing keeps literal in both.
-    const QUOTED: [(&str, &str, &str); 13] = [
+    pub(crate) const QUOTED: [(&str, &str, &str); 13] = [
         ("hi!.csv", "'hi!.csv'", "\"hi!.csv\""),
         ("$notes", "'$notes'", "'$notes'"),
         ("a`b`", "'a`b`'", "'a`b`'"),
@@ -254,6 +260,23 @@ mod tests {
                 shell[0]
             );
         }
+    }
+
+    /// powershell reads a curly quote as a straight one, so a command holding one outside single
+    /// quotes is never read as words there.
+    #[test]
+    fn a_curly_quote_powershell_reads_as_a_quote_is_never_read_as_text() {
+        for command in [
+            "fetchloom get \"a\u{201c};calc;\u{201c}\"",
+            "fetchloom get a\u{2019};calc;\u{2018}",
+            "fetchloom get \u{201c}a b\u{201d}",
+        ] {
+            assert_eq!(command_words(command, true), None, "{command}");
+        }
+        assert_eq!(
+            command_words("fetchloom get 'a\u{201c}b'", true).unwrap(),
+            ["fetchloom", "get", "a\u{201c}b"],
+        );
     }
 
     #[test]
