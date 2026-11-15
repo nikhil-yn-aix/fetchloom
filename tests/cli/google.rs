@@ -206,7 +206,9 @@ fn decode(text: &str) -> Option<Vec<u8>> {
 }
 
 /// what is wrong with a service account's assertion, as google's token endpoint checks it: its
-/// signature under the test key's public half, its issuer, audience, scope and hour of life.
+/// signature under the test key's public half, its issuer, audience and scope, and its hour of
+/// life, which must hold the endpoint's own clock, a few minutes either way. a part that does not
+/// read is wrong too.
 fn assertion_fault(assertion: &str) -> Option<String> {
     let parts: Vec<&str> = assertion.split('.').collect();
     let [header, claims, signature] = parts.as_slice() else {
@@ -217,22 +219,33 @@ fn assertion_fault(assertion: &str) -> Option<String> {
         PUBLIC_KEY,
     );
     let signed = format!("{header}.{claims}");
-    if key.verify(signed.as_bytes(), &decode(signature)?).is_err() {
+    let read =
+        |part: &str| -> Option<serde_json::Value> { serde_json::from_slice(&decode(part)?).ok() };
+    let verified = decode(signature)
+        .is_some_and(|signature| key.verify(signed.as_bytes(), &signature).is_ok());
+    let (Some(header), Some(claims), true) = (read(header), read(claims), verified) else {
         return Some("Invalid JWT Signature.".to_owned());
+    };
+    let (Some(issued), Some(expires)) = (claims["iat"].as_u64(), claims["exp"].as_u64()) else {
+        return Some(format!("no iat or exp in {claims}"));
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    if issued > now + SKEW || expires + SKEW <= now {
+        return Some("Invalid JWT: Token must be a short-lived token (60 minutes) and in a reasonable timeframe. Check your iat and exp values in the JWT claim.".to_owned());
     }
-    let header: serde_json::Value = serde_json::from_slice(&decode(header)?).ok()?;
-    let claims: serde_json::Value = serde_json::from_slice(&decode(claims)?).ok()?;
-    let lifetime = claims["exp"]
-        .as_u64()?
-        .checked_sub(claims["iat"].as_u64()?)?;
     let expected = header["alg"] == "RS256"
         && header["kid"] == "test-key-id"
         && claims["iss"] == EMAIL
         && claims["aud"] == "https://oauth2.googleapis.com/token"
         && [STORAGE_SCOPE, DRIVE_SCOPE].contains(&claims["scope"].as_str().unwrap_or_default())
-        && lifetime == 3600;
+        && expires.checked_sub(issued) == Some(3600);
     (!expected).then(|| format!("unexpected assertion {header} {claims}"))
 }
+
+/// the seconds google's token endpoint lets an assertion's times stray from its own clock.
+const SKEW: u64 = 300;
 
 fn assertion_scope(assertion: &str) -> Option<String> {
     let claims = decode(assertion.split('.').nth(1)?)?;
