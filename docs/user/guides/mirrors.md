@@ -64,6 +64,7 @@ a mirror you name may be on this machine or your network, such as `http://10.0.0
 | lacks a file, 404 or 410 on the web | asks the next mirror, then the source |
 | holds a copy of another size or with other bytes, or a link or a special file in its place | warns, naming the mirror and the file, and asks the next mirror, then the source |
 | is not there, holds no `fetchloom-mirror` file, cannot be reached, refuses with 401 or 403, or fails with 5xx after the retries | warns once and skips the mirror for the rest of the run |
+| is busy: asks to wait longer than a run waits for one request, or still answers 429 after the retries | warns once that it is busy, with what it answered, and skips the mirror for the rest of the run |
 
 in [mirror-only mode](#mirror-only-mode) the source is never asked, so a file no mirror gives fails the run, named.
 

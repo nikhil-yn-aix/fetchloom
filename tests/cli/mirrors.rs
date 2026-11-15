@@ -683,6 +683,47 @@ fn a_dead_web_mirror_is_asked_once_then_skipped() -> Result {
     Ok(())
 }
 
+/// a mirror that asks to wait an hour answered, so it is called busy, not unreachable, and the run
+/// goes to the sources at once.
+#[test]
+fn a_mirror_that_asks_to_wait_is_skipped_as_busy() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let asked = source.requests().len();
+    let mirror = Routes::start(vec![(
+        "/m/fetchloom-mirror".to_owned(),
+        reply(
+            "429 Too Many Requests",
+            &[("Content-Length", "0"), ("Retry-After", "3600")],
+            b"",
+        ),
+    )])?;
+    let base = format!("{}/m", mirror.url);
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&folder, &["--json", "sync", "--mirror", &base])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    ok(&output)?;
+    holds_the_project(&folder)?;
+    let document = json(&output)?;
+    let skipped = crate::support::warning(&document, "mirror.skipped");
+    assert_eq!(
+        skipped["message"],
+        format!(
+            "the mirror {base} is busy: 127.0.0.1 asked to wait 1 h before the next request, so this run skips it"
+        ),
+        "{document}"
+    );
+    assert_eq!(
+        skipped["help"],
+        "try again later, or ask whoever keeps the mirror"
+    );
+    assert_eq!(mirror.targets(), ["/m/fetchloom-mirror"]);
+    assert_eq!(source.requests().len(), asked + 2);
+    Ok(())
+}
+
 /// a file no mirror holds fails naming what each mirror said, and resolving, searching, checking
 /// keys and one-off downloads are refused, each naming the setting.
 #[test]

@@ -291,19 +291,43 @@ fn web_missing(location: &Location, look: web::Look) -> Option<Skip> {
             refused_help(location, status),
             format!("answered {status}"),
         ),
-        web::Look::Failed(error) => (
-            format!(
-                "could not reach the mirror {location}: {}, so this run skips it",
-                error.message
-            ),
-            "check the address, and that this machine can reach it".to_owned(),
-            error.message,
-        ),
+        web::Look::Failed(error) => {
+            let (warning, help) = skip_warning(location, &error, || {
+                format!(
+                    "could not reach the mirror {location}: {}, so this run skips it",
+                    error.message
+                )
+            });
+            (warning, help, error.message)
+        }
     };
     Some(Skip {
         warning: Some((warning, help)),
         said,
     })
+}
+
+/// the warning and help for the mirror at `location`, skipped once a request to it ended with
+/// `error`, as `otherwise` words it. a mirror that asked to wait answered, so it is called busy
+/// and its address is not blamed.
+fn skip_warning(
+    location: &Location,
+    error: &Error,
+    otherwise: impl FnOnce() -> String,
+) -> (String, String) {
+    if error.kind == Kind::NetworkRateLimited {
+        return (
+            format!(
+                "the mirror {location} is busy: {}, so this run skips it",
+                error.message
+            ),
+            "try again later, or ask whoever keeps the mirror".to_owned(),
+        );
+    }
+    (
+        otherwise(),
+        "check the address, and that this machine can reach it".to_owned(),
+    )
 }
 
 /// why the S3 mirror at `location`, `top`, is skipped, after its marker was asked for.
@@ -330,14 +354,15 @@ fn bucket_missing(location: &Location, top: &s3::Top, look: s3::Look) -> Option<
             "try again later, or ask whoever keeps the mirror".to_owned(),
             format!("answered {status}"),
         ),
-        s3::Look::Failed(error) => (
-            format!(
-                "could not reach the mirror {location}: {}, so this run skips it",
-                error.message
-            ),
-            "check the address, and that this machine can reach it".to_owned(),
-            error.message,
-        ),
+        s3::Look::Failed(error) => {
+            let (warning, help) = skip_warning(location, &error, || {
+                format!(
+                    "could not reach the mirror {location}: {}, so this run skips it",
+                    error.message
+                )
+            });
+            (warning, help, error.message)
+        }
     };
     Some(Skip {
         warning: Some((warning, help)),
@@ -711,17 +736,17 @@ async fn from_web(
         );
     }
     if let Some(error) = trouble {
+        let warning = skip_warning(location, &error, || {
+            format!(
+                "the mirror {location} failed: {}, so this run skips it",
+                error.message
+            )
+        });
         mirrored.skip(
             context,
             index,
             Skip {
-                warning: Some((
-                    format!(
-                        "the mirror {location} failed: {}, so this run skips it",
-                        error.message
-                    ),
-                    "check the address, and that this machine can reach it".to_owned(),
-                )),
+                warning: Some(warning),
                 said: error.message,
             },
         );

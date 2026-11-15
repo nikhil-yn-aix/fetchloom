@@ -170,7 +170,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `merge.formatting` | a merge kept one side's entry of a dataset, which the other side writes differently only in comments or spacing |
 | `merge.unpinned` | after a merge, neither side's data.lock pins datasets as data.toml now asks |
 | `mirror.damaged` | a mirror holds a damaged copy of a file, so it was not used |
-| `mirror.skipped` | a mirror is missing, unreadable or unreachable, so the run skips it |
+| `mirror.skipped` | a mirror is missing, unreadable, unreachable or busy, so the run skips it |
 | `mirror.unreadable` | `cache gc` could not read copies on a mirror |
 | `name.taken` | the name an add chose was taken, so the dataset got a number |
 | `network.private_origin` | a later run downloads from a private address only once `allowed_origins` lists it; `details` names each origin |
