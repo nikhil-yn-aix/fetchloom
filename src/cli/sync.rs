@@ -2302,7 +2302,12 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
             "unfetchable entries",
         ));
     }
-    facts.extend(listing.license.clone());
+    facts.extend(
+        listing
+            .license
+            .as_ref()
+            .map(|license| format!("license {license}")),
+    );
     output.step("Resolved", &facts.join(" · "));
     if let Some(license) = &listing.license
         && let Some(limit) = restriction(license)
@@ -2993,6 +2998,40 @@ mod tests {
             ),
             ["moved"],
             "only a new version is told when the bytes are a guess"
+        );
+    }
+
+    /// a license is told with its label, since a source's own may be a bare `unknown`.
+    #[test]
+    fn the_resolved_line_labels_the_license() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: true,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        );
+        let listing = Listing {
+            within: Vec::new(),
+            access: source::Access::Unknown,
+            resolved: Reference::parse("zenodo:3608990").unwrap().reference,
+            title: Some("Movie reviews".to_owned()),
+            license: Some("unknown".to_owned()),
+            doi: None,
+            files: Vec::new(),
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+        };
+        tell_resolved(&output, &listing);
+        assert_eq!(
+            output.said(),
+            ["   Resolved zenodo:3608990 · Movie reviews · 0 files · 0 B · license unknown"]
         );
     }
 

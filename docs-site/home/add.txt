@@ -1,6 +1,6 @@
 $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
   Resolving hf:datasets/scikit-learn/iris
-   Resolved hf:datasets/scikit-learn/iris@0bda0ce · 3 of 4 files · 16.6 KiB · cc0-1.0
+   Resolved hf:datasets/scikit-learn/iris@0bda0ce · 3 of 4 files · 16.6 KiB · license cc0-1.0
 Downloading 3 files · 16.6 KiB
  Downloaded 3 files · 16.6 KiB in 83 ms
     Started a project in ~/iris-study
