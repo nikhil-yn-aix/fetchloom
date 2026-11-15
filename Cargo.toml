@@ -97,6 +97,11 @@ zstd = { version = "0.14", default-features = false }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process", "termios"] }
 
+# the macos keychain's error, whose status code tells a locked keychain no screen can unlock from
+# the failures keyring reports alike. it is already in the tree under keyring's apple store
+[target.'cfg(target_vendor = "apple")'.dependencies]
+security-framework = { version = "3.7", default-features = false }
+
 # a linux system or container without a certificate bundle still verifies https with mozilla's
 # roots. macos and windows ask their own verifier. both crates are already under reqwest
 [target.'cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))'.dependencies]

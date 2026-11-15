@@ -70,9 +70,33 @@ impl Keyring {
 /// whether `err`, from the credential store, says the store would not let fetchloom in, as a
 /// locked keyring does where it cannot ask for its password.
 pub(crate) fn locked(err: &io::Error) -> bool {
-    err.get_ref()
+    match err
+        .get_ref()
         .and_then(|inner| inner.downcast_ref::<keyring::Error>())
-        .is_some_and(|err| matches!(err, keyring::Error::NoStorageAccess(_)))
+    {
+        Some(keyring::Error::NoStorageAccess(_)) => true,
+        Some(keyring::Error::PlatformFailure(failure)) => locked_keychain(failure.as_ref()),
+        _ => false,
+    }
+}
+
+/// macos's errSecInteractionNotAllowed: the keychain is locked, and no screen can show its
+/// password prompt, as over ssh.
+#[cfg(target_vendor = "apple")]
+const INTERACTION_NOT_ALLOWED: i32 = -25308;
+
+/// whether a failure the store reports, which keyring's apple store gives errSecInteractionNotAllowed
+/// as, is a locked keychain, told by its status code since the message is in the system's language.
+#[cfg(target_vendor = "apple")]
+fn locked_keychain(failure: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    failure
+        .downcast_ref::<security_framework::base::Error>()
+        .is_some_and(|failure| failure.code() == INTERACTION_NOT_ALLOWED)
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn locked_keychain(_failure: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    false
 }
 
 /// whether `FETCHLOOM_KEYRING` leaves the system's credential store in use: unless it is false,
@@ -266,6 +290,37 @@ mod tests {
     use std::ffi::OsString;
 
     use super::*;
+
+    /// a store that cannot ask for its password counts as locked, so the help says to unlock it;
+    /// any other failure does not.
+    #[test]
+    fn a_store_that_cannot_ask_for_its_password_is_locked() {
+        let failed = |err: keyring::Error| io::Error::other(err);
+        assert!(locked(&failed(keyring::Error::NoStorageAccess(Box::new(
+            io::Error::other("locked")
+        )))));
+        assert!(!locked(&failed(keyring::Error::PlatformFailure(Box::new(
+            io::Error::other("User interaction is not allowed")
+        )))));
+        assert!(!locked(&failed(keyring::Error::NoEntry)));
+        assert!(!locked(&io::Error::other("no store at all")));
+    }
+
+    /// macos answers errSecInteractionNotAllowed for a locked keychain no screen can unlock, as
+    /// over ssh, which keyring's apple store reports as a platform failure; its code tells it,
+    /// whatever language the message is in.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn a_keychain_that_no_screen_can_unlock_is_locked() {
+        let failed = |code| {
+            io::Error::other(keyring::Error::PlatformFailure(Box::new(
+                security_framework::base::Error::from_code(code),
+            )))
+        };
+        assert!(locked(&failed(-25308)));
+        // errSecAuthFailed: a wrong password, not a lock
+        assert!(!locked(&failed(-25293)));
+    }
 
     #[test]
     fn a_key_replaces_its_file_with_a_new_private_one() {

@@ -828,11 +828,16 @@ fn elsewhere(it: &str, locked: bool) -> String {
     let file = format!(
         "set FETCHLOOM_KEYRING=false to keep {it} in fetchloom's own file, readable only by you, then run it again"
     );
-    if locked {
-        format!("unlock {}, or {file}", auth::keyring_name())
-    } else {
-        file
+    if !locked {
+        return file;
     }
+    // macos's own command asks for the keychain's password in the terminal, over ssh too
+    let unlock = if cfg!(target_os = "macos") {
+        "unlock the macos keychain with `security unlock-keychain`".to_owned()
+    } else {
+        format!("unlock {}", auth::keyring_name())
+    };
+    format!("{unlock}, or {file}")
 }
 
 /// the question before saving `account`'s key to the file `path`, and the answer enter gives:
@@ -1220,6 +1225,22 @@ mod tests {
             accessible: false,
         };
         Arc::new(Context::new(Output::new(style, Level::Quiet, false, false)))
+    }
+
+    /// a store that is locked names how to unlock it: on macos the command that asks for the
+    /// keychain's password in a terminal, over ssh too.
+    #[test]
+    fn a_locked_store_says_how_to_unlock_it() {
+        let file = "set FETCHLOOM_KEYRING=false to keep the key in fetchloom's own file, readable only by you, then run it again";
+        let unlock = if cfg!(target_os = "macos") {
+            "unlock the macos keychain with `security unlock-keychain`"
+        } else if cfg!(windows) {
+            "unlock windows credential manager"
+        } else {
+            "unlock the system keyring"
+        };
+        assert_eq!(elsewhere("the key", true), format!("{unlock}, or {file}"));
+        assert_eq!(elsewhere("the key", false), file);
     }
 
     /// a dataverse host a person typed may be on a private network, as `add` allows, so its key

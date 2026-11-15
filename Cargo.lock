@@ -843,6 +843,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "same-file",
+ "security-framework",
  "serde",
  "serde_json",
  "sevenz-rust2",
