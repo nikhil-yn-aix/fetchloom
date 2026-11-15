@@ -52,6 +52,8 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         unread,
         ..
     } = needed_with(&cache, None, &context.stop, false, Uses::Told)?;
+    // gc stops at a project it cannot read, so it frees nothing then
+    let blocked = !unread.is_empty();
     for error in unread {
         let said = format!("{}; what that project needs is not counted", error.message);
         match &error.help {
@@ -106,7 +108,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
             ),
         );
     }
-    tell_usage(output, &usage, projects.len());
+    tell_usage(output, &usage, projects.len(), blocked);
     if unfinished.downloads > 0 {
         output.hint("`fetchloom cache gc --now` also frees unfinished downloads no fetchloom is running; those start over next time");
     }
@@ -156,7 +158,7 @@ fn tell_projects(output: &Output, projects: &[PathBuf]) {
     }
 }
 
-fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
+fn tell_usage(output: &Output, usage: &Usage, projects: usize, blocked: bool) {
     if usage.objects == 0 {
         output.done("Ok", "the cache has no data files");
         return;
@@ -164,7 +166,7 @@ fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
     if projects > 0 {
         output.label("Needed", &needed_line(usage, projects));
     }
-    let unneeded = unneeded_line(usage);
+    let unneeded = unneeded_line(usage, blocked);
     if let Some(line) = &unneeded {
         output.label("Unneeded", line);
     }
@@ -173,7 +175,7 @@ fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
     }
     if unneeded.is_none() {
         output.done("Ok", "every cached file is needed by a project");
-    } else if usage.unneeded == 0 || usage.freeable + usage.young > 0 {
+    } else if !blocked && (usage.unneeded == 0 || usage.freeable + usage.young > 0) {
         // gc frees nothing of what folders outside the cache link
         output.hint("`fetchloom cache gc` frees what no project needs once it is a day old; `fetchloom cache gc --now` frees it now");
     }
@@ -201,9 +203,17 @@ fn needed_line(usage: &Usage, projects: usize) -> String {
     line
 }
 
-fn unneeded_line(usage: &Usage) -> Option<String> {
+/// what no project needs, and what gc frees of it; `blocked` when a project could not be read,
+/// which stops gc before it frees anything.
+fn unneeded_line(usage: &Usage, blocked: bool) -> Option<String> {
     if usage.unneeded_objects == 0 {
         return None;
+    }
+    if blocked {
+        return Some(format!(
+            "{} · needed by none of the projects fetchloom could read; gc frees none of it while a project cannot be read",
+            units::size(usage.unneeded)
+        ));
     }
     let (freeable, young) = (usage.freeable, usage.young);
     let elsewhere = usage.unneeded.saturating_sub(freeable + young);
@@ -1044,10 +1054,14 @@ fn needed_focused(
                 continue;
             }
             Err(err) => {
-                return Err(Error::io(
-                    format!("cannot read {}", manifest.display()),
-                    &err,
-                ));
+                let error = Error::io(format!("cannot read {}", manifest.display()), &err);
+                let error = theirs(&project.root, error);
+                if uses == Uses::Told {
+                    unread.push(error);
+                    complete = false;
+                    continue;
+                }
+                return Err(error);
             }
         };
         // data.toml that does not read counts as one without members tables: more is kept
@@ -1066,7 +1080,7 @@ fn needed_focused(
                 Some(help) => help.replace(&here, &there),
                 None => "fix that project's data.lock, then try again".to_owned(),
             };
-            Error::new(
+            let error = Error::new(
                 err.kind,
                 format!(
                     "{} cannot be read, so the cache stays as it is",
@@ -1074,7 +1088,8 @@ fn needed_focused(
                 ),
             )
             .detail(err.message)
-            .help(help)
+            .help(help);
+            theirs(&project.root, error)
         });
         let lock = match lock {
             Ok(lock) => lock,
@@ -1117,6 +1132,52 @@ fn needed_focused(
         groups,
         unread,
     })
+}
+
+/// `error`, from reading the registered project at `root`, with help that names whose project it
+/// is when it is another user's, who alone can fix it, as in a lab's shared cache.
+fn theirs(root: &Path, error: Error) -> Error {
+    #[cfg(unix)]
+    if let Some(owner) = owner_besides(root, rustix::process::geteuid().as_raw()) {
+        let owner = user_name(owner).unwrap_or_else(|| format!("the user with id {owner}"));
+        return error.help(format!(
+            "{} belongs to {owner}: ask them to let your group read its data.toml, data.lock and \
+             data.lock.d, or to fix them; until then gc keeps every file in the cache",
+            root.display()
+        ));
+    }
+    #[cfg(not(unix))]
+    let _ = root;
+    error
+}
+
+/// who owns the project at `root`, when it is not `me`: the owner of its data.toml, or of the
+/// nearest folder on the way to it whose details this user may read, as a private folder lets
+/// others read nothing inside it.
+#[cfg(unix)]
+fn owner_besides(root: &Path, me: u32) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    let manifest = root.join(crate::project::manifest::FILE);
+    let found = std::iter::once(manifest.as_path())
+        .chain(root.ancestors())
+        .find_map(|path| fs::symlink_metadata(path).ok())?;
+    (found.uid() != me).then_some(found.uid())
+}
+
+/// the name of the user `id`, as `id -nu` tells it: a cluster's accounts are mostly kept in a
+/// directory service, which `/etc/passwd` does not list and only the system's own lookup asks.
+#[cfg(unix)]
+fn user_name(id: u32) -> Option<String> {
+    let told = std::process::Command::new("id")
+        .arg("-nu")
+        .arg(id.to_string())
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8(told.stdout).ok()?;
+    let name = name.trim();
+    (told.status.success() && !name.is_empty()).then(|| name.to_owned())
 }
 
 /// the most bytes a registered project's data.toml may hold for gc to read it: far more than any
@@ -1925,6 +1986,42 @@ mod tests {
         assert!(needed.objects.contains(&species.digest), "by its MD5");
     }
 
+    /// a project another member keeps to themselves, as in a private folder of a lab's shared
+    /// scratch, is told and left out of the cache's report, which goes on; gc still stops before
+    /// it frees anything, since what that project needs is unknown.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_that_cannot_be_read_is_told_and_gc_keeps_everything() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let project = folder.path().join("theirs");
+        fs::create_dir(&project).unwrap();
+        fs::write(project.join("data.toml"), "").unwrap();
+        cache.register(&project).unwrap();
+        fs::set_permissions(&project, fs::Permissions::from_mode(0o000)).unwrap();
+        let report = needed_with(&cache, None, &Stop::default(), false, Uses::Told);
+        let gc = needed_with(&cache, None, &Stop::default(), true, Uses::Untold);
+        fs::set_permissions(&project, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let report = report.unwrap();
+        let unread: Vec<&str> = report
+            .unread
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect();
+        let message = format!(
+            "cannot read {}: permission was denied",
+            project.join("data.toml").display()
+        );
+        assert_eq!(unread, [message.as_str()]);
+        assert!(!report.complete);
+        assert_eq!(gc.map(drop).map_err(|error| error.message), Err(message));
+    }
+
     /// a registered project's data.toml that a clone or someone sharing the cache made a fifo, a
     /// link to /dev/zero or to a huge file is refused at once by every walk of the projects, as
     /// gc's, never waited on for a writer or read without end.
@@ -2131,12 +2228,52 @@ mod tests {
                 unneeded_objects: 1,
                 ..Usage::default()
             };
-            assert_eq!(unneeded_line(&usage).as_deref(), Some(said));
+            assert_eq!(unneeded_line(&usage, false).as_deref(), Some(said));
         }
         assert_eq!(
-            unneeded_line(&Usage::default()),
+            unneeded_line(&Usage::default(), false),
             None,
             "all of it is needed"
+        );
+        let usage = Usage {
+            unneeded: 1024,
+            freeable: 1024,
+            unneeded_objects: 1,
+            ..Usage::default()
+        };
+        assert_eq!(
+            unneeded_line(&usage, true).as_deref(),
+            Some(
+                "1.0 KiB · needed by none of the projects fetchloom could read; gc frees none of \
+                 it while a project cannot be read"
+            ),
+            "gc stops at a project it cannot read"
+        );
+    }
+
+    /// the owner of a project in a folder only its owner may enter is read from that folder, and
+    /// named only when it is someone else.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_another_user_keeps_is_named_with_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let private = folder.path().join("bob");
+        let project = private.join("p");
+        fs::create_dir_all(&project).unwrap();
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o000)).unwrap();
+        let me = rustix::process::geteuid().as_raw();
+        let mine = owner_besides(&project, me);
+        let others = owner_besides(&project, me + 1);
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(mine, None, "this user's own project");
+        assert_eq!(
+            others,
+            Some(me),
+            "read from the folder only its owner may enter"
         );
     }
 
