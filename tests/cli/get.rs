@@ -1656,34 +1656,64 @@ fn get_reports_zero_byte_copies_in_a_synced_folder() -> Result {
     Ok(())
 }
 
+/// a link whose name promises a data file and answers with a web page, as a sign-in form does, is
+/// refused unless the page is asked for; a link named as a page, or a file the server names, is
+/// taken, the latter with a warning.
 #[test]
-fn data_file_links_warn_when_the_server_returns_html() -> Result {
-    for (path, warns) in [
-        ("/iris.csv", true),
-        ("/iris.CSV", true),
-        ("/index.html", false),
-        ("/index.HTM", false),
-        ("/index.xhtml", false),
+fn data_file_links_that_answer_with_html_are_refused() -> Result {
+    let page = |headers: &[(&'static str, &'static str)]| {
+        let mut headers = headers.to_vec();
+        headers.push(("Content-Type", "text/html; charset=utf-8"));
+        reply("200 OK", &headers, b"<html><form>sign in</form></html>")
+    };
+    let named = [("Content-Disposition", "attachment; filename=\"iris.csv\"")];
+    for (path, headers, args, refused, warns) in [
+        ("/iris.csv", &[][..], &[][..], true, false),
+        ("/iris.CSV", &[][..], &[][..], true, false),
+        ("/iris.csv", &[][..], &["--web-page"][..], false, false),
+        ("/export", &named[..], &[][..], false, true),
+        ("/index.html", &[][..], &[][..], false, false),
+        ("/index.HTM", &[][..], &[][..], false, false),
+        ("/index.xhtml", &[][..], &[][..], false, false),
     ] {
         let sandbox = Sandbox::new()?;
-        let body = b"<html>not the data</html>";
-        let server = Server::start(
-            path,
-            vec![reply(
-                "200 OK",
-                &[("Content-Type", "text/html; charset=utf-8")],
-                body,
-            )],
-        )?;
-        let output = sandbox.run(&["get", &server.url])?;
+        let server = Server::start(path, vec![page(headers)])?;
+        let mut asked = vec!["get", server.url.as_str()];
+        asked.extend_from_slice(args);
+        let output = sandbox.run(&asked)?;
         let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(0), "{stderr}");
-        let message = format!(
-            "{} came back as a web page, not a data file. the link may open a page instead of downloading\n  help: look for a download or raw link",
-            &path[1..]
+        let code = if refused { 10 } else { 0 };
+        assert_eq!(output.status.code(), Some(code), "{path}: {stderr}");
+        assert_eq!(
+            stderr.contains(&format!(
+                "error: {} answered with a web page, such as a sign-in page, not a data file",
+                server.url
+            )),
+            refused,
+            "{path}: {stderr}"
         );
-        assert_eq!(stderr.contains(&message), warns, "{stderr}");
+        assert_eq!(
+            stderr.contains("came back as a web page, not a data file"),
+            warns,
+            "{path}: {stderr}"
+        );
     }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![page(&[])])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("if the page itself is the data, add --web-page"),
+        "{stderr}"
+    );
+    let site = server.url.trim_start_matches("http://");
+    let site = site.split('/').next().unwrap_or(site);
+    assert!(
+        stderr.contains(&format!("`fetchloom auth login {site}`")),
+        "the sign-in names the port: {stderr}"
+    );
+    assert!(!sandbox.work().join("data.lock").exists());
     Ok(())
 }
 
