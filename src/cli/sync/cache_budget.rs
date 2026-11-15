@@ -60,8 +60,9 @@ pub(super) fn largest(lock: &Lock, most: usize) -> Vec<(String, u64)> {
 pub(super) struct Over<'a> {
     pub(super) doing: &'a str,
     pub(super) past: Past,
-    /// what `cache gc` would free now, none when a project it reads is out of reach.
-    pub(super) freeable: Option<u64>,
+    /// what `cache gc` would free now, and what only `cache gc --now` would, as a file a day old
+    /// at most; none when a project gc reads is out of reach.
+    pub(super) freeable: Option<(u64, u64)>,
     /// the project's largest datasets, with their bytes, largest first.
     pub(super) largest: Vec<(String, u64)>,
 }
@@ -81,10 +82,14 @@ impl Over<'_> {
     fn room(&self) -> Vec<String> {
         let mut lines = Vec::new();
         match self.freeable {
-            Some(0) => lines.push("`fetchloom cache gc` would free nothing now".to_owned()),
-            Some(bytes) => lines.push(format!(
+            Some((0, 0)) => lines.push("`fetchloom cache gc` would free nothing now".to_owned()),
+            Some((aged, 0)) => lines.push(format!(
                 "`fetchloom cache gc` would free {} now",
-                units::size(bytes)
+                units::size(aged)
+            )),
+            Some((aged, young)) => lines.push(format!(
+                "`fetchloom cache gc --now` would free {} now",
+                units::size(aged.saturating_add(young))
             )),
             None => {}
         }
@@ -105,10 +110,11 @@ impl Over<'_> {
     }
 
     /// the commands that free a dataset's files: dropping it here, which keeps it pinned, or
-    /// removing it, then gc, which deletes only what no project needs.
+    /// removing it, then gc, which deletes only what no project needs, at once with `--now`, as
+    /// gc alone keeps a file a day.
     fn freeing() -> String {
         format!(
-            "`{}` frees a dataset's files here and keeps it pinned, or `{}` and then `fetchloom cache gc` free them and take it out of the project",
+            "`{}` frees a dataset's files here and keeps it pinned, or `{}` and then `fetchloom cache gc --now` free them and take it out of the project",
             crate::suggested::command("drop <name>"),
             crate::suggested::command("remove <name>")
         )
@@ -277,7 +283,7 @@ mod tests {
                 .collect(),
         };
         let told = over(
-            Some(3 * GIB),
+            Some((3 * GIB, 0)),
             &[("imagenet", 180 * GIB), ("coco", 20 * GIB)],
         );
         assert_eq!(
@@ -292,11 +298,16 @@ mod tests {
             ]
         );
         assert_eq!(
-            over(Some(0), &[("iris", 4608)]).room(),
+            over(Some((0, 0)), &[("iris", 4608)]).room(),
             [
                 "`fetchloom cache gc` would free nothing now",
                 "this project's largest dataset is iris (4.5 KiB)"
             ]
+        );
+        // gc keeps a file downloaded today for a day, so only --now frees it now
+        assert_eq!(
+            over(Some((GIB, 2 * GIB)), &[]).room(),
+            ["`fetchloom cache gc --now` would free 3.0 GiB now"]
         );
         assert_eq!(over(None, &[]).room(), Vec::<String>::new());
     }
@@ -311,7 +322,7 @@ mod tests {
                 total: 212 * GIB,
                 budget: 200 * GIB,
             },
-            freeable: Some(3 * GIB),
+            freeable: Some((3 * GIB, 0)),
             largest: vec![("imagenet".to_owned(), 180 * GIB)],
         };
         let style = crate::output::Style {
@@ -327,7 +338,7 @@ mod tests {
         assert_eq!(
             output.warned(),
             [
-                "this sync brings the cache to 212.0 GiB, past the 200.0 GiB cache_budget; `fetchloom cache gc` would free 3.0 GiB now; this project's largest dataset is imagenet (180.0 GiB); `fetchloom drop <name>` frees a dataset's files here and keeps it pinned, or `fetchloom remove <name>` and then `fetchloom cache gc` free them and take it out of the project"
+                "this sync brings the cache to 212.0 GiB, past the 200.0 GiB cache_budget; `fetchloom cache gc` would free 3.0 GiB now; this project's largest dataset is imagenet (180.0 GiB); `fetchloom drop <name>` frees a dataset's files here and keeps it pinned, or `fetchloom remove <name>` and then `fetchloom cache gc --now` free them and take it out of the project"
             ]
         );
         let error = ask(&output, false, &over).unwrap_err();

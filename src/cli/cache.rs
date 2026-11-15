@@ -794,24 +794,25 @@ fn remind_at(output: &Output, root: &Path, threads: Threads, stop: &Stop) {
 /// workers; none when a project is out of reach, which gc would forget, or the cache unreadable.
 fn freeable(cache: &Cache, now: SystemTime, threads: Threads, stop: &Stop) -> Option<u64> {
     let scan = cache.scan_objects(threads, stop).ok()?;
-    freeable_in(cache, &scan, now, threads, stop)
+    unneeded_in(cache, &scan, now, threads, stop).map(|(freeable, _)| freeable)
 }
 
-/// [`freeable`] of the objects `scan` found in `cache`.
-pub(super) fn freeable_in(
+/// what gc would free of the objects `scan` found in `cache` at `now`, as [`freeable`] reads it:
+/// what `cache gc` frees, and what only `cache gc --now` does, as it is less than a day old.
+pub(super) fn unneeded_in(
     cache: &Cache,
     scan: &Scan,
     now: SystemTime,
     threads: Threads,
     stop: &Stop,
-) -> Option<u64> {
+) -> Option<(u64, u64)> {
     let found = needed_with(cache, None, stop, false, Uses::Untold).ok()?;
     if !found.complete {
         return None;
     }
     // what gc frees tells nothing of copies, so it reads no project's files
     let usage = Usage::measure(scan, &found.needed, &[], now, threads, stop).ok()?;
-    Some(usage.freeable)
+    Some((usage.freeable, usage.young))
 }
 
 /// sets the time itself, since writing an empty file again leaves its time alone on windows.

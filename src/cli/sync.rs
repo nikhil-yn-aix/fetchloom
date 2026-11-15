@@ -1234,7 +1234,7 @@ impl<'a> Loop<'a> {
         self.past_budget.store(true, Ordering::Relaxed);
         let now = SystemTime::now();
         let freeable =
-            scan.and_then(|scan| super::cache::freeable_in(&self.cache, &scan, now, threads, stop));
+            scan.and_then(|scan| super::cache::unneeded_in(&self.cache, &scan, now, threads, stop));
         let pinned = match lock {
             Some(_) => None,
             None => self.project.lock().ok().flatten(),
