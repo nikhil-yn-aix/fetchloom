@@ -624,7 +624,7 @@ fn changed_bytes_upstream_stop_sync_with_both_ways_on() -> Result {
     let help = error["help"].as_str().unwrap_or_default();
     for way in [
         "`fetchloom push --to <folder>`",
-        "`fetchloom sync --mirror <folder>`",
+        "`--mirror <folder>`",
         "`fetchloom lock --upgrade iris`",
     ] {
         assert!(help.contains(way), "{help}");

@@ -261,7 +261,7 @@ fn empty_variables_clear_the_mirrors_and_push_folder_the_file_names() -> Result 
     assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
     assert_eq!(
         json(&output)?["errors"][0]["message"],
-        "push needs a folder to copy the files into"
+        "push needs a folder or an S3 bucket to copy the files into"
     );
     assert!(!lab.join("pushed").exists());
     Ok(())

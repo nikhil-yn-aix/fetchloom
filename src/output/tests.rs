@@ -405,7 +405,7 @@ fn a_fix_is_the_first_runnable_command_in_the_help() {
     );
     assert_eq!(
         fix_in(
-            "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`",
+            "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`",
             false
         ),
         None,

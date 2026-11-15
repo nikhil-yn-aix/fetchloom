@@ -1633,7 +1633,7 @@ fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
         assert_eq!(output.status.code(), Some(10), "{document}");
         assert_eq!(
             document["errors"][0]["help"],
-            "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the file moved, put its new link as ref in data.toml",
+            "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the file moved, put its new link as ref in data.toml",
             "{link}"
         );
     }

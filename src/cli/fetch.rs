@@ -1434,12 +1434,12 @@ fn explain(error: Error, job: &Job) -> Error {
 }
 
 /// what to do about a file data.lock pins whose link has nothing at it now.
-const GONE_HELP: &str = "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the file moved, put its new link as ref in data.toml";
+const GONE_HELP: &str = "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the file moved, put its new link as ref in data.toml";
 
 /// what to do about pinned bytes of `dataset` that its source no longer serves.
 fn changed_upstream(dataset: &str) -> String {
     format!(
-        "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade {dataset}`"
+        "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade {dataset}`"
     )
 }
 
@@ -2198,7 +2198,7 @@ mod tests {
         assert_eq!(
             explain(gone(), &job).help.as_deref(),
             Some(
-                "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the file moved, put its new link as ref in data.toml"
+                "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the file moved, put its new link as ref in data.toml"
             )
         );
     }

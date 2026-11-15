@@ -287,7 +287,10 @@ fn target(context: &Context, args: &args::Push) -> Result<Location, Error> {
     let Some(to) = &args.to else {
         let push_to = &context.settings.push_to;
         return push_to.value.clone().ok_or_else(|| {
-            let error = Error::new(Kind::Usage, "push needs a folder to copy the files into");
+            let error = Error::new(
+                Kind::Usage,
+                "push needs a folder or an S3 bucket to copy the files into",
+            );
             let mirrors: Vec<String> = context
                 .settings
                 .mirrors
@@ -308,10 +311,10 @@ fn target(context: &Context, args: &args::Push) -> Result<Location, Error> {
             };
             // only an empty variable clears push_to with nothing in its place
             if push_to.origin == crate::settings::Origin::Environment {
-                error.help("FETCHLOOM_PUSH_TO is set empty, which clears push_to: give --to <folder>, or unset FETCHLOOM_PUSH_TO")
+                error.help("FETCHLOOM_PUSH_TO is set empty, which clears push_to: give --to <folder> or --to s3://bucket/prefix, or unset FETCHLOOM_PUSH_TO")
             } else {
                 error.help(
-                    "give --to <folder>, or save the folder for every push with `fetchloom settings set push_to <folder>`",
+                    "give --to <folder> or --to s3://bucket/prefix, or save it for every push with `fetchloom settings set push_to <folder>`",
                 )
             }
         });
@@ -1667,7 +1670,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         assert_eq!(
             error.help.as_deref(),
             Some(
-                "give --to <folder>, or save the folder for every push with `fetchloom settings set push_to <folder>`"
+                "give --to <folder> or --to s3://bucket/prefix, or save it for every push with `fetchloom settings set push_to <folder>`"
             )
         );
         assert_eq!(error.details, Vec::<String>::new());
@@ -1703,11 +1706,14 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         };
         let error = target(&context, &args).unwrap_err();
         assert_eq!(error.kind, Kind::Usage);
-        assert_eq!(error.message, "push needs a folder to copy the files into");
+        assert_eq!(
+            error.message,
+            "push needs a folder or an S3 bucket to copy the files into"
+        );
         assert_eq!(
             error.help.as_deref(),
             Some(
-                "FETCHLOOM_PUSH_TO is set empty, which clears push_to: give --to <folder>, or unset FETCHLOOM_PUSH_TO"
+                "FETCHLOOM_PUSH_TO is set empty, which clears push_to: give --to <folder> or --to s3://bucket/prefix, or unset FETCHLOOM_PUSH_TO"
             )
         );
     }
