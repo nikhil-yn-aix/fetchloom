@@ -815,11 +815,20 @@ async fn blocking<T: Send + 'static>(
 
 /// warns about the damaged copies `location` holds: the first few by name, the rest counted.
 fn tell_damaged(context: &Context, location: &Location, labels: &[String]) {
+    let help = match location {
+        Location::Folder(root) => format!(
+            "whoever keeps the mirror replaces it with `fetchloom push --verify --to {}`",
+            crate::suggested::shell_word(&root.display().to_string())
+        ),
+        Location::Web(_) | Location::S3(_) => {
+            "ask whoever keeps the mirror to replace it".to_owned()
+        }
+    };
     for label in labels.iter().take(NAMED) {
         context.output.warn_with(
             Warning::MirrorDamaged,
             &format!("the mirror {location} holds a damaged copy of {label}, so it was not used"),
-            "ask whoever keeps the mirror to replace it",
+            &help,
         );
     }
     if labels.len() > NAMED {

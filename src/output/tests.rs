@@ -527,7 +527,7 @@ fn a_fix_is_only_a_command_the_table_allows() {
         ("diff", true, &[]),
         ("list", true, &[]),
         ("export", true, &["--format", "--output"]),
-        ("push", true, &["--to", "--inputs", "--dry-run"]),
+        ("push", true, &["--to", "--inputs", "--verify", "--dry-run"]),
         ("path", true, &["--locked"]),
         ("cache", true, &[]),
         ("cache gc", false, &["--dry-run"]),

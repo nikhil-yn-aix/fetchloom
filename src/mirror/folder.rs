@@ -216,6 +216,30 @@ pub(crate) fn check_all(
     Ok(held)
 }
 
+/// [`check_all`] for `items`, objects or trees, each at its place below `root`, unheard.
+pub(crate) fn check_items(
+    root: &Path,
+    items: &[Item],
+    threads: Threads,
+    stop: &Stop,
+) -> io::Result<Vec<Held>> {
+    let held = crate::place::run_all(items, threads.at_most(COPIES), |item| {
+        let want = Wanted {
+            digest: item.digest,
+            size: item.size,
+            label: String::new(),
+        };
+        check(
+            &place(root, item.folder, &item.digest),
+            &want,
+            stop,
+            &mut |_| {},
+        )
+    });
+    stop.check_io()?;
+    Ok(held)
+}
+
 /// what the copy at `path` is of `want`, read as [`check_all`] reads it, telling `read` each
 /// block's size.
 fn check(path: &Path, want: &Wanted, stop: &Stop, read: &mut dyn FnMut(u64)) -> Held {

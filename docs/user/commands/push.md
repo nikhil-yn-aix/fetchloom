@@ -21,6 +21,7 @@ fetchloom push [options] [name]...
 |---|---|
 | `--to <folder>` | the mirror's folder. without it, the `push_to` setting names it, from the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_PUSH_TO`; with neither, push stops with `usage`, exit 2 |
 | `--inputs` | also push the datasets the named recipes are made from, and what those are made from in turn, so a rebuild on another machine finds them on the mirror. with no name, of every recipe |
+| `--verify` | read back each copy already on a folder mirror and replace one whose bytes are not the pinned ones; without it a copy of the right size counts as there. a bucket refuses it, since S3 checked each file when push sent it |
 | `-n`, `--dry-run` | say what would be downloaded, what would be copied and what is there already; change nothing |
 
 [global options](global-options.md) also apply. `--yes` answers the [question](#data-you-may-not-share) about data whose source wanted an account or accepted terms.

@@ -736,3 +736,56 @@ fn a_size_the_cached_bytes_do_not_have_sends_no_one_to_sync() -> Result {
     assert!(error["fix"].is_null(), "{error}");
     Ok(())
 }
+
+/// a copy of the right size with other bytes counts as there until `--verify` reads it back and
+/// replaces it, which is what sync's warning about it says to run. a bucket takes no `--verify`.
+#[test]
+fn verify_replaces_a_damaged_copy_of_the_right_size() -> Result {
+    let sandbox = Sandbox::new()?;
+    // the source stays up, so the clone's sync takes the file from it
+    let _source = project(&sandbox)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    let push = |verify: bool| {
+        let mut command = sandbox.command(&["--json", "--yes", "push"]);
+        if verify {
+            command.arg("--verify");
+        }
+        command.arg("--to").arg(&root).output()
+    };
+    ok(&push(false)?)?;
+    let hex = sha256_hex(IRIS);
+    let copy = root.join("objects").join(&hex[..2]).join(&hex[2..]);
+    let mut damaged = IRIS.to_vec();
+    damaged[0] ^= 1;
+    edit(&copy, &damaged)?;
+    let trusted = push(false)?;
+    ok(&trusted)?;
+    assert_eq!(json(&trusted)?["result"]["replaced"], 0);
+    let (clone, cache) = cold(&sandbox, "clone")?;
+    let synced = sandbox
+        .command_in(&clone, &["sync", "--mirror"])
+        .arg(&root)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    ok(&synced)?;
+    let stderr = text(&synced.stderr)?;
+    assert!(
+        stderr.contains(
+            "help: whoever keeps the mirror replaces it with `fetchloom push --verify --to "
+        ),
+        "{stderr}"
+    );
+    let verified = push(true)?;
+    ok(&verified)?;
+    let document = json(&verified)?;
+    assert_eq!(document["result"]["replaced"], 1, "{document}");
+    assert_eq!(document["result"]["present"], 5, "{document}");
+    assert_eq!(sha256_hex(&fs::read(&copy)?), hex);
+    let bucket = sandbox.run(&["--json", "push", "--verify", "--to", "s3://lab-data/m"])?;
+    assert_eq!(bucket.status.code(), Some(2), "{}", text(&bucket.stderr)?);
+    assert_eq!(
+        json(&bucket)?["errors"][0]["message"],
+        "--verify reads back the copies on a folder mirror, and s3://lab-data/m is a bucket"
+    );
+    Ok(())
+}

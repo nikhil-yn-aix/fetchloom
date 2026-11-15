@@ -141,14 +141,19 @@ struct Asking {
 /// where a push writes: a folder, or a prefix in an S3 bucket.
 #[derive(Clone)]
 enum To {
-    Folder(PathBuf),
+    /// a folder, and whether a copy of the right size there is read back and hashed before the
+    /// push takes it as the pinned file, as `--verify` asks.
+    Folder {
+        root: PathBuf,
+        verify: bool,
+    },
     Bucket(Arc<Pusher>),
 }
 
 impl std::fmt::Display for To {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            To::Folder(root) => write!(f, "{}", root.display()),
+            To::Folder { root, .. } => write!(f, "{}", root.display()),
             To::Bucket(pusher) => write!(f, "{}", pusher.top()),
         }
     }
@@ -191,7 +196,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
         };
         return Ok(Report::empty(target, args.dry.dry_run));
     }
-    let target = opened(context, target)?;
+    let target = opened(context, target, args.verify)?;
     let lock = project.lock()?;
     if let Some(lock) = &lock {
         lock.refuse_stated(datasets.iter().map(String::as_str))?;
@@ -335,16 +340,24 @@ fn target(context: &Context, args: &args::Push) -> Result<Location, Error> {
     }
 }
 
-/// where `target` is written: a folder as the system reaches it, or a bucket with the keys the
-/// AWS settings give for it.
-fn opened(context: &Context, target: Location) -> Result<To, Error> {
+/// where `target` is written: a folder as the system reaches it, its copies read back first when
+/// `verify` asks, or a bucket with the keys the AWS settings give for it.
+fn opened(context: &Context, target: Location, verify: bool) -> Result<To, Error> {
     match target {
+        Location::S3(top) if verify => Err(Error::new(
+            Kind::Usage,
+            format!("--verify reads back the copies on a folder mirror, and {top} is a bucket"),
+        )
+        .help("push to the bucket without --verify: S3 checked each file against its SHA-256 when push sent it")),
         Location::S3(top) => Ok(To::Bucket(Arc::new(Pusher::new(
             Arc::new(context.net()),
             top,
             Arc::clone(&context.stop),
         )?))),
-        Location::Folder(root) => Ok(To::Folder(reached(root))),
+        Location::Folder(root) => Ok(To::Folder {
+            root: reached(root),
+            verify,
+        }),
         Location::Web(base) => Err(web_refused(base.as_str())),
     }
 }
@@ -421,14 +434,18 @@ fn plan(
     let Wanted { needed, unknown } = needed(manifest, lock, cache, &datasets)?;
     let items: Vec<Item> = needed.iter().map(|needed| needed.item).collect();
     let (state, there) = match &target {
-        To::Folder(root) => {
+        To::Folder { root, verify } => {
             let state = folder::look(root).map_err(|refused| refusal(root, refused))?;
-            let there = folder::survey(root, state, &items, context.threads).map_err(|err| {
-                Error::io(
-                    format_args!("could not look in the mirror {}", root.display()),
-                    &err,
-                )
-            })?;
+            let mut there =
+                folder::survey(root, state, &items, context.threads).map_err(|err| {
+                    Error::io(
+                        format_args!("could not look in the mirror {}", root.display()),
+                        &err,
+                    )
+                })?;
+            if *verify {
+                read_back(context, root, &needed, &mut there)?;
+            }
             (state, there)
         }
         To::Bucket(pusher) => waiting(async {
@@ -463,6 +480,50 @@ fn plan(
         taking: Vec::new(),
         folder: DataFolder::default(),
     })
+}
+
+/// reads back and hashes each copy the folder mirror at `root` holds at the right size, as `there`
+/// says, and marks one whose bytes are not its pin's damaged, so the push replaces it. fails for a
+/// copy that cannot be read, or at a stop.
+fn read_back(
+    context: &Context,
+    root: &Path,
+    needed: &[Needed],
+    there: &mut [There],
+) -> Result<(), Error> {
+    let present: Vec<usize> = (0..there.len())
+        .filter(|at| there[*at] == There::Present)
+        .collect();
+    let items: Vec<Item> = present.iter().map(|at| needed[*at].item).collect();
+    let held =
+        folder::check_items(root, &items, context.threads, &context.stop).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                Stop::stopped()
+            } else {
+                Error::io(
+                    format_args!("could not read the mirror {}", root.display()),
+                    &err,
+                )
+            }
+        })?;
+    for (at, held) in present.into_iter().zip(held) {
+        there[at] = match held {
+            folder::Held::Verified(_) => There::Present,
+            folder::Held::Absent => There::Absent,
+            folder::Held::Damaged => There::Damaged,
+            folder::Held::Unreadable(err) => {
+                return Err(Error::io(
+                    format_args!(
+                        "could not read the copy of {} on the mirror {}",
+                        needed[at].label,
+                        root.display()
+                    ),
+                    &err,
+                ));
+            }
+        };
+    }
+    Ok(())
 }
 
 /// moves to `planned.taking` the files of `planned.lacked` the data folder holds: a `dry_run` only
@@ -954,7 +1015,7 @@ fn reasons(asks: &[Asking]) -> String {
 /// order. the first write that fails ends it; files written before keep their names.
 fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, Vec<Put>), Error> {
     let root = match &planned.target {
-        To::Folder(root) => root,
+        To::Folder { root, .. } => root,
         To::Bucket(pusher) => return write_bucket(context, cache, planned, pusher),
     };
     let (mut target, started) =
@@ -1664,6 +1725,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             names: Vec::new(),
             to: None,
             inputs: false,
+            verify: false,
             dry: args::DryRun { dry_run: false },
         };
         let error = target(&context, &args).unwrap_err();

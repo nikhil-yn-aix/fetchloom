@@ -1229,6 +1229,11 @@ pub(crate) struct Push {
     #[arg(long, help_heading = "options")]
     pub(crate) inputs: bool,
 
+    /// read back each copy already on a folder mirror and replace one whose bytes are not the
+    /// ones data.lock lists. without it a copy of the right size counts as there
+    #[arg(long, help_heading = "options")]
+    pub(crate) verify: bool,
+
     #[command(flatten)]
     pub(crate) dry: DryRun,
 }
