@@ -9,7 +9,7 @@ the project folder holds `data.toml` and `data.lock`, and its `.fetchloom/` hold
 | `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |
 | `.fetchloom/lock` | OS project lock; file contents are unused |
 | `.fetchloom/owner` | JSON identifying the modifying command, shared by windows and WSL |
-| `.fetchloom/owner.<pid>.<16 hex digits>.tmp` | owner record being written before hardlink publication; a hard kill can leave this file behind |
+| `.fetchloom/owner.<pid>.<16 hex digits>.tmp` | owner record being written before it is published by a hardlink, or on refs by a rename; a hard kill can leave this file behind |
 | `.fetchloom/state` | compact JSON describing tracked placements |
 | `.fetchloom/builds/<recipe>.log` | the output of the last run of a [recipe](../guides/recipes.md)'s step, made anew for each run, readable by you only on linux and macos, keeping the latest 16 MiB |
 | `.fetchloom/data.toml.recovery.<16 hex digits>`, `.fetchloom/data.lock.recovery.<16 hex digits>` | exact pre-add metadata, retained if rollback fails |

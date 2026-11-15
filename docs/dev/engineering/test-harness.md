@@ -68,7 +68,7 @@ debug builds read these variables so a CLI test can put a local server where a h
 | `FETCHLOOM_TEST_HF_API`, `FETCHLOOM_TEST_KAGGLE_API`, `FETCHLOOM_TEST_ZENODO_API`, `FETCHLOOM_TEST_ENA_API`, `FETCHLOOM_TEST_GEO_API`, `FETCHLOOM_TEST_DANDI_API`, `FETCHLOOM_TEST_OPENNEURO_API`, `FETCHLOOM_TEST_ARXIV_API` | sends each API request to that site's host, searches and listings alike, to the local server it names, with the same path and query | `search.rs`, `add.rs` and `mirrors.rs`; hugging face also `auth.rs`, zenodo also `get.rs` and `secrets.rs`, arXiv `papers.rs` |
 | `FETCHLOOM_TEST_GOOGLE_TOKEN` | stands a local server in for google's token endpoint | `google.rs`, `google/drive.rs` |
 | `FETCHLOOM_TEST_AZURE_IDENTITY` | stands a local server in for the instance metadata service a managed identity asks | `azure.rs` |
-| `FETCHLOOM_TEST_FILESYSTEM` | the format every disk reports, by the name `Filesystem::named` reads, such as `vfat` | `project.rs`, `get.rs`, `buckets.rs` |
+| `FETCHLOOM_TEST_FILESYSTEM` | the format every disk reports, by the name `Filesystem::named` reads, such as `vfat` | `project.rs`, `get.rs`, `buckets.rs`, `placing.rs` |
 | `FETCHLOOM_TEST_FREE` | the bytes free on every disk | `project.rs`, `import.rs`, `build.rs`, `get.rs` |
 | `FETCHLOOM_TEST_ROOM` | the memory the machine has, as a container's limit leaves it | `caps.rs` |
 | `FETCHLOOM_TEST_INLINE` | the most files a source lists in data.lock itself, rather than 50,000, so a test writes lists to `data.lock.d` with few files | `project.rs`, `import.rs`, `merge.rs`, `buckets.rs` |

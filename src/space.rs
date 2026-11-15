@@ -10,12 +10,15 @@ use crate::error::{Error, Kind};
 pub(crate) const FAT_LARGEST: u64 = (1 << 32) - 1;
 
 /// what a disk is formatted as, as far as fetchloom's work changes with it: FAT and exFAT make
-/// no links and change one folder at a time, and FAT holds no file past [`FAT_LARGEST`].
+/// no links and change one folder at a time, FAT holds no file past [`FAT_LARGEST`], and on refs
+/// fetchloom makes no hardlinks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Filesystem {
     /// FAT32, or FAT12 and FAT16 on smaller disks.
     Fat,
     Exfat,
+    /// windows' refs, which a dev drive is.
+    Refs,
     Other,
 }
 
@@ -28,6 +31,8 @@ impl Filesystem {
             Filesystem::Exfat
         } else if is(&["vfat", "fat", "fat12", "fat16", "fat32", "msdos", "msdosfs"]) {
             Filesystem::Fat
+        } else if is(&["refs"]) {
+            Filesystem::Refs
         } else {
             Filesystem::Other
         }
@@ -80,7 +85,13 @@ impl Filesystem {
     /// whether its folders change one at a time, as on FAT and exFAT, so changing several at
     /// once only queues the changes.
     pub(crate) fn serializes(self) -> bool {
-        self != Filesystem::Other
+        matches!(self, Filesystem::Fat | Filesystem::Exfat)
+    }
+
+    /// whether fetchloom makes hardlinks here where the disk takes them. refs can deadlock until a
+    /// restart when a name is added to a file, by a link or a rename; a clone adds none.
+    pub(crate) fn makes_hardlinks(self) -> bool {
+        self != Filesystem::Refs
     }
 
     /// the most bytes one file holds on this filesystem, when that is less than any disk holds.
@@ -312,13 +323,31 @@ mod tests {
         for name in ["exfat", "exFAT"] {
             assert_eq!(Filesystem::named(name), Filesystem::Exfat, "{name}");
         }
-        for name in ["ntfs", "refs", "apfs", "ext4", "xfs", "not-exfat", ""] {
+        for name in ["ReFS", "refs"] {
+            assert_eq!(Filesystem::named(name), Filesystem::Refs, "{name}");
+        }
+        for name in ["ntfs", "apfs", "ext4", "xfs", "not-exfat", ""] {
             assert_eq!(Filesystem::named(name), Filesystem::Other, "{name}");
         }
         assert_eq!(Filesystem::from_magic(0x4d44), Filesystem::Fat);
         assert_eq!(Filesystem::from_magic(0x2011_bab0), Filesystem::Exfat);
         for magic in [-1, 0, 0xef53, 0x5846_5342] {
             assert_eq!(Filesystem::from_magic(magic), Filesystem::Other);
+        }
+    }
+
+    /// only refs keeps fetchloom from making hardlinks, and only FAT and exFAT change one folder
+    /// at a time.
+    #[test]
+    fn refs_takes_no_hardlinks_and_changes_folders_at_once() {
+        for (filesystem, hardlinks, serializes) in [
+            (Filesystem::Fat, true, true),
+            (Filesystem::Exfat, true, true),
+            (Filesystem::Refs, false, false),
+            (Filesystem::Other, true, false),
+        ] {
+            assert_eq!(filesystem.makes_hardlinks(), hardlinks, "{filesystem:?}");
+            assert_eq!(filesystem.serializes(), serializes, "{filesystem:?}");
         }
     }
 

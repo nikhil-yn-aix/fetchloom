@@ -177,8 +177,9 @@ impl Location {
         .map_err(Into::into)
     }
 
-    /// renames to `target`'s name, refusing a taken name with `AlreadyExists`.
-    pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
+    /// renames to `target`'s name, refusing a taken name with `AlreadyExists`. unix renames that
+    /// way itself, so links come in only where the filesystem lacks such a rename.
+    pub(super) fn rename_new_to(&self, target: &Location, _links: bool) -> io::Result<()> {
         crate::volume::rename_new_at(
             self.parent.file.as_fd(),
             self.name.as_os_str(),

@@ -651,19 +651,29 @@ impl Cache {
     /// replaced, lest every project place the edit; one that cannot be read stays.
     fn link_new(&self, source: &Path, path: &Path, digest: &Sha256, size: u64) -> io::Result<bool> {
         let volume = &self.volume;
-        let new = match volume.hard_link(source, path) {
-            Ok(()) => true,
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
-            // something removed the object's folder since this run checked it
-            Err(err) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
-                if let Some(parent) = path.parent() {
-                    real_folder(parent, FolderUse::Cache)?;
-                }
-                return self.link_new(source, path, digest, size);
+        // something removed the object's folder since this run checked it
+        let again = || {
+            if let Some(parent) = path.parent() {
+                real_folder(parent, FolderUse::Cache)?;
             }
-            Err(_) => match volume.rename_new(source, path) {
+            self.link_new(source, path, digest, size)
+        };
+        let linked = volume
+            .makes_hardlinks()
+            .then(|| volume.hard_link(source, path));
+        let new = match linked {
+            Some(Ok(())) => true,
+            Some(Err(err)) if err.kind() == io::ErrorKind::AlreadyExists => false,
+            Some(Err(err)) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
+                return again();
+            }
+            // a rename that never replaces, where fetchloom makes no hardlinks or the link failed
+            _ => match volume.rename_new(source, path) {
                 Ok(()) => return Ok(true),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
+                Err(err) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
+                    return again();
+                }
                 // an object's name is its verified sha-256 and every writer seals its copy first,
                 // so on a disk with no other way a rename that replaces swaps identical bytes
                 Err(err) if refuses_links(&err) => {
@@ -932,6 +942,22 @@ pub(crate) mod tests {
                 Some(io::ErrorKind::InvalidInput)
             );
         }
+    }
+
+    /// on refs an object is published by a rename that never replaces, never by a link: it is
+    /// read-only, and nothing stays in `tmp/`.
+    #[test]
+    fn an_object_on_refs_is_published_without_a_link() {
+        let (_dir, mut cache) = cache();
+        let tmp = cache.root.join("tmp");
+        let refs = Volume::new(tmp.clone()).on(crate::space::Filesystem::Refs);
+        cache.volume = Arc::new(refs.never_linking());
+        let stored = store(&cache, b"length\n1.4\n");
+        let object = cache.object_path(&stored.digest);
+        assert!(stored.new);
+        assert_eq!(fs::read(&object).unwrap(), b"length\n1.4\n");
+        assert!(fs::metadata(&object).unwrap().permissions().readonly());
+        assert_eq!(fs::read_dir(&tmp).unwrap().count(), 0);
     }
 
     /// a cache that acts as if it sat on FAT32 or exFAT: it cannot hardlink, and it refuses to

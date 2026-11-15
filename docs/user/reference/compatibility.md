@@ -34,8 +34,8 @@ some speedups depend on the system and fall back without failing:
 |---|---|---|
 | one flush for a batch of downloads and copies | linux 5.8 or later | each file is flushed on its own |
 | one drive flush for a batch of unpacked files | macos | each file gets a full flush |
-| reflinks, which share bytes until a file changes | btrfs, xfs, apfs, refs and dev drive | hardlinks |
-| hardlinks | ntfs, ext4, hfs+ and other filesystems that support them | copies when links are unavailable or disabled, including fat, exfat and recognized synced folders |
+| reflinks, which share bytes until a file changes | btrfs, xfs, apfs, refs and dev drive | hardlinks, or copies on refs and dev drive |
+| hardlinks | ntfs, ext4, hfs+ and other filesystems that support them, except refs and dev drive | copies when links are unavailable or disabled, including fat, exfat and recognized synced folders |
 
 ## terminals
 
