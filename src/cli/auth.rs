@@ -603,19 +603,20 @@ fn read_stdin(
     account: &Account,
     output: &crate::output::Output,
 ) -> Result<(String, Option<String>), Error> {
-    let mut text = String::new();
-    if std::io::stdin().is_terminal() {
+    let text = if std::io::stdin().is_terminal() {
         // a key typed or pasted at a terminal stays hidden, as an interactive sign-in keeps it
         let prompt = match account.secret() {
             Secret::Password => "login",
             Secret::Token => "key",
         };
-        text = output.read_hidden(prompt)?;
+        output.read_hidden(prompt)?
     } else {
+        let mut text = String::new();
         std::io::stdin()
             .read_to_string(&mut text)
             .map_err(|err| Error::io("could not read the key from stdin", &err))?;
-    }
+        text
+    };
     // only the line ending a pipe adds goes; a password may start or end with a space
     let text = text.trim_end_matches(['\r', '\n']).to_owned();
     if text.trim().is_empty() {
