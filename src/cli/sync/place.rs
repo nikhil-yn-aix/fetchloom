@@ -646,13 +646,22 @@ impl<'a> Placing<'a> {
     }
 
     /// keeps in place each file of a recipe's result linked to the cache's changed copy whose
-    /// pinned bytes `holds` says the cache lacks, so the result is not left out for it and its
-    /// intact files stay; the file is told with the build that puts it back.
+    /// pinned bytes `holds` says the cache lacks and no fetched file of the run brings, so the
+    /// result is not left out for it and its intact files stay; the file is told with the build
+    /// that puts it back.
     pub(crate) fn keep_changed_links(&mut self, holds: impl Fn(&Sha256, u64) -> bool) {
+        let fetched: HashSet<Sha256> = self
+            .targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(target, action)| needs_bytes(action) && target.holder != plan::Holder::Result)
+            .map(|(target, _)| target.sha256)
+            .collect();
         for (target, action) in self.targets.iter().zip(&mut self.actions) {
             if target.holder == plan::Holder::Result
                 && matches!(action, Action::Replace)
                 && self.survey.elsewhere.contains(&target.path)
+                && !fetched.contains(&target.sha256)
                 && !holds(&target.sha256, target.size)
             {
                 *action = Action::Leave(Reason::Damaged);

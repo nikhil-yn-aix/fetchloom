@@ -793,6 +793,36 @@ fn lose_made(sandbox: &Sandbox, placed_too: bool) -> Result {
     Ok(())
 }
 
+/// a result file sharing its bytes with a fetched file is put back by the sync that downloads
+/// those bytes again after the cache's copy changed, so no build is asked for.
+#[test]
+fn a_changed_link_whose_bytes_a_download_brings_back_needs_no_build() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let (fetched, made) = (
+        placed(&sandbox, "iris", "iris.csv"),
+        placed(&sandbox, "clean", "iris.csv"),
+    );
+    if !same_file::is_same_file(&made, object(&sandbox, IRIS))? {
+        return crate::support::skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
+    }
+    crate::support::edit(&fetched, b"sepal_length,species\n0.0,changed\n")?;
+
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("fetchloom build"), "{stderr}");
+    assert_eq!(fs::read(&made)?, IRIS, "{stderr}");
+    assert_eq!(fs::read(&fetched)?, IRIS, "{stderr}");
+    Ok(())
+}
+
 /// a notebook writing one file of a result again in place, after `chmod -R u+w data/`, changes the
 /// cache's copy through the link: sync keeps the result's intact files, names the changed one with
 /// the build that makes it again, and that one build puts it back.
