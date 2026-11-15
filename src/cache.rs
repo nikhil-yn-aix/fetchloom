@@ -18,7 +18,7 @@ mod link_tests;
 
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,6 +50,69 @@ const FOLDERS: [&str; 10] = [
     "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed", "imported",
     "builds",
 ];
+
+/// what a system keeps in a folder that holds nothing of a person's: a new disk's lost+found, and
+/// what macos and windows put at a disk's top or in a folder someone looked at.
+const SYSTEM_NAMES: [&str; 7] = [
+    "lost+found",
+    ".DS_Store",
+    ".Spotlight-V100",
+    ".fseventsd",
+    ".Trashes",
+    "System Volume Information",
+    "$RECYCLE.BIN",
+];
+
+/// refuses `root` as the cache unless it is empty, but for what a system keeps there, or a cache
+/// already: fetchloom's tag, its objects and partial folders, or only folders a cache holds, one
+/// besides tmp/ among them. gc clears old files from tmp/, and the tag tells backup tools to skip
+/// the whole folder, which a folder of a person's own files, as a home named by mistake, must not get.
+fn adoptable(root: &Path) -> io::Result<()> {
+    let real = |name: &str| fs::symlink_metadata(root.join(name)).is_ok_and(|found| found.is_dir());
+    if tagged(root) || (real("objects") && real("partial")) {
+        return Ok(());
+    }
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    let (mut empty, mut cached) = (true, false);
+    for entry in entries {
+        let name = entry?.file_name();
+        if SYSTEM_NAMES.iter().any(|system| name == *system) {
+            continue;
+        }
+        empty = false;
+        if FOLDERS
+            .iter()
+            .any(|folder| name == *folder && *folder != "tmp")
+        {
+            cached = true;
+        } else if name != "tmp" && name != "gc.lock" {
+            cached = false;
+            break;
+        }
+    }
+    if empty || cached {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "it holds other files and is not a fetchloom cache, and fetchloom makes its cache only \
+         in an empty folder or a new one",
+    ))
+}
+
+/// whether `root` holds the tag fetchloom writes in its cache.
+fn tagged(root: &Path) -> bool {
+    let mut text = String::new();
+    read_unfollowed(&root.join("CACHEDIR.TAG"))
+        .and_then(|file| file.take(4096).read_to_string(&mut text))
+        .is_ok()
+        && text.lines().next() == TAG.lines().next()
+        && text.contains("fetchloom")
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct Cache {
@@ -184,6 +247,7 @@ impl Cache {
         }
         #[cfg(not(unix))]
         fs::create_dir_all(&root)?;
+        adoptable(&root)?;
         for folder in FOLDERS {
             real_folder(&root.join(folder), FolderUse::Cache)?;
         }
@@ -227,6 +291,7 @@ impl Cache {
             Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
             _ => {}
         }
+        adoptable(&root)?;
         for folder in FOLDERS {
             let path = root.join(folder);
             match fs::symlink_metadata(&path) {
@@ -1289,10 +1354,55 @@ pub(crate) mod tests {
         }
     }
 
+    /// gc clears old files from tmp/ and the tag tells backup tools to skip the whole folder, so a
+    /// folder of someone's own files, as a home folder named by mistake, never becomes the cache.
+    #[test]
+    fn a_folder_of_other_files_never_becomes_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        fs::create_dir_all(home.join("tmp")).unwrap();
+        fs::write(home.join("tmp/important.txt"), b"keep these bytes").unwrap();
+        fs::write(home.join("thesis.tex"), b"keep these bytes").unwrap();
+
+        let error = Cache::open(home.clone()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(Cache::unopened(home.clone()).is_err());
+        fs::rename(home.join("thesis.tex"), dir.path().join("thesis.tex")).unwrap();
+        assert!(
+            Cache::open(home.clone()).is_err(),
+            "a tmp/ alone is no cache"
+        );
+        fs::rename(dir.path().join("thesis.tex"), home.join("thesis.tex")).unwrap();
+
+        let mut left: Vec<_> = fs::read_dir(&home)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["thesis.tex", "tmp"]);
+    }
+
+    /// an empty folder, as a new disk with its lost+found, becomes the cache, and a cache opens
+    /// again, even one whose tag someone removed, by its own folders.
+    #[test]
+    fn an_empty_folder_or_a_cache_opens_as_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = dir.path().join("disk");
+        fs::create_dir_all(disk.join("lost+found")).unwrap();
+        Cache::open(disk.clone()).unwrap();
+        fs::write(disk.join("notes.txt"), b"a person's note").unwrap();
+        Cache::open(disk.clone()).unwrap();
+        fs::remove_file(disk.join("CACHEDIR.TAG")).unwrap();
+        Cache::open(disk.clone()).unwrap();
+        assert!(Cache::unopened(disk).is_ok());
+    }
+
     #[test]
     fn cache_folders_cannot_be_files() {
         for name in FOLDERS {
             let dir = tempfile::tempdir().unwrap();
+            Cache::open(dir.path().to_path_buf()).unwrap();
+            fs::remove_dir(dir.path().join(name)).unwrap();
             fs::write(dir.path().join(name), b"keep these bytes").unwrap();
 
             let error = Cache::open(dir.path().to_path_buf()).unwrap_err();

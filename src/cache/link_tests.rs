@@ -31,8 +31,9 @@ fn cache_folders_cannot_be_links_to_another_folder() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("cache");
         let outside = dir.path().join("outside");
-        fs::create_dir(&root).unwrap();
+        Cache::open(root.clone()).unwrap();
         fs::create_dir(&outside).unwrap();
+        fs::remove_dir(root.join(name)).unwrap();
         crate::test_links::link_folder(&outside, &root.join(name)).unwrap();
         assert!(
             Cache::open(root).is_err(),
