@@ -118,6 +118,9 @@ struct Needed {
     fetch: Option<Fetch>,
 }
 
+/// files a push writes, each with what the mirror held at its name.
+type Writes<'a> = Vec<(&'a Needed, There)>;
+
 /// where the bytes of a [`Needed`] are on this machine.
 #[derive(Clone, Copy)]
 enum Source {
@@ -181,8 +184,9 @@ impl Keys {
         }
     }
 
-    /// whether the file at `link` may have come with one of these keys.
-    fn open(&self, link: &str) -> bool {
+    /// whether this machine signs in where the file at `link` comes from, so its download may
+    /// have needed a key.
+    fn signs_in(&self, link: &str) -> bool {
         let Ok(url) = url::Url::parse(link) else {
             return false;
         };
@@ -197,8 +201,8 @@ impl Keys {
     /// what `locked` asks before a push, and whether a key of this machine made it ask: data.lock's
     /// access, or an account's for a dataset it calls public whose files may have needed a key.
     fn access(&self, locked: &crate::project::lock::Locked) -> (Access, bool) {
-        let keyed =
-            locked.access == Access::Public && locked.files.iter().any(|file| self.open(&file.url));
+        let keyed = locked.access == Access::Public
+            && locked.files.iter().any(|file| self.signs_in(&file.url));
         if keyed {
             (Access::Login, true)
         } else {
@@ -249,7 +253,21 @@ struct Planned {
     folder: DataFolder,
 }
 
+impl Planned {
+    /// what a push writes of `needed`, all the mirror does not hold as it is, with what it holds
+    /// at each one's name: the files, then the lists of what archives unpack to, in order.
+    fn writes(&self) -> (Writes<'_>, Writes<'_>) {
+        self.needed
+            .iter()
+            .zip(&self.there)
+            .filter(|(_, there)| **there != There::Present)
+            .map(|(needed, there)| (needed, *there))
+            .partition(|(needed, _)| !matches!(needed.source, Source::List(_)))
+    }
+}
+
 pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error> {
+    let dry_run = args.dry.dry_run;
     let target = target(context, args)?;
     let project = find(&context.output)?;
     let (_, manifest) = project.manifest()?;
@@ -263,7 +281,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
             Location::Folder(root) => reached(root).display().to_string(),
             other => other.to_string(),
         };
-        return Ok(Report::empty(target, args.dry.dry_run));
+        return Ok(Report::empty(target, dry_run));
     }
     let target = opened(context, target, args.verify)?;
     let lock = project.lock()?;
@@ -279,7 +297,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
         &scope,
     )?;
     let lock = lock.unwrap_or_default();
-    let cache = if args.dry.dry_run {
+    let cache = if dry_run {
         super::peek_cache()?
     } else {
         super::open_cache()?
@@ -288,7 +306,6 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     let mut planned = plan(
         context, &manifest, &lock, &cache, target, selected, datasets,
     )?;
-    let dry_run = args.dry.dry_run;
     settle(
         context,
         &project,
@@ -441,10 +458,14 @@ fn web_refused(text: &str) -> Error {
     .help("give --to a folder, or a bucket such as s3://lab-data/fetchloom, and serve what it holds from the web server")
 }
 
-/// runs `work`, a push's requests to a bucket, to its end on the command's runtime.
+/// runs `work`, a push's requests to a bucket or downloads, to its end on the command's runtime.
 fn waiting<T>(work: impl std::future::Future<Output = Result<T, Error>>) -> Result<T, Error> {
-    let runtime = tokio::runtime::Handle::try_current()
-        .map_err(|err| Error::new(Kind::LocalIo, format!("cannot reach the bucket: {err}")))?;
+    let runtime = tokio::runtime::Handle::try_current().map_err(|err| {
+        Error::new(
+            Kind::LocalIo,
+            format!("cannot send the push's requests: {err}"),
+        )
+    })?;
     runtime.block_on(work)
 }
 
@@ -663,10 +684,8 @@ fn fetch(
     if names.is_empty() {
         return Ok(());
     }
-    let runtime = tokio::runtime::Handle::try_current()
-        .map_err(|err| Error::new(Kind::LocalIo, format!("cannot download: {err}")))?;
     let work = Loop::new(context, project, Arc::new(context.net()), cache.clone()).readying("push");
-    runtime.block_on(work.ready(manifest, lock, names))
+    waiting(work.ready(manifest, lock, names))
 }
 
 /// the error for a file of `lacked` that `lock` pins at another size than the bytes its SHA-256
@@ -1112,14 +1131,12 @@ fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, V
             .output
             .step("Started", &format!("a mirror in {}", root.display()));
     }
-    let copy: Vec<(&Needed, There)> = planned
-        .needed
+    let (files, lists) = planned.writes();
+    let items: Vec<Item> = files
         .iter()
-        .zip(&planned.there)
-        .filter(|(_, there)| **there != There::Present)
-        .map(|(needed, there)| (needed, *there))
+        .chain(&lists)
+        .map(|(needed, _)| needed.item)
         .collect();
-    let items: Vec<Item> = copy.iter().map(|(needed, _)| needed.item).collect();
     target.prepare(&items).map_err(|err| {
         Error::io(
             format_args!("could not make folders in the mirror {}", root.display()),
@@ -1138,9 +1155,6 @@ fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, V
             ),
         );
     }
-    let (files, lists): (Vec<_>, Vec<_>) = copy
-        .into_iter()
-        .partition(|(needed, _)| !matches!(needed.source, Source::List(_)));
     let mut puts = put_files(context, cache, &target, &files)?;
     puts.extend(put_lists(context, cache, &target, &lists)?);
     let written: Vec<Item> = files
@@ -1174,16 +1188,7 @@ fn write_bucket(
     planned: &Planned,
     pusher: &Arc<Pusher>,
 ) -> Result<(bool, Vec<Put>), Error> {
-    let copy: Vec<(&Needed, There)> = planned
-        .needed
-        .iter()
-        .zip(&planned.there)
-        .filter(|(_, there)| **there != There::Present)
-        .map(|(needed, there)| (needed, *there))
-        .collect();
-    let (files, lists): (Vec<_>, Vec<_>) = copy
-        .into_iter()
-        .partition(|(needed, _)| !matches!(needed.source, Source::List(_)));
+    let (files, lists) = planned.writes();
     let mut uploads = Vec::with_capacity(lists.len());
     for (needed, there) in &lists {
         let Source::List(archive) = needed.source else {
@@ -1213,13 +1218,7 @@ fn write_bucket(
             pusher.start().await?;
             output.step("Started", &format!("a mirror in {top}"));
         }
-        let total = files.iter().map(|(needed, _)| needed.item.size).sum();
-        let what = units::count(files.len() as u64, "file", "files");
-        let bar = output.bar("Pushing", what.clone());
-        bar.start(Some(total), 0);
-        let sizes = files.iter().map(|(needed, _)| Some(needed.item.size));
-        let ticker = output.ticker("Pushing", what, sizes);
-        let shown = Arc::new(Mutex::new(Some((bar, ticker))));
+        let shown = Arc::new(Mutex::new(Some(progress(output, "Pushing", &files))));
         let advance = Arc::clone(&shown);
         let sent: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |size| {
             if let Some((bar, ticker)) = &*advance.lock().unwrap_or_else(PoisonError::into_inner) {
@@ -1253,6 +1252,20 @@ fn write_bucket(
     })
 }
 
+/// a bar and a ticker of `verb` over the bytes of `files`, none of them done yet.
+fn progress(
+    output: &crate::output::Output,
+    verb: &'static str,
+    files: &[(&Needed, There)],
+) -> (crate::output::Bar, crate::output::Ticker) {
+    let total = files.iter().map(|(needed, _)| needed.item.size).sum();
+    let what = units::count(files.len() as u64, "file", "files");
+    let bar = output.bar(verb, what.clone());
+    bar.start(Some(total), 0);
+    let sizes = files.iter().map(|(needed, _)| Some(needed.item.size));
+    (bar, output.ticker(verb, what, sizes))
+}
+
 /// the error for `fault`, from pushing `needed` into a bucket.
 fn bucket_failure(fault: s3::Fault, needed: &Needed) -> Error {
     match fault {
@@ -1271,16 +1284,8 @@ fn put_files(
     target: &Target,
     files: &[(&Needed, There)],
 ) -> Result<Vec<Put>, Error> {
-    let total = files.iter().map(|(needed, _)| needed.item.size).sum();
-    let what = units::count(files.len() as u64, "file", "files");
     let output = &context.output;
-    let stage = |verb| {
-        let bar = output.bar(verb, what.clone());
-        bar.start(Some(total), 0);
-        let sizes = files.iter().map(|(needed, _)| Some(needed.item.size));
-        (bar, output.ticker(verb, what.clone(), sizes))
-    };
-    let writing = Mutex::new(Some(stage("Pushing")));
+    let writing = Mutex::new(Some(progress(output, "Pushing", files)));
     let checking = OnceLock::new();
     let wrote = |size| {
         if let Some((bar, ticker)) = &*writing.lock().unwrap_or_else(PoisonError::into_inner) {
@@ -1296,7 +1301,7 @@ fn put_files(
                     .unwrap_or_else(PoisonError::into_inner)
                     .take(),
             );
-            stage("Checking")
+            progress(output, "Checking", files)
         });
         bar.advance(size);
         ticker.advance(size);
