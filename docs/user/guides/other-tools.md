@@ -40,6 +40,7 @@ $ awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ 'NF
 $ fetchloom add -i links.txt
  Downloaded 2 files · 13.3 KiB in 108 ms
     Started a project in ~/paper
+    Ignored data/ in .gitignore, since its files come from data.lock
       Added iris, its files are in data/iris
       Added tips, its files are in data/tips
   hint: scripts can find each with `fetchloom path <name>`

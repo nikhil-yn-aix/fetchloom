@@ -68,9 +68,12 @@ impl Report {
     }
 }
 
+/// says what [`ignore_data`] would add to .gitignore, or what a person adds by hand. a project
+/// with no data.toml yet, as a dry run of its start leaves it, is told as one starting.
 pub(super) fn preview_ignore(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
     let output = &work.context.output;
-    match work.project.ignored_in_git(&manifest.data_dir)? {
+    let starting = std::fs::symlink_metadata(work.project.manifest_path()).is_err();
+    match work.project.ignored_in_git(&manifest.data_dir, starting)? {
         Ignore::Add(_) => output.step(
             "Would add",
             &format!(
@@ -83,9 +86,15 @@ pub(super) fn preview_ignore(work: &Loop<'_>, manifest: &Manifest) -> Result<(),
     Ok(())
 }
 
-pub(super) fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
+/// adds the data folder's rule to .gitignore inside git, and outside it for a project `starting`,
+/// saying so only when it added the line.
+pub(super) fn ignore_data(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    starting: bool,
+) -> Result<(), Error> {
     let output = &work.context.output;
-    match work.project.ignore_in_git(&manifest.data_dir)? {
+    match work.project.ignore_in_git(&manifest.data_dir, starting)? {
         Ignore::Add(_) => output.step(
             "Ignored",
             &format!(
@@ -448,7 +457,7 @@ async fn sync_held(
     )
     .await?;
     // a project that became a git repository after its add gets its ignore rule now
-    ignore_data(&work, &manifest)?;
+    ignore_data(&work, &manifest, false)?;
     let closing = closing(
         &project,
         &manifest,
@@ -529,7 +538,7 @@ async fn sync_plain(
         pins,
         placed: placement,
     } = outcome;
-    ignore_data(&work, manifest)?;
+    ignore_data(&work, manifest, false)?;
     let closing = closing(
         project,
         manifest,
@@ -616,7 +625,7 @@ fn settled_named(
         .map_err(|error| work.before_placing(error))?;
     context.stop.finish();
     register(&work);
-    ignore_data(&work, manifest)?;
+    ignore_data(&work, manifest, false)?;
     let closing = closing(project, manifest, scope, false, &placement, false);
     let report = Report {
         selected: Some(scope.clone()),
@@ -674,7 +683,7 @@ fn settled_unheld(
     else {
         return Ok(None);
     };
-    match project.ignored_in_git(&manifest.data_dir)? {
+    match project.ignored_in_git(&manifest.data_dir, false)? {
         Ignore::Add(_) => return Ok(None),
         ignore => by_hand(&context.output, &manifest, &ignore),
     }

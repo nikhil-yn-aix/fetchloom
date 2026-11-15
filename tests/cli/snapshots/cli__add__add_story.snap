@@ -5,5 +5,6 @@ expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
     Started a project in [sandbox]/work
+    Ignored data/ in .gitignore, since its files come from data.lock
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`

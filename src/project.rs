@@ -784,9 +784,10 @@ impl Project {
     }
 
     /// adds the data folder to the .gitignore of the git repository the project is in, unless it is
-    /// there, and says what it found: [`Ignore::Add`] once it wrote the rule.
-    pub(crate) fn ignore_in_git(&self, data_dir: &str) -> Result<Ignore, Error> {
-        let ignore = self.ignored_in_git(data_dir)?;
+    /// there, and says what it found: [`Ignore::Add`] once it wrote the rule. a project `starting`
+    /// gets the rule outside git too, so a `git init` after it leaves the data out all the same.
+    pub(crate) fn ignore_in_git(&self, data_dir: &str, starting: bool) -> Result<Ignore, Error> {
+        let ignore = self.ignored_in_git(data_dir, starting)?;
         if let Ignore::Add(updated) = &ignore {
             self.write(".gitignore", updated.as_bytes())?;
         }
@@ -794,9 +795,9 @@ impl Project {
     }
 
     /// what [`Project::ignore_in_git`] would do to the .gitignore of the git repository the
-    /// project is in.
-    pub(crate) fn ignored_in_git(&self, data_dir: &str) -> Result<Ignore, Error> {
-        if Project::repository(&self.root).is_none() {
+    /// project is in, or of the project `starting` outside git.
+    pub(crate) fn ignored_in_git(&self, data_dir: &str, starting: bool) -> Result<Ignore, Error> {
+        if !starting && Project::repository(&self.root).is_none() {
             return Ok(Ignore::Done);
         }
         // git reads [, *, ? and \ in a rule as a pattern, so a folder named data[1] needs them
@@ -1710,11 +1711,11 @@ mod tests {
         let (dir, project) = project(&[("data.toml", "")]);
         fs::create_dir(dir.path().join(".git")).unwrap();
         assert!(matches!(
-            project.ignore_in_git("datasets[1]").unwrap(),
+            project.ignore_in_git("datasets[1]", false).unwrap(),
             Ignore::Add(_)
         ));
         assert_eq!(
-            project.ignore_in_git("datasets[1]").unwrap(),
+            project.ignore_in_git("datasets[1]", false).unwrap(),
             Ignore::Done,
             "only once"
         );
@@ -1728,17 +1729,17 @@ mod tests {
     fn gitignore_gains_the_data_folder_once_inside_git() {
         let (dir, project) = project(&[("data.toml", ""), (".gitignore", "target")]);
         assert_eq!(
-            project.ignore_in_git("data").unwrap(),
+            project.ignore_in_git("data", false).unwrap(),
             Ignore::Done,
             "outside git nothing changes"
         );
         fs::create_dir(dir.path().join(".git")).unwrap();
         assert!(matches!(
-            project.ignore_in_git("data").unwrap(),
+            project.ignore_in_git("data", false).unwrap(),
             Ignore::Add(_)
         ));
         assert_eq!(
-            project.ignore_in_git("data").unwrap(),
+            project.ignore_in_git("data", false).unwrap(),
             Ignore::Done,
             "only once"
         );
@@ -2137,7 +2138,10 @@ mod tests {
             };
             let text = format!("# existing\n  {entry}  \n");
             fs::write(project.root.join(".gitignore"), &text).unwrap();
-            assert_eq!(project.ignore_in_git("inputs/raw").unwrap(), Ignore::Done);
+            assert_eq!(
+                project.ignore_in_git("inputs/raw", false).unwrap(),
+                Ignore::Done
+            );
             assert_eq!(
                 fs::read_to_string(project.root.join(".gitignore")).unwrap(),
                 text
@@ -2148,7 +2152,7 @@ mod tests {
             root: dir.path().join("child"),
         };
         assert!(matches!(
-            project.ignore_in_git("inputs/raw").unwrap(),
+            project.ignore_in_git("inputs/raw", false).unwrap(),
             Ignore::Add(_)
         ));
         assert_eq!(
@@ -2157,7 +2161,7 @@ mod tests {
         );
         fs::write(project.root.join(".gitignore"), [0xff]).unwrap();
         assert_eq!(
-            project.ignore_in_git("inputs/raw").unwrap_err().kind,
+            project.ignore_in_git("inputs/raw", false).unwrap_err().kind,
             Kind::LocalIo
         );
         assert_eq!(fs::read(project.root.join(".gitignore")).unwrap(), [0xff]);
@@ -2165,7 +2169,7 @@ mod tests {
         let large = "#".repeat(usize::try_from(GITIGNORE_CAP).unwrap() + 1);
         fs::write(project.root.join(".gitignore"), &large).unwrap();
         assert_eq!(
-            project.ignore_in_git("inputs/raw").unwrap(),
+            project.ignore_in_git("inputs/raw", false).unwrap(),
             Ignore::ByHand {
                 rule: "/inputs/raw/".to_owned(),
                 why: "larger than 1.0 MiB".to_owned()

@@ -1203,6 +1203,60 @@ fn inside_git_the_data_folder_is_ignored_once() -> Result {
     Ok(())
 }
 
+/// a project started outside git gets its ignore rule at once, so a `git init` and `git add -A`
+/// right after it commit no data file; the line that says so comes only when the rule is added.
+#[test]
+fn a_project_started_outside_git_keeps_its_data_out_of_a_later_commit() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let output = sandbox.run(&["add", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_some() {
+        crate::merge::ok(&sandbox, &["add", "-A"])?;
+        let staged = crate::merge::git(
+            &sandbox,
+            &sandbox.work(),
+            &["diff", "--cached", "--name-only"],
+        )?
+        .ok_or("git went away")?;
+        assert_eq!(text(&staged.stdout)?, ".gitignore\ndata.lock\ndata.toml\n");
+    }
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join(".gitignore"))?,
+        "/data/\n"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "    Started a project in {}\n    Ignored data/ in .gitignore, since its files come from data.lock\n",
+            sandbox.work().display()
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a .gitignore that leaves the data folder out already, in a way git reads as the same rule, is
+/// left byte for byte as it was when a project starts beside it, and no line says otherwise.
+#[test]
+fn a_gitignore_that_has_the_rule_is_left_as_it_was() -> Result {
+    let sandbox = Sandbox::new()?;
+    let ignore = "# mine\r\n  data/\r\n*.tmp";
+    fs::write(sandbox.work().join(".gitignore"), ignore)?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let output = sandbox.run(&["add", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("Ignored"), "{stderr}");
+    assert_eq!(
+        fs::read(sandbox.work().join(".gitignore"))?,
+        ignore.as_bytes()
+    );
+    Ok(())
+}
+
 /// a .gitignore that is a link, as a cloned repository may hold one to a file of keys, is never
 /// read or edited: the link and the file it names stay as they were, and a warning gives the line
 /// to add by hand.
@@ -1249,7 +1303,16 @@ fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
             )?;
         }
         added(&sandbox, &server)?;
-        assert!(!work.join(".gitignore").exists(), "{command}");
+        // a project started here has the rule from its start, outside git too; taking it out
+        // stands for a project that never had it, which each command then gives it inside git
+        if data_dir == "data" {
+            assert_eq!(
+                fs::read_to_string(work.join(".gitignore"))?,
+                "/data/\n",
+                "{command}"
+            );
+            fs::remove_file(work.join(".gitignore"))?;
+        }
         fs::create_dir(work.join(".git"))?;
         let args = match command {
             "add" => vec!["add", server.url.as_str()],
@@ -3479,8 +3542,8 @@ fn status_forecasts_a_rename_as_sync_carries_it() -> Result {
     Ok(())
 }
 
-/// committing what the suggestion names leaves nothing untracked. outside git no .gitignore is
-/// written or named, as `the_next_step_is_told_only_at_a_terminal` shows.
+/// committing what the suggestion names leaves nothing untracked. outside git .gitignore is not
+/// named, as `the_next_step_is_told_only_at_a_terminal` shows.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {

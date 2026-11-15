@@ -59,6 +59,7 @@ $ fetchloom add http://127.0.0.1:19353/report/ --web-page
 Downloading report · 86 B
  Downloaded report · 86 B in 6 ms
     Started a project in /home/ada/notes
+    Ignored data/ in .gitignore, since its files come from data.lock
       Added report, its files are in data/report
   hint: scripts can find it with `fetchloom path report`
 $ fetchloom sync

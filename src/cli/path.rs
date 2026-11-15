@@ -114,7 +114,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                         Run::planned(&seen),
                     )
                     .await?;
-                    ignore_data(&work, &manifest)?;
+                    ignore_data(&work, &manifest, false)?;
                     drop(held);
                     let lock = project.lock()?.unwrap_or_default();
                     let planned = plan::from_cache(&manifest, &lock, &work.cache)?;

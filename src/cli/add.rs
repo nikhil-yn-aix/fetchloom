@@ -1301,7 +1301,7 @@ pub(super) fn render_add(
     private: &[url::Origin],
 ) -> Result<(), Error> {
     tell_started(work, starting);
-    ignore_data(work, manifest)?;
+    ignore_data(work, manifest, starting)?;
     tell_added(work, manifest, added, here, private);
     Ok(())
 }
@@ -1583,7 +1583,7 @@ async fn again(
     let names = [name.to_owned()];
     let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
     // a project that became a git repository after its first add gets its ignore rule now
-    ignore_data(work, manifest)?;
+    ignore_data(work, manifest, false)?;
     let contents = if outcome.placed.planned.contains(name) {
         format!(
             "its files are in {}",

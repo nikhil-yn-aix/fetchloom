@@ -420,7 +420,14 @@ fn output_writes_the_file_whole_and_replaces_one_only_with_force() -> Result {
     names.sort();
     assert_eq!(
         names,
-        [".fetchloom", "data", "data.lock", "data.toml", "sums.txt"],
+        [
+            ".fetchloom",
+            ".gitignore",
+            "data",
+            "data.lock",
+            "data.toml",
+            "sums.txt"
+        ],
         "nothing is left beside it"
     );
     let folder = sandbox.run(&["export", "-o", "data"])?;

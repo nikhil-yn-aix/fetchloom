@@ -73,7 +73,7 @@ pub(super) async fn accept(
         lock: Some(digest::sha256(written.as_bytes())),
     };
     let outcome = sync_all(&work, &manifest, Some(lock), None, Run::planned(&seen)).await?;
-    ignore_data(&work, &manifest)?;
+    ignore_data(&work, &manifest, false)?;
     tell(context, project, &manifest, &wanted);
     report.placement = Some(outcome.placed);
     Ok(report)

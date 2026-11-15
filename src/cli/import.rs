@@ -360,7 +360,7 @@ async fn already_imported(
     let manifest = &adding.manifest;
     let names = [name.to_owned()];
     let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
-    ignore_data(work, manifest)?;
+    ignore_data(work, manifest, false)?;
     let folder = from_here(work.project, here, &plan::folder(manifest, name));
     work.context.output.done(
         "Ok",
@@ -483,7 +483,7 @@ async fn supply(
     output.step("Supplied", &format!("{name} · {told}"));
     let names = [name.to_owned()];
     let outcome = sync_add(work, adding, manifest, None, old, (&names, given), &[]).await?;
-    ignore_data(work, manifest)?;
+    ignore_data(work, manifest, false)?;
     let folder = from_here(work.project, here, &plan::folder(manifest, name));
     if pins {
         output.done(

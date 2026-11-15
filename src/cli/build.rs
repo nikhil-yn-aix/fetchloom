@@ -989,7 +989,7 @@ impl<'a> Building<'a> {
             Run::planned(&seen),
         )
         .await?;
-        ignore_data(&self.work, &self.manifest)?;
+        ignore_data(&self.work, &self.manifest, false)?;
         let built: Vec<&str> = self
             .report
             .steps
