@@ -8,7 +8,7 @@ on:
       check:
         description: which bounded check to run
         type: choice
-        options: [all, coverage, fuzz, links, mutants]
+        options: [all, coverage, fuzz, links, mutants, workflows]
         default: all
       file:
         description: one Rust file for the manual mutation pilot
@@ -54,6 +54,7 @@ env:
   PIN_LYCHEE: 0.24.2
   PIN_LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
   PIN_MUTANTS: cargo-mutants@27.1.0
+  PIN_ZIZMOR: zizmor@1.32.0
   PIN_NIGHTLY: nightly-2026-11-03
 
 jobs:
@@ -211,6 +212,25 @@ jobs:
           path: target/links/report.md
           if-no-files-found: warn
           retention-days: 14
+
+  # ci.yml audits the workflows offline on every change; this run adds the audits that ask github,
+  # such as whether a pinned commit is really the action's and whether an action has an advisory
+  workflows:
+    if: github.event_name == 'schedule' || inputs.check == 'all' || inputs.check == 'workflows'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: ${{ env.PIN_ZIZMOR }}
+          fallback: none
+      - name: audit the workflows online
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --strict-collection .github
 
   mutants:
     if: github.event_name == 'workflow_dispatch' && inputs.check == 'mutants'

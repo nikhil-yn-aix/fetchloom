@@ -25,11 +25,15 @@ def jobs(name):
 
 class WorkflowTests(unittest.TestCase):
     def test_workflows_that_install_one_tool_pin_one_version(self):
-        seen = {}
+        seen, tools = {}, {}
         for path in WORKFLOWS:
             for name, value in pins(path).items():
                 with self.subTest(workflow=path.name, pin=name):
                     self.assertEqual(seen.setdefault(name, value), value)
+                for tool, _, version in (part.rpartition("@") for part in value.split(",")):
+                    if tool:
+                        with self.subTest(workflow=path.name, tool=tool):
+                            self.assertEqual(tools.setdefault(tool, version), version)
         nextest = tomllib.loads((ROOT / ".config/nextest.toml").read_text(encoding="utf-8"))
         self.assertEqual(seen["PIN_NEXTEST"], "cargo-nextest@" + nextest["nextest-version"]["required"])
 
@@ -110,6 +114,18 @@ class WorkflowTests(unittest.TestCase):
                     step = itertools.takewhile(lambda following: following.startswith(" " * 8), lines[number + 1:])
                     with self.subTest(workflow=path.name, line=number + 1):
                         self.assertIn(" " * 10 + "fallback: none", list(step))
+
+
+    def test_a_weekly_run_audits_the_workflows_online(self):
+        """ci.yml's zizmor runs offline, which leaves out the audits that ask github whether a
+        pinned commit belongs to its action and whether an action has a known advisory."""
+        text = (ROOT / ".github/workflows/deep.yml").read_text(encoding="utf-8")
+        self.assertIn("\n  schedule:\n", text)
+        self.assertRegex(text, r"\npermissions:\n  contents: read\n\n")
+        audit = jobs("deep.yml")["workflows"]
+        self.assertIn("if: github.event_name == 'schedule' ||", audit)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", audit)
+        self.assertRegex(audit, r"\n        run: zizmor --strict-collection \.github\n")
 
 
 if __name__ == "__main__":
