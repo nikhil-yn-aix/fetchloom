@@ -211,9 +211,9 @@ fn named(origin: Origin, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
     use std::path::PathBuf;
 
+    use super::super::tests::env;
     use super::super::{File, Settings, parse};
     use super::{Level, Spending};
     use crate::machine::Machine;
@@ -221,19 +221,6 @@ mod tests {
 
     const MIB: u64 = 1 << 20;
     const GIB: u64 = 1 << 30;
-
-    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
-        let pairs: Vec<(String, OsString)> = pairs
-            .iter()
-            .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
-            .collect();
-        move |name| {
-            pairs
-                .iter()
-                .find(|(set, _)| set == name)
-                .map(|(_, value)| value.clone())
-        }
-    }
 
     fn file(text: &str) -> File {
         let path = PathBuf::from("/home/ada/.config/fetchloom/settings.toml");

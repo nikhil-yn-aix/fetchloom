@@ -9,7 +9,7 @@ fn machine(memory: Option<u64>) -> Machine {
     }
 }
 
-fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+pub(super) fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
     let pairs: Vec<(String, OsString)> = pairs
         .iter()
         .map(|(name, value)| ((*name).to_owned(), OsString::from(value)))
