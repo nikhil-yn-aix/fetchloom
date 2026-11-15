@@ -1353,7 +1353,7 @@ fn copy_at(
     staged.publish()?;
     #[cfg(windows)]
     {
-        if let Err(error) = set_file_writable(&file, writable) {
+        if let Err(error) = set_named_writable(&file, location.path(), writable) {
             let _ = fs::remove_file(location.path());
             return Err(error);
         }
@@ -1569,6 +1569,19 @@ fn set_file_writable(output: &File, writable: bool) -> io::Result<()> {
         if before != after {
             output.set_permissions(after)?;
         }
+    }
+    Ok(())
+}
+
+/// [`set_file_writable`] for a file named at `path`, by that name too where windows ignored the
+/// handle: clearing read-only through it leaves a file whose only attribute it was with none,
+/// which windows takes as no change.
+#[cfg(windows)]
+fn set_named_writable(file: &File, path: &Path, writable: bool) -> io::Result<()> {
+    set_file_writable(file, writable)?;
+    let now = file.metadata()?.permissions();
+    if now.readonly() == writable {
+        fs::set_permissions(path, writable_as(now, writable))?;
     }
     Ok(())
 }

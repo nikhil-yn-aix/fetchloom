@@ -1963,6 +1963,39 @@ fn a_placed_file_made_read_only_keeps_no_setuid_bit() {
     assert_eq!(mode & 0o7777, 0o555, "{mode:o}");
 }
 
+/// a clone takes its object's attributes, and a cache object whose archive flag a backup cleared
+/// has read-only alone. clearing that through a handle hands windows no attribute at all, which it
+/// takes as no change, so a dataset that asks for copies would get a read-only one.
+#[cfg(windows)]
+#[test]
+fn a_file_with_read_only_as_its_only_attribute_is_made_writable() {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("placed.csv");
+    std::fs::write(&path, b"a,b\n").unwrap();
+    let mut sealed = std::fs::metadata(&path).unwrap().permissions();
+    sealed.set_readonly(true);
+    std::fs::set_permissions(&path, sealed).unwrap();
+    let cleared = std::process::Command::new("attrib")
+        .arg("-A")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(cleared.success());
+    assert_eq!(std::fs::metadata(&path).unwrap().file_attributes(), 0x1);
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES)
+        .open(&path)
+        .unwrap();
+
+    super::set_named_writable(&file, &path, true).unwrap();
+
+    drop(file);
+    assert!(!std::fs::metadata(&path).unwrap().permissions().readonly());
+}
+
 /// a name with a drive, which a path joins as a new start, or with a colon, which names a stream
 /// of another file, never leads a placement out of its folder.
 #[cfg(windows)]

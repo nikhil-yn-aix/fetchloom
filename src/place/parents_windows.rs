@@ -182,7 +182,7 @@ impl Location {
                 })
         })?;
         staged.publish()?;
-        if let Err(error) = super::set_file_writable(&file, writable) {
+        if let Err(error) = super::set_named_writable(&file, &self.path, writable) {
             let _ = fs::remove_file(&self.path);
             return Err(error);
         }
