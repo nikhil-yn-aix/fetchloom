@@ -65,7 +65,7 @@ in a new terminal, `fetchloom settings` shows the `rate` row coming from the env
 
 ### a project too big for its container
 
-in a container with a memory limit, fetchloom compares what reading a project's files takes, about 650 bytes a file data.lock pins, with what the limit leaves, and stops before reading them when that is too little, with `local.io`, exit 50. in a container limited to 64 MiB, the status of a project of 100,000 files says:
+in a container with a memory limit, fetchloom compares what reading a project's files takes, about 650 bytes a file data.lock pins, with what the limit leaves, and stops before reading them when that is too little, with `local.io`, exit 50. a list in `data.lock.d` whose paths and URLs are longer than most counts twice what each holds past 650 bytes as it is read, and stops the same way partway, saying the read takes at least that much and naming the dataset whose list holds them. in a container limited to 64 MiB, the status of a project of 100,000 files says:
 
 ```text
 error: reading this project's 100,000 files takes about 70.0 MiB of memory, more than the 60.6 MiB this container leaves fetchloom

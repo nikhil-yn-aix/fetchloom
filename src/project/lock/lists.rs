@@ -35,8 +35,14 @@ const PART: usize = if cfg!(test) { 1_000 } else { 250_000 };
 const LEVEL: i32 = 9;
 /// the most memory decompressing a part may take: a window of 2^27 bytes.
 const WINDOW_LOG: u32 = 27;
-/// the longest line a part may hold, so a damaged part cannot fill memory.
+/// the longest line a part may hold, so one damaged line cannot fill memory.
 const LONGEST: u64 = 1 << 20;
+/// the longest path a row may hold, in bytes, as an archive's member or an imported file may.
+pub(crate) const LONGEST_PATH: usize = 4096;
+/// the longest link a row may hold, in bytes, far past what servers take in a request. with
+/// [`LONGEST_PATH`] it keeps a cloned part of long rows, a few bytes each once compressed, from
+/// asking for gigabytes.
+pub(crate) const LONGEST_URL: usize = 64 << 10;
 /// how to recover a list fetchloom cannot use.
 pub(super) const BROKEN: &str = "restore data.lock and data.lock.d from git, or delete data.lock and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
 
@@ -59,10 +65,19 @@ pub(crate) trait Row: Sized {
     const HOLDS: &'static str;
     fn path(&self) -> &str;
     fn size(&self) -> u64;
+    /// the bytes of text the row holds, its path and link, which its memory grows with.
+    fn text(&self) -> u64;
+    /// what of the row is longer than a list may hold, [`LONGEST_PATH`] or [`LONGEST_URL`].
+    fn too_long(&self) -> Option<&'static str>;
     /// appends the row's line, its fields between tabs, without the line break.
     fn write(&self, text: &mut String);
     /// the row a line holds, without its line break.
     fn parse(line: &str) -> Option<Self>;
+}
+
+/// "its path" when `path` is longer than [`LONGEST_PATH`].
+fn path_too_long(path: &str) -> Option<&'static str> {
+    (path.len() > LONGEST_PATH).then_some("its path")
 }
 
 /// path, size, SHA-256, MD5, link and the tree an archive unpacks to.
@@ -76,6 +91,14 @@ impl Row for LockedFile {
 
     fn size(&self) -> u64 {
         self.size
+    }
+
+    fn text(&self) -> u64 {
+        (self.path.len() + self.url.len()) as u64
+    }
+
+    fn too_long(&self) -> Option<&'static str> {
+        path_too_long(&self.path).or((self.url.len() > LONGEST_URL).then_some("its link"))
     }
 
     fn write(&self, text: &mut String) {
@@ -110,14 +133,15 @@ impl Row for LockedFile {
             "" => None,
             hex => Some(Sha256::from_hex(hex)?),
         };
-        fields.next().is_none().then_some(LockedFile {
+        let file = LockedFile {
             path,
             size,
             sha256,
             md5,
             url,
             unpacks_to,
-        })
+        };
+        (fields.next().is_none() && file.too_long().is_none()).then_some(file)
     }
 }
 
@@ -134,6 +158,14 @@ impl Row for Member {
         self.size
     }
 
+    fn text(&self) -> u64 {
+        self.path.len() as u64
+    }
+
+    fn too_long(&self) -> Option<&'static str> {
+        path_too_long(&self.path)
+    }
+
     fn write(&self, text: &mut String) {
         escape(&self.path, text);
         text.push('\t');
@@ -147,10 +179,8 @@ impl Row for Member {
         let path = unescape(fields.next()?)?;
         let size = size(fields.next()?)?;
         let sha256 = Sha256::from_hex(fields.next()?)?;
-        fields
-            .next()
-            .is_none()
-            .then_some(Member { path, size, sha256 })
+        let member = Member { path, size, sha256 };
+        (fields.next().is_none() && member.too_long().is_none()).then_some(member)
     }
 }
 
@@ -160,6 +190,30 @@ fn size(digits: &str) -> Option<u64> {
         return None;
     }
     digits.parse().ok()
+}
+
+/// refuses `rows`, the files of `name`'s list, when one is longer than [`read`] takes, so
+/// fetchloom never writes a list it would refuse.
+pub(crate) fn listable<R: Row>(name: &str, rows: &[R]) -> Result<(), Error> {
+    let Some((row, what)) = rows
+        .iter()
+        .find_map(|row| row.too_long().map(|what| (row, what)))
+    else {
+        return Ok(());
+    };
+    let longest = if what == "its path" {
+        LONGEST_PATH
+    } else {
+        LONGEST_URL
+    };
+    Err(Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "{name}/{} cannot be pinned: {what} is longer than {}, the most data.lock.d keeps",
+            crate::name::abridged(row.path()),
+            crate::units::count(longest as u64, "byte", "bytes")
+        ),
+    ))
 }
 
 /// the texts of the parts that list `rows`, in order, each beginning with the header. a list of
@@ -303,7 +357,13 @@ pub(crate) enum Parts<'a> {
 /// the rows of `name`'s list from the parts `listed` names in `parts`, checked against what
 /// data.lock records; refused unread when a part's path is not one fetchloom writes for `name`,
 /// when the list holds more files than a run may list, or when [`FOLDER`] is no real folder.
-pub(crate) fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Result<Vec<R>, Error> {
+/// each row's text is weighed against `budget` as it is read.
+pub(crate) fn read<R: Row>(
+    parts: Parts<'_>,
+    name: &str,
+    listed: &Listed,
+    budget: &mut super::Budget,
+) -> Result<Vec<R>, Error> {
     if !named_as_written(name, listed) {
         return Err(broken(format!(
             "data.lock names the file list of {name} in files fetchloom does not write"
@@ -375,6 +435,7 @@ pub(crate) fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Res
             if rows.len() == count || rows.last().is_some_and(|last| last.path() >= row.path()) {
                 return Err(damaged(part, number));
             }
+            budget.take(name, row.text())?;
             bytes = add(bytes, row.size());
             rows.push(row);
         }
@@ -519,6 +580,12 @@ mod tests {
         listed
     }
 
+    /// [`super::read`] with all the memory there is.
+    fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Result<Vec<R>, Error> {
+        let mut budget = super::super::Budget::of(std::iter::empty(), u64::MAX).unwrap();
+        super::read(parts, name, listed, &mut budget)
+    }
+
     #[test]
     fn a_list_reads_back_the_files_it_was_written_from_across_parts() {
         let root = tempfile::tempdir().unwrap();
@@ -586,6 +653,46 @@ mod tests {
             read::<LockedFile>(Parts::Folder(root.path()), "odd", &listed).unwrap(),
             odd
         );
+    }
+
+    /// a row is held to the longest path and link fetchloom pins, so a cloned part of rows a few
+    /// bytes each once compressed cannot ask for gigabytes; the longest of each still reads, and
+    /// a list fetchloom would refuse is never written.
+    #[test]
+    fn a_row_longer_than_fetchloom_writes_is_refused_unread() {
+        let root = tempfile::tempdir().unwrap();
+        let link = |length: usize| format!("https://e.org/{}", "a".repeat(length - 14));
+        for (path, url, reads) in [
+            ("p".repeat(4096), link(64 << 10), true),
+            ("p".repeat(4097), link(100), false),
+            ("p".to_owned(), link((64 << 10) + 1), false),
+        ] {
+            let mut rows = files(1);
+            rows[0].path.clone_from(&path);
+            rows[0].url.clone_from(&url);
+            let lengths = (path.len(), url.len());
+            assert_eq!(listable("set", &rows).is_ok(), reads, "{lengths:?}");
+            let listed = write(root.path(), "set", &rows);
+            match read::<LockedFile>(Parts::Folder(root.path()), "set", &listed) {
+                Ok(read) => assert!(reads && read == rows, "{lengths:?}"),
+                Err(error) => {
+                    assert!(!reads, "{lengths:?}: {error:?}");
+                    assert!(error.message.ends_with("is damaged at line 2"), "{error:?}");
+                }
+            }
+        }
+        // a recipe's result holds paths alone
+        for (length, reads) in [(4096, true), (4097, false)] {
+            let made = [Member {
+                path: "m".repeat(length),
+                size: 1,
+                sha256: digest::sha256(b"m"),
+            }];
+            assert_eq!(listable("made", &made).is_ok(), reads, "{length}");
+            let listed = write(root.path(), "made", &made);
+            let read = read::<Member>(Parts::Folder(root.path()), "made", &listed);
+            assert_eq!(read.is_ok(), reads, "{length}");
+        }
     }
 
     #[test]

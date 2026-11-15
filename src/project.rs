@@ -506,9 +506,11 @@ impl Project {
 
     /// writes the parts of `lock`'s file lists not yet beside data.lock, returning their paths
     /// below the project. a part's name changes with its list, so one there already holds the same.
-    /// refused, even with nothing to write, when data.lock.d is a link or a file.
+    /// refused, even with nothing to write, when data.lock.d is a link or a file, and before any
+    /// part is written when a list would hold a path or link longer than a list keeps.
     pub(crate) fn write_lists(&self, lock: &Lock) -> Result<Vec<String>, Error> {
         let folder = lock::lists::folder(&self.root)?;
+        lock.listable()?;
         let parts = lock.lists();
         if parts.is_empty() {
             return Ok(Vec::new());

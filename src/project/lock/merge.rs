@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use self::markers::Sides;
 use super::derived::Derived;
-use super::{Lock, Locked, LockedFile, Parsed, parse, resolve, spec};
+use super::{Lock, Locked, LockedFile, Parsed, parse, spec};
 use crate::error::{Error, Kind};
 use crate::project::manifest::{self, Edit, Entry, Manifest};
 use crate::units;
@@ -331,7 +331,9 @@ pub(crate) fn merge(
         _ => Vec::new(),
     };
     let lock = match (records, &locks) {
-        (Some(records), Some(locks)) => Some(kept(records, locks, &decided, root, committed)?),
+        (Some(records), Some(locks)) => {
+            Some(kept(records, locks, &decided, root, committed, memory)?)
+        }
         _ => None,
     };
     Ok(Merged {
@@ -864,14 +866,17 @@ fn chosen_records(
 /// the merged data.lock of `records`, each list read below `root`, or from the commit of the side
 /// it comes from, as `committed` gives it, where git's merge deleted it: a rebuild on one side that
 /// replaced a list deletes it, though the other side still names it. a pin that does not read
-/// stops the merge with how to restore its side, never with advice to pin anew.
+/// stops the merge with how to restore its side, never with advice to pin anew. the lists
+/// together are read within `memory`, what a container leaves.
 fn kept(
     records: Vec<Parsed>,
     locks: &Locks,
     decided: &Decided,
     root: &Path,
     committed: Option<Committed<'_>>,
+    memory: u64,
 ) -> Result<Lock, Error> {
+    let mut budget = super::Budget::of(&records, memory)?;
     let mut lock = Lock::default();
     for record in records {
         let name = record.name().to_owned();
@@ -894,9 +899,12 @@ fn kept(
         } else {
             None
         };
-        let read = resolve(
+        let read = super::resolve_from(
             vec![record],
-            Some(found.as_ref().map_or(root, |found| found.path())),
+            Some(super::lists::Parts::Folder(
+                found.as_ref().map_or(root, |found| found.path()),
+            )),
+            &mut budget,
         )
         .map_err(|error| {
             let broken = [super::BROKEN, super::lists::BROKEN];

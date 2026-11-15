@@ -74,16 +74,71 @@ pub(crate) fn set_room(room: Option<u64>) {
 /// refuses, before any list is read, a lock whose files take more memory than `room`, so a run
 /// too big for its container says so instead of being killed partway.
 fn fits<'a>(parsed: impl IntoIterator<Item = &'a Parsed>, room: u64) -> Result<(), Error> {
-    let files: u64 = parsed.into_iter().map(Parsed::files).sum();
-    let need = BASE.saturating_add(files.saturating_mul(PER_FILE));
-    if need <= room {
-        return Ok(());
+    Budget::of(parsed, room).map(|_| ())
+}
+
+/// the memory reading a lock's files takes, against the `room` a container leaves: [`PER_FILE`]
+/// a file and [`BASE`] counted before any list is read, then what each row read from a list
+/// holds past that, so a list of long rows is refused as it is read rather than filling the room.
+pub(crate) struct Budget {
+    files: u64,
+    need: u64,
+    room: u64,
+    /// what a lock read before and still held takes of the room, as [`Lock::read_with`] says.
+    taken: u64,
+}
+
+impl Budget {
+    /// the budget of the files `parsed` pins, refused as [`fits`] says when they do not fit.
+    fn of<'a>(parsed: impl IntoIterator<Item = &'a Parsed>, room: u64) -> Result<Budget, Error> {
+        let files: u64 = parsed.into_iter().map(Parsed::files).sum();
+        let need = BASE.saturating_add(files.saturating_mul(PER_FILE));
+        if need > room {
+            return Err(too_big(
+                &crate::units::count(files, "file", "files"),
+                need,
+                room,
+            ));
+        }
+        Ok(Budget {
+            files,
+            need,
+            room,
+            taken: 0,
+        })
     }
-    Err(too_big(
-        &crate::units::count(files, "file", "files"),
-        need,
-        room,
-    ))
+
+    /// takes the memory a row of `name`'s list holding `text` bytes of path and link needs past
+    /// [`PER_FILE`]: a status held about twice the text of a list of long rows.
+    pub(super) fn take(&mut self, name: &str, text: u64) -> Result<(), Error> {
+        let past = text.saturating_sub(PER_FILE).saturating_mul(2);
+        self.need = self.need.saturating_add(past);
+        if self.need <= self.room {
+            return Ok(());
+        }
+        // what is not read yet would take more still
+        let error = Error::new(
+            Kind::LocalIo,
+            format!(
+                "reading this project's {} takes at least {} of memory, more than the {} this container leaves fetchloom",
+                crate::units::count(self.files, "file", "files"),
+                crate::units::size(self.need),
+                crate::units::size(self.room)
+            ),
+        )
+        .detail(format!(
+            "the file list of {name} holds longer paths and links than most"
+        ));
+        let error = if self.taken == 0 {
+            error
+        } else {
+            error.detail(format!(
+                "the other data.lock, read already, takes about {} of it",
+                crate::units::size(self.taken)
+            ))
+        };
+        Err(error.help(raise(self.need - self.room)))
+    }
 }
 
 /// refuses, before it is parsed, the text of a lock, or of `what` as messages name it, which is
@@ -112,10 +167,15 @@ fn too_big(what: &str, need: u64, room: u64) -> Error {
             crate::units::size(room)
         ),
     )
-    .help(format!(
+    .help(raise(need - room))
+}
+
+/// how to give a read that is `short` bytes short the memory it takes.
+fn raise(short: u64) -> String {
+    format!(
         "raise the container's memory limit by {} or more, or name one dataset, as in `fetchloom path <name>`, which reads only its files",
-        crate::units::size(need - room)
-    ))
+        crate::units::size(short)
+    )
 }
 
 /// how to recover a data.lock this fetchloom cannot use. `fetchloom lock` alone reads the same
@@ -779,7 +839,8 @@ impl Lock {
         )
         .map_err(beside)?;
         let parsed = parse_only(text, &|_| true)?;
-        fits(&parsed, room).map_err(beside)?;
+        let mut budget = Budget::of(&parsed, room).map_err(beside)?;
+        budget.taken = taken;
         // a part fetchloom would not write is refused as a read refuses it, never passed over
         let (listed, unlisted): (Vec<Parsed>, Vec<Parsed>) =
             parsed.into_iter().partition(|entry| {
@@ -788,7 +849,7 @@ impl Lock {
                         || listed.parts.iter().all(|part| has(part))
                 })
             });
-        let mut lock = resolve_from(listed, Some(lists::Parts::Given(part)))?;
+        let mut lock = resolve_from(listed, Some(lists::Parts::Given(part)), &mut budget)?;
         let mut names = Vec::with_capacity(unlisted.len());
         for entry in unlisted {
             names.push(entry.name().to_owned());
@@ -904,7 +965,8 @@ impl Lock {
             let name = entry.name().to_owned();
             waiting.push(Waiting { name, part, entry });
         }
-        let mut lock = resolve(listed, Some(root))?;
+        let mut budget = Budget::of(&listed, memory)?;
+        let mut lock = resolve_from(listed, Some(lists::Parts::Folder(root)), &mut budget)?;
         lock.waiting = waiting;
         Ok(lock)
     }
@@ -1197,6 +1259,29 @@ impl Lock {
         self.lists_with(lists::inline())
     }
 
+    /// refuses a lock whose lists would hold a file whose path or link is longer than a list
+    /// keeps, as [`lists::listable`] says.
+    pub(crate) fn listable(&self) -> Result<(), Error> {
+        let inline = lists::inline();
+        for dataset in self
+            .datasets
+            .iter()
+            .filter(|dataset| dataset.files.len() > inline)
+        {
+            lists::listable(&dataset.name, &dataset.files).map_err(|error| {
+                error.help(format!(
+                    "leave that file out with an `exclude` pattern for {} in data.toml",
+                    dataset.name
+                ))
+            })?;
+        }
+        for derived in &self.derived {
+            lists::listable(&derived.name, &derived.files)
+                .map_err(|error| error.help("make the step write that file at a shorter path"))?;
+        }
+        Ok(())
+    }
+
     /// [`Lock::lists`], as [`Lock::render_with`] names them for `inline`.
     fn lists_with(&self, inline: usize) -> Vec<(String, String)> {
         let mut parts = Vec::new();
@@ -1391,15 +1476,22 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
     Ok(parsed)
 }
 
-/// the lock `parsed` gives, with each list it keeps below `root` read and checked.
+/// the lock `parsed` gives, with each list it keeps below `root` read and checked within the room
+/// a container leaves.
+#[cfg(test)]
 fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
-    resolve_from(parsed, root.map(lists::Parts::Folder))
+    let mut budget = Budget::of(&parsed, ROOM.get().copied().unwrap_or(u64::MAX))?;
+    resolve_from(parsed, root.map(lists::Parts::Folder), &mut budget)
 }
 
-/// the lock `parsed` gives, with each list it keeps read from `parts` and checked. every reader's
-/// datasets pass through here, so the links they give are checked here once.
-fn resolve_from(parsed: Vec<Parsed>, parts: Option<lists::Parts<'_>>) -> Result<Lock, Error> {
-    fits(&parsed, ROOM.get().copied().unwrap_or(u64::MAX))?;
+/// the lock `parsed` gives, with each list it keeps read from `parts` and checked, weighed against
+/// `budget`. every reader's datasets pass through here, so the links they give are checked here
+/// once.
+fn resolve_from(
+    parsed: Vec<Parsed>,
+    parts: Option<lists::Parts<'_>>,
+    budget: &mut Budget,
+) -> Result<Lock, Error> {
     let mut lock = Lock::default();
     for entry in parsed {
         match entry {
@@ -1408,7 +1500,7 @@ fn resolve_from(parsed: Vec<Parsed>, parts: Option<lists::Parts<'_>>) -> Result<
                 let is_listed = listed.is_some();
                 if let Some(listed) = listed {
                     let parts = project(parts, &dataset.name)?;
-                    dataset.files = lists::read(parts, &dataset.name, &listed)?;
+                    dataset.files = lists::read(parts, &dataset.name, &listed, budget)?;
                     check_paths(&dataset.name, dataset.files.iter().map(|file| &file.path))?;
                 }
                 let links = dataset.files.iter().map(|file| (&file.path, &file.url));
@@ -1417,7 +1509,7 @@ fn resolve_from(parsed: Vec<Parsed>, parts: Option<lists::Parts<'_>>) -> Result<
             }
             Parsed::Derived(mut derived, listed) => {
                 let parts = project(parts, &derived.name)?;
-                derived.files = lists::read(parts, &derived.name, &listed)?;
+                derived.files = lists::read(parts, &derived.name, &listed, budget)?;
                 derived::check_files(&derived)?;
                 lock.derived.push(derived);
             }
@@ -2629,6 +2721,66 @@ mod tests {
             .collect();
         assert!(fits(&zeta, BASE + PER_FILE).is_ok());
         assert!(fits(&zeta, BASE + PER_FILE - 1).is_err());
+    }
+
+    /// a list is weighed as it is read: a row whose path and link run past what [`PER_FILE`]
+    /// holds takes the rest twice, so a cloned list of long rows, small once compressed, is
+    /// refused within the container's room rather than filling it.
+    #[test]
+    fn a_list_of_long_rows_is_weighed_against_the_room() {
+        let mut lock = sample_sorted();
+        for file in &mut lock.datasets[0].files {
+            file.url = format!("https://example.org/{}", "a".repeat(60 << 10));
+        }
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+        for (part, text) in lock.lists_with(1) {
+            std::fs::write(root.path().join(part), lists::compress(&text).unwrap()).unwrap();
+        }
+        let text = lock.render_with(1);
+        // iris's two files in its list and zeta's one, as the count alone weighs them
+        let counted = BASE + 3 * PER_FILE;
+        let read = |room| Lock::read_waiting_within(&text, root.path(), &|_| true, room);
+        let error = read(counted + (100 << 10)).unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo);
+        assert!(
+            error
+                .message
+                .starts_with("reading this project's 3 files takes at least "),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            error.details,
+            ["the file list of iris holds longer paths and links than most"]
+        );
+        assert_eq!(read(counted + (1 << 20)).unwrap().datasets, lock.datasets);
+    }
+
+    /// a lock whose list would hold a path longer than a list keeps is refused before any part
+    /// is written, so fetchloom never writes a list it would refuse to read.
+    #[test]
+    fn a_list_fetchloom_would_refuse_is_never_written() {
+        let mut long = clean();
+        long.files[1].path = format!("notes/{}", "p".repeat(lists::LONGEST_PATH));
+        let lock = Lock {
+            derived: vec![long],
+            ..Lock::default()
+        };
+        let root = tempfile::tempdir().unwrap();
+        let project = crate::project::Project {
+            root: root.path().to_path_buf(),
+        };
+        let error = project.write_lists(&lock).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(
+            error.message.ends_with(
+                "cannot be pinned: its path is longer than 4,096 bytes, the most data.lock.d keeps"
+            ),
+            "{}",
+            error.message
+        );
+        assert!(!root.path().join(lists::FOLDER).exists());
     }
 
     #[test]
