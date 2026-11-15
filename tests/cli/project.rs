@@ -2287,6 +2287,54 @@ fn a_state_from_another_folder_cannot_make_a_command_delete_a_file() -> Result {
     Ok(())
 }
 
+/// a copy not yet synced has no state of its own, so remove cannot tell which files of the
+/// dataset's folder it placed: it deletes none and says so in one line, as its dry run does. the
+/// project the copy came from deletes them and says nothing of the kind.
+#[test]
+fn remove_in_a_copy_says_what_it_keeps_and_why() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("shared")?;
+    for name in ["a.csv", "b.csv"] {
+        fs::write(source.join(name), name)?;
+    }
+    let added = sandbox.run(&["add", "../shared"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let copy = clone(&sandbox, "copy")?;
+    fs::create_dir_all(copy.join(".fetchloom"))?;
+    let state = sandbox.work().join(".fetchloom").join("state");
+    fs::copy(state, copy.join(".fetchloom").join("state"))?;
+    let own = copy.join("data").join("shared");
+    fs::create_dir_all(&own)?;
+    for name in ["a.csv", "b.csv"] {
+        fs::write(own.join(name), name)?;
+    }
+    let why =
+        "its 2 files, since fetchloom cannot tell which files it placed in this project folder";
+    let dry = sandbox
+        .command_in(&copy, &["remove", "--dry-run", "shared"])
+        .output()?;
+    let stderr = text(&dry.stderr)?;
+    assert!(
+        stderr.contains(&format!("warning: data/shared would keep {why}\n")),
+        "{stderr}"
+    );
+    let removed = sandbox
+        .command_in(&copy, &["--yes", "remove", "shared"])
+        .output()?;
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("warning: data/shared keeps {why}\n")),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(own.join("a.csv"))?, b"a.csv");
+    let here = sandbox.run(&["--yes", "remove", "shared"])?;
+    let stderr = text(&here.stderr)?;
+    assert!(!stderr.contains("cannot tell"), "{stderr}");
+    assert!(!sandbox.work().join("data/shared/a.csv").exists());
+    Ok(())
+}
+
 /// a renamed folder is the same folder, so its state is still used: remove deletes the file
 /// fetchloom placed, with no sync first, which would write the state again.
 #[cfg(unix)]

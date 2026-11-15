@@ -10,6 +10,7 @@ use super::sync::{Scope, place};
 use super::{Context, open_cache, peek_cache};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
+use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::Project;
 use crate::project::lock;
@@ -63,6 +64,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     };
     let stop = &context.stop;
     let survey = Survey::read(&project, &new_manifest.data_dir, context.threads, stop)?;
+    let unrecorded = unrecorded(&survey, &manifest, &names);
     let placing = place::Placing::new(
         &project,
         &new_manifest,
@@ -73,18 +75,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         survey,
     )?;
     if dry_run {
-        let preview = placing.preview_removal();
-        context.output.step(
-            "Would remove",
-            &format!("{listed} from data.toml and data.lock"),
-        );
-        place::tell_preview(&context.output, &new_manifest, &Scope::All, &preview);
-        dry_run_done(&context.output, None);
-        let outcome = Outcome {
-            lock_changed: true,
-            pins: Vec::new(),
-            placed: preview,
-        };
+        let outcome = previewed(context, &placing, &new_manifest, &listed, &unrecorded);
         return Ok(Report::dry(project.root, names, outcome));
     }
     // a stop asked while the data folder was read leaves the project as it was; once the files
@@ -106,6 +97,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
                 "data.toml and data.lock already leave out {listed}"
             ))
     })?;
+    tell_unrecorded(&context.output, &unrecorded, false);
     context.output.done("Removed", &listed);
     context.output.next(&format!(
         "commit {}; after pulling, other clones remove unchanged files with `fetchloom sync`",
@@ -118,6 +110,93 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         placement: Some(placement),
         ..Report::default()
     })
+}
+
+/// what the removal of `listed` would change, told as the removal tells it.
+fn previewed(
+    context: &Context,
+    placing: &place::Placing<'_>,
+    manifest: &Manifest,
+    listed: &str,
+    unrecorded: &[(String, Vec<String>)],
+) -> Outcome<place::Preview> {
+    let preview = placing.preview_removal();
+    context.output.step(
+        "Would remove",
+        &format!("{listed} from data.toml and data.lock"),
+    );
+    place::tell_preview(&context.output, manifest, &Scope::All, &preview);
+    tell_unrecorded(&context.output, unrecorded, true);
+    dry_run_done(&context.output, None);
+    Outcome {
+        lock_changed: true,
+        pins: Vec::new(),
+        placed: preview,
+    }
+}
+
+/// the files below the folders of `names` when the state records nothing for this project folder,
+/// as in a copy or a clone not yet synced, by folder. removal cannot tell which of them fetchloom
+/// placed, so it deletes none. a dataset placed in the data folder itself names no folder of its own.
+fn unrecorded(
+    survey: &Survey,
+    manifest: &Manifest,
+    names: &[String],
+) -> Vec<(String, Vec<String>)> {
+    if survey.state.was_read() {
+        return Vec::new();
+    }
+    names
+        .iter()
+        .map(|name| plan::folder(manifest, name))
+        .filter(|folder| *folder != manifest.data_dir)
+        .filter_map(|folder| {
+            let below = format!("{folder}/");
+            let mut files: Vec<String> = survey
+                .disk
+                .keys()
+                .filter(|path| path.starts_with(&below))
+                .filter(|path| {
+                    !crate::place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path))
+                })
+                .cloned()
+                .collect();
+            files.sort_unstable();
+            (!files.is_empty()).then_some((folder, files))
+        })
+        .collect()
+}
+
+/// one line for the folders [`unrecorded`] found, which the removal leaves as they are. `-v`
+/// names each file.
+fn tell_unrecorded(output: &Output, unrecorded: &[(String, Vec<String>)], dry_run: bool) {
+    if unrecorded.is_empty() {
+        return;
+    }
+    let folders: Vec<&str> = unrecorded
+        .iter()
+        .map(|(folder, _)| folder.as_str())
+        .collect();
+    let files: Vec<&String> = unrecorded.iter().flat_map(|(_, files)| files).collect();
+    let (keep, its) = match (folders.len(), dry_run) {
+        (1, false) => ("keeps", "its"),
+        (1, true) => ("would keep", "its"),
+        (_, false) => ("keep", "their"),
+        (_, true) => ("would keep", "their"),
+    };
+    output.warn_detailed(
+        Warning::PlaceLeftBehind,
+        &format!(
+            "{} {keep} {its} {}, since fetchloom cannot tell which files it placed in this project folder",
+            crate::units::listed(&folders, "and"),
+            crate::units::count(files.len() as u64, "file", "files")
+        ),
+        None,
+        &files,
+    );
+    for path in files {
+        output.detail(path);
+    }
 }
 
 /// `asked` without the names given twice, in the order given.
