@@ -534,7 +534,8 @@ impl Cache {
     }
 
     /// removes abandoned downloads and the lock files nobody holds, holding each lock; a run that
-    /// opened one before it went locks a file with no name, which `claim` notices.
+    /// opened one before it went locks a file with no name, which `claim` notices. a download whose
+    /// files could not all be removed keeps its lock, by which the next sweep finds it again.
     fn sweep_partials(
         &self,
         abandoned: &dyn Fn(SystemTime) -> bool,
@@ -574,20 +575,24 @@ impl Cache {
             if !left {
                 continue;
             }
+            let mut kept = false;
             for leftover in [bytes, folder.join(format!("{key}.json"))] {
                 stop.check()?;
                 let size = fs::symlink_metadata(&leftover).map_or(0, |metadata| on_disk(&metadata));
-                if removed(
-                    &leftover,
-                    self.remove_inside(&leftover),
-                    &mut freed.not_removed,
-                ) {
+                let removal = self.remove_inside(&leftover);
+                kept |= removal
+                    .as_ref()
+                    .is_err_and(|err| err.kind() != io::ErrorKind::NotFound);
+                if removed(&leftover, removal, &mut freed.not_removed) {
                     freed.removed_leftovers += 1;
                     freed.removed_leftover_bytes += size;
                 }
             }
-            // an empty lock file frees nothing worth counting, and one left behind costs nothing
-            let _ = self.remove_inside(&entry.path());
+            // a sweep finds what is left of a download by its lock, so the lock goes last
+            if !kept {
+                // an empty lock file frees nothing worth counting
+                let _ = self.remove_inside(&entry.path());
+            }
         }
         Ok(())
     }
@@ -1362,6 +1367,65 @@ mod tests {
         assert!(lock("https://example.org/running").exists());
         assert!(!lock("https://example.org/finished").exists());
         drop(running);
+    }
+
+    /// a sweep finds an unfinished download by its lock, so one whose bytes it could not remove,
+    /// as windows refuses for a file another program holds open, keeps its lock for the next.
+    #[test]
+    fn a_download_a_sweep_could_not_remove_keeps_its_lock() {
+        let (_dir, mut cache) = cache();
+        let key = "ab".repeat(32);
+        let shard = cache.partial_folder(&key);
+        fs::create_dir_all(&shard).unwrap();
+        let [part, record, lock] =
+            ["part", "json", "lock"].map(|end| shard.join(format!("{key}.{end}")));
+        fs::write(&part, b"abc").unwrap();
+        fs::write(&record, b"{}").unwrap();
+        fs::write(&lock, b"").unwrap();
+        let held = crate::volume::Volume::new(cache.root.join("tmp")).with_removal(|path| {
+            if path.extension().is_some_and(|end| end == "part") {
+                return Err(io::Error::other("another program holds it open"));
+            }
+            fs::remove_file(path)
+        });
+        let free = std::mem::replace(&mut cache.volume, std::sync::Arc::new(held));
+        let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+        assert_eq!(cache.sweep(&Needed::default(), later).not_removed.len(), 1);
+        assert!(part.exists());
+        assert!(
+            lock.exists(),
+            "the lock a later sweep finds the bytes by is gone"
+        );
+        cache.volume = free;
+        cache.sweep(&Needed::default(), later);
+        assert_eq!(fs::read_dir(&shard).unwrap().count(), 0);
+        assert_eq!(cache.unfinished().downloads, 0);
+    }
+
+    /// the same with the file held open for real, shared for reading alone, as a scanner may.
+    #[cfg(windows)]
+    #[test]
+    fn a_download_another_program_holds_is_swept_once_it_lets_go() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 1;
+        let (_dir, cache) = cache();
+        let key = "cd".repeat(32);
+        let shard = cache.partial_folder(&key);
+        fs::create_dir_all(&shard).unwrap();
+        let [part, lock] = ["part", "lock"].map(|end| shard.join(format!("{key}.{end}")));
+        fs::write(&part, b"abc").unwrap();
+        fs::write(&lock, b"").unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&part)
+            .unwrap();
+        let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+        assert_eq!(cache.sweep(&Needed::default(), later).not_removed.len(), 1);
+        assert!(part.exists() && lock.exists());
+        drop(held);
+        cache.sweep(&Needed::default(), later);
+        assert_eq!(fs::read_dir(&shard).unwrap().count(), 0);
     }
 
     #[test]
