@@ -18,7 +18,7 @@ use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
-use crate::net::{Event, Expect, Fetch, Fetched, Net, Resumable, estimate};
+use crate::net::{Event, Expect, Fetch, Fetched, Net, Origin, Resumable, estimate};
 use crate::output::{Bar, Output, Ticker, Warning};
 use crate::source::{self, Remote};
 use crate::stop::Stop;
@@ -772,6 +772,23 @@ pub(super) fn tell_planned(output: &Output, what: &str, total: &estimate::Total)
     tell_total(output, "Downloading", what, total, output.shows_bars());
 }
 
+/// after the downloads [`tell_planned`] told as `what` and `total`, a line when `fetched` holds
+/// none from the network: the cache had every file, or its source said it had not changed.
+pub(super) fn tell_found(
+    output: &Output,
+    what: &str,
+    total: &estimate::Total,
+    fetched: &[Fetched],
+) {
+    if is_told(total)
+        && fetched
+            .iter()
+            .all(|fetched| fetched.origin != Origin::Network)
+    {
+        output.step("Found", &format!("{what} in the cache"));
+    }
+}
+
 /// [`tell_planned`] for a run that would download, as a dry run or `status` tells it: once
 /// there are several files, or a time to add to the one file's own line.
 pub(super) fn tell_would(output: &Output, what: &str, total: &estimate::Total) {
@@ -809,9 +826,14 @@ pub(super) fn tell_would_fetch<D: std::borrow::Borrow<super::sync::place::Downlo
 
 /// `live` says a bar will show the time once the downloads start.
 fn tell_total(output: &Output, verb: &str, what: &str, total: &estimate::Total, live: bool) {
-    if total.files > 0 && total.is_sized() {
+    if is_told(total) {
         output.step(verb, &format!("{what} · {}", total.facts(live)));
     }
+}
+
+/// whether a total of downloads is told before they start: some file with a known size.
+fn is_told(total: &estimate::Total) -> bool {
+    total.files > 0 && total.is_sized()
 }
 
 /// the most downloads, or datasets, a run tells on a line each; past it one line counts them.
@@ -1442,6 +1464,60 @@ mod tests {
             },
             stop: Arc::default(),
             waiting: AtomicUsize::new(0),
+        }
+    }
+
+    /// downloads told before they start, as a retry of an add tells them, end on a line even when
+    /// the cache or the source's "unchanged" answered for every file and none came over the network.
+    #[test]
+    fn downloads_that_fetched_nothing_say_where_the_files_were() {
+        let fetched = |origin| Fetched {
+            digest: crate::digest::sha256(b"rows"),
+            size: 51_456,
+            moved: 0,
+            name: None,
+            origin,
+            version: None,
+            began: None,
+            arrived: None,
+            asked: std::time::Duration::ZERO,
+        };
+        let total = estimate::Total {
+            files: 4,
+            bytes: 205_824,
+            sizes_unknown: 0,
+            time: None,
+        };
+        let sizeless = estimate::Total {
+            sizes_unknown: 4,
+            ..total.clone()
+        };
+        let cached = [fetched(Origin::NotModified), fetched(Origin::Cache)];
+        let downloaded = [fetched(Origin::Cache), fetched(Origin::Network)];
+        for (total, fetched, said) in [
+            (
+                &total,
+                &cached[..],
+                vec!["      Found 4 files in the cache"],
+            ),
+            (&total, &downloaded[..], Vec::new()),
+            (&sizeless, &cached[..], Vec::new()),
+        ] {
+            let output = Output::new(
+                Style {
+                    color: false,
+                    unicode: true,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                    accessible: false,
+                },
+                Level::Normal,
+                false,
+                false,
+            );
+            tell_found(&output, "4 files", total, fetched);
+            assert_eq!(output.said(), said, "{total:?}");
         }
     }
 

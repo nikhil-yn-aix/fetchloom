@@ -1618,7 +1618,10 @@ async fn learn_names(
         remote.named_by_server = false;
     }
     let what = match downloaded.as_slice() {
-        [] => return Ok(()),
+        [] => {
+            fetch::tell_found(&context.output, &called, &planned, &fetched);
+            return Ok(());
+        }
         [(path, _)] => path.clone(),
         several => units::count(several.len() as u64, "file", "files"),
     };

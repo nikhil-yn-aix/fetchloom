@@ -1089,6 +1089,7 @@ impl<'a> Loop<'a> {
             .map_err(|error| self.as_left(error))?;
         if ahead.is_empty() {
             self.tell_downloaded(&fetched, started);
+            fetch::tell_found(&self.context.output, &called, &planned, &fetched);
             return Ok(Batch {
                 fetched,
                 ahead: None,
