@@ -45,7 +45,7 @@ struct Answers {
 }
 
 /// why a mirror is skipped for the rest of the run: what to warn, the help, and its answer in
-/// short. no warning for one a person chose to skip, as a web mirror while offline.
+/// short. no warning for one a person chose to skip, as a web or S3 mirror while offline.
 struct Skip {
     warning: Option<(String, String)>,
     said: String,
