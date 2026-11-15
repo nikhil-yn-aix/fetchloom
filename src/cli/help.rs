@@ -238,6 +238,10 @@ shell reads: {iris} stands for a folder holding a copy of iris's files, and
 the project the result depends on, such as the script, and
 env = { NAME = \"value\" } sets variables for the step alone.
 
+run finds a bare program name on PATH, so for a project's own python write
+\".venv/bin/python\", on windows \".venv/Scripts/python.exe\", or start run
+with \"uv\", \"run\", \"python\".
+
 only `fetchloom build` runs a step, as you, with your files and keys, so read
 the commands of a project you cloned with `fetchloom build --dry-run` first.
 the build records what the step wrote, each file with its SHA-256, in
@@ -624,7 +628,7 @@ fn agreed(text: &str) -> String {
 mod tests {
     use clap::CommandFactory;
 
-    use super::{CONCEPTS, ENVIRONMENT, EXIT_CODES, TOPICS, args, arguments};
+    use super::{CONCEPTS, ENVIRONMENT, EXIT_CODES, RECIPES, TOPICS, args, arguments};
 
     #[test]
     fn a_short_only_option_keeps_its_spelling_and_its_value() {
@@ -720,6 +724,19 @@ mod tests {
         for name in read {
             assert!(topic.contains(name), "{name}");
             assert!(docs.contains(&format!("`{name}`")), "{name}");
+        }
+    }
+
+    /// a step finds a bare `python` on PATH, which has the project's own only while its venv is
+    /// active, so the topic names the venv's python by its path, and uv's way.
+    #[test]
+    fn the_recipes_topic_names_a_projects_own_python() {
+        for named in [
+            "\".venv/bin/python\"",
+            "\".venv/Scripts/python.exe\"",
+            "\"uv\", \"run\", \"python\"",
+        ] {
+            assert!(RECIPES.contains(named), "{named}");
         }
     }
 
