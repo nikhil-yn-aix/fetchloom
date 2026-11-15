@@ -55,7 +55,7 @@ pub(crate) struct Partial {
 }
 
 /// the locked file keeping a download to one process. the last clone removes it, still locked,
-/// when nothing is left to resume; a run that opened it before then notices in [`take_lock`].
+/// when nothing is left to resume; a run that opened it before then notices in [`lock_named`].
 #[derive(Debug)]
 pub(super) struct Claimed {
     file: File,
@@ -177,8 +177,8 @@ pub(super) fn take_lock(path: &Path, opened: File) -> Result<File, TryLockError>
     )
 }
 
-/// [`take_lock`], with `names` saying whether the claim file still has its name and `reopen`
-/// opening it again.
+/// locks the claim file `opened`, opening it again until the file locked is the one it names,
+/// with `names` saying whether the claim file still has its name and `reopen` opening it again.
 fn lock_named(
     mut opened: File,
     names: impl Fn(&File) -> io::Result<bool>,
