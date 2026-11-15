@@ -1006,6 +1006,39 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
     Ok(())
 }
 
+/// an `--as` name no dataset can have is refused before any search, and a link given there in
+/// place of the name is answered with the line the other way round.
+#[test]
+fn a_name_as_cannot_take_is_refused_before_any_search() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (arguments, message, help) in [
+        (
+            &[
+                "--json",
+                "add",
+                "--as",
+                "hf:datasets/scikit-learn/iris",
+                "myiris",
+            ][..],
+            "--as takes the new dataset's name, and \"hf:datasets/scikit-learn/iris\" looks like its link",
+            "did you mean `fetchloom --json add hf:datasets/scikit-learn/iris --as myiris`?",
+        ),
+        (
+            &["--json", "add", "--as", "My Iris", "iris"],
+            "\"My Iris\" is not a valid dataset name",
+            "use lowercase letters a to z, digits, - and _, starting with a letter or a digit, at most 64 characters, such as --as my-iris",
+        ),
+    ] {
+        let output = sandbox.run(arguments)?;
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["message"], message, "{arguments:?}");
+        assert_eq!(error["help"], help, "{arguments:?}");
+    }
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
+
 /// q or ctrl-c at the search list, and no or ctrl-c at the home folder question, each say what
 /// was cancelled and that nothing changed, exiting 1 for q or no, as a cancel, and 130 for
 /// ctrl-c.

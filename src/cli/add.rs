@@ -321,6 +321,9 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
         }));
     }
     let mut typed = std::mem::take(&mut args.links);
+    if let Some(asked) = args.name.as_deref() {
+        named_as(asked, &typed)?;
+    }
     if let Some(words) = one_search(&typed, true)? {
         return Ok(Request::Link(words));
     }
@@ -347,6 +350,29 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     }
     super::search::refuse_local(&link, true)?;
     Ok(Request::Link(link))
+}
+
+/// refuses an `--as` name no dataset can have before anything is searched or fetched. a link
+/// there, beside one word that could be the name, was most likely given the other way round.
+fn named_as(asked: &str, typed: &[String]) -> Result<(), Error> {
+    if name::dataset_name_problem(asked).is_none() {
+        return Ok(());
+    }
+    if let [word] = typed
+        && name::dataset_name_problem(word).is_none()
+        && (asked.contains(':') || local::is_path(asked))
+    {
+        let shown = crate::shown::mask_query(asked);
+        let instead =
+            super::project::command(&format!("add {} --as {word}", super::shell_word(&shown)));
+        let line = super::typed::meant(&["--as", asked, word], &[asked, "--as", word], instead);
+        return Err(Error::new(
+            Kind::Usage,
+            format!("--as takes the new dataset's name, and \"{shown}\" looks like its link"),
+        )
+        .help(format!("did you mean `{line}`?")));
+    }
+    usable(asked, &Manifest::parse("")?)
 }
 
 /// the words of one search, when `typed` holds several plain words and no link, id, DOI or path.
