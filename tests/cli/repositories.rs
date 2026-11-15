@@ -1532,8 +1532,8 @@ fn a_pin_by_the_sources_md5_is_downloaded_and_completed_by_a_sync() -> Result {
     Ok(())
 }
 
-/// bytes that do not match the MD5 their source states fail the sync as any pin does, and
-/// data.lock and the data folder stay as they were.
+/// bytes other than the MD5 data.lock pins fail the sync as any pin does, saying the file is not
+/// the one data.lock records, and data.lock and the data folder stay as they were.
 #[test]
 fn a_sync_that_finds_other_bytes_than_the_stated_md5_records_nothing() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1541,7 +1541,17 @@ fn a_sync_that_finds_other_bytes_than_the_stated_md5_records_nothing() -> Result
     let lock = added_unsynced(&sandbox, &routes)?;
     let (teammate, synced) = teammate_sync(&sandbox, &routes, &["--json", "sync"])?;
     assert_eq!(synced.status.code(), Some(30), "{}", text(&synced.stderr)?);
-    assert_eq!(json(&synced)?["errors"][0]["kind"], "integrity.mismatch");
+    let error = &json(&synced)?["errors"][0];
+    assert_eq!(error["kind"], "integrity.mismatch");
+    assert_eq!(
+        error["message"],
+        "archiving/rows.csv is not the file data.lock records"
+    );
+    let help = error["help"].as_str().unwrap_or_default();
+    assert!(
+        help.ends_with("if the new bytes are intended, run `fetchloom lock --upgrade archiving`"),
+        "{help}"
+    );
     assert_eq!(fs::read_to_string(teammate.join("data.lock"))?, lock);
     assert!(!teammate.join("data/archiving/rows.csv").exists());
     Ok(())

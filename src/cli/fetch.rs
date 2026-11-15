@@ -1412,11 +1412,12 @@ fn explain(error: Error, job: &Job) -> Error {
     if job.again.is_some() && error.help.as_deref() == Some(crate::net::MOVED_HELP) {
         return error.help(GONE_HELP);
     }
-    // an MD5 mismatch comes with its own help, since the source contradicts itself
+    // an MD5 mismatch comes with its own help, since the source contradicts itself, unless
+    // data.lock pinned that MD5, as `add --no-sync` does, and the file changed since
+    let pinned_md5 = job.again.is_some() && job.fetch.expect.sha256.is_none();
     let dataset = job.dataset.as_ref().filter(|_| {
         error.kind == Kind::IntegrityMismatch
-            && error.help.is_none()
-            && job.fetch.expect.sha256.is_some()
+            && (pinned_md5 || (error.help.is_none() && job.fetch.expect.sha256.is_some()))
     });
     let Some(dataset) = dataset else {
         return if error.kind == Kind::IntegrityMismatch {
