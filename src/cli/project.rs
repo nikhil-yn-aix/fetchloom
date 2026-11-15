@@ -1789,7 +1789,18 @@ pub(super) async fn hold_until<T>(
             return Ok(Waited::Ready(answer));
         }
         match project.hold(command)? {
-            Hold::Held(held) => return Ok(Waited::Held(held)),
+            Hold::Held(mut held) => {
+                if let Some(path) = held.removed_unread() {
+                    context.output.warn(
+                        Warning::ProjectOwnerRemoved,
+                        &format!(
+                            "removed {}, which no fetchloom wrote, as a cloned project can hold, and went on",
+                            path.display()
+                        ),
+                    );
+                }
+                return Ok(Waited::Held(held));
+            }
             Hold::Busy(holder) if !told => {
                 // the line about the other fetchloom says what the wait is
                 drop(setup.take());

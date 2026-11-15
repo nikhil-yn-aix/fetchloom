@@ -1203,6 +1203,31 @@ fn inside_git_the_data_folder_is_ignored_once() -> Result {
     Ok(())
 }
 
+/// a record in .fetchloom/owner that no fetchloom writes, as a clone can carry, keeps nobody out:
+/// the command removes it, says so once, and goes on.
+#[test]
+fn an_owner_record_no_fetchloom_writes_is_removed_with_a_warning() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let owner = sandbox.work().join(".fetchloom").join("owner");
+    fs::write(&owner, "{\"os\": \"plan9\"}")?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(
+        crate::support::warned(&document),
+        [format!(
+            "removed {}, which no fetchloom wrote, as a cloned project can hold, and went on",
+            owner.display()
+        )],
+        "{document}"
+    );
+    assert_eq!(crate::support::kinds(&document), ["project.owner_removed"]);
+    assert!(!owner.exists());
+    Ok(())
+}
+
 /// a project started outside git gets its ignore rule at once, so a `git init` and `git add -A`
 /// right after it commit no data file; the line that says so comes only when the rule is added.
 #[test]
@@ -2407,9 +2432,10 @@ fn a_state_that_records_another_device_is_still_used() -> Result {
     Ok(())
 }
 
-/// an owner file far larger than any fetchloom writes stands in for a damaged one.
+/// an owner file far larger than any fetchloom writes, as a cloned project can hold, is removed
+/// with a warning in plain words, and the command goes on.
 #[test]
-fn a_project_that_cannot_be_locked_is_named_plainly() -> Result {
+fn an_owner_record_too_large_to_be_one_is_removed_and_told_plainly() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
@@ -2418,21 +2444,18 @@ fn a_project_that_cannot_be_locked_is_named_plainly() -> Result {
     delete(&sandbox.work().join("data/iris/iris.csv"))?;
     let output = sandbox.run(&["sync"])?;
     let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.starts_with("error: could not lock the project: "),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!(
-            "help: if no other fetchloom is working in this project, delete {}, then run `fetchloom sync` again",
+        stderr.starts_with(&format!(
+            "warning: removed {}, which no fetchloom wrote, as a cloned project can hold, and went on\n",
             owner.display()
         )),
         "{stderr}"
     );
-    for internal in ["claim", "owner record"] {
+    for internal in ["claim", "record"] {
         assert!(!stderr.contains(internal), "{internal}: {stderr}");
     }
+    assert!(!owner.exists());
     Ok(())
 }
 

@@ -104,6 +104,8 @@ pub(crate) enum Warning {
     PlaceUnportable,
     /// a stopped add could not put data.toml and data.lock back as they were.
     ProjectNotRestored,
+    /// `.fetchloom/owner` held no record fetchloom writes, so taking the project removed it.
+    ProjectOwnerRemoved,
     /// a catalog did not answer a search, or its search failed.
     SearchPartial,
     /// the settings file `settings set` or `unset` changed still holds a problem every run stops
@@ -182,6 +184,7 @@ impl Warning {
             Warning::PlaceRestored => "place.restored",
             Warning::PlaceUnportable => "place.unportable",
             Warning::ProjectNotRestored => "project.not_restored",
+            Warning::ProjectOwnerRemoved => "project.owner_removed",
             Warning::SearchPartial => "search.partial",
             Warning::SettingsBroken => "settings.broken",
             Warning::SettingsColorsUnread => "settings.colors_unread",
@@ -267,6 +270,7 @@ mod tests {
             PlaceRestored,
             PlaceUnportable,
             ProjectNotRestored,
+            ProjectOwnerRemoved,
             SearchPartial,
             SettingsBroken,
             SettingsColorsUnread,

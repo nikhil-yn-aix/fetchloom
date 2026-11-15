@@ -187,6 +187,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `place.restored` | a changed file was put back as data.lock pins it |
 | `place.unportable` | files have names windows and fat disks cannot store |
 | `project.not_restored` | a stopped add could not put data.toml and data.lock back as they were |
+| `project.owner_removed` | `.fetchloom/owner` held something no fetchloom wrote, as a cloned project can, so taking the project removed it and the command went on; the message names the file |
 | `search.partial` | a search site did not answer in time, or its search failed |
 | `settings.broken` | `settings set` or `settings unset` changed a settings file that still holds a problem every run stops at, such as a key that is no setting, which the change did not bring |
 | `settings.colors_unread` | `FETCHLOOM_COLORS` holds entries fetchloom cannot read, which keep their default colors |

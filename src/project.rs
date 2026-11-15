@@ -48,6 +48,8 @@ pub(crate) struct Project {
 pub(crate) struct Held {
     lock: Option<File>,
     owner: Option<PathBuf>,
+    /// an owner record fetchloom could not read, which taking the hold removed as stale.
+    removed: Option<PathBuf>,
 }
 
 pub(crate) enum Hold {
@@ -92,6 +94,11 @@ impl Owner {
 }
 
 impl Held {
+    /// the owner record fetchloom could not read that taking this hold removed, told once.
+    pub(crate) fn removed_unread(&mut self) -> Option<PathBuf> {
+        self.removed.take()
+    }
+
     fn publish_owner(&mut self, path: &Path, record: &[u8]) -> io::Result<()> {
         let (temporary, file) = loop {
             let temporary = path.with_file_name(format!(
@@ -164,10 +171,30 @@ impl Held {
             let (bytes, modified) = match read_owner(path) {
                 Ok(read) => read,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                // a link, a special file, or more than any fetchloom writes: no record of one
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData
+                    ) =>
+                {
+                    match fs::remove_file(path) {
+                        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                        _ => {}
+                    }
+                    self.removed = Some(path.to_path_buf());
+                    continue;
+                }
                 Err(err) => return Err(err),
             };
             let owner = Owner::read(&bytes);
-            // an empty reservation may belong to a paused writer on another OS
+            // a record no fetchloom writes, as a clone or a crash can leave, holds nobody out. an
+            // empty one is a reservation, which may belong to a paused writer on another OS
+            if owner.is_none() && !bytes.is_empty() {
+                remove_stale_owner(path, &bytes, modified)?;
+                self.removed = Some(path.to_path_buf());
+                continue;
+            }
             let stale = self.lock.is_some()
                 && owner
                     .as_ref()
@@ -655,9 +682,13 @@ impl Project {
                 }
             };
             let owner = folder.join("owner");
-            return Held { lock, owner: None }
-                .claim(&owner, command, now)
-                .map_err(|err| not_locked(&owner, &err));
+            return Held {
+                lock,
+                owner: None,
+                removed: None,
+            }
+            .claim(&owner, command, now)
+            .map_err(|err| not_locked(&owner, &err));
         }
         Err(Error::new(
             Kind::LocalIo,
@@ -1291,6 +1322,7 @@ mod tests {
         let competing = Held {
             lock: None,
             owner: None,
+            removed: None,
         };
         assert!(matches!(
             competing.claim(&path, "remove", SystemTime::now()).unwrap(),
@@ -1356,40 +1388,56 @@ mod tests {
         assert!(!path.exists());
     }
 
-    /// an owner record is read only with the words fetchloom writes in it, since a clone can carry
-    /// one: any other system, command or time reads as a record of another fetchloom, which waits
-    /// and names the file to delete, never the record's own text.
+    /// a record no fetchloom writes, as a clone or a crash can leave, holds nobody out: other
+    /// words, broken JSON, more than fetchloom writes or a link, which is never followed. taking
+    /// the project removes it, once, for a warning, and the record there is this command's.
     #[test]
-    fn an_owner_with_words_fetchloom_never_writes_is_not_shown() {
-        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+    fn an_owner_record_fetchloom_cannot_read_is_stale() {
+        let (_dir, project) = project(&[(".fetchloom/elsewhere", "{}")]);
         let path = project.own_folder().join("owner");
-        for (os, command, started) in [
-            ("plan9", "sync", "2026-10-30T12:00:00Z"),
-            ("windows", "rm -rf ~", "2026-10-30T12:00:00Z"),
-            ("windows", "sync", "\u{1b}]52;c;aGk=\u{7}"),
-        ] {
-            let record = serde_json::json!({
+        let target = project.own_folder().join("elsewhere");
+        let record = |os: &str, command: &str, started: &str| {
+            serde_json::json!({
                 "os": os,
                 "pid": 42,
                 "started": started,
                 "command": command,
-            });
-            fs::write(&path, record.to_string()).unwrap();
-            let modified = fs::metadata(&path).unwrap().modified().unwrap();
-            let now = modified + Duration::from_secs(60);
-            let Hold::Owner(message) = project.hold_at("remove", now).unwrap() else {
-                panic!("a record fetchloom never writes needs a person")
+            })
+            .to_string()
+        };
+        for (what, planted) in [
+            (
+                "a system",
+                Some(record("plan9", "sync", "2026-10-30T12:00:00Z")),
+            ),
+            (
+                "a command",
+                Some(record("windows", "rm -rf ~", "2026-10-30T12:00:00Z")),
+            ),
+            (
+                "a time",
+                Some(record("windows", "sync", "\u{1b}]52;c;aGk=\u{7}")),
+            ),
+            ("broken json", Some("{".to_owned())),
+            ("too large", Some("x".repeat(2 << 20))),
+            ("a link", None),
+        ] {
+            match planted {
+                Some(text) => fs::write(&path, text).unwrap(),
+                None if linked(&target, &path) => {}
+                None => continue,
+            }
+            let Hold::Held(mut held) = project.hold("remove").unwrap() else {
+                panic!("{what}: a record no fetchloom writes keeps nobody out")
             };
-            assert_eq!(
-                message,
-                format!(
-                    "for another fetchloom working in this project; if that process is gone, delete {}",
-                    path.display()
-                ),
-                "{os} {command} {started:?}"
-            );
-            assert_eq!(holder(&path), None, "{os} {command}");
+            assert_eq!(held.removed_unread(), Some(path.clone()), "{what}");
+            assert_eq!(held.removed_unread(), None, "{what}: told once");
+            let ours = Owner::read(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(ours.command, "remove", "{what}");
+            drop(held);
+            assert!(!path.exists(), "{what}");
         }
+        assert_eq!(fs::read(&target).unwrap(), b"{}");
     }
 
     #[test]
@@ -1418,6 +1466,7 @@ mod tests {
         let held = Held {
             lock: None,
             owner: None,
+            removed: None,
         };
         assert!(matches!(
             held.claim(&path, "remove", std::time::SystemTime::now())
@@ -1441,11 +1490,16 @@ mod tests {
         let first = Held {
             lock: None,
             owner: Some(path.clone()),
+            removed: None,
         };
         for lock in [None, Some(File::open(&path).unwrap())] {
-            let second = Held { lock, owner: None }
-                .claim(&path, "remove", started + Duration::from_secs(12))
-                .unwrap();
+            let second = Held {
+                lock,
+                owner: None,
+                removed: None,
+            }
+            .claim(&path, "remove", started + Duration::from_secs(12))
+            .unwrap();
             assert!(
                 matches!(second, Hold::Owner(_)),
                 "an active empty reservation was stolen"
@@ -1481,27 +1535,12 @@ mod tests {
     }
 
     #[test]
-    fn a_nonempty_invalid_owner_waits() {
-        let (_dir, project) = project(&[(".fetchloom/owner", "{")]);
-        let path = project.own_folder().join("owner");
-        let modified = fs::metadata(&path).unwrap().modified().unwrap();
-        let now = modified + std::time::Duration::from_secs(60);
-        let Hold::Owner(message) = project.hold_at("sync", now).unwrap() else {
-            panic!("an invalid nonempty owner needs manual recovery")
-        };
-        assert!(message.contains(&path.display().to_string()));
-        assert_eq!(fs::read(path).unwrap(), b"{");
-    }
-
-    #[test]
     fn an_owner_too_large_to_be_one_is_not_read_whole() {
         let large = "x".repeat(2 << 20);
         let (_dir, project) = project(&[(".fetchloom/owner", &large)]);
         let path = project.own_folder().join("owner");
         let err = read_owner(&path).err().map(|err| err.kind());
         assert_eq!(err, Some(io::ErrorKind::InvalidData));
-        assert!(project.hold("sync").is_err());
-        assert_eq!(fs::metadata(&path).unwrap().len(), large.len() as u64);
     }
 
     #[test]
@@ -1514,7 +1553,6 @@ mod tests {
         }
         let err = read_owner(&path).err().map(|err| err.kind());
         assert_eq!(err, Some(io::ErrorKind::InvalidInput));
-        assert!(project.hold("sync").is_err());
         assert_eq!(fs::read(&target).unwrap(), b"{}");
     }
 
@@ -1647,6 +1685,7 @@ mod tests {
             Held {
                 lock: None,
                 owner: None,
+                removed: None,
             }
             .claim(&path, "sync", now)
             .unwrap()
