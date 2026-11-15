@@ -165,6 +165,37 @@ fn each_dataset_and_file_that_differs_has_a_line() {
     assert!(diffed(&after, &after).is_empty());
 }
 
+/// a dataset whose table data.toml renamed keeps its pin, so diff tells one rename, not a
+/// dataset removed and another added; one that changed besides stays both.
+#[test]
+fn a_renamed_dataset_is_told_as_one() {
+    let files = vec![file("penguins.csv", b"species\n")];
+    let before = Lock {
+        datasets: vec![fetched("penguins", 1, files.clone())],
+        ..Lock::default()
+    };
+    let mut birds = fetched("penguins", 1, files.clone());
+    birds.name = "birds".to_owned();
+    let after = Lock {
+        datasets: vec![birds],
+        ..Lock::default()
+    };
+    let datasets = diffed(&before, &after);
+    assert_eq!(
+        told(&datasets),
+        ["penguins renamed to birds; the same files"]
+    );
+    assert_eq!(datasets[0].renamed_from.as_deref(), Some("penguins"));
+    let mut other = fetched("penguins", 2, files);
+    other.name = "birds".to_owned();
+    let changed = Lock {
+        datasets: vec![other],
+        ..Lock::default()
+    };
+    let datasets = diffed(&before, &changed);
+    assert_eq!(datasets.len(), 2, "{:?}", told(&datasets));
+}
+
 /// a terminal shows a dataset's first file lines and counts the rest, naming the command that
 /// lists them all; a pipe has every line.
 #[test]

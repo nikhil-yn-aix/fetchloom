@@ -67,6 +67,10 @@ struct Dataset {
     /// what changed, in words, for the line that tells it.
     #[serde(skip)]
     said: Vec<String>,
+    /// the name `from` gave the dataset, when only its name changed, as a rename in data.toml
+    /// moves its pin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    renamed_from: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -460,6 +464,73 @@ fn recipe(derived: &Derived) -> Vec<(&'static str, Option<String>)> {
     ]
 }
 
+/// a dataset removed and another added with the same fields and files, which a rename of its
+/// table in data.toml makes, as one dataset renamed. the others stay as they are.
+fn renamed(datasets: Vec<Dataset>) -> Vec<Dataset> {
+    type Pins<'a> = (
+        Vec<(&'a str, &'a Option<String>)>,
+        Vec<(&'a str, Option<Pinned>)>,
+    );
+    /// a dataset's fields and files as its one side pins them.
+    fn pinned(dataset: &Dataset) -> Pins<'_> {
+        let fields = dataset
+            .fields
+            .iter()
+            .map(|field| {
+                let value = if field.before.is_some() {
+                    &field.before
+                } else {
+                    &field.after
+                };
+                (field.name, value)
+            })
+            .collect();
+        let files = dataset
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.before.or(file.after)))
+            .collect();
+        (fields, files)
+    }
+    let mut gone: Vec<Dataset> = Vec::new();
+    let mut kept: Vec<Dataset> = Vec::new();
+    for dataset in datasets {
+        match dataset.change {
+            Change::Removed if dataset.unlisted.is_empty() => gone.push(dataset),
+            _ => kept.push(dataset),
+        }
+    }
+    for dataset in &mut kept {
+        if dataset.change != Change::Added || !dataset.unlisted.is_empty() {
+            continue;
+        }
+        let same = pinned(dataset);
+        let Some(at) = gone
+            .iter()
+            .position(|old| old.kind == dataset.kind && pinned(old) == same)
+        else {
+            continue;
+        };
+        let old = gone.remove(at);
+        *dataset = Dataset {
+            name: dataset.name.clone(),
+            change: Change::Changed,
+            kind: dataset.kind,
+            fields: Vec::new(),
+            added: 0,
+            removed: 0,
+            changed: 0,
+            files: Vec::new(),
+            unlisted: Vec::new(),
+            said: Vec::new(),
+            renamed_from: Some(old.name),
+        };
+    }
+    kept.extend(gone);
+    kept.sort_by(|a, b| a.name.cmp(&b.name));
+    kept
+}
+
 /// each dataset `after` pins otherwise than `before`, by name.
 fn compared(before: &Read, after: &Read) -> Vec<Dataset> {
     let mut names: Vec<&str> = [&before.lock, &after.lock]
@@ -474,7 +545,7 @@ fn compared(before: &Read, after: &Read) -> Vec<Dataset> {
         .collect();
     names.sort_unstable();
     names.dedup();
-    names
+    let datasets = names
         .into_iter()
         .filter_map(|name| {
             let unlisted = [("from", before), ("to", after)]
@@ -489,7 +560,8 @@ fn compared(before: &Read, after: &Read) -> Vec<Dataset> {
                 unlisted,
             )
         })
-        .collect()
+        .collect();
+    renamed(datasets)
 }
 
 /// how the pin of `name` differs from `before` to `after`, none when it does not. the files of a
@@ -534,6 +606,7 @@ fn dataset(
         files,
         unlisted,
         said,
+        renamed_from: None,
     })
 }
 
@@ -836,6 +909,9 @@ fn summary(dataset: &Dataset, from: &str, to: &str) -> String {
                 "removed"
             };
             format!("{name} {change}: {what}; {files}")
+        }
+        Change::Changed if let Some(before) = &dataset.renamed_from => {
+            format!("{} renamed to {name}; the same files", plain(before))
         }
         Change::Changed => {
             let mut said = dataset.said.clone();
