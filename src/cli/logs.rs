@@ -146,7 +146,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn absent_empty_or_invalid_settings_do_not_enable_logging() {
+    fn absent_empty_or_invalid_log_variables_leave_logging_off() {
         for log in [None, Some("fetchloom=not-a-level")] {
             let logs = start(Level::Normal, false, &|name| match name {
                 "FETCHLOOM_LOG" => log.map(OsString::from),
