@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use super::{UrlRecord, recorded_url_matches};
 use crate::digest;
+use crate::volume::{open_unfollowed, read_unfollowed};
 
 pub(super) const SHARDS: usize = 16;
 
@@ -61,7 +62,7 @@ impl Index {
     /// reads the entries past those read before: a first read grouped, a later one as recent.
     fn read_on(&mut self, path: &Path) -> io::Result<()> {
         if self.file.is_none() {
-            match File::open(path) {
+            match read_unfollowed(path) {
                 Ok(file) => self.file = Some(file),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
                 Err(err) => return Err(err),
@@ -148,7 +149,7 @@ impl Shards {
                 index.latest(key)?
             };
             if index.log.is_none() {
-                index.log = Some(Arc::new(File::open(paths(root, shard).0).ok()?));
+                index.log = Some(Arc::new(read_unfollowed(&paths(root, shard).0).ok()?));
             }
             (Arc::clone(index.log.as_ref()?), start)
         };
@@ -179,20 +180,16 @@ impl Shards {
         let (shard, key) = place(&record.url);
         let json = serde_json::to_vec(record).map_err(io::Error::other)?;
         let (records, entries) = paths(root, shard);
-        // windows locks keep other handles off what they cover and refuse one opened to append
-        let held = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(lock_path(root, shard))?;
+        // windows locks keep other handles off what they cover and refuse one opened to append.
+        // none of these files is opened through a link, since a line holds text a server chose
+        let held = open_unfollowed(&lock_path(root, shard), true)?;
         match lock(&held) {
             Err(err) if err.kind() != io::ErrorKind::Unsupported => return Err(err),
             _ => {}
         }
-        let mut log = OpenOptions::new().append(true).create(true).open(records)?;
+        let mut log = open_unfollowed(&records, true)?;
         // a shard holds 4 GiB; past that its links go unrecorded until gc writes it again
-        let start = u32::try_from(log.metadata()?.len()).map_err(io::Error::other)?;
+        let start = u32::try_from(log.seek(SeekFrom::End(0))?).map_err(io::Error::other)?;
         let mut line = Vec::with_capacity(CHECK + json.len() + 1);
         line.extend_from_slice(&check(&json));
         line.push(b' ');
@@ -202,11 +199,7 @@ impl Shards {
         let mut entry = [0; ENTRY];
         entry[..8].copy_from_slice(&key.to_le_bytes());
         entry[8..].copy_from_slice(&start.to_le_bytes());
-        let mut index = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(entries)?;
+        let mut index = open_unfollowed(&entries, true)?;
         // an entry a dead run left unfinished is written over, so each starts on its boundary
         let whole = index.metadata()?.len() / ENTRY as u64 * ENTRY as u64;
         index.seek(SeekFrom::Start(whole))?;
@@ -273,7 +266,7 @@ struct Kept {
 /// record.
 fn kept(root: &Path, shard: usize, keep: &dyn Fn(&UrlRecord) -> bool) -> io::Result<Option<Kept>> {
     let (records, entries) = paths(root, shard);
-    let (lines, index) = match (fs::read(&records), fs::read(&entries)) {
+    let (lines, index) = match (read_whole(&records), read_whole(&entries)) {
         (Ok(lines), Ok(index)) => (lines, index),
         (Err(err), _) | (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
             return Err(err);
@@ -406,10 +399,21 @@ fn checked(line: &[u8]) -> Option<&[u8]> {
     (line[CHECK - 1] == b' ' && check(json) == line[..CHECK - 1]).then_some(json)
 }
 
-/// puts `bytes` at `path` in one step, through a file of its own in `scratch`.
+/// the bytes of the plain file at `path`, never read through a link.
+fn read_whole(path: &Path) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    read_unfollowed(path)?.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// puts `bytes` at `path` in one step, through a new file of its own in `scratch`.
 fn replace(scratch: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = scratch.join(format!("{:016x}.urls", fastrand::u64(..)));
-    fs::write(&temporary, bytes)?;
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?
+        .write_all(bytes)?;
     fs::rename(&temporary, path).inspect_err(|_| {
         let _ = fs::remove_file(&temporary);
     })
@@ -495,6 +499,46 @@ mod tests {
         for shard in 0..SHARDS {
             shards.rewrite(root, root, shard, keep).unwrap();
         }
+    }
+
+    /// a record's line holds text a server chose, such as an etag, so a shard's file planted as a
+    /// link to someone's file, as their shell's startup file, is never written through.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_never_writes_through_a_linked_record_file() {
+        let url = "https://example.org/a";
+        let (shard, _) = place(url);
+        for linked in 0..3 {
+            let folder = store();
+            let root = folder.path();
+            let (records, entries) = paths(root, shard);
+            let path = [records, entries, lock_path(root, shard)][linked].clone();
+            let outside = root.join("bashrc");
+            fs::write(&outside, b"keep these bytes").unwrap();
+            std::os::unix::fs::symlink(&outside, &path).unwrap();
+
+            assert!(Shards::default().save(root, &record(url, 1)).is_err());
+
+            assert_eq!(fs::read(&outside).unwrap(), b"keep these bytes", "{path:?}");
+        }
+    }
+
+    /// a rewrite's new file takes a name no file had, so one planted at it is never written.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewrite_never_writes_through_a_planted_temporary_name() {
+        let folder = store();
+        let root = folder.path();
+        let outside = root.join("bashrc");
+        fs::write(&outside, b"keep these bytes").unwrap();
+        fastrand::seed(7);
+        let planted = root.join(format!("{:016x}.urls", fastrand::u64(..)));
+        std::os::unix::fs::symlink(&outside, &planted).unwrap();
+        fastrand::seed(7);
+
+        assert!(replace(root, &root.join("urls/0.log"), b"a line\n").is_err());
+
+        assert_eq!(fs::read(&outside).unwrap(), b"keep these bytes");
     }
 
     /// the latest record of a link is the one found, by this run and by the next.
