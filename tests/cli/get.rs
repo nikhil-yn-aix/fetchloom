@@ -1701,22 +1701,28 @@ fn data_file_links_that_answer_with_html_are_refused() -> Result {
             "{path}: {stderr}"
         );
     }
-    let sandbox = Sandbox::new()?;
-    let server = Server::start("/iris.csv", vec![page(&[])])?;
-    let added = sandbox.run(&["add", &server.url])?;
-    let stderr = text(&added.stderr)?;
-    assert_eq!(added.status.code(), Some(10), "{stderr}");
-    assert!(
-        stderr.contains("if the page itself is the data, add --web-page"),
-        "{stderr}"
-    );
-    let site = server.url.trim_start_matches("http://");
-    let site = site.split('/').next().unwrap_or(site);
-    assert!(
-        stderr.contains(&format!("`fetchloom auth login {site}`")),
-        "the sign-in names the port: {stderr}"
-    );
-    assert!(!sandbox.work().join("data.lock").exists());
+    // a refused add wrote no data.toml entry, with --as or without, so the flag is the way in
+    for named in [&[][..], &["--as", "fpx"][..]] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start("/iris.csv", vec![page(&[])])?;
+        let mut args = vec!["add", server.url.as_str()];
+        args.extend_from_slice(named);
+        let added = sandbox.run(&args)?;
+        let stderr = text(&added.stderr)?;
+        assert_eq!(added.status.code(), Some(10), "{stderr}");
+        assert!(
+            stderr.contains("if the page itself is the data, add --web-page"),
+            "{named:?}: {stderr}"
+        );
+        assert!(!stderr.contains("[datasets."), "{named:?}: {stderr}");
+        let site = server.url.trim_start_matches("http://");
+        let site = site.split('/').next().unwrap_or(site);
+        assert!(
+            stderr.contains(&format!("`fetchloom auth login {site}`")),
+            "the sign-in names the port: {stderr}"
+        );
+        assert!(!sandbox.work().join("data.lock").exists());
+    }
     Ok(())
 }
 

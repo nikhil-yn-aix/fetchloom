@@ -35,6 +35,15 @@ pub(super) struct Job {
     pub(super) again: Option<Again>,
 }
 
+/// how a refusal of a web page says to ask for the page itself, for a download data.toml's entry
+/// `dataset` asks for.
+pub(in crate::cli) fn page_entry(dataset: &str) -> String {
+    format!("add web_page = true to [datasets.{dataset}] in data.toml")
+}
+
+/// [`page_entry`]'s words where no entry asks yet, as for a `get` or an add not written.
+pub(in crate::cli) const PAGE_FLAG: &str = "add --web-page";
+
 /// the batch facts retained while a validated job waits for an admission slot.
 pub(super) struct Description {
     pub(super) label: String,
@@ -777,8 +786,8 @@ impl<'a> Watch<'a> {
     fn page_refused(&self, named: bool) -> Error {
         let link = crate::shown::Shown(&self.job.fetch.url);
         let asked = match &self.job.dataset {
-            Some(dataset) => format!("add web_page = true to [datasets.{dataset}] in data.toml"),
-            None => "add --web-page".to_owned(),
+            Some(dataset) => page_entry(dataset),
+            None => PAGE_FLAG.to_owned(),
         };
         if named {
             // a site's sign-in is kept for its host and port, as `auth login` takes them
@@ -787,11 +796,12 @@ impl<'a> Watch<'a> {
                 Some(port) => format!("{}:{port}", crate::net::host(url)),
                 None => crate::net::host(url).to_owned(),
             };
+            let sign_in = crate::account::Account::Login(host).command();
             return Error::new(
                 Kind::SourceInvalid,
                 format!("{link} answered with a web page, such as a sign-in page, not a data file"),
             )
-            .help(format!("open it in a browser: a page that asks you to sign in needs `{}`, else look for a download or raw link. if the page itself is the data, {asked}", crate::account::Account::Login(host).command()));
+            .help(format!("open it in a browser: a page that asks you to sign in needs `{sign_in}`, else look for a download or raw link. if the page itself is the data, {asked}"));
         }
         Error::new(
             Kind::SourceInvalid,
@@ -2647,6 +2657,18 @@ mod tests {
         watch.on(&Event::WebPage {
             name: name.map(str::to_owned),
         })
+    }
+
+    /// a host that would mean more to a shell, which a link's parser lets through, is quoted in
+    /// the sign-in a refusal suggests, so pasting it runs nothing.
+    #[test]
+    fn the_sign_in_a_page_refusal_suggests_quotes_its_host() {
+        let error = on_page("http://x$(id).example/data.csv", "data.csv", None, None).unwrap_err();
+        let advice = error.help.unwrap_or_default();
+        assert!(
+            advice.contains("`fetchloom auth login 'x$(id).example'`"),
+            "{advice}"
+        );
     }
 
     #[test]

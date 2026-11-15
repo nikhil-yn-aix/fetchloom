@@ -707,7 +707,7 @@ async fn add_held(
         &[],
     )
     .await
-    .map_err(|error| some_missing(error, &names[0], kept))
+    .map_err(|error| page_by_flag(some_missing(error, &names[0], kept), &names[0]))
     .map_err(|error| on_lines(error, None, std::slice::from_ref(&typed_line)))?;
     let [name] = names;
     let private = private_origins(&work, [&parsed.reference]);
@@ -866,6 +866,25 @@ fn typed(mut error: Error, several: bool) -> Error {
             .as_deref()
             .and_then(|help| typed_help(help, several))
         {
+            failure.help = Some(help);
+        }
+    }
+    error
+}
+
+/// `error` of the add's downloads with its help saying to ask for a web page through `name`'s
+/// data.toml entry, which this add did not write: the add's own flag asks for it instead.
+fn page_by_flag(mut error: Error, name: &str) -> Error {
+    let entry = super::fetch::page_entry(name);
+    let flagged = |help: &str| {
+        help.contains(&entry)
+            .then(|| help.replace(&entry, super::fetch::PAGE_FLAG))
+    };
+    if let Some(help) = error.help.as_deref().and_then(flagged) {
+        error = error.help(help);
+    }
+    for failure in &mut error.failures {
+        if let Some(help) = failure.help.as_deref().and_then(flagged) {
             failure.help = Some(help);
         }
     }
