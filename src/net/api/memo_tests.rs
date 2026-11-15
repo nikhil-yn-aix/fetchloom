@@ -176,6 +176,7 @@ fn response(url: &Url, status: u16, body: &[u8]) -> Response {
         region: None,
         keyed: None,
         authorized: None,
+        signed: None,
         body: Arc::new(body.to_vec()),
     }
 }

@@ -90,6 +90,9 @@ pub(crate) struct Response {
     pub(crate) authorized: Option<super::Authorized>,
     /// how a request to google drive's api went out: with a google token or not, and whose.
     pub(crate) drive: Option<super::DriveAnswered>,
+    /// what a saved credential or `.netrc` login sent with the request that answered, when one
+    /// went, so a refusal can say it was refused.
+    pub(crate) signed: Option<super::site::Sent>,
     pub(crate) body: Arc<Vec<u8>>,
 }
 
@@ -397,6 +400,11 @@ impl Net {
         let keyed = response.extensions().get::<super::s3::Keyed>().cloned();
         let authorized = response.extensions().get::<super::Authorized>().cloned();
         let drive = response.extensions().get::<super::DriveAnswered>().cloned();
+        let signed = response
+            .extensions()
+            .get::<super::site::Sent>()
+            .filter(|sent| sent.answered())
+            .cloned();
         let sent = response
             .extensions()
             .get::<Sent>()
@@ -441,6 +449,7 @@ impl Net {
                 keyed,
                 authorized,
                 drive,
+                signed,
                 body: Arc::new(body),
             },
             sent,

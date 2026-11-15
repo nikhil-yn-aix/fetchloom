@@ -85,12 +85,7 @@ impl Location {
             }
         }
         if !url.username().is_empty() || url.password().is_some() {
-            // a sign-in is kept for its host and port, as `auth login` takes them
-            let host = match url.port() {
-                Some(port) => format!("{}:{port}", crate::net::host(&url)),
-                None => crate::net::host(&url).to_owned(),
-            };
-            let sign_in = crate::account::Account::Login(host).command();
+            let sign_in = sign_in(&url);
             return Err(Refusal {
                 reason: "it holds a login".to_owned(),
                 instead: format!("write the address without it, and sign in with `{sign_in}`"),
@@ -119,6 +114,16 @@ impl fmt::Display for Location {
             Location::S3(top) => top.fmt(f),
         }
     }
+}
+
+/// the command that signs in to the web mirror at `url`, for its host and its port when it is not
+/// the scheme's own, as `auth login` keeps a login.
+pub(crate) fn sign_in(url: &Url) -> String {
+    let host = match url.port() {
+        Some(port) => format!("{}:{port}", crate::net::host(url)),
+        None => crate::net::host(url).to_owned(),
+    };
+    crate::account::Account::Login(host).command()
 }
 
 /// why some text is no mirror, and what to write instead.

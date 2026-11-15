@@ -300,6 +300,16 @@ impl Sent {
     pub(crate) fn answered(&self) -> bool {
         self.answered
     }
+
+    /// that a host answered as if what went were not there, as a mirror that answers 401 does,
+    /// and how to sign in again: `it refused the login saved for lab:8443, which may have expired:
+    /// sign in again with ...`.
+    pub(crate) fn refused_here(&self) -> String {
+        format!(
+            "it refused {} saved for {}, which may have expired: {}",
+            self.what, self.host, self.again
+        )
+    }
 }
 
 /// the refusal of `response`, a web page from `answered` where a file was expected after a saved

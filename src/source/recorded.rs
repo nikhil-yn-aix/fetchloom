@@ -40,6 +40,7 @@ impl Recorded {
             keyed: None,
             authorized: None,
             drive: None,
+            signed: None,
             body: std::sync::Arc::new(body.into()),
         };
         self.answers.insert(parsed.to_string(), response);

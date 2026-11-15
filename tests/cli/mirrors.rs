@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::caps::shown;
 use crate::support::{
-    Result, Routes, Sandbox, delete, edit, file, json, ok, reply, sha256_hex, text,
+    Result, Routes, Sandbox, delete, edit, file, json, ok, reply, sha256_hex, text, warning,
 };
 
 pub(crate) const IRIS: &[u8] = b"sepal_length,sepal_width,species\n5.1,3.5,setosa\n";
@@ -755,6 +755,51 @@ fn a_mirror_that_asks_to_wait_is_skipped_as_busy() -> Result {
     );
     assert_eq!(mirror.targets(), ["/m/fetchloom-mirror"]);
     assert_eq!(source.requests().len(), asked + 2);
+    Ok(())
+}
+
+/// a web mirror on another port that answers 401 is signed in to with its port, as `auth login`
+/// keeps a login for its host and port; once a saved login went and was refused, it says so
+/// instead of offering a first sign-in.
+#[test]
+fn a_refusing_web_mirror_names_its_port_and_a_refused_login() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = project(&sandbox)?;
+    let mirror = Routes::start(vec![(
+        "/m/fetchloom-mirror".to_owned(),
+        reply("401 Unauthorized", &[("Content-Length", "0")], b""),
+    )])?;
+    let host = mirror.url.trim_start_matches("http://").to_owned();
+    let skipped = |clone: &str| -> Result<(String, String)> {
+        let (folder, cache) = cold(&sandbox, clone)?;
+        let output = sandbox
+            .command_in(&folder, &["--json", "sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_MIRRORS", format!("{}/m", mirror.url))
+            .env("FETCHLOOM_RETRIES", "0")
+            .output()?;
+        ok(&output)?;
+        let document = json(&output)?;
+        let help = warning(&document, "mirror.skipped")["help"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        Ok((help, document.to_string()))
+    };
+    assert_eq!(
+        skipped("cold")?.0,
+        format!("if it needs a login, sign in with `fetchloom auth login {host}`")
+    );
+    let login = sandbox.command(&["auth", "login", &host, "--token", "--with-token"]);
+    ok(&crate::auth::with_stdin(login, "lab-token\n")?)?;
+    let (refused, document) = skipped("signed")?;
+    assert_eq!(
+        refused,
+        format!(
+            "it refused the token saved for {host}, which may have expired: save a current one with `fetchloom auth login {host} --token`"
+        ),
+        "{document}"
+    );
     Ok(())
 }
 

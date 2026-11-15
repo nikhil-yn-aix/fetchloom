@@ -55,7 +55,7 @@ a web mirror is the same layout on a web server, at an `http://` or `https://` a
 
 so a reviewer whose copy of a paper's data is gone from its source restores it from the lab's server with `fetchloom sync --locked --mirror https://data.lab.example/fetchloom`, whose first line then reads `Downloaded 6 files · 91 B in 27 ms from https://data.lab.example/fetchloom`, the rest as for a folder mirror.
 
-a mirror you name may be on this machine or your network, such as `http://10.0.0.5:8080/fetchloom`: like a link typed on the command line, its origin, the scheme, host and port of its address, may be reached whatever its address is. another port or scheme of that host is not trusted, so it reaches public addresses only, unless [`allowed_origins`](../reference/environment.md) lists it. a login for it goes in `.netrc`, which `fetchloom auth login data.lab.example` writes, and is sent over https only. over plain http the hashes still check every byte, but anyone on the network can see what is fetched.
+a mirror you name may be on this machine or your network, such as `http://10.0.0.5:8080/fetchloom`: like a link typed on the command line, its origin, the scheme, host and port of its address, may be reached whatever its address is. another port or scheme of that host is not trusted, so it reaches public addresses only, unless [`allowed_origins`](../reference/environment.md) lists it. a login for it goes in `.netrc`, which `fetchloom auth login data.lab.example` writes, with the port for a mirror on another one, as `fetchloom auth login 10.0.0.5:8080`, and is sent over https only. over plain http the hashes still check every byte, but anyone on the network can see what is fetched.
 
 ## what goes wrong
 
@@ -63,7 +63,7 @@ a mirror you name may be on this machine or your network, such as `http://10.0.0
 |---|---|
 | lacks a file, 404 or 410 on the web | asks the next mirror, then the source |
 | holds a copy of another size or with other bytes, or a link or a special file in its place | warns, naming the mirror and the file, and asks the next mirror, then the source |
-| is not there, holds no `fetchloom-mirror` file, cannot be reached, refuses with 401 or 403, or fails with 5xx after the retries | warns once and skips the mirror for the rest of the run |
+| is not there, holds no `fetchloom-mirror` file, cannot be reached, refuses with 401 or 403, or fails with 5xx after the retries | warns once and skips the mirror for the rest of the run; a 401 or 403 names the `auth login` for its host and port, or says the key saved for it was refused when one went |
 | is busy: asks to wait longer than a run waits for one request, or still answers 429 after the retries | warns once that it is busy, with what it answered, and skips the mirror for the rest of the run |
 
 in [mirror-only mode](#mirror-only-mode) the source is never asked, so a file no mirror gives fails the run, named.

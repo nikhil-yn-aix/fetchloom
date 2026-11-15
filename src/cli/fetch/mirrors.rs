@@ -286,9 +286,9 @@ fn web_missing(location: &Location, look: web::Look) -> Option<Skip> {
             "check that the address names a mirror's top folder".to_owned(),
             "no fetchloom-mirror file".to_owned(),
         ),
-        web::Look::Answered(status) => (
+        web::Look::Answered(status, signed) => (
             format!("the mirror {location} answered {status}, so this run skips it"),
-            refused_help(location, status),
+            refused_help(location, status, signed.as_ref()),
             format!("answered {status}"),
         ),
         web::Look::Failed(error) => {
@@ -370,12 +370,18 @@ fn bucket_missing(location: &Location, top: &s3::Top, look: s3::Look) -> Option<
     })
 }
 
-/// what to do about a web mirror that answered `status` instead of a file.
-fn refused_help(location: &Location, status: u16) -> String {
-    match (status, location) {
-        (401 | 403, Location::Web(base)) => format!(
+/// what to do about a web mirror that answered `status` instead of a file, after `signed`, what
+/// a saved credential sent with the request, when one went.
+fn refused_help(
+    location: &Location,
+    status: u16,
+    signed: Option<&crate::net::site::Sent>,
+) -> String {
+    match (status, location, signed) {
+        (401 | 403, Location::Web(_), Some(signed)) => signed.refused_here(),
+        (401 | 403, Location::Web(base), None) => format!(
             "if it needs a login, sign in with `{}`",
-            crate::account::Account::Login(crate::net::host(base).to_owned()).command()
+            crate::mirror::sign_in(base)
         ),
         _ => "ask whoever keeps the mirror, or check its address".to_owned(),
     }
@@ -957,12 +963,12 @@ mod tests {
         let web = Location::Web(url::Url::parse("https://mirror.lab.example/data/").unwrap());
         for status in [401, 403] {
             assert_eq!(
-                refused_help(&web, status),
+                refused_help(&web, status, None),
                 "if it needs a login, sign in with `fetchloom auth login mirror.lab.example`"
             );
         }
         assert_eq!(
-            refused_help(&web, 500),
+            refused_help(&web, 500, None),
             "ask whoever keeps the mirror, or check its address"
         );
     }

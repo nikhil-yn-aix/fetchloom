@@ -13,8 +13,9 @@ pub(crate) enum Look {
     There,
     /// no marker, so the address is not a mirror's top.
     NoMarker,
-    /// another answer than the marker, such as 403 from a gatekeeper.
-    Answered(u16),
+    /// another answer than the marker, such as 403 from a gatekeeper, with what a saved
+    /// credential sent with the request, when one went.
+    Answered(u16, Option<crate::net::site::Sent>),
     /// no answer, after the network's retries.
     Failed(Error),
 }
@@ -37,7 +38,7 @@ pub(crate) async fn probe(net: &Net, base: &Url) -> Result<Look, Error> {
     Ok(match answer.status {
         200 if is_marker(&answer.text()) => Look::There,
         200 | 404 | 410 => Look::NoMarker,
-        status => Look::Answered(status),
+        status => Look::Answered(status, answer.signed),
     })
 }
 
