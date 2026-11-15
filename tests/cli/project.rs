@@ -2059,6 +2059,31 @@ fn a_linked_data_folder_is_refused_with_advice_that_works() -> Result {
     Ok(())
 }
 
+/// the survey of a data folder reached through a link stops before it reads anything there, so
+/// status names no file of the folder the link leads to.
+#[cfg(unix)]
+#[test]
+fn status_reads_nothing_through_a_linked_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let data = sandbox.work().join("data");
+    crate::support::delete_folder(&data)?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    fs::create_dir_all(elsewhere.join("iris"))?;
+    fs::write(elsewhere.join("iris").join("secret.txt"), "not yours\n")?;
+    std::os::unix::fs::symlink(&elsewhere, &data)?;
+    let output = sandbox.run(&["--json", "status"])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(50), "{document}");
+    assert_eq!(
+        document["errors"][0]["kind"], "project.invalid",
+        "{document}"
+    );
+    assert!(!document.to_string().contains("secret.txt"), "{document}");
+    Ok(())
+}
+
 /// an owner file far larger than any fetchloom writes stands in for a damaged one.
 #[test]
 fn a_project_that_cannot_be_locked_is_named_plainly() -> Result {

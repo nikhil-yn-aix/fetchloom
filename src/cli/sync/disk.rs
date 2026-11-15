@@ -222,6 +222,7 @@ impl Survey {
         beside_from: u64,
         level: Level,
     ) -> Result<Survey, Error> {
+        project.refuse_linked_data_dir(data_dir)?;
         let started = nanos(SystemTime::now());
         let within = within.map(|folders| outermost(data_dir, folders));
         let walk = || scan(&project.root, data_dir, within.as_deref(), threads, stop);

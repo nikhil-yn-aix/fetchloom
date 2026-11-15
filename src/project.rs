@@ -683,15 +683,26 @@ impl Project {
         self.data_folder(manifest, false)
     }
 
+    /// refuses a data folder `data_dir` that a link leads to, before anything reads in it.
+    pub(crate) fn refuse_linked_data_dir(&self, data_dir: &str) -> Result<(), Error> {
+        let mut folder = self.root.clone();
+        for part in data_dir.split('/') {
+            folder.push(part);
+            if fs::symlink_metadata(&folder).is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                return Err(linked_data_dir(&folder));
+            }
+        }
+        Ok(())
+    }
+
     fn data_folder(&self, manifest: &Manifest, create: bool) -> Result<PathBuf, Error> {
         let mut folder = self.root.clone();
         for part in manifest.data_dir.split('/') {
             folder.push(part);
             match fs::symlink_metadata(&folder) {
                 Ok(metadata) if metadata.file_type().is_symlink() => {
-                    // data_dir must stay inside the project, so it cannot take the data elsewhere
-                    return Err(Error::new(Kind::ProjectInvalid, format!("{} is a link, and fetchloom only places files in real folders", folder.display()))
-                        .help("replace the link with a real folder; to keep the data on another disk, move the whole project folder to that disk"));
+                    return Err(linked_data_dir(&folder));
                 }
                 Ok(metadata) if !metadata.is_dir() => {
                     return Err(Error::new(
@@ -956,6 +967,19 @@ fn fill(mut file: File, bytes: &[u8]) -> io::Result<()> {
     tests::flushing_file();
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+/// the error for a data folder the link at `folder` leads to: `data_dir` must stay inside the
+/// project, so it cannot take the data elsewhere.
+fn linked_data_dir(folder: &Path) -> Error {
+    Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "{} is a link, and fetchloom only places files in real folders",
+            folder.display()
+        ),
+    )
+    .help("replace the link with a real folder; to keep the data on another disk, move the whole project folder to that disk")
 }
 
 #[cfg(test)]
