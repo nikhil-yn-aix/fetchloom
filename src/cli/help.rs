@@ -207,7 +207,7 @@ const EXIT_CODES: &str = "fetchloom exit codes
     2  usage: a mistake on the command line
    10  reference.*, source.invalid: the link or id is wrong, or names nothing.
        network.refused: the link leads where fetchloom will not go
-   20  network.*, offline.missing: retry later, or go online
+   20  other network.* kinds, offline.missing: retry later, or go online
    30  integrity.mismatch: the bytes are not the ones data.lock pins
    40  auth.required: sign in, or accept the source's terms
    50  local.*, project.*: disk, permissions, a broken or changed project file
@@ -287,9 +287,9 @@ errors[0].kind, and the exit code it gives:
     1  unconfirmed, lock.outdated, data.not_ready
     2  usage
    10  reference.invalid, reference.unresolved, reference.ambiguous,
-       source.invalid
+       source.invalid, network.refused
    20  network.unreachable, network.status, network.rate_limited,
-       network.refused, offline.missing
+       offline.missing
    30  integrity.mismatch
    40  auth.required
    50  local.io, local.not_empty, project.invalid, project.changed
