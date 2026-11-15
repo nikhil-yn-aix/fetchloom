@@ -1,7 +1,7 @@
 //! the loop at the heart of a project: resolve what data.toml changed, learn every file's hash,
 //! put what the lock names in the cache, then write data.lock.
 
-mod cache_budget;
+pub(in crate::cli) mod cache_budget;
 pub(super) mod disk;
 mod draft;
 mod fill;
@@ -1298,13 +1298,7 @@ impl<'a> Loop<'a> {
         let mut scan = None;
         let budget = self.context.settings.cache_budget.value;
         let Some(past) = cache_budget::weigh(budget, adding, || {
-            let found = self.cache.scan_objects(threads, stop).ok()?;
-            // what the files take on the disk, as `fetchloom cache` holds them against the budget
-            let held = found
-                .objects
-                .iter()
-                .map(|object| object.disk.unwrap_or(object.size));
-            let held = held.fold(0, u64::saturating_add);
+            let (held, found) = cache_budget::held(&self.cache, threads, stop)?;
             scan = Some(found);
             Some(held)
         }) else {

@@ -1,9 +1,12 @@
 //! the `cache_budget` setting: a run whose downloads would take the cache's files past it asks
 //! first, as for a disk without room. nothing is deleted to keep within it.
 
+use crate::cache::{Cache, Scan};
 use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
 use crate::project::lock::Lock;
+use crate::stop::Stop;
+use crate::threads::Threads;
 use crate::units;
 
 /// how many of the project's largest datasets a message about the budget names.
@@ -11,7 +14,7 @@ pub(super) const LARGEST: usize = 3;
 
 /// downloads that would take the cache past its budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Past {
+pub(in crate::cli) struct Past {
     /// what the downloads bring.
     pub(super) adding: u64,
     /// what the cache's files would hold once they are in.
@@ -22,7 +25,7 @@ pub(super) struct Past {
 /// whether downloading `adding` bytes takes the cache past `budget`, reading what its files hold
 /// with `held` only when a budget is set and something downloads. a cache `held` cannot read is
 /// taken to fit, as a disk that does not tell its free space is.
-pub(super) fn weigh(
+pub(in crate::cli) fn weigh(
     budget: Option<u64>,
     adding: u64,
     held: impl FnOnce() -> Option<u64>,
@@ -34,6 +37,18 @@ pub(super) fn weigh(
         total,
         budget,
     })
+}
+
+/// what the cache's files take on its disk, as `fetchloom cache` holds them against the budget,
+/// and the scan that read them; none when the cache cannot be read.
+pub(in crate::cli) fn held(cache: &Cache, threads: Threads, stop: &Stop) -> Option<(u64, Scan)> {
+    let found = cache.scan_objects(threads, stop).ok()?;
+    let held = found
+        .objects
+        .iter()
+        .map(|object| object.disk.unwrap_or(object.size))
+        .fold(0, u64::saturating_add);
+    Some((held, found))
 }
 
 /// the `most` largest datasets `lock` pins, by their pinned files' bytes, largest first.
@@ -57,14 +72,14 @@ pub(super) fn largest(lock: &Lock, most: usize) -> Vec<(String, u64)> {
 }
 
 /// what a person reads when `doing` would take the cache past its budget, and what frees room.
-pub(super) struct Over<'a> {
-    pub(super) doing: &'a str,
-    pub(super) past: Past,
+pub(in crate::cli) struct Over<'a> {
+    pub(in crate::cli) doing: &'a str,
+    pub(in crate::cli) past: Past,
     /// what `cache gc` would free now, and what only `cache gc --now` would, as a file a day old
     /// at most; none when a project gc reads is out of reach.
-    pub(super) freeable: Option<(u64, u64)>,
+    pub(in crate::cli) freeable: Option<(u64, u64)>,
     /// the project's largest datasets, with their bytes, largest first.
-    pub(super) largest: Vec<(String, u64)>,
+    pub(in crate::cli) largest: Vec<(String, u64)>,
 }
 
 impl Over<'_> {
@@ -123,7 +138,7 @@ impl Over<'_> {
 
 /// asks whether `over` may go on, as for a disk without room: a person at a terminal answers, a
 /// run no one can answer stops with what frees room, and `--yes` goes on with a warning.
-pub(super) fn ask(output: &Output, yes: bool, over: &Over<'_>) -> Result<(), Error> {
+pub(in crate::cli) fn ask(output: &Output, yes: bool, over: &Over<'_>) -> Result<(), Error> {
     let room = over.room();
     if yes {
         let mut help = room.clone();

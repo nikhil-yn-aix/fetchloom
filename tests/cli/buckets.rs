@@ -1378,6 +1378,59 @@ fn an_md5_hint_for_a_smaller_file_never_skips_asking() -> Result {
     Ok(())
 }
 
+/// a get whose stated sizes take the cache past `cache_budget` asks first, as a sync does: with no
+/// one to answer it stops before any download, and `--yes` goes on with a warning.
+#[test]
+fn a_get_past_the_cache_budget_asks_before_downloading() -> Result {
+    let sandbox = Sandbox::new()?;
+    let base = "/audit-bucket.s3.amazonaws.com/";
+    let large = vec![b'x'; 2048];
+    let routes = Routes::start(vec![
+        (
+            s3_listing(base, "data/", None),
+            s3_page(&[("data/a.bin", &large)], None),
+        ),
+        (
+            format!("{base}data/a.bin"),
+            file(&large, &format!("\"{}\"", md5_hex(&large))),
+        ),
+    ])?;
+    let get = |args: &[&str]| {
+        command(&sandbox, &routes, args)
+            .env("FETCHLOOM_CACHE_BUDGET", "1K")
+            .output()
+    };
+    let output = get(&["--json", "get", "s3://audit-bucket/data/", "--dir", "out"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed", "{document}");
+    assert_eq!(
+        error["message"],
+        "downloading 1 file would bring the cache to 2.0 KiB, past the 1.0 KiB cache_budget"
+    );
+    assert_eq!(routes.targets(), [s3_listing(base, "data/", None)]);
+    assert!(!sandbox.work().join("out").exists());
+
+    let output = get(&[
+        "--json",
+        "get",
+        "s3://audit-bucket/data/",
+        "--dir",
+        "out",
+        "--yes",
+    ])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let warned = crate::support::warning(&document, "cache.over_budget")["message"].to_string();
+    assert!(
+        warned.contains("downloading 1 file brings the cache to 2.0 KiB"),
+        "{document}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("out/a.bin"))?, large);
+    Ok(())
+}
+
 #[test]
 fn listed_sizes_too_large_to_add_up_are_asked_about() -> Result {
     let sandbox = Sandbox::new()?;

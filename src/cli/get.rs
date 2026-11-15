@@ -1104,6 +1104,13 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
     )
     .map_err(Error::unchanged)?;
     let (size, room) = needs(&missing);
+    let what = units::count(missing.len() as u64, "file", "files");
+    let doing = if room > size {
+        format!("downloading and unpacking {what}")
+    } else {
+        format!("downloading {what}")
+    };
+    over_budget(context, cache, &doing, room)?;
     let planned = fetch::planned(
         context,
         missing
@@ -1112,12 +1119,6 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
     );
     let called = fetch::called(missing.iter().map(|job| job.label.as_str()), planned.files);
     fetch::tell_planned(&context.output, &called, &planned);
-    let what = units::count(missing.len() as u64, "file", "files");
-    let doing = if room > size {
-        format!("downloading and unpacking {what}")
-    } else {
-        format!("downloading {what}")
-    };
     super::confirm_doing(
         &context.output,
         context.yes,
@@ -1129,6 +1130,30 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
     )
     .map(|_| ())
     .map_err(Error::unchanged)
+}
+
+/// asks once, as a sync does, when the `adding` bytes `doing` brings would take the cache past the
+/// `cache_budget` setting. only then are the cache's files read.
+fn over_budget(context: &Context, cache: &Cache, doing: &str, adding: u64) -> Result<(), Error> {
+    use super::sync::cache_budget;
+    let (threads, stop) = (context.threads, &context.stop);
+    let mut scan = None;
+    let budget = context.settings.cache_budget.value;
+    let Some(past) = cache_budget::weigh(budget, adding, || {
+        let (held, found) = cache_budget::held(cache, threads, stop)?;
+        scan = Some(found);
+        Some(held)
+    }) else {
+        return Ok(());
+    };
+    let now = std::time::SystemTime::now();
+    let over = cache_budget::Over {
+        doing,
+        past,
+        freeable: scan.and_then(|scan| super::cache::unneeded_in(cache, &scan, now, threads, stop)),
+        largest: Vec::new(),
+    };
+    cache_budget::ask(&context.output, context.yes, &over).map_err(Error::unchanged)
 }
 
 /// the bytes the downloads `missing` move, and the room they need on the cache's disk, where an
