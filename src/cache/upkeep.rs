@@ -594,7 +594,7 @@ impl Cache {
 
     /// hashes every object on the requested threads, stopping between reads when asked.
     #[cfg(test)]
-    pub(crate) fn verify_with_stop(
+    fn verify_with_stop(
         &self,
         threads: usize,
         progress: &(dyn Fn(u64) + Sync),
