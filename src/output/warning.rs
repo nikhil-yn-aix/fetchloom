@@ -45,6 +45,9 @@ pub(crate) enum Warning {
     ExportLeftOut,
     /// git does not have code a recipe runs.
     GitCodeUntracked,
+    /// .gitignore is a link, a special file or too large, which fetchloom never edits, so the data
+    /// folder's rule is for a person to add.
+    GitIgnoreUnedited,
     /// files an import read are in the git work tree, where a commit takes or keeps them.
     GitImportInTree,
     /// git does not have lists in data.lock.d that data.lock names.
@@ -148,6 +151,7 @@ impl Warning {
             Warning::DownloadWebPage => "download.web_page",
             Warning::ExportLeftOut => "export.left_out",
             Warning::GitCodeUntracked => "git.code_untracked",
+            Warning::GitIgnoreUnedited => "git.ignore_unedited",
             Warning::GitImportInTree => "git.import_in_tree",
             Warning::GitLockPartUntracked => "git.lock_part_untracked",
             Warning::ImportSkipped => "import.skipped",
@@ -231,6 +235,7 @@ mod tests {
             DownloadWebPage,
             ExportLeftOut,
             GitCodeUntracked,
+            GitIgnoreUnedited,
             GitImportInTree,
             GitLockPartUntracked,
             ImportSkipped,

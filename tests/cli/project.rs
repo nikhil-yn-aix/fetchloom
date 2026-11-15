@@ -1174,6 +1174,38 @@ fn inside_git_the_data_folder_is_ignored_once() -> Result {
     Ok(())
 }
 
+/// a .gitignore that is a link, as a cloned repository may hold one to a file of keys, is never
+/// read or edited: the link and the file it names stay as they were, and a warning gives the line
+/// to add by hand.
+#[cfg(unix)]
+#[test]
+fn a_linked_gitignore_is_never_read_or_edited() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir(work.join(".git"))?;
+    let secret = sandbox.folder("outside")?.join("tokens");
+    fs::write(&secret, "TOKEN=hunter2\n")?;
+    std::os::unix::fs::symlink(&secret, work.join(".gitignore"))?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let output = sandbox.run(&["--json", "add", &server.url])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(fs::read_to_string(&secret)?, "TOKEN=hunter2\n");
+    let link = fs::symlink_metadata(work.join(".gitignore"))?;
+    assert!(link.is_symlink(), "the link was replaced");
+    assert_eq!(fs::read_link(work.join(".gitignore"))?, secret);
+    let document = json(&output)?;
+    assert_eq!(
+        crate::support::warned(&document),
+        [
+            ".gitignore is a link or a special file, which fetchloom never edits; to keep data/ out of git, add the line /data/ to it by hand"
+        ],
+        "{document}"
+    );
+    assert_eq!(crate::support::kinds(&document), ["git.ignore_unedited"]);
+    Ok(())
+}
+
 /// `path` places the files it answers with first, so it adds the ignore rule too.
 #[test]
 fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {

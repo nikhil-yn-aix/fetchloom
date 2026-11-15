@@ -24,6 +24,22 @@ const FOLDER: &str = ".fetchloom";
 /// the most an owner record is read for. one is a line of JSON naming a command and a process.
 const OWNER_CAP: u64 = 64 << 10;
 
+/// the most of a .gitignore fetchloom reads to add the data folder's rule to it, many times what
+/// a person writes.
+const GITIGNORE_CAP: u64 = 1 << 20;
+
+/// what the .gitignore of the git repository a project is in needs for its data folder.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Ignore {
+    /// nothing: the project is in no git repository, or .gitignore has the rule already.
+    Done,
+    /// .gitignore's text with the rule added.
+    Add(String),
+    /// .gitignore is `why`, as a link a clone holds, which fetchloom never reads or edits: the
+    /// rule a person adds to it by hand.
+    ByHand { rule: String, why: String },
+}
+
 pub(crate) struct Project {
     pub(crate) root: PathBuf,
 }
@@ -729,26 +745,21 @@ impl Project {
     }
 
     /// adds the data folder to the .gitignore of the git repository the project is in, unless it is
-    /// there. says whether it was added.
-    pub(crate) fn ignore_in_git(&self, data_dir: &str) -> Result<bool, Error> {
-        let Some(updated) = self.ignored_in_git(data_dir)? else {
-            return Ok(false);
-        };
-        self.write(".gitignore", updated.as_bytes())?;
-        Ok(true)
+    /// there, and says what it found: [`Ignore::Add`] once it wrote the rule.
+    pub(crate) fn ignore_in_git(&self, data_dir: &str) -> Result<Ignore, Error> {
+        let ignore = self.ignored_in_git(data_dir)?;
+        if let Ignore::Add(updated) = &ignore {
+            self.write(".gitignore", updated.as_bytes())?;
+        }
+        Ok(ignore)
     }
 
-    /// the .gitignore that [`Project::ignore_in_git`] would write, or none when it writes nothing.
-    pub(crate) fn ignored_in_git(&self, data_dir: &str) -> Result<Option<String>, Error> {
+    /// what [`Project::ignore_in_git`] would do to the .gitignore of the git repository the
+    /// project is in.
+    pub(crate) fn ignored_in_git(&self, data_dir: &str) -> Result<Ignore, Error> {
         if Project::repository(&self.root).is_none() {
-            return Ok(None);
+            return Ok(Ignore::Done);
         }
-        let path = self.root.join(".gitignore");
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
-            Err(err) => return Err(self.unreadable(".gitignore", &err)),
-        };
         // git reads [, *, ? and \ in a rule as a pattern, so a folder named data[1] needs them
         // escaped to be ignored itself
         let literal: String = data_dir
@@ -759,6 +770,24 @@ impl Project {
             })
             .collect();
         let entry = format!("/{literal}/");
+        let path = self.root.join(".gitignore");
+        let text = match read_gitignore(&path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
+                return Ok(Ignore::ByHand {
+                    rule: entry,
+                    why: "a link or a special file".to_owned(),
+                });
+            }
+            Err(err) if err.kind() == io::ErrorKind::FileTooLarge => {
+                return Ok(Ignore::ByHand {
+                    rule: entry,
+                    why: format!("larger than {}", crate::units::size(GITIGNORE_CAP)),
+                });
+            }
+            Err(err) => return Err(self.unreadable(".gitignore", &err)),
+        };
         let present = text.lines().map(str::trim).any(|line| {
             [
                 entry.as_str(),
@@ -769,7 +798,7 @@ impl Project {
             .contains(&line)
         });
         if present {
-            return Ok(None);
+            return Ok(Ignore::Done);
         }
         let mut updated = text;
         if !updated.is_empty() && !updated.ends_with('\n') {
@@ -777,7 +806,7 @@ impl Project {
         }
         updated.push_str(&entry);
         updated.push('\n');
-        Ok(Some(updated))
+        Ok(Ignore::Add(updated))
     }
 
     /// the .fetchloom folder, which tells git to ignore it the first time it is made. one this call
@@ -842,6 +871,19 @@ impl Project {
 /// a submodule or worktree has.
 fn is_repository(folder: &Path) -> bool {
     folder.join(".git").exists()
+}
+
+/// .gitignore's text, read without following a link and only up to [`GITIGNORE_CAP`]: a link a
+/// clone holds would have the file it names copied in, and a pipe or a device never ends.
+/// `InvalidInput` for a link or a special file, `FileTooLarge` past the cap.
+fn read_gitignore(path: &Path) -> io::Result<String> {
+    let file = crate::volume::read_unfollowed(path)?;
+    let mut bytes = Vec::new();
+    file.take(GITIGNORE_CAP + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > GITIGNORE_CAP {
+        return Err(io::ErrorKind::FileTooLarge.into());
+    }
+    String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 /// refuses the project file at `path` when it is a folder or a special file, as a link a clone
@@ -1592,8 +1634,15 @@ mod tests {
     fn a_data_folder_named_like_a_pattern_is_ignored_as_itself() {
         let (dir, project) = project(&[("data.toml", "")]);
         fs::create_dir(dir.path().join(".git")).unwrap();
-        assert!(project.ignore_in_git("datasets[1]").unwrap());
-        assert!(!project.ignore_in_git("datasets[1]").unwrap(), "only once");
+        assert!(matches!(
+            project.ignore_in_git("datasets[1]").unwrap(),
+            Ignore::Add(_)
+        ));
+        assert_eq!(
+            project.ignore_in_git("datasets[1]").unwrap(),
+            Ignore::Done,
+            "only once"
+        );
         assert_eq!(
             fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
             "/datasets\\[1\\]/\n"
@@ -1603,13 +1652,21 @@ mod tests {
     #[test]
     fn gitignore_gains_the_data_folder_once_inside_git() {
         let (dir, project) = project(&[("data.toml", ""), (".gitignore", "target")]);
-        assert!(
-            !project.ignore_in_git("data").unwrap(),
+        assert_eq!(
+            project.ignore_in_git("data").unwrap(),
+            Ignore::Done,
             "outside git nothing changes"
         );
         fs::create_dir(dir.path().join(".git")).unwrap();
-        assert!(project.ignore_in_git("data").unwrap());
-        assert!(!project.ignore_in_git("data").unwrap(), "only once");
+        assert!(matches!(
+            project.ignore_in_git("data").unwrap(),
+            Ignore::Add(_)
+        ));
+        assert_eq!(
+            project.ignore_in_git("data").unwrap(),
+            Ignore::Done,
+            "only once"
+        );
         assert_eq!(
             fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
             "target\n/data/\n"
@@ -2005,7 +2062,7 @@ mod tests {
             };
             let text = format!("# existing\n  {entry}  \n");
             fs::write(project.root.join(".gitignore"), &text).unwrap();
-            assert!(!project.ignore_in_git("inputs/raw").unwrap());
+            assert_eq!(project.ignore_in_git("inputs/raw").unwrap(), Ignore::Done);
             assert_eq!(
                 fs::read_to_string(project.root.join(".gitignore")).unwrap(),
                 text
@@ -2015,7 +2072,10 @@ mod tests {
         let project = Project {
             root: dir.path().join("child"),
         };
-        assert!(project.ignore_in_git("inputs/raw").unwrap());
+        assert!(matches!(
+            project.ignore_in_git("inputs/raw").unwrap(),
+            Ignore::Add(_)
+        ));
         assert_eq!(
             fs::read(project.root.join(".gitignore")).unwrap(),
             b"/inputs/raw/\n"
@@ -2026,6 +2086,20 @@ mod tests {
             Kind::LocalIo
         );
         assert_eq!(fs::read(project.root.join(".gitignore")).unwrap(), [0xff]);
+        // read whole only up to a size no person writes, and else left for a person to edit
+        let large = "#".repeat(usize::try_from(GITIGNORE_CAP).unwrap() + 1);
+        fs::write(project.root.join(".gitignore"), &large).unwrap();
+        assert_eq!(
+            project.ignore_in_git("inputs/raw").unwrap(),
+            Ignore::ByHand {
+                rule: "/inputs/raw/".to_owned(),
+                why: "larger than 1.0 MiB".to_owned()
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(project.root.join(".gitignore")).unwrap(),
+            large
+        );
     }
 
     #[cfg(unix)]

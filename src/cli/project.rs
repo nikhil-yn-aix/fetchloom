@@ -26,7 +26,7 @@ use crate::project::lock::merge;
 use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
-use crate::project::{Held, Hold, Project, git};
+use crate::project::{Held, Hold, Ignore, Project, git};
 use crate::recipe::{self, Change};
 use crate::source::{Listing, local};
 pub(crate) use crate::suggested::command;
@@ -69,29 +69,48 @@ impl Report {
 }
 
 pub(super) fn preview_ignore(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
-    if work.project.ignored_in_git(&manifest.data_dir)?.is_some() {
-        work.context.output.step(
+    let output = &work.context.output;
+    match work.project.ignored_in_git(&manifest.data_dir)? {
+        Ignore::Add(_) => output.step(
             "Would add",
             &format!(
                 "{}/ to .gitignore, since its files come from data.lock",
                 manifest.data_dir
             ),
-        );
+        ),
+        ignore => by_hand(output, manifest, &ignore),
     }
     Ok(())
 }
 
 pub(super) fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
-    if work.project.ignore_in_git(&manifest.data_dir)? {
-        work.context.output.step(
+    let output = &work.context.output;
+    match work.project.ignore_in_git(&manifest.data_dir)? {
+        Ignore::Add(_) => output.step(
             "Ignored",
             &format!(
                 "{}/ in .gitignore, since its files come from data.lock",
                 manifest.data_dir
             ),
-        );
+        ),
+        ignore => by_hand(output, manifest, &ignore),
     }
     Ok(())
+}
+
+/// warns, where `ignore` says .gitignore is one fetchloom never edits, with the line that keeps
+/// the data folder out of git.
+fn by_hand(output: &Output, manifest: &Manifest, ignore: &Ignore) {
+    if let Ignore::ByHand { rule, why } = ignore {
+        output.warn_with(
+            Warning::GitIgnoreUnedited,
+            &format!(".gitignore is {why}, which fetchloom never edits"),
+            &format!(
+                "to keep {}/ out of git, add the line {rule} to it by hand",
+                manifest.data_dir
+            ),
+        );
+    }
 }
 
 /// ends a run that wrote lists into data.lock.d that git lacks, which `git commit -a` leaves out
@@ -655,8 +674,9 @@ fn settled_unheld(
     else {
         return Ok(None);
     };
-    if project.ignored_in_git(&manifest.data_dir)?.is_some() {
-        return Ok(None);
+    match project.ignored_in_git(&manifest.data_dir)? {
+        Ignore::Add(_) => return Ok(None),
+        ignore => by_hand(&context.output, &manifest, &ignore),
     }
     if held && let Err(err) = cache.register(&project.root) {
         tracing::debug!(%err, "could not list a read-only project in the cache");
