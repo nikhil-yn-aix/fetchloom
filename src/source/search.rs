@@ -64,9 +64,35 @@ impl Serialize for Candidate {
 #[derive(Debug, Default)]
 pub(crate) struct Search {
     pub(crate) candidates: Vec<Candidate>,
-    pub(crate) warnings: Vec<String>,
+    pub(crate) warnings: Vec<Short>,
     /// the matches found but not shown, since a search without a limit shows at most [`MOST`].
     pub(crate) left_out: usize,
+}
+
+/// a site whose search came back short, as a warning tells it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Short {
+    /// the site, and that its search failed or did not answer in time.
+    pub(crate) message: String,
+    /// for a site that did not answer in time, the command that waits for it.
+    pub(crate) help: Option<String>,
+}
+
+/// the warning for `catalog`, which did not answer a search for `words` within `grace` of the
+/// other sites.
+fn unanswered(catalog: Catalog, words: &str, grace: Duration) -> Short {
+    Short {
+        message: format!(
+            "{} did not answer within {} s of the others",
+            catalog.label(),
+            grace.as_secs()
+        ),
+        help: Some(format!(
+            "`fetchloom search {} --source {}` waits for it",
+            crate::suggested::shell_word(words),
+            catalog.name()
+        )),
+    }
 }
 
 /// a catalog that answers keyword searches, named as references name it.
@@ -263,17 +289,13 @@ pub(crate) async fn search(
     for (place, (catalog, answer)) in asked.into_iter().zip(answers).enumerate() {
         let source = catalog.label();
         match answer {
-            None => result.warnings.push(format!(
-                "{source} did not answer within {} s of the others; \
-                 `fetchloom search \"{words}\" --source {}` waits for it",
-                grace.as_secs(),
-                catalog.name()
-            )),
+            None => result.warnings.push(unanswered(catalog, words, grace)),
             Some(Ok(candidates)) => lists.push(offer(candidates, place, &mut offered).into_iter()),
             Some(Err(error)) => {
-                result
-                    .warnings
-                    .push(format!("{source} search failed: {error}"));
+                result.warnings.push(Short {
+                    message: format!("{source} search failed: {error}"),
+                    help: None,
+                });
                 failed.push(error);
             }
         }
@@ -301,7 +323,7 @@ pub(crate) async fn search(
 /// the error of a search that no site answered, from the errors of those that `failed` and a line
 /// `told` for each site: the one site's own error when only one was asked, else one naming every
 /// site, with their help when they share it and the first account a sign-in could lift one with.
-fn everywhere(mut failed: Vec<Error>, told: Vec<String>) -> Error {
+fn everywhere(mut failed: Vec<Error>, told: Vec<Short>) -> Error {
     if told.len() == 1 {
         return failed.swap_remove(0);
     }
@@ -313,7 +335,7 @@ fn everywhere(mut failed: Vec<Error>, told: Vec<String>) -> Error {
         Some("fix the errors above, then run the same command again".into())
     };
     error.need = failed.iter().find_map(|error| error.need.clone());
-    error.details = told;
+    error.details = told.into_iter().map(|short| short.message).collect();
     error
 }
 

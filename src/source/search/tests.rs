@@ -335,7 +335,7 @@ fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
     for text in references {
         assert_eq!(Reference::parse(&text).unwrap().reference.to_string(), text);
     }
-    assert_eq!(result.warnings, Vec::<String>::new());
+    assert_eq!(result.warnings, Vec::<Short>::new());
     let hf = &result.candidates[0];
     assert_eq!(hf.title, "scikit-learn/iris");
     assert_eq!(hf.source, "hugging face");
@@ -439,7 +439,12 @@ fn a_failed_source_warns_without_discarding_the_others() {
     assert_eq!(result.candidates.len(), 14);
     assert_eq!(result.candidates[1].source, "zenodo");
     assert_eq!(result.warnings.len(), 1);
-    assert!(result.warnings[0].starts_with("kaggle search failed: "));
+    assert!(
+        result.warnings[0]
+            .message
+            .starts_with("kaggle search failed: ")
+    );
+    assert_eq!(result.warnings[0].help, None);
 }
 
 /// a search every site failed names each site and what went wrong there, keeping the first
@@ -493,7 +498,11 @@ fn invalid_json_warns_instead_of_hiding_successful_catalogs() {
     let api = recorded().on(HF, 200, b"not json".to_vec());
     let result = block_on(search(&api, "iris", &Catalog::ALL, Some(LIMIT))).unwrap();
     assert_eq!(result.candidates.len(), 14);
-    assert!(result.warnings[0].starts_with("hugging face search failed: "));
+    assert!(
+        result.warnings[0]
+            .message
+            .starts_with("hugging face search failed: ")
+    );
 }
 
 #[test]
@@ -518,7 +527,7 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
     ))
     .unwrap();
     assert!(result.candidates.is_empty());
-    assert_eq!(result.warnings, Vec::<String>::new());
+    assert_eq!(result.warnings, Vec::<Short>::new());
     // GEO, having found no series, asks for no summaries, and arXiv asks titles, then anywhere
     assert_eq!(api.asked().len(), 11);
 }
@@ -635,11 +644,13 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
         if zenodo.is_none() {
             assert_eq!(
                 result.warnings,
-                [format!(
-                    "zenodo did not answer within {} s of the others; \
-                     `fetchloom search \"iris\" --source zenodo` waits for it",
-                    took.as_secs()
-                )]
+                [Short {
+                    message: format!(
+                        "zenodo did not answer within {} s of the others",
+                        took.as_secs()
+                    ),
+                    help: Some("`fetchloom search iris --source zenodo` waits for it".to_owned()),
+                }]
             );
         } else {
             assert!(result.warnings.is_empty(), "{:?}", result.warnings);
@@ -743,7 +754,40 @@ fn invalid_catalog_ids_never_become_candidates() {
     );
     let result = block_on(search(&api, "iris", &Catalog::ALL, Some(LIMIT))).unwrap();
     assert_eq!(result.candidates.len(), 14);
-    assert!(result.warnings[0].contains("invalid dataset id"));
+    assert!(result.warnings[0].message.contains("invalid dataset id"));
+}
+
+/// the command that waits for a site that did not answer in time gives the shell the words
+/// searched, whatever they hold.
+#[cfg(not(windows))]
+#[test]
+fn the_command_waiting_for_a_late_site_keeps_the_words_whole() {
+    for words in [
+        "iris",
+        "iris flowers",
+        r#"say "hi""#,
+        "$HOME data",
+        "back`tick",
+        r"back\slash",
+        "it's",
+    ] {
+        let late = unanswered(Catalog::Zenodo, words, Duration::from_secs(3));
+        assert_eq!(
+            late.message,
+            "zenodo did not answer within 3 s of the others"
+        );
+        let help = late.help.unwrap_or_default();
+        let command = help
+            .strip_prefix('`')
+            .and_then(|rest| rest.strip_suffix("` waits for it"))
+            .unwrap_or_default();
+        let expected = ["fetchloom", "search", words, "--source", "zenodo"].map(String::from);
+        assert_eq!(
+            crate::suggested::command_words(command, false),
+            Some(expected.to_vec()),
+            "{command}"
+        );
+    }
 }
 
 /// papers are no datasets, so a search asks arXiv and semantic scholar only when `--source` names

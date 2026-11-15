@@ -362,7 +362,14 @@ async fn find(
     context.stop.check()?;
     let result = result?;
     for warning in result.warnings {
-        context.output.warn(Warning::SearchPartial, &warning);
+        match &warning.help {
+            Some(help) => context
+                .output
+                .warn_with(Warning::SearchPartial, &warning.message, help),
+            None => context
+                .output
+                .warn(Warning::SearchPartial, &warning.message),
+        }
     }
     let mut candidates = result.candidates;
     for candidate in &mut candidates {
