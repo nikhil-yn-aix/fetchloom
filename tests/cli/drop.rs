@@ -322,3 +322,55 @@ fn a_dropped_dataset_whose_bytes_came_back_is_freed_again() -> Result {
     assert!(!cached.exists());
     Ok(())
 }
+
+/// a build that only reaches a dataset dropped here, as a recipe's input, leaves it dropped: it
+/// neither fetches nor places it, with or without the recipe named.
+#[test]
+fn a_build_leaves_a_dropped_input_dropped() -> Result {
+    let sandbox = Sandbox::new()?;
+    let answer = || file(crate::project::IRIS, "\"v1\"");
+    let server = Server::start(crate::project::PATH, vec![answer(), answer(), answer()])?;
+    with(&sandbox, &server, WRITE)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
+    let folder = sandbox.work().join("data/iris");
+    assert!(!folder.exists());
+    let asked = server.requests().len();
+    for line in [&["build"][..], &["build", "clean"][..]] {
+        let built = build(&sandbox, line)?;
+        assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+        assert!(!folder.exists(), "{line:?} placed the dropped input");
+        assert_eq!(server.requests().len(), asked, "{line:?} fetched it");
+    }
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["dropped"], json!(["iris"]));
+    Ok(())
+}
+
+/// an add leaves a dataset dropped here dropped, as a plain sync does.
+#[test]
+fn an_add_leaves_a_dropped_dataset_dropped() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = Routes::start(vec![
+        ("/files/iris.csv".to_owned(), file(IRIS, "\"i\"")),
+        ("/files/pets.csv".to_owned(), file(b"name\nrex\n", "\"p\"")),
+    ])?;
+    sandbox.allow(&source.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/iris.csv", source.url)])?)?;
+    ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
+    let iris = |requests: Vec<String>| {
+        requests
+            .iter()
+            .filter(|head| head.contains("/files/iris.csv"))
+            .count()
+    };
+    let asked = iris(source.requests());
+    ok(&sandbox.run(&["add", &format!("{}/files/pets.csv", source.url)])?)?;
+    assert!(sandbox.work().join("data/pets/pets.csv").exists());
+    assert!(!sandbox.work().join("data/iris").exists());
+    assert_eq!(iris(source.requests()), asked, "the add fetched it");
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["dropped"], json!(["iris"]));
+    Ok(())
+}

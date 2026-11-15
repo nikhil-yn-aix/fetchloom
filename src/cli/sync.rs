@@ -111,6 +111,9 @@ pub(super) struct Loop<'a> {
     /// datasets the command's last lines tell about, whose lock and placement lines wait for `-v`.
     told: BTreeSet<String>,
     pub(super) scope: Scope,
+    /// the datasets the person named, when the scope reaches more, as a build's reaches the
+    /// inputs of the recipes named; a dataset dropped here that they did not name stays dropped.
+    named: Option<BTreeSet<String>>,
     /// whether this run wrote data.lock, after which a cancel no longer leaves all as it was.
     wrote_lock: AtomicBool,
     /// whether a person said yes despite a short disk, which also covers every download's size.
@@ -162,6 +165,7 @@ impl<'a> Loop<'a> {
             unlisted: Mutex::default(),
             told: BTreeSet::new(),
             scope: Scope::All,
+            named: None,
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
             past_budget: AtomicBool::new(false),
@@ -205,6 +209,22 @@ impl<'a> Loop<'a> {
     pub(super) fn within(mut self, scope: Scope) -> Self {
         self.scope = scope;
         self
+    }
+
+    /// the person named `named` alone of the datasets the scope reaches.
+    pub(super) fn naming(mut self, named: BTreeSet<String>) -> Self {
+        self.named = Some(named);
+        self
+    }
+
+    /// the datasets the person named: those [`Loop::naming`] gave, else the scope's, none for a
+    /// run of every dataset.
+    pub(super) fn named(&self) -> BTreeSet<String> {
+        match (&self.named, &self.scope) {
+            (Some(named), _) => named.clone(),
+            (None, Scope::Only(names)) => names.clone(),
+            (None, Scope::All) => BTreeSet::new(),
+        }
     }
 
     /// makes the data folder match `lock` from `survey` of it, downloading only what placing lacks;

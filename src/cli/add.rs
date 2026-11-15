@@ -1143,6 +1143,10 @@ async fn preview_add(
 /// brings the project in line with `manifest`, the add's data.toml, `updated` its text when the add
 /// changes it. every byte goes into the cache before data.toml or data.lock is written, so an add
 /// cut off while it downloads has changed nothing; a later failure or stop puts both back.
+#[expect(
+    clippy::too_many_lines,
+    reason = "each step guards the next write, so they read best in order"
+)]
 pub(super) async fn sync_add(
     work: &Loop<'_>,
     adding: &AddProject,
@@ -1173,8 +1177,9 @@ pub(super) async fn sync_add(
     }
     // a lock whose files cannot all land is refused before anything is written, so data.lock
     // never pins what no sync can place
-    let plan = plan::from_cache_adding(manifest, &lock, &work.cache, names)?;
-    let placing = work.prepare(manifest, &lock, plan, false, survey).await?;
+    let placed = super::drop::placed_adding(manifest, names, &survey);
+    let plan = plan::from_cache_adding(&placed, &lock, &work.cache, names)?;
+    let placing = work.prepare(&placed, &lock, plan, false, survey).await?;
     if pinning.is_none() {
         pinning = pinning_line(work, names);
     }

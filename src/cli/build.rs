@@ -278,8 +278,10 @@ impl<'a> Building<'a> {
             lock.refuse_stated(names.iter().map(String::as_str))?;
         }
         let old = read.map(|(lock, text)| (lock, digest::sha256(text.as_bytes())));
-        let work =
-            Loop::new(context, project, Arc::new(context.net()), open_cache()?).within(scope);
+        // a dataset dropped here that the build only reaches, as a recipe's input, stays dropped
+        let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?)
+            .within(scope)
+            .naming(names.iter().cloned().collect());
         let (lock, before) = work
             .relock(
                 &manifest,
@@ -531,12 +533,21 @@ impl<'a> Building<'a> {
     /// puts in the cache what placing the build's fetched datasets needs that the data folder
     /// lacks, as for a dataset only skipped steps read; results are left to steps and `prepare`.
     async fn ready_to_place(&self) -> Result<(), Error> {
+        let (named, dropped) = (self.work.named(), self.work.project.dropped());
         let fetched = Lock {
             datasets: self
                 .lock
                 .datasets
                 .iter()
-                .filter(|locked| self.work.scope.includes(&locked.name))
+                .filter(|locked| {
+                    self.work.scope.includes(&locked.name)
+                        && !super::drop::stays_dropped(
+                            &locked.name,
+                            &self.work.scope,
+                            &named,
+                            &dropped,
+                        )
+                })
                 .cloned()
                 .collect(),
             derived: Vec::new(),

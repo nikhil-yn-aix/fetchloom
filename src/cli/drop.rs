@@ -557,6 +557,50 @@ pub(super) fn placed_by<'m>(
     std::borrow::Cow::Owned(placed)
 }
 
+/// whether a run of `scope`, for which the person named `named`, leaves `name` out: it is
+/// dropped here and the run only reaches it, as a build reaches a recipe's inputs or an add the
+/// rest of the project, so the run neither fetches nor places it.
+pub(super) fn stays_dropped(
+    name: &str,
+    scope: &Scope,
+    named: &BTreeSet<String>,
+    dropped: &BTreeSet<String>,
+) -> bool {
+    dropped.contains(name) && scope.includes(name) && !named.contains(name)
+}
+
+/// `manifest` as a run of `scope`, for which the person named `named`, places it while `dropped`
+/// are dropped here: each dataset [`stays_dropped`] says it leaves out has `place = false`.
+pub(super) fn placed_naming<'m>(
+    manifest: &'m Manifest,
+    scope: &Scope,
+    named: &BTreeSet<String>,
+    dropped: &BTreeSet<String>,
+) -> std::borrow::Cow<'m, Manifest> {
+    let out: BTreeSet<String> = dropped
+        .iter()
+        .filter(|name| stays_dropped(name, scope, named, dropped))
+        .cloned()
+        .collect();
+    if out.is_empty() {
+        return std::borrow::Cow::Borrowed(manifest);
+    }
+    let mut placed = manifest.clone();
+    left_out(&mut placed, &out);
+    std::borrow::Cow::Owned(placed)
+}
+
+/// `manifest` as an add of `names` places it while `survey` notes datasets dropped here: each one
+/// the add does not name stays dropped, as a plain sync leaves it.
+pub(super) fn placed_adding<'m>(
+    manifest: &'m Manifest,
+    names: &[String],
+    survey: &Survey,
+) -> std::borrow::Cow<'m, Manifest> {
+    let added = names.iter().cloned().collect();
+    placed_naming(manifest, &Scope::All, &added, &survey.state.dropped)
+}
+
 /// whether `scope` names a dataset `dropped` here, which its run brings back.
 pub(super) fn names_any(scope: &Scope, dropped: &BTreeSet<String>) -> bool {
     match scope {
@@ -565,20 +609,11 @@ pub(super) fn names_any(scope: &Scope, dropped: &BTreeSet<String>) -> bool {
     }
 }
 
-/// takes the datasets `scope` names off `survey`'s list of those dropped here, so its run places
-/// them and writes the state without them. the run then looks at every file it places, since the
-/// last sync's word that all was in place left them out.
-pub(super) fn brought_back(survey: &mut Survey, scope: &Scope) {
-    let Scope::Only(names) = scope else {
-        return;
-    };
-    let back: BTreeSet<String> = survey
-        .state
-        .dropped
-        .iter()
-        .filter(|name| names.contains(*name))
-        .cloned()
-        .collect();
+/// takes the datasets the person named, `named`, off `survey`'s list of those dropped here, so
+/// the run places them and writes the state without them. the run then looks at every file it
+/// places, since the last sync's word that all was in place left them out.
+pub(super) fn brought_back(survey: &mut Survey, named: &BTreeSet<String>) {
+    let back: BTreeSet<String> = survey.state.dropped.intersection(named).cloned().collect();
     if back.is_empty() {
         return;
     }

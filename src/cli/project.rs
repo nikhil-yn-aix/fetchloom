@@ -1423,8 +1423,9 @@ async fn sync_surveyed(
         verify: _,
         read,
     } = run;
-    super::drop::brought_back(&mut survey, &work.scope);
-    let left_out = super::drop::placed_by(manifest, &work.scope, &survey.state.dropped);
+    let named = work.named();
+    super::drop::brought_back(&mut survey, &named);
+    let left_out = super::drop::placed_naming(manifest, &work.scope, &named, &survey.state.dropped);
     let manifest = &*left_out;
     let seen = match read {
         Read::Settled(seen) => {
