@@ -791,7 +791,7 @@ impl<'a> Watch<'a> {
                 Kind::SourceInvalid,
                 format!("{link} answered with a web page, such as a sign-in page, not a data file"),
             )
-            .help(format!("open it in a browser: a page that asks you to sign in needs `fetchloom auth login {host}`, else look for a download or raw link. if the page itself is the data, {asked}"));
+            .help(format!("open it in a browser: a page that asks you to sign in needs `{}`, else look for a download or raw link. if the page itself is the data, {asked}", crate::account::Account::Login(host).command()));
         }
         Error::new(
             Kind::SourceInvalid,

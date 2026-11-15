@@ -302,8 +302,8 @@ fn bucket_missing(location: &Location, top: &s3::Top, look: s3::Look) -> Option<
 fn refused_help(location: &Location, status: u16) -> String {
     match (status, location) {
         (401 | 403, Location::Web(base)) => format!(
-            "if it needs a login, sign in with `fetchloom auth login {}`",
-            crate::net::host(base)
+            "if it needs a login, sign in with `{}`",
+            crate::account::Account::Login(crate::net::host(base).to_owned()).command()
         ),
         _ => "ask whoever keeps the mirror, or check its address".to_owned(),
     }

