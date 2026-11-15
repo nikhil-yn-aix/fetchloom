@@ -7,8 +7,8 @@ exit codes group failures, while error kinds identify the cause.
 | 0 | success |
 | 1 | `unconfirmed`, `lock.outdated`, `data.not_ready` |
 | 2 | `usage` |
-| 10 | `reference.invalid`, `reference.unresolved`, `reference.ambiguous`, `source.invalid` |
-| 20 | `network.unreachable`, `network.status`, `network.rate_limited`, `network.refused`, `offline.missing` |
+| 10 | `reference.invalid`, `reference.unresolved`, `reference.ambiguous`, `source.invalid`, `network.refused` |
+| 20 | `network.unreachable`, `network.status`, `network.rate_limited`, `offline.missing` |
 | 30 | `integrity.mismatch`, including size mismatches and changed bytes found by cache verification |
 | 40 | `auth.required` |
 | 50 | `local.io`, `local.not_empty`, `project.invalid`, `project.changed` |
@@ -30,7 +30,8 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | `reference.invalid`, `reference.unresolved`, `source.invalid` | check the reference and the source's supported access rules. for `source.invalid`, `help` names who can change what was refused: the dataset's owner, for a file name fetchloom refuses or a file kept where fetchloom cannot pin it, or fetchloom's [issues](https://github.com/nikhil-yn-aix/fetchloom/issues), for an answer fetchloom cannot read |
 | `reference.ambiguous` | choose a returned canonical reference and rerun; `--yes` never chooses |
 | `network.unreachable`, `network.status` | check connectivity and the link before retrying |
-| `network.rate_limited`, `network.refused` | respect the source's wait or access requirement |
+| `network.rate_limited` | respect the source's wait |
+| `network.refused` | a link fetchloom will not follow, such as one on a private address `allowed_origins` does not list, or a redirect to a link that is not http or https: `help` says what lifts it, when a setting does |
 | `offline.missing` | prepare the missing data online |
 | `integrity.mismatch` | investigate changed bytes. when a source no longer serves the bytes data.lock pins, keep them from a folder mirror that holds them: someone who has them runs `fetchloom push --to <folder>`, then `fetchloom sync --mirror <folder>`. run `fetchloom lock --upgrade <name>` only if the new bytes are intended; `errors[0].fix` is null for it, since only a person may choose other bytes than data.lock pins |
 | `auth.required` | obtain access and set supported credentials |

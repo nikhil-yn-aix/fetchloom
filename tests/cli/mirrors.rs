@@ -288,7 +288,7 @@ fn an_empty_allowed_origins_variable_clears_the_origins_the_file_allows() -> Res
         command
     };
     let output = sync().env("FETCHLOOM_ALLOWED_ORIGINS", "").output()?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
     let document = json(&output)?;
     assert_eq!(document["errors"][0]["kind"], "network.refused");
     assert_eq!(document["work"]["requests"], 0);
@@ -391,7 +391,7 @@ fn an_import_file_a_mirror_lacks_is_named_as_a_download_is() -> Result {
         (
             "FETCHLOOM_MIRRORS_ONLY",
             "network.refused",
-            20,
+            10,
             lacked.as_str(),
         ),
         ("--offline", "offline.missing", 20, "flowers/sepals.csv"),
@@ -636,7 +636,7 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
             .output()
     };
     let output = run(&["--json", "sync", "--locked"])?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(error["kind"], "network.refused");
     assert_eq!(
@@ -667,7 +667,7 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
         ),
     ] {
         let output = run(arguments)?;
-        assert_eq!(output.status.code(), Some(20), "{arguments:?}");
+        assert_eq!(output.status.code(), Some(10), "{arguments:?}");
         let document = json(&output)?;
         let error = &document["errors"][0];
         assert_eq!(error["kind"], "network.refused", "{arguments:?}");
@@ -683,7 +683,7 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
         .env("FETCHLOOM_MIRRORS", &root)
         .env("FETCHLOOM_MIRRORS_ONLY", "1")
         .output()?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(
         error["details"][0],
@@ -715,7 +715,7 @@ fn a_new_link_in_mirror_only_mode_is_not_called_a_pinned_file() -> Result {
         .env("FETCHLOOM_MIRRORS", &root)
         .env("FETCHLOOM_MIRRORS_ONLY", "1")
         .output()?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
     let document = json(&output)?;
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "network.refused");

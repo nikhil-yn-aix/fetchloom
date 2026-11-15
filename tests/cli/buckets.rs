@@ -810,7 +810,7 @@ fn a_cloned_project_cannot_aim_keys_at_a_server_of_its_own() -> Result {
     let refused = run("")?;
     assert_eq!(
         refused.status.code(),
-        Some(20),
+        Some(10),
         "{}",
         text(&refused.stdout)?
     );

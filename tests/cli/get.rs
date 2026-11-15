@@ -1329,7 +1329,7 @@ fn a_redirect_into_this_machine_is_refused() -> Result {
     );
     let server = Server::start(PATH, vec![inward])?;
     let output = sandbox.run(&["--json", "get", &server.url])?;
-    assert_eq!(output.status.code(), Some(20));
+    assert_eq!(output.status.code(), Some(10));
     assert_eq!(json(&output)?["errors"][0]["kind"], "network.refused");
     Ok(())
 }

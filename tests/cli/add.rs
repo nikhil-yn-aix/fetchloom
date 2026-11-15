@@ -1476,8 +1476,7 @@ fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
     let settings = sandbox.folder("config")?.join("settings.toml");
     fs::write(&settings, "")?;
     let line = format!(
-        "put `allowed_origins = [\"{origin}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run",
-        settings.display()
+        "save it with `fetchloom settings set allowed_origins {origin}`, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run"
     );
     let added = sandbox
         .command(&["-q", "add", &server.url])
@@ -1506,7 +1505,7 @@ fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
     let refused = sync(None)?;
     assert_eq!(
         refused.status.code(),
-        Some(20),
+        Some(10),
         "{}",
         text(&refused.stdout)?
     );

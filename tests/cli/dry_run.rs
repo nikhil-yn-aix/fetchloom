@@ -827,7 +827,7 @@ fn a_link_a_sync_refuses_is_never_announced_as_a_download() -> Result {
     for args in [&["sync", "--dry-run"][..], &["sync"]] {
         let output = run(args)?;
         let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(20), "{args:?}: {stderr}");
+        assert_eq!(output.status.code(), Some(10), "{args:?}: {stderr}");
         assert!(stderr.contains(&refusal), "{args:?}: {stderr}");
         assert!(!announced(&stderr), "{args:?}: {stderr}");
     }

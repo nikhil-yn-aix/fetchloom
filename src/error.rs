@@ -88,14 +88,15 @@ impl Kind {
         match self {
             Kind::Unconfirmed | Kind::Outdated | Kind::NotReady => 1,
             Kind::Usage => 2,
+            // a refusal is fetchloom's own rule, which no later try changes
             Kind::ReferenceInvalid
             | Kind::ReferenceUnresolved
             | Kind::ReferenceAmbiguous
-            | Kind::SourceInvalid => 10,
+            | Kind::SourceInvalid
+            | Kind::NetworkRefused => 10,
             Kind::NetworkUnreachable
             | Kind::NetworkStatus
             | Kind::NetworkRateLimited
-            | Kind::NetworkRefused
             | Kind::OfflineMissing => 20,
             Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,

@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use hyper_util::client::proxy::matcher::Matcher;
@@ -37,20 +36,18 @@ struct Hosts {
     resolved: HashSet<String>,
 }
 
-/// the `allowed_origins` setting as refusals and hints quote it: the origins it lists and where
-/// a person changes it.
+/// the `allowed_origins` setting as refusals and hints quote it: the origins it lists and how a
+/// person changes it.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Allowed {
     pub(crate) origins: Vec<url::Origin>,
     /// set by `FETCHLOOM_ALLOWED_ORIGINS`, which wins over the settings file while it is set.
     pub(crate) by_variable: bool,
-    /// the settings file, which keeps the setting for every run.
-    pub(crate) file: Option<PathBuf>,
 }
 
 impl Allowed {
     /// how to let a later run reach `origin` too: the setting's whole value with `origin` added,
-    /// for the settings file and one run's variable, or for the variable alone while it sets it.
+    /// saved with `settings set` or as one run's variable, or the variable alone while it sets it.
     pub(crate) fn remedy(&self, origin: &url::Origin) -> String {
         let mut listed: Vec<String> = self
             .origins
@@ -65,17 +62,9 @@ impl Allowed {
         if self.by_variable {
             return format!("set {variable}");
         }
-        let quoted: Vec<String> = listed
-            .iter()
-            .map(|origin| format!("\"{origin}\""))
-            .collect();
-        let file = self
-            .file
-            .as_deref()
-            .map_or_else(|| "the settings file".to_owned(), crate::units::path);
         format!(
-            "put `allowed_origins = [{}]` in {file}, or set {variable} for one run",
-            quoted.join(", ")
+            "save it with `fetchloom settings set allowed_origins {}`, or set {variable} for one run",
+            listed.join(" ")
         )
     }
 }
@@ -882,31 +871,29 @@ mod tests {
         assert_eq!(on("other.local"), Vec::<String>::new());
     }
 
-    /// the refusal quotes the settings file's line with what it lists already and one run's
-    /// variable, or the variable alone while it sets the list, since it then wins over the file.
+    /// the refusal gives the `settings set` command with what the setting lists already and one
+    /// run's variable, or the variable alone while it sets the list, since it then wins.
     #[test]
     fn a_refusal_quotes_the_whole_setting_that_lifts_it() {
         let origin = Url::parse("http://10.0.0.5:9001/a.zip").unwrap().origin();
         let lab = Url::parse("http://lab.local:8080").unwrap().origin();
-        let file = Some(PathBuf::from("/home/ada/.config/fetchloom/settings.toml"));
-        let remedy = |origins: Vec<url::Origin>, by_variable, file| {
+        let remedy = |origins: Vec<url::Origin>, by_variable| {
             Allowed {
                 origins,
                 by_variable,
-                file,
             }
             .remedy(&origin)
         };
         assert_eq!(
-            remedy(Vec::new(), false, file.clone()),
-            "put `allowed_origins = [\"http://10.0.0.5:9001\"]` in /home/ada/.config/fetchloom/settings.toml, or set `FETCHLOOM_ALLOWED_ORIGINS=http://10.0.0.5:9001` for one run"
+            remedy(Vec::new(), false),
+            "save it with `fetchloom settings set allowed_origins http://10.0.0.5:9001`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://10.0.0.5:9001` for one run"
         );
         assert_eq!(
-            remedy(vec![lab.clone()], false, None),
-            "put `allowed_origins = [\"http://lab.local:8080\", \"http://10.0.0.5:9001\"]` in the settings file, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001` for one run"
+            remedy(vec![lab.clone()], false),
+            "save it with `fetchloom settings set allowed_origins http://lab.local:8080 http://10.0.0.5:9001`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001` for one run"
         );
         assert_eq!(
-            remedy(vec![lab], true, file),
+            remedy(vec![lab], true),
             "set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001`"
         );
     }

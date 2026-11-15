@@ -958,6 +958,9 @@ impl Net {
         let Some(next) = redirect_target(hop, response) else {
             return Ok(None);
         };
+        if !matches!(next.scheme(), "http" | "https") {
+            return Err(Failure::Final(elsewhere(hop, &next)));
+        }
         *name = headers::file_name(response.headers()).or_else(|| name.take());
         *redirects += 1;
         if *redirects > REDIRECTS {
@@ -1339,8 +1342,7 @@ pub(crate) fn host(url: &Url) -> &str {
         .map_or("the server", |host| host.trim_end_matches('.'))
 }
 
-/// where `response` redirects a request for `from`, when it is a redirect to an http or https
-/// link.
+/// where `response` redirects a request for `from`, when it is a redirect to a link.
 fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
     let redirect = matches!(
         response.status(),
@@ -1351,8 +1353,24 @@ fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
             | StatusCode::PERMANENT_REDIRECT
     );
     let location = response.headers().get(header::LOCATION)?.to_str().ok()?;
-    let next = from.join(location).ok()?;
-    (redirect && matches!(next.scheme(), "http" | "https")).then_some(next)
+    redirect.then(|| from.join(location).ok()).flatten()
+}
+
+/// the refusal of a redirect from `hop` to `next`, a link that is not http or https, such as
+/// file:// or data:, which no try would follow. the link it names is left out, as a data: link
+/// may hold a whole file.
+fn elsewhere(hop: &Url, next: &Url) -> Error {
+    let slashes = if next.has_authority() { "//" } else { "" };
+    Error::new(
+        Kind::NetworkRefused,
+        format!(
+            "fetchloom will not follow {}: {} sent it on to a {}:{slashes} link, and fetchloom downloads over http and https alone",
+            Shown(hop),
+            host(hop),
+            next.scheme()
+        ),
+    )
+    .help("open the link in a browser to see where it leads, or ask its owner for a direct download link")
 }
 
 #[cfg(test)]
@@ -1620,6 +1638,46 @@ mod tests {
                 error.message
             );
             assert!(error.message.contains("mirrors_only"), "{}", error.message);
+        }
+    }
+
+    /// a redirect to a link that is not http or https is refused at once, as fetchloom's own
+    /// rule, never as a status to try again later.
+    #[test]
+    fn a_redirect_to_another_scheme_is_refused_and_says_why() {
+        use crate::net::scripted::{reply, serve};
+        use crate::source::recorded::block_on;
+
+        for (to, said) in [
+            ("file:///etc/passwd", "file://"),
+            ("ftp://lab.example/a.csv", "ftp://"),
+            ("data:text/plain,hello", "data:"),
+        ] {
+            let (url, asked) = serve(vec![reply("302 Found", &[("Location", to)], b"")]);
+            let net = Net::new(
+                Options {
+                    offline: Offline::No,
+                    jobs: 1,
+                    credentials: Vec::new(),
+                    split: Splitting::Never,
+                },
+                Arc::default(),
+                Arc::default(),
+                Arc::new(|_| {}),
+            );
+            net.typed(&url);
+            let Err(Failure::Final(error)) = block_on(net.send(&url, |request| request)) else {
+                panic!("the redirect to {to} was not refused");
+            };
+            assert_eq!(error.kind, Kind::NetworkRefused);
+            assert_eq!(error.kind.exit_code(), 10);
+            assert_eq!(
+                error.message,
+                format!(
+                    "fetchloom will not follow {url}: 127.0.0.1 sent it on to a {said} link, and fetchloom downloads over http and https alone"
+                )
+            );
+            assert_eq!(asked.lock().unwrap().len(), 1);
         }
     }
 

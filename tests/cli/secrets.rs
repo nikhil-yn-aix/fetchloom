@@ -308,13 +308,12 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         };
         let output = run.env("FETCHLOOM_CACHE", cache).output()?;
         let document = json(&output)?;
-        assert_eq!(output.status.code(), Some(20), "{allowed:?}: {document}");
+        assert_eq!(output.status.code(), Some(10), "{allowed:?}: {document}");
         assert_eq!(document["errors"][0]["kind"], "network.refused");
         Ok(document["errors"][0].clone())
     };
     let untrusted = format!(
-        "if you trust that server, put `allowed_origins = [\"{origin}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run",
-        settings_file(&sandbox)?
+        "if you trust that server, save it with `fetchloom settings set allowed_origins {origin}`, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run"
     );
     assert_eq!(refused("sync", None, &sandbox.cache())?["help"], untrusted);
     // an empty variable clears what the file allows, so the file is no remedy while it is set
@@ -350,16 +349,6 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     Ok(())
 }
 
-/// the settings file `fetchloom settings` names in `sandbox`, as a help writes it: `~/…`.
-fn settings_file(sandbox: &Sandbox) -> Result<String> {
-    let document = json(&sandbox.run(&["--json", "settings"])?)?;
-    let path = document["result"]["file"]["path"]
-        .as_str()
-        .ok_or("settings names no file")?;
-    let below = std::path::Path::new(path).strip_prefix(sandbox.folder("home")?)?;
-    Ok(format!("~{}{}", std::path::MAIN_SEPARATOR, below.display()))
-}
-
 /// the line a refusal adds when `trusted` is another origin on `host`, the refused link's host.
 fn trusted_alone(trusted: &str, host: &str) -> String {
     format!("only {trusted} is trusted on {host}, and trust covers that origin alone")
@@ -380,7 +369,7 @@ fn another_port_of_an_allowed_host_reaches_no_private_address() -> Result {
         .env("FETCHLOOM_ALLOWED_ORIGINS", "http://localhost:9")
         .output()?;
     assert_eq!(server.requests(), Vec::<String>::new());
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(error["kind"], "network.refused");
     assert_eq!(
@@ -430,7 +419,7 @@ fn a_mirror_on_this_machine_trusts_its_own_origin_alone() -> Result {
         "the clone asked the source: {}",
         text(&output.stdout)?
     );
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
     let error = &json(&output)?["errors"][0];
     let link = format!("{}{PATH}", source.url);
     assert_eq!(error["kind"], "network.refused");
@@ -442,10 +431,8 @@ fn a_mirror_on_this_machine_trusts_its_own_origin_alone() -> Result {
     assert_eq!(
         error["help"],
         format!(
-            "to reach it too, put `allowed_origins = [\"{}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={}` for one run",
-            source.url,
-            settings_file(&sandbox)?,
-            source.url
+            "to reach it too, save it with `fetchloom settings set allowed_origins {}`, or set `FETCHLOOM_ALLOWED_ORIGINS={}` for one run",
+            source.url, source.url
         )
     );
     Ok(())
@@ -472,7 +459,7 @@ fn a_link_typed_in_a_clone_trusts_its_own_origin_alone() -> Result {
         "the clone asked the source: {}",
         text(&output.stdout)?
     );
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(error["kind"], "network.refused", "{error}");
     assert_eq!(error["details"][0], trusted_alone(&other.url, "127.0.0.1"));
@@ -564,7 +551,7 @@ fn a_typed_link_reaches_no_other_port_that_data_toml_names() -> Result {
         "{}",
         text(&output.stdout)?
     );
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(error["kind"], "network.refused", "{error}");
     assert_eq!(
@@ -575,10 +562,8 @@ fn a_typed_link_reaches_no_other_port_that_data_toml_names() -> Result {
     assert_eq!(
         error["help"],
         format!(
-            "to reach it too, put `allowed_origins = [\"{}\"]` in {}, or set `FETCHLOOM_ALLOWED_ORIGINS={}` for one run",
-            named.url,
-            settings_file(&sandbox)?,
-            named.url
+            "to reach it too, save it with `fetchloom settings set allowed_origins {}`, or set `FETCHLOOM_ALLOWED_ORIGINS={}` for one run",
+            named.url, named.url
         )
     );
     Ok(())
@@ -594,7 +579,7 @@ fn a_host_in_a_list_of_links_reaches_this_machine_only_as_an_allowed_origin() ->
     )?;
     let output = sandbox.run(&["--json", "get", "-i", "links.txt"])?;
     let document = json(&output)?;
-    assert_eq!(output.status.code(), Some(20), "{document}");
+    assert_eq!(output.status.code(), Some(10), "{document}");
     assert_eq!(document["errors"][0]["kind"], "network.refused");
     assert_eq!(server.requests(), Vec::<String>::new());
     sandbox.allow(&server.url);
@@ -619,7 +604,7 @@ fn a_refused_redirect_never_shows_the_token() -> Result {
     )?;
     let output = sandbox.run(&["get", &server.url])?;
     let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(20), "{stderr}");
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
     assert!(stderr.contains("private address"), "{stderr}");
     assert!(!stderr.contains("abc123"), "{stderr}");
     Ok(())
@@ -1108,7 +1093,7 @@ fn a_mirror_that_sends_fetchloom_elsewhere_names_both_origins() -> Result {
         .env("FETCHLOOM_MIRRORS_ONLY", "1")
         .output()?;
     let document = text(&output.stdout)?;
-    assert_eq!(output.status.code(), Some(20), "{document}");
+    assert_eq!(output.status.code(), Some(10), "{document}");
     assert_eq!(source.requests().len(), asked, "the source is never asked");
     let said = format!(
         "fetchloom will not ask {}, where {} sent it, since mirrors_only lets it ask its mirrors alone",

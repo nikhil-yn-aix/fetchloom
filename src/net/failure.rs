@@ -1095,7 +1095,7 @@ mod tests {
         assert_eq!(
             error.help.as_deref(),
             Some(
-                "to reach it too, put `allowed_origins = [\"http://lab.local:9090\"]` in the settings file, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:9090` for one run"
+                "to reach it too, save it with `fetchloom settings set allowed_origins http://lab.local:9090`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:9090` for one run"
             )
         );
     }

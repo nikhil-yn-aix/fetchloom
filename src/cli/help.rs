@@ -203,7 +203,8 @@ const EXIT_CODES: &str = "fetchloom exit codes
        data.not_ready: sync --strict or status --check found data not ready,
        or status --sources --check found a pinned file served nowhere
     2  usage: a mistake on the command line
-   10  reference.*, source.invalid: the link or id is wrong, or names nothing
+   10  reference.*, source.invalid: the link or id is wrong, or names nothing.
+       network.refused: the link leads where fetchloom will not go
    20  network.*, offline.missing: retry later, or go online
    30  integrity.mismatch: the bytes are not the ones data.lock pins
    40  auth.required: sign in, or accept the source's terms

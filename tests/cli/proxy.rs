@@ -31,7 +31,7 @@ fn a_redirect_to_this_machine_is_refused_before_a_proxy_connects_to_it() -> Resu
     // the proxy carried the link that was typed, and was never asked for this machine
     let asked = proxy.asked();
     assert_eq!(asked, [format!("get {} http/1.1", server.url)], "{asked:?}");
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
     let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(document["errors"][0]["kind"], "network.refused");
     Ok(())
