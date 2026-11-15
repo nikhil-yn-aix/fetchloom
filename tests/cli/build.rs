@@ -128,11 +128,13 @@ fn lock_check_and_sync_locked_report_recipe_drift() -> Result {
     pin_clean(&sandbox, CODE, &[])?;
     let checked = sandbox.run(&["lock", "--check"])?;
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
-    // the pin was written by hand, so no build made its files here
+    // the pin was written by hand, so no build made its files here; that is no stale lock
     let synced = sandbox.run(&["sync", "--locked"])?;
-    assert_eq!(synced.status.code(), Some(60));
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     assert!(
-        text(&synced.stderr)?.contains("clean's pinned result is not on this machine or a mirror"),
+        text(&synced.stderr)?.contains(
+            "clean's pinned result is not on this machine or a mirror, so it is left out"
+        ),
         "{}",
         text(&synced.stderr)?
     );
@@ -2808,15 +2810,10 @@ fn a_plain_sync_leaves_out_a_result_found_nowhere() -> Result {
         "{}",
         text(&added.stderr)?
     );
-    for args in [&["sync", "--locked"][..], &["sync", "clean"]] {
-        let output = there(args)?;
-        assert_eq!(
-            output.status.code(),
-            Some(60),
-            "{args:?}: {}",
-            text(&output.stderr)?
-        );
-    }
+    let locked = there(&["sync", "--locked"])?;
+    assert_eq!(locked.status.code(), Some(0), "{}", text(&locked.stderr)?);
+    let named = there(&["sync", "clean"])?;
+    assert_eq!(named.status.code(), Some(60), "{}", text(&named.stderr)?);
     assert_eq!(runs(&sandbox.work())?, 1, "sync never runs a step");
     Ok(())
 }

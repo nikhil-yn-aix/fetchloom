@@ -948,7 +948,9 @@ pub(crate) struct Sync {
     #[arg(long, help_heading = "options")]
     pub(crate) force: bool,
 
-    /// fail instead of updating data.lock when it is out of date with data.toml, for CI
+    /// fail instead of updating data.lock when it is out of date with data.toml, for CI. add
+    /// --strict to fail as well while the data is not ready, as when no mirror holds a recipe's
+    /// result
     #[arg(long, help_heading = "options")]
     pub(crate) locked: bool,
 

@@ -2925,10 +2925,11 @@ fn fresh_with_recipe(sandbox: &Sandbox, name: &str) -> Result<std::path::PathBuf
     Ok(folder)
 }
 
-/// placing iris first means a job that checks its sources still checks them, so a source that
-/// changed iris fails with the mismatch instead of build.needed.
+/// `--locked` checks data.lock alone, so a pinned result no cache or mirror holds is left out with
+/// a warning, as a plain sync leaves it, and `--strict` fails for it as for any data not ready. a
+/// source that changed iris still fails the job with the mismatch.
 #[test]
-fn a_locked_sync_places_what_sources_serve_before_it_stops_for_a_build() -> Result {
+fn a_locked_sync_leaves_out_a_result_found_nowhere_as_a_plain_sync_does() -> Result {
     let sandbox = Sandbox::new()?;
     let changed: &[u8] = b"sepal_length,species\n9.9,changed\n";
     let server = Server::start(
@@ -2942,13 +2943,20 @@ fn a_locked_sync_places_what_sources_serve_before_it_stops_for_a_build() -> Resu
     crate::build::with_recipe(&sandbox, &server)?;
     crate::build::pin_clean(&sandbox, crate::build::CODE, &[])?;
     let runner = fresh_with_recipe(&sandbox, "runner")?;
-    let output = sandbox
-        .command_in(&runner, &["--json", "sync", "--locked", "--yes"])
-        .env("FETCHLOOM_CACHE", sandbox.folder("runner-cache")?)
-        .output()?;
+    let cache = sandbox.folder("runner-cache")?;
+    let locked = |args: &[&str]| {
+        sandbox
+            .command_in(&runner, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let output = locked(&["--json", "sync", "--locked", "--yes"])?;
     let document = json(&output)?;
-    assert_eq!(output.status.code(), Some(60), "{document}");
-    assert_eq!(document["errors"][0]["kind"], "build.needed", "{document}");
+    assert_eq!(output.status.code(), Some(0), "{document}");
+    assert!(
+        crate::support::kinds(&document).contains(&"build.left_out"),
+        "{document}"
+    );
     assert_eq!(document["result"]["placement"]["placed"], 1, "{document}");
     assert_eq!(
         document["result"]["placement"]["unbuilt"],
@@ -2956,6 +2964,13 @@ fn a_locked_sync_places_what_sources_serve_before_it_stops_for_a_build() -> Resu
         "{document}"
     );
     assert_eq!(fs::read(runner.join("data/iris/iris.csv"))?, IRIS);
+    let strict = locked(&["--json", "sync", "--locked", "--strict", "--yes"])?;
+    let document = json(&strict)?;
+    assert_eq!(strict.status.code(), Some(1), "{document}");
+    assert_eq!(
+        document["errors"][0]["kind"], "data.not_ready",
+        "{document}"
+    );
     let drifted = fresh_with_recipe(&sandbox, "drifted")?;
     let output = sandbox
         .command_in(&drifted, &["--json", "sync", "--locked", "--yes"])

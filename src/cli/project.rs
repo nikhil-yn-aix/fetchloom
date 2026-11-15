@@ -400,9 +400,7 @@ async fn sync_held(
             .map(|report| (report, None));
     }
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
-        .within(scope)
-        .stopping_on_unbuilt(args.locked);
+    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?).within(scope);
     let Outcome {
         lock_changed,
         pins,
@@ -422,42 +420,23 @@ async fn sync_held(
     .await?;
     // a project that became a git repository after its add gets its ignore rule now
     ignore_data(&work, &manifest)?;
-    // a locked run places what the sources serve before it stops for the results only a
-    // build makes, so a job still checks every source
-    let stops = args.locked && !placement.unbuilt.is_empty();
-    let closing = (!stops).then(|| {
-        closing(
-            &project,
-            &manifest,
-            &work.scope,
-            lock_changed,
-            &placement,
-            args.verify,
-        )
-    });
-    unbuilt_locked(
-        stops,
-        Report {
-            selected: Some(work.scope.clone()),
-            project: project.root,
-            datasets: pins,
-            lock_changed,
-            placement: Some(placement),
-            ..Report::default()
-        },
-    )
-    .map(|report| (report, closing))
-}
-
-fn unbuilt_locked(stops: bool, report: Report) -> Result<Report, Error> {
-    let unbuilt = report
-        .placement
-        .as_ref()
-        .map_or(&[][..], |placement| &placement.unbuilt);
-    if !stops || unbuilt.is_empty() {
-        return Ok(report);
-    }
-    Err(engine::unbuilt_here(unbuilt).with_report(&report))
+    let closing = closing(
+        &project,
+        &manifest,
+        &work.scope,
+        lock_changed,
+        &placement,
+        args.verify,
+    );
+    let report = Report {
+        selected: Some(work.scope.clone()),
+        project: project.root,
+        datasets: pins,
+        lock_changed,
+        placement: Some(placement),
+        ..Report::default()
+    };
+    Ok((report, Some(closing)))
 }
 
 /// data.toml's `text` as [`manifest::read_plain`] reads it, with its SHA-256, for a plain sync of
@@ -865,9 +844,7 @@ async fn preview_sync(
     scope: Scope,
 ) -> Result<Report, Error> {
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?)
-        .within(scope)
-        .stopping_on_unbuilt(args.locked);
+    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?).within(scope);
     let outcome = preview_all(
         &work,
         manifest,
@@ -880,23 +857,17 @@ async fn preview_sync(
     .await?;
     preview_ignore(&work, manifest)?;
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
-    let stops = args.locked && !outcome.placed.placement.unbuilt.is_empty();
-    if !stops {
-        dry_run_done(
-            &context.output,
-            nothing
-                .then(|| in_place(manifest, &work.scope, args.verify))
-                .as_deref(),
-        );
-    }
+    dry_run_done(
+        &context.output,
+        nothing
+            .then(|| in_place(manifest, &work.scope, args.verify))
+            .as_deref(),
+    );
     let pins = outcome.pins.clone();
-    unbuilt_locked(
-        stops,
-        Report {
-            selected: Some(work.scope.clone()),
-            ..Report::dry(project.root.clone(), pins, outcome)
-        },
-    )
+    Ok(Report {
+        selected: Some(work.scope.clone()),
+        ..Report::dry(project.root.clone(), pins, outcome)
+    })
 }
 
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
