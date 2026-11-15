@@ -691,6 +691,28 @@ fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
     }
 }
 
+/// a resume whose file may not split, as with splitting off, fills the gap its kept ranges leave
+/// with the one answer it has, however free the slots and however long the gap takes.
+#[test]
+fn a_resume_that_may_not_split_adds_no_stream() {
+    let body = body(MIB);
+    let server = serve(
+        body.clone(),
+        Serving {
+            rate: MIB,
+            ..SERVING
+        },
+    );
+    let mut net = net(&server.url, 8);
+    net.split.when = Splitting::Never;
+    let (_folder, cache) = cache();
+    keep_both_ends(&cache, &server.url, &body);
+    let fetched = download(&net, &cache, &server.url, Expect::default());
+    assert_eq!(fetched.digest, sha256(&body));
+    let heads = server.heads();
+    assert_eq!((heads.len(), server.most()), (1, 1), "{heads:?}");
+}
+
 #[test]
 fn a_finished_stream_takes_half_of_the_largest_range_left() {
     let mut board = Board::new(vec![(0, 100)]);
