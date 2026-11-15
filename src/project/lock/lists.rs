@@ -213,6 +213,12 @@ fn names(name: &str, sha256: &Sha256, count: usize) -> Vec<String> {
         .collect()
 }
 
+/// whether `listed` names its parts as fetchloom writes them for `name`, each a file of
+/// [`FOLDER`]: the only paths a list is read from, since data.lock may come from someone else.
+pub(crate) fn named_as_written(name: &str, listed: &Listed) -> bool {
+    !listed.parts.is_empty() && listed.parts == names(name, &listed.sha256, listed.parts.len())
+}
+
 /// whether `file`, a name in [`FOLDER`], is one fetchloom writes for a list.
 pub(crate) fn is_part(file: &str) -> bool {
     let Some(stem) = file.strip_suffix(".tsv.zst") else {
@@ -269,7 +275,7 @@ pub(crate) fn folder(root: &Path) -> Result<PathBuf, Error> {
 /// data.lock records; refused unread when it holds more files than a run may list, or when
 /// [`FOLDER`] is no real folder.
 pub(crate) fn read<R: Row>(root: &Path, name: &str, listed: &Listed) -> Result<Vec<R>, Error> {
-    if listed.parts.is_empty() || listed.parts != names(name, &listed.sha256, listed.parts.len()) {
+    if !named_as_written(name, listed) {
         return Err(broken(format!(
             "data.lock names the file list of {name} in files fetchloom does not write"
         )));

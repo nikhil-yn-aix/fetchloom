@@ -842,3 +842,91 @@ fn a_choice_takes_the_whole_pin_its_branch_committed() -> Result {
     assert_eq!(input.requests().len(), asked, "a merge asks no server");
     Ok(())
 }
+
+/// a project making b-mk from a-src by copying it, built and committed on main. branch b runs the
+/// step another way that makes the same files, so b-mk's list keeps its name; branch a makes other
+/// files, so its rebuild replaces the list and its commit deletes the old one. none without git.
+fn relisted_on_a(sandbox: &Sandbox, server: &Server) -> Result<Option<String>> {
+    if git(sandbox, &sandbox.work(), &["init", "-q"])?.is_none() {
+        return Ok(None);
+    }
+    succeeded(&run(sandbox, &["add", &server.url, "--as", "a-src"])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let text = fs::read_to_string(&manifest)?;
+    let step = "run = [\"recipe-step\", \"copy\", \"{a-src}\", \"{out}\"]";
+    fs::write(
+        &manifest,
+        format!("{text}\n[datasets.b-mk]\nfrom = [\"a-src\"]\n{step}\n"),
+    )?;
+    succeeded(&building(sandbox, &["build"])?)?;
+    ok(sandbox, &["add", "."])?;
+    ok(sandbox, &["commit", "-qm", "recipe"])?;
+    let parts = || -> Result<Vec<String>> {
+        let mut parts: Vec<String> = fs::read_dir(sandbox.work().join("data.lock.d"))?
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect::<Result<_>>()?;
+        parts.sort();
+        Ok(parts)
+    };
+    let listed = parts()?;
+    let rewrite = |run: &str, why: &str| -> Result {
+        let text = fs::read_to_string(&manifest)?.replace(step, run);
+        fs::write(&manifest, text)?;
+        succeeded(&building(sandbox, &["build"])?)?;
+        ok(sandbox, &["add", "."])?;
+        ok(sandbox, &["commit", "-qm", why])?;
+        Ok(())
+    };
+    ok(sandbox, &["checkout", "-qb", "b"])?;
+    rewrite(
+        "run = [\"recipe-step\", \"say\", \"1\", \"{a-src}\", \"{out}\"]",
+        "say more, make the same",
+    )?;
+    assert_eq!(parts()?, listed, "the same files keep their list");
+    ok(sandbox, &["checkout", "-qb", "a", "main"])?;
+    rewrite(
+        "run = [\"recipe-step\", \"write\", \"made.txt\", \"by a\", \"{a-src}\", \"{out}\"]",
+        "make other files",
+    )?;
+    let [old] = listed.as_slice() else {
+        return Err("b-mk has one list part".into());
+    };
+    assert!(!parts()?.contains(old), "a's rebuild replaced {old}");
+    Ok(Some(format!("data.lock.d/{old}")))
+}
+
+/// git's merge deletes the list a's rebuild replaced, which b's b-mk still names. keeping b's
+/// side, as ours or theirs in a merge or a rebase, brings the list back from b's commit.
+#[test]
+fn keeping_a_side_brings_back_the_list_the_merge_deleted() -> Result {
+    let sandbox = Sandbox::new()?;
+    let input = Server::start("/in.txt", vec![file(b"one\n", "\"1\"")])?;
+    sandbox.allow(&input.url);
+    let Some(old) = relisted_on_a(&sandbox, &input)? else {
+        return Ok(());
+    };
+    let b = shown(&sandbox, "b:data.lock")?;
+    let meetings: [(&str, &[&str], &str); 3] = [
+        ("a", &["merge", "-q", "b"], "theirs"),
+        ("b", &["merge", "-q", "a"], "ours"),
+        ("b", &["rebase", "-q", "a"], "theirs"),
+    ];
+    for (on, meeting, b_side) in meetings {
+        ok(&sandbox, &["checkout", "-q", on])?;
+        stopped(&sandbox, meeting)?;
+        assert!(!sandbox.work().join(&old).exists(), "{meeting:?}");
+        let output = run(&sandbox, &["lock", &format!("--{b_side}"), "b-mk"])?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{meeting:?}: {}",
+            text(&output.stderr)?
+        );
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        assert_eq!(table(&lock, "b-mk")?, table(&b, "b-mk")?, "{meeting:?}");
+        assert!(sandbox.work().join(&old).is_file(), "{meeting:?}");
+        succeeded(&run(&sandbox, &["lock", "--check"])?)?;
+        abandon(&sandbox)?;
+    }
+    Ok(())
+}

@@ -69,7 +69,7 @@ fn merged(manifest: &Sides, locks: &Sides, choices: &[(&str, Side)]) -> Result<M
         .iter()
         .map(|(name, side)| ((*name).to_owned(), *side))
         .collect();
-    merge(manifest, Some(locks), &choices, root.path(), &|_| {})
+    merge(manifest, Some(locks), &choices, root.path(), &|_| {}, None)
 }
 
 fn names(lock: &Lock) -> Vec<&str> {
@@ -432,11 +432,53 @@ fn listed_datasets_merge_from_the_parts_of_the_side_kept() {
         Some(ours.render_with(1)),
     );
     let choices = Choices::new();
-    let merged = merge(&manifest, Some(&locks), &choices, root.path(), &|_| {}).unwrap();
+    let merged = merge(
+        &manifest,
+        Some(&locks),
+        &choices,
+        root.path(),
+        &|_| {},
+        None,
+    )
+    .unwrap();
     let lock = merged.lock.unwrap();
     assert_eq!(names(&lock), ["beta", "photos"]);
     assert_eq!(lock.datasets[1].files, upgraded.files);
     assert_eq!(merged.summary.from_theirs, ["beta", "photos"]);
+    // a git merge deletes a part the other side replaced: without git the error names the command
+    // that brings it back, and with git it comes from their side's commit
+    let parts = theirs.lists_with(1);
+    let (part, text) = parts
+        .iter()
+        .find(|(part, _)| part.contains("photos"))
+        .unwrap();
+    fs::remove_file(root.path().join(part)).unwrap();
+    let gone = merge(
+        &manifest,
+        Some(&locks),
+        &choices,
+        root.path(),
+        &|_| {},
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(
+        gone.help.as_deref(),
+        Some(format!("bring it back from their side's commit with `git checkout MERGE_HEAD -- {part}`, or `git checkout REBASE_HEAD -- {part}` in a rebase, then run the same command again").as_str())
+    );
+    let bytes = lists::compress(text).unwrap();
+    let committed =
+        |side: Side, asked: &str| (side == Side::Theirs && asked == part).then(|| bytes.clone());
+    let merged = merge(
+        &manifest,
+        Some(&locks),
+        &choices,
+        root.path(),
+        &|_| {},
+        Some(&committed),
+    )
+    .unwrap();
+    assert_eq!(merged.lock.unwrap().datasets[1].files, upgraded.files);
 }
 
 #[test]
@@ -481,12 +523,28 @@ fn recipe_results_merge_by_name() {
         Some(lock(vec![core.clone()])),
     );
     let choices = Choices::new();
-    let merged = merge(&manifest, Some(&added), &choices, root.path(), &|_| {}).unwrap();
+    let merged = merge(
+        &manifest,
+        Some(&added),
+        &choices,
+        root.path(),
+        &|_| {},
+        None,
+    )
+    .unwrap();
     assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
     assert_eq!(merged.summary.from_ours, ["clean"]);
     // the one result data.toml's recipe has is its pin, whatever the base was
     let unknown = sides(added.ours.clone(), added.theirs.clone(), None);
-    let merged = merge(&manifest, Some(&unknown), &choices, root.path(), &|_| {}).unwrap();
+    let merged = merge(
+        &manifest,
+        Some(&unknown),
+        &choices,
+        root.path(),
+        &|_| {},
+        None,
+    )
+    .unwrap();
     assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
     let rebuilt = Lock {
         datasets: vec![core.clone()],
@@ -496,18 +554,18 @@ fn recipe_results_merge_by_name() {
         }],
     };
     let both = sides(with_result.render(), rebuilt.render(), None);
-    let error = merge(&manifest, Some(&both), &choices, root.path(), &|_| {}).unwrap_err();
+    let error = merge(&manifest, Some(&both), &choices, root.path(), &|_| {}, None).unwrap_err();
     assert_eq!(error.message, "the merge needs a choice for clean");
     // a result goes with its recipe, as a fetched dataset's pin goes with its entry, unless the
     // other side built it anew: then removing the recipe waits for a choice
     let dropped = sides(text.clone(), toml(&[("core", "zenodo:3")]), Some(text));
-    let error = merge(&dropped, Some(&added), &choices, root.path(), &|_| {}).unwrap_err();
+    let error = merge(&dropped, Some(&added), &choices, root.path(), &|_| {}, None).unwrap_err();
     assert_eq!(
         error.details,
         ["clean: one side changed it and the other removed it"]
     );
     let removal = Choices::from([("clean".to_owned(), Side::Theirs)]);
-    let merged = merge(&dropped, Some(&added), &removal, root.path(), &|_| {}).unwrap();
+    let merged = merge(&dropped, Some(&added), &removal, root.path(), &|_| {}, None).unwrap();
     assert!(!merged.manifest.contains("clean"), "{}", merged.manifest);
     assert_eq!(merged.lock.unwrap().derived, []);
     let built_before = sides(
@@ -521,6 +579,7 @@ fn recipe_results_merge_by_name() {
         &choices,
         root.path(),
         &|_| {},
+        None,
     )
     .unwrap();
     assert_eq!(merged.lock.unwrap().derived, []);
@@ -692,6 +751,46 @@ fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
     assert_eq!(gone.summary.removed, ["beta"]);
 }
 
+/// the other side of a merge wrote data.lock, names of list parts too: a part that climbs out of
+/// data.lock.d is refused before anything is read or written for it, whatever git gives.
+#[test]
+fn a_list_part_out_of_data_lock_d_is_never_written() {
+    let root = tempfile::tempdir().unwrap();
+    let mut photos = pin("photos", "zenodo:7", b"one");
+    photos.files.push(LockedFile {
+        path: "photos2.csv".to_owned(),
+        ..photos.files[0].clone()
+    });
+    let listed = Lock {
+        datasets: vec![photos],
+        ..Lock::default()
+    };
+    let [(part, _)] = &listed.lists_with(1)[..] else {
+        panic!("photos has one list part");
+    };
+    let escaped = format!("escaped-{}.tsv.zst", std::process::id());
+    let outside = std::env::temp_dir().join(&escaped);
+    let theirs = listed
+        .render_with(1)
+        .replace(part.as_str(), &format!("data.lock.d/../../{escaped}"));
+    let text = toml(&[("photos", "zenodo:7")]);
+    let manifest = sides(text.clone(), text, None);
+    let locks = sides(lock(Vec::new()), theirs, Some(lock(Vec::new())));
+    let committed = |_: Side, _: &str| Some(b"their bytes".to_vec());
+    let merged = merge(
+        &manifest,
+        Some(&locks),
+        &Choices::new(),
+        root.path(),
+        &|_| {},
+        Some(&committed),
+    );
+    let written = outside.exists();
+    let _ = fs::remove_file(&outside);
+    assert!(!written, "a part was written at {}", outside.display());
+    assert_eq!(merged.unwrap_err().kind, Kind::ProjectInvalid);
+}
+
 /// git merged their new list's name into our side's conflict lines beside our list's hash, and
 /// took our part away: read from those lines, the merge stops with help to restore ours by hand.
 /// read whole from git, our pin is the one we made.
@@ -729,7 +828,15 @@ fn a_pin_mixed_from_both_sides_is_never_kept() {
     let manifest = sides(text.clone(), text, None);
     let locks = sides(mixed, theirs_text.clone(), None);
     let choices = Choices::from([("photos".to_owned(), Side::Ours)]);
-    let error = merge(&manifest, Some(&locks), &choices, root.path(), &|_| {}).unwrap_err();
+    let error = merge(
+        &manifest,
+        Some(&locks),
+        &choices,
+        root.path(),
+        &|_| {},
+        None,
+    )
+    .unwrap_err();
     assert_eq!(error.kind, Kind::ProjectInvalid);
     assert_eq!(
         error.message,
@@ -748,7 +855,15 @@ fn a_pin_mixed_from_both_sides_is_never_kept() {
         whole: Some([ours_text, theirs_text]),
         ..locks
     };
-    let kept = merge(&manifest, Some(&whole), &choices, root.path(), &|_| {}).unwrap();
+    let kept = merge(
+        &manifest,
+        Some(&whole),
+        &choices,
+        root.path(),
+        &|_| {},
+        None,
+    )
+    .unwrap();
     assert_eq!(kept.lock.unwrap().datasets, [photos]);
 }
 
@@ -759,7 +874,7 @@ fn text_merged(manifest: &Sides, choices: &[(&str, Side)]) -> String {
         .iter()
         .map(|(name, side)| ((*name).to_owned(), *side))
         .collect();
-    merge(manifest, None, &choices, root.path(), &|_| {})
+    merge(manifest, None, &choices, root.path(), &|_| {}, None)
         .unwrap()
         .manifest
 }

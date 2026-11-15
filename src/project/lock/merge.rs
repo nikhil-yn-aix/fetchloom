@@ -58,6 +58,10 @@ impl Side {
 /// the side a person chose for each dataset the sides disagree on.
 pub(crate) type Choices = BTreeMap<String, Side>;
 
+/// a part of data.lock.d as one side's commit holds it, by its path from the project, when git
+/// has it there.
+pub(crate) type Committed<'a> = &'a dyn Fn(Side, &str) -> Option<Vec<u8>>;
+
 /// data.toml and data.lock merged, and how each dataset came out.
 #[derive(Debug)]
 pub(crate) struct Merged {
@@ -245,16 +249,19 @@ impl Manifests<'_> {
     }
 }
 
-/// data.toml and data.lock merged from their sides, the lists data.lock keeps read below `root`;
-/// `lock` is none when neither side has one. a dataset the base cannot settle and `choices` does
-/// not name is `unconfirmed`, after `told` gets each side's pin, as `-v` shows. an unneeded choice
-/// is `usage`; an unreadable side, or text outside the datasets both changed, `project.invalid`.
+/// data.toml and data.lock merged from their sides, the lists data.lock keeps read below `root`,
+/// or as git's `committed` gives a part that is not there, none without git; `lock` is none when
+/// neither side has one. a
+/// dataset the base cannot settle and `choices` does not name is `unconfirmed`, after `told` gets
+/// each side's pin, as `-v` shows. an unneeded choice is `usage`; an unreadable side, or text
+/// outside the datasets both changed, `project.invalid`.
 pub(crate) fn merge(
     manifest: &Sides,
     lock: Option<&Sides>,
     choices: &Choices,
     root: &Path,
     told: &dyn Fn(&str),
+    committed: Option<Committed<'_>>,
 ) -> Result<Merged, Error> {
     let manifests = read_manifests(manifest)?;
     let frame = frame(manifest)?;
@@ -302,7 +309,7 @@ pub(crate) fn merge(
         _ => Vec::new(),
     };
     let lock = match (records, &locks) {
-        (Some(records), Some(locks)) => Some(kept(records, locks, &decided, root)?),
+        (Some(records), Some(locks)) => Some(kept(records, locks, &decided, root, committed)?),
         _ => None,
     };
     Ok(Merged {
@@ -804,13 +811,16 @@ fn chosen_records(
     records.sort_by(|a, b| a.name().cmp(b.name()));
 }
 
-/// the merged data.lock of `records`, each list read below `root`. a pin that does not read
+/// the merged data.lock of `records`, each list read below `root`, or from the commit of the side
+/// it comes from, as `committed` gives it, where git's merge deleted it: a rebuild on one side that
+/// replaced a list deletes it, though the other side still names it. a pin that does not read
 /// stops the merge with how to restore its side, never with advice to pin anew.
 fn kept(
     records: Vec<Parsed>,
     locks: &Locks,
     decided: &Decided,
     root: &Path,
+    committed: Option<Committed<'_>>,
 ) -> Result<Lock, Error> {
     let mut lock = Lock::default();
     for record in records {
@@ -819,7 +829,26 @@ fn kept(
             Some(Take::Side(side)) => *side,
             _ => Side::Ours,
         };
-        let read = resolve(vec![record], Some(root)).map_err(|error| {
+        // the other side wrote these names, so only fetchloom's own are looked for or brought back
+        let parts = match &record {
+            Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed)
+                if super::lists::named_as_written(&name, listed) =>
+            {
+                listed.parts.clone()
+            }
+            _ => Vec::new(),
+        };
+        let gone = parts.iter().any(|part| !below(root, part).is_file());
+        let found = if gone {
+            from_commit(&name, side, &parts, root, committed)?
+        } else {
+            None
+        };
+        let read = resolve(
+            vec![record],
+            Some(found.as_ref().map_or(root, |found| found.path())),
+        )
+        .map_err(|error| {
             let broken = [super::BROKEN, super::lists::BROKEN];
             if error
                 .help
@@ -835,6 +864,76 @@ fn kept(
         lock.derived.extend(read.derived);
     }
     Ok(lock)
+}
+
+/// a folder holding the parts of `name`'s list, `parts`: each as it is below `root`, or as `side`'s
+/// commit holds it where it is not there. a part's name holds its contents' hash and reading checks
+/// it against data.lock, so a part from git is the one data.lock names. none when the commit lacks
+/// one too; without git to ask, the error names the command that brings it back. refused, as
+/// reading a list is, when data.lock.d is a link or a file.
+fn from_commit(
+    name: &str,
+    side: Side,
+    parts: &[String],
+    root: &Path,
+    committed: Option<Committed<'_>>,
+) -> Result<Option<tempfile::TempDir>, Error> {
+    super::lists::folder(root)?;
+    let Some(committed) = committed else {
+        let gone = parts.iter().find(|part| !below(root, part).is_file());
+        return Err(list_gone(name, side, gone.map_or("", String::as_str)));
+    };
+    let found = tempfile::tempdir().map_err(|err| {
+        Error::io(
+            format_args!("could not make a folder for {name}'s list"),
+            &err,
+        )
+    })?;
+    for part in parts {
+        let bytes = match std::fs::read(below(root, part)) {
+            Ok(bytes) => bytes,
+            Err(_) => match committed(side, part) {
+                Some(bytes) => bytes,
+                None => return Ok(None),
+            },
+        };
+        let path = below(found.path(), part);
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, bytes));
+        written.map_err(|err| Error::io(format_args!("could not keep {part} for {name}"), &err))?;
+    }
+    Ok(Some(found))
+}
+
+/// `part`, a path from the project with `/` between folders, below `folder`.
+fn below(folder: &Path, part: &str) -> std::path::PathBuf {
+    folder.join(part.replace('/', std::path::MAIN_SEPARATOR_STR))
+}
+
+/// the error for `part` of `name`'s list on `side`, which is not in data.lock.d, without git to read
+/// it from: the command that brings it back from that side's commit.
+fn list_gone(name: &str, side: Side, part: &str) -> Error {
+    let help = match side {
+        Side::Ours => format!(
+            "bring it back from our side's commit with `git checkout HEAD -- {part}`, then run the same command again"
+        ),
+        Side::Theirs => format!(
+            "bring it back from their side's commit with `git checkout MERGE_HEAD -- {part}`, or `git checkout REBASE_HEAD -- {part}` in a rebase, then run the same command again"
+        ),
+    };
+    Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "{name} on {} side of data.lock names {part}, which is not there",
+            side.whose()
+        ),
+    )
+    .detail(
+        "a merge deletes a list one side's rebuild replaced, though the other side still names it",
+    )
+    .help(help)
 }
 
 /// the error for `name`'s pin on `side`, which did not read whole as `error` says. `whole` says

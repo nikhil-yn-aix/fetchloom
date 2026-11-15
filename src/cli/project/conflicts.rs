@@ -55,8 +55,24 @@ pub(super) fn merge(
     }
     let (manifest, lock) = sides(project, &conflicted);
     let told = |line: &str| context.output.detail(line);
-    let merged = merge::merge(&manifest, lock.as_ref(), &choices, &project.root, &told)
-        .map_err(|error| in_project(error, project))?;
+    let program = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &project.root));
+    let committed = |side: Side, part: &str| {
+        git::in_commit(
+            program.as_deref()?,
+            &project.root,
+            part,
+            side == Side::Theirs,
+        )
+    };
+    let merged = merge::merge(
+        &manifest,
+        lock.as_ref(),
+        &choices,
+        &project.root,
+        &told,
+        program.is_some().then_some(&committed),
+    )
+    .map_err(|error| in_project(error, project))?;
     for warning in &merged.warnings {
         context.output.warn(Warning::MergeFormatting, warning);
     }
@@ -201,11 +217,14 @@ fn write(
         project.write(manifest::FILE, merged.manifest.as_bytes())?;
     }
     let mut written = Vec::new();
-    if let (Some(lock), Some(text)) = (&merged.lock, rendered) {
-        // the lists first, so data.lock never names a part that is not there yet
+    if let Some(lock) = &merged.lock {
+        // the lists first, so data.lock never names a part that is not there yet, and a part the
+        // git merge deleted, which the side kept still names, comes back
         written = project.write_lists(lock)?;
-        project.write(lock::FILE, text.as_bytes())?;
-        project.sweep_lists(lock);
+        if let Some(text) = rendered {
+            project.write(lock::FILE, text.as_bytes())?;
+            project.sweep_lists(lock);
+        }
     }
     Ok(written)
 }

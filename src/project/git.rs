@@ -91,23 +91,34 @@ pub(crate) fn stages(git: &Path, root: &Path, file: &str) -> Option<Stages> {
     })
 }
 
+/// the commits an unfinished merge, rebase, cherry-pick or revert brings in, of which one is under
+/// way. a revert brings in the parent of the commit it takes back.
+const THEIRS: [&str; 4] = [
+    "MERGE_HEAD",
+    "REBASE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD^",
+];
+
 /// `file` in `root`, which git merged by itself, whole as each side of the unfinished merge,
 /// rebase, cherry-pick or revert has it in its commit. none when none is under way or one lacks it.
 pub(crate) fn committed(git: &Path, root: &Path, file: &str) -> Option<[String; 2]> {
+    let read = |theirs: bool| text(in_commit(git, root, file, theirs)?);
+    Some([read(false)?, read(true)?])
+}
+
+/// `file` in `root` as one side's commit of the unfinished merge, rebase, cherry-pick or revert
+/// holds it: ours, `HEAD`, unless `theirs`. none when none is under way or that commit lacks it.
+pub(crate) fn in_commit(git: &Path, root: &Path, file: &str, theirs: bool) -> Option<Vec<u8>> {
     let read = |commit: &str| {
         let blob = format!("{commit}:./{file}");
-        text(read_objects(git, root, &["cat-file", "blob", &blob])?)
+        read_objects(git, root, &["cat-file", "blob", &blob])
     };
-    // a revert brings in the parent of the commit it takes back
-    let theirs = [
-        "MERGE_HEAD",
-        "REBASE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "REVERT_HEAD^",
-    ]
-    .into_iter()
-    .find_map(read)?;
-    Some([read("HEAD")?, theirs])
+    if theirs {
+        THEIRS.into_iter().find_map(read)
+    } else {
+        read("HEAD")
+    }
 }
 
 fn text(bytes: Vec<u8>) -> Option<String> {
