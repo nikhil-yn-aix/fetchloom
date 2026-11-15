@@ -928,8 +928,9 @@ fn a_stopped_get_says_so_in_a_plain_line() -> Result {
     Ok(())
 }
 
-/// a server like python's http.server, which names no version and sends whole files, cannot
-/// continue, so the rerun starts over and says so once, though a broken connection restarts it.
+/// a server that names no version, by an ETag or a Last-Modified, leaves nothing to show that
+/// kept bytes are the same file, so the rerun starts over and says why once, though a broken
+/// connection restarts it.
 #[cfg(unix)]
 #[test]
 fn a_stop_promises_only_what_the_server_allows() -> Result {
@@ -965,7 +966,7 @@ fn a_stop_promises_only_what_the_server_allows() -> Result {
     assert!(
         kept.starts_with("            the ")
             && kept.ends_with(
-                " downloaded so far is deleted, since the server cannot continue from it"
+                " downloaded so far is deleted, since nothing shows it is the same file: the server sent no ETag or Last-Modified"
             ),
         "{stderr}"
     );
@@ -979,7 +980,7 @@ fn a_stop_promises_only_what_the_server_allows() -> Result {
     // the stop deleted what it could not go on from, so only this run's own broken try restarts
     assert!(
         matches!(restarts.as_slice(), [line] if line.starts_with(" Restarting big.bin · the ")
-            && line.ends_with(" downloaded so far cannot be continued, since the server cannot continue from them")),
+            && line.ends_with(" downloaded so far cannot be continued, since nothing shows they are the same file: the server sent no ETag or Last-Modified")),
         "{stderr}"
     );
     assert_eq!(server.requests().len(), 3, "{stderr}");

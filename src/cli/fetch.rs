@@ -627,8 +627,13 @@ impl<'a> Watch<'a> {
             )
         } else {
             let why = match (self.held.resumable(), resumable) {
+                (Resumable::Unproven, _) => {
+                    "nothing shows they are the same file: the server sent no ETag or Last-Modified"
+                }
                 (Resumable::No, _) => "the server cannot continue from them",
-                (_, Resumable::No) => "the server sent the whole file again instead of the rest",
+                (_, Resumable::No | Resumable::Unproven) => {
+                    "the server sent the whole file again instead of the rest"
+                }
                 _ => "the file changed on the server",
             };
             format!(
@@ -1615,13 +1620,14 @@ fn kept(error: Error, held: &[Held]) -> Error {
     if !matches!(error.kind, Kind::Interrupted | Kind::NetworkUnreachable) {
         return error;
     }
-    let (mut sure, mut maybe, mut lost) = (0_u64, 0_u64, 0_u64);
+    let (mut sure, mut maybe, mut lost, mut unproven) = (0_u64, 0_u64, 0_u64, 0_u64);
     for held in held {
         let bytes = held.bytes.load(Ordering::Relaxed);
         let sum = match held.resumable() {
             Resumable::Yes => &mut sure,
             Resumable::Maybe => &mut maybe,
             Resumable::No => &mut lost,
+            Resumable::Unproven => &mut unproven,
         };
         *sum = sum.saturating_add(bytes);
     }
@@ -1637,17 +1643,35 @@ fn kept(error: Error, held: &[Held]) -> Error {
             units::size(going_on)
         )),
     };
-    match (lost, going_on) {
-        (0, _) => error,
-        (_, 0) => error.detail(format!(
-            "the {} downloaded so far is deleted, since the server cannot continue from it",
-            units::size(lost)
-        )),
-        _ => error.detail(format!(
-            "the other {} is deleted, since its server cannot continue from it",
-            units::size(lost)
-        )),
+    let unproven_why = |server: &str| {
+        format!("nothing shows it is the same file: {server} sent no ETag or Last-Modified")
+    };
+    let deleted = [
+        (
+            lost,
+            "the server cannot continue from it".to_owned(),
+            "its server cannot continue from it".to_owned(),
+        ),
+        (
+            unproven,
+            unproven_why("the server"),
+            unproven_why("its server"),
+        ),
+    ];
+    let mut told = going_on > 0;
+    let mut error = error;
+    for (bytes, alone, other) in deleted.into_iter().filter(|(bytes, ..)| *bytes > 0) {
+        error = error.detail(if told {
+            format!("the other {} is deleted, since {other}", units::size(bytes))
+        } else {
+            format!(
+                "the {} downloaded so far is deleted, since {alone}",
+                units::size(bytes)
+            )
+        });
+        told = true;
     }
+    error
 }
 
 /// how many failed files one error names. the rest are counted.
@@ -3033,6 +3057,13 @@ mod tests {
             [
                 "the 3.0 MiB downloaded so far is kept, and the next run continues from there",
                 "the other 1.0 MiB is deleted, since its server cannot continue from it"
+            ]
+        );
+        assert_eq!(
+            said(&[(mib, Resumable::No), (2 * mib, Resumable::Unproven)]),
+            [
+                "the 1.0 MiB downloaded so far is deleted, since the server cannot continue from it",
+                "the other 2.0 MiB is deleted, since nothing shows it is the same file: its server sent no ETag or Last-Modified"
             ]
         );
         assert_eq!(said(&[(0, Resumable::Yes)]), Vec::<String>::new());

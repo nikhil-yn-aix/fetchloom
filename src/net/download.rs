@@ -217,9 +217,11 @@ pub(crate) enum Resumable {
     /// the bytes are proven, but the server has not said whether it sends parts of a file.
     #[default]
     Maybe,
-    /// nothing proves the bytes, or the server said it sends no parts, so a later run starts
-    /// over.
+    /// the server said it sends no parts, so a later run starts over.
     No,
+    /// nothing proves the bytes are one file, neither a hash a pin or the source states nor a
+    /// version the server named, so a later run starts over.
+    Unproven,
 }
 
 impl Resumable {
@@ -234,7 +236,7 @@ impl Resumable {
         asked: Option<&Validators>,
     ) -> Resumable {
         if !proven {
-            return Resumable::No;
+            return Resumable::Unproven;
         }
         let ignored = status == StatusCode::OK
             && asked.is_some_and(|kept| headers::same_version(kept, &headers::validators(head)));
@@ -255,7 +257,7 @@ impl Resumable {
         if proven {
             Resumable::Maybe
         } else {
-            Resumable::No
+            Resumable::Unproven
         }
     }
 }
@@ -729,7 +731,7 @@ impl Net {
         };
         let heard = |event: Event| {
             if let Event::Kept { resumable, .. } | Event::Started { resumable, .. } = &event {
-                let continuable = *resumable != Resumable::No;
+                let continuable = !matches!(resumable, Resumable::No | Resumable::Unproven);
                 unfinished.continuable.store(continuable, Ordering::Relaxed);
             }
             on(event)

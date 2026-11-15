@@ -1325,13 +1325,19 @@ fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
             None,
             Resumable::No,
         ),
-        (StatusCode::OK, &ranges[..], false, None, Resumable::No),
+        (
+            StatusCode::OK,
+            &ranges[..],
+            false,
+            None,
+            Resumable::Unproven,
+        ),
         (
             StatusCode::PARTIAL_CONTENT,
             &[][..],
             false,
             None,
-            Resumable::No,
+            Resumable::Unproven,
         ),
         // the rest of the same version was asked for, and all of it came
         (StatusCode::OK, &same[..], true, Some(&kept), Resumable::No),
@@ -1374,7 +1380,7 @@ fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
         );
     }
     assert_eq!(Resumable::kept(true), Resumable::Maybe);
-    assert_eq!(Resumable::kept(false), Resumable::No);
+    assert_eq!(Resumable::kept(false), Resumable::Unproven);
 }
 
 #[test]
