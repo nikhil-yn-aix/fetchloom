@@ -54,6 +54,10 @@ pub(super) struct Status {
     outdated: Vec<String>,
     /// files no dataset places, not placed by fetchloom or changed since, which `sync` keeps.
     extra: Vec<String>,
+    /// the files of `extra` named as the changed copy sync keeps of a file it put back, with that
+    /// file.
+    #[serde(skip)]
+    kept_copies: HashMap<String, String>,
     /// unchanged files fetchloom placed that no dataset needs now, which the next `sync` removes.
     unneeded: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
@@ -606,6 +610,7 @@ fn check(
     if place::untouched(project, &manifest, &survey, &seen, false, &Scope::All)?.is_some() {
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
         status.extra = extra(&survey, &recorded);
+        status.kept_copies = kept_copies(&status.extra, &recorded);
         return Ok((status, manifest, lock_text));
     }
     let planned = plan::from_cache(&manifest, &lock, &cache)?;
@@ -971,7 +976,27 @@ fn compare(
                 .is_some_and(|placed| unsure.contains(placed.dataset.as_str()))
         })
         .partition(|path| going.contains(path));
+    status.kept_copies = kept_copies(&status.extra, &wanted);
     Ok(())
+}
+
+/// the files of `extra` named as sync names the changed copy it keeps of a file of `wanted` it put
+/// back, `<file>.changed` or `<file>.changed.2` and on, each with that file.
+fn kept_copies(extra: &[String], wanted: &HashSet<&str>) -> HashMap<String, String> {
+    extra
+        .iter()
+        .filter_map(|path| {
+            let at = path.rfind(".changed")?;
+            let number = &path[at + ".changed".len()..];
+            let numbered = number
+                .strip_prefix('.')
+                .and_then(|number| number.parse::<u32>().ok())
+                .is_some_and(|number| number >= 2);
+            let file = &path[..at];
+            ((number.is_empty() || numbered) && wanted.contains(file))
+                .then(|| (path.clone(), file.to_owned()))
+        })
+        .collect()
 }
 
 /// the files in the data folder that no dataset places, sorted, but for the staging leftovers of an
@@ -1203,6 +1228,13 @@ fn list(output: &Output, status: &Status) {
                 }
             } else if let Some(said) = said {
                 rows.push((format!("{path} · {said}"), 1));
+            } else if let Some(file) = status.kept_copies.get(path) {
+                rows.push((
+                    format!(
+                        "{path} · a changed copy sync kept of {file}: compare the two, keep what you need, then delete it"
+                    ),
+                    1,
+                ));
             } else if status.shared.contains(path) {
                 rows.push((
                     format!("{path} · changed through a hardlink other projects may share"),

@@ -47,5 +47,6 @@ mod secrets;
 mod sites;
 mod sources;
 mod split;
+mod status;
 mod support;
 mod unattended;

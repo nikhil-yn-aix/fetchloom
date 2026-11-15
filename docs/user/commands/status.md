@@ -90,6 +90,12 @@ an edit through a hardlink, after making the file writable, changes the cache's 
     Damaged data/iris/iris.csv · linked to the cache's copy, which was changed
 ```
 
+after that sync, status lists the kept copy as extra and says what to do with it:
+
+```text
+      Extra data/iris/iris.csv.changed · a changed copy sync kept of data/iris/iris.csv: compare the two, keep what you need, then delete it
+```
+
 a file saved anew, as most editors save, is your own file and stays an edit. a changed hardlink whose shared copy the cache no longer knows appears as edited, followed by `· changed through a hardlink other projects may share`.
 
 an entry in a file's way is listed once as blocked, rather than each file behind it as missing:
