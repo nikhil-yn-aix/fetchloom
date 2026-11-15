@@ -669,15 +669,19 @@ fn peek_cache() -> Result<Cache, Error> {
     })
 }
 
-/// for a command that only frees or checks a cache, as gc and verify do: the default cache folder
-/// when it holds no cache yet, which the first command that needs one makes there, or none when a
-/// cache is there. a folder `FETCHLOOM_CACHE` or the cache setting names that holds none is refused,
-/// so a mistyped one never becomes an empty cache that answers Ok, and the help names where it was
-/// set, which is where a typo would be.
+/// for a command that only frees or checks a cache, as gc and verify do: the cache folder when it
+/// holds no cache yet, which the first command that needs one makes there, or none when a cache is
+/// there. a folder `FETCHLOOM_CACHE` or the cache setting names that is missing is refused, so a
+/// mistyped one never answers Ok, and the help names where it was set, which is where a typo would
+/// be; an empty one is answered as `fetchloom cache` answers it, since a lab makes its shared
+/// cache's folder before anyone syncs.
 fn absent_cache(nothing: &str) -> Result<Option<std::path::PathBuf>, Error> {
     let root = cache_root()?;
     if !crate::cache::absent(&root) {
         return Ok(None);
+    }
+    if root.is_dir() {
+        return Ok(Some(root));
     }
     let chosen = std::env::var_os("FETCHLOOM_CACHE").is_some_and(|value| !value.is_empty());
     let help = if chosen {

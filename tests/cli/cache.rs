@@ -521,11 +521,11 @@ fn the_cache_report_creates_nothing() -> Result {
 }
 
 /// gc and verify work on a cache that is there: a folder `FETCHLOOM_CACHE` or the cache setting
-/// names that holds none, as a mistyped one, is refused and left as it was, with the help naming
-/// where it was set. the default folder before any command made a cache there has nothing to
-/// free or check yet, and gets no cache either.
+/// names that is missing, as a mistyped one is, is refused, with the help naming where it was set.
+/// an empty one, as a lab makes before anyone syncs, and the default folder before any command made
+/// a cache there have nothing to free or check yet, and get no cache either.
 #[test]
-fn gc_and_verify_refuse_a_folder_holding_no_cache() -> Result {
+fn gc_and_verify_refuse_a_missing_folder_and_answer_an_empty_one() -> Result {
     let sandbox = Sandbox::new()?;
     let missing = sandbox.folder("place")?.join("no-cache-yet");
     let empty = sandbox.folder("empty")?;
@@ -550,8 +550,6 @@ fn gc_and_verify_refuse_a_folder_holding_no_cache() -> Result {
         let setting = "the cache setting names that folder: check it for a typo, or change it with `fetchloom settings set cache <folder>`";
         for (folder, set, help) in [
             (&missing, "FETCHLOOM_CACHE", variable),
-            (&empty, "FETCHLOOM_CACHE", variable),
-            (&begun, "FETCHLOOM_CACHE", variable),
             (&missing, "FETCHLOOM_SETTINGS", setting),
         ] {
             let mut command = sandbox.command(args);
@@ -580,6 +578,19 @@ fn gc_and_verify_refuse_a_folder_holding_no_cache() -> Result {
             assert_eq!(error["help"], help, "{args:?} {set}");
         }
         assert!(!missing.exists(), "{args:?}");
+        for folder in [&empty, &begun] {
+            let output = sandbox
+                .command(args)
+                .env("FETCHLOOM_CACHE", folder)
+                .output()?;
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{args:?} {}: {}",
+                folder.display(),
+                text(&output.stdout)?
+            );
+        }
         assert_eq!(fs::read_dir(&empty)?.count(), 0, "{args:?}");
         assert_eq!(fs::read_dir(&begun)?.count(), 1, "{args:?}");
         let default = sandbox
