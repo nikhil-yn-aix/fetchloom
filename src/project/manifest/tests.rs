@@ -260,6 +260,65 @@ fn metadata_data_dirs_are_refused() {
     refuses_metadata("data_dir", "[project]");
 }
 
+/// a data.toml is shared with windows clones, so a `data_dir` or a `path` some disk cannot store is
+/// refused as it is read, on every system, naming the setting and its line, before any download.
+#[test]
+fn a_folder_windows_cannot_store_is_refused_as_data_toml_is_read() {
+    for (table, key, value, reason) in [
+        (
+            "[project]",
+            "data_dir",
+            "NUL",
+            "\"NUL\" is a name windows reserves for devices",
+        ),
+        (
+            "[project]",
+            "data_dir",
+            "data.",
+            "\"data.\" ends with a dot or a space, which windows drops",
+        ),
+        (
+            "[project]",
+            "data_dir",
+            "data:stream",
+            "\"data:stream\" has ':', which windows does not allow in names",
+        ),
+        (
+            "[project]",
+            "data_dir",
+            "inputs/con",
+            "\"con\" is a name windows reserves for devices",
+        ),
+        (
+            "[datasets.iris]\nref = \"https://example.org/iris.csv\"",
+            "path",
+            "iris:stream",
+            "\"iris:stream\" has ':', which windows does not allow in names",
+        ),
+    ] {
+        let error = fails(&format!("{table}\n{key} = '{value}'\n"));
+        assert_eq!(error.kind, Kind::ProjectInvalid, "{value}");
+        assert_eq!(
+            error.message,
+            format!("{key} = \"{value}\" in data.toml is refused because {reason}")
+        );
+        assert_eq!(error.details.len(), 1, "{value}: {:?}", error.details);
+        assert!(
+            error.details[0].ends_with(&format!("{key} = '{value}'")),
+            "{:?}",
+            error.details
+        );
+        assert!(
+            error
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("every system can store")),
+            "{:?}",
+            error.help
+        );
+    }
+}
+
 #[test]
 fn metadata_dataset_paths_are_refused() {
     refuses_metadata("path", "[datasets.x]\nref = \"https://example.org/x\"");

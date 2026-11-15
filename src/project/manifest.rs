@@ -1158,7 +1158,14 @@ impl Reader<'_> {
             .help("use a folder of its own inside the project, such as data"));
         }
         match name::escapes(text) {
-            None => Ok(text.to_owned()),
+            // a data.toml is shared with windows clones, where every file would hit the same name
+            None => match name::unportable(text) {
+                None => Ok(text.to_owned()),
+                Some(reason) => Err(refused(&reason).help(format!(
+                    "choose a {key} every system can store, since clones on windows read the same data.toml{}",
+                    if key == "data_dir" { ", such as data" } else { "" }
+                ))),
+            },
             Some(reason) => Err(refused(reason).help(match key {
                 "path" if text.is_empty() => "use \".\" for the data folder itself",
                 "path" => {
