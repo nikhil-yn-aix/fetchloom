@@ -860,9 +860,9 @@ fn count<T: FromStr + PartialOrd + fmt::Display + Copy>(
 
 /// a byte size as a person writes it or fetchloom prints it: a whole or decimal number, then
 /// maybe a unit, in any case and after a space or not: `B`; `K`, `M`, `G`, `T` or `KiB` to `TiB`
-/// for powers of 1024; `KB` to `TB` for powers of 1000. a bare number is bytes, so `10G`,
-/// `10GiB` and `10.0 GiB` are the same and `10GB` is 10 000 000 000 bytes. none for what is no
-/// size.
+/// for powers of 1024; `KB` to `TB` for powers of 1000. a bare number, which [`sized`] takes
+/// only as 0, is bytes, so `10G`, `10GiB` and `10.0 GiB` are the same and `10GB` is
+/// 10 000 000 000 bytes. none for what is no size.
 fn bytes_in(text: &str) -> Option<u64> {
     let text = text.trim();
     let end = text
@@ -895,8 +895,15 @@ fn bytes_in(text: &str) -> Option<u64> {
     whole.checked_add(fraction)
 }
 
-/// the bytes `text` gives `named`, or the message for what is no size, or a size of none.
+/// the bytes `text` gives `named`, or the message for what is no size, or a size of none. a
+/// number with no unit is refused, as 10 meant as 10G would budget 10 bytes; 0 needs none.
 fn sized(named: &str, text: &str) -> Result<u64, String> {
+    let number = text.trim();
+    if number.bytes().all(|byte| byte.is_ascii_digit()) && number.bytes().any(|byte| byte != b'0') {
+        return Err(format!(
+            "{named} is \"{text}\", and a size needs its unit, as {number}M or {number}G"
+        ));
+    }
     match bytes_in(text) {
         Some(0) => Err(format!(
             "{named} is \"{text}\", and a size is at least 1 byte"
@@ -1256,21 +1263,51 @@ fn boolean(given: &Given<'_>, key: &str, default: bool) -> Result<Set<bool>, Err
     })
 }
 
-/// the whole seconds `key` holds, within `range`, or `default`.
+/// the whole seconds `key` holds, as a number of seconds or with a unit, as `30s`, `2min` or
+/// `1h`, as `fetchloom settings` prints them, within `range`, or `default`.
 fn seconds(
     given: &Given<'_>,
     key: &str,
     range: RangeInclusive<u64>,
     default: Set<Duration>,
 ) -> Result<Set<Duration>, Error> {
-    let as_seconds = Set {
-        value: default.value.as_secs(),
-        origin: default.origin,
+    let Some((text, origin, named)) = given.get(key) else {
+        return Ok(default);
     };
-    count(given, key, range, as_seconds).map(|set| Set {
-        value: Duration::from_secs(set.value),
-        origin: set.origin,
-    })
+    let (low, high) = (range.start(), range.end());
+    seconds_in(&text)
+        .filter(|seconds| range.contains(seconds))
+        .map(|seconds| Set {
+            value: Duration::from_secs(seconds),
+            origin,
+        })
+        .ok_or_else(|| {
+            Error::new(
+                Kind::Usage,
+                format!("{named} is \"{text}\", which is not a time from {low} s to {high} s, as 30s or 2min"),
+            )
+            .help(format!(
+                "{} to use the default of {} s, or set it to a time such as 30s, 2min or 1h",
+                undo(origin, key),
+                default.value.as_secs()
+            ))
+        })
+}
+
+/// the seconds `text` gives: a whole number, then maybe `s`, `min` or `h`, after a space or not.
+fn seconds_in(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let end = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    let (number, unit) = (&text[..end], text[end..].trim_start());
+    let per = match unit.to_ascii_lowercase().as_str() {
+        "" | "s" => 1,
+        "min" => 60,
+        "h" => 3600,
+        _ => return None,
+    };
+    number.parse::<u64>().ok()?.checked_mul(per)
 }
 
 #[cfg(test)]

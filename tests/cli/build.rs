@@ -1663,7 +1663,7 @@ fn a_build_short_of_room_asks_first() -> Result {
     let short = |args: &[&str]| -> Result<std::process::Output> {
         Ok(building_in(&sandbox, &sandbox.work(), args)?
             .env("FETCHLOOM_TEST_FREE", "20")
-            .env("FETCHLOOM_BUILD_FLOOR", "1")
+            .env("FETCHLOOM_BUILD_FLOOR", "1B")
             .output()?)
     };
     let lock = fs::read(sandbox.work().join("data.lock"))?;

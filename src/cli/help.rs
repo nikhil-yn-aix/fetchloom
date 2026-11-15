@@ -75,8 +75,8 @@ const ENVIRONMENT: &str = "fetchloom environment
                        4 by default. raise it if the network drops for minutes.
                        with no network a run first waits for it, up to 5 min
                        at a terminal and 30 s elsewhere; 0 fails at once
-  FETCHLOOM_TIMEOUT    seconds a site may send nothing, or less than 1K, before
-                       a try fails, 1 to 3600; 30 by default
+  FETCHLOOM_TIMEOUT    how long a site may send nothing, or less than 1K, before
+                       a try fails, as 30s or 2min, up to 1h; 30s by default
   FETCHLOOM_ASK_ABOVE  a download bigger than this needs a yes, as 20G;
                        10G by default
   FETCHLOOM_MEMORY     memory for download buffers, as 512M; a quarter of what

@@ -3428,7 +3428,7 @@ fn a_link_is_held_to_the_budget_as_the_disk_stores_the_cache() -> Result {
     sandbox.allow(&second.url);
     let output = sandbox
         .command_in(&sandbox.work(), &["--json", "add", &second.url])
-        .env("FETCHLOOM_CACHE_BUDGET", on_disk.to_string())
+        .env("FETCHLOOM_CACHE_BUDGET", format!("{on_disk}B"))
         .output()?;
     let document = json(&output)?;
     assert_eq!(output.status.code(), Some(1), "{document}");

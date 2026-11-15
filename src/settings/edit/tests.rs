@@ -230,7 +230,7 @@ fn a_tilde_is_the_home_folder_and_a_missing_folder_is_named() {
 fn each_value_is_written_as_toml_reads_it() {
     let (folder, path, var) = settings("settings.toml", None);
     for (key, value) in [
-        ("ask_above", "1000000"),
+        ("ask_above", "1000000B"),
         ("memory", "512M"),
         ("mirrors_only", "1"),
         ("resources", "lean"),
@@ -243,7 +243,7 @@ fn each_value_is_written_as_toml_reads_it() {
     assert!(text.ends_with("\njobs = 5\n"), "{text}");
     assert!(
         text.starts_with(
-            "ask_above = 1000000\nmemory = \"512M\"\nmirrors_only = true\nresources = \"lean\"\npush_to = "
+            "ask_above = \"1000000B\"\nmemory = \"512M\"\nmirrors_only = true\nresources = \"lean\"\npush_to = "
         ),
         "{text}"
     );

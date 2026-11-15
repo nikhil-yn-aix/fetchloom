@@ -538,7 +538,7 @@ fn output_asks_whether_the_bytes_its_file_holds_changed() -> Result {
     let get = |extra: &[&str]| {
         sandbox
             .command(&[&["--json", "get", &server.url, "-o", "data.csv"], extra].concat())
-            .env("FETCHLOOM_ASK_ABOVE", "1")
+            .env("FETCHLOOM_ASK_ABOVE", "1B")
             .output()
     };
     let first = get(&["--yes"])?;
@@ -1416,7 +1416,7 @@ fn an_accessible_terminal_asks_on_plain_lines_and_ci_never_does() -> Result {
         // the plain line that tells the download begins comes as its size is known, as the
         // question does, and never inside it
         command
-            .env("FETCHLOOM_ASK_ABOVE", "1")
+            .env("FETCHLOOM_ASK_ABOVE", "1B")
             .env("FETCHLOOM_ACCESSIBLE", "1")
             .env("FETCHLOOM_TEST_TICKER", "on")
             .env("TERM", "dumb");

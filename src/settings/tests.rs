@@ -70,7 +70,7 @@ fn the_build_floor_is_a_size_or_left_to_the_cache_disk() {
 
 /// no budget unless one is set, and a size the budget cannot read says how to have none.
 /// a size reads as fetchloom prints it, in either kind of unit and any case, with a space or
-/// not, and a bare number is bytes; 0 is told as too small, not as no size.
+/// not, and a number needs its unit; 0 is told as too small, not as no size.
 #[test]
 fn a_size_reads_as_fetchloom_prints_it() {
     let gib = 1 << 30;
@@ -84,12 +84,17 @@ fn a_size_reads_as_fetchloom_prints_it() {
         ("512MiB", 512 << 20),
         ("4 KiB", 4096),
         ("2.5M", 2_621_440),
-        ("10", 10),
         ("512 B", 512),
     ] {
         let settings = read(&[("FETCHLOOM_CACHE_BUDGET", text)], None).unwrap();
         assert_eq!(settings.cache_budget.value, Some(bytes), "{text}");
     }
+    // 10 meant as 10G would budget 10 bytes, so a size needs its unit
+    let error = read(&[("FETCHLOOM_CACHE_BUDGET", "10")], None).unwrap_err();
+    assert_eq!(
+        error.message,
+        "FETCHLOOM_CACHE_BUDGET is \"10\", and a size needs its unit, as 10M or 10G"
+    );
     for text in ["lots", "10 G B", "1e3", "-1", "+1", ".5G", "10XB"] {
         let error = read(&[("FETCHLOOM_ASK_ABOVE", text)], None).unwrap_err();
         assert_eq!(
@@ -476,6 +481,26 @@ fn archives_unpack_within_their_settings_and_a_share_of_the_memory() {
     );
 }
 
+/// a time reads as `fetchloom settings` prints it, in seconds, minutes or hours, or as a bare
+/// number of seconds.
+#[test]
+fn a_time_reads_with_its_unit() {
+    for (text, seconds) in [
+        ("30", 30),
+        ("30s", 30),
+        ("30 s", 30),
+        ("2min", 120),
+        ("1h", 3600),
+    ] {
+        let settings = read(&[("FETCHLOOM_TIMEOUT", text)], None).unwrap();
+        assert_eq!(
+            settings.timeout.value,
+            Duration::from_secs(seconds),
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn a_bad_value_is_a_usage_error_naming_the_variable_and_what_it_takes() {
     for (name, value, said, help) in [
@@ -488,8 +513,8 @@ fn a_bad_value_is_a_usage_error_naming_the_variable_and_what_it_takes() {
         (
             "FETCHLOOM_TIMEOUT",
             "soon",
-            "FETCHLOOM_TIMEOUT is \"soon\", which is not a number from 1 to 3600",
-            "unset FETCHLOOM_TIMEOUT to use the default of 30, or set it to a number from 1 to 3600",
+            "FETCHLOOM_TIMEOUT is \"soon\", which is not a time from 1 s to 3600 s, as 30s or 2min",
+            "unset FETCHLOOM_TIMEOUT to use the default of 30 s, or set it to a time such as 30s, 2min or 1h",
         ),
         (
             "FETCHLOOM_MEMORY",
@@ -500,8 +525,14 @@ fn a_bad_value_is_a_usage_error_naming_the_variable_and_what_it_takes() {
         (
             "FETCHLOOM_TIMEOUT",
             "0",
-            "FETCHLOOM_TIMEOUT is \"0\", which is not a number from 1 to 3600",
-            "unset FETCHLOOM_TIMEOUT to use the default of 30, or set it to a number from 1 to 3600",
+            "FETCHLOOM_TIMEOUT is \"0\", which is not a time from 1 s to 3600 s, as 30s or 2min",
+            "unset FETCHLOOM_TIMEOUT to use the default of 30 s, or set it to a time such as 30s, 2min or 1h",
+        ),
+        (
+            "FETCHLOOM_TIMEOUT",
+            "2h",
+            "FETCHLOOM_TIMEOUT is \"2h\", which is not a time from 1 s to 3600 s, as 30s or 2min",
+            "unset FETCHLOOM_TIMEOUT to use the default of 30 s, or set it to a time such as 30s, 2min or 1h",
         ),
         (
             "FETCHLOOM_ASK_ABOVE",

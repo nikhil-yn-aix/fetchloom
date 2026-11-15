@@ -965,7 +965,7 @@ fn story_lines_wrap_between_words_at_a_narrow_terminal() -> Result {
         vec![crate::support::file(&[0; 1024], "\"v1\"")],
     )?;
     let mut get = sandbox.command(&["get", &server.url, "-o", "dumb-prompt.bin"]);
-    get.env("TERM", "dumb").env("FETCHLOOM_ASK_ABOVE", "100");
+    get.env("TERM", "dumb").env("FETCHLOOM_ASK_ABOVE", "100B");
     let Some((code, screen)) =
         crate::support::typed(&sandbox.work(), &get, "rows 30 cols 60", "", "")?
     else {
