@@ -402,7 +402,7 @@ pub(crate) struct Settings {
     /// whether requests may go to the mirrors alone, never to a source.
     pub(crate) mirrors_only: Set<bool>,
     /// the folder mirror `fetchloom push` writes to when `--to` names none.
-    pub(crate) push_to: Set<Option<PathBuf>>,
+    pub(crate) push_to: Set<Option<Location>>,
     /// the least free space a recipe's step may leave on the disk holding the cache, or none for
     /// the larger of 1 GiB and 1% of that disk.
     pub(crate) build_floor: Set<Option<u64>>,
@@ -513,7 +513,7 @@ impl Settings {
             drive_folders: drive_folders(&given, "drive_folders")?,
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
-            push_to: push_folder(&given, "push_to")?,
+            push_to: push_target(&given, "push_to")?,
             build_floor: optional_size(
                 &given,
                 "build_floor",
@@ -1023,16 +1023,17 @@ fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
     })
 }
 
-/// the folder `key` names for `fetchloom push`, which writes folders only, so a web address is
-/// refused. a relative folder is taken as [`mirrors`] takes one. none when unset or empty.
-fn push_folder(given: &Given<'_>, key: &str) -> Result<Set<Option<PathBuf>>, Error> {
+/// the folder or S3 bucket `key` names for `fetchloom push`, which writes no web server, so a web
+/// address is refused. a relative folder is taken as [`mirrors`] takes one. none when unset or
+/// empty.
+fn push_target(given: &Given<'_>, key: &str) -> Result<Set<Option<Location>>, Error> {
     let Some((value, origin, named)) = given.text(key) else {
         return Ok(Set::default(None));
     };
     // a web address is text, so a name that is not is a folder
     let Some(text) = value.to_str() else {
         return Ok(Set {
-            value: Some(PathBuf::from(value)),
+            value: Some(Location::Folder(PathBuf::from(value))),
             origin,
         });
     };
@@ -1048,21 +1049,23 @@ fn push_folder(given: &Given<'_>, key: &str) -> Result<Set<Option<PathBuf>>, Err
     };
     let shown = crate::shown::mask_typed(text.trim());
     match Location::parse(text, base) {
-        Ok(Location::Folder(folder)) => Ok(Set {
-            value: Some(folder),
-            origin,
-        }),
         Ok(Location::Web(_)) => Err(Error::new(
             Kind::Usage,
-            format!("{named} is \"{shown}\", which is a web address, and push writes to folders"),
+            format!(
+                "{named} is \"{shown}\", which is a web address, and push writes to folders and S3 buckets"
+            ),
         )
         .help(format!(
-            "set it to a folder, such as /mnt/lab/fetchloom, and copy that folder to a server or a bucket with a tool such as rclone; or {}",
+            "set it to a folder, such as /mnt/lab/fetchloom, or a bucket, such as s3://lab-data/fetchloom, and serve that from the web server; or {}",
             undo(origin, key)
         ))),
+        Ok(location) => Ok(Set {
+            value: Some(location),
+            origin,
+        }),
         Err(refusal) => Err(Error::new(
             Kind::Usage,
-            format!("{named} is \"{shown}\", which is no folder: {}", refusal.reason),
+            format!("{named} is \"{shown}\", which is no folder or S3 bucket: {}", refusal.reason),
         )
         .help(format!("{}, or {}", refusal.instead, undo(origin, key)))),
     }

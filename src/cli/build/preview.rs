@@ -176,14 +176,14 @@ impl<'a> Ahead<'a> {
             .iter()
             .filter_map(|location| match location {
                 Location::Folder(root) => Some(root.as_path()),
-                Location::Web(_) => None,
+                Location::Web(_) | Location::S3(_) => None,
             })
             .filter(|root| crate::mirror::folder::probe(root).is_ok())
             .collect();
         let web = mirrors
             .list
             .iter()
-            .filter(|location| !offline && matches!(location, Location::Web(_)))
+            .filter(|location| !offline && !matches!(location, Location::Folder(_)))
             .map(ToString::to_string)
             .collect();
         Ahead {

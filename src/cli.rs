@@ -217,10 +217,14 @@ impl Context {
             credentials,
             split: self.split,
         };
-        let signing = net::s3::Signing::new(
-            self.settings.s3_buckets.value.clone(),
-            Arc::new(crate::machine::env),
-        );
+        // a bucket mirror a person named counts as listed: data.toml can never name a mirror
+        let mut listed = self.settings.s3_buckets.value.clone();
+        for bucket in self.mirrors.mirrors.buckets() {
+            if !listed.contains(bucket) {
+                listed.push(bucket.clone());
+            }
+        }
+        let signing = net::s3::Signing::new(listed, Arc::new(crate::machine::env));
         let google = net::Google::new(
             self.settings.gcs_buckets.value.clone(),
             Arc::new(crate::machine::env),
@@ -250,12 +254,19 @@ impl Context {
             .with_timeout(self.settings.timeout.value);
         let net = if self.mirrors.mirrors.only {
             net.with_mirrors_only(self.mirrors.mirrors.web().cloned().collect())
+                .with_mirror_buckets(self.mirrors.mirrors.buckets().cloned().collect())
         } else {
             net
         };
         // a person names a mirror as they type a link, so it may be a lab server on their network.
         // only its origin is trusted, no other port or scheme of its host
         net.trust(self.mirrors.mirrors.web().map(url::Url::origin));
+        net.trust(
+            self.mirrors
+                .mirrors
+                .buckets()
+                .filter_map(|bucket| bucket.endpoint().cloned()),
+        );
         net
     }
 }

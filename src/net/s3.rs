@@ -224,6 +224,20 @@ impl Signing {
 }
 
 impl Located {
+    /// `bucket`, which a person named, as its requests in `region` locate it, or at its usual
+    /// endpoint when none.
+    pub(crate) fn named(bucket: Bucket, region: Option<String>) -> Located {
+        let region = region.or_else(|| match &bucket.endpoint {
+            Some(url::Origin::Tuple(_, host, _)) => service_region(&host.to_string()),
+            _ => None,
+        });
+        Located {
+            bucket,
+            listed: true,
+            region,
+        }
+    }
+
     /// how the request went out, signed by `signer` or not.
     pub(crate) fn keyed(&self, signer: Option<&Signer>) -> Keyed {
         match signer {
@@ -271,6 +285,18 @@ impl Signer {
     /// the headers that sign a GET of `url` made at `now`: the date, the hash of the empty body,
     /// the session of temporary keys, and the authorization, which holds the signature.
     pub(crate) fn headers(&self, url: &Url, now: SystemTime) -> Vec<(&'static str, String)> {
+        self.headers_for("GET", url, sign::EMPTY, now)
+    }
+
+    /// [`Signer::headers`] for a `method` request whose body hashes to `payload`, the SHA-256 in
+    /// hex that S3 checks the body against before it keeps it.
+    pub(crate) fn headers_for(
+        &self,
+        method: &str,
+        url: &Url,
+        payload: &str,
+        now: SystemTime,
+    ) -> Vec<(&'static str, String)> {
         let keys = &self.keys;
         let time = sign::amz_date(now);
         let host = match (url.host_str(), url.port()) {
@@ -279,7 +305,7 @@ impl Signer {
             (None, Some(_)) => String::new(),
         };
         let mut headers = vec![
-            ("x-amz-content-sha256", sign::EMPTY.to_owned()),
+            ("x-amz-content-sha256", payload.to_owned()),
             ("x-amz-date", time.clone()),
         ];
         if let Some(token) = &keys.token {
@@ -293,10 +319,10 @@ impl Signer {
             service: "s3",
         };
         let request = Request {
-            method: "GET",
+            method,
             url,
             headers: &signed,
-            payload: sign::EMPTY,
+            payload,
         };
         let authorization = sign::authorization(keys, &scope, &request);
         headers.push(("authorization", authorization));
@@ -349,22 +375,61 @@ impl Bucket {
     pub(crate) fn parse(text: &str) -> Option<Bucket> {
         let text = text.trim();
         let text = text.strip_suffix('/').unwrap_or(text);
-        let (endpoint, name) = match text.split_once(':') {
-            None => (None, text),
-            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("s3") => {
-                if let Some(name) = rest.strip_prefix("//") {
-                    (None, name)
-                } else {
-                    let (origin, name) = endpoint(rest)?;
-                    (Some(origin), name)
-                }
-            }
-            Some(_) => return None,
+        if !text.contains(':') {
+            return is_bucket(text).then(|| Bucket {
+                endpoint: None,
+                name: text.to_owned(),
+            });
+        }
+        let (bucket, rest) = Bucket::split(text)?;
+        rest.is_empty().then_some(bucket)
+    }
+
+    /// reads a bucket written as [`Bucket::parse`] reads one with its scheme, and what follows
+    /// its name after a `/`, as `raw/` in `s3://lab-data/raw/`.
+    pub(crate) fn split(text: &str) -> Option<(Bucket, &str)> {
+        let (scheme, rest) = text.split_once(':')?;
+        if !scheme.eq_ignore_ascii_case("s3") {
+            return None;
+        }
+        let (endpoint, path) = if let Some(path) = rest.strip_prefix("//") {
+            (None, path)
+        } else {
+            let (origin, path) = endpoint(rest)?;
+            (Some(origin), path)
         };
-        is_bucket(name).then(|| Bucket {
-            endpoint,
-            name: name.to_owned(),
+        let (name, after) = path.split_once('/').unwrap_or((path, ""));
+        is_bucket(name).then(|| {
+            let bucket = Bucket {
+                endpoint,
+                name: name.to_owned(),
+            };
+            (bucket, after)
         })
+    }
+
+    /// the bucket's name, without its service.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// the link below which the bucket names its objects, ending in `/`: on AWS the bucket's own
+    /// host in `region`, or S3's when none, or a path on S3's host for a dotted name the wildcard
+    /// certificate does not cover; at another service, a path on its origin.
+    pub(crate) fn base(&self, region: Option<&str>) -> Option<Url> {
+        let service = match region {
+            Some(region) => format!("s3.{region}.amazonaws.com"),
+            None => "s3.amazonaws.com".to_owned(),
+        };
+        let name = &self.name;
+        let base = if let Some(origin) = &self.endpoint {
+            format!("{}/{name}/", origin.ascii_serialization())
+        } else if name.contains('.') {
+            format!("https://{service}/{name}/")
+        } else {
+            format!("https://{name}.{service}/")
+        };
+        Url::parse(&base).ok()
     }
 
     /// the bucket a link to one of its objects names: on AWS by its host or first segment,
@@ -531,6 +596,24 @@ pub(crate) fn endpoint(text: &str) -> Option<(url::Origin, &str)> {
         && url.password().is_none()
         && url.path() == "/";
     plain.then(|| (url.origin(), path))
+}
+
+/// the region S3 sends a bucket's requests to when they reached the wrong one: its
+/// `x-amz-bucket-region` header, `header`, else the region or regional endpoint its error
+/// document, `said`, names.
+pub(crate) fn region_named(
+    header: Option<&str>,
+    said: Option<&crate::xml::Element>,
+) -> Option<String> {
+    let named = || {
+        let said = said?;
+        said.text_of("Region")
+            .or_else(|| s3_host(said.text_of("Endpoint")?).and_then(|(_, region)| region))
+    };
+    header
+        .or_else(named)
+        .filter(|region| is_region(region))
+        .map(str::to_owned)
 }
 
 /// whether `name` follows S3's bucket naming rules.

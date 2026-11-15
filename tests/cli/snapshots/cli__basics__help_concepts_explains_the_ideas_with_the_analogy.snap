@@ -34,9 +34,9 @@ command wrote in data.lock and places it in data/ like any dataset.
 place = false keeps a dataset pinned in data.lock but out of data/, as for raw
 data that only a recipe reads. a build takes its files from the cache.
 
-a mirror is a folder or web server that keeps pinned files, such as a lab
-disk. fetchloom asks the mirrors you name before the sources, and
-`fetchloom push` copies a project's pinned files into a folder mirror.
+a mirror is a folder, web server or S3 bucket that keeps pinned files, such
+as a lab disk. fetchloom asks the mirrors you name before the sources, and
+`fetchloom push` copies a project's pinned files into a folder or bucket.
 
 commit data.toml and data.lock with your code, and data.lock.d once it is
 there: each recipe's result and each big dataset keep their file lists in it.

@@ -519,11 +519,9 @@ fn a_push_needs_a_folder_and_never_a_web_address() -> Result {
     assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(error["kind"], "usage");
-    assert!(
-        error["help"]
-            .as_str()
-            .is_some_and(|help| help.contains("rclone")),
-        "{error}"
+    assert_eq!(
+        error["message"],
+        "--to https://data.lab.example/fetchloom is a web address, and push writes to folders and S3 buckets"
     );
     Ok(())
 }

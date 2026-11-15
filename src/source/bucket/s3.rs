@@ -6,7 +6,7 @@ use url::Url;
 use super::{Listed, Object, Prefix, object_url, query};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
-use crate::net::s3::{Keyed, is_region, s3_host};
+use crate::net::s3::{Keyed, is_region, region_named};
 use crate::net::{Api, Response};
 use crate::source::invalid;
 use crate::xml;
@@ -19,20 +19,10 @@ struct Endpoint {
 
 impl Endpoint {
     fn new(prefix: &Prefix, region: Option<&str>) -> Result<Endpoint, Error> {
-        let service = match region {
-            Some(region) => format!("s3.{region}.amazonaws.com"),
-            None => "s3.amazonaws.com".to_owned(),
-        };
-        let bucket = &prefix.bucket;
-        let base = if let Some(origin) = &prefix.endpoint {
-            format!("{}/{bucket}/", origin.ascii_serialization())
-        } else if bucket.contains('.') {
-            format!("https://{service}/{bucket}/")
-        } else {
-            format!("https://{bucket}.{service}/")
-        };
-        let base =
-            Url::parse(&base).map_err(|_| invalid(prefix, "the bucket makes no valid link"))?;
+        let base = prefix
+            .bucket()
+            .base(region)
+            .ok_or_else(|| invalid(prefix, "the bucket makes no valid link"))?;
         Ok(Endpoint { base })
     }
 
@@ -153,17 +143,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
 /// the region an answer sends the bucket to: its `x-amz-bucket-region` header, else the region
 /// or regional endpoint the error names.
 fn region(response: &Response, said: Option<&xml::Element>) -> Option<String> {
-    let named = || {
-        let said = said?;
-        said.text_of("Region")
-            .or_else(|| s3_host(said.text_of("Endpoint")?).and_then(|(_, region)| region))
-            .map(str::to_owned)
-    };
-    response
-        .region
-        .clone()
-        .or_else(named)
-        .filter(|region| is_region(region))
+    region_named(response.region.as_deref(), said)
 }
 
 /// an object of the listing. its `ETag` stands for an MD5 only in an unsigned AWS listing: a

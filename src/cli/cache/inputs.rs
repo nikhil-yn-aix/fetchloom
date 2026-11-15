@@ -444,7 +444,7 @@ fn folders(mirrors: &Mirrors) -> Vec<PathBuf> {
             Location::Folder(root) => {
                 Some(std::path::absolute(root).unwrap_or_else(|_| root.clone()))
             }
-            Location::Web(_) => None,
+            Location::Web(_) | Location::S3(_) => None,
         })
         .collect()
 }

@@ -1578,7 +1578,7 @@ impl<'a> Loop<'a> {
             .mirrors
             .list
             .iter()
-            .filter(|mirror| matches!(mirror, crate::mirror::Location::Web(_)))
+            .filter(|mirror| !matches!(mirror, crate::mirror::Location::Folder(_)))
             .map(ToString::to_string)
             .collect();
         error.help(match web.as_slice() {

@@ -71,7 +71,7 @@ pub(crate) async fn read_tree(net: &Net, base: &Url, tree: &Sha256) -> Result<Tr
 }
 
 /// `parts` below the web mirror at `base`, which ends in `/`.
-fn joined(base: &Url, parts: &[impl AsRef<str>]) -> Url {
+pub(super) fn joined(base: &Url, parts: &[impl AsRef<str>]) -> Url {
     let mut url = base.clone();
     let below: Vec<&str> = parts.iter().map(AsRef::as_ref).collect();
     url.set_path(&format!("{}{}", base.path(), below.join("/")));

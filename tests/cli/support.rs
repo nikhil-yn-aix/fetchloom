@@ -19,6 +19,7 @@ mod paths;
 mod ports;
 mod programs;
 mod running;
+mod s3;
 mod server;
 // marked as test code, which clippy lets print
 #[cfg(test)]
@@ -31,6 +32,7 @@ pub(crate) use paths::workspace;
 pub(crate) use ports::Refusing;
 pub(crate) use programs::{executable, recipe_step};
 pub(crate) use running::Running;
+pub(crate) use s3::S3;
 
 use server::{Connection, ServerTask, Shutdown};
 

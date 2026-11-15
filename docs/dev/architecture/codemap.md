@@ -230,6 +230,7 @@ a run asks its mirrors before any source and checks every file one gives against
 |---|---|---|---|
 | `src/mirror.rs` | the layout folder and web mirrors share; `Mirrors`, the mirrors a run asks in order and whether it may ask nothing else; `Wanted`, a pinned file asked of them; nothing a mirror gives is trusted | `Mirrors`, `Location` | `Wanted` |
 | `src/mirror/folder.rs` | a mirror on a disk this machine reads, its files copied and never linked; `Target` writes one for `push`, checking each file before it takes its name, and `There` is what a mirror holds already | `probe`, `Target` | `Item` |
+| `src/mirror/s3.rs` | a mirror in an S3 bucket below a key prefix: read as a web mirror is, signed as for a listed bucket; `Pusher` writes one for `push`, a HEAD then a PUT S3 checks against the file's SHA-256, or parts past 5 GiB | `probe`, `Pusher` | `Top` |
 | `src/mirror/web.rs` | a mirror on a web server: files through the download pipeline, marker and trees read whole up to 64 MiB | `probe`, `object` |  |
 
 ## cache

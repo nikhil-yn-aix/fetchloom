@@ -11,7 +11,7 @@ use url::Url;
 
 use super::Context;
 use super::fetch::Queue;
-use super::fetch::mirrors::{self, Look};
+use super::fetch::mirrors::Look;
 use crate::error::{Error, Kind};
 use crate::mirror::Wanted;
 use crate::net::{Expect, Fetch, Net, Probed};
@@ -179,7 +179,7 @@ pub(in crate::cli) async fn find(
         if asked.is_empty() {
             break;
         }
-        let held: Vec<bool> = match mirrors::look(&context.mirrors.mirrors.list[index]) {
+        let held: Vec<bool> = match context.mirrors.look(index) {
             Look::Folder(_) if folders == Folders::Skipped => continue,
             Look::Folder(root) => tokio::task::block_in_place(|| {
                 crate::place::run_all(&asked, context.threads.at_most(LOOKS), |at| {

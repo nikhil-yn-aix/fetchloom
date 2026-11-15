@@ -144,7 +144,7 @@ fn the_settings_list_each_mirror_and_refuse_what_is_no_mirror() -> Result {
     assert_eq!(document["errors"][0]["kind"], "usage");
     assert_eq!(
         document["errors"][0]["message"],
-        "FETCHLOOM_MIRRORS holds \"ftp://lab.example/fetchloom\", which is no mirror: a mirror is a folder or an http or https address, not ftp"
+        "FETCHLOOM_MIRRORS holds \"ftp://lab.example/fetchloom\", which is no mirror: a mirror is a folder, an http or https address or an S3 bucket, not ftp"
     );
     Ok(())
 }

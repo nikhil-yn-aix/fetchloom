@@ -259,6 +259,9 @@ pub(crate) struct Net {
     /// in mirror-only mode, the web mirrors' addresses, each ending in `/`: a request goes only
     /// below one of them, and only as a mirror's request.
     mirrors_only: Option<Vec<Url>>,
+    /// the S3 mirrors' buckets, which a mirror's request in mirror-only mode may also ask, in
+    /// whichever region S3 keeps them.
+    mirror_buckets: Vec<s3::Bucket>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
@@ -456,6 +459,13 @@ impl Wire {
     }
 }
 
+/// what a bucket answered one of a push's requests: its status, its headers and its body.
+pub(crate) struct Answered {
+    pub(crate) status: u16,
+    pub(crate) headers: reqwest::header::HeaderMap,
+    pub(crate) body: Vec<u8>,
+}
+
 impl Net {
     pub(crate) fn new(options: Options, work: Arc<Work>, stop: Arc<Stop>, notify: Notify) -> Net {
         let given = options.credentials;
@@ -473,6 +483,7 @@ impl Net {
             azure: Azure::default(),
             refuse_versions: Mutex::default(),
             mirrors_only: None,
+            mirror_buckets: Vec::new(),
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
@@ -593,15 +604,24 @@ impl Net {
         self
     }
 
+    /// lets a mirror's request in mirror-only mode ask the S3 mirrors' `buckets` too.
+    pub(crate) fn with_mirror_buckets(mut self, buckets: Vec<s3::Bucket>) -> Net {
+        self.mirror_buckets = buckets;
+        self
+    }
+
     /// refuses `url` in mirror-only mode unless it is a `mirror`'s request below a mirror's
-    /// address: the same origin and a path inside it. a refused redirect names its sender.
+    /// address, the same origin and a path inside it, or in an S3 mirror's bucket. a refused
+    /// redirect names its sender.
     fn may_ask(&self, url: &Url, mirror: bool, sent_by: Option<&Url>) -> Result<(), Failure> {
         let Some(bases) = &self.mirrors_only else {
             return Ok(());
         };
         let below =
             |base: &Url| url.origin() == base.origin() && url.path().starts_with(base.path());
-        if mirror && bases.iter().any(below) {
+        let in_bucket =
+            || s3::Bucket::holding(url).is_some_and(|bucket| self.mirror_buckets.contains(&bucket));
+        if mirror && (bases.iter().any(below) || in_bucket()) {
             return Ok(());
         }
         let asked = match sent_by {
@@ -681,6 +701,115 @@ impl Net {
             .await?;
         tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
         Ok(response)
+    }
+
+    /// one request a push sends to an S3 bucket a person named, and its answer, whose body may
+    /// hold at most `most` bytes. `make` builds the request on the client for `url`, or in debug
+    /// builds for the test server standing in for it, and signs it for that link. no redirect is
+    /// followed and no stored credential added. the request fails once `moved`, the bytes of its
+    /// body sent so far, stays still as long as an answer may take, so a large body may take its
+    /// time. a failure a retry may get past is tried again, as a download's is, and a stop ends
+    /// it; unless `heeding` is false, as for the request that cleans up after a stop, which goes
+    /// once whatever is asked and leaves its answer unread.
+    ///
+    /// # Errors
+    ///
+    /// offline, an address this run may not ask, no answer after the retries, a body past
+    /// `most`, or a stop.
+    pub(crate) async fn send_to_bucket(
+        &self,
+        url: &Url,
+        heeding: bool,
+        most: usize,
+        moved: &std::sync::atomic::AtomicU64,
+        make: impl Fn(&reqwest::Client, &Url) -> Result<reqwest::RequestBuilder, Error>,
+    ) -> Result<Answered, Error> {
+        if self.offline.enabled() {
+            return Err(Error::new(
+                Kind::OfflineMissing,
+                format!("offline, and this needs an answer from {}", host(url)),
+            )
+            .help(self.offline.retry()));
+        }
+        self.typed
+            .check(url)
+            .map_err(|reason| failure::refused(url, &reason))?;
+        #[cfg(debug_assertions)]
+        let local = api::stand_in(url).inspect(|local| self.typed(local));
+        #[cfg(debug_assertions)]
+        let url = local.as_ref().unwrap_or(url);
+        let wire = self.wire()?;
+        if !heeding {
+            let (client, _) = self
+                .checked_client(wire, Lane::Apart, url)
+                .await
+                .map_err(|failure| failure.into_error(Kind::NetworkUnreachable))?;
+            let request = make(client, url)?;
+            Work::add(&self.work.requests, 1);
+            let deadline = self.connect + self.idle;
+            let response = tokio::time::timeout(deadline, request.send())
+                .await
+                .map_err(|_| {
+                    Error::new(
+                        Kind::NetworkUnreachable,
+                        format!(
+                            "{} did not answer within {} s",
+                            host(url),
+                            deadline.as_secs()
+                        ),
+                    )
+                })?
+                .map_err(|err| {
+                    Error::new(
+                        Kind::NetworkUnreachable,
+                        format!("could not reach {}: {}", host(url), with_causes(&err)),
+                    )
+                })?;
+            return Ok(Answered {
+                status: response.status().as_u16(),
+                headers: response.headers().clone(),
+                body: Vec::new(),
+            });
+        }
+        let mut retry = failure::Retry::new(self, url);
+        loop {
+            let permits = self.permit(url).await?;
+            let tried = async {
+                let (client, carrier) = self.checked_client(wire, Lane::Apart, url).await?;
+                let request = make(client, url).map_err(Failure::Final)?;
+                Work::add(&self.work.requests, 1);
+                let quiet = self.connect + self.idle;
+                let mut response = tokio::select! {
+                    sent = request.send() => match sent {
+                        Ok(response) => response,
+                        Err(err) => return Err(unanswered(wire, url, carrier.as_ref(), &err, self.offline).await),
+                    },
+                    () = still(moved, quiet) => return Err(failure::transient(format!("{} took nothing and said nothing for {} s", host(url), quiet.as_secs()))),
+                    () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
+                };
+                self.outage.answered();
+                if failure::is_transient(response.status()) {
+                    return Err(failure::refusal(url, response.status(), response.headers()));
+                }
+                let too_large = || format!("{} sent more than a short answer", host(url));
+                let body = self
+                    .read_body(url, &mut response, "the answer", most, too_large, |_| {
+                        std::future::ready(Ok(()))
+                    })
+                    .await?;
+                Ok(Answered {
+                    status: response.status().as_u16(),
+                    headers: response.headers().clone(),
+                    body,
+                })
+            };
+            let failure = match tried.await {
+                Ok(answered) => return Ok(answered),
+                Err(failure) => failure,
+            };
+            drop(permits);
+            retry.after(failure, false).await?;
+        }
     }
 
     /// a GET to `url`, shaped by `shape`, following redirects one checked hop at a time and
@@ -1159,6 +1288,19 @@ async fn watched<'c>(
     match carrier {
         Some(carrier) => (carrier, wire.proxies.watch(carrier).await),
         None => std::future::pending().await,
+    }
+}
+
+/// resolves once `moved` has not changed for `quiet`, checked each `quiet`.
+async fn still(moved: &std::sync::atomic::AtomicU64, quiet: Duration) {
+    let mut seen = moved.load(std::sync::atomic::Ordering::Relaxed);
+    loop {
+        tokio::time::sleep(quiet).await;
+        let now = moved.load(std::sync::atomic::Ordering::Relaxed);
+        if now == seen {
+            return;
+        }
+        seen = now;
     }
 }
 

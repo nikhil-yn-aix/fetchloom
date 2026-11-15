@@ -84,11 +84,13 @@ on disk: nothing, or the one file -o names, which it never replaces without --fo
 
     pub(super) const PUSH: &str = "examples:
   fetchloom push --to /mnt/lab/fetchloom
+  fetchloom push --to s3://lab-data/fetchloom
   fetchloom push iris --dry-run
   fetchloom push --inputs clean
-  fetchloom push --to /media/usb/fetchloom --json
 
-on disk: copies the files data.lock lists from the cache into the mirror folder, which it starts when the folder is new or empty. what the cache lacks it takes from the data folder or downloads first. it never changes the project. --dry-run writes nothing";
+on disk: copies the files data.lock lists from the cache into the mirror, which it starts in a folder that is new or empty, or a bucket prefix with no fetchloom-mirror file. what the cache lacks it takes from the data folder or downloads first. it never changes the project. --dry-run writes nothing
+
+in a bucket: each file goes up once, checked by S3 against its SHA-256 and signed with the AWS keys fetchloom finds, as for s3_buckets. a key S3 refuses is named, with what the bucket's policy must grant it";
 
     pub(super) const PATH: &str = "examples:
   fetchloom path iris
@@ -511,8 +513,8 @@ pub(crate) struct Global {
     )]
     pub(crate) directory: Option<PathBuf>,
 
-    /// ask the mirror at this web address or folder for files before their sources. repeat it
-    /// for more
+    /// ask the mirror at this folder, web address or S3 bucket, as `s3://bucket/prefix`, for
+    /// files before their sources. repeat it for more
     #[arg(long, value_name = "url", global = true, help_heading = GLOBAL)]
     pub(crate) mirror: Vec<String>,
 
@@ -559,7 +561,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom export [options] [name]...", help_template = TEMPLATE, after_help = examples::EXPORT)]
     Export(Export),
 
-    /// copy the files data.lock lists into a folder mirror
+    /// copy the files data.lock lists into a folder or S3 bucket mirror
     #[command(override_usage = "fetchloom push [options] [name]...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(PUSH_DRY_RUN)), after_help = examples::PUSH)]
     Push(Push),
 
@@ -1091,9 +1093,10 @@ pub(crate) struct Push {
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) names: Vec<String>,
 
-    /// the mirror folder to copy the files into; the `push_to` setting names it otherwise. a new
-    /// or empty folder becomes a mirror
-    #[arg(long, value_name = "folder", help_heading = "options")]
+    /// the mirror to copy the files into: a folder, or an S3 bucket as `s3://bucket/prefix`; the
+    /// `push_to` setting names it otherwise. a new or empty folder, or a prefix with no
+    /// fetchloom-mirror file, becomes a mirror
+    #[arg(long, value_name = "mirror", help_heading = "options")]
     pub(crate) to: Option<PathBuf>,
 
     /// also push the datasets the named recipes are made from, and what those are made from,

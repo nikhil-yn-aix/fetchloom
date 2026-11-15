@@ -253,10 +253,10 @@ fn rows(context: &Context) -> Vec<Shown> {
     let push_to = settings.push_to.value.as_ref();
     shown.push(Shown {
         name: "push_to",
-        value: push_to.map_or(Value::Null, |folder| json!(folder.display().to_string())),
+        value: push_to.map_or(Value::Null, |target| json!(target.to_string())),
         origin: vec![settings.push_to.origin],
         variable: crate::settings::variable("push_to"),
-        said: push_to.map_or_else(|| "none".to_owned(), |folder| folder.display().to_string()),
+        said: push_to.map_or_else(|| "none".to_owned(), ToString::to_string),
         only_variable: false,
     });
     shown.push(build_floor);

@@ -1,6 +1,7 @@
 //! `fetchloom push`: the files data.lock pins, copied from this machine's cache into a folder
-//! mirror with the lists of what their archives unpack to. it writes only the mirror, and the cache
-//! for a file it lacks, taken in as a sync would; it never changes the project or builds.
+//! mirror or an S3 bucket's, with the lists of what their archives unpack to. it writes only the
+//! mirror, and the cache for a file it lacks, taken in as a sync would; it never changes the
+//! project or builds.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -19,6 +20,7 @@ use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Failed, Fault, Item, Put, Refused, State, Target, There};
+use crate::mirror::s3::{self, Pusher};
 use crate::mirror::{Location, OBJECTS, TREES};
 use crate::project::Project;
 use crate::project::lock::archives::Archive;
@@ -32,9 +34,9 @@ use crate::{plan, recipe, units};
 /// what a push did, or with `--dry-run` would do, as `--json` prints it.
 #[derive(Serialize)]
 pub(super) struct Report {
-    /// the mirror's folder.
-    target: PathBuf,
-    /// whether the push started a mirror in that folder.
+    /// the mirror's folder, or its bucket and prefix as `s3://bucket/prefix`.
+    target: String,
+    /// whether the push started a mirror there.
     started: bool,
     /// the datasets named, or none when the push named none.
     selected: Option<Vec<String>>,
@@ -136,9 +138,25 @@ struct Asking {
     from: Vec<String>,
 }
 
+/// where a push writes: a folder, or a prefix in an S3 bucket.
+#[derive(Clone)]
+enum To {
+    Folder(PathBuf),
+    Bucket(Arc<Pusher>),
+}
+
+impl std::fmt::Display for To {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            To::Folder(root) => write!(f, "{}", root.display()),
+            To::Bucket(pusher) => write!(f, "{}", pusher.top()),
+        }
+    }
+}
+
 /// what a push found before writing anything.
 struct Planned {
-    target: PathBuf,
+    target: To,
     state: State,
     selected: Option<Vec<String>>,
     datasets: Vec<String>,
@@ -167,9 +185,13 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     let datasets = selected(&manifest, &args.names, args.inputs);
     if datasets.is_empty() {
         context.output.done("Ok", &everything(&datasets));
-        let target = reached(target);
+        let target = match target {
+            Location::Folder(root) => reached(root).display().to_string(),
+            other => other.to_string(),
+        };
         return Ok(Report::empty(target, args.dry.dry_run));
     }
+    let target = opened(context, target)?;
     let lock = project.lock()?;
     let scope = Scope::Only(datasets.iter().cloned().collect());
     locked(
@@ -255,9 +277,9 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     Ok(report)
 }
 
-/// the folder to push to, as `--to` names it, else the `push_to` setting; `usage` when neither
-/// names one, or `--to` names a web address.
-fn target(context: &Context, args: &args::Push) -> Result<PathBuf, Error> {
+/// the folder or S3 bucket to push to, as `--to` names it, else the `push_to` setting; `usage`
+/// when neither names one, or `--to` names a web address.
+fn target(context: &Context, args: &args::Push) -> Result<Location, Error> {
     let Some(to) = &args.to else {
         let push_to = &context.settings.push_to;
         return push_to.value.clone().ok_or_else(|| {
@@ -272,24 +294,51 @@ fn target(context: &Context, args: &args::Push) -> Result<PathBuf, Error> {
             }
         });
     };
-    // a web address is text, so a name that is not is a folder
+    // a web address or a bucket is text, so a name that is not is a folder
     let Some(text) = to.to_str() else {
-        return Ok(to.clone());
+        return Ok(Location::Folder(to.clone()));
     };
-    let shown = crate::shown::mask_query(text);
+    let shown = crate::shown::mask_typed(text);
     match Location::parse(text, None) {
-        Ok(Location::Folder(folder)) => Ok(folder),
-        Ok(Location::Web(_)) => Err(Error::new(
-            Kind::Usage,
-            format!("--to {shown} is a web address, and push writes to folders"),
-        )
-        .help("give --to a folder, and copy that folder to a server or a bucket with a tool such as rclone")),
+        Ok(Location::Web(_)) => Err(web_refused(text)),
+        Ok(location) => Ok(location),
         Err(refusal) => Err(Error::new(
             Kind::Usage,
-            format!("--to {shown} is no folder: {}", refusal.reason),
+            format!("--to {shown} is no folder or S3 bucket: {}", refusal.reason),
         )
         .help(refusal.instead)),
     }
+}
+
+/// where `target` is written: a folder as the system reaches it, or a bucket with the keys the
+/// AWS settings give for it.
+fn opened(context: &Context, target: Location) -> Result<To, Error> {
+    match target {
+        Location::S3(top) => Ok(To::Bucket(Arc::new(Pusher::new(
+            Arc::new(context.net()),
+            top,
+            Arc::clone(&context.stop),
+        )?))),
+        Location::Folder(root) => Ok(To::Folder(reached(root))),
+        Location::Web(base) => Err(web_refused(base.as_str())),
+    }
+}
+
+/// the error for `--to`, `text`, naming a web address.
+fn web_refused(text: &str) -> Error {
+    let shown = crate::shown::mask_typed(text);
+    Error::new(
+        Kind::Usage,
+        format!("--to {shown} is a web address, and push writes to folders and S3 buckets"),
+    )
+    .help("give --to a folder, or a bucket such as s3://lab-data/fetchloom, and serve what it holds from the web server")
+}
+
+/// runs `work`, a push's requests to a bucket, to its end on the command's runtime.
+fn waiting<T>(work: impl std::future::Future<Output = Result<T, Error>>) -> Result<T, Error> {
+    let runtime = tokio::runtime::Handle::try_current()
+        .map_err(|err| Error::new(Kind::LocalIo, format!("cannot reach the bucket: {err}")))?;
+    runtime.block_on(work)
 }
 
 /// `target` as an absolute path without `.` or `..`, the folder the system reaches: on unix a link
@@ -332,28 +381,37 @@ fn selected(manifest: &Manifest, names: &[String], inputs: bool) -> Vec<String> 
     chosen.into_iter().map(str::to_owned).collect()
 }
 
-/// what pushing `datasets` into the folder `target` needs, what the mirror holds of it already, one
-/// look a file, and what neither the mirror nor the cache holds; fails for a folder that cannot
-/// take a push or a mirror that cannot be looked in.
+/// what pushing `datasets` into `target` needs, what the mirror holds of it already, one look a
+/// file, and what neither the mirror nor the cache holds; fails for a folder that cannot take a
+/// push, or a mirror that cannot be looked in or refuses this machine's keys.
 fn plan(
     context: &Context,
     manifest: &Manifest,
     lock: &Lock,
     cache: &Cache,
-    target: PathBuf,
+    target: To,
     selected: Option<Vec<String>>,
     datasets: Vec<String>,
 ) -> Result<Planned, Error> {
-    let target = reached(target);
     let Wanted { needed, unknown } = needed(manifest, lock, cache, &datasets)?;
-    let state = folder::look(&target).map_err(|refused| refusal(&target, refused))?;
     let items: Vec<Item> = needed.iter().map(|needed| needed.item).collect();
-    let there = folder::survey(&target, state, &items, context.threads).map_err(|err| {
-        Error::io(
-            format_args!("could not look in the mirror {}", target.display()),
-            &err,
-        )
-    })?;
+    let (state, there) = match &target {
+        To::Folder(root) => {
+            let state = folder::look(root).map_err(|refused| refusal(root, refused))?;
+            let there = folder::survey(root, state, &items, context.threads).map_err(|err| {
+                Error::io(
+                    format_args!("could not look in the mirror {}", root.display()),
+                    &err,
+                )
+            })?;
+            (state, there)
+        }
+        To::Bucket(pusher) => waiting(async {
+            let state = pusher.look().await?;
+            let there = pusher.survey(state, &items).await?;
+            Ok((state, there))
+        })?,
+    };
     // an archive whose files are not known yet has them to copy, as far as anyone can tell
     let copying: BTreeSet<&str> = needed
         .iter()
@@ -780,7 +838,7 @@ fn ask(context: &Context, planned: &Planned) -> Result<(), Error> {
         ("them", "their")
     };
     let why = reasons(&planned.asks);
-    let target = planned.target.display();
+    let target = &planned.target;
     let names: Vec<&str> = planned
         .asks
         .iter()
@@ -870,7 +928,10 @@ fn reasons(asks: &[Asking]) -> String {
 /// files, and says whether it started the mirror and what each write gave, in `planned.needed`
 /// order. the first write that fails ends it; files written before keep their names.
 fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, Vec<Put>), Error> {
-    let root = &planned.target;
+    let root = match &planned.target {
+        To::Folder(root) => root,
+        To::Bucket(pusher) => return write_bucket(context, cache, planned, pusher),
+    };
     let (mut target, started) =
         Target::open(root, Arc::clone(&context.stop)).map_err(|refused| refusal(root, refused))?;
     if started {
@@ -919,6 +980,103 @@ fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, V
         })?;
     }
     Ok((started, puts))
+}
+
+/// [`write()`] for a mirror in a bucket: the marker when the bucket had none, then the files and the
+/// lists, each a PUT the bucket checks against its SHA-256, or an upload in parts.
+fn write_bucket(
+    context: &Context,
+    cache: &Cache,
+    planned: &Planned,
+    pusher: &Arc<Pusher>,
+) -> Result<(bool, Vec<Put>), Error> {
+    let copy: Vec<(&Needed, There)> = planned
+        .needed
+        .iter()
+        .zip(&planned.there)
+        .filter(|(_, there)| **there != There::Present)
+        .map(|(needed, there)| (needed, *there))
+        .collect();
+    let (files, lists): (Vec<_>, Vec<_>) = copy
+        .into_iter()
+        .partition(|(needed, _)| !matches!(needed.source, Source::List(_)));
+    let mut uploads = Vec::with_capacity(lists.len());
+    for (needed, there) in &lists {
+        let Source::List(archive) = needed.source else {
+            continue;
+        };
+        let Some(members) = cache.unpacked(&archive, Some(&needed.item.digest)) else {
+            return Err(failed_list(
+                Failed::File(
+                    uploads.len(),
+                    Fault::Source(std::io::ErrorKind::NotFound.into()),
+                ),
+                &lists,
+                Path::new(""),
+            ));
+        };
+        uploads.push(s3::Upload {
+            item: needed.item,
+            there: *there,
+            source: s3::Source::Made(crate::cache::tree(&members).into_bytes()),
+        });
+    }
+    let started = planned.state == State::New;
+    let top = pusher.top().to_string();
+    let output = &context.output;
+    waiting(async {
+        if started {
+            pusher.start().await?;
+            output.step("Started", &format!("a mirror in {top}"));
+        }
+        let total = files.iter().map(|(needed, _)| needed.item.size).sum();
+        let what = units::count(files.len() as u64, "file", "files");
+        let bar = output.bar("Pushing", what.clone());
+        bar.start(Some(total), 0);
+        let sizes = files.iter().map(|(needed, _)| Some(needed.item.size));
+        let ticker = output.ticker("Pushing", what, sizes);
+        let shown = Arc::new(Mutex::new(Some((bar, ticker))));
+        let advance = Arc::clone(&shown);
+        let sent: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |size| {
+            if let Some((bar, ticker)) = &*advance.lock().unwrap_or_else(PoisonError::into_inner) {
+                bar.advance(size);
+                ticker.advance(size);
+            }
+        });
+        let pushing = files
+            .iter()
+            .map(|(needed, there)| s3::Upload {
+                item: needed.item,
+                there: *there,
+                source: s3::Source::Cached(cache.object_path(&needed.item.digest)),
+            })
+            .collect();
+        let put = pusher.put_all(pushing, sent).await;
+        drop(shown.lock().unwrap_or_else(PoisonError::into_inner).take());
+        let mut puts = put.map_err(|failed| {
+            let (at, fault) = *failed;
+            bucket_failure(fault, files[at].0)
+        })?;
+        let listed = pusher
+            .put_all(uploads, Arc::new(|_| {}))
+            .await
+            .map_err(|failed| {
+                let (at, fault) = *failed;
+                bucket_failure(fault, lists[at].0)
+            })?;
+        puts.extend(listed);
+        Ok((started, puts))
+    })
+}
+
+/// the error for `fault`, from pushing `needed` into a bucket.
+fn bucket_failure(fault: s3::Fault, needed: &Needed) -> Error {
+    match fault {
+        s3::Fault::Bucket(error) if error.kind == Kind::Interrupted => Stop::stopped(),
+        s3::Fault::Bucket(error) => error,
+        s3::Fault::Source(err) => unreadable(&needed.label, &err),
+        s3::Fault::OtherBytes => other_bytes(&needed.label),
+    }
 }
 
 /// writes `files` from the cache as [`Target::put_all`] does, with a bar of the bytes written,
@@ -1046,18 +1204,8 @@ fn failure(fault: Fault, needed: &Needed, root: &Path) -> Error {
             format_args!("could not push {label} to {}", root.display()),
             &err,
         ),
-        Fault::Source(err) => Error::io(
-            format_args!("could not read the cache's copy of {label}"),
-            &err,
-        ),
-        Fault::OtherBytes => Error::new(
-            Kind::IntegrityMismatch,
-            format!("the cache's copy of {label} does not hold its pinned bytes, so it was not pushed"),
-        )
-        .help(format!(
-            "run `fetchloom cache verify`, which notes it, then `{}` to fetch it again",
-            super::project::command("sync")
-        )),
+        Fault::Source(err) => unreadable(label, &err),
+        Fault::OtherBytes => other_bytes(label),
         Fault::ReadBack => Error::new(
             Kind::IntegrityMismatch,
             format!(
@@ -1075,6 +1223,26 @@ fn failure(fault: Fault, needed: &Needed, root: &Path) -> Error {
         )
         .help("stop whatever else writes into that folder, such as a sync client, a backup tool or antivirus, then push again"),
     }
+}
+
+/// the error for the cache's copy of the file a person knows as `label` that could not be read.
+fn unreadable(label: &str, err: &std::io::Error) -> Error {
+    Error::io(
+        format_args!("could not read the cache's copy of {label}"),
+        err,
+    )
+}
+
+/// the error for the cache's copy of `label` holding other bytes than its pin.
+fn other_bytes(label: &str) -> Error {
+    Error::new(
+        Kind::IntegrityMismatch,
+        format!("the cache's copy of {label} does not hold its pinned bytes, so it was not pushed"),
+    )
+    .help(format!(
+        "run `fetchloom cache verify`, which notes it, then `{}` to fetch it again",
+        super::project::command("sync")
+    ))
 }
 
 /// the error for a folder that cannot take a push.
@@ -1111,7 +1279,7 @@ enum Outcome<'a> {
 /// the report of `planned` as it ended: what it set out to write and wrote, or would write.
 fn report(planned: &Planned, outcome: Outcome<'_>) -> Report {
     let dry_run = matches!(outcome, Outcome::DryRun);
-    let mut report = Report::empty(planned.target.clone(), dry_run);
+    let mut report = Report::empty(planned.target.to_string(), dry_run);
     let (started, puts) = match outcome {
         Outcome::Written(started, puts) => (started, Some(puts)),
         Outcome::Stopped => (false, None),
@@ -1169,7 +1337,7 @@ fn downloads(planned: &Planned) -> (Vec<Fetch>, Vec<String>) {
 
 impl Report {
     /// a report of nothing pushed yet into `target`.
-    fn empty(target: PathBuf, dry_run: bool) -> Report {
+    fn empty(target: String, dry_run: bool) -> Report {
         Report {
             target,
             started: false,
@@ -1244,7 +1412,7 @@ fn copied(needed: &Needed) -> Copied {
 /// the lines of a push that wrote: what it copied, what it replaced, what it found there.
 fn tell(context: &Context, planned: &Planned, report: &Report) {
     let output = &context.output;
-    let target = planned.target.display();
+    let target = &planned.target;
     if report.copied > 0 {
         output.step(
             "Pushed",
@@ -1296,7 +1464,7 @@ fn tell(context: &Context, planned: &Planned, report: &Report) {
 /// the lines of a dry run: what a push would take in, write, find there and ask about.
 fn tell_dry(context: &Context, planned: &Planned, report: &Report) {
     let output = &context.output;
-    let target = planned.target.display();
+    let target = &planned.target;
     if !planned.taking.is_empty() {
         let bytes = planned
             .taking

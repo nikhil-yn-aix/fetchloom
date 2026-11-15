@@ -12,7 +12,7 @@ use crate::cli::Context;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Gave, Missing};
-use crate::mirror::{Location, Mirrors, Wanted, web};
+use crate::mirror::{Location, Mirrors, Wanted, s3, web};
 use crate::net::{Fetched, Net};
 use crate::output::Warning;
 use crate::project::lock::archives::Archive;
@@ -40,6 +40,8 @@ struct Answers {
     down: HashMap<usize, String>,
     /// what a mirror answered for a file or tree it did not give.
     lacked: HashMap<(usize, Sha256), String>,
+    /// the link below which each S3 mirror found there keeps its files, in its bucket's region.
+    bases: HashMap<usize, url::Url>,
 }
 
 /// why a mirror is skipped for the rest of the run: what to warn, the help, and its answer in
@@ -68,6 +70,16 @@ impl Mirrored {
 
     fn lacked(&self, index: usize, digest: Sha256, said: String) {
         self.answers().lacked.insert((index, digest), said);
+    }
+
+    /// the link the web or S3 mirror `index` at `location` keeps its files below, once
+    /// [`Mirrored::usable`] found it there.
+    fn base(&self, index: usize, location: &Location) -> Option<url::Url> {
+        match location {
+            Location::Web(base) => Some(base.clone()),
+            Location::S3(_) => self.answers().bases.get(&index).cloned(),
+            Location::Folder(_) => None,
+        }
     }
 
     /// what each mirror said of the file pinned to `digest`, in order, or that none can be asked
@@ -108,7 +120,8 @@ impl Mirrored {
     }
 
     /// whether mirror `index` may be asked: its marker was found, once a run. one without it is
-    /// told once and skipped, a web mirror is never asked offline, and a stop while asking fails.
+    /// told once and skipped, a web or S3 mirror is never asked offline, and a stop while asking
+    /// fails.
     async fn usable(
         &self,
         context: &Context,
@@ -127,11 +140,18 @@ impl Mirrored {
         }
         let skip = match location {
             Location::Folder(root) => folder_missing(location, folder::probe(root).err()),
-            Location::Web(_) if net.offline().enabled() => Some(Skip {
+            Location::Web(_) | Location::S3(_) if net.offline().enabled() => Some(Skip {
                 warning: None,
                 said: "not asked offline".to_owned(),
             }),
             Location::Web(base) => web_missing(location, web::probe(net, base).await?),
+            Location::S3(top) => match s3::probe(net, top).await? {
+                s3::Look::There(base) => {
+                    self.answers().bases.insert(index, base);
+                    None
+                }
+                look => bucket_missing(location, top, look),
+            },
         };
         match skip {
             None => {
@@ -143,6 +163,18 @@ impl Mirrored {
                 Ok(false)
             }
         }
+    }
+
+    /// how mirror `index` is asked whether it holds a file, as [`fill`] asks it for one: a web or
+    /// S3 mirror below the link [`Mirrored::up`] found it at, a bucket's in the region S3 named.
+    pub(in crate::cli) fn look(&self, index: usize) -> Look<'_> {
+        let location = &self.mirrors.list[index];
+        let base = match location {
+            Location::Folder(root) => return Look::Folder(root),
+            Location::Web(base) => base.clone(),
+            Location::S3(top) => self.base(index, location).unwrap_or_else(|| top.link(None)),
+        };
+        Look::Ask(Box::new(move |want| web::object(&base, want)))
     }
 
     /// the mirrors this run may ask, by their place in its list, each found or skipped once a run
@@ -168,14 +200,6 @@ pub(in crate::cli) enum Look<'m> {
     Folder(&'m std::path::Path),
     /// a mirror asked over the network, by the request this makes for a file's object.
     Ask(Box<dyn Fn(&Wanted) -> crate::net::Fetch + Send + Sync + 'm>),
-}
-
-/// how the mirror at `location` is asked whether it holds a file, as [`fill`] asks it for one.
-pub(in crate::cli) fn look(location: &Location) -> Look<'_> {
-    match location {
-        Location::Folder(root) => Look::Folder(root),
-        Location::Web(base) => Look::Ask(Box::new(move |want| web::object(base, want))),
-    }
 }
 
 /// why the folder mirror at `location` is skipped, when its look found it `missing`.
@@ -235,6 +259,45 @@ fn web_missing(location: &Location, look: web::Look) -> Option<Skip> {
     })
 }
 
+/// why the S3 mirror at `location`, `top`, is skipped, after its marker was asked for.
+fn bucket_missing(location: &Location, top: &s3::Top, look: s3::Look) -> Option<Skip> {
+    let (warning, help, said) = match look {
+        s3::Look::There(_) => return None,
+        s3::Look::NoMarker => (
+            format!("the mirror {location} holds no fetchloom-mirror file, so this run skips it"),
+            "check that the prefix names a mirror's top".to_owned(),
+            "no fetchloom-mirror file".to_owned(),
+        ),
+        s3::Look::NoBucket => (
+            format!("the bucket of the mirror {location} does not exist, so this run skips it"),
+            "check the bucket's name: names are lowercase and exact".to_owned(),
+            "no such bucket".to_owned(),
+        ),
+        s3::Look::Refused(keyed) => (
+            format!("the mirror {location} refused to be read, so this run skips it"),
+            s3::Look::refused_help(top, keyed.as_ref()),
+            "refused".to_owned(),
+        ),
+        s3::Look::Answered(status) => (
+            format!("the mirror {location} answered {status}, so this run skips it"),
+            "try again later, or ask whoever keeps the mirror".to_owned(),
+            format!("answered {status}"),
+        ),
+        s3::Look::Failed(error) => (
+            format!(
+                "could not reach the mirror {location}: {}, so this run skips it",
+                error.message
+            ),
+            "check the address, and that this machine can reach it".to_owned(),
+            error.message,
+        ),
+    };
+    Some(Skip {
+        warning: Some((warning, help)),
+        said,
+    })
+}
+
 /// what to do about a web mirror that answered `status` instead of a file.
 fn refused_help(location: &Location, status: u16) -> String {
     match (status, location) {
@@ -247,7 +310,7 @@ fn refused_help(location: &Location, status: u16) -> String {
 }
 
 /// the mirrors this run asks: those `given` with `--mirror`, then the settings' list. `usage` for a
-/// `--mirror` that is no folder or web address, or `mirrors_only` with no mirror to ask.
+/// `--mirror` that is no folder, web address or S3 bucket, or `mirrors_only` with no mirror to ask.
 pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirrors, Error> {
     let mut flagged = Vec::with_capacity(given.len());
     for text in given {
@@ -256,7 +319,7 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
                 Kind::Usage,
                 format!(
                     "--mirror {} is no mirror: {}",
-                    crate::shown::mask_query(text),
+                    crate::shown::mask_typed(text),
                     refusal.reason
                 ),
             )
@@ -426,13 +489,14 @@ pub(in crate::cli) async fn fill(
         if ask.is_empty() || !mirrored.usable(context, net, index, location).await? {
             continue;
         }
-        let stored = match location {
-            Location::Folder(root) => {
+        let stored = match (location, mirrored.base(index, location)) {
+            (Location::Folder(root), _) => {
                 from_folder(context, cache, index, location, root, ask).await?
             }
-            Location::Web(base) => {
-                from_web(context, net, cache, index, location, base, ask).await?
+            (Location::Web(_) | Location::S3(_), Some(base)) => {
+                from_web(context, net, cache, index, location, &base, ask).await?
             }
+            (Location::Web(_) | Location::S3(_), None) => continue,
         };
         wanted.retain(|want| !stored.contains(&want.digest));
         if wanted.is_empty() {
@@ -493,8 +557,9 @@ async fn from_folder(
     Ok(stored)
 }
 
-/// downloads `ask` from the web mirror `index` at `base` as any download, question included, and
-/// says which files it stored. a mirror that refuses or fails is skipped for the rest of the run.
+/// downloads `ask` from the web or S3 mirror `index` at `base` as any download, question
+/// included, and says which files it stored. a mirror that refuses or fails is skipped for the rest
+/// of the run.
 async fn from_web(
     context: &Context,
     net: &Arc<Net>,
@@ -654,12 +719,17 @@ async fn tree_from_mirrors(
                     Err(err) => Got::Trouble(crate::error::said(&err)),
                 }
             }
-            Location::Web(base) => match web::read_tree(net, base, &tree).await? {
-                web::Tree::Bytes(bytes) => Got::Bytes(bytes),
-                web::Tree::Absent => Got::Absent,
-                web::Tree::Answered(status) => Got::Trouble(format!("answered {status}")),
-                web::Tree::Failed(error) => Got::Trouble(error.message),
-            },
+            Location::Web(_) | Location::S3(_) => {
+                let Some(base) = mirrored.base(index, location) else {
+                    continue;
+                };
+                match web::read_tree(net, &base, &tree).await? {
+                    web::Tree::Bytes(bytes) => Got::Bytes(bytes),
+                    web::Tree::Absent => Got::Absent,
+                    web::Tree::Answered(status) => Got::Trouble(format!("answered {status}")),
+                    web::Tree::Failed(error) => Got::Trouble(error.message),
+                }
+            }
         };
         let bytes = match got {
             Got::Bytes(bytes) => bytes,

@@ -630,7 +630,7 @@ fn gone(
 
 /// moves to `unbuilt` each recipe whose result sync would leave out, a missing or outdated file of
 /// it found nowhere: not in the cache, the data folder, a folder mirror or the sync's downloads.
-/// with a web mirror set nothing moves, as only a sync asks one.
+/// with a web or S3 mirror set nothing moves, as only a sync asks one.
 fn unbuilt_here(
     status: &mut Status,
     manifest: &Manifest,
@@ -639,7 +639,7 @@ fn unbuilt_here(
     cache: &Cache,
     mirrors: &Mirrors,
 ) {
-    if mirrors.web().next().is_some() {
+    if mirrors.any_remote() {
         return;
     }
     let folders: Vec<&std::path::Path> = mirrors
@@ -647,7 +647,7 @@ fn unbuilt_here(
         .iter()
         .filter_map(|location| match location {
             Location::Folder(root) => Some(root.as_path()),
-            Location::Web(_) => None,
+            Location::Web(_) | Location::S3(_) => None,
         })
         .filter(|root| crate::mirror::folder::probe(root).is_ok())
         .collect();

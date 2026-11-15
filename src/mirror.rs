@@ -1,6 +1,6 @@
-//! mirrors: folders and web servers standing in for a file's source, holding pinned files under
-//! their SHA-256. a mirror is never trusted: the cache keeps only what matches its pin. both lay
-//! files out alike:
+//! mirrors: folders, web servers and S3 buckets standing in for a file's source, holding pinned
+//! files under their SHA-256. a mirror is never trusted: the cache keeps only what matches its pin.
+//! each lays files out alike:
 //!
 //! ```text
 //! fetchloom-mirror           first line "fetchloom mirror 1"
@@ -9,6 +9,7 @@
 //! ```
 
 pub(crate) mod folder;
+pub(crate) mod s3;
 pub(crate) mod web;
 
 use std::fmt;
@@ -32,13 +33,22 @@ pub(crate) enum Location {
     Folder(PathBuf),
     /// an http or https address, ending in `/`.
     Web(Url),
+    /// a key prefix in an S3 bucket, as `s3://lab-data/fetchloom`.
+    S3(s3::Top),
 }
 
 impl Location {
-    /// reads a mirror as a person writes it: text with `://` is a web address and anything else a
-    /// folder, as `C:\lab`, a relative one from `base` when given. a [`Refusal`] says what to do.
+    /// reads a mirror as a person writes it: text with `s3:` is a bucket, as the `s3_buckets`
+    /// setting writes one, then text with `://` is a web address and anything else a folder, as
+    /// `C:\lab`, a relative one from `base` when given. a [`Refusal`] says what to do.
     pub(crate) fn parse(text: &str, base: Option<&Path>) -> Result<Location, Refusal> {
         let text = text.trim();
+        if text
+            .get(..3)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("s3:"))
+        {
+            return s3::Top::parse(text).map(Location::S3);
+        }
         if !text.contains("://") {
             let folder = PathBuf::from(text);
             return Ok(Location::Folder(match base {
@@ -62,9 +72,10 @@ impl Location {
             scheme => {
                 return Err(Refusal {
                     reason: format!(
-                        "a mirror is a folder or an http or https address, not {scheme}"
+                        "a mirror is a folder, an http or https address or an S3 bucket, not {scheme}"
                     ),
-                    instead: "write an http or https address, or a folder".to_owned(),
+                    instead: "write an http or https address, s3://bucket/prefix, or a folder"
+                        .to_owned(),
                 });
             }
         }
@@ -97,6 +108,7 @@ impl fmt::Display for Location {
         match self {
             Location::Folder(root) => write!(f, "{}", root.display()),
             Location::Web(base) => f.write_str(base.as_str().trim_end_matches('/')),
+            Location::S3(top) => top.fmt(f),
         }
     }
 }
@@ -143,8 +155,23 @@ impl Mirrors {
     pub(crate) fn web(&self) -> impl Iterator<Item = &Url> {
         self.list.iter().filter_map(|location| match location {
             Location::Web(base) => Some(base),
-            Location::Folder(_) => None,
+            Location::Folder(_) | Location::S3(_) => None,
         })
+    }
+
+    /// the buckets of the S3 mirrors, which a person named, so their keys may sign for them.
+    pub(crate) fn buckets(&self) -> impl Iterator<Item = &crate::net::s3::Bucket> {
+        self.list.iter().filter_map(|location| match location {
+            Location::S3(top) => Some(top.bucket()),
+            Location::Folder(_) | Location::Web(_) => None,
+        })
+    }
+
+    /// whether any mirror is asked over the network: a web server or a bucket.
+    pub(crate) fn any_remote(&self) -> bool {
+        self.list
+            .iter()
+            .any(|location| !matches!(location, Location::Folder(_)))
     }
 }
 
@@ -196,7 +223,7 @@ mod tests {
             ("file:///mnt/lab", "write the folder path itself"),
             (
                 "ftp://lab.example/m",
-                "write an http or https address, or a folder",
+                "write an http or https address, s3://bucket/prefix, or a folder",
             ),
             (
                 "https://ada:secret@lab.example/m",

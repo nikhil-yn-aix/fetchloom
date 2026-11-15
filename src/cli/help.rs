@@ -45,9 +45,9 @@ command wrote in data.lock and places it in data/ like any dataset.
 place = false keeps a dataset pinned in data.lock but out of data/, as for raw
 data that only a recipe reads. a build takes its files from the cache.
 
-a mirror is a folder or web server that keeps pinned files, such as a lab
-disk. fetchloom asks the mirrors you name before the sources, and
-`fetchloom push` copies a project's pinned files into a folder mirror.
+a mirror is a folder, web server or S3 bucket that keeps pinned files, such
+as a lab disk. fetchloom asks the mirrors you name before the sources, and
+`fetchloom push` copies a project's pinned files into a folder or bucket.
 
 commit data.toml and data.lock with your code, and data.lock.d once it is
 there: each recipe's result and each big dataset keep their file lists in it.
@@ -105,12 +105,13 @@ const ENVIRONMENT: &str = "fetchloom environment
                        private google drive folders and files your google
                        credentials may read, by id or sharing link,
                        separated by commas
-  FETCHLOOM_MIRRORS    folders or web addresses to copy files from before
+  FETCHLOOM_MIRRORS    folders, web addresses or S3 buckets, as
+                       s3://lab-data/fetchloom, to copy files from before
                        their sources, separated by commas
   FETCHLOOM_MIRRORS_ONLY
                        true asks the mirrors alone, never a source
-  FETCHLOOM_PUSH_TO    the folder fetchloom push copies files into, unless
-                       --to names one
+  FETCHLOOM_PUSH_TO    the folder or S3 bucket fetchloom push copies files
+                       into, unless --to names one
   FETCHLOOM_BUILD_FLOOR
                        the least free space a build's step may leave on the
                        cache's disk, as 20G; 1G or 1% of that disk by default

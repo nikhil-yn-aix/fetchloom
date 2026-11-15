@@ -1052,13 +1052,13 @@ fn every_documented_variable_is_known() {
 }
 
 #[test]
-fn push_to_is_a_folder_from_the_variable_or_else_the_file() {
+fn push_to_is_a_folder_or_a_bucket_from_the_variable_or_else_the_file() {
     assert_eq!(read(&[], None).unwrap().push_to, Set::default(None));
     let set = read(&[("FETCHLOOM_PUSH_TO", " /mnt/lab/fetchloom ")], None).unwrap();
     assert_eq!(
         set.push_to,
         Set {
-            value: Some(PathBuf::from("/mnt/lab/fetchloom")),
+            value: Some(Location::Folder(PathBuf::from("/mnt/lab/fetchloom"))),
             origin: Origin::Environment
         }
     );
@@ -1068,13 +1068,20 @@ fn push_to_is_a_folder_from_the_variable_or_else_the_file() {
     assert_eq!(
         set.push_to,
         Set {
-            value: Some(PathBuf::from("/home/ada/.config/fetchloom/mirror")),
+            value: Some(Location::Folder(PathBuf::from(
+                "/home/ada/.config/fetchloom/mirror"
+            ))),
             origin: Origin::File
         }
     );
+    let set = read(&[("FETCHLOOM_PUSH_TO", "s3://lab-data/fetchloom")], None).unwrap();
+    assert_eq!(
+        set.push_to.value.map(|location| location.to_string()),
+        Some("s3://lab-data/fetchloom".to_owned())
+    );
 }
 
-/// push writes folders only; a bucket or a server gets the folder through rclone.
+/// push writes folders and buckets; a web server serves what one of them holds.
 #[test]
 fn push_to_a_web_address_is_a_usage_error() {
     let error = read(
@@ -1085,12 +1092,12 @@ fn push_to_a_web_address_is_a_usage_error() {
     assert_eq!(error.kind, Kind::Usage);
     assert_eq!(
         error.message,
-        "FETCHLOOM_PUSH_TO is \"https://data.lab.example/fetchloom\", which is a web address, and push writes to folders"
+        "FETCHLOOM_PUSH_TO is \"https://data.lab.example/fetchloom\", which is a web address, and push writes to folders and S3 buckets"
     );
     assert_eq!(
         error.help.as_deref(),
         Some(
-            "set it to a folder, such as /mnt/lab/fetchloom, and copy that folder to a server or a bucket with a tool such as rclone; or unset FETCHLOOM_PUSH_TO"
+            "set it to a folder, such as /mnt/lab/fetchloom, or a bucket, such as s3://lab-data/fetchloom, and serve that from the web server; or unset FETCHLOOM_PUSH_TO"
         )
     );
     let error = Settings::read(
