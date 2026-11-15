@@ -24,7 +24,7 @@ names, as data.toml gives them, limit the sync to those datasets, as [named data
 |---|---|
 | `--force` | replace edited files, and files fetchloom did not place, at the paths `data.lock` lists, naming each replaced file, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder. it finds changes by size and time; add `--verify` for changes that kept both |
 | `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI. given names, only their entries are checked |
-| `--verify` | check the SHA-256 of every placed file, and put back those that changed though their size and time did not |
+| `--verify` | check the SHA-256 of every placed file and of each cached file it places, and put back or download again those that changed though their size and time did not |
 | `--strict` | fail with `data.not_ready`, exit 1, when the data asked for is not ready to use once the sync is done, naming each file or dataset with what makes it ready. the sync does the same work and keeps edits as without it, as [local changes](#local-changes) shows |
 | `-n`, `--dry-run` | plan locking, downloads, placement and removal without applying project or cache changes |
 
@@ -153,7 +153,7 @@ a changed hardlink shared by other projects, whose cached copy the cache no long
 
 an entry in a pinned file's way, such as a link at its path or a file where its folder belongs, stays without `--force`, with kept reason `blocked` and its path as `blocked_by`. with `--force`, sync removes it, a link itself and never what it points to; a folder that holds anything stays even then. a file fetchloom placed that no dataset needs now is removed first, so when a pinned file becomes a folder of files, or the other way round, one sync places the new files.
 
-sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` checks the hash of every placed file too, and puts back one whose bytes changed though its size and time did not, without `--force`. a dataset that [waits for its file list](../reference/data-lock.md#big-datasets) has nothing in place, so the closing line counts only the datasets placed and names it, as `Synced 1 dataset into data · clean waits for its file list` or `Ok all pinned files but clean's are in place by size and time, nothing to do`.
+sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` checks the hash of every placed file too, and puts back one whose bytes changed though its size and time did not, without `--force`. it hashes each file it takes from the cache as well, so a cached file that changed under its size and time, as a cache restored from elsewhere can hold, is downloaded again with a `cache.changed` warning rather than placed. a dataset that [waits for its file list](../reference/data-lock.md#big-datasets) has nothing in place, so the closing line counts only the datasets placed and names it, as `Synced 1 dataset into data · clean waits for its file list` or `Ok all pinned files but clean's are in place by size and time, nothing to do`.
 
 if registering with the cache fails, sync still succeeds, with a warning that `cache gc` may not keep the project's files; check the cache's permissions and run sync again.
 

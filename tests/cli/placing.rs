@@ -2922,6 +2922,64 @@ fn verify_finds_and_puts_back_a_change_that_kept_its_size_and_time() -> Result {
     Ok(())
 }
 
+/// a fresh clone's `sync --locked --verify` checks the cached bytes it places: an object changed
+/// under its size and time, as a cache restored from elsewhere can hold, is fetched again, never
+/// placed.
+#[test]
+fn verify_checks_the_cached_bytes_a_fresh_clone_places() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\n", server.url),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let object = crate::recipes::object(&sandbox.cache(), V1);
+    let modified = fs::metadata(&object)?.modified()?;
+    let mut changed = V1.to_vec();
+    changed[0] = b'S';
+    edit(&object, &changed)?;
+    set_time(&object, modified)?;
+    let mut sealed = fs::metadata(&object)?.permissions();
+    sealed.set_readonly(true);
+    fs::set_permissions(&object, sealed)?;
+    let placed = clone.join("data").join("iris").join("iris.csv");
+
+    let offline = sandbox
+        .command_in(&clone, &["sync", "--locked", "--verify", "--offline"])
+        .output()?;
+    let stderr = text(&offline.stderr)?;
+    assert_eq!(offline.status.code(), Some(20), "{stderr}");
+    assert!(!placed.exists(), "{stderr}");
+    assert!(
+        stderr
+            .contains("the cache's copy of data/iris/iris.csv changed, so it is downloaded again"),
+        "{stderr}"
+    );
+    let verified = sandbox
+        .command_in(&clone, &["sync", "--locked", "--verify"])
+        .output()?;
+
+    let stderr = text(&verified.stderr)?;
+    assert_eq!(verified.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the changed copy is fetched again"
+    );
+    Ok(())
+}
+
 /// a copy whose size or time changed is the project's own, so it stays until --force.
 #[test]
 fn verify_keeps_an_edit_that_shows() -> Result {

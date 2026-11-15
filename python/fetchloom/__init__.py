@@ -170,8 +170,9 @@ def sync(
     ``lock.outdated`` instead of updating a missing or out-of-date data.lock, for the named
     datasets alone when ``names`` names some, and kind ``build.needed`` for a recipe data.lock
     does not pin as building it now would make, which only ``fetchloom build`` changes.
-    ``verify=True`` checks the SHA-256 of every placed file, as ``sync --verify`` does, and puts
-    back one whose bytes changed though its size and time did not.
+    ``verify=True`` checks the SHA-256 of every placed file and of each cached file it places, as
+    ``sync --verify`` does, and puts back or downloads again one whose bytes changed though its
+    size and time did not.
     """
     arguments = _options(["sync"], yes, offline, locked)
     if verify:

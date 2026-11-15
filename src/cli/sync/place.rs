@@ -21,7 +21,7 @@ use super::disk::{Blocker, Entry, Freeing, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
 use crate::project::lock::{Lock, LockedFile};
@@ -582,6 +582,89 @@ impl<'a> Placing<'a> {
             .filter(|target| absent.contains(&target.sha256))
             .map(|target| target.dataset.to_owned())
             .collect()
+    }
+
+    /// hashes, for `--verify`, each cached object placing takes, and marks one whose bytes changed
+    /// though its size did not, as a cache restored from elsewhere can hold one, so the run fetches
+    /// it again rather than placing it, with a warning naming a file it was for. a link the survey
+    /// found changed is that object, already fetched again. `output` shows a bar of the bytes; an
+    /// object that cannot be read stops the check.
+    pub(crate) fn check_cached(&self, cache: &Cache, output: &Output) -> Result<(), Error> {
+        let mut unique = HashSet::new();
+        let objects: Vec<(Sha256, u64, &str)> = self
+            .targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(target, action)| {
+                needs_bytes(action)
+                    && !self.survey.elsewhere.contains(&target.path)
+                    && unique.insert(target.sha256)
+            })
+            .map(|(target, _)| (target.sha256, target.size, target.path.as_str()))
+            .filter(|(digest, size, _)| {
+                fs::symlink_metadata(cache.object_path(digest))
+                    .is_ok_and(|found| found.is_file() && found.len() == *size)
+            })
+            .collect();
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let total = objects
+            .iter()
+            .fold(0_u64, |sum, (_, size, _)| sum.saturating_add(*size));
+        let _span = tracing::debug_span!("check_cached", objects = objects.len()).entered();
+        let what = crate::units::count(objects.len() as u64, "cached file", "cached files");
+        let bar = output.bar("Checking", what.clone());
+        bar.start(Some(total), 0);
+        let ticker = output.ticker("Checking", what, [Some(total)]);
+        let read = |bytes| {
+            bar.advance(bytes);
+            ticker.advance(bytes);
+        };
+        let path: place::FilePath<'_, (Sha256, u64, &str)> =
+            &|(digest, ..)| std::borrow::Cow::Owned(cache.object_path(digest));
+        let ahead = place::ReadAhead::when_cold(&objects, path);
+        let intact = place::run_hashes(
+            &objects,
+            total,
+            self.survey.threads,
+            ahead.as_ref(),
+            |(digest, size, _)| {
+                let file = crate::volume::read_unfollowed(&cache.object_path(digest))?;
+                let block = Block::sized(size.saturating_add(1));
+                Sha256::of_reader_telling(file, block, &read).map(|actual| actual == *digest)
+            },
+        );
+        drop((bar, ticker));
+        for ((digest, _, path), intact) in objects.iter().zip(intact) {
+            let object = cache.object_path(digest);
+            match intact {
+                Ok(true) => {}
+                Ok(false) => {
+                    cache.mark_changed(digest).map_err(|error| {
+                        doubtful(&Doubt {
+                            object,
+                            changed: true,
+                            error,
+                        })
+                    })?;
+                    output.warn(
+                        Warning::CacheChanged,
+                        &format!("the cache's copy of {path} changed, so it is downloaded again"),
+                    );
+                }
+                // a file gone since the look is missing, which the run fetches
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(doubtful(&Doubt {
+                        object,
+                        changed: false,
+                        error,
+                    }));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// what [`Placing::missing`] lists, found without sealing or marking any cached object, for

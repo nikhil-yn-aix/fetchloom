@@ -128,6 +128,8 @@ pub(super) struct Loop<'a> {
     places: AtomicBool,
     /// whether relocking downloads the datasets only their sources' digests pin, as a sync does.
     fills: bool,
+    /// whether placing hashes every cached file it takes first, as `sync --verify` asks.
+    verifies: bool,
     /// what relocking told ahead and fetched, which placing's downloads finish telling.
     ahead: Mutex<Option<Ahead>>,
 }
@@ -173,6 +175,7 @@ impl<'a> Loop<'a> {
             readying: "build",
             places: AtomicBool::new(false),
             fills: false,
+            verifies: false,
             ahead: Mutex::default(),
         }
     }
@@ -180,6 +183,13 @@ impl<'a> Loop<'a> {
     /// relocking downloads each dataset in scope only its source's digests pin, and pins it whole.
     pub(super) fn filling(mut self) -> Self {
         self.fills = true;
+        self
+    }
+
+    /// placing hashes every cached file it takes first, when `verify` says so, so a file changed
+    /// in the cache is fetched again rather than placed.
+    pub(super) fn verifying(mut self, verify: bool) -> Self {
+        self.verifies = verify;
         self
     }
 
@@ -364,6 +374,9 @@ impl<'a> Loop<'a> {
         let mut placing =
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
+        if self.verifies {
+            placing.check_cached(&self.cache, &self.context.output)?;
+        }
         self.ask_room(lock, &placing)?;
         // the first failure that leaves files for a later run waits until the rest is in
         let mut failed = None;

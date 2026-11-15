@@ -468,7 +468,8 @@ async fn sync_held(
     let old = read.map(|(lock, _)| lock);
     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
         .within(scope)
-        .filling();
+        .filling()
+        .verifying(args.verify);
     let Outcome {
         lock_changed,
         pins,

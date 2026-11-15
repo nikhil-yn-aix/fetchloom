@@ -68,7 +68,7 @@ runners inside a lab or company network can take pinned files from a [mirror](mi
 fetchloom sync --locked --verify --yes
 ```
 
-it hashes every placed file, downloads again any whose bytes differ from `data.lock`, and keeps the changed copy beside it as `<path>.changed`, with a warning. it reads every byte of the data, so it takes longer than plain `--locked`.
+it hashes every placed file and every cached file it places, as on a fresh runner whose cache was restored, downloads again any whose bytes differ from `data.lock`, and keeps the changed copy beside it as `<path>.changed`, with a warning. it reads every byte of the data, so it takes longer than plain `--locked`.
 
 ## recipes
 

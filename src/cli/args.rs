@@ -1039,8 +1039,8 @@ pub(crate) struct Sync {
     #[command(flatten)]
     pub(crate) dry: DryRun,
 
-    /// check the SHA-256 of every placed file, and put back those that changed though their
-    /// size and time did not
+    /// check the SHA-256 of every placed file and of each cached file it places, and put back
+    /// or download again those that changed though their size and time did not
     #[arg(long, help_heading = "options")]
     pub(crate) verify: bool,
 
