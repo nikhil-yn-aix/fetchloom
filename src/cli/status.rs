@@ -173,18 +173,17 @@ pub(super) fn run(
         sources::askable(context)?;
     }
     let project = super::project::find(&context.output)?;
-    let status = check(
+    let (mut status, manifest, lock) = check(
         &project,
         context.threads,
         &context.stop,
         &context.mirrors.mirrors,
         verify.then_some(&context.output),
     )?;
-    let mut status = status;
     let downloads = super::fetch::askable(context, std::mem::take(&mut status.downloads));
     status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
-    warn_git(output, &project)?;
+    warn_git(output, &project, &manifest, lock.as_deref());
     list(output, &status);
     if sum_up(output, &status) {
         let total = &status.to_download;
@@ -306,7 +305,7 @@ fn hint_unbuilt(output: &Output, status: &Status) {
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
-    let status = check(
+    let (status, manifest, lock) = check(
         project,
         context.threads,
         &context.stop,
@@ -314,13 +313,12 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
         None,
     )?;
     let output = &context.output;
-    warn_git(output, project)?;
+    warn_git(output, project, &manifest, lock.as_deref());
     if !sum_up(output, &status) {
         return Ok(status);
     }
     let status_command = super::project::command("status");
     if status.sync_repairs_all() {
-        let (_, manifest) = project.manifest()?;
         output.hint(&format!(
             "`{}` puts the pinned files in {}/; `{status_command}` lists them",
             super::project::command("sync"),
@@ -334,12 +332,10 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
 
 /// warns of the files a commit would leave out that a clone needs: lists data.lock names and code
 /// recipes take in, and of lists data.lock no longer names, which a commit should not take.
-fn warn_git(output: &Output, project: &Project) -> Result<(), Error> {
+fn warn_git(output: &Output, project: &Project, manifest: &Manifest, lock: Option<&str>) {
     warn_untracked(output, project);
-    warn_unnamed(output, project);
-    let (_, manifest) = project.manifest()?;
-    super::project::warn_recipe_code(output, project, &manifest);
-    Ok(())
+    warn_unnamed(output, project, lock);
+    super::project::warn_recipe_code(output, project, manifest);
 }
 
 /// the most lists a warning about lists nothing reads names in its command; `-v` names each.
@@ -348,9 +344,9 @@ const NAMED_LISTS: usize = 5;
 /// warns of the lists in data.lock.d that data.lock no longer names, as after `git checkout` of an
 /// older data.lock, which `git add data.lock.d` would commit. the help names the command that
 /// removes them, since status deletes nothing and only data.lock's next write sweeps them.
-fn warn_unnamed(output: &Output, project: &Project) {
+fn warn_unnamed(output: &Output, project: &Project, lock: Option<&str>) {
     use crate::project::lock::{self, lists};
-    let Ok(text) = std::fs::read_to_string(project.root.join(lock::FILE)) else {
+    let Some(text) = lock else {
         return;
     };
     let Some(entries) = lists::folder(&project.root)
@@ -359,7 +355,7 @@ fn warn_unnamed(output: &Output, project: &Project) {
     else {
         return;
     };
-    let named: HashSet<String> = lock::parts(&text).into_iter().collect();
+    let named: HashSet<String> = lock::parts(text).into_iter().collect();
     let mut unnamed: Vec<String> = entries
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
@@ -528,27 +524,27 @@ fn unbuilt(
 
 /// compares the data folder with data.lock by what the disk says, or with `verify` by hashing every
 /// placed file under its bar. a settled project is answered as sync finds it, without a plan, and a
-/// result is looked for in the cache and folder `mirrors` only, as status makes no request.
+/// result is looked for in the cache and folder `mirrors` only, as status makes no request. it
+/// hands back data.toml and data.lock's text as it read them, so the warnings read neither again.
 fn check(
     project: &Project,
     threads: Threads,
     stop: &Stop,
     mirrors: &Mirrors,
     verify: Option<&Output>,
-) -> Result<Status, Error> {
+) -> Result<(Status, Manifest, Option<String>), Error> {
     let (text, manifest) = project.manifest()?;
-    let read = project.lock_and_text()?;
+    let (read, lock_text) = project.lock_and_text()?.unzip();
     let seen = place::Seen {
         manifest: digest::sha256(text.as_bytes()),
-        lock: read
+        lock: lock_text
             .as_ref()
-            .map(|(_, text)| digest::sha256(text.as_bytes())),
+            .map(|text| digest::sha256(text.as_bytes())),
     };
     let lockless = read.is_none();
     // a sync carries a pin over to the name data.toml gives it now, so status reads data.lock
     // as that sync would leave it, and names what it renames
-    let (lock, carried) =
-        super::sync::rename::forecast(&manifest, read.map(|(lock, _)| lock).unwrap_or_default());
+    let (lock, carried) = super::sync::rename::forecast(&manifest, read.unwrap_or_default());
     let renamed: BTreeMap<String, String> = carried
         .into_iter()
         .map(|rename| (rename.new, rename.old))
@@ -610,7 +606,7 @@ fn check(
     if place::untouched(project, &manifest, &survey, &seen, false, &Scope::All)?.is_some() {
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
         status.extra = extra(&survey, &recorded);
-        return Ok(status);
+        return Ok((status, manifest, lock_text));
     }
     let planned = plan::from_cache(&manifest, &lock, &cache)?;
     status.not_unpacked = planned
@@ -638,7 +634,8 @@ fn check(
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
-    Ok(status)
+    drop(planned);
+    Ok((status, manifest, lock_text))
 }
 
 /// `manifest` as a plain sync places it, without the datasets dropped here, which `status` names:
@@ -1483,6 +1480,24 @@ mod tests {
             assert_eq!(status.unbuilt.len(), usize::from(unbuilt), "{mirrors:?}");
             assert_eq!(status.missing.is_empty(), unbuilt, "{mirrors:?}");
         }
+    }
+
+    /// status reads data.toml once: the warnings after its check use what the check read.
+    #[test]
+    fn status_reads_data_toml_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("data.toml"),
+            "[datasets.iris]\nref = \"zenodo:1\"\n",
+        )
+        .unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let context = crate::cli::project::tests::offline_context();
+        let before = crate::project::manifest::tests::reads();
+        brief(&context, &project).unwrap();
+        assert_eq!(crate::project::manifest::tests::reads() - before, 1);
     }
 
     #[test]
