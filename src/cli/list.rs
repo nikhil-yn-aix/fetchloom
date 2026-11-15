@@ -755,25 +755,10 @@ mod tests {
     #[test]
     fn the_heading_names_the_dataset_beside_its_license() {
         let mut dataset = Listed {
-            name: "iris".to_owned(),
             reference: Some("hf:datasets/scikit-learn/iris".to_owned()),
-            from: None,
-            resolved: None,
             files: Some(4),
             bytes: Some(18_534),
-            folder: "data/iris".to_owned(),
-            placed: true,
-            dropped: false,
-            waiting: None,
-            usual_folder: true,
-            title: None,
-            license: Some("cc0-1.0".to_owned()),
-            doi: None,
-            access: None,
-            locked_files: None,
-            downloaded: None,
-            pinned_by: None,
-            held: None,
+            ..zenodo("iris", Some("cc0-1.0"))
         };
         assert_eq!(
             heading(&dataset),
@@ -837,7 +822,7 @@ mod tests {
         assert_eq!(value["datasets"][1]["placed"], true);
     }
 
-    /// a placed dataset of one file from zenodo, with `license`.
+    /// a placed dataset of one file from zenodo, with `license`; a test changes what it is about.
     fn zenodo(name: &str, license: Option<&str>) -> Listed {
         Listed {
             name: name.to_owned(),
@@ -922,25 +907,8 @@ mod tests {
     #[test]
     fn a_long_source_is_cut_in_the_middle() {
         let listed = |name: &str, reference: &str, license: Option<&str>| Listed {
-            name: name.to_owned(),
             reference: Some(reference.to_owned()),
-            from: None,
-            resolved: None,
-            files: Some(1),
-            bytes: Some(4551),
-            folder: format!("data/{name}"),
-            placed: true,
-            dropped: false,
-            waiting: None,
-            usual_folder: true,
-            title: None,
-            license: license.map(str::to_owned),
-            doi: None,
-            access: None,
-            locked_files: None,
-            downloaded: None,
-            pinned_by: None,
-            held: Some(Vec::new()),
+            ..zenodo(name, license)
         };
         let datasets = [
             listed(
@@ -990,25 +958,8 @@ mod tests {
     #[test]
     fn a_creative_commons_link_shows_as_its_id() {
         let listed = |name: &str, license: &str| Listed {
-            name: name.to_owned(),
             reference: Some(format!("arxiv:{name}")),
-            from: None,
-            resolved: Some(format!("arxiv:{name}@v1")),
-            files: Some(1),
-            bytes: Some(4551),
-            folder: format!("data/{name}"),
-            placed: true,
-            dropped: false,
-            waiting: None,
-            usual_folder: true,
-            title: None,
-            license: Some(license.to_owned()),
-            doi: None,
-            access: Some(Access::Public),
-            locked_files: Some(Vec::new()),
-            downloaded: None,
-            pinned_by: None,
-            held: Some(Vec::new()),
+            ..zenodo(name, Some(license))
         };
         let datasets = [
             listed("a", "http://creativecommons.org/licenses/by-nc-nd/4.0/"),
@@ -1051,25 +1002,10 @@ mod tests {
     #[test]
     fn every_cell_shows_its_control_characters_escaped() {
         let dataset = Listed {
-            name: "iris".to_owned(),
             reference: Some("https://lab.example/x\u{1b}[2J".to_owned()),
-            from: None,
-            resolved: None,
-            files: Some(1),
-            bytes: Some(4551),
             folder: "data/ir\u{9b}is".to_owned(),
-            placed: true,
-            dropped: false,
-            waiting: None,
             usual_folder: false,
-            title: None,
-            license: Some("\u{1b}]0;TITLE\u{7}\u{9b}31m".to_owned()),
-            doi: None,
-            access: Some(Access::Public),
-            locked_files: None,
-            downloaded: None,
-            pinned_by: None,
-            held: None,
+            ..zenodo("iris", Some("\u{1b}]0;TITLE\u{7}\u{9b}31m"))
         };
         let full = table(std::slice::from_ref(&dataset), None, UNICODE);
         assert!(

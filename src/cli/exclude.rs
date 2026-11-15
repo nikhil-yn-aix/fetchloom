@@ -1310,35 +1310,12 @@ mod tests {
     /// the import tiny, `folders` folders of `each` files, with an empty cache of its own.
     fn tiny(folders: usize, each: usize) -> (Manifest, Lock, tempfile::TempDir, Cache) {
         let manifest = Manifest::parse("[datasets.tiny]\nref = \"local\"\n").unwrap();
-        let source = manifest.datasets["tiny"].source().unwrap();
-        let files = (0..folders * each)
-            .map(|n| {
-                let path = format!("d{:03}/f{n:05}.txt", n / each);
-                LockedFile {
-                    sha256: crate::digest::sha256(path.as_bytes()),
-                    path,
-                    size: 1,
-                    md5: None,
-                    url: String::new(),
-                    unpacks_to: None,
-                }
-            })
+        let paths: Vec<String> = (0..folders * each)
+            .map(|n| format!("d{:03}/f{n:05}.txt", n / each))
             .collect();
+        let files: Vec<(&str, bool)> = paths.iter().map(|path| (path.as_str(), false)).collect();
         let lock = Lock {
-            datasets: vec![Locked {
-                name: "tiny".to_owned(),
-                reference: "local".to_owned(),
-                spec: lock::spec(source),
-                extract: source.extract,
-                web_page: false,
-                resolved: "local".to_owned(),
-                title: None,
-                license: None,
-                doi: None,
-                access: crate::source::Access::Unknown,
-                timestamp: "2026-01-01T00:00:00Z".to_owned(),
-                files,
-            }],
+            datasets: vec![pinned(&manifest, "tiny", &files)],
             derived: Vec::new(),
             stated: Vec::new(),
         };

@@ -1555,11 +1555,7 @@ mod tests {
     #[test]
     fn help_wraps_between_words_and_never_inside_one() {
         let mut screens = every_help();
-        let top = match Args::command().try_get_matches_from(["fetchloom", "--help"]) {
-            Ok(_) => String::new(),
-            Err(err) => err.render().to_string(),
-        };
-        screens.push(("fetchloom".to_owned(), top));
+        screens.push(("fetchloom".to_owned(), top_help()));
         let words = |text: &str| -> Vec<String> {
             text.split_whitespace()
                 .filter(|word| !matches!(*word, "\\" | "`" | "#"))
