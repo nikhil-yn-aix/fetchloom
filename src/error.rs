@@ -40,7 +40,8 @@ pub(crate) enum Kind {
     Outdated,
     /// a strict check found data the run asked for not ready: a file with other bytes than
     /// data.lock pins, one not in place yet, a recipe's result not here, or a dataset not pinned
-    /// as data.toml asks.
+    /// as data.toml asks; or `status --sources --check` found a file data.lock pins that no
+    /// mirror or source serves.
     NotReady,
     /// data.lock does not pin what a recipe in data.toml makes now, which only `fetchloom build`
     /// can pin, since it runs the project's code.

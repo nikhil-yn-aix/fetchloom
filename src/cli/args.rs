@@ -63,9 +63,10 @@ on disk: runs each step that needs it in a folder of its own in the cache, write
     pub(super) const STATUS: &str = "examples:
   fetchloom status
   fetchloom status --verify
+  fetchloom status --sources --check    # for ci: fail if a source lost a file
   fetchloom status --json
 
-on disk: nothing. it reads data.toml, data.lock and data/";
+on disk: nothing. it reads data.toml, data.lock and data/. --sources also asks each mirror and source over the network, one small request a file";
 
     pub(super) const LIST: &str = "examples:
   fetchloom list
@@ -980,6 +981,12 @@ pub(crate) struct Status {
     /// sync --strict does, for scripts. it still changes nothing
     #[arg(long, help_heading = "options")]
     pub(crate) check: bool,
+
+    /// also ask whether a mirror or its source still serves each file in data.lock, by asking for
+    /// its first byte, so nothing is downloaded. with --check, fail only when a file is served
+    /// nowhere, so ci can run it on a fresh clone
+    #[arg(long, help_heading = "options")]
+    pub(crate) sources: bool,
 }
 
 /// bring data.lock in line with data.toml

@@ -19,6 +19,7 @@ fetchloom status [options]
 |---|---|
 | `--verify` | check the SHA-256 of every placed file, so a change that kept its size and time shows too |
 | `--check` | fail with `data.not_ready`, exit 1, when the data is not ready to use, naming each file or dataset with what makes it ready, as `sync --strict` does after a sync. it still changes nothing |
+| `--sources` | also ask whether a mirror or its source still serves each file `data.lock` pins, by a request for its first byte, so nothing is downloaded. with `--check`, fail with `data.not_ready` only when a file is served nowhere, so CI can run it on a fresh clone |
 
 [global options](global-options.md) also apply.
 

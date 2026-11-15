@@ -40,7 +40,7 @@ pub(crate) fn project(sandbox: &Sandbox) -> Result<Routes> {
 
 /// a folder mirror at `root` holding every object the sandbox's cache holds and the tree of every
 /// archive it unpacked, as pushing fills one.
-fn mirror_of(sandbox: &Sandbox, root: &Path) -> Result {
+pub(crate) fn mirror_of(sandbox: &Sandbox, root: &Path) -> Result {
     fs::create_dir_all(root)?;
     fs::write(root.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
     for fan in fs::read_dir(sandbox.cache().join("objects"))? {
@@ -67,7 +67,7 @@ fn mirror_of(sandbox: &Sandbox, root: &Path) -> Result {
 }
 
 /// a web mirror under `/m` holding what [`mirror_of`] puts in a folder mirror.
-fn web_mirror_of(sandbox: &Sandbox) -> Result<Routes> {
+pub(crate) fn web_mirror_of(sandbox: &Sandbox) -> Result<Routes> {
     let root = sandbox.folder("web-mirror")?;
     mirror_of(sandbox, &root)?;
     let mut routes = Vec::new();

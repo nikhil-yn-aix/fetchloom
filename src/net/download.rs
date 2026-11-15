@@ -21,8 +21,10 @@ use crate::error::{Error, Kind};
 use crate::units;
 use crate::work::Work;
 
+mod probe;
 mod split;
 
+pub(crate) use probe::Probed;
 pub(crate) use split::starting;
 
 /// how often to look again while another fetchloom downloads the same URL.

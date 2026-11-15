@@ -521,7 +521,7 @@ fn a_fix_is_only_a_command_the_table_allows() {
         ("sync", true, &["--locked", "--strict", "--dry-run"]),
         ("lock", true, &["--check", "--dry-run"]),
         ("build", false, &["--dry-run"]),
-        ("status", true, &["--verify", "--check"]),
+        ("status", true, &["--verify", "--check", "--sources"]),
         ("list", true, &[]),
         ("export", true, &["--format", "--output"]),
         ("push", true, &["--to", "--inputs", "--dry-run"]),

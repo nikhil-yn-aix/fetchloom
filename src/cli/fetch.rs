@@ -961,7 +961,9 @@ fn publish(cache: &Cache, batched: bool) -> Result<(), Error> {
     }
 }
 
-struct Queue<T> {
+/// items taken a host at a time, each host in turn, so one host's many items never hold back
+/// another's.
+pub(super) struct Queue<T> {
     hosts: VecDeque<VecDeque<(usize, T)>>,
 }
 
@@ -974,7 +976,8 @@ impl Queue<Job> {
 }
 
 impl<T> Queue<T> {
-    fn grouped(items: Vec<T>, mut host: impl FnMut(usize, &T) -> String) -> Self {
+    /// `items` by the host `host` names for each, given its place among them.
+    pub(super) fn grouped(items: Vec<T>, mut host: impl FnMut(usize, &T) -> String) -> Self {
         let mut hosts = VecDeque::<VecDeque<_>>::new();
         let mut by_host = HashMap::new();
         for (index, job) in items.into_iter().enumerate() {

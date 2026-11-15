@@ -16,6 +16,7 @@ mod links;
 mod list;
 mod logs;
 mod path;
+mod probe;
 mod project;
 mod push;
 mod remove;
@@ -896,7 +897,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Status(args) => {
             let outcome = blocking(context, Effect::Reads, move |context| {
-                status::run(context, args.verify, args.check)
+                status::run(context, args.verify, args.check, args.sources)
             });
             finish(context, name, outcome, started)
         }

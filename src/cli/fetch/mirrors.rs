@@ -144,6 +144,38 @@ impl Mirrored {
             }
         }
     }
+
+    /// the mirrors this run may ask, by their place in its list, each found or skipped once a run
+    /// as sync finds it. fails at a stop.
+    pub(in crate::cli) async fn up(
+        &self,
+        context: &Context,
+        net: &Net,
+    ) -> Result<Vec<usize>, Error> {
+        let mut up = Vec::new();
+        for (index, location) in self.mirrors.list.iter().enumerate() {
+            if self.usable(context, net, index, location).await? {
+                up.push(index);
+            }
+        }
+        Ok(up)
+    }
+}
+
+/// how a mirror is asked whether it holds a pinned file at its size, taking nothing of it.
+pub(in crate::cli) enum Look<'m> {
+    /// a folder mirror, whose copy is looked at unread.
+    Folder(&'m std::path::Path),
+    /// a mirror asked over the network, by the request this makes for a file's object.
+    Ask(Box<dyn Fn(&Wanted) -> crate::net::Fetch + Send + Sync + 'm>),
+}
+
+/// how the mirror at `location` is asked whether it holds a file, as [`fill`] asks it for one.
+pub(in crate::cli) fn look(location: &Location) -> Look<'_> {
+    match location {
+        Location::Folder(root) => Look::Folder(root),
+        Location::Web(base) => Look::Ask(Box::new(move |want| web::object(base, want))),
+    }
 }
 
 /// why the folder mirror at `location` is skipped, when its look found it `missing`.

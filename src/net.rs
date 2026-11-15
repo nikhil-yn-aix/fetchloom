@@ -38,7 +38,9 @@ pub(crate) use azure::Given;
 #[cfg(debug_assertions)]
 pub(crate) use azure::test_identity_endpoint;
 pub(crate) use azure::{Azure, Sent};
-pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Resumable};
+pub(crate) use download::{
+    Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Probed, Resumable,
+};
 pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing};
 #[cfg(debug_assertions)]
 pub(crate) use google::test_token_endpoint;
