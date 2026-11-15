@@ -473,11 +473,18 @@ pub(crate) fn sweep_build_at(
     let Ok(Some(folder)) = private_at(parent, name) else {
         return Ok(false);
     };
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let lock = match rustix::fs::openat(&folder, "lock", flags, Mode::empty()) {
+    // nfs and smb lock byte ranges for flock, and lock no handle open only to read
+    let flags = OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let opened = match rustix::fs::openat(&folder, "lock", flags | OFlags::RDWR, Mode::empty()) {
+        Err(rustix::io::Errno::ACCESS) => {
+            rustix::fs::openat(&folder, "lock", flags | OFlags::RDONLY, Mode::empty())
+        }
+        opened => opened,
+    };
+    let lock = match opened {
         Ok(lock) => {
             let lock = File::from(lock);
-            match lock.try_lock() {
+            match crate::volume::try_lock(&lock) {
                 Ok(()) => Some(lock),
                 Err(TryLockError::WouldBlock) => return Ok(false),
                 Err(TryLockError::Error(_)) => None,
@@ -947,6 +954,28 @@ mod tests {
         assert!(old_staging(&folder, now, &Stop::default()));
         File::open(&member).unwrap().set_modified(now).unwrap();
         assert!(!old_staging(&folder, now, &Stop::default()));
+    }
+
+    /// a build still running keeps its folder where an exclusive lock needs a handle open to write,
+    /// as on nfs, whose flock locks byte ranges: a sweep must not take that refusal for a disk
+    /// without locks and clear the folder once it is old.
+    #[cfg(unix)]
+    #[test]
+    fn a_running_build_keeps_its_folder_where_locks_need_a_writer() {
+        let (_dir, cache) = cache();
+        let (folder, lock) = cache.build_folder().unwrap();
+        if lock.is_none() {
+            return crate::test_skips::skip("file-locks", "this disk takes no file locks");
+        }
+        fs::write(folder.join("kept"), b"the step's work").unwrap();
+        let later = SystemTime::now() + GRACE + GRACE;
+
+        crate::volume::LOCKS_NEED_A_WRITER.set(true);
+        cache.sweep_staging(later, &Stop::default(), &mut Vec::new());
+        crate::volume::LOCKS_NEED_A_WRITER.set(false);
+
+        assert_eq!(fs::read(folder.join("kept")).unwrap(), b"the step's work");
+        drop(lock);
     }
 
     /// a folder of this user's that others can write, as `builds/<key>` in a group's cache, put in
