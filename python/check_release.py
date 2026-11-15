@@ -1,5 +1,6 @@
-"""check every downloaded package before publication or apt signing: its bytes against
-SHA256SUMS, then its provenance attestation with gh."""
+"""check every downloaded package before publication: its bytes against SHA256SUMS, then its
+provenance attestation with gh. pages.yml runs the same checks on the debian packages written
+out, since the job that signs them runs no repository file."""
 
 from __future__ import annotations
 

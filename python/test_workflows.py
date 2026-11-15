@@ -62,14 +62,16 @@ class WorkflowTests(unittest.TestCase):
 
 
     def test_release_packages_are_checked_before_they_are_published_or_signed(self):
-        """python/check_release.py verifies each package's attestation, which takes attestations:
-        read, before pypi gets the wheels or the apt key signs the debian packages."""
-        for workflow, job, then in [("publish.yml", "pypi", "uses: pypa/gh-action-pypi-publish@"),
-                                    ("pages.yml", "pages", "gpg --batch --yes --armor --detach-sign")]:
+        """each package's attestation is verified, which takes attestations: read, before pypi gets
+        the wheels or the apt key signs the debian packages."""
+        for workflow, job, check, then in [
+            ("publish.yml", "pypi", "python3 python/check_release.py ", "uses: pypa/gh-action-pypi-publish@"),
+            ("pages.yml", "pages", "gh attestation verify ", "gpg --batch --yes --armor --detach-sign"),
+        ]:
             with self.subTest(workflow=workflow):
                 text = jobs(workflow)[job]
                 self.assertIn("\n      attestations: read\n", text)
-                self.assertLess(text.index("python3 python/check_release.py "), text.index(then))
+                self.assertLess(text.index(check), text.index(then))
 
     def test_the_apt_key_never_shares_a_job_with_the_docs_toolchain(self):
         """the site's toolchain comes from pypi and runs with the runner's sudo, so its job holds no
@@ -84,6 +86,13 @@ class WorkflowTests(unittest.TestCase):
                 self.assertNotIn(toolchain, pages)
         self.assertRegex(pages, r"\n +mkdir site/apt\n")
 
+    def test_the_apt_key_job_runs_no_repository_file(self):
+        """a script pushed to main could put a stand-in gpg on the path, or LD_PRELOAD in the
+        environment, of the step that signs, so the job holding the key checks out nothing and runs
+        no action of this repository, which $/ would fetch without a checkout."""
+        pages = jobs("pages.yml")["pages"]
+        self.assertNotRegex(pages, r"uses: (?:actions/checkout@|\./|\$/)")
+        self.assertNotRegex(pages, r"python3? python/|\.github/scripts/")
 
     def test_the_crates_token_reaches_a_publish_that_builds_nothing(self):
         """cargo publish builds the crate first unless told not to, which runs every build script
