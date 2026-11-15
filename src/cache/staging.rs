@@ -155,11 +155,14 @@ impl Cache {
                 },
                 Err(_) => None,
             };
+            if build && !owned(&entry) {
+                continue;
+            }
             if build && (lock.is_some() || old_staging(&folder, now, stop)) {
                 // a pretending sweep only counts, since a build's folder is never a cache file
                 if !self.volume.is_pretending() {
                     drop(lock);
-                    if let Err(error) = clear_tree(&folder) {
+                    if let Err(error) = clear_below(&self.root, &folder) {
                         not_removed.push(Failure::new(&folder, &error));
                     }
                 }
@@ -342,6 +345,83 @@ fn all_old(folder: &Path, deeper: bool, now: SystemTime, stop: &Stop) -> bool {
                 })
         })
     })
+}
+
+/// whether this user owns the entry, as a build folder must for a sweep to clear it: another
+/// user's may hold anything, as links swapped in while it is cleared.
+fn owned(entry: &fs::DirEntry) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        entry
+            .metadata()
+            .is_ok_and(|found| found.uid() == rustix::process::geteuid().as_raw())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = entry;
+        true
+    }
+}
+
+/// [`clear_tree`] for `folder` below the cache's `root`, reached from `root` through handles that
+/// never follow a link, so a folder swapped for one meanwhile, `tmp/` too, leads nowhere else.
+#[cfg(unix)]
+fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
+    use rustix::fs::{Mode, OFlags};
+    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "a folder outside the cache");
+    let below = folder.strip_prefix(root).map_err(|_| invalid())?;
+    let mut parts: Vec<&std::ffi::OsStr> = below.iter().collect();
+    let name = parts.pop().ok_or_else(invalid)?;
+    let mut parent = File::open(root)?;
+    for part in parts {
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        parent = File::from(rustix::fs::openat(&parent, part, flags, Mode::empty())?);
+    }
+    clear_at(&parent, name)
+}
+
+#[cfg(not(unix))]
+fn clear_below(_: &Path, folder: &Path) -> io::Result<()> {
+    clear_tree(folder)
+}
+
+/// removes `name`, in the folder `parent` holds open, and all it holds, a link as itself, never
+/// following one, first giving a folder back the access a step may have taken from its owner. it
+/// goes on past a failure and returns the first.
+#[cfg(unix)]
+fn clear_at(parent: &File, name: impl rustix::path::Arg + Copy) -> io::Result<()> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    let found = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    if FileType::from_raw_mode(found.st_mode) != FileType::Directory {
+        return Ok(rustix::fs::unlinkat(parent, name, AtFlags::empty())?);
+    }
+    if found.st_mode & 0o700 != 0o700 {
+        // chmodat follows a link, but no one else writes in this user's own build folder
+        let mode = Mode::from_raw_mode((found.st_mode & 0o7777) | 0o700);
+        rustix::fs::chmodat(parent, name, mode, AtFlags::empty())?;
+    }
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let folder = File::from(rustix::fs::openat(parent, name, flags, Mode::empty())?);
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(&folder)? {
+        let entry = entry?;
+        if entry.file_name() != c"." && entry.file_name() != c".." {
+            names.push(entry.file_name().to_owned());
+        }
+    }
+    let mut first = None;
+    for child in &names {
+        match clear_at(&folder, child.as_c_str()) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => {
+                first.get_or_insert(err);
+            }
+            _ => {}
+        }
+    }
+    drop(folder);
+    let removed = rustix::fs::unlinkat(parent, name, AtFlags::REMOVEDIR).map_err(io::Error::from);
+    first.map_or(removed, Err)
 }
 
 /// removes the folder at `root` and everything in it, a link as itself, first giving back the

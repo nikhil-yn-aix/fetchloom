@@ -278,6 +278,52 @@ fn a_staging_folder_reached_through_a_swapped_tmp_keeps_its_files() {
     assert_ne!(freed.not_removed, []);
 }
 
+/// a build's folder whose lock a sweep can take is cleared at once, so a `tmp/` swapped for a
+/// link must not lead the sweep to clear a folder of that name elsewhere.
+#[test]
+fn a_build_folder_reached_through_a_swapped_tmp_keeps_its_files() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let outside = dir.path().join("outside");
+    let build = outside.join("0123456789abcdef.build");
+    fs::create_dir_all(&build).unwrap();
+    fs::write(build.join("lock"), b"").unwrap();
+    let payload = build.join("payload");
+    fs::write(&payload, b"keep these bytes").unwrap();
+    let folder = cache.root.join("tmp");
+    fs::create_dir_all(&folder).unwrap();
+    fs::rename(&folder, cache.root.join("old-tmp")).unwrap();
+    crate::test_links::link_folder(&outside, &folder).unwrap();
+
+    cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
+
+    assert_eq!(fs::read(&payload).unwrap(), b"keep these bytes");
+    assert!(build.join("lock").exists());
+}
+
+/// a sweep clears a build folder through handles that never follow a link, so a folder in it
+/// swapped for a link to someone's folder keeps what that folder holds.
+#[cfg(unix)]
+#[test]
+fn clearing_a_build_folder_never_follows_a_link_inside_it() {
+    let (dir, cache) = super::tests::cache();
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let kept = outside.join("notes.txt");
+    fs::write(&kept, b"keep these bytes").unwrap();
+    let build = cache.root.join("tmp/0123456789abcdef.build");
+    fs::create_dir_all(build.join("out")).unwrap();
+    fs::write(build.join("lock"), b"").unwrap();
+    std::os::unix::fs::symlink(&outside, build.join("linked")).unwrap();
+
+    cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
+
+    assert!(!build.exists());
+    assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
+}
+
 #[cfg(unix)]
 #[test]
 fn verifying_never_hashes_an_object_swapped_for_a_symlink() {
