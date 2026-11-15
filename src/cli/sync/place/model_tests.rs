@@ -362,8 +362,8 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
         (named("set"), true),
         (named("other"), false),
     ] {
-        for flags in 0_u8..64 {
-            let [wanted, unknown, missing, edited, different, holds] =
+        for flags in 0_u8..128 {
+            let [wanted, unknown, missing, edited, different, holds, waiting] =
                 std::array::from_fn(|bit| flags & (1 << bit) != 0);
             let mut survey = Survey::read(
                 &project,
@@ -409,22 +409,34 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
             } else {
                 Vec::new()
             };
-            let actual = unwanted(&survey, &wanted, &unknown, &scope, |_, _, _| holds);
-            let protected = !wanted.is_empty() || !unknown.is_empty() || !selected;
+            let waiting = if waiting {
+                vec![Waiting {
+                    name: "set".to_owned(),
+                    part: format!("data.lock.d/set.{}.tsv.zst", "a".repeat(12)),
+                    made: false,
+                }]
+            } else {
+                Vec::new()
+            };
+            let actual = unwanted(&survey, &wanted, &unknown, &waiting, &scope, |_, _, _| {
+                holds
+            });
+            let protected =
+                !wanted.is_empty() || !unknown.is_empty() || !waiting.is_empty() || !selected;
             if protected {
-                assert!(actual.is_empty(), "{scope:?} {flags:06b}");
+                assert!(actual.is_empty(), "{scope:?} {flags:07b}");
                 continue;
             }
-            assert_eq!(actual.len(), 1, "{scope:?} {flags:06b}");
+            assert_eq!(actual.len(), 1, "{scope:?} {flags:07b}");
             let actual = &actual[0].1;
             if missing {
                 assert!(matches!(actual, Unwanted::Gone));
             } else if edited || (different && !holds) {
-                assert!(matches!(actual, Unwanted::Keep), "{flags:06b}");
+                assert!(matches!(actual, Unwanted::Keep), "{flags:07b}");
             } else {
                 assert!(
                     matches!(actual, Unwanted::Remove(found) if *found == seen),
-                    "{flags:06b}"
+                    "{flags:07b}"
                 );
             }
         }

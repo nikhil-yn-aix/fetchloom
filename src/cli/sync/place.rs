@@ -25,7 +25,7 @@ use crate::output::Output;
 use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
 use crate::project::Project;
-use crate::project::lock::{Lock, LockedFile};
+use crate::project::lock::{Lock, LockedFile, Waiting};
 use crate::project::manifest::Manifest;
 use crate::project::state::{Look, Placed, State, Synced};
 use crate::stop::Stop;
@@ -848,8 +848,16 @@ impl<'a> Placing<'a> {
             .iter()
             .map(|target| target.path.as_str())
             .collect();
+        let waiting = self.project.waiting();
         let holds = still_placed(&self.survey, &self.project.root);
-        let unwanted = unwanted(&self.survey, &wanted, &self.unknown, &self.scope, holds);
+        let unwanted = unwanted(
+            &self.survey,
+            &wanted,
+            &self.unknown,
+            &waiting,
+            &self.scope,
+            holds,
+        );
         let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
         preview.placement.retired = self.survey.retired(&wanted, &going);
         preview.placement.left_behind =
@@ -1804,7 +1812,7 @@ fn remove_unwanted(
     placement: &mut Placement,
 ) -> Result<bool, Error> {
     let holds = still_placed(survey, &project.root);
-    let unwanted = unwanted(survey, wanted, unknown, scope, holds);
+    let unwanted = unwanted(survey, wanted, unknown, &project.waiting(), scope, holds);
     let changed = !unwanted.is_empty();
     let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
     placement.retired = survey.retired(wanted, &going);
@@ -1919,10 +1927,21 @@ fn removable(
     scope: &Scope,
     root: &Path,
 ) -> HashSet<String> {
-    unwanted(survey, wanted, unknown, scope, still_placed(survey, root))
-        .into_iter()
-        .filter_map(|(path, fate)| matches!(fate, Unwanted::Remove(_)).then_some(path))
-        .collect()
+    let waiting = Project {
+        root: root.to_path_buf(),
+    }
+    .waiting();
+    unwanted(
+        survey,
+        wanted,
+        unknown,
+        &waiting,
+        scope,
+        still_placed(survey, root),
+    )
+    .into_iter()
+    .filter_map(|(path, fate)| matches!(fate, Unwanted::Remove(_)).then_some(path))
+    .collect()
 }
 
 /// `action` for a file an entry keeps out, freed when `freeing` clears that entry. one holding a
@@ -1960,16 +1979,22 @@ fn clearing(action: Action, survey: &Survey, freeing: &Freeing, scope: &Scope) -
 }
 
 /// what becomes of each file fetchloom placed for `scope` that no dataset needs now. a dataset with
-/// an archive never unpacked here keeps its files, since nothing tells which it needs, and a file
-/// that no longer looks as placed goes only when `holds` finds its placed bytes.
+/// an archive never unpacked here keeps its files, since nothing tells which it needs, and so does
+/// one `waiting` for its file list. a file that no longer looks as placed goes only when `holds`
+/// finds its placed bytes.
 fn unwanted(
     survey: &Survey,
     wanted: &HashSet<&str>,
     unknown: &[(&str, &LockedFile)],
+    waiting: &[Waiting],
     scope: &Scope,
     holds: impl Fn(&str, &Placed, &Look) -> bool,
 ) -> Vec<(String, Unwanted)> {
-    let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
+    let unsure: HashSet<&str> = unknown
+        .iter()
+        .map(|(dataset, _)| *dataset)
+        .chain(waiting.iter().map(|waiting| waiting.name.as_str()))
+        .collect();
     survey
         .state
         .files

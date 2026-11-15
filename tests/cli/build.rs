@@ -1034,6 +1034,14 @@ fn a_recipe_whose_list_was_not_committed_waits_alone() -> Result {
         IRIS
     );
     assert!(clone.join(&part).is_file(), "the same list again");
+    // a part deleted where the result is placed leaves its files as they are
+    fs::remove_file(clone.join(&part))?;
+    let synced = run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    let placed = clone.join("data").join("clean").join("iris.csv");
+    assert!(placed.is_file(), "{stderr}");
+    assert_eq!(fs::read(placed)?, IRIS);
     Ok(())
 }
 
