@@ -3,7 +3,7 @@
 //! several trees, as a step that is not reproducible gives.
 
 use std::fs::{self, File, TryLockError};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -101,7 +101,7 @@ impl Cache {
 
     /// the result recorded at `path` as `tree`, when it is whole and this user's alone.
     fn result_in(&self, path: &Path, tree: Sha256) -> Option<Built> {
-        let file = crate::volume::read_unfollowed(path).ok()?;
+        let mut file = crate::volume::read_unfollowed(path).ok()?;
         let metadata = file.metadata().ok()?;
         #[cfg(unix)]
         {
@@ -111,7 +111,9 @@ impl Cache {
                 return None;
             }
         }
-        let bytes = fs::read(path).ok()?;
+        // read through the handle checked above, not the path, which someone may have swapped since
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).ok()?;
         if digest::sha256(&bytes) != tree {
             return None;
         }
