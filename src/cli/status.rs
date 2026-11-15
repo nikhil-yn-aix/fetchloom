@@ -59,6 +59,10 @@ pub(super) struct Status {
     /// file.
     #[serde(skip)]
     kept_copies: HashMap<String, String>,
+    /// the files of `extra` that are a person's file `sync --force` moved out of the way and could
+    /// not put back, with the path it had.
+    #[serde(skip)]
+    set_aside: HashMap<String, String>,
     /// unchanged files fetchloom placed that no dataset needs now, which the next `sync` removes.
     unneeded: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
@@ -646,6 +650,7 @@ fn check(
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
         status.extra = extra(&survey, &recorded);
         status.kept_copies = kept_copies(&status.extra, &recorded);
+        status.set_aside = set_aside(&status.extra, &survey);
         return Ok((status, manifest, lock_text));
     }
     let planned = plan::from_cache(&manifest, &lock, &cache)?;
@@ -1028,6 +1033,7 @@ fn compare(
         })
         .partition(|path| going.contains(path));
     status.kept_copies = kept_copies(&status.extra, &wanted);
+    status.set_aside = set_aside(&status.extra, survey);
     Ok(())
 }
 
@@ -1058,6 +1064,22 @@ fn unrecorded_folders(
             )
         })
         .collect()
+}
+
+/// the files of `extra` the state records as a person's file `sync --force` moved out of the way
+/// and could not put back, each with the path it had.
+fn set_aside(extra: &[String], survey: &Survey) -> HashMap<String, String> {
+    extra
+        .iter()
+        .filter_map(|path| Some((path.clone(), survey.state.aside.get(path)?.clone())))
+        .collect()
+}
+
+/// the line for `path`, the hidden name `sync --force` kept a person's file `file` under.
+fn set_aside_row(path: &str, file: &str) -> String {
+    format!(
+        "{path} · {file}, which `sync --force` moved out of the way and could not put back: move it or give it another name to keep it"
+    )
 }
 
 /// the files of `extra` named as sync names the changed copy it keeps of a file of `wanted` it put
@@ -1344,6 +1366,8 @@ fn list(output: &Output, status: &Status) {
                 }
             } else if let Some(said) = said {
                 rows.push((format!("{path} · {said}"), 1));
+            } else if let Some(file) = status.set_aside.get(path) {
+                rows.push((set_aside_row(path, file), 1));
             } else if let Some(file) = status.kept_copies.get(path) {
                 rows.push((
                     format!(

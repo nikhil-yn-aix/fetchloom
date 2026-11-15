@@ -56,6 +56,10 @@ pub(crate) struct State {
     /// the project folder the state was written for, which a clone or a copy is not.
     #[serde(default)]
     pub(crate) folder: Option<Folder>,
+    /// files `sync --force` moved out of the way that could not go back, by the hidden name each
+    /// is kept under, with the path it had, so each sync and status names them while they stay.
+    #[serde(default)]
+    pub(crate) aside: BTreeMap<String, String>,
 }
 
 /// which folder a state was written for: its file number, the inode on unix and the file index
@@ -336,6 +340,10 @@ impl State {
             out.extend_from_slice(br#","folder":"#);
             serde_json::to_writer(&mut *out, folder)?;
         }
+        if !self.aside.is_empty() {
+            out.extend_from_slice(br#","aside":"#);
+            serde_json::to_writer(&mut *out, &self.aside)?;
+        }
         out.extend_from_slice(br#","blocks":"#);
         serde_json::to_writer(&mut *out, &blocks)?;
         out.push(b'}');
@@ -366,7 +374,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         use serde::de::Error;
         let mut state = State::default();
         let (mut version, mut files, mut synced, mut candidates) = (None, false, false, false);
-        let (mut dropped, mut folder) = (false, false);
+        let (mut dropped, mut folder, mut aside) = (false, false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -389,6 +397,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "folder" => {
                     state.folder = map.next_value()?;
                     std::mem::replace(&mut folder, true)
+                }
+                "aside" => {
+                    state.aside = map.next_value()?;
+                    std::mem::replace(&mut aside, true)
                 }
                 _ => {
                     map.next_value::<serde::de::IgnoredAny>()?;
@@ -473,8 +485,8 @@ impl serde::de::Visitor<'_> for Kept<'_> {
 /// a block of records: the path of its first record, and where its bytes start and end.
 type Block = (String, u64, u64);
 
-/// what follows the records: the settled sync, the kept rebuilds, the dropped datasets and the
-/// blocks.
+/// what follows the records: the settled sync, the kept rebuilds, the dropped datasets, the
+/// folder, the files kept aside and the blocks.
 #[derive(Deserialize)]
 struct Tail {
     #[serde(default)]
@@ -485,6 +497,8 @@ struct Tail {
     dropped: BTreeSet<String>,
     #[serde(default)]
     folder: Option<Folder>,
+    #[serde(default)]
+    aside: BTreeMap<String, String>,
     blocks: Vec<Block>,
 }
 
@@ -528,6 +542,7 @@ fn indexed(
         candidates,
         dropped,
         folder,
+        aside,
         blocks,
     } = index(reading)?;
     let mut files = BTreeMap::new();
@@ -548,6 +563,7 @@ fn indexed(
         candidates,
         dropped,
         folder,
+        aside,
     })
 }
 
@@ -559,6 +575,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         candidates,
         dropped,
         folder,
+        aside,
         blocks,
     } = index(reading)?;
     let mut records = Vec::new();
@@ -582,6 +599,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         candidates,
         dropped,
         folder,
+        aside,
     })
 }
 
@@ -1245,6 +1263,10 @@ mod tests {
             complete: true,
         });
         state.dropped.insert("pets".to_owned());
+        state.aside.insert(
+            "data/b/.fetchloom-0123456789abcdef.old".to_owned(),
+            "data/b/c".to_owned(),
+        );
         state
     }
 
@@ -1267,6 +1289,7 @@ mod tests {
         assert_eq!(read.synced, whole.synced, "{case}");
         assert_eq!(read.candidates, whole.candidates, "{case}");
         assert_eq!(read.dropped, whole.dropped, "{case}");
+        assert_eq!(read.aside, whole.aside, "{case}");
         assert_eq!(read.version, whole.version, "{case}");
     }
 
@@ -1333,6 +1356,7 @@ mod tests {
             };
             let read = by_blocks(&mut reading).expect("its index fits");
             assert_same(&read, &State::parse(&bytes), &format!("blocks of {block}"));
+            assert_eq!(read.aside, state.aside, "blocks of {block}");
             for folders in FOLDERS {
                 let folders: Vec<String> = folders.iter().map(|&folder| folder.into()).collect();
                 let case = format!("{folders:?} in blocks of {block}");

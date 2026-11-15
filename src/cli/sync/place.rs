@@ -1027,13 +1027,15 @@ impl<'a> Placing<'a> {
         if !stopped && failure.is_none() && flushed.is_ok() {
             link_adopted(project, &placer, cache, work, &found, state, &mut placement);
         }
-        settle_aside(project, &data_dir, threads, &placement, |(path, sha256)| {
+        let stays = settle_aside(project, &data_dir, threads, &placement, |(path, sha256)| {
             flushed.is_ok()
                 && state
                     .files
                     .get(path)
                     .is_some_and(|placed| placed.checked == checked && placed.sha256 == *sha256)
         });
+        let (kept_aside, moved_away) = track_aside(&project.root, state, stays);
+        tell::set_aside(output, manifest, &state.aside);
         let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding
                 .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
@@ -1043,8 +1045,8 @@ impl<'a> Placing<'a> {
         let whole = vouched && unknown.is_empty() && placement.unbuilt.is_empty();
         let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
-        let recorded = removed || adopted || undone || !tallies.is_empty();
-        let dropped = state.forget_removed(manifest);
+        let recorded = removed || adopted || undone || kept_aside || !tallies.is_empty();
+        let dropped = state.forget_removed(manifest) || moved_away;
         record(project, state, synced, recorded, needs_writing || dropped)?;
         if stopped {
             return Err(Stop::stopped());
@@ -1190,6 +1192,7 @@ pub(crate) fn untouched(
         || !survey.damaged.is_empty()
         || !survey.vouched.is_empty()
         || survey.leftovers().next().is_some()
+        || !state.aside.is_empty()
         || state.files.iter().any(|(path, placed)| {
             survey.disk.get(path) != Some(&placed.look)
                 // a link made writable leaves the cache's copy open to edits until sealed again
@@ -1342,29 +1345,54 @@ fn undo(
 }
 
 /// deletes each file `--force` moved aside once `in_place` says every file in its stead is in
-/// place, else moves it back, so a failed or stopped replacement leaves it; one that cannot go back
-/// keeps its hidden name. a stop does not stop this.
+/// place, else moves it back, so a failed or stopped replacement leaves it. returns each that
+/// cannot go back, as when a folder took its path, by its hidden name's path in the project, with
+/// the path it had. a stop does not stop this.
 fn settle_aside(
     project: &Project,
     data_dir: &Path,
     threads: crate::threads::Threads,
     placement: &Placement,
     in_place: impl Fn(&(String, Sha256)) -> bool,
-) {
+) -> Vec<(String, String)> {
+    let mut stays = Vec::new();
     if placement.set_aside.is_empty() {
-        return;
+        return stays;
     }
     let mut placer = Placer::new(data_dir).with_threads(threads);
     for set in &placement.set_aside {
-        let done = if set.stead.iter().all(&in_place) {
-            placer.remove(&set.aside, false, None)
-        } else {
+        let back = !set.stead.iter().all(&in_place);
+        let done = if back {
             placer.move_back(&set.aside, &project.root.join(&set.path))
+        } else {
+            placer.remove(&set.aside, false, None)
         };
         if let Err(err) = done {
             tracing::debug!(path = %set.path, %err, "a file --force moved aside stays where it was moved");
+            let name = set.aside.file_name().unwrap_or_default().to_string_lossy();
+            if back {
+                let hidden = match set.path.rsplit_once('/') {
+                    Some((folder, _)) => format!("{folder}/{name}"),
+                    None => name.into_owned(),
+                };
+                stays.push((hidden, set.path.clone()));
+            }
         }
     }
+    stays
+}
+
+/// records in `state` the files of `stays` that `--force` kept aside, and forgets each kept aside
+/// that is no longer under `root`, as once a person moved it. says whether it recorded any, and
+/// whether it forgot any.
+fn track_aside(root: &Path, state: &mut State, stays: Vec<(String, String)>) -> (bool, bool) {
+    let recorded = !stays.is_empty();
+    state.aside.extend(stays);
+    let before = state.aside.len();
+    state
+        .aside
+        .retain(|hidden, _| now(&root.join(hidden)).is_some());
+    (recorded, state.aside.len() != before)
 }
 
 /// carries out every decision short of placing: counts what stays, records files found holding the

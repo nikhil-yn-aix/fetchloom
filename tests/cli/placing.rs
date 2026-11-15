@@ -2329,6 +2329,99 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     Ok(())
 }
 
+/// a person's file `--force` moved out of the way cannot go back once a folder took its name, so
+/// the run, and each sync and status after it, say where it is until the person moves it.
+#[cfg(unix)]
+#[test]
+fn a_file_force_could_not_put_back_is_named_until_it_is_moved() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::support::warning;
+    if rustix::process::geteuid().is_root() {
+        return skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let bytes = zip_of(&[
+        ("top.csv", b"top\n"),
+        ("sub/a.csv", b"first\n"),
+        ("sub/b.csv", b"second\n"),
+    ])?;
+    let server = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.d]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let folder = sandbox.work().join("data").join("d");
+    fs::create_dir_all(&folder)?;
+    fs::write(folder.join("sub"), b"my notes\n")?;
+    let blocked = sandbox.run(&["sync"])?;
+    assert_eq!(blocked.status.code(), Some(0), "{}", text(&blocked.stderr)?);
+    // a copy of b.csv reads bytes the cache now refuses, after a.csv made the folder
+    let object = crate::recipes::object(&sandbox.cache(), b"second\n");
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o000))?;
+    let forced = sandbox.run(&["--json", "sync", "--force", "--offline"]);
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o444))?;
+    let forced = forced?;
+    let document = json(&forced)?;
+    assert_eq!(forced.status.code(), Some(50), "{document}");
+    let hidden: Vec<String> = fs::read_dir(&folder)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|name| {
+            name.starts_with(".fetchloom-")
+                && Path::new(name)
+                    .extension()
+                    .is_some_and(|extension| extension == "old")
+        })
+        .collect();
+    let [hidden] = hidden.as_slice() else {
+        panic!("one file moved aside: {hidden:?}");
+    };
+    assert_eq!(fs::read(folder.join(hidden))?, b"my notes\n");
+    let hidden = format!("data/d/{hidden}");
+    let told = |document: &serde_json::Value| {
+        let found = warning(document, "place.set_aside");
+        assert_eq!(found["details"], serde_json::json!([hidden]), "{document}");
+        assert!(
+            found["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("data/d/sub")),
+            "{document}"
+        );
+    };
+    told(&document);
+
+    let again = sandbox.run(&["--json", "sync", "--offline"])?;
+    let document = json(&again)?;
+    assert_eq!(again.status.code(), Some(0), "{document}");
+    told(&document);
+    let status = text(&sandbox.run(&["status"])?.stdout)?;
+    assert!(
+        status.contains(&format!("{hidden} · data/d/sub, ")),
+        "{status}"
+    );
+    // the sync before settled the project, which a file kept aside keeps from settling
+    let settled = sandbox.run(&["--json", "sync", "--offline"])?;
+    let document = json(&settled)?;
+    assert_eq!(settled.status.code(), Some(0), "{document}");
+    told(&document);
+    fs::rename(
+        sandbox.work().join(&hidden),
+        sandbox.work().join("my notes"),
+    )?;
+    let moved = sandbox.run(&["--json", "sync", "--offline"])?;
+    let document = json(&moved)?;
+    assert_eq!(moved.status.code(), Some(0), "{document}");
+    assert_eq!(
+        warning(&document, "place.set_aside"),
+        &serde_json::Value::Null,
+        "{document}"
+    );
+    Ok(())
+}
+
 #[test]
 fn status_names_a_file_in_a_folders_way_once() -> Result {
     let sandbox = Sandbox::new()?;

@@ -698,6 +698,24 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
     }
 }
 
+/// a warning for each person's file `sync --force` moved out of the way that could not go back,
+/// by the hidden name it is kept under, told by every sync while it stays there.
+pub(super) fn set_aside(output: &Output, manifest: &Manifest, aside: &BTreeMap<String, String>) {
+    for (hidden, path) in aside {
+        output.warn_detailed(
+            Warning::PlaceSetAside,
+            &format!(
+                "{path} is kept as {hidden}: `sync --force` moved it out of the way and could not put it back"
+            ),
+            Some(&format!(
+                "to get it back, move {hidden} out of {}/ or give it another name; sync never deletes it",
+                manifest.data_dir
+            )),
+            [hidden],
+        );
+    }
+}
+
 /// a warning for each folder no dataset uses now that still holds files fetchloom did not place,
 /// such as a person's work or a changed copy sync kept. `-v` names each file.
 fn warn_retired(output: &Output, placement: &Placement) {

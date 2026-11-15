@@ -103,6 +103,9 @@ pub(crate) enum Warning {
     PlacePutBack,
     /// a changed file was put back as data.lock pins it.
     PlaceRestored,
+    /// a file `sync --force` moved out of the way could not go back, so it is kept under a hidden
+    /// name.
+    PlaceSetAside,
     /// files have names windows and fat disks cannot store.
     PlaceUnportable,
     /// a stopped add could not put data.toml and data.lock back as they were.
@@ -186,6 +189,7 @@ impl Warning {
             Warning::PlacePathFolder => "place.path_folder",
             Warning::PlacePutBack => "place.put_back",
             Warning::PlaceRestored => "place.restored",
+            Warning::PlaceSetAside => "place.set_aside",
             Warning::PlaceUnportable => "place.unportable",
             Warning::ProjectNotRestored => "project.not_restored",
             Warning::ProjectOwnerRemoved => "project.owner_removed",
@@ -273,6 +277,7 @@ mod tests {
             PlacePathFolder,
             PlacePutBack,
             PlaceRestored,
+            PlaceSetAside,
             PlaceUnportable,
             ProjectNotRestored,
             ProjectOwnerRemoved,

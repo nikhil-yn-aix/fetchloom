@@ -186,6 +186,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `place.path_folder` | a dataset's `path` makes a folder named like the one file it holds |
 | `place.put_back` | files fetchloom placed were deleted or moved, so they were put back; `details` names them |
 | `place.restored` | a changed file was put back as data.lock pins it |
+| `place.set_aside` | a file `sync --force` moved out of the way could not go back, as when a folder now has its path, so it is kept under a hidden name, which `details` names; every sync says so until the file is moved |
 | `place.unportable` | files have names windows and fat disks cannot store |
 | `project.not_restored` | a stopped add could not put data.toml and data.lock back as they were |
 | `project.owner_removed` | `.fetchloom/owner` held something no fetchloom wrote, as a cloned project can, so taking the project removed it and the command went on; the message names the file |
