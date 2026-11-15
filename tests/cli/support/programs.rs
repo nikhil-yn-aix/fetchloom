@@ -1,3 +1,5 @@
+//! the programs the tests run: the fetchloom binary and the recipe step `examples/recipe_step.rs`.
+
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -6,6 +8,7 @@ use std::sync::OnceLock;
 use super::Result;
 use super::paths::{relocated, workspace};
 
+/// the fetchloom binary cargo built for these tests.
 pub(crate) fn executable() -> &'static Path {
     static PROGRAM: OnceLock<PathBuf> = OnceLock::new();
     PROGRAM.get_or_init(|| {
@@ -16,6 +19,8 @@ pub(crate) fn executable() -> &'static Path {
     })
 }
 
+/// the recipe step beside [`executable`]: refreshed once with the `cargo` that runs the tests, or
+/// taken as built under nextest, where each test is a process of its own.
 pub(crate) fn recipe_step() -> Result<PathBuf> {
     static BUILT: OnceLock<std::result::Result<PathBuf, String>> = OnceLock::new();
     BUILT
@@ -31,6 +36,8 @@ pub(crate) fn recipe_step() -> Result<PathBuf> {
         .map_err(Into::into)
 }
 
+/// the recipe step in the `examples` folder beside `executable`, refreshed first with `cargo`
+/// unless `reuse` takes it as it is.
 fn build_recipe(
     executable: &Path,
     workspace: &Path,
