@@ -220,19 +220,11 @@ impl<'a> Loop<'a> {
     ) -> Result<Placement, Error> {
         match self.prepare(manifest, lock, plan, force, survey).await {
             Ok(placing) => self.apply(manifest, lock, placing, synced),
-            // a sync of every dataset still places those it has whole, and names the rest
-            Err(error) if self.scope == Scope::All && lacks_files(&error) => {
+            // a sync still places the datasets it has whole, of those named or of all, and names
+            // the rest
+            Err(error) if lacks_files(&error) => {
                 match self.place_whole(manifest, lock, force, synced) {
-                    Ok(Some(Partial { placed, waiting })) => Err(error
-                        .detail(format!(
-                            "placed {}, whose files are all on this machine",
-                            placed.join(", ")
-                        ))
-                        .detail(format!(
-                            "{} {} for the files above",
-                            waiting.join(", "),
-                            if waiting.len() == 1 { "waits" } else { "wait" }
-                        ))),
+                    Ok(Some(partial)) => Err(self.partly(error, partial)),
                     Ok(None) => Err(self.before_placing(error)),
                     Err(other) => {
                         tracing::debug!(%other, "could not place the datasets the cache holds whole");
@@ -244,9 +236,37 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// places the datasets of `lock` whose files the cache holds whole, once a sync of every
-    /// dataset could not get the rest: the names it placed and those that wait, or none when
-    /// no dataset is whole.
+    /// `error` with the datasets the run placed whole and those that wait, in its details and,
+    /// for `--json`, in its result, shaped as a sync's.
+    fn partly(&self, error: Error, partial: Partial) -> Error {
+        let Partial {
+            placed,
+            waiting,
+            placement,
+        } = partial;
+        let error = error
+            .detail(format!(
+                "placed {}, whose files are all on this machine",
+                placed.join(", ")
+            ))
+            .detail(format!(
+                "{} {} for files this run could not get",
+                waiting.join(", "),
+                if waiting.len() == 1 { "waits" } else { "wait" }
+            ));
+        error.with_result(serde_json::json!({
+            "project": self.project.root,
+            "selected": self.scope,
+            "datasets": placed,
+            "waiting": waiting,
+            "lock_changed": self.wrote_lock.load(Ordering::Relaxed),
+            "placement": placement,
+        }))
+    }
+
+    /// places the datasets of `lock` in the run's scope whose files the cache holds whole, once
+    /// the run could not get the rest: the names it placed, those that wait and what placing did,
+    /// or none when no dataset is whole.
     fn place_whole(
         &self,
         manifest: &Manifest,
@@ -261,7 +281,7 @@ impl<'a> Loop<'a> {
             &self.context.stop,
         )?;
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
-        let placing = Placing::from_plan(self.project, manifest, plan, force, &Scope::All, survey)?;
+        let placing = Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         let mut waiting: BTreeSet<String> = placing
             .missing(&self.cache)?
             .into_iter()
@@ -273,7 +293,9 @@ impl<'a> Loop<'a> {
         let whole: BTreeSet<String> = manifest
             .datasets
             .iter()
-            .filter(|(name, entry)| entry.place && !waiting.contains(*name))
+            .filter(|(name, entry)| {
+                entry.place && self.scope.includes(name) && !waiting.contains(*name)
+            })
             .map(|(name, _)| name.clone())
             .collect();
         if whole.is_empty() || waiting.is_empty() {
@@ -283,10 +305,11 @@ impl<'a> Loop<'a> {
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let scope = Scope::Only(whole.clone());
         let placing = Placing::from_plan(self.project, manifest, plan, force, &scope, survey)?;
-        self.apply(manifest, lock, placing, synced)?;
+        let placement = self.apply(manifest, lock, placing, synced)?;
         Ok(Some(Partial {
             placed: whole.into_iter().collect(),
             waiting: waiting.into_iter().collect(),
+            placement,
         }))
     }
 
@@ -2312,10 +2335,12 @@ fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {
     in_cache_where(cache, fetch, |_| true)
 }
 
-/// the datasets a sync placed whole though it could not get every file, and those that wait.
+/// the datasets a sync placed whole though it could not get every file, those that wait, and
+/// what placing did.
 struct Partial {
     placed: Vec<String>,
     waiting: Vec<String>,
+    placement: Placement,
 }
 
 /// whether `error` stopped a run from getting files, which a later run may get: a source or the

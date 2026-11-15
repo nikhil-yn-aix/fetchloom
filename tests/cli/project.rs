@@ -3387,7 +3387,8 @@ fn a_download_that_needs_a_yes_is_told_only_once_it_starts() -> Result {
 }
 
 /// a sync that cannot get one dataset's files still places the datasets whose files are all on
-/// this machine, and its error names the one that waits.
+/// this machine, of all or of those named, and its error names the one that waits; `--json` gives
+/// both in its result too.
 #[test]
 fn a_sync_that_lacks_some_files_places_the_datasets_it_has_whole() -> Result {
     let sandbox = Sandbox::new()?;
@@ -3407,24 +3408,31 @@ fn a_sync_that_lacks_some_files_places_the_datasets_it_has_whole() -> Result {
             .join(&hex[..2])
             .join(&hex[2..]),
     )?;
-    let fresh = clone(&sandbox, "fresh")?;
-    let output = sandbox
-        .command_in(&fresh, &["--json", "sync", "--offline"])
-        .output()?;
-    let document = json(&output)?;
-    assert_eq!(output.status.code(), Some(20), "{document}");
-    assert_eq!(
-        document["errors"][0]["kind"], "offline.missing",
-        "{document}"
-    );
-    assert_eq!(fs::read(fresh.join("data/one/one.bin"))?, one, "{document}");
-    assert!(!fresh.join("data/two").exists(), "{document}");
-    let details = document["errors"][0]["details"].to_string();
-    assert!(
-        details.contains("placed one, whose files are all on this machine")
-            && details.contains("two waits for the files above"),
-        "{document}"
-    );
+    for (name, args) in [
+        ("fresh", &["--json", "sync", "--offline"][..]),
+        ("named", &["--json", "sync", "one", "two", "--offline"]),
+    ] {
+        let fresh = clone(&sandbox, name)?;
+        let output = sandbox.command_in(&fresh, args).output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(20), "{document}");
+        assert_eq!(
+            document["errors"][0]["kind"], "offline.missing",
+            "{document}"
+        );
+        assert_eq!(fs::read(fresh.join("data/one/one.bin"))?, one, "{document}");
+        assert!(!fresh.join("data/two").exists(), "{document}");
+        let details = document["errors"][0]["details"].to_string();
+        assert!(
+            details.contains("placed one, whose files are all on this machine")
+                && details.contains("two waits for files this run could not get"),
+            "{document}"
+        );
+        let result = &document["result"];
+        assert_eq!(result["datasets"], serde_json::json!(["one"]), "{document}");
+        assert_eq!(result["waiting"], serde_json::json!(["two"]), "{document}");
+        assert_eq!(result["placement"]["placed"], 1, "{document}");
+    }
     Ok(())
 }
 

@@ -217,7 +217,7 @@ fn a_clone_lacking_several_imports_names_each_and_what_it_can_place() -> Result 
             "tiny/t.csv",
             "wide/w.csv",
             "placed flowers, whose files are all on this machine",
-            "tiny, wide wait for the files above"
+            "tiny, wide wait for files this run could not get"
         ])
     );
     assert_eq!(
