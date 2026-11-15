@@ -1773,7 +1773,8 @@ fn status_check_fails_while_a_pin_is_not_downloaded_yet() -> Result {
         error["details"][0],
         "archiving is pinned by its source's MD5, not downloaded yet: `fetchloom sync archiving` downloads and checks it"
     );
-    assert_eq!(error["fix"], "fetchloom sync");
+    // the sync named downloads, which whoever runs fetchloom chooses, so it is advice, no fix
+    assert_eq!(error["fix"], serde_json::Value::Null);
     ok(&command(&sandbox, &routes, &["sync"]).output()?)?;
     ok(&sandbox.run(&["status", "--check"])?)?;
     Ok(())

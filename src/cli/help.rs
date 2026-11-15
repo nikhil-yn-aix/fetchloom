@@ -298,10 +298,11 @@ errors[0].kind, and the exit code it gives:
 `fetchloom help exit-codes` says what to do about each.
 
 errors[0].fix is the command to run next, or null. it is safe to run
-without asking: it never deletes, overwrites or repins your files, runs the
-project's code, signs in or answers a question for you, and in a --locked
-run it never writes data.lock. help also names the ways only a person
-should choose.
+without asking: it never downloads into place, writes outside the project,
+publishes, deletes, overwrites or repins your files, runs the project's
+code, signs in or answers a question for you, and in a --locked run it
+never writes data.lock. so add, sync, path, get and push are no fix but
+with --dry-run. help still names them, as steps for you to choose.
 
 nothing asks a question with --json, when stdin or stderr is no terminal,
 or where CI, AI_AGENT or a coding agent's own variable is set. a step that

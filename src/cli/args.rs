@@ -711,16 +711,14 @@ impl Command {
         }
     }
 
-    /// whether a script may run the command a help names next: not one that deletes, overwrites or
-    /// repins what a person keeps, runs code, signs in or takes a web page, unless a dry run.
+    /// whether a script may run the command a help names next, with no person to choose: not one
+    /// that downloads into place, writes outside the project or publishes, nor one that deletes,
+    /// overwrites or repins what a person keeps, runs code or signs in, unless a dry run.
     pub(crate) fn harmless(&self) -> bool {
         match self {
-            Command::Add(add) => !add.web_page || add.dry.dry_run,
             Command::Status(_)
             | Command::Diff(_)
             | Command::List(_)
-            | Command::Path(_)
-            | Command::Push(_)
             | Command::Settings(Settings { action: None })
             | Command::Search(_)
             | Command::Completions(_)
@@ -729,21 +727,25 @@ impl Command {
                 action: None | Some(CacheAction::Verify),
             })
             | Command::Auth(Auth { action: None }) => true,
-            Command::Sync(sync) => (!sync.force && !sync.verify) || sync.dry.dry_run,
             Command::Lock(lock) => {
                 (lock.upgrade.is_none() && lock.ours.is_empty() && lock.theirs.is_empty())
                     || lock.dry.dry_run
             }
             Command::Export(export) => !export.force,
-            Command::Get(get) => (!get.force && !get.web_page) || get.dry.dry_run,
-            Command::Remove(Remove { dry, .. })
+            Command::Add(Add { dry, .. })
+            | Command::Get(Get { dry, .. })
+            | Command::Push(Push { dry, .. })
+            | Command::Sync(Sync { dry, .. })
+            | Command::Remove(Remove { dry, .. })
             | Command::Exclude(Exclude { dry, .. })
             | Command::Drop(Drop { dry, .. })
             | Command::Build(Build { dry, .. })
             | Command::Cache(Cache {
                 action: Some(CacheAction::Gc(Gc { dry, .. })),
             }) => dry.dry_run,
-            Command::Auth(Auth {
+            // path syncs the dataset it names when that is not ready, and has no dry run
+            Command::Path(_)
+            | Command::Auth(Auth {
                 action: Some(AuthAction::Login(_) | AuthAction::Logout(_)),
             })
             | Command::Settings(Settings { action: Some(_) }) => false,
