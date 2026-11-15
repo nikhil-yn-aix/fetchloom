@@ -38,6 +38,15 @@ class WorkflowTests(unittest.TestCase):
             with self.subTest(workflow=path.name):
                 self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?m)^\s+(?:runs-on|options): .*-latest\b")
 
+    def test_checkouts_name_a_full_ref(self):
+        """actions/checkout takes a branch over a tag of the same short name, so a ref such as
+        v0.1.0 would publish a branch someone pushed under that name."""
+        for path in WORKFLOWS:
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if re.match(r"\s+ref: ", line):
+                    with self.subTest(workflow=path.name, line=number):
+                        self.assertRegex(line, r"^\s+ref: refs/(?:heads|tags)/")
+
 
 if __name__ == "__main__":
     unittest.main()

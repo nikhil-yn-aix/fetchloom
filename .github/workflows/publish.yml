@@ -1,7 +1,8 @@
 name: publish
 
 # runs when a draft release from release.yml is published, so nothing reaches a package index
-# before the release is checked by hand
+# before the release is checked by hand. each job checks out the release's tag as a full ref: a
+# bare tag name would let a branch of that name win
 on:
   release:
     types: [published]
@@ -27,7 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
       - name: download the wheels
         env:
@@ -49,7 +49,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
           persist-credentials: false
       - run: rustup toolchain install
       - name: publish to crates.io
