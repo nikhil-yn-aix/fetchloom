@@ -2783,7 +2783,7 @@ fn a_plain_sync_leaves_out_a_result_found_nowhere() -> Result {
         document["result"]["placement"]["unbuilt"],
         serde_json::json!(["clean"])
     );
-    let warned = "clean's pinned result is not on this machine or a mirror, so it is left out; run `fetchloom build clean` to make it here";
+    let warned = "clean's pinned result is not on this machine or a mirror, so it is left out; run `fetchloom build clean` to make it here, or whoever built it can share it with `fetchloom push`";
     assert!(
         crate::support::warned(&document)
             .iter()

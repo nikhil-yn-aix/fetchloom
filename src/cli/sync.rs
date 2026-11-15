@@ -312,12 +312,14 @@ impl<'a> Loop<'a> {
                 "them",
             ),
         };
+        // a clone gets results only from a mirror, which whoever built them fills
         self.context.output.warn_with(
             Warning::BuildLeftOut,
             &said,
             &format!(
-                "run `{}` to make {them} here",
-                super::project::command(&format!("build {}", unbuilt.join(" ")))
+                "run `{}` to make {them} here, or whoever built {them} can share {them} with `{}`",
+                super::project::command(&format!("build {}", unbuilt.join(" "))),
+                super::project::command("push")
             ),
         );
         placing.leave_out(&unbuilt);
