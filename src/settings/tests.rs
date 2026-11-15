@@ -187,7 +187,7 @@ fn the_settings_file_sets_what_the_environment_leaves_and_names_its_errors() {
     assert_eq!(
         error.help.as_deref(),
         Some(
-            "remove jobs from the settings file to use the default of 8, or set it to a number from 1 to 256"
+            "run `fetchloom settings unset jobs` to use the default of 8, or set it to a number from 1 to 256"
         )
     );
     let unknown = self::file("job = 3\n").unwrap_err();
@@ -297,7 +297,7 @@ fn a_key_only_a_variable_sets_is_named_with_that_variable() {
     );
     assert_eq!(
         refused.help.as_deref(),
-        Some("remove threads from the settings file and set FETCHLOOM_THREADS instead")
+        Some("run `fetchloom settings unset threads` and set FETCHLOOM_THREADS instead")
     );
     let split = file("split = true\n").unwrap_err();
     assert!(
@@ -736,7 +736,7 @@ fn a_mirror_that_is_no_folder_or_web_address_is_a_usage_error() {
             .help
             .as_deref()
             .is_some_and(|help| help.contains("`fetchloom auth login lab.example`")
-                && help.ends_with("remove mirrors from the settings file to ask no mirror")),
+                && help.ends_with("run `fetchloom settings unset mirrors` to ask no mirror")),
         "{:?}",
         error.help
     );
@@ -1149,7 +1149,7 @@ fn push_to_a_web_address_is_a_usage_error() {
     .unwrap_err();
     assert_eq!(
         error.help.as_deref(),
-        Some("write the folder path itself, or remove push_to from the settings file")
+        Some("write the folder path itself, or run `fetchloom settings unset push_to`")
     );
 }
 

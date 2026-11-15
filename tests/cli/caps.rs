@@ -343,7 +343,7 @@ fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
     );
     assert_eq!(
         document["errors"][0]["help"],
-        "remove jobs from the settings file to use the default of 8, or set it to a number from 1 to 256; --no-config runs without the settings file"
+        "run `fetchloom settings unset jobs` to use the default of 8, or set it to a number from 1 to 256; --no-config runs without the settings file"
     );
     // the variable wins over the file, so it also works around a bad value there
     let output = sandbox
@@ -726,10 +726,7 @@ fn settings_unset_fixes_a_file_that_stops_every_run() -> Result {
     let refused = json(&sandbox.run(&["--json", "settings", "set", "jobs", "300"])?)?;
     assert_eq!(
         refused["errors"][0]["message"],
-        format!(
-            "jobs in the settings file {} is \"300\", which is not a number from 1 to 256",
-            path.display()
-        )
+        "jobs is \"300\", which is not a number from 1 to 256"
     );
     assert_eq!(std::fs::read_to_string(&path)?, "jobs = 0\n");
     let unset = sandbox.run(&["settings", "unset", "jobs"])?;

@@ -493,7 +493,7 @@ mod tests {
         assert_eq!(
             error.help.as_deref(),
             Some(
-                "remove resources from the settings file to use the default level, or set it to lean, default or max"
+                "run `fetchloom settings unset resources` to use the default level, or set it to lean, default or max"
             )
         );
     }

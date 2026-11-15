@@ -71,67 +71,54 @@ fn a_set_keeps_comments_and_the_other_keys() {
     );
 }
 
-/// a run would refuse each value, so `set` refuses it with the reader's message and writes nothing,
-/// and its help says to unset the key, not to remove it from a file the set left as it was.
+/// a run would refuse each value, so `set` refuses it with the reader's message, naming the value
+/// as given rather than as the file's, which it never was, and writes nothing.
 #[test]
 fn a_value_runs_refuse_is_refused_with_the_readers_message() {
     let text = "jobs = 8\n";
     let (_folder, path, var) = settings("settings.toml", Some(text));
-    let shown = path.display();
     for (key, value, message) in [
         (
             "jobs",
             "1000",
-            format!(
-                "jobs in the settings file {shown} is \"1000\", which is not a number from 1 to 256"
-            ),
+            "jobs is \"1000\", which is not a number from 1 to 256".to_owned(),
         ),
         (
             "memory",
             "lots",
-            format!(
-                "memory in the settings file {shown} is \"lots\", which is not a size such as 512M or 4G"
-            ),
+            "memory is \"lots\", which is not a size such as 512M or 4G".to_owned(),
         ),
         (
             "mirrors_only",
             "yes",
-            format!(
-                "mirrors_only in the settings file {shown} is \"yes\", which is not true or false"
-            ),
+            "mirrors_only is \"yes\", which is not true or false".to_owned(),
         ),
         (
             "mirrors",
             "ftp://lab.example/data",
-            format!(
-                "mirrors in the settings file {shown} holds \"ftp://lab.example/data\", which is no mirror: a mirror is a folder, an http or https address or an S3 bucket, not ftp"
-            ),
+            "mirrors holds \"ftp://lab.example/data\", which is no mirror: a mirror is a folder, an http or https address or an S3 bucket, not ftp".to_owned(),
         ),
         (
             "mirrors",
             "s3:lab-data",
-            format!(
-                "mirrors in the settings file {shown} holds \"s3:lab-data\", which is no mirror: it names no S3 bucket"
-            ),
+            "mirrors holds \"s3:lab-data\", which is no mirror: it names no S3 bucket".to_owned(),
         ),
         (
             "push_to",
             "https://lab.example/data",
-            format!(
-                "push_to in the settings file {shown} is \"https://lab.example/data\", which is a web address, and push writes to folders and S3 buckets"
-            ),
+            "push_to is \"https://lab.example/data\", which is a web address, and push writes to folders and S3 buckets".to_owned(),
         ),
     ] {
         let error = set(&var, key, &values(&[value]), None, &fine).unwrap_err();
         assert_eq!(error.kind, Kind::Usage, "{key}");
         assert_eq!(error.message, message, "{key}");
-        assert_eq!(error.details, ["the settings file is as it was"], "{key}");
+        assert_eq!(error.details, ["nothing was saved"], "{key}");
         let help = error.help.as_deref().unwrap_or_default();
         assert!(
             help.contains(&format!("run `fetchloom settings unset {key}`")),
             "{help}"
         );
-        assert!(!help.contains("from the settings file"), "{help}");
+        assert!(!help.contains("settings file"), "{help}");
         assert_eq!(fs::read_to_string(&path).unwrap(), text, "{key}");
     }
 }

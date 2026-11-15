@@ -357,7 +357,7 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
                         ),
                     )
                     .help(format!(
-                        "remove {key} from the settings file and set {variable} instead"
+                        "run `fetchloom settings unset {key}` and set {variable} instead"
                     )));
                 }
                 let error = invalid(format!(
@@ -495,8 +495,23 @@ impl Settings {
     /// every setting, from the environment `var` reads, else from `file`, else from `machine` and
     /// the defaults. `usage` names the variable or key, and what it takes, when one holds another.
     pub(crate) fn read(var: Var<'_>, file: File, machine: Machine) -> Result<Settings, Error> {
+        Settings::read_asked(var, file, machine, None)
+    }
+
+    /// [`Settings::read`], where the value `file` holds for `asked` is one the command line gave,
+    /// to be saved, so a message names it as given there rather than as the file's.
+    fn read_asked(
+        var: Var<'_>,
+        file: File,
+        machine: Machine,
+        asked: Option<&str>,
+    ) -> Result<Settings, Error> {
         let defaults = Settings::defaults(machine);
-        let given = Given { var, file: &file };
+        let given = Given {
+            var,
+            file: &file,
+            asked,
+        };
         let resources = level(&given)?;
         let limits = resources.value.limits(machine);
         let memory = size(
@@ -650,6 +665,8 @@ fn most_files(memory: Set<u64>) -> Set<usize> {
 struct Given<'a> {
     var: Var<'a>,
     file: &'a File,
+    /// the key whose value in `file` the command line gave, as `settings set` checks it.
+    asked: Option<&'a str>,
 }
 
 impl Given<'_> {
@@ -670,11 +687,8 @@ impl Given<'_> {
             Value::Text(text) => split(text),
             Value::List(items) => items.clone(),
         };
-        Some((
-            items,
-            Origin::File,
-            format!("{key} in the settings file {}", self.file_path().display()),
-        ))
+        let (origin, named) = self.in_file(key);
+        Some((items, origin, named))
     }
 
     /// the text `key` holds as it is, never split at commas, since a folder's name may hold one,
@@ -686,11 +700,20 @@ impl Given<'_> {
         let Value::Text(text) = self.file.get(key)? else {
             return None;
         };
-        Some((
-            OsString::from(text),
+        let (origin, named) = self.in_file(key);
+        Some((OsString::from(text), origin, named))
+    }
+
+    /// where the value the settings file holds for `key` came from, and how to name it: the
+    /// command line's, to be saved, by the key alone, else the file's.
+    fn in_file(&self, key: &str) -> (Origin, String) {
+        if self.asked == Some(key) {
+            return (Origin::Flag, key.to_owned());
+        }
+        (
             Origin::File,
             format!("{key} in the settings file {}", self.file_path().display()),
-        ))
+        )
     }
 
     /// what the variable for `key` holds, and its name: a nonempty value, or an empty one for a
@@ -767,10 +790,11 @@ pub(crate) fn misnamed(names: impl IntoIterator<Item = OsString>) -> Vec<(String
         .collect()
 }
 
-/// how to undo a bad value: unset the variable, or remove the key from the file.
+/// how to undo a bad value: unset the variable, or take the key out of the settings file, or,
+/// for one the command line gave to be saved, leave it out.
 fn undo(origin: Origin, key: &str) -> String {
     match origin {
-        Origin::File => format!("remove {key} from the settings file"),
+        Origin::File | Origin::Flag => format!("run `fetchloom settings unset {key}`"),
         _ => format!("unset {}", variable(key)),
     }
 }
@@ -1037,7 +1061,7 @@ fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
         return Ok(Set::default(Vec::new()));
     };
     let base = match origin {
-        Origin::File => given.file_path().parent(),
+        Origin::File | Origin::Flag => given.file_path().parent(),
         _ => None,
     };
     let mut mirrors = Vec::new();
@@ -1092,7 +1116,7 @@ fn push_target(given: &Given<'_>, key: &str) -> Result<Set<Option<Location>>, Er
         });
     }
     let base = match origin {
-        Origin::File => given.file_path().parent(),
+        Origin::File | Origin::Flag => given.file_path().parent(),
         _ => None,
     };
     let shown = crate::shown::mask_typed(text.trim());
