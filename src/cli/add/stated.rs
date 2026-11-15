@@ -73,7 +73,7 @@ pub(super) fn pinned(
         .filter(|remote| stated(remote).is_none())
         .map(|remote| remote.path.as_str())
         .collect();
-    let plain = || {
+    let instead = || {
         format!(
             "run `{}` without --no-sync where the data can download",
             super::super::project::command(&format!("add {}", crate::suggested::shell_word(typed)))
@@ -88,7 +88,7 @@ pub(super) fn pinned(
                 units::some_of(&unstated, NAMED)
             ),
         )
-        .help(format!("pinning them needs their bytes: {}", plain())));
+        .help(format!("pinning them needs their bytes: {}", instead())));
     }
     let most = lock::lists::inline();
     if kept.len() > most {
@@ -100,7 +100,7 @@ pub(super) fn pinned(
                 units::grouped(most as u64)
             ),
         )
-        .help(format!("{}, or choose fewer files with --select", plain())));
+        .help(format!("{}, or choose fewer files with --select", instead())));
     }
     let mut files: Vec<StatedFile> = kept.iter().filter_map(stated).collect();
     files.sort_by(|a, b| a.path.cmp(&b.path));
