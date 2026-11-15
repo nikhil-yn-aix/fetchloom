@@ -1,4 +1,4 @@
-//! `remove`: what it drops and keeps, and that it downloads nothing.
+//! `remove`: what it takes out and keeps, and that it downloads nothing.
 
 use std::fs;
 
@@ -197,15 +197,21 @@ fn remove_explains_how_to_finish_after_placement_fails() -> Result {
     Ok(())
 }
 
+/// a project with `precious`, a dataset added from a folder of the sandbox.
+fn imported(sandbox: &Sandbox) -> Result {
+    let precious = sandbox.folder("precious")?;
+    fs::write(precious.join("notes.csv"), b"id\n1\n")?;
+    let added = sandbox.run(&["add", "../precious"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    Ok(())
+}
+
 /// files imported from a folder come back from no source, so removing their dataset needs a yes,
 /// which nobody gives under --json, a pipe or CI unless --yes does.
 #[test]
 fn removing_an_import_needs_a_yes() -> Result {
     let sandbox = Sandbox::new()?;
-    let precious = sandbox.folder("precious")?;
-    fs::write(precious.join("notes.csv"), b"id\n1\n")?;
-    let added = sandbox.run(&["add", "../precious"])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    imported(&sandbox)?;
     let work = sandbox.work();
     let before = fs::read(work.join("data.toml"))?;
     let refused = sandbox.run(&["--json", "remove", "precious"])?;
@@ -235,10 +241,7 @@ fn removing_an_import_needs_a_yes() -> Result {
 #[test]
 fn removing_an_import_asks_at_a_terminal() -> Result {
     let sandbox = Sandbox::new()?;
-    let precious = sandbox.folder("precious")?;
-    fs::write(precious.join("notes.csv"), b"id\n1\n")?;
-    let added = sandbox.run(&["add", "../precious"])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    imported(&sandbox)?;
     let work = sandbox.work();
     let before = fs::read(work.join("data.toml"))?;
     let asked = "remove it anyway?";

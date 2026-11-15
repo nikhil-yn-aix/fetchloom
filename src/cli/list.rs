@@ -509,8 +509,9 @@ enum Folders {
     None,
 }
 
-/// the datasets in aligned columns, a line each for `grep`. a narrow terminal drops usual folders,
-/// cuts the source to [`SOURCE`], drops the license, folders, the source, then [`folded`] lays it.
+/// the datasets in aligned columns, a line each for `grep`. a narrow terminal leaves out usual
+/// folders, cuts the source to [`SOURCE`], leaves out the license, folders, the source, then
+/// [`folded`] lays it.
 fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
     let widest = |text: &str| text.lines().map(units::columns).max().unwrap_or_default();
     let full = columns(datasets, Some(usize::MAX), (Folders::All, true), marks);
@@ -801,7 +802,7 @@ mod tests {
             table(&report.datasets, Some(50), UNICODE),
             "iris          zenodo:3608990        not locked yet\n\
              mnist-digits  hf:datase…ecun/mnist  not locked yet",
-            "a narrow terminal drops the usual folder, then cuts the source in the middle"
+            "a narrow terminal leaves out the usual folder, then cuts the source in the middle"
         );
     }
 
@@ -824,9 +825,9 @@ mod tests {
         assert_eq!(value["datasets"][1]["placed"], true);
     }
 
-    #[test]
-    fn the_license_comes_last_and_gives_way_after_the_folder() {
-        let listed = |name: &str, license: Option<&str>| Listed {
+    /// a placed dataset of one file from zenodo, with `license`.
+    fn zenodo(name: &str, license: Option<&str>) -> Listed {
+        Listed {
             name: name.to_owned(),
             reference: Some(format!("zenodo:{}", name.len())),
             from: None,
@@ -845,7 +846,12 @@ mod tests {
             downloaded: None,
             pinned_by: None,
             held: Some(Vec::new()),
-        };
+        }
+    }
+
+    #[test]
+    fn the_license_comes_last_and_gives_way_after_the_folder() {
+        let listed = zenodo;
         let datasets = [
             listed("iris", Some("cc-by-4.0")),
             listed(
@@ -1071,26 +1077,7 @@ mod tests {
     /// stays as it is.
     #[test]
     fn a_row_too_wide_for_the_terminal_puts_its_folder_below() {
-        let listed = |name: &str| Listed {
-            name: name.to_owned(),
-            reference: Some(format!("zenodo:{}", name.len())),
-            from: None,
-            resolved: Some(format!("zenodo:{}@1", name.len())),
-            files: Some(1),
-            bytes: Some(4551),
-            folder: format!("data/{name}"),
-            placed: true,
-            dropped: false,
-            usual_folder: true,
-            title: None,
-            license: None,
-            doi: None,
-            access: Some(Access::Unknown),
-            locked_files: Some(Vec::new()),
-            downloaded: None,
-            pinned_by: None,
-            held: Some(Vec::new()),
-        };
+        let listed = |name: &str| zenodo(name, None);
         let mut stations = listed("field-station-measurements");
         stations.folder = "data/field-station".to_owned();
         stations.usual_folder = false;
