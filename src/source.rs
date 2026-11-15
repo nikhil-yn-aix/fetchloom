@@ -1002,8 +1002,13 @@ fn single(url: &Url) -> Listing {
 
 /// a listing is hostile input: every path must stay inside the dataset and appear once, and it
 /// holds at most `most` files. one of only its readme and git files is told, since its data has
-/// usually moved elsewhere.
+/// usually moved elsewhere. its title loses the spaces around it.
 fn check(reference: &Reference, mut listing: Listing, most: usize) -> Result<Listing, Error> {
+    listing.title = listing
+        .title
+        .take()
+        .map(|title| title.trim().to_owned())
+        .filter(|title| !title.is_empty());
     let only_about = !matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
         && !listing.files.is_empty()
         && listing.files.iter().all(|file| is_about(&file.path));
@@ -2005,5 +2010,26 @@ mod tests {
                 .is_empty(),
             "a link to one readme asked for it"
         );
+    }
+
+    /// a title is kept as the source wrote it but for the spaces around it, as kaggle's
+    /// trailing one, which data.lock would keep.
+    #[test]
+    fn a_title_is_kept_without_the_spaces_around_it() {
+        let url = Url::parse("https://example.org/sentences.zip").unwrap();
+        let reference = Reference::Url(url.clone());
+        for (title, kept) in [
+            (
+                "Sentiment Labelled Sentences Data Set ",
+                Some("Sentiment Labelled Sentences Data Set"),
+            ),
+            ("\tIris ", Some("Iris")),
+            ("  ", None),
+        ] {
+            let mut listing = single(&url);
+            listing.title = Some(title.to_owned());
+            let checked = check(&reference, listing, crate::net::MOST_FILES).unwrap();
+            assert_eq!(checked.title.as_deref(), kept, "{title:?}");
+        }
     }
 }
