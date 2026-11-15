@@ -550,6 +550,10 @@ static SETTINGS_FILE: std::sync::OnceLock<File> = std::sync::OnceLock::new();
 /// the help for a cache folder that could not be used. the folder fetchloom chose may be one the
 /// user does not own, as in a container whose user has a home of `/`, so it names the variable too.
 fn moved_by_variable(error: Error, err: &std::io::Error) -> Error {
+    // a folder where fetchloom keeps a file comes with its own fix, which a move would only hide
+    if err.kind() == std::io::ErrorKind::IsADirectory {
+        return error;
+    }
     let chosen = std::env::var_os("FETCHLOOM_CACHE").is_some_and(|value| !value.is_empty());
     let filed = SETTINGS_FILE
         .get()

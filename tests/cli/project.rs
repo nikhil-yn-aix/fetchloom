@@ -2742,6 +2742,8 @@ fn a_folder_in_place_of_a_file_fetchloom_keeps_is_named_with_the_fix() -> Result
         )),
         "{stderr}"
     );
+    // moving the cache elsewhere is no fix for a folder in it
+    assert!(!stderr.contains("FETCHLOOM_CACHE"), "{stderr}");
     fs::remove_dir(&lock)?;
     let state = sandbox.work().join(".fetchloom").join("state");
     delete(&state)?;
