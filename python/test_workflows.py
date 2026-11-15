@@ -87,5 +87,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertRegex(given[0], r"\n        run: cargo publish --locked --no-verify(?: #[^\n]*)?\n")
 
 
+    def test_packages_are_kept_before_unpinned_tools_install(self):
+        """apt and brew install whatever version they hold, so in a build job such a step after the
+        build comes after the packages are uploaded, when it can no longer change them."""
+        build = jobs("artifacts.yml")["build"]
+        after = build[build.index("&compile"):]
+        installs = list(re.finditer(r"apt-install\.sh [^\n]*|brew install [^\n]*", after))
+        self.assertTrue(installs)
+        for install in installs:
+            with self.subTest(install=install[0]):
+                self.assertGreater(install.start(), after.index("name: packages-"))
+
+
 if __name__ == "__main__":
     unittest.main()
