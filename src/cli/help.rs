@@ -166,8 +166,9 @@ a key fetchloom auth login saved:
   NETRC                the netrc file with logins for other sites, instead of
                        ~/.netrc
   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_PROFILE,
-  AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE, AWS_REGION, AWS_DEFAULT_REGION,
-  AWS_ENDPOINT_URL, AWS_ENDPOINT_URL_S3, AWS_IGNORE_CONFIGURED_ENDPOINT_URLS
+  AWS_DEFAULT_PROFILE, AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE, AWS_REGION,
+  AWS_DEFAULT_REGION, AWS_ENDPOINT_URL, AWS_ENDPOINT_URL_S3,
+  AWS_IGNORE_CONFIGURED_ENDPOINT_URLS
                        S3 buckets in s3_buckets and S3 mirrors, as the aws cli
                        reads them. with an endpoint set, a mirror written as
                        s3://bucket/prefix is at that service
