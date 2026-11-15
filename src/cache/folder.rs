@@ -100,10 +100,7 @@ impl Folder {
     pub(super) fn create_new(&self, name: &str) -> io::Result<File> {
         #[cfg(unix)]
         {
-            use rustix::fs::{Mode, OFlags};
-            let flags = OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW;
-            let mode = Mode::from_bits_truncate(0o666);
-            Ok(rustix::fs::openat(&self.handle, name, flags | OFlags::CLOEXEC, mode)?.into())
+            self.create_new_with(name, 0o666)
         }
         #[cfg(not(unix))]
         std::fs::OpenOptions::new()
@@ -111,6 +108,47 @@ impl Folder {
             .write(true)
             .create_new(true)
             .open(self.join(name))
+    }
+
+    /// [`Folder::create_new`] with the permissions `mode` before the umask takes its part.
+    #[cfg(unix)]
+    pub(super) fn create_new_with(&self, name: &str, mode: u32) -> io::Result<File> {
+        use rustix::fs::{Mode, OFlags};
+        let flags = OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW;
+        let mode = Mode::from_bits_truncate(mode);
+        Ok(rustix::fs::openat(&self.handle, name, flags | OFlags::CLOEXEC, mode)?.into())
+    }
+
+    /// the names the folder holds.
+    pub(super) fn list(&self) -> io::Result<Vec<std::ffi::OsString>> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            Ok(super::staging::names_at(&self.handle)?
+                .into_iter()
+                .map(|name| std::ffi::OsString::from_vec(name.into_bytes()))
+                .collect())
+        }
+        #[cfg(not(unix))]
+        std::fs::read_dir(self.path())?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect()
+    }
+
+    /// gives the file `name` the name `to` in the folder `into`, replacing a file there.
+    pub(super) fn rename_into(&self, name: &str, into: &Folder, to: &str) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            Ok(rustix::fs::renameat(&self.handle, name, &into.handle, to)?)
+        }
+        #[cfg(not(unix))]
+        std::fs::rename(self.join(name), into.join(to))
+    }
+
+    /// flushes the folder's names, which flushing a file does not make last on unix.
+    #[cfg(unix)]
+    pub(super) fn flush(&self) -> io::Result<()> {
+        self.handle.sync_all()
     }
 
     /// opens the plain file `name` to read and write, never through a link nor when it has another
@@ -207,20 +245,11 @@ impl Folder {
         };
         let written = file.write_all(bytes);
         drop(file);
-        #[cfg(unix)]
-        let renamed = || -> io::Result<()> {
-            Ok(rustix::fs::renameat(
-                &scratch.handle,
-                temporary.as_str(),
-                &self.handle,
-                name,
-            )?)
-        };
-        #[cfg(not(unix))]
-        let renamed = || std::fs::rename(scratch.join(&temporary), self.join(name));
-        written.and_then(|()| renamed()).inspect_err(|_| {
-            let _ = scratch.remove(&temporary);
-        })
+        written
+            .and_then(|()| scratch.rename_into(&temporary, self, name))
+            .inspect_err(|_| {
+                let _ = scratch.remove(&temporary);
+            })
     }
 
     #[cfg(unix)]

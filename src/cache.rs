@@ -18,7 +18,7 @@ mod urls;
 mod link_tests;
 
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -302,6 +302,23 @@ fn name_count(file: &File) -> io::Result<u64> {
     {
         let _ = file;
         Ok(1)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// what a test does once a record's folder in the cache is looked at and before the record is
+    /// renamed, read or removed there, as someone sharing the cache swapping that folder or that
+    /// record for a link meanwhile would, once.
+    static MEANWHILE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// runs what a test asked to happen at this point, once.
+fn meanwhile() {
+    #[cfg(test)]
+    if let Some(swap) = MEANWHILE.take() {
+        swap();
     }
 }
 
@@ -644,9 +661,10 @@ impl Cache {
     }
 
     /// removes an object the cache no longer needs to hold, such as an archive whose files are
-    /// all unpacked. files placed from it keep their bytes.
+    /// all unpacked, through its fan folder held from the cache's root, so a fan folder someone
+    /// swapped for a link sends the removal nowhere else. files placed from it keep their bytes.
     pub(crate) fn drop_object(&self, digest: &Sha256) -> io::Result<()> {
-        match self.volume.remove(&self.object_path(digest)) {
+        match self.remove_inside(&self.object_path(digest)) {
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
             removed => removed,
         }
@@ -777,6 +795,9 @@ impl Cache {
         self.replace_file(path, bytes, false, false)
     }
 
+    /// writes `bytes` to a new file in tmp/ and renames it to `path`, both through folders held
+    /// from the cache's root, so neither goes elsewhere when someone sharing the cache swaps a
+    /// folder on the way for a link meanwhile.
     fn replace_file(
         &self,
         path: &Path,
@@ -784,30 +805,84 @@ impl Cache {
         durable: bool,
         private: bool,
     ) -> io::Result<()> {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
+        let parent = path.parent().unwrap_or(&self.root);
+        let scratch = self.root.join("tmp");
         #[cfg(unix)]
-        if private {
-            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o644);
+        {
+            let below = parent.strip_prefix(&self.root).ok();
+            let name = path.file_name().and_then(std::ffi::OsStr::to_str);
+            let (Some(below), Some(name)) = (below, name) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is not a record in the cache", path.display()),
+                ));
+            };
+            let folder = folder::Folder::open(&self.root, below)
+                .map_err(|err| self.explained(parent, err))?;
+            let tmp = folder::Folder::open(&self.root, Path::new("tmp"))
+                .map_err(|err| self.explained(&scratch, err))?;
+            let mode = if private { 0o644 } else { 0o666 };
+            let (temporary, file) = loop {
+                let temporary = format!("{:016x}.tmp", fastrand::u64(..));
+                match tmp.create_new_with(&temporary, mode) {
+                    Ok(file) => break (temporary, file),
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(err) => return Err(self.explained(&scratch, err)),
+                }
+            };
+            let written = fill_and_rename_with(
+                file,
+                bytes,
+                [&tmp.join(&temporary), path],
+                durable,
+                File::sync_all,
+                |_, _| {
+                    meanwhile();
+                    tmp.rename_into(&temporary, &folder, name)
+                },
+                |at| {
+                    if at == scratch {
+                        tmp.flush()
+                    } else {
+                        folder.flush()
+                    }
+                },
+            );
+            if written.is_err() {
+                let _ = tmp.remove(&temporary);
+            }
+            written.map_err(|err| self.explained(parent, err))
         }
         #[cfg(not(unix))]
-        let _ = private;
-        let (temporary, file) = loop {
-            let temporary = self
-                .root
-                .join("tmp")
-                .join(format!("{:016x}.tmp", fastrand::u64(..)));
-            match options.open(&temporary) {
-                Ok(file) => break (temporary, file),
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(err) => return Err(self.explained(&self.root.join("tmp"), err)),
+        {
+            let _ = private;
+            real_folder(parent, FolderUse::Cache).map_err(|err| self.explained(parent, err))?;
+            let placer = self.remover.placer(&self.root);
+            let (temporary, file) = loop {
+                let temporary = scratch.join(format!("{:016x}.tmp", fastrand::u64(..)));
+                match placer.create_file(&temporary, false) {
+                    Ok(file) => break (temporary, file),
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(err) => return Err(self.explained(&scratch, err)),
+                }
+            };
+            let written = fill_and_rename_with(
+                file,
+                bytes,
+                [&temporary, path],
+                durable,
+                File::sync_all,
+                |from, to| {
+                    meanwhile();
+                    placer.rename_file(from, to)
+                },
+                crate::volume::sync_directory,
+            );
+            if written.is_err() {
+                let _ = placer.delete_file(&temporary);
             }
-        };
-        let written = fill_and_rename(file, bytes, &temporary, path, durable);
-        if written.is_err() {
-            let _ = fs::remove_file(&temporary);
+            written.map_err(|err| self.explained(parent, err))
         }
-        written.map_err(|err| self.explained(path.parent().unwrap_or(&self.root), err))
     }
 
     /// moves a sealed file into the cache under its hash. the link never replaces an intact
@@ -946,7 +1021,7 @@ fn exclude_native_backup_and_indexing(root: &Path) -> io::Result<()> {
         Ok(()) | Err(rustix::io::Errno::EXIST | rustix::io::Errno::NOTSUP) => {}
         Err(err) => return Err(err.into()),
     }
-    match OpenOptions::new()
+    match fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(root.join(NEVER_INDEX))
@@ -997,25 +1072,8 @@ fn existing(
     }
 }
 
-/// writes `bytes` to the new file at `temporary`, flushed when `durable`, and renames it to `path`.
-fn fill_and_rename(
-    file: File,
-    bytes: &[u8],
-    temporary: &Path,
-    path: &Path,
-    durable: bool,
-) -> io::Result<()> {
-    fill_and_rename_with(
-        file,
-        bytes,
-        [temporary, path],
-        durable,
-        File::sync_all,
-        |from, to| fs::rename(from, to),
-        crate::volume::sync_directory,
-    )
-}
-
+/// writes `bytes` to the new file at `temporary` and gives it the name `path` with `rename`, each
+/// flushed with `sync_file` and `sync_directory` when `durable`.
 fn fill_and_rename_with(
     mut file: File,
     bytes: &[u8],
@@ -1156,7 +1214,7 @@ pub(crate) mod tests {
     pub(crate) fn hold(path: &Path) -> impl Sized {
         use std::os::windows::fs::OpenOptionsExt;
         const FILE_SHARE_READ: u32 = 1;
-        OpenOptions::new()
+        fs::OpenOptions::new()
             .read(true)
             .share_mode(FILE_SHARE_READ)
             .open(path)

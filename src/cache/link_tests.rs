@@ -176,6 +176,119 @@ fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
     assert_eq!(fs::read(kept).unwrap(), b"keep these bytes");
 }
 
+/// a folder outside the cache holding a file named as a marked object is, as git lfs and hugging
+/// face name theirs, and a test step that swaps `changed/` for a link to it, as someone sharing the
+/// cache can, once the cache has looked at `changed/`.
+fn changed_swapped_meanwhile(cache: &Cache, digest: &crate::digest::Sha256) -> std::path::PathBuf {
+    let outside = cache.root.with_file_name("outside");
+    fs::create_dir(&outside).unwrap();
+    let theirs = outside.join(digest.hex());
+    fs::write(&theirs, b"keep these bytes").unwrap();
+    let folder = cache.root.join("changed");
+    let aside = cache.root.join("old-changed");
+    super::MEANWHILE.set(Some(Box::new(move || {
+        fs::rename(&folder, aside).unwrap();
+        crate::test_links::link_folder(&outside, &folder).unwrap();
+    })));
+    theirs
+}
+
+/// gc lists `changed/`, then removes the mark of each object that is gone, so `changed/` swapped
+/// for a link in between must not lead it to delete files of those names elsewhere.
+#[test]
+fn forgetting_marks_never_follows_a_changed_folder_swapped_meanwhile() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let digest = crate::digest::sha256(b"object");
+    cache.mark_changed(&digest).unwrap();
+    let theirs = changed_swapped_meanwhile(&cache, &digest);
+
+    let mut not_removed = Vec::new();
+    cache
+        .forget_changed_reporting(
+            &std::collections::HashSet::new(),
+            &crate::stop::Stop::default(),
+            &mut not_removed,
+        )
+        .unwrap();
+
+    assert!(super::MEANWHILE.take().is_none(), "the folder was swapped");
+    assert_eq!(fs::read(theirs).unwrap(), b"keep these bytes");
+}
+
+/// a mark is written aside in `tmp/`, then renamed into `changed/`, so `changed/` swapped for a
+/// link in between must not lead the rename to replace a file of that name elsewhere.
+#[test]
+fn a_mark_never_replaces_a_file_through_a_changed_folder_swapped_meanwhile() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let digest = crate::digest::sha256(b"object");
+    let theirs = changed_swapped_meanwhile(&cache, &digest);
+
+    let _ = cache.mark_changed(&digest);
+
+    assert!(super::MEANWHILE.take().is_none(), "the folder was swapped");
+    assert_eq!(fs::read(theirs).unwrap(), b"keep these bytes");
+}
+
+/// a mark swapped for a link once looked at is never read through it: a fifo there would never
+/// end the read, and a file elsewhere would pass for the mark.
+#[cfg(unix)]
+#[test]
+fn a_mark_swapped_for_a_link_meanwhile_is_never_read_through_it() {
+    let (dir, cache) = super::tests::cache();
+    let digest = crate::digest::sha256(b"object");
+    cache
+        .mark_replaced(&digest, std::time::SystemTime::UNIX_EPOCH)
+        .unwrap();
+    let mark = cache.root.join("changed").join(digest.hex());
+    let outside = dir.path().join("outside");
+    fs::write(&outside, b"9000000000000000000\n").unwrap();
+    let link = mark.clone();
+    super::MEANWHILE.set(Some(Box::new(move || {
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+    })));
+
+    let read = cache.changed_at(&digest);
+
+    assert!(super::MEANWHILE.take().is_none(), "the mark was swapped");
+    assert_eq!(
+        read.map_err(|error| error.message),
+        Err(format!(
+            "could not read the cache's list of changed files at {}: it is not a plain file",
+            mark.display()
+        ))
+    );
+}
+
+/// an archive's object dropped once its files are unpacked goes through its fan folder reached from
+/// the cache's root, so a fan folder someone swapped for a link sends the removal nowhere else.
+#[test]
+fn dropping_an_object_never_follows_a_fan_folder_swapped_for_a_link() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let digest = crate::digest::sha256(b"archive");
+    let hex = digest.hex();
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let theirs = outside.join(&hex[2..]);
+    fs::write(&theirs, b"keep these bytes").unwrap();
+    let fan = cache.root.join("objects").join(&hex[..2]);
+    let _ = fs::remove_dir(&fan);
+    crate::test_links::link_folder(&outside, &fan).unwrap();
+
+    let _ = cache.drop_object(&digest);
+
+    assert_eq!(fs::read(theirs).unwrap(), b"keep these bytes");
+}
+
 /// gc reads every list of imports and removes each that names no object it holds, so a link
 /// swapped in for `imported/` must not lead it to read or delete someone's files.
 #[test]

@@ -4,14 +4,13 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::Cache;
 use crate::digest::{Block, Sha256};
 use crate::error::Error;
-use crate::place::{FolderUse, found_folder, real_folder};
 use crate::units::nanos;
 use crate::volume::is_plain;
 
@@ -106,7 +105,7 @@ impl Cache {
     /// object at the name; with none, that object is another file, kept out of doubt by its time.
     pub(crate) fn mark_copy_changed(&self, digest: &Sha256, copy: Identity) -> io::Result<()> {
         let path = self.changed_folder().join(digest.hex());
-        let marked = match fs::symlink_metadata(&path).and_then(|found| Mark::read(&path, &found)) {
+        let marked = match Mark::read(&path) {
             Ok(mark) => Some(mark),
             Err(err) if err.kind() == io::ErrorKind::NotFound => None,
             Err(err) => return Err(err),
@@ -147,8 +146,6 @@ impl Cache {
         replacement: Option<u64>,
         copies: &[Identity],
     ) -> io::Result<()> {
-        let folder = self.changed_folder();
-        real_folder(&folder, FolderUse::Cache)?;
         let mut text = replacement
             .map(|written| written.to_string())
             .unwrap_or_default();
@@ -156,14 +153,12 @@ impl Cache {
             text.push('\n');
             text.push_str(&copy.to_string());
         }
-        self.write_atomically(&folder.join(digest.hex()), text.as_bytes())
+        self.write_atomically(&self.changed_folder().join(digest.hex()), text.as_bytes())
     }
 
     /// the copies an earlier mark for `digest` names, none when it cannot be read.
     fn marked_copies(&self, digest: &Sha256) -> Vec<Identity> {
-        let path = self.changed_folder().join(digest.hex());
-        fs::symlink_metadata(&path)
-            .and_then(|metadata| Mark::read(&path, &metadata))
+        Mark::read(&self.changed_folder().join(digest.hex()))
             .map(|mark| mark.copies)
             .unwrap_or_default()
     }
@@ -194,35 +189,27 @@ impl Cache {
     /// returns an error when the marks folder, an entry or a mark cannot be read. only a missing
     /// folder or mark means there is no recorded doubt.
     pub(crate) fn marks(&self) -> Result<HashMap<Sha256, Mark>, Error> {
-        let folder = self.changed_folder();
-        let metadata = match fs::symlink_metadata(&folder) {
-            Ok(metadata) => metadata,
+        let path = self.changed_folder();
+        let folder = match self.held_changed() {
+            Ok(folder) => folder,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
-            Err(err) => return Err(unreadable_mark(&folder, &err)),
-        };
-        found_folder(&folder, &metadata, FolderUse::Cache)
-            .map_err(|err| unreadable_mark(&folder, &err))?;
-        let entries = match fs::read_dir(&folder) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
-            Err(err) => return Err(unreadable_mark(&folder, &err)),
+            Err(err) => return Err(unreadable_mark(&path, &err)),
         };
         let mut marks = HashMap::new();
-        for entry in entries {
-            let entry = entry.map_err(|err| unreadable_mark(&folder, &err))?;
-            let Some(digest) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
+        for name in folder.list().map_err(|err| unreadable_mark(&path, &err))? {
+            let Some(name) = name.to_str() else {
                 continue;
             };
-            let path = entry.path();
-            let mark = entry
-                .metadata()
-                .and_then(|metadata| Mark::read(&path, &metadata));
-            match mark {
-                Ok(mark) => {
-                    marks.insert(digest, mark);
+            let Some(digest) = Sha256::from_hex(name) else {
+                continue;
+            };
+            let mark = folder.join(name);
+            match Mark::opened(&mark, || folder.read_file(name)) {
+                Ok(found) => {
+                    marks.insert(digest, found);
                 }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => return Err(unreadable_mark(&path, &err)),
+                Err(err) => return Err(unreadable_mark(&mark, &err)),
             }
         }
         Ok(marks)
@@ -242,27 +229,30 @@ impl Cache {
         stop: &crate::stop::Stop,
         not_removed: &mut Vec<super::Failure>,
     ) -> Result<(), crate::error::Error> {
-        let folder = self.changed_folder();
-        for entry in super::upkeep::scan_entries(&folder, not_removed, stop)? {
+        stop.check()?;
+        // listed through the folder held from the cache's root, so a link someone swapped in for
+        // it names no files elsewhere
+        let names = match self.held_changed().and_then(|folder| folder.list()) {
+            Ok(names) => names,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                not_removed.push(super::Failure::new(&self.changed_folder(), &err));
+                return Ok(());
+            }
+        };
+        for name in names {
             stop.check()?;
-            let Some(digest) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
+            let Some(digest) = name.to_str().and_then(Sha256::from_hex) else {
                 continue;
             };
             let object = self.object_path(&digest);
             // a pretend sweep keeps the objects it would remove, so their marks go as well
             let gone = self.volume.pretends_removed(&object)
                 || object.try_exists().is_ok_and(|exists| !exists);
-            if !needed.contains(&digest)
-                && gone
-                && fs::symlink_metadata(&folder).is_ok_and(|metadata| {
-                    found_folder(&folder, &metadata, FolderUse::Cache).is_ok()
-                })
-            {
-                super::upkeep::removed(
-                    &entry.path(),
-                    self.volume.remove(&entry.path()),
-                    not_removed,
-                );
+            if !needed.contains(&digest) && gone {
+                let mark = self.changed_folder().join(&name);
+                super::meanwhile();
+                super::upkeep::removed(&mark, self.remove_inside(&mark), not_removed);
             }
         }
         Ok(())
@@ -271,7 +261,7 @@ impl Cache {
     /// the time the object for `digest` must be newer than to be out of doubt, when it is marked.
     pub(super) fn changed_at(&self, digest: &Sha256) -> Result<Option<u64>, Error> {
         let path = self.changed_folder().join(digest.hex());
-        match fs::symlink_metadata(&path).and_then(|metadata| Mark::read(&path, &metadata)) {
+        match Mark::read(&path) {
             Ok(mark) => Ok(Some(mark.doubt_since())),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(unreadable_mark(&path, &err)),
@@ -280,6 +270,11 @@ impl Cache {
 
     fn changed_folder(&self) -> PathBuf {
         self.root.join("changed")
+    }
+
+    /// `changed/`, held from the cache's root without following a link.
+    fn held_changed(&self) -> io::Result<super::folder::Folder> {
+        super::folder::Folder::existing(&self.root, Path::new("changed"))
     }
 }
 
@@ -297,14 +292,36 @@ pub(crate) struct Mark {
 }
 
 impl Mark {
-    fn read(path: &Path, metadata: &fs::Metadata) -> io::Result<Mark> {
-        if !is_plain(metadata) {
+    /// the mark at `path`, opened without following a link.
+    fn read(path: &Path) -> io::Result<Mark> {
+        Mark::opened(path, || crate::volume::read_unfollowed(path))
+    }
+
+    /// the mark at `path`, a plain file of [`MARK_MOST`] bytes at most, read through the handle
+    /// `open` gives: anyone who can write a shared cache can put a fifo there, or a link to
+    /// /dev/zero, and a mark looked at by its name could be swapped for one before it is read.
+    fn opened(path: &Path, open: impl FnOnce() -> io::Result<fs::File>) -> io::Result<Mark> {
+        let not_plain = || io::Error::new(io::ErrorKind::InvalidData, "it is not a plain file");
+        if !is_plain(&fs::symlink_metadata(path)?) {
+            return Err(not_plain());
+        }
+        super::meanwhile();
+        let file = open().map_err(|err| {
+            if err.kind() == io::ErrorKind::InvalidInput {
+                not_plain()
+            } else {
+                err
+            }
+        })?;
+        let metadata = file.metadata()?;
+        let mut text = String::new();
+        file.take(MARK_MOST + 1).read_to_string(&mut text)?;
+        if text.len() as u64 > MARK_MOST {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "it is not a plain file",
+                "it is larger than any note of a change",
             ));
         }
-        let text = fs::read_to_string(path)?;
         let mut lines = text.lines();
         let replacement = lines.next().and_then(|line| line.trim().parse().ok());
         Ok(Mark {
@@ -325,6 +342,9 @@ impl Mark {
 
 /// how many changed copies a mark remembers. each repair leaves one behind at most.
 const COPIES: usize = 16;
+
+/// the most bytes a mark may hold: a time and [`COPIES`] lines of four numbers, with room to spare.
+const MARK_MOST: u64 = 4096;
 
 /// a file apart from its names: device and inode on unix, volume and file index on windows, with
 /// its size and time, so neither a file reusing a freed number nor a copy edited again passes for
