@@ -24,12 +24,10 @@ try {
     New-Item -ItemType Directory 'R:\sandboxes' | Out-Null
     $env:TMP = 'R:\sandboxes'
     $env:TEMP = $env:TMP
-    $env:FETCHLOOM_CI_VOLUME = $FileSystem
     python python/ci_tests.py run $FileSystem --disk --archive target/ci/windows-tests.tar.zst
     if ($LASTEXITCODE) { throw "tests failed on $FileSystem" }
 } finally {
     $env:TMP, $env:TEMP = $oldTmp, $oldTemp
-    Remove-Item Env:\FETCHLOOM_CI_VOLUME -ErrorAction SilentlyContinue
     Set-Content $script -Encoding ascii -Value @("select vdisk file=`"$image`"", 'detach vdisk')
     diskpart /s $script
     if ($LASTEXITCODE) { throw "diskpart could not detach $FileSystem" }
