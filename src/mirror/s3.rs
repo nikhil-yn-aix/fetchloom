@@ -1218,6 +1218,7 @@ mod tests {
             "s3://lab-data/a/../b",
             "s3://lab-data/a//b",
             "s3://lab-data/m#top",
+            "s3://192.168.1.1/x",
         ] {
             let refusal = Top::parse(text).unwrap_err();
             assert!(!refusal.reason.contains("secret"), "{text}");

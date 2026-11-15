@@ -616,9 +616,15 @@ pub(crate) fn region_named(
         .map(str::to_owned)
 }
 
-/// whether `name` follows S3's bucket naming rules.
+/// whether `name` follows S3's bucket naming rules, which also refuse a name written as an IP
+/// address, such as 192.168.5.4.
 pub(crate) fn is_bucket(name: &str) -> bool {
-    named(name, 63, false)
+    let parts: Vec<&str> = name.split('.').collect();
+    let address = parts.len() == 4
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    named(name, 63, false) && !address
 }
 
 /// whether `name` is 3 to `longest` lowercase letters, digits, `-` and `.`, and `_` when
@@ -711,6 +717,18 @@ mod tests {
     /// what signs a request for `located`, whose written keys hold at any time.
     fn signer(signing: &Signing, located: &Located) -> Option<Signer> {
         block_on(signing.signer(Some(located), UNIX_EPOCH, &Stop::default())).unwrap()
+    }
+
+    /// S3 takes no bucket named like an IP address, so such a name never reaches a request.
+    #[test]
+    fn a_bucket_is_never_named_like_an_ip_address() {
+        for name in ["192.168.1.1", "10.0.0.1", "999.1.1.1"] {
+            assert!(!is_bucket(name), "{name}");
+            assert_eq!(Bucket::parse(&format!("s3://{name}")), None, "{name}");
+        }
+        for name in ["10.0.0.1a", "1.2.3", "1.2.3.4.5", "lab-data", "open.data"] {
+            assert!(is_bucket(name), "{name}");
+        }
     }
 
     #[test]
