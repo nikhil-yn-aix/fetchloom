@@ -1282,7 +1282,7 @@ impl Output {
     /// puts back the mode a question holds the terminal in, clears the bars and shows the cursor
     /// again, for a run that ends at once, as at a second ctrl-c, so it leaves the terminal as it
     /// found it.
-    pub(crate) fn abandon(&self) {
+    fn abandon(&self) {
         raw::release();
         if let Some(bars) = &self.bars {
             let _ = bars.clear();

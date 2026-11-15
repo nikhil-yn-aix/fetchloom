@@ -18,7 +18,7 @@ const GROUP: usize = 256;
 
 /// how long the first download in a group waits for it to fill before it is flushed and named
 /// anyway, so another run that wants one of them does not wait for this run's longest download.
-pub(crate) const PUBLISH_WITHIN: Duration = Duration::from_secs(1);
+const PUBLISH_WITHIN: Duration = Duration::from_secs(1);
 
 /// a download written in full, read-only, still at its partial name and still claimed.
 #[derive(Debug)]

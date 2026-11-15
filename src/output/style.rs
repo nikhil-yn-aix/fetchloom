@@ -24,7 +24,7 @@ pub(crate) enum Tone {
 /// the color of each tone. `FETCHLOOM_COLORS` changes any of them, as in
 /// `done=green:work=blue:accent=#d787ff`, or picks a whole theme with `theme=light`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Palette {
+struct Palette {
     done: Color,
     work: Color,
     warn: Color,
@@ -34,7 +34,7 @@ pub(crate) struct Palette {
 
 /// a set of colors that belong together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Theme {
+enum Theme {
     /// the terminal's own sixteen colors, which follow whatever theme it has
     Ansi,
     /// the docs site's dark colors, as `python/test_site.py` checks: sage green for work and what a
@@ -74,7 +74,7 @@ impl Theme {
 
     /// the theme a terminal suits: the dark one where it draws any color and its background is
     /// known or assumed dark, the light one on a light background, and its own colors elsewhere.
-    pub(crate) fn detect(var: &dyn Fn(&str) -> Option<OsString>) -> Theme {
+    fn detect(var: &dyn Fn(&str) -> Option<OsString>) -> Theme {
         if !full_color(var) {
             return Theme::Ansi;
         }
@@ -104,7 +104,7 @@ impl Default for Palette {
 }
 
 impl Palette {
-    pub(crate) fn color(&self, tone: Tone) -> Color {
+    fn color(&self, tone: Tone) -> Color {
         match tone {
             Tone::Done => self.done,
             Tone::Work => self.work,
@@ -116,7 +116,7 @@ impl Palette {
 
     /// reads `tone=color` entries split by `:`. an entry it cannot read keeps the default and is
     /// returned, so one typo never costs the rest.
-    pub(crate) fn parse(text: &str, theme: Theme) -> (Palette, Vec<String>) {
+    fn parse(text: &str, theme: Theme) -> (Palette, Vec<String>) {
         let entries: Vec<&str> = text
             .split(':')
             .map(str::trim)

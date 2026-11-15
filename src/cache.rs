@@ -482,7 +482,7 @@ impl Cache {
     /// replaces `path` in one step without flushing it first. for records whose loss after a power
     /// cut costs only a download or a resume, and which read as absent when torn. dropping their
     /// flushes halved fetching 1,000 files of 100 KiB from a server on the same machine.
-    pub(crate) fn write_hint(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    fn write_hint(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         self.replace_file(path, bytes, false, false)
     }
 

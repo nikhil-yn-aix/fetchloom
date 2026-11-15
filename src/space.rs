@@ -35,7 +35,7 @@ impl Filesystem {
 
     /// the filesystem a linux `statfs` magic number stands for. vfat and msdos share one.
     #[cfg(any(target_os = "linux", test))]
-    pub(crate) fn from_magic(magic: i128) -> Filesystem {
+    fn from_magic(magic: i128) -> Filesystem {
         match magic {
             0x4d44 => Filesystem::Fat,
             0x2011_bab0 => Filesystem::Exfat,
