@@ -268,7 +268,13 @@ jobs:
       - name: tests on hfs+
         if: matrix.os == 'macos-15'
         timeout-minutes: 12
-        run: .github/scripts/macos-filesystem.sh
+        run: .github/scripts/macos-filesystem.sh hfs
+      # exfat on macos has neither links nor a rename that refuses a taken name, so each placed
+      # file takes its name another way
+      - name: placing tests on exfat
+        if: matrix.os == 'macos-15'
+        timeout-minutes: 12
+        run: .github/scripts/macos-filesystem.sh exfat
       - name: keep test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

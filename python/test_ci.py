@@ -36,6 +36,7 @@ SELECTIONS = {
     "disk": [name for name in NATIVE if not name.startswith(("fetchloom::net::", "fetchloom::cli::basics::"))],
     "chmod": [f"fetchloom::{CHMOD}"],
     "aliases": sorted([f"fetchloom::{LIB_ALIAS}", f"fetchloom::cli::{CLI_ALIAS}"]),
+    "placing": [name for name in NATIVE if name.startswith("fetchloom::cli::placing::")],
 }
 
 
@@ -174,7 +175,7 @@ class RecordAndRun(unittest.TestCase):
         return json.loads((self.root / "target/ci/selection.json").read_text(encoding="utf-8"))
 
     def test_record_keeps_what_libtest_selects_for_each_run(self):
-        self.assertEqual(self.main("record"), (0, "libtest selections: {'native': 16, 'disk': 14, 'chmod': 1, 'aliases': 2}\n"))
+        self.assertEqual(self.main("record"), (0, "libtest selections: {'native': 16, 'disk': 14, 'chmod': 1, 'aliases': 2, 'placing': 10}\n"))
         self.assertEqual(self.recorded(), SELECTIONS)
 
     def test_record_refuses_test_binaries_cargo_and_nextest_list_apart(self):
@@ -193,7 +194,8 @@ class RecordAndRun(unittest.TestCase):
         snapshot = self.root / "tests/cli/snapshots/basics__help.snap"
         # windows names a snapshot with its long-path prefix
         self.workspace.snapshots = [str(snapshot), "\\\\?\\" + str(self.root / "tests/cli/snapshots/get__one.snap")]
-        for scope, flags in [("native", []), ("xfs", ["--disk"]), ("chmod", ["--chmod"]), ("aliases", ["--aliases"])]:
+        for scope, flags in [("native", []), ("xfs", ["--disk"]), ("chmod", ["--chmod"]), ("aliases", ["--aliases"]),
+                             ("exfat", ["--placing"])]:
             with self.subTest(scope=scope):
                 code, printed = self.main("run", scope, *flags)
                 kind = flags[0][2:] if flags else "native"

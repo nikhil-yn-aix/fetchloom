@@ -14,6 +14,8 @@ SKIP = ("source::", "net::", "glob::", "name::", "output::", "units::", "digest:
         "error::", "basics::", "hints::", "progress::", "proxy::", "secrets::",
         "split::", "search::", "caps::", "keyring::", "azurite::")
 CHMOD = "place::tests::a_writable_copy_works_where_the_mount_refuses_chmod"
+# the tests of placing and syncing files, for a disk too small or too odd for every disk test
+PLACING = ("placing::", "copied::")
 # the tests of names a disk takes for one another, which run only where it ignores case
 ALIASES = (
     "placing::a_file_renamed_in_another_case_still_matches_its_pin",
@@ -85,13 +87,13 @@ def record(args):
     listed = {Path(suite["binary-path"]).resolve() for suite in suites.values()}
     if binaries != listed:
         raise RuntimeError(f"cargo and nextest binaries differ: {binaries ^ listed}")
-    expected = {scope: set() for scope in ("native", "disk", "chmod", "aliases")}
+    expected = {scope: set() for scope in ("native", "disk", "chmod", "aliases", "placing")}
     disk_flags = [word for skip in SKIP for word in ("--skip", skip)]
     for binary, suite in suites.items():
         path = suite["binary-path"]
         ignored = libtest(path, ignored=True)
         for scope, filters in (("native", ()), ("disk", disk_flags), ("chmod", (CHMOD, "--exact")),
-                               ("aliases", (*ALIASES, "--exact"))):
+                               ("aliases", (*ALIASES, "--exact")), ("placing", PLACING)):
             expected[scope].update(f"{binary}::{name}" for name in libtest(path, filters) - ignored)
     require_same(expected["native"], selected(document), "native")
     RESULTS.mkdir(parents=True, exist_ok=True)
@@ -103,7 +105,8 @@ def run(args):
     """run the tests recorded for this run once nextest selects the same, keep its selection,
     snapshot references and JUnit report in target/ci/<scope>, and return nextest's exit code.
     a run that passed without running each of them, or that changed Cargo.lock, fails."""
-    scope = "disk" if args.disk else "chmod" if args.chmod else "aliases" if args.aliases else "native"
+    scope = ("disk" if args.disk else "chmod" if args.chmod else "aliases" if args.aliases
+             else "placing" if args.placing else "native")
     expected = set(json.loads((RESULTS / "selection.json").read_text(encoding="utf-8"))[scope])
     filters = []
     if args.disk:
@@ -112,6 +115,8 @@ def run(args):
         filters = ["-E", f"test(={CHMOD})"]
     elif args.aliases:
         filters = ["-E", " | ".join(f"test(={name})" for name in ALIASES)]
+    elif args.placing:
+        filters = ["-E", " | ".join(f"test({name})" for name in PLACING)]
     document = listing(args, filters)
     actual = selected(document)
     require_same(expected, actual, args.scope)
@@ -158,6 +163,7 @@ def main():
     parser.add_argument("--disk", action="store_true")
     parser.add_argument("--chmod", action="store_true")
     parser.add_argument("--aliases", action="store_true")
+    parser.add_argument("--placing", action="store_true")
     parser.add_argument("--archive", type=Path)
     args = parser.parse_args()
     if args.command == "record":

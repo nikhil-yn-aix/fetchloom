@@ -2146,7 +2146,9 @@ fn force_replaces_a_link_at_a_pinned_path_without_following_it() -> Result {
     let precious = sandbox.folder("important")?.join("thesis.txt");
     fs::write(&precious, b"precious")?;
     delete(&placed)?;
-    std::os::unix::fs::symlink(&precious, &placed)?;
+    if std::os::unix::fs::symlink(&precious, &placed).is_err() {
+        return skipped("symlinks", "no symbolic link can be made here");
+    }
 
     let status = sandbox.run(&["--json", "status"])?;
     let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;

@@ -49,7 +49,7 @@ elif name == 'apt-get':
     if mode == 'always_fail' or mode == 'failure_once' and operation == 'update' and number == 1:
         sys.exit(100)
 elif name == 'hdiutil':
-    mount = root / 'runner/hfs'
+    mount = root / 'runner' / settings.get('volume', 'hfs')
     if args[0] == 'attach':
         mount.mkdir()
         sys.stdout.buffer.write(plistlib.dumps({'system-entities': [
@@ -71,7 +71,7 @@ elif name == 'hdiutil':
 elif name == 'python3':
     if args[0] == '-':
         os.execv(settings['python'], [settings['python'], *args])
-    assert args == ['python/ci_tests.py', 'run', 'hfs', '--disk']
+    assert args == ['python/ci_tests.py', 'run', settings.get('volume', 'hfs'), settings.get('scope', '--disk')]
     sys.exit(settings.get('test_exit', 0))
 elif name not in ('diskutil', 'mdutil', 'sleep'):
     raise AssertionError(name)
@@ -80,7 +80,7 @@ elif name not in ('diskutil', 'mdutil', 'sleep'):
 
 @unittest.skipIf(os.name == 'nt', 'POSIX CI provisioning helpers')
 class PlatformScripts(unittest.TestCase):
-    def run_script(self, script, attempt='1s', guard=15, **settings):
+    def run_script(self, script, attempt='1s', guard=15, arguments=('fixture-package',), **settings):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
@@ -94,7 +94,7 @@ class PlatformScripts(unittest.TestCase):
             path.chmod(0o755)
         env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
                    CI_TEST_ROOT=str(root), RUNNER_TEMP=str(root / 'runner'), CI_APT_ATTEMPT_TIMEOUT=attempt)
-        process = subprocess.Popen(['bash', str(ROOT / '.github/scripts' / script), 'fixture-package'],
+        process = subprocess.Popen(['bash', str(ROOT / '.github/scripts' / script), *arguments],
                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
         try:
@@ -103,7 +103,8 @@ class PlatformScripts(unittest.TestCase):
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
             self.fail('the provisioning helper exceeded its test guard')
-        calls = [json.loads(line) for line in (root / 'calls.jsonl').read_text().splitlines()]
+        log = root / 'calls.jsonl'
+        calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
         return process.returncode, stdout + stderr, calls, root
 
     def test_apt_attempts_are_bounded_and_failures_stay_red(self):
@@ -134,7 +135,7 @@ class PlatformScripts(unittest.TestCase):
         for busy, test_exit, force_exit, expected in [(0, 0, 0, 0), (2, 0, 0, 0),
                                                      (99, 0, 0, 0), (99, 19, 0, 19), (99, 0, 1, 1)]:
             with self.subTest(busy=busy, test_exit=test_exit, force_exit=force_exit):
-                code, output, calls, _ = self.run_script('macos-filesystem.sh', busy=busy,
+                code, output, calls, _ = self.run_script('macos-filesystem.sh', arguments=['hfs'], busy=busy,
                                                         test_exit=test_exit, force_exit=force_exit)
                 self.assertEqual(code, expected, output)
                 detach = [call for call in calls if call[:2] == ['hdiutil', 'detach']]
@@ -144,3 +145,18 @@ class PlatformScripts(unittest.TestCase):
                 indexing = next(i for i, call in enumerate(calls) if call[:3] == ['mdutil', '-i', 'off'])
                 testing = next(i for i, call in enumerate(calls) if call[:2] == ['python3', 'python/ci_tests.py'])
                 self.assertLess(indexing, testing)
+
+    def test_exfat_runs_the_placing_tests_on_a_small_image(self):
+        code, output, calls, _ = self.run_script('macos-filesystem.sh', arguments=['exfat'], volume='exfat',
+                                                scope='--placing')
+        self.assertEqual(code, 0, output)
+        create = next(call for call in calls if call[:2] == ['hdiutil', 'create'])
+        self.assertEqual(create[create.index('-fs') + 1], 'ExFAT')
+        self.assertEqual(create[create.index('-size') + 1], '64m')
+        self.assertIn(['python3', 'python/ci_tests.py', 'run', 'exfat', '--placing'], calls)
+
+    def test_a_filesystem_without_a_recipe_is_refused(self):
+        code, output, calls, _ = self.run_script('macos-filesystem.sh', arguments=['zfs'])
+        self.assertEqual(code, 2, output)
+        self.assertIn('no disk image recipe for zfs', output)
+        self.assertFalse([call for call in calls if call[0] == 'hdiutil'])
