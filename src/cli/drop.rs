@@ -235,6 +235,7 @@ async fn unfound(
         .map(|named| named.name)
         .collect();
     let net = Arc::new(context.net());
+    let cache = peek_cache()?;
     let mut found = vec![false; pinned.len()];
     for index in context.mirrors.up(context, &net).await? {
         let Location::Folder(root) = &context.mirrors.mirrors.list[index] else {
@@ -266,7 +267,9 @@ async fn unfound(
             }
         })?;
         for (at, held) in asked.into_iter().zip(held) {
-            found[at] |= matches!(held, Held::Verified(_));
+            // the cache's own file, reached through a link, is no second copy
+            found[at] |= matches!(held, Held::Verified(_))
+                && !folder::is_cache_copy(root, &locked[at].1.sha256, &cache);
         }
     }
     let mut lacking: BTreeMap<String, Vec<String>> = BTreeMap::new();

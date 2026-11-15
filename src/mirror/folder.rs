@@ -198,9 +198,11 @@ pub(crate) fn check_all(
     read: &(dyn Fn(u64) + Sync),
     stop: &Stop,
 ) -> io::Result<Vec<Held>> {
+    let placer = Placer::in_named_folder(root);
     let held = crate::place::run_all(wanted, threads.at_most(COPIES), |want| {
         let mut settled = 0;
         let held = check(
+            &placer,
             &place(root, "objects", &want.digest),
             want,
             stop,
@@ -223,6 +225,7 @@ pub(crate) fn check_items(
     threads: Threads,
     stop: &Stop,
 ) -> io::Result<Vec<Held>> {
+    let placer = Placer::in_named_folder(root);
     let held = crate::place::run_all(items, threads.at_most(COPIES), |item| {
         let want = Wanted {
             digest: item.digest,
@@ -230,6 +233,7 @@ pub(crate) fn check_items(
             label: String::new(),
         };
         check(
+            &placer,
             &place(root, item.folder, &item.digest),
             &want,
             stop,
@@ -241,8 +245,22 @@ pub(crate) fn check_items(
 }
 
 /// what the copy at `path` is of `want`, read as [`check_all`] reads it, telling `read` each
-/// block's size.
-fn check(path: &Path, want: &Wanted, stop: &Stop, read: &mut dyn FnMut(u64)) -> Held {
+/// block's size. its folders are checked through `placer`, on the mirror's top, first.
+fn check(
+    placer: &Placer,
+    path: &Path,
+    want: &Wanted,
+    stop: &Stop,
+    read: &mut dyn FnMut(u64),
+) -> Held {
+    match below_real_folders(placer, path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Held::Absent,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            return Held::Unreadable(err);
+        }
+        Err(_) => return Held::Damaged,
+    }
     match fs::symlink_metadata(path) {
         Ok(found) if is_plain(&found) && found.len() == want.size => {}
         Ok(_) => return Held::Damaged,
@@ -280,8 +298,24 @@ fn check(path: &Path, want: &Wanted, stop: &Stop, read: &mut dyn FnMut(u64)) -> 
 
 /// whether the copy of `digest` at `root` still looks as `seen` says, by one look and no read.
 pub(crate) fn still(root: &Path, digest: &Sha256, seen: &Seen) -> bool {
-    fs::symlink_metadata(place(root, "objects", digest))
-        .is_ok_and(|found| is_plain(&found) && Seen::of(&found) == *seen)
+    let name = place(root, "objects", digest);
+    below_real_folders(&Placer::in_named_folder(root), &name).is_ok()
+        && fs::symlink_metadata(&name)
+            .is_ok_and(|found| is_plain(&found) && Seen::of(&found) == *seen)
+}
+
+/// whether the copy of `digest` on the folder mirror at `root` is the cache's own file, as through
+/// a link someone put among the mirror's folders: no second copy, though it hashes right.
+pub(crate) fn is_cache_copy(root: &Path, digest: &Sha256, cache: &Cache) -> bool {
+    same_file::is_same_file(place(root, "objects", digest), cache.object_path(digest))
+        .unwrap_or(false)
+}
+
+/// checks the folders `path` is in, from the mirror's top that `placer` holds, without following
+/// a link: a co-user who swaps one for a link could make another disk's file, such as the cache's
+/// own, pass for the mirror's copy.
+fn below_real_folders(placer: &Placer, path: &Path) -> io::Result<()> {
+    placer.check_parent(path)
 }
 
 /// the folder a push writes files in before they take their names.
@@ -975,7 +1009,8 @@ fn holds(name: &Path, size: u64) -> bool {
 
 /// whether the folder mirror at `root` holds a plain file of `size` bytes for `digest`, unread.
 pub(crate) fn has(root: &Path, digest: &Sha256, size: u64) -> bool {
-    holds(&place(root, super::OBJECTS, digest), size)
+    let name = place(root, super::OBJECTS, digest);
+    below_real_folders(&Placer::in_named_folder(root), &name).is_ok() && holds(&name, size)
 }
 
 /// the files `wrote` gives, each in a slot a worker takes it from to name it, or the first that
@@ -1335,6 +1370,56 @@ pub(crate) mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, bytes).unwrap();
         }
+    }
+
+    /// a fan folder a co-user swapped for a link, here into a cache that holds the same bytes, never
+    /// makes that file pass for the mirror's copy: checked, looked at again or counted, it is not
+    /// there, while the same copy below real folders is.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_below_a_linked_folder_is_no_copy() {
+        let folder = tempfile::tempdir().unwrap();
+        let bytes: &[u8] = b"pets";
+        let digest = crate::digest::sha256(bytes);
+        let hex = digest.hex();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let object = cache.object_path(&digest);
+        fs::create_dir_all(object.parent().unwrap()).unwrap();
+        fs::write(&object, bytes).unwrap();
+        let root = folder.path().join("mirror");
+        mirror(&root, &[]);
+        fs::create_dir_all(root.join("objects")).unwrap();
+        std::os::unix::fs::symlink(
+            object.parent().unwrap(),
+            root.join("objects").join(&hex[..2]),
+        )
+        .unwrap();
+        let held = check_all(
+            &root,
+            &[wanted(bytes)],
+            Threads::default(),
+            &|_| {},
+            &Stop::default(),
+        )
+        .unwrap();
+        assert!(matches!(held[..], [Held::Damaged]), "{held:?}");
+        assert!(!has(&root, &digest, 4));
+        let seen = Seen::of(&fs::metadata(&object).unwrap());
+        assert!(!still(&root, &digest, &seen));
+        assert!(is_cache_copy(&root, &digest, &cache));
+        let real = folder.path().join("real");
+        mirror(&real, &[bytes]);
+        let held = check_all(
+            &real,
+            &[wanted(bytes)],
+            Threads::default(),
+            &|_| {},
+            &Stop::default(),
+        )
+        .unwrap();
+        assert!(matches!(held[..], [Held::Verified(_)]), "{held:?}");
+        assert!(has(&real, &digest, 4));
+        assert!(!is_cache_copy(&real, &digest, &cache));
     }
 
     fn wanted(bytes: &[u8]) -> Wanted {

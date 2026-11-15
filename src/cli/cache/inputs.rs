@@ -492,7 +492,18 @@ fn free(
         let Some(Fate::Free { at, seen }) = plan.fates.get(&object).copied() else {
             continue;
         };
-        if !folder::still(&plan.mirrors[at], &object, &seen) {
+        let mirror = &plan.mirrors[at];
+        if folder::is_cache_copy(mirror, &object, cache) {
+            // the cache's own file, reached through a link, is no second copy
+            plan.fates.insert(
+                object,
+                Fate::Keep {
+                    reason: Reason::Damaged,
+                    at: Some(at),
+                },
+            );
+            plan.dropped.insert(object);
+        } else if !folder::still(mirror, &object, &seen) {
             plan.fates.insert(
                 object,
                 Fate::Keep {
