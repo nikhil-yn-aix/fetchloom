@@ -384,6 +384,51 @@ fn gc_names_the_project_whose_merge_is_unfinished() -> Result {
         "{document}"
     );
     assert_eq!(error["fix"], serde_json::Value::Null, "{document}");
+    // the report goes on, warning that the project's needs are not counted
+    let report = sandbox.run(&["--json", "cache"])?;
+    let document = json(&report)?;
+    assert_eq!(report.status.code(), Some(0), "{document}");
+    let warning = document["warnings"]
+        .as_array()
+        .and_then(|warnings| {
+            warnings
+                .iter()
+                .find(|warning| warning["kind"] == "cache.unreadable")
+        })
+        .ok_or("no cache.unreadable warning")?;
+    assert!(
+        warning["message"].as_str().is_some_and(|message| message
+            .contains(&other.join("data.lock").display().to_string())
+            && message.ends_with("what that project needs is not counted")),
+        "{warning}"
+    );
+    Ok(())
+}
+
+/// `fetchloom cache` only reports: it makes no cache where there is none, and leaves a folder of
+/// other files as it is, which no cache may be.
+#[test]
+fn the_cache_report_creates_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let missing = sandbox.folder("place")?.join("no-cache-yet");
+    let report = sandbox
+        .command(&["--json", "cache"])
+        .env("FETCHLOOM_CACHE", &missing)
+        .output()?;
+    assert_eq!(report.status.code(), Some(0), "{}", text(&report.stdout)?);
+    assert!(!missing.exists());
+    let documents = sandbox.folder("documents")?;
+    fs::write(documents.join("notes.txt"), b"mine\n")?;
+    let report = sandbox
+        .command(&["--json", "cache"])
+        .env("FETCHLOOM_CACHE", &documents)
+        .output()?;
+    assert_eq!(report.status.code(), Some(50), "{}", text(&report.stdout)?);
+    let mut names: Vec<String> = fs::read_dir(&documents)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<_>>()?;
+    names.sort();
+    assert_eq!(names, ["notes.txt"]);
     Ok(())
 }
 
@@ -514,7 +559,8 @@ fn sync_warns_when_gc_registration_fails() -> Result {
     }
     for json in [false, true] {
         let sandbox = Sandbox::new()?;
-        assert!(sandbox.run(&["cache"])?.status.success());
+        // the cache comes into being with its first use, which a report is not
+        assert!(sandbox.run(&["cache", "verify"])?.status.success());
         fs::write(sandbox.work().join("data.toml"), "")?;
         let registrations = sandbox.cache().join("projects");
         let before = fs::metadata(&registrations)?.permissions();
@@ -959,7 +1005,8 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
     }
     let sandbox = Sandbox::new()?;
     let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
-    assert!(sandbox.run(&["cache"])?.status.success());
+    // the cache comes into being with its first use, which a report is not
+    assert!(sandbox.run(&["cache", "verify"])?.status.success());
     let mut folders = vec![sandbox.cache()];
     for entry in fs::read_dir(sandbox.cache())? {
         let path = entry?.path();
@@ -1107,7 +1154,8 @@ fn gc_names_each_project_it_forgets() -> Result {
 #[test]
 fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     let sandbox = Sandbox::new()?;
-    assert!(sandbox.run(&["cache"])?.status.success());
+    // the cache comes into being with its first use, which a report is not
+    assert!(sandbox.run(&["cache", "verify"])?.status.success());
     // each download sits in one of the folders under partial/, named by its key's first digit
     let partial = sandbox.cache().join("partial");
     let at =

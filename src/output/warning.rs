@@ -34,7 +34,8 @@ pub(crate) enum Warning {
     CacheForeign,
     /// a run told `--yes` goes on though its downloads take the cache past `cache_budget`.
     CacheOverBudget,
-    /// a path in the cache could not be read, or removed.
+    /// a path in the cache, or the data.lock of a project it keeps files for, could not be read,
+    /// or removed.
     CacheUnreadable,
     /// the project could not join the cache's list of projects, which gc keeps files for.
     CacheUnregistered,

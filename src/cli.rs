@@ -514,9 +514,15 @@ fn open_cache() -> Result<Cache, Error> {
             ));
         }
     })?;
-    if let Some(output) = output
-        && let Some(exposed) = crate::cache::exposed(cache.root())
-    {
+    if let Some(output) = output {
+        tell_exposed(output, cache.root());
+    }
+    Ok(cache)
+}
+
+/// warns once a run when the cache at `root` is another user's or others may write it.
+fn tell_exposed(output: &Output, root: &std::path::Path) {
+    if let Some(exposed) = crate::cache::exposed(root) {
         // a run may open the cache more than once, and says this only the first time
         static TOLD: std::sync::Once = std::sync::Once::new();
         TOLD.call_once(|| {
@@ -527,7 +533,6 @@ fn open_cache() -> Result<Cache, Error> {
             );
         });
     }
-    Ok(cache)
 }
 
 /// what a run that waits for the cache tells and listens to: the command's output and stop

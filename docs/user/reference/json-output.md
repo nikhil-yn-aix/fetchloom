@@ -153,7 +153,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `cache.changed` | a cached file changed, so it is downloaded again the next time it is needed |
 | `cache.foreign` | the cache folder belongs to another user, or every user of the machine may write to it, so they can change the files projects place from it |
 | `cache.over_budget` | a run told `--yes` goes on though its downloads take the cache past the `cache_budget` setting; `details` says what would free room |
-| `cache.unreadable` | a path in the cache could not be read or removed |
+| `cache.unreadable` | a path in the cache, or the data.lock of a project it keeps files for, could not be read or removed |
 | `cache.unregistered` | the project could not join the cache's list of projects, so `cache gc` may delete files it needs |
 | `download.encoded` | a server sent a file compressed with `Content-Encoding`, and it is kept as sent |
 | `download.unnamed` | a server gave no name for a file |

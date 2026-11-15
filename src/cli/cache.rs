@@ -43,10 +43,24 @@ pub(super) struct Info {
 }
 
 pub(super) fn info(context: &Context) -> Result<Info, Error> {
-    let cache = open_cache()?;
+    // a report makes no cache where there is none yet
+    let cache = super::peek_cache()?;
+    super::tell_exposed(&context.output, cache.root());
     let Found {
-        needed, projects, ..
+        needed,
+        projects,
+        unread,
+        ..
     } = needed_with(&cache, None, &context.stop, false, Uses::Told)?;
+    for error in unread {
+        let said = format!("{}; what that project needs is not counted", error.message);
+        match &error.help {
+            Some(help) => context
+                .output
+                .warn_with(Warning::CacheUnreadable, &said, help),
+            None => context.output.warn(Warning::CacheUnreadable, &said),
+        }
+    }
     let scan = cache.scan_objects(context.threads, &context.stop)?;
     if let Some(failure) = scan.unreadable.first() {
         return Err(failure.error("cannot inspect"));
@@ -950,6 +964,9 @@ struct Found {
     complete: bool,
     /// with [`Uses::Grouped`], each dataset with `place = false` that recipes read.
     groups: Vec<Group>,
+    /// with [`Uses::Told`], a report's, each registered project whose data.lock could not be
+    /// read, as one mid-merge, which only gc must stop at.
+    unread: Vec<Error>,
 }
 
 /// a dataset with `place = false` that recipes read, in one registered project, with the objects
@@ -998,6 +1015,7 @@ fn needed_focused(
     let mut stale_projects = Vec::new();
     let mut complete = true;
     let mut groups = Vec::new();
+    let mut unread = Vec::new();
     for root in cache.registered_projects(stop)? {
         stop.check()?;
         let project = Project { root };
@@ -1043,7 +1061,16 @@ fn needed_focused(
             )
             .detail(err.message)
             .help(help)
-        })?;
+        });
+        let lock = match lock {
+            Ok(lock) => lock,
+            Err(error) if uses == Uses::Told => {
+                unread.push(error);
+                complete = false;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         // a rebuild kept for `fetchloom build --accept` is in no lock, only in the state, and
         // reading none of its records skips nearly all of it
         let (state, _) = project.state_within(&[], &|_| false);
@@ -1074,6 +1101,7 @@ fn needed_focused(
         stale_projects,
         complete,
         groups,
+        unread,
     })
 }
 
