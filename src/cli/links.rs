@@ -399,6 +399,21 @@ mod tests {
             .strip_prefix("find its id with `")
             .and_then(|rest| rest.strip_suffix("`, then list that instead"))
             .unwrap_or_default();
+        // no command on windows holds `$` or `&` safely, so placeholders stand in for them there
+        if cfg!(windows) {
+            assert_eq!(
+                search, "fetchloom search iris <name> <name 2> \"it's\"",
+                "{help}"
+            );
+            for named in ["<name> is $(id), which", "<name 2> is a;b&c, which"] {
+                assert!(
+                    error.details.iter().any(|line| line.starts_with(named)),
+                    "{:?}",
+                    error.details
+                );
+            }
+            return;
+        }
         assert_eq!(
             crate::suggested::command_words(search, cfg!(windows)),
             Some(

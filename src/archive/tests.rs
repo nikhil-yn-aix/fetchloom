@@ -616,9 +616,13 @@ fn a_next_step_runs_as_typed_where_fetchloom_ran() {
 /// which ends a quoted string at a curly quote as at a straight one.
 #[test]
 fn a_next_steps_words_keep_shell_characters_literal() {
-    for (word, _, _) in crate::suggested::tests::QUOTED {
+    for (word, _, on_windows) in crate::suggested::tests::QUOTED {
         for system in [System::Linux, System::Macos, System::Windows] {
             let windows = system == System::Windows;
+            // a word withheld on windows is never in a command there
+            if windows && on_windows.is_none() {
+                continue;
+            }
             let line = format!("unrar x {}", system.word(word));
             assert_eq!(
                 crate::suggested::command_words(&line, windows),

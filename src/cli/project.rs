@@ -1668,7 +1668,7 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
                 let folder = here.join(first);
                 format!(
                     "fetchloom -C {} <command>",
-                    super::shell_word(&folder.to_string_lossy())
+                    crate::suggested::shell_folder(&folder.to_string_lossy())
                 )
             });
             let folders: Vec<String> = below.iter().map(|folder| format!("{folder}/")).collect();

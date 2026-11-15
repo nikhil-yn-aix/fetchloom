@@ -270,23 +270,26 @@ fn exclusion_hints_quote_shell_characters() {
         .unwrap()
         .replace(">gdown<", ">gdown&#39;s $notes&#96;extra<");
     let error = filtered("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
+    // on windows no command there can hold `$` or a backtick safely, so a placeholder stands in
     let expected = if cfg!(windows) {
-        "--exclude 'gdown''s $notes`extra'"
+        "--exclude <name>"
     } else {
         r"--exclude 'gdown'\''s $notes`extra'"
     };
-    assert!(error.help.unwrap().contains(expected));
+    let help = error.help.unwrap();
+    assert!(help.contains(expected), "{help}");
     // bash and zsh expand `!` from the history even inside double quotes
     let body = String::from_utf8(fixture_bytes("drive/folder-select-mixed.html"))
         .unwrap()
         .replace(">gdown<", ">notes!v2<");
     let error = filtered("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
     let expected = if cfg!(windows) {
-        "--exclude \"notes!v2\""
+        "--exclude <name>"
     } else {
         "--exclude 'notes!v2'"
     };
-    assert!(error.help.unwrap().contains(expected));
+    let help = error.help.unwrap();
+    assert!(help.contains(expected), "{help}");
 }
 
 #[test]

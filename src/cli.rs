@@ -765,7 +765,9 @@ pub(crate) fn run() -> ExitCode {
         }
         // the folder as the system names it, which a pasted command finds from any folder
         let worked_in = std::env::current_dir().unwrap_or_else(|_| folder.clone());
-        crate::suggested::set_directory(shell_word(&worked_in.to_string_lossy()).into_owned());
+        crate::suggested::set_directory(
+            crate::suggested::shell_folder(&worked_in.to_string_lossy()).into_owned(),
+        );
     }
     match Threads::read(&var) {
         Ok(threads) => context.threads = threads,

@@ -464,6 +464,11 @@ impl Output {
         help: Option<&str>,
         details: impl IntoIterator<Item = impl std::fmt::Display>,
     ) {
+        // a name no command here can hold safely is told on a line of its own
+        let (help, named) = match help.map(crate::suggested::withheld) {
+            Some((help, named)) => (Some(help), named),
+            None => (None, Vec::new()),
+        };
         self.warnings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -473,20 +478,22 @@ impl Output {
                 details: details
                     .into_iter()
                     .map(|detail| detail.to_string())
+                    .chain(named.iter().cloned())
                     .collect(),
-                help: help.map(str::to_owned),
+                help: help.as_deref().map(str::to_owned),
             });
         // a warning is about the data, as a kept edit is, so -q keeps it as it keeps errors
         if self.tells(Level::Quiet) {
             let yellow = toned(self.style.color, Tone::Warn);
             let said = accented(&plain(text), Paint::new(), self.style.color);
-            self.line(&match help {
-                Some(help) => format!(
-                    "{yellow}warning:{yellow:#} {said}\n{}",
-                    help_line(help, self.style.color)
-                ),
-                None => format!("{yellow}warning:{yellow:#} {said}"),
-            });
+            let mut told = format!("{yellow}warning:{yellow:#} {said}");
+            for line in &named {
+                let _ = write!(told, "\n  {}", plain(line));
+            }
+            if let Some(help) = help {
+                let _ = write!(told, "\n{}", help_line(&help, self.style.color));
+            }
+            self.line(&told);
         }
     }
 
@@ -582,7 +589,11 @@ impl Output {
 
     pub(crate) fn hint(&self, text: &str) {
         if self.shows_hints() {
-            self.line(&hint_line(text, self.style.color));
+            let (text, named) = crate::suggested::withheld(text);
+            self.line(&hint_line(&text, self.style.color));
+            for line in named {
+                self.line(&format!("        {}", plain(&line)));
+            }
         }
     }
 
@@ -605,10 +616,14 @@ impl Output {
     pub(crate) fn next(&self, text: &str) {
         if self.shows_next() {
             let dim = paint(self.style.color, Paint::new().dimmed());
+            let (text, named) = crate::suggested::withheld(text);
             self.line(&format!(
                 "  {dim}next: {}{dim:#}",
-                accented(&plain(text), dim, self.style.color)
+                accented(&plain(&text), dim, self.style.color)
             ));
+            for line in named {
+                self.line(&format!("        {dim}{}{dim:#}", plain(&line)));
+            }
         }
     }
 
@@ -1287,14 +1302,22 @@ impl Output {
     }
 
     fn line(&self, text: &str) {
-        let text = self.prepared(text);
+        // a name withheld from a command that reached a line no help went through is named under it
+        let (text, named) = crate::suggested::withheld(text);
+        let lines: Vec<String> = std::iter::once(self.prepared(&text))
+            .chain(
+                named
+                    .iter()
+                    .map(|line| self.prepared(&format!("        {}", plain(line)))),
+            )
+            .collect();
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(waiting) = held.as_mut() {
-            waiting.push(text);
+            waiting.extend(lines);
             return;
         }
         // still holding `held`, so lines go out in the order they were told
-        self.write_lines(&[text]);
+        self.write_lines(&lines);
     }
 
     /// `text` as a line goes out: its symbols as the terminal shows them, wrapped to its width,

@@ -1250,11 +1250,11 @@ fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Fo
 }
 
 /// the account as `fetchloom auth login` takes it, such as hf, so the listing names what to type.
+/// a name no command on windows holds safely shows as it is: a listing runs nothing.
 fn login_name(account: &Account) -> String {
     match account {
         Account::Dataverse(_) => title(account),
-        _ => account
-            .command()
+        _ => crate::suggested::unmarked(&account.command())
             .trim_start_matches("fetchloom auth login ")
             .to_owned(),
     }

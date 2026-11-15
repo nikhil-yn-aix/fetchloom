@@ -439,8 +439,12 @@ mod tests {
     /// which ends a quoted string at a curly quote as at a straight one.
     #[test]
     fn an_exclusion_flag_keeps_shell_characters_literal() {
-        for (word, _, _) in crate::suggested::tests::QUOTED {
+        for (word, _, on_windows) in crate::suggested::tests::QUOTED {
             for windows in [false, true] {
+                // a word withheld on windows is never in a command there
+                if windows && on_windows.is_none() {
+                    continue;
+                }
                 let flag = exclusion_flag_for(word, windows);
                 assert_eq!(
                     crate::suggested::command_words(&flag, windows),

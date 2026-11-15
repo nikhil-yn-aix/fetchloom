@@ -511,6 +511,17 @@ mod tests {
     fn a_guessed_path_is_one_word_for_a_shell() {
         let error = not_in("iris", "notes (id).csv", &["notes $(id).csv"]);
         let help = error.help.unwrap_or_default();
+        // no command on windows holds `$` safely, so a placeholder stands in for the path there
+        if cfg!(windows) {
+            assert_eq!(&*help, "did you mean `fetchloom path <file>`?");
+            let named = "<file> is iris/notes $(id).csv, which no command here can hold safely";
+            assert!(
+                error.details.iter().any(|line| line == named),
+                "{:?}",
+                error.details
+            );
+            return;
+        }
         let meant = help
             .strip_prefix("did you mean `")
             .and_then(|rest| rest.strip_suffix("`?"))

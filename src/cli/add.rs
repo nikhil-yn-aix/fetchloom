@@ -1947,23 +1947,35 @@ mod tests {
             "https://huggingface.co/datasets/scikit-learn/irsi/tree/main/a&b$(id)",
             &near,
         );
-        let meant = help
-            .strip_prefix("did you mean `")
-            .and_then(|rest| rest.strip_suffix("`?"))
-            .unwrap_or_default();
-        assert_eq!(
-            crate::suggested::command_words(meant, cfg!(windows)),
-            Some(
+        // no command on windows holds `&` or `$` safely, so the help names the link apart there
+        if cfg!(windows) {
+            let (shown, named) = crate::suggested::withheld(&help);
+            assert_eq!(shown, "did you mean `fetchloom add <name>`?");
+            assert_eq!(
+                named,
                 [
-                    "fetchloom",
-                    "add",
-                    "https://huggingface.co/datasets/scikit-learn/iris/tree/main/a&b$(id)",
+                    "<name> is https://huggingface.co/datasets/scikit-learn/iris/tree/main/a&b$(id), which no command here can hold safely"
                 ]
-                .map(str::to_owned)
-                .to_vec()
-            ),
-            "{help}"
-        );
+            );
+        } else {
+            let meant = help
+                .strip_prefix("did you mean `")
+                .and_then(|rest| rest.strip_suffix("`?"))
+                .unwrap_or_default();
+            assert_eq!(
+                crate::suggested::command_words(meant, false),
+                Some(
+                    [
+                        "fetchloom",
+                        "add",
+                        "https://huggingface.co/datasets/scikit-learn/iris/tree/main/a&b$(id)",
+                    ]
+                    .map(str::to_owned)
+                    .to_vec()
+                ),
+                "{help}"
+            );
+        }
         assert_eq!(
             near_help(
                 "https://huggingface.co/datasets/scikit-learn/irsi?rlkey=hunter2",

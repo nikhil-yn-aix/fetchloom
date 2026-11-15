@@ -81,18 +81,132 @@ pub(crate) fn command_words(command: &str, windows: bool) -> Option<Vec<String>>
     Some(words)
 }
 
-/// quotes a word so suggested commands preserve spaces, patterns and shell metacharacters.
+/// quotes a word so suggested commands preserve spaces, patterns and shell metacharacters. on
+/// windows a word no quoting keeps literal in both powershell and cmd is withheld, as
+/// [`withheld`] tells.
 pub(crate) fn shell_word(word: &str) -> Cow<'_, str> {
     shell_word_for(word, cfg!(windows))
 }
 
+/// [`shell_word`] for a folder, which a withheld word stands for as `<folder>`.
+pub(crate) fn shell_folder(word: &str) -> Cow<'_, str> {
+    if cfg!(windows) && !safe_on_windows(word) {
+        return Cow::Owned(format!("{OPEN}{FOLDER}{word}{CLOSE}"));
+    }
+    shell_word(word)
+}
+
+/// the marks around a word withheld from a command on windows, which [`withheld`] turns into a
+/// placeholder and a line naming the word: private-use characters no text fetchloom prints holds.
+const OPEN: char = '\u{f8e0}';
+const CLOSE: char = '\u{f8e1}';
+/// after [`OPEN`], the kind of word withheld, which names its placeholder.
+const FILE: char = 'f';
+const FOLDER: char = 'd';
+const NAME: char = 'n';
+
+/// whether `word` may go into a command a person pastes on windows: none of the characters cmd
+/// acts on even inside quotes, `& | < > ^ % !`, nor those powershell's quoting cannot keep, `$`, a
+/// backtick or a double quote, straight or curly.
+pub(crate) fn safe_on_windows(word: &str) -> bool {
+    !word.contains([
+        '&', '|', '<', '>', '^', '%', '!', '$', '\u{60}', '"', '\u{201c}', '\u{201d}', '\u{201e}',
+        OPEN, CLOSE,
+    ])
+}
+
+/// `text` with each word [`shell_word`] withheld named by a placeholder, `<file>`, `<folder>` or
+/// `<name>`, which no shell runs and `--json`'s fix never offers, and a line for each saying which
+/// name it stands for.
+pub(crate) fn withheld(text: &str) -> (Cow<'_, str>, Vec<String>) {
+    if !text.contains(OPEN) {
+        return (Cow::Borrowed(text), Vec::new());
+    }
+    let mut shown = String::with_capacity(text.len());
+    let mut named: Vec<(&str, String)> = Vec::new();
+    let mut lines = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        shown.push_str(&rest[..start]);
+        let after = &rest[start + OPEN.len_utf8()..];
+        let Some(end) = after.find(CLOSE) else {
+            rest = after;
+            break;
+        };
+        let mut marked = after[..end].chars();
+        let base = match marked.next() {
+            Some(FILE) => "file",
+            Some(FOLDER) => "folder",
+            _ => "name",
+        };
+        let word = marked.as_str();
+        let seen = named
+            .iter()
+            .find(|(seen, _)| *seen == word)
+            .map(|(_, placeholder)| placeholder.clone());
+        let placeholder = seen.unwrap_or_else(|| {
+            // one the text holds already, as a help told before does, names another word; each
+            // taken one needs a `<`, so one past their count is free
+            let taken = text.matches('<').count() + named.len();
+            let placeholder = (1..=taken + 1)
+                .map(|count| match count {
+                    1 => format!("<{base}>"),
+                    count => format!("<{base} {count}>"),
+                })
+                .find(|placeholder| {
+                    !text.contains(placeholder.as_str())
+                        && named.iter().all(|(_, taken)| taken != placeholder)
+                })
+                .unwrap_or_default();
+            lines.push(format!(
+                "{placeholder} is {word}, which no command here can hold safely"
+            ));
+            named.push((word, placeholder.clone()));
+            placeholder
+        });
+        shown.push_str(&placeholder);
+        rest = &after[end + CLOSE.len_utf8()..];
+    }
+    shown.push_str(rest);
+    (Cow::Owned(shown), lines)
+}
+
+/// `text` with each word [`shell_word`] withheld given back as it is, for a name shown where no
+/// command holds it, as in a listing.
+pub(crate) fn unmarked(text: &str) -> Cow<'_, str> {
+    if !text.contains(OPEN) {
+        return Cow::Borrowed(text);
+    }
+    let mut shown = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            OPEN => {
+                chars.next();
+            }
+            CLOSE => {}
+            c => shown.push(c),
+        }
+    }
+    Cow::Owned(shown)
+}
+
 /// [`shell_word`] for powershell and cmd on windows, or for bash, zsh and fish. a word starting
-/// with `~` or `=`, which zsh expands, or `@`, which powershell splats, is quoted. double quotes
-/// keep it literal unless it holds `$`, a backtick or a double quote, on windows a curly double
-/// quote, elsewhere `!` (history) or a backslash; then it is single-quoted, each single quote
-/// doubled on windows, curly ones too, and elsewhere a single quote or backslash escaped outside
-/// the quotes, since fish reads a backslash inside them as an escape.
+/// with `~` or `=`, which zsh expands, or `@`, which powershell splats, is quoted. on windows a
+/// word [`safe_on_windows`] is double-quoted, which powershell and cmd both read as written; any
+/// other is withheld between marks for [`withheld`]. elsewhere double
+/// quotes keep a word literal unless it holds `$`, a backtick, a double quote, `!` (history) or a
+/// backslash; then it is single-quoted, a single quote or backslash escaped outside the quotes,
+/// since fish reads a backslash inside them as an escape.
 pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
+    if windows && !safe_on_windows(word) {
+        // a path to a file, not a host or a link, which only look like one
+        let file = word.contains(['/', '\\'])
+            && !word.contains("://")
+            && std::path::Path::new(word).extension().is_some();
+        let kind = if file { FILE } else { NAME };
+        return Cow::Owned(format!("{OPEN}{kind}{word}{CLOSE}"));
+    }
     if !word.is_empty()
         && !word.starts_with(['~', '=', '@'])
         && word
@@ -101,26 +215,9 @@ pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
     {
         return Cow::Borrowed(word);
     }
-    let literal = |c: char| match c {
-        '$' | '\u{60}' | '"' => false,
-        '!' | '\\' => windows,
-        '\u{201c}'..='\u{201e}' => !windows,
-        _ => true,
-    };
-    if word.chars().all(literal) {
+    let literal = |c: char| !matches!(c, '$' | '\u{60}' | '"' | '!' | '\\');
+    if windows || word.chars().all(literal) {
         return Cow::Owned(format!("\"{word}\""));
-    }
-    if windows {
-        let mut quoted = String::with_capacity(word.len() + 2);
-        quoted.push('\'');
-        for c in word.chars() {
-            if is_single_quote(c) {
-                quoted.push(c);
-            }
-            quoted.push(c);
-        }
-        quoted.push('\'');
-        return Cow::Owned(quoted);
     }
     let mut quoted = String::with_capacity(word.len() + 2);
     let mut open = false;
@@ -154,40 +251,53 @@ pub(crate) mod tests {
 
     #[test]
     fn a_word_a_shell_would_split_or_expand_is_quoted() {
-        assert_eq!(shell_word("zenodo:3608990"), "zenodo:3608990");
+        for windows in [false, true] {
+            assert_eq!(shell_word_for("zenodo:3608990", windows), "zenodo:3608990");
+            assert_eq!(shell_word_for("*.csv", windows), "\"*.csv\"");
+            assert_eq!(shell_word_for("my data", windows), "\"my data\"");
+        }
         assert_eq!(
-            shell_word("https://example.org/a.csv?download=1&v=2"),
+            shell_word_for("https://example.org/a.csv?download=1&v=2", false),
             "\"https://example.org/a.csv?download=1&v=2\""
         );
-        assert_eq!(shell_word("*.csv"), "\"*.csv\"");
-        assert_eq!(shell_word("my data"), "\"my data\"");
     }
 
-    /// a word a shell would expand or split, quoted for bash, zsh and fish, then for powershell,
-    /// and for cmd but with `$`, a backtick or a double quote, which nothing keeps literal in both.
-    pub(crate) const QUOTED: [(&str, &str, &str); 13] = [
-        ("hi!.csv", "'hi!.csv'", "\"hi!.csv\""),
-        ("$notes", "'$notes'", "'$notes'"),
-        ("a`b`", "'a`b`'", "'a`b`'"),
-        ("ada's data", "\"ada's data\"", "\"ada's data\""),
-        ("it's $5!", "'it'\\''s $5!'", "'it''s $5!'"),
-        ("my data", "\"my data\"", "\"my data\""),
-        ("données é.csv", "\"données é.csv\"", "\"données é.csv\""),
-        (r"data\notes", r"'data'\\'notes'", r#""data\notes""#),
-        ("a\"b", "'a\"b'", "'a\"b'"),
-        ("~notes.csv", "\"~notes.csv\"", "\"~notes.csv\""),
-        ("=notes.csv", "\"=notes.csv\"", "\"=notes.csv\""),
-        ("@notes.csv", "\"@notes.csv\"", "\"@notes.csv\""),
+    /// a word a shell would expand or split, quoted for bash, zsh and fish, then for powershell
+    /// and cmd on windows: double quotes, which both read as written, or none for a word holding
+    /// what cmd acts on or powershell's quoting cannot keep, which a command never holds there.
+    pub(crate) const QUOTED: [(&str, &str, Option<&str>); 16] = [
+        ("hi!.csv", "'hi!.csv'", None),
+        ("$notes", "'$notes'", None),
+        ("a`b`", "'a`b`'", None),
+        ("ada's data", "\"ada's data\"", Some("\"ada's data\"")),
+        ("it's $5!", "'it'\\''s $5!'", None),
+        ("my data", "\"my data\"", Some("\"my data\"")),
         (
-            "ada’s “best” data",
-            "\"ada’s “best” data\"",
-            "'ada’’s “best” data'",
+            "données é.csv",
+            "\"données é.csv\"",
+            Some("\"données é.csv\""),
         ),
+        (r"data\notes", r"'data'\\'notes'", Some(r#""data\notes""#)),
+        ("a\"b", "'a\"b'", None),
+        ("~notes.csv", "\"~notes.csv\"", Some("\"~notes.csv\"")),
+        ("=notes.csv", "\"=notes.csv\"", Some("\"=notes.csv\"")),
+        ("@notes.csv", "\"@notes.csv\"", Some("\"@notes.csv\"")),
+        ("ada’s “best” data", "\"ada’s “best” data\"", None),
+        ("ada’s data", "\"ada’s data\"", Some("\"ada’s data\"")),
+        (
+            "notes$ & mkdir PWNED-arch & x.csv",
+            "'notes$ & mkdir PWNED-arch & x.csv'",
+            None,
+        ),
+        ("a%PATH%b.csv", "a%PATH%b.csv", None),
     ];
 
     #[test]
     fn suggested_commands_keep_shell_metacharacters_literal() {
         for (word, posix, windows) in QUOTED {
+            let Some(windows) = windows else {
+                continue;
+            };
             for (on_windows, quoted) in [(false, posix), (true, windows)] {
                 assert_eq!(shell_word_for(word, on_windows), quoted, "{word}");
                 let line = format!("fetchloom get {quoted}");
@@ -210,7 +320,6 @@ pub(crate) mod tests {
     #[cfg(unix)]
     #[test]
     fn a_quoted_word_reads_back_whole_in_each_shell() {
-        let words: Vec<&str> = QUOTED.iter().map(|(word, _, _)| *word).collect();
         let printf = "printf '%s\\n'";
         for (shell, windows, print) in [
             (
@@ -227,6 +336,12 @@ pub(crate) mod tests {
                 "Write-Output",
             ),
         ] {
+            // a word withheld on windows is never in a command there
+            let words: Vec<&str> = QUOTED
+                .iter()
+                .filter(|(_, _, quoted)| !windows || quoted.is_some())
+                .map(|(word, _, _)| *word)
+                .collect();
             let line: Vec<String> = words
                 .iter()
                 .map(|word| shell_word_for(word, windows).into_owned())
@@ -259,6 +374,107 @@ pub(crate) mod tests {
                 "{}: {script}",
                 shell[0]
             );
+        }
+    }
+
+    /// on windows a word holding what cmd acts on even inside quotes, or what powershell's quoting
+    /// cannot keep, is never in a command: the command names a placeholder no shell runs, and a
+    /// line says which name it stands for, the same name the same placeholder.
+    #[test]
+    fn a_word_no_windows_shell_keeps_literal_is_named_apart() {
+        for (word, _, windows) in QUOTED {
+            assert_eq!(
+                shell_word_for(word, true).contains(OPEN),
+                windows.is_none(),
+                "{word}"
+            );
+        }
+        let file = "data/corpus/notes$ & mkdir PWNED-arch & x.csv";
+        let folder = r"C:\Users\ada\p$ & mkdir PWNED-cmd7 & q";
+        let help = format!(
+            "run `fetchloom -C {} exclude {}`, then `fetchloom -C {} sync`; or `fetchloom get {}`",
+            format_args!("{OPEN}{FOLDER}{folder}{CLOSE}"),
+            shell_word_for(file, true),
+            format_args!("{OPEN}{FOLDER}{folder}{CLOSE}"),
+            shell_word_for("100%done", true),
+        );
+        let (shown, lines) = withheld(&help);
+        assert_eq!(
+            shown,
+            "run `fetchloom -C <folder> exclude <file>`, then `fetchloom -C <folder> sync`; or `fetchloom get <name>`"
+        );
+        assert_eq!(
+            lines,
+            [
+                format!("<folder> is {folder}, which no command here can hold safely"),
+                format!("<file> is {file}, which no command here can hold safely"),
+                "<name> is 100%done, which no command here can hold safely".to_owned(),
+            ]
+        );
+        assert_eq!(withheld("run `fetchloom sync`").0, "run `fetchloom sync`");
+        let again = format!(
+            "{shown}; then run `fetchloom path {}`",
+            shell_word_for("data/a&b.csv", true)
+        );
+        assert_eq!(
+            withheld(&again),
+            (
+                Cow::Owned(format!("{shown}; then run `fetchloom path <file 2>`")),
+                vec!["<file 2> is data/a&b.csv, which no command here can hold safely".to_owned()]
+            )
+        );
+        assert_eq!(
+            unmarked(&format!("of {}", shell_word_for(file, true))),
+            format!("of {file}")
+        );
+    }
+
+    /// each word's command as fetchloom prints it on windows, pasted into powershell and into cmd,
+    /// runs nothing it does not show: no folder appears from a name that tries to make one, and
+    /// powershell reads a word fetchloom quotes back whole.
+    #[cfg(windows)]
+    #[test]
+    fn a_printed_command_runs_nothing_more_in_powershell_or_cmd() {
+        let folder = tempfile::tempdir().unwrap();
+        let tries = [
+            "p$ & mkdir PWNED-cmd7 & q",
+            "x | mkdir PWNED-pipe",
+            "a^& mkdir PWNED-caret",
+            "%COMSPEC% & mkdir PWNED-percent",
+            "b > PWNED-redirect.txt",
+        ];
+        let words = QUOTED
+            .iter()
+            .map(|(word, _, quoted)| (*word, quoted.is_some()))
+            .chain(tries.iter().map(|word| (*word, false)));
+        for (word, quoted) in words {
+            let printed = format!("echo {}", shell_word_for(word, true));
+            let line = withheld(&printed).0.into_owned();
+            let shells: [(&str, &[&str]); 2] = [
+                (
+                    "powershell.exe",
+                    &["-NoProfile", "-NonInteractive", "-Command"],
+                ),
+                ("cmd.exe", &["/d", "/c"]),
+            ];
+            for (shell, flags) in shells {
+                let output = std::process::Command::new(shell)
+                    .args(flags)
+                    .arg(&line)
+                    .current_dir(folder.path())
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .unwrap();
+                if shell == "powershell.exe" && quoted {
+                    let told = String::from_utf8_lossy(&output.stdout);
+                    assert_eq!(told.trim_end(), word, "{shell}: {line}");
+                }
+            }
+            let made: Vec<_> = std::fs::read_dir(folder.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert!(made.is_empty(), "{word}: {line} made {made:?}");
         }
     }
 

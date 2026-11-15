@@ -1430,3 +1430,19 @@ fn json_leaves_as_ascii_and_reads_back_the_same() {
         assert_eq!(back, named);
     }
 }
+
+/// a name withheld from a command on windows that reaches a line no help went through still shows
+/// as a placeholder, named on a line under it, so no line holds what a shell there would run.
+#[test]
+fn a_withheld_name_on_a_plain_line_is_named_under_it() {
+    let output = telling(false);
+    let marked = crate::suggested::shell_word_for("a&b.example", true);
+    output.step("Signed", &format!("in to {marked}"));
+    let said = output.said();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said[0].ends_with("Signed in to <name>"), "{said:?}");
+    assert_eq!(
+        said[1].trim_start(),
+        "<name> is a&b.example, which no command here can hold safely"
+    );
+}

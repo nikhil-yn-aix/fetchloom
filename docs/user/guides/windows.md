@@ -47,6 +47,10 @@ do not make a managed hardlink writable to edit it. set `copy = true` on the dat
 
 fetchloom writes its progress and results to stderr. windows powershell 5.1 shows stderr as red `NativeCommandError` text when you redirect it with `2>&1`, even when the command worked. the text is harmless; the exit code still tells you whether the command worked. powershell 7, or running without `2>&1`, shows the lines as they are.
 
+## commands in help lines
+
+a command fetchloom suggests puts each name in double quotes, which powershell and cmd both read as written. a name holding what cmd acts on even inside quotes, `& | < > ^ % !`, or what powershell's quotes cannot keep, `$`, a backtick or a double quote, is never put in a command, so pasting one runs nothing hidden in a name: the command shows a placeholder such as `<file>` or `<folder>`, and a line of its own gives the name it stands for, to type quoted as your shell needs. `--json` gives such a help no `fix`.
+
 ## paths and open files
 
 use `/` inside `data.toml` paths and `fetchloom path iris/Iris.csv` on windows too. returned absolute paths use the platform's filesystem representation.

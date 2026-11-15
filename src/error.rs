@@ -256,8 +256,13 @@ impl Error {
         self
     }
 
+    /// the help, with each name no command here can hold safely given a placeholder, and a
+    /// detail saying which name it stands for.
     pub(crate) fn help(mut self, help: impl Into<String>) -> Error {
-        self.help = Some(help.into().into_boxed_str());
+        let help = help.into();
+        let (shown, named) = crate::suggested::withheld(&help);
+        self.help = Some(shown.into_owned().into_boxed_str());
+        self.details.extend(named);
         self
     }
 
@@ -297,12 +302,12 @@ impl Error {
 
     /// the help with `command` where it says to run "the command" or "the same command".
     pub(crate) fn naming(mut self, command: &str) -> Error {
-        if let Some(help) = &mut self.help {
+        if let Some(help) = self.help.take() {
             let named = format!("run `{command}`");
-            *help = help
+            let help = help
                 .replace("run the same command", &named)
-                .replace("run the command", &named)
-                .into_boxed_str();
+                .replace("run the command", &named);
+            return self.help(help);
         }
         self
     }
