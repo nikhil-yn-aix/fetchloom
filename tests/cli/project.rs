@@ -2970,6 +2970,48 @@ fn a_download_that_needs_a_yes_is_told_only_once_it_starts() -> Result {
     Ok(())
 }
 
+/// a sync that cannot get one dataset's files still places the datasets whose files are all on
+/// this machine, and its error names the one that waits.
+#[test]
+fn a_sync_that_lacks_some_files_places_the_datasets_it_has_whole() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (one, two) = (vec![b'x'; 1024], vec![b'y'; 1024]);
+    let first = Server::start("/one.bin", vec![file(&one, "\"a\"")])?;
+    let second = Server::start("/two.bin", vec![file(&two, "\"b\"")])?;
+    for server in [&first, &second] {
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let hex = sha256_hex(&two);
+    delete(
+        &sandbox
+            .cache()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..]),
+    )?;
+    let fresh = clone(&sandbox, "fresh")?;
+    let output = sandbox
+        .command_in(&fresh, &["--json", "sync", "--offline"])
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(20), "{document}");
+    assert_eq!(
+        document["errors"][0]["kind"], "offline.missing",
+        "{document}"
+    );
+    assert_eq!(fs::read(fresh.join("data/one/one.bin"))?, one, "{document}");
+    assert!(!fresh.join("data/two").exists(), "{document}");
+    let details = document["errors"][0]["details"].to_string();
+    assert!(
+        details.contains("placed one, whose files are all on this machine")
+            && details.contains("two waits for the files above"),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// freeing space cannot help, so the refusal comes before the question about room.
 #[test]
 fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Result {

@@ -218,11 +218,76 @@ impl<'a> Loop<'a> {
         survey: Survey,
         synced: Option<Synced>,
     ) -> Result<Placement, Error> {
-        let placing = self
-            .prepare(manifest, lock, plan, force, survey)
-            .await
-            .map_err(|error| self.before_placing(error))?;
-        self.apply(manifest, lock, placing, synced)
+        match self.prepare(manifest, lock, plan, force, survey).await {
+            Ok(placing) => self.apply(manifest, lock, placing, synced),
+            // a sync of every dataset still places those it has whole, and names the rest
+            Err(error) if self.scope == Scope::All && lacks_files(&error) => {
+                match self.place_whole(manifest, lock, force, synced) {
+                    Ok(Some(Partial { placed, waiting })) => Err(error
+                        .detail(format!(
+                            "placed {}, whose files are all on this machine",
+                            placed.join(", ")
+                        ))
+                        .detail(format!(
+                            "{} {} for the files above",
+                            waiting.join(", "),
+                            if waiting.len() == 1 { "waits" } else { "wait" }
+                        ))),
+                    Ok(None) => Err(self.before_placing(error)),
+                    Err(other) => {
+                        tracing::debug!(%other, "could not place the datasets the cache holds whole");
+                        Err(self.before_placing(error))
+                    }
+                }
+            }
+            Err(error) => Err(self.before_placing(error)),
+        }
+    }
+
+    /// places the datasets of `lock` whose files the cache holds whole, once a sync of every
+    /// dataset could not get the rest: the names it placed and those that wait, or none when
+    /// no dataset is whole.
+    fn place_whole(
+        &self,
+        manifest: &Manifest,
+        lock: &Lock,
+        force: bool,
+        synced: Option<Synced>,
+    ) -> Result<Option<Partial>, Error> {
+        let survey = Survey::read(
+            self.project,
+            &manifest.data_dir,
+            self.context.threads,
+            &self.context.stop,
+        )?;
+        let plan = plan::from_cache(manifest, lock, &self.cache)?;
+        let placing = Placing::from_plan(self.project, manifest, plan, force, &Scope::All, survey)?;
+        let mut waiting: BTreeSet<String> = placing
+            .missing(&self.cache)?
+            .into_iter()
+            .chain(placing.unknown())
+            .map(|(dataset, _)| dataset)
+            .collect();
+        waiting
+            .extend(placing.unbuilt(|digest, size| self.cache.find(digest, Some(size)).is_some()));
+        let whole: BTreeSet<String> = manifest
+            .datasets
+            .iter()
+            .filter(|(name, entry)| entry.place && !waiting.contains(*name))
+            .map(|(name, _)| name.clone())
+            .collect();
+        if whole.is_empty() || waiting.is_empty() {
+            return Ok(None);
+        }
+        let survey = placing.into_survey();
+        let plan = plan::from_cache(manifest, lock, &self.cache)?;
+        let scope = Scope::Only(whole.clone());
+        let placing = Placing::from_plan(self.project, manifest, plan, force, &scope, survey)?;
+        self.apply(manifest, lock, placing, synced)?;
+        Ok(Some(Partial {
+            placed: whole.into_iter().collect(),
+            waiting: waiting.into_iter().collect(),
+        }))
     }
 
     /// puts in the cache every byte placing `plan` needs, downloading and unpacking what it
@@ -2232,6 +2297,18 @@ fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url, page: bool
 
 fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {
     in_cache_where(cache, fetch, |_| true)
+}
+
+/// the datasets a sync placed whole though it could not get every file, and those that wait.
+struct Partial {
+    placed: Vec<String>,
+    waiting: Vec<String>,
+}
+
+/// whether `error` stopped a run from getting files, which a later run may get: a source or the
+/// network failing, no network, a key needed or bytes other than the pins, never a person's no.
+fn lacks_files(error: &Error) -> bool {
+    matches!(error.kind.exit_code(), 10 | 20 | 30 | 40)
 }
 
 /// what placing downloads: the `files` `available` says the cache lacks, described by

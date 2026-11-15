@@ -192,9 +192,15 @@ fn a_clone_lacking_several_imports_names_each_and_what_it_can_place() -> Result 
         error["message"],
         "tiny and wide were imported from files, and this machine's cache does not hold them"
     );
+    // flowers is whole on this machine, so the sync places it before it stops for the others
     assert_eq!(
         error["details"],
-        serde_json::json!(["tiny/t.csv", "wide/w.csv"])
+        serde_json::json!([
+            "tiny/t.csv",
+            "wide/w.csv",
+            "placed flowers, whose files are all on this machine",
+            "tiny, wide wait for the files above"
+        ])
     );
     assert_eq!(
         error["help"],
