@@ -1031,6 +1031,16 @@ impl Net {
                 .finish_kept(fetch, partial, (size, kept.clone()), told, on)
                 .await;
         }
+        if let Some((received, kept)) = &earlier
+            && let Some(stated) = length.filter(|stated| stated > received)
+            && status == StatusCode::RANGE_NOT_SATISFIABLE
+            && headers::total_length(&head, StatusCode::PARTIAL_CONTENT) == Some(*received)
+            && !other_version(kept, &validators)
+        {
+            // no answer this server gives can tell which length is the file's
+            partial.discard();
+            return Err(Failure::Final(two_lengths(&fetch.url, stated, *received)));
+        }
         let Some(offset) =
             self.starting_offset(from, status, &head, asked.as_ref(), length, &validators)?
         else {
@@ -1888,6 +1898,25 @@ fn wrong_size(url: &Url, expected: u64, got: Option<u64>) -> Error {
         ),
     )
     .detail(detail)
+}
+
+/// the error for a server that said the file at `url` is `stated` bytes long, sent `received` of
+/// them, then said those are all of it.
+fn two_lengths(url: &Url, stated: u64, received: u64) -> Error {
+    Error::new(
+        Kind::IntegrityMismatch,
+        format!(
+            "{} said the file is {} and sent {}, then said that is all of {}",
+            host(url),
+            units::size(stated),
+            units::size(received),
+            crate::shown::Shown(url)
+        ),
+    )
+    .detail(format!(
+        "stated {stated} bytes, sent {received}, then Content-Range: bytes */{received}"
+    ))
+    .help("the server states two lengths for the file, so neither can be trusted: ask its owner to fix the length it states, or download the file from another link")
 }
 
 /// whether a pinned version could not be read: refused, 401 or 403, or gone, 404 or 410.

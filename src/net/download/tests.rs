@@ -524,6 +524,43 @@ fn a_part_of_a_file_of_another_length_never_joins_the_bytes_kept() {
     assert_eq!(lines(&asked).len(), 3);
 }
 
+/// a server that stated a length its body never reached, then answers the request for the rest
+/// with a 416 saying the bytes kept are all of the file, contradicts itself: no answer it gives
+/// can tell which length is the file's, so the download fails at once, saying so, and drops the
+/// bytes no later run could finish, instead of fetching them again try after try.
+#[test]
+fn a_server_that_states_two_lengths_fails_the_download_at_once() {
+    let lie = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 12\r\nETag: \"v1\"\r\n\r\naaaabbbb";
+    let all = reply(
+        "416 Range Not Satisfiable",
+        &[("Content-Range", "bytes */8"), ("ETag", "\"v1\"")],
+        b"",
+    );
+    let (url, asked) = serve(
+        std::iter::repeat_n([lie.as_bytes().to_vec(), all], 5)
+            .flatten()
+            .collect(),
+    );
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = Fetch::new(url.clone());
+    let error = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap_err();
+    assert_eq!(
+        (error.kind, lines(&asked).len()),
+        (Kind::IntegrityMismatch, 2),
+        "{error:?}"
+    );
+    assert!(
+        error.message.contains("said the file is 12 B"),
+        "{}",
+        error.message
+    );
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    assert_eq!(partial.resumable(), None);
+}
+
 /// a resume the server cannot serve from the kept bytes, answered 416, starts the file over from
 /// its first byte rather than failing.
 #[test]
