@@ -1261,6 +1261,7 @@ pub(crate) mod tests {
         fs::create_dir_all(&shard).unwrap();
         let part = shard.join(format!("{key}.part"));
         fs::write(&part, [0; 2048]).unwrap();
+        fs::write(shard.join(format!("{key}.lock")), b"").unwrap();
         let error = crate::error::Error::io(
             "could not write to the cache",
             &cache.explained(&partial, full()),

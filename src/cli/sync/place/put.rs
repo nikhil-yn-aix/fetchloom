@@ -253,6 +253,7 @@ mod tests {
         let shard = cache.partial_folder(&key);
         fs::create_dir_all(&shard).unwrap();
         fs::write(shard.join(format!("{key}.part")), [0; 2048]).unwrap();
+        fs::write(shard.join(format!("{key}.lock")), b"").unwrap();
         let told = full_with_unfinished(error(), &full(), &project, &cache);
         assert_eq!(
             told.details,

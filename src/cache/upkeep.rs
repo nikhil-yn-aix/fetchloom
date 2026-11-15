@@ -227,11 +227,14 @@ impl Cache {
     }
 
     /// [`Cache::unfinished`] for the downloads no run holds, which `cache gc --now` frees: a run
-    /// working on one, this one too, finishes it or deletes it itself.
+    /// working on one, this one too, finishes it or deletes it itself. a lock is opened as the
+    /// sweep opens it, never through a link nor waiting on a fifo someone put in its place.
     pub(crate) fn unfinished_unheld(&self) -> Unfinished {
         self.unfinished_where(|claim| {
-            // a claim file a run holds cannot be locked again until that run lets it go
-            fs::File::open(claim).map_or(true, |file| file.try_lock().is_ok())
+            crate::volume::open_unfollowed(claim, false)
+                .ok()
+                .and_then(|lock| super::partial::unheld(claim, lock))
+                .is_some()
         })
     }
 
@@ -1654,6 +1657,54 @@ mod tests {
         assert_eq!(
             (unfinished.bytes, freed.removed_leftover_bytes),
             (part_held, part_held + record_held)
+        );
+    }
+
+    /// the downloads the full-disk hint says `cache gc --now` frees are those whose lock it can
+    /// take as its sweep does: a lock someone made a fifo, or a link to a file elsewhere, counts
+    /// for none, and is never waited on or followed.
+    #[cfg(unix)]
+    #[test]
+    fn unheld_downloads_are_those_a_sweep_frees() {
+        let (dir, cache) = cache();
+        let key = "ab".repeat(32);
+        let shard = cache.partial_folder(&key);
+        fs::create_dir_all(&shard).unwrap();
+        fs::write(shard.join(format!("{key}.part")), b"abc").unwrap();
+        let lock = shard.join(format!("{key}.lock"));
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"").unwrap();
+        std::os::unix::fs::symlink(&outside, &lock).unwrap();
+        assert_eq!(cache.unfinished_unheld().downloads, 0, "a link");
+
+        fs::remove_file(&lock).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(&lock)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // a writer answers a reader that waits for one, so an open that waits still ends
+        let path = lock.clone();
+        let writer = std::thread::spawn(move || {
+            drop(fs::OpenOptions::new().write(true).open(path).unwrap());
+        });
+        let fifo = cache.unfinished_unheld().downloads;
+        let flags = rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK;
+        let released = rustix::fs::open(&lock, flags, rustix::fs::Mode::empty()).unwrap();
+        writer.join().unwrap();
+        drop(released);
+        assert_eq!(fifo, 0, "a fifo");
+
+        fs::remove_file(&lock).unwrap();
+        fs::write(&lock, b"").unwrap();
+        let held = fs::File::options().write(true).open(&lock).unwrap();
+        held.lock().unwrap();
+        assert_eq!(cache.unfinished_unheld().downloads, 0, "a lock a run holds");
+        drop(held);
+        assert_eq!(
+            cache.unfinished_unheld().downloads,
+            1,
+            "a lock nobody holds"
         );
     }
 
