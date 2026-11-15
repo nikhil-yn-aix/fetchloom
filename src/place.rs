@@ -96,6 +96,17 @@ pub(crate) struct Placer {
 #[cfg(test)]
 type Observation = dyn Fn(&Metadata) + Send + Sync;
 
+#[cfg(test)]
+type Swap = Box<dyn FnOnce(&Path)>;
+
+#[cfg(test)]
+thread_local! {
+    /// what a test does to a file's place once its folders are walked and before the file opens,
+    /// as a co-user swapping one of them for a link meanwhile would, once.
+    pub(crate) static WALKED: std::cell::RefCell<Option<Swap>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// one file to place; `writable` asks for a writable copy.
 pub(crate) struct Order {
     pub(crate) object: PathBuf,
@@ -612,6 +623,51 @@ impl Placer {
     /// checks a parent without caching the result or creating anything.
     pub(crate) fn check_parent(&self, path: &Path) -> io::Result<()> {
         self.location(path, false).map(drop)
+    }
+
+    /// opens the plain file at `path` to read through the folders the walk below the root holds,
+    /// never following a link among them or in its place, so a folder swapped for a link once
+    /// walked cannot send the read to another file. a link, a folder or a special file in its
+    /// place is refused as `InvalidInput`.
+    pub(crate) fn open_read(&self, path: &Path) -> io::Result<File> {
+        let location = self.location(path, false)?;
+        #[cfg(test)]
+        if let Some(swap) = WALKED.take() {
+            swap(path);
+        }
+        let refused = || {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} is a link or a special file, which fetchloom never reads or writes",
+                    path.display()
+                ),
+            )
+        };
+        let file = match location.open_read() {
+            Ok(file) => file,
+            #[cfg(unix)]
+            Err(err) if err.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
+                return Err(refused());
+            }
+            // a folder or a link in its place, which windows opens to read for no one
+            #[cfg(windows)]
+            Err(_) if location.metadata().is_ok_and(|found| !is_plain(&found)) => {
+                return Err(refused());
+            }
+            Err(err) => return Err(err),
+        };
+        if is_plain(&file.metadata()?) {
+            Ok(file)
+        } else {
+            Err(refused())
+        }
+    }
+
+    /// what has the name `path` now, looked at through the folders the walk below the root holds,
+    /// never following a link among them or in its place.
+    pub(crate) fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+        self.location(path, false)?.metadata()
     }
 
     /// creates one new folder below the pinned root; existing names are refused.

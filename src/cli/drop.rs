@@ -446,13 +446,17 @@ async fn on_folders(
             }
         })?;
         for (at, held) in asked.into_iter().zip(held) {
+            let digest = locked[at].1.sha256;
             // the cache's own file, reached through a link, is no second copy
-            if matches!(held, Held::Verified(_))
-                && !folder::is_cache_copy(root, &locked[at].1.sha256, &cache)
+            if let Held::Verified(seen) = held
+                && !folder::is_cache_copy(&seen, &digest, &cache)
             {
                 found[at] = true;
                 let folders = checked.folders.entry(pinned[at].dataset.to_owned());
                 folders.or_default().insert(root.display().to_string());
+                context
+                    .mirrors
+                    .hashed(index, digest, seen, pinned[at].label());
             }
         }
     }
@@ -759,6 +763,7 @@ fn mark(project: &crate::project::Project, freeing: &BTreeSet<String>) -> Result
 
 /// drops `freeing`: removes their unchanged files from the data folder, marks them dropped in the
 /// state, then frees the cache files nothing else needs, under the cache's own lock, as gc does.
+/// a file whose copy on a folder mirror changed since it hashed stays in the cache.
 fn free(
     context: &Context,
     project: &crate::project::Project,
@@ -801,7 +806,20 @@ fn free(
     digests.sort();
     let (mut freed, mut bytes) = (0, 0);
     for (digest, size) in digests {
-        if !needed.objects.contains(digest) && cache.free_input(digest, &mut report.not_removed) {
+        if needed.objects.contains(digest) {
+            continue;
+        }
+        if let Some((root, label)) = context.mirrors.changed(digest) {
+            context.output.warn(
+                Warning::MirrorDamaged,
+                &format!(
+                    "kept {label} in the cache, since its copy on {} changed after it was checked",
+                    root.display()
+                ),
+            );
+            continue;
+        }
+        if cache.free_input(digest, &mut report.not_removed) {
             freed += 1;
             bytes += size;
         }

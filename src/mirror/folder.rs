@@ -158,20 +158,28 @@ pub(crate) fn read_tree(root: &Path, tree: &Sha256, stop: &Stop) -> io::Result<T
     }
 }
 
-/// a copy on a folder mirror as it was when it hashed to its name: its size and modified time. its
-/// number is left out, since a network disk may give a file a new one.
+/// a copy on a folder mirror as it was when it hashed to its name: its size and modified time,
+/// and which file it was, by the handle that read it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Seen {
     size: u64,
     modified: Option<SystemTime>,
+    file: Identity,
 }
 
 impl Seen {
-    fn of(found: &fs::Metadata) -> Seen {
+    fn of(found: &fs::Metadata, file: Identity) -> Seen {
         Seen {
             size: found.len(),
             modified: found.modified().ok(),
+            file,
         }
+    }
+
+    /// whether `found` has the size and modified time seen. its number is left out, since a
+    /// network disk may give a file a new one.
+    fn matches(&self, found: &fs::Metadata) -> bool {
+        found.len() == self.size && found.modified().ok() == self.modified
     }
 }
 
@@ -245,7 +253,8 @@ pub(crate) fn check_items(
 }
 
 /// what the copy at `path` is of `want`, read as [`check_all`] reads it, telling `read` each
-/// block's size. its folders are checked through `placer`, on the mirror's top, first.
+/// block's size. it opens through its folders, each walked from the mirror's top that `placer`
+/// holds without following a link, so a folder swapped meanwhile cannot send the read elsewhere.
 fn check(
     placer: &Placer,
     path: &Path,
@@ -253,31 +262,21 @@ fn check(
     stop: &Stop,
     read: &mut dyn FnMut(u64),
 ) -> Held {
-    match below_real_folders(placer, path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Held::Absent,
-        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-            return Held::Unreadable(err);
-        }
-        Err(_) => return Held::Damaged,
-    }
-    match fs::symlink_metadata(path) {
-        Ok(found) if is_plain(&found) && found.len() == want.size => {}
-        Ok(_) => return Held::Damaged,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Held::Absent,
-        Err(err) => return Held::Unreadable(err),
-    }
-    let mut file = match read_unfollowed(path) {
+    let mut file = match placer.open_read(path) {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Held::Absent,
-        // a link or a special file put in its place since the look
-        Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Held::Damaged,
-        Err(err) => return Held::Unreadable(err),
+        Err(err) => {
+            return match err.kind() {
+                io::ErrorKind::NotFound => Held::Absent,
+                // a link among its folders or in its place, or anything else no plain file
+                io::ErrorKind::InvalidInput | io::ErrorKind::NotADirectory => Held::Damaged,
+                _ => Held::Unreadable(err),
+            };
+        }
     };
-    let before = match file.metadata() {
-        Ok(found) if found.len() == want.size => Seen::of(&found),
-        Ok(_) => return Held::Damaged,
-        Err(err) => return Held::Unreadable(err),
+    let before = match (file.metadata(), identity(&file)) {
+        (Ok(found), Ok(copy)) if found.len() == want.size => Seen::of(&found, copy),
+        (Ok(_), Ok(_)) => return Held::Damaged,
+        (Err(err), _) | (_, Err(err)) => return Held::Unreadable(err),
     };
     past_memory(&file);
     let sum = hashed(&mut file, want.size.saturating_add(1), stop, |block| {
@@ -290,25 +289,28 @@ fn check(
         Err(err) => return Held::Unreadable(err),
     }
     match file.metadata() {
-        Ok(found) if Seen::of(&found) == before => Held::Verified(before),
+        Ok(found) if before.matches(&found) => Held::Verified(before),
         Ok(_) => Held::Damaged,
         Err(err) => Held::Unreadable(err),
     }
 }
 
-/// whether the copy of `digest` at `root` still looks as `seen` says, by one look and no read.
+/// whether the copy of `digest` at `root` still looks as `seen` says, by one look through the
+/// mirror's real folders and no read.
 pub(crate) fn still(root: &Path, digest: &Sha256, seen: &Seen) -> bool {
     let name = place(root, "objects", digest);
-    below_real_folders(&Placer::in_named_folder(root), &name).is_ok()
-        && fs::symlink_metadata(&name)
-            .is_ok_and(|found| is_plain(&found) && Seen::of(&found) == *seen)
+    Placer::in_named_folder(root)
+        .metadata(&name)
+        .is_ok_and(|found| is_plain(&found) && seen.matches(&found))
 }
 
-/// whether the copy of `digest` on the folder mirror at `root` is the cache's own file, as through
-/// a link someone put among the mirror's folders: no second copy, though it hashes right.
-pub(crate) fn is_cache_copy(root: &Path, digest: &Sha256, cache: &Cache) -> bool {
-    same_file::is_same_file(place(root, "objects", digest), cache.object_path(digest))
-        .unwrap_or(false)
+/// whether the copy that hashed as `seen` is the cache's own file of `digest`, as through a link
+/// someone put among the mirror's folders or a second name: no second copy, though it hashes
+/// right. the handle that read it tells, which no later swap of a folder changes.
+pub(crate) fn is_cache_copy(seen: &Seen, digest: &Sha256, cache: &Cache) -> bool {
+    read_unfollowed(&cache.object_path(digest))
+        .and_then(|file| identity(&file))
+        .is_ok_and(|own| own == seen.file)
 }
 
 /// checks the folders `path` is in, from the mirror's top that `placer` holds, without following
@@ -432,9 +434,9 @@ struct Written<'a> {
     identity: Identity,
 }
 
-/// which file a pushed file is: its device and its number there, and on unix the account that
-/// owns it.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// which file a pushed file, or a copy read on a mirror, is: its device and its number there, and
+/// on unix the account that owns it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Identity {
     device: u64,
     number: u64,
@@ -1421,9 +1423,9 @@ pub(crate) mod tests {
         .unwrap();
         assert!(matches!(held[..], [Held::Damaged]), "{held:?}");
         assert!(!has(&root, &digest, 4));
-        let seen = Seen::of(&fs::metadata(&object).unwrap());
+        let file = File::open(&object).unwrap();
+        let seen = Seen::of(&file.metadata().unwrap(), identity(&file).unwrap());
         assert!(!still(&root, &digest, &seen));
-        assert!(is_cache_copy(&root, &digest, &cache));
         let real = folder.path().join("real");
         mirror(&real, &[bytes]);
         let held = check_all(
@@ -1434,9 +1436,27 @@ pub(crate) mod tests {
             &Stop::default(),
         )
         .unwrap();
-        assert!(matches!(held[..], [Held::Verified(_)]), "{held:?}");
+        let [Held::Verified(seen)] = held[..] else {
+            panic!("{held:?}");
+        };
         assert!(has(&real, &digest, 4));
-        assert!(!is_cache_copy(&real, &digest, &cache));
+        assert!(!is_cache_copy(&seen, &digest, &cache));
+        // the cache's own file under a second name in real folders hashes right, and is no copy
+        let named = place(&real, "objects", &digest);
+        fs::remove_file(&named).unwrap();
+        fs::hard_link(&object, &named).unwrap();
+        let held = check_all(
+            &real,
+            &[wanted(bytes)],
+            Threads::default(),
+            &|_| {},
+            &Stop::default(),
+        )
+        .unwrap();
+        let [Held::Verified(seen)] = held[..] else {
+            panic!("{held:?}");
+        };
+        assert!(is_cache_copy(&seen, &digest, &cache));
     }
 
     fn wanted(bytes: &[u8]) -> Wanted {
@@ -1445,6 +1465,49 @@ pub(crate) mod tests {
             size: bytes.len() as u64,
             label: String::from_utf8_lossy(bytes).into_owned(),
         }
+    }
+
+    /// a co-user who swaps the mirror's folder of an object for a link into this machine's cache
+    /// once the check walked it, and back once it hashed, never makes the cache's own file count
+    /// as the mirror's copy: the copy opens through the folder the check walked.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_swapped_for_a_link_during_a_check_lends_no_copy() {
+        let folder = tempfile::tempdir().unwrap();
+        let bytes: &[u8] = b"pets";
+        let digest = crate::digest::sha256(bytes);
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let object = cache.object_path(&digest);
+        fs::create_dir_all(object.parent().unwrap()).unwrap();
+        fs::write(&object, bytes).unwrap();
+        let root = folder.path().join("mirror");
+        mirror(&root, &[]);
+        let fan = place(&root, "objects", &digest)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        fs::create_dir_all(&fan).unwrap();
+        let aside = folder.path().join("aside");
+        let (from, to) = (fan.clone(), aside.clone());
+        let into = object.parent().unwrap().to_path_buf();
+        crate::place::WALKED.set(Some(Box::new(move |_: &Path| {
+            fs::rename(&from, &to).unwrap();
+            std::os::unix::fs::symlink(&into, &from).unwrap();
+        })));
+        let held = check_all(
+            &root,
+            &[wanted(bytes)],
+            Threads::default(),
+            &|_| {},
+            &Stop::default(),
+        )
+        .unwrap();
+        fs::remove_file(&fan).unwrap();
+        fs::rename(&aside, &fan).unwrap();
+        let counted =
+            matches!(held[..], [Held::Verified(seen)] if !is_cache_copy(&seen, &digest, &cache));
+        assert!(!counted, "{held:?}");
+        assert!(matches!(held[..], [Held::Absent]), "{held:?}");
     }
 
     #[test]
@@ -1870,7 +1933,7 @@ pub(crate) mod tests {
         drop(target);
         assert!(!ours.exists());
         let found = read_unfollowed(&theirs).unwrap();
-        assert!(identity(&found).unwrap() == identity(&held).unwrap());
+        assert_eq!(identity(&found).unwrap(), identity(&held).unwrap());
         assert!(!unlocked(&theirs));
     }
 

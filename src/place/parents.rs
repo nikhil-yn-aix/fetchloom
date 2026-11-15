@@ -134,7 +134,6 @@ impl Location {
         file.metadata()
     }
 
-    #[cfg(target_os = "macos")]
     fn open(&self, flags: OFlags) -> io::Result<File> {
         native::openat(
             &self.parent.file,
@@ -144,6 +143,16 @@ impl Location {
         )
         .map(File::from)
         .map_err(Into::into)
+    }
+
+    /// opens the file to read through its folder's handle, never following a link in its place.
+    pub(super) fn open_read(&self) -> io::Result<File> {
+        self.open(OFlags::RDONLY)
+    }
+
+    /// what has the name now, looked at through its folder's handle without following a link.
+    pub(super) fn metadata(&self) -> io::Result<Metadata> {
+        metadata(&self.parent.file, &self.name)
     }
 
     pub(super) fn create_file(&self, readonly: bool) -> io::Result<File> {

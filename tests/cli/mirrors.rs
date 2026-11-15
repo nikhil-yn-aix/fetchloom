@@ -440,6 +440,44 @@ fn an_import_file_a_mirror_lacks_is_named_as_a_download_is() -> Result {
     Ok(())
 }
 
+/// a folder mirror's copy that changes once drop checked it frees nothing: the cache keeps the
+/// import's bytes, and drop says why, so no file is left with no copy at all.
+#[cfg(unix)]
+#[test]
+fn a_copy_that_changes_on_the_mirror_while_drop_runs_keeps_the_cache_copy() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flowers = sandbox.folder("flowers")?;
+    let sepals = b"length,width\n5.1,3.5\n";
+    fs::write(flowers.join("sepals.csv"), sepals)?;
+    ok(&sandbox.run(&["add", "../flowers"])?)?;
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let hex = sha256_hex(sepals);
+    let copy = root.join("objects").join(&hex[..2]).join(&hex[2..]);
+    let cached = sandbox
+        .cache()
+        .join("objects")
+        .join(&hex[..2])
+        .join(&hex[2..]);
+    let mut command = sandbox.command(&["drop", "flowers", "--mirror"]);
+    command.arg(&root);
+    let (running, release) = crate::support::held_at_its_mark(&sandbox, &mut command)?;
+    delete(&copy)?;
+    fs::write(&release, b"")?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(cached.exists(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "warning: kept flowers/sepals.csv in the cache, since its copy on {} changed after it was checked",
+            root.display()
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_damaged_mirror_copy_is_told_and_the_source_gives_the_file() -> Result {
     let sandbox = Sandbox::new()?;

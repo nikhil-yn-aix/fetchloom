@@ -493,7 +493,7 @@ fn free(
             continue;
         };
         let mirror = &plan.mirrors[at];
-        if folder::is_cache_copy(mirror, &object, cache) {
+        if folder::is_cache_copy(&seen, &object, cache) {
             // the cache's own file, reached through a link, is no second copy
             plan.fates.insert(
                 object,

@@ -11,7 +11,7 @@ use crate::cache::Cache;
 use crate::cli::Context;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::mirror::folder::{self, Gave, Missing};
+use crate::mirror::folder::{self, Gave, Missing, Seen};
 use crate::mirror::{Location, Mirrors, Wanted, s3, web};
 use crate::net::{Fetched, Net};
 use crate::output::Warning;
@@ -42,6 +42,9 @@ struct Answers {
     lacked: HashMap<(usize, Sha256), String>,
     /// the link below which each S3 mirror found there keeps its files, in its bucket's region.
     bases: HashMap<usize, url::Url>,
+    /// by pin, the folder mirror whose copy hashed to it, the copy as it was, and the file's name,
+    /// which a run that frees the cache's file for that copy looks at again first.
+    hashed: HashMap<Sha256, (usize, Seen, String)>,
 }
 
 /// why a mirror is skipped for the rest of the run: what to warn, the help, and its answer in
@@ -70,6 +73,22 @@ impl Mirrored {
 
     fn lacked(&self, index: usize, digest: Sha256, said: String) {
         self.answers().lacked.insert((index, digest), said);
+    }
+
+    /// notes that folder mirror `index` holds a copy of the file `label` that hashed to `digest`,
+    /// as `seen` says.
+    pub(in crate::cli) fn hashed(&self, index: usize, digest: Sha256, seen: Seen, label: String) {
+        self.answers().hashed.insert(digest, (index, seen, label));
+    }
+
+    /// the folder mirror and the file's name, when the copy this run found hashed to `digest`
+    /// changed since, by one look through the mirror's real folders.
+    pub(in crate::cli) fn changed(&self, digest: &Sha256) -> Option<(std::path::PathBuf, String)> {
+        let (index, seen, label) = self.answers().hashed.get(digest).cloned()?;
+        let Some(Location::Folder(root)) = self.mirrors.list.get(index) else {
+            return None;
+        };
+        (!folder::still(root, digest, &seen)).then(|| (root.clone(), label))
     }
 
     /// the link the web or S3 mirror `index` at `location` keeps its files below, once

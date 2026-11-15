@@ -102,6 +102,12 @@ impl Location {
         fs::symlink_metadata(&self.path)
     }
 
+    /// opens the file to read by its path, below folders this location holds open, which no one
+    /// can swap meanwhile, never following a link in its place.
+    pub(super) fn open_read(&self) -> io::Result<File> {
+        crate::volume::read_unfollowed(&self.path)
+    }
+
     pub(super) fn link(&self, object: &Path) -> io::Result<()> {
         fs::hard_link(object, &self.path)
     }
