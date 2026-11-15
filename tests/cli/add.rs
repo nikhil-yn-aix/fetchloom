@@ -1184,7 +1184,8 @@ fn a_cancelled_download_of_an_add_says_nothing_changed() -> Result {
     );
     let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
     let large = Server::start("/huge.bin", (0..4).map(|_| huge()).collect())?;
-    let command = sandbox.command(&["add", &large.url]);
+    let mut command = sandbox.command(&["add", &large.url]);
+    command.env("FETCHLOOM_ASK_ABOVE", "1G");
     for (keys, code) in [("n\r", 1), ("\u{3}", 130)] {
         // -isig lets ctrl-c reach the question as the key it reads, whenever it is typed
         let Some((exit, screen)) = crate::support::typed(

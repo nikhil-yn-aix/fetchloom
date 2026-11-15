@@ -1336,13 +1336,19 @@ fn a_large_download_needs_a_yes_when_nobody_can_answer() -> Result {
     let sandbox = Sandbox::new()?;
     let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
     let server = Server::start("/huge.bin", vec![huge(), huge()])?;
-    let output = sandbox.run(&["get", &server.url])?;
+    let get = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_ASK_ABOVE", "1G")
+            .output()
+    };
+    let output = get(&["get", &server.url])?;
     assert_eq!(output.status.code(), Some(1));
     let stderr = text(&output.stderr)?;
     sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
     // the question comes before the body is read, so nothing was downloaded or kept, not even
     // an empty unfinished download that `fetchloom cache` would count
-    let document = json(&sandbox.run(&["--json", "get", &server.url, "-o", "huge.bin"])?)?;
+    let document = json(&get(&["--json", "get", &server.url, "-o", "huge.bin"])?)?;
     assert_eq!(document["errors"][0]["kind"], "unconfirmed");
     assert_eq!(document["work"]["bytes_down"], 0);
     assert_eq!(document["work"]["objects_written"], 0);
@@ -1363,7 +1369,8 @@ fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
     let sandbox = Sandbox::new()?;
     let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
     let server = Server::start("/huge.bin", vec![huge(), huge()])?;
-    let command = sandbox.command(&["get", &server.url]);
+    let mut command = sandbox.command(&["get", &server.url]);
+    command.env("FETCHLOOM_ASK_ABOVE", "1G");
     for (keys, code) in [("n\r", 1), ("\u{3}", 130)] {
         // -isig lets ctrl-c reach the question as the key it reads, whenever it is typed
         let Some((exit, screen)) = crate::support::typed(
@@ -2427,6 +2434,7 @@ fn a_download_fat32_cannot_hold_is_refused_before_any_byte_moves() -> Result {
         let output = sandbox
             .command(&["--json", "get", &server.url])
             .env("FETCHLOOM_TEST_FILESYSTEM", filesystem)
+            .env("FETCHLOOM_ASK_ABOVE", "1G")
             .output()?;
         let document = json(&output)?;
         kinds.push(document["errors"][0]["kind"].clone());

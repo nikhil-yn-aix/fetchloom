@@ -29,7 +29,9 @@ fn no_command_waits_for_input_when_stdin_is_not_a_terminal() -> Result {
         (&["cache", "verify"], 0),
         (&["--help"], 0),
     ] {
-        let output = Running::start_with_open_stdin(&mut sandbox.command(args))?
+        let mut command = sandbox.command(args);
+        command.env("FETCHLOOM_ASK_ABOVE", "1G");
+        let output = Running::start_with_open_stdin(&mut command)?
             .finish()
             .map_err(|error| format!("{args:?}: {error}"))?;
         assert_eq!(

@@ -6,7 +6,7 @@
 fetchloom sync --yes
 ```
 
-a download of more than 1 GiB asks first. `FETCHLOOM_ASK_ABOVE`, or `ask_above` in the [settings file](../reference/environment.md#settings-file), moves that line, as `FETCHLOOM_ASK_ABOVE=50G` on a machine meant for big data.
+a download of more than 10 GiB asks first. `FETCHLOOM_ASK_ABOVE`, or `ask_above` in the [settings file](../reference/environment.md#settings-file), moves that line, as `FETCHLOOM_ASK_ABOVE=50G` on a machine meant for big data.
 
 | download | bytes counted |
 |---|---|

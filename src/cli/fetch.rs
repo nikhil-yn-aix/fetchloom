@@ -1662,7 +1662,7 @@ mod tests {
         assert_eq!(stopped.kind, Kind::Unconfirmed);
         assert_eq!(
             stopped.message,
-            "downloading big.bin needs more than 1.0 GiB, and fetchloom cannot ask you here"
+            "downloading big.bin needs more than 10.0 GiB, and fetchloom cannot ask you here"
         );
         assert_eq!(
             stopped.help.as_deref(),

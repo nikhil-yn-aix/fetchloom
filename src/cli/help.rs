@@ -76,7 +76,7 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_TIMEOUT    seconds a site may send nothing before a try fails,
                        1 to 3600; 30 by default
   FETCHLOOM_ASK_ABOVE  a download bigger than this needs a yes, as 20G;
-                       1G by default
+                       10G by default
   FETCHLOOM_MEMORY     memory for download buffers, as 512M; on linux a quarter
                        of what is free by default, from 256M to 4G; else 256M
   FETCHLOOM_MOST_FILES the most files one dataset may list; by default 1 for

@@ -2484,10 +2484,12 @@ fn a_cancel_at_a_question_stops_the_other_downloads() -> Result {
             large.url, slow.url
         ),
     )?;
+    let mut sync = sandbox.command(&["sync"]);
+    sync.env("FETCHLOOM_ASK_ABOVE", "1G");
     // -isig lets ctrl-c reach the question as the key it reads
     let Some((exit, screen)) = crate::support::typed(
         &sandbox.work(),
-        &sandbox.command(&["sync"]),
+        &sync,
         "-isig",
         "download huge/huge.bin (2.0 GiB)?",
         "\u{3}",
@@ -2574,7 +2576,8 @@ fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result 
     assert!(grown.contains(&sha256_hex(b"two gibibytes")), "{grown}");
     fs::write(work.join("data.lock"), &grown)?;
     delete(&work.join("data/huge/huge.bin"))?;
-    let sync = sandbox.command(&["sync"]);
+    let mut sync = sandbox.command(&["sync"]);
+    sync.env("FETCHLOOM_ASK_ABOVE", "1G");
     let question = "download 1 file (2.0 GiB)?";
     let Some((exit, screen)) = crate::support::typed(&work, &sync, "", question, "n\r")? else {
         return Ok(());

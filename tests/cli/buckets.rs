@@ -1367,7 +1367,9 @@ fn an_md5_hint_for_a_smaller_file_never_skips_asking() -> Result {
         "[datasets.data]\nref = \"s3://audit-bucket/data/\"\n",
     )?;
 
-    let output = command(&sandbox, &large, &["--json", "lock"]).output()?;
+    let output = command(&sandbox, &large, &["--json", "lock"])
+        .env("FETCHLOOM_ASK_ABOVE", "1G")
+        .output()?;
 
     assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
     let document = json(&output)?;

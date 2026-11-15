@@ -10,7 +10,7 @@ a terminal is a window where you type a command and press enter to run it. type 
 - macos: press cmd and space, type `terminal` and press enter.
 - linux: press ctrl, alt and t, or open terminal from your applications.
 
-with a screen reader, run `export FETCHLOOM_ACCESSIBLE=1` first, or `$env:FETCHLOOM_ACCESSIBLE = '1'` in powershell. fetchloom then redraws nothing: progress comes as plain lines, a question such as whether to download a file over 1 GiB is a line you answer with y or n, and words such as `iris` list the matching datasets by number, so you type the number of the one to add. `export TERM=dumb`, or `$env:TERM = 'dumb'`, drops colors and symbols such as `·` too.
+with a screen reader, run `export FETCHLOOM_ACCESSIBLE=1` first, or `$env:FETCHLOOM_ACCESSIBLE = '1'` in powershell. fetchloom then redraws nothing: progress comes as plain lines, a question such as whether to download a file over 10 GiB is a line you answer with y or n, and words such as `iris` list the matching datasets by number, so you type the number of the one to add. `export TERM=dumb`, or `$env:TERM = 'dumb'`, drops colors and symbols such as `·` too.
 
 ## 1. install rust
 

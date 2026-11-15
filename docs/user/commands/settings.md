@@ -27,7 +27,7 @@ jobs              32                       settings file  FETCHLOOM_JOBS
 host_jobs         8                        environment    FETCHLOOM_HOST_JOBS
 retries           4                        default        FETCHLOOM_RETRIES
 timeout           30 s                     default        FETCHLOOM_TIMEOUT
-ask_above         1.0 GiB                  default        FETCHLOOM_ASK_ABOVE
+ask_above         10.0 GiB                 default        FETCHLOOM_ASK_ABOVE
 memory            4.0 GiB                  this machine   FETCHLOOM_MEMORY
 ```
 

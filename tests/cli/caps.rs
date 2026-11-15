@@ -51,7 +51,7 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
         ("host_jobs", serde_json::json!(6), "file"),
         ("timeout", serde_json::json!(90), "file"),
         ("retries", serde_json::json!(4), "default"),
-        ("ask_above", serde_json::json!(1_u64 << 30), "default"),
+        ("ask_above", serde_json::json!(10_u64 << 30), "default"),
         (
             "cache",
             serde_json::json!(cache.display().to_string()),

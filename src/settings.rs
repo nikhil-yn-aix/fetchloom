@@ -25,7 +25,7 @@ use crate::units;
 /// processor, so the number does not follow the core count.
 pub(crate) const JOBS: usize = 8;
 /// downloads above this size ask first, at a terminal, or need `--yes` without one.
-pub(crate) const ASK_ABOVE: u64 = 1 << 30;
+pub(crate) const ASK_ABOVE: u64 = 10 << 30;
 /// the most memory a run budgets for its buffers on its own, however much the machine has.
 const MOST_MEMORY: u64 = 4 << 30;
 

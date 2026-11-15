@@ -376,7 +376,7 @@ fn a_bad_value_is_a_usage_error_naming_the_variable_and_what_it_takes() {
             "FETCHLOOM_ASK_ABOVE",
             "big",
             "FETCHLOOM_ASK_ABOVE is \"big\", which is not a size such as 512M or 4G",
-            "unset FETCHLOOM_ASK_ABOVE to use the default of 1.0 GiB, or set it to a size such as 512M or 4G",
+            "unset FETCHLOOM_ASK_ABOVE to use the default of 10.0 GiB, or set it to a size such as 512M or 4G",
         ),
     ] {
         let error = read(&[(name, value)], None).unwrap_err();

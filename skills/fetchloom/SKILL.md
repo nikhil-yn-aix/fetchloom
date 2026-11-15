@@ -67,7 +67,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 
 ## ask the user first
 
-- `--yes` (`-y`): a download over 1 GiB, or `FETCHLOOM_ASK_ABOVE`, or one the cache's disk lacks room for, exits 1 with `unconfirmed`. ask before adding `--yes`, which never picks a dataset, and never raise `FETCHLOOM_ASK_ABOVE` to avoid asking.
+- `--yes` (`-y`): a download over 10 GiB, or `FETCHLOOM_ASK_ABOVE`, or one the cache's disk lacks room for, exits 1 with `unconfirmed`. ask before adding `--yes`, which never picks a dataset, and never raise `FETCHLOOM_ASK_ABOVE` to avoid asking.
 - `--force`: on `sync` it replaces files a person edited, on `get -o` and `export -o` a file already at the path.
 - `fetchloom build` runs the project's code as the user, and `fetchloom build --accept` pins a rebuild that differs: show `fetchloom build --dry-run --json` first.
 - `fetchloom lock --upgrade` pins what the sources serve now, and `fetchloom cache gc --now` frees files less than a day old.
