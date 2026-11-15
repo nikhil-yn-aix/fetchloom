@@ -1452,11 +1452,11 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
     let status = super::project::command("status -v");
     error.help(match names.as_slice() {
         [name] => format!(
-            "the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and {} are as they were. the rebuild is kept for you to compare; for example, `{status}` says where its files are. once you choose it, {accept} pins it",
+            "the step made other files from the same inputs, command and code. a likely cause is another version of a program or library it uses, since pyarrow and other python packages write their version into the parquet, arrow and zip files they make; the time or an unseeded random number can do it too. data.lock and {} are as they were. the rebuild is kept for you to compare; for example, `{status}` says where its files are. once you choose it, {accept} pins it",
             plan::folder(manifest, name)
         ),
         _ => format!(
-            "the steps made other files from the same inputs, commands and code. another version of a program or library they use can do that, as can the time or an unseeded random number; data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `{status}` says where their files are. once you choose them, {accept} pins them"
+            "the steps made other files from the same inputs, commands and code. a likely cause is another version of a program or library they use, since pyarrow and other python packages write their version into the parquet, arrow and zip files they make; the time or an unseeded random number can do it too. data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `{status}` says where their files are. once you choose them, {accept} pins them"
         ),
     })
 }
@@ -1557,8 +1557,9 @@ mod tests {
         );
     }
 
-    /// the help names possible causes, not one: another version of what a step uses, the time and
-    /// random numbers. then comes `status -v`, and `--accept` last, for one step and several.
+    /// the help names likely causes, not one: another version of what a step uses, as python
+    /// packages write their version into the files they make, the time and random numbers. then
+    /// comes `status -v`, and `--accept` last, for one step and several.
     #[test]
     fn a_differing_rebuild_is_compared_before_it_is_accepted() {
         let manifest = Manifest::parse("").unwrap();
@@ -1580,11 +1581,11 @@ mod tests {
         };
         assert_eq!(
             help(&[differing("emb")]),
-            "the step made other files from the same inputs, command and code. another version of a program or library it uses can do that, as can the time or an unseeded random number; data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it"
+            "the step made other files from the same inputs, command and code. a likely cause is another version of a program or library it uses, since pyarrow and other python packages write their version into the parquet, arrow and zip files they make; the time or an unseeded random number can do it too. data.lock and data/emb are as they were. the rebuild is kept for you to compare; for example, `fetchloom status -v` says where its files are. once you choose it, `fetchloom build --accept emb` pins it"
         );
         assert_eq!(
             help(&[differing("emb"), differing("tok")]),
-            "the steps made other files from the same inputs, commands and code. another version of a program or library they use can do that, as can the time or an unseeded random number; data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `fetchloom status -v` says where their files are. once you choose them, `fetchloom build --accept emb tok` pins them"
+            "the steps made other files from the same inputs, commands and code. a likely cause is another version of a program or library they use, since pyarrow and other python packages write their version into the parquet, arrow and zip files they make; the time or an unseeded random number can do it too. data.lock and the data folder are as they were. the rebuilds are kept for you to compare; for example, `fetchloom status -v` says where their files are. once you choose them, `fetchloom build --accept emb tok` pins them"
         );
     }
 
