@@ -341,10 +341,17 @@ pub(crate) fn said(err: &io::Error) -> String {
                 _ => text,
             };
             let text = text.trim_end_matches('.');
+            // a capitalized first word, never a drive letter as in C:\ or an acronym
             let mut chars = text.chars();
-            chars.next().map_or_else(String::new, |first| {
-                first.to_lowercase().chain(chars).collect()
-            })
+            match (chars.next(), chars.as_str().chars().next()) {
+                (Some(first), next)
+                    if first.is_uppercase()
+                        && next.is_none_or(|c| c.is_lowercase() || c.is_whitespace()) =>
+                {
+                    first.to_lowercase().chain(chars).collect()
+                }
+                _ => text.to_owned(),
+            }
         }
     }
 }
@@ -491,6 +498,25 @@ mod tests {
             full.or_help("fallback").help.as_deref(),
             Some("free some space on that disk, then run the command again")
         );
+    }
+
+    /// a sentence's first word reads on after a colon; a drive letter or an acronym keeps its case.
+    #[test]
+    fn an_io_error_lowercases_only_a_first_word() {
+        let cases = [
+            ("Access is denied.", "access is denied"),
+            ("A device is not ready", "a device is not ready"),
+            (
+                r"C:\cache\gc.lock is a folder",
+                r"C:\cache\gc.lock is a folder",
+            ),
+            ("TLS handshake failed", "TLS handshake failed"),
+            ("I/O error", "I/O error"),
+            ("already lowercase", "already lowercase"),
+        ];
+        for (text, shown) in cases {
+            assert_eq!(said(&io::Error::other(text)), shown, "{text}");
+        }
     }
 
     /// the message scripts read stays as it was.
