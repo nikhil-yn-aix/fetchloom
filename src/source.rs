@@ -286,12 +286,14 @@ impl Listing {
         }
     }
 
-    /// whether the file at `path` stays out of a dataset unless a select pattern keeps it: a
-    /// hugging face repository's `.gitattributes`, which tells git how to store the files and
-    /// holds no data.
+    /// whether the file at `path` stays out of a dataset unless a select pattern keeps it: the
+    /// `.gitattributes` of a hugging face or openneuro repository, which tells git, or git-annex,
+    /// how to store the files and holds no data.
     pub(crate) fn kept_only_if_selected(&self, path: &str) -> bool {
-        matches!(self.resolved, Reference::HuggingFace(_))
-            && path.rsplit('/').next() == Some(".gitattributes")
+        matches!(
+            self.resolved,
+            Reference::HuggingFace(_) | Reference::OpenNeuro(_)
+        ) && path.rsplit('/').next() == Some(".gitattributes")
     }
 
     /// the paths select and exclude can match, including entries without downloadable bytes.
@@ -2062,6 +2064,31 @@ mod tests {
                 Kind::SourceInvalid,
                 "{bad:?}"
             );
+        }
+    }
+
+    /// a repository's `.gitattributes` is git's or git-annex's, at hugging face and openneuro
+    /// alike; a file of that name elsewhere is data like any other.
+    #[test]
+    fn a_gitattributes_file_is_kept_only_if_selected() {
+        let url = Url::parse("https://example.org/x").unwrap();
+        for (reference, kept_out) in [
+            ("hf:datasets/scikit-learn/iris", true),
+            ("openneuro:ds001037", true),
+            ("zenodo:3608990", false),
+        ] {
+            let listing = Listing {
+                resolved: parse(reference).reference,
+                ..single(&url)
+            };
+            for path in [".gitattributes", "sub-01/.gitattributes"] {
+                assert_eq!(
+                    listing.kept_only_if_selected(path),
+                    kept_out,
+                    "{reference} {path}"
+                );
+            }
+            assert!(!listing.kept_only_if_selected("README.md"), "{reference}");
         }
     }
 
