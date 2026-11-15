@@ -186,12 +186,12 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: .github/scripts/apt-install.sh dbus gnome-keyring libsecret-tools
       # the azure tests sign for microsoft's own emulator, pinned to 3.35, the newest that runs on
-      # node 20; later ones want node 21 or more
+      # node 20; its lockfile pins every package it pulls in, and no package runs scripts
       - name: install azurite for the azure signing tests
         if: matrix.os == 'ubuntu-24.04'
         run: |
-          npm install --global --prefix "$RUNNER_TEMP/azurite" --no-audit --no-fund azurite@3.35.0
-          echo "$RUNNER_TEMP/azurite/bin" >> "$GITHUB_PATH"
+          npm ci --prefix .github/azurite --ignore-scripts --no-audit --no-fund
+          echo "$GITHUB_WORKSPACE/.github/azurite/node_modules/.bin" >> "$GITHUB_PATH"
       - name: nextest
         env:
           FETCHLOOM_TEST_REQUIRE: ${{ matrix.require }}

@@ -32,7 +32,7 @@ a test that needs what a machine may lack returns early and says `skipped: <reas
 | `file-locks` | a disk that takes file locks |
 | `bash`, `sh`, `zsh`, `fish`, `pwsh` | each shell the quoting test pastes a command into; the completion tests also need `bash` and `pwsh` |
 | `secret-service` | `dbus-daemon`, `dbus-send`, `gnome-keyring-daemon` and `secret-tool`, for a session bus and a gnome keyring of the test's own, which `keyring.rs` keeps keys in |
-| `azurite` | `azurite-blob`, microsoft's emulator of azure blob storage, which checks each shared key and SAS `azurite.rs` sends it through a `Relay` |
+| `azurite` | `azurite-blob`, microsoft's emulator of azure blob storage, which checks each shared key and SAS `azurite.rs` sends it through a `Relay`; `npm ci --prefix .github/azurite --ignore-scripts` installs the version ci pins |
 
 `FETCHLOOM_TEST_REQUIRE` lists the ones the tests must find, as `script,git,hardlinks`; the shared helper in `tests/support/skips.rs` reads it once, and a test that lacks a listed capability fails instead of skipping. CI's native runs set what each runner has:
 
