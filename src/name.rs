@@ -518,23 +518,10 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
         if length > 255 {
             return Some(too_long(path, part));
         }
-        if cfg!(windows) {
-            if let Some(c) = part
-                .chars()
-                .find(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
-            {
-                return Some(format!(
-                    "\"{part}\" has {c:?}, which windows does not allow in names"
-                ));
-            }
-            if part.ends_with(['.', ' ']) {
-                return Some(format!(
-                    "\"{part}\" ends with a dot or a space, which windows drops"
-                ));
-            }
-            if is_reserved_on_windows(part) {
-                return Some(format!("\"{part}\" is a name windows reserves for devices"));
-            }
+        if cfg!(windows)
+            && let Some(why) = windows_refuses(part)
+        {
+            return Some(why);
         }
     }
     None
@@ -572,24 +559,30 @@ pub(crate) fn unportable(path: &str) -> Option<String> {
         if part.len() > 255 {
             return Some(too_long(path, part));
         }
-        if let Some(c) = part
-            .chars()
-            .find(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
-        {
-            return Some(format!(
-                "\"{part}\" has {c:?}, which windows does not allow in names"
-            ));
-        }
-        if part.ends_with(['.', ' ']) {
-            return Some(format!(
-                "\"{part}\" ends with a dot or a space, which windows drops"
-            ));
-        }
-        if is_reserved_on_windows(part) {
-            return Some(format!("\"{part}\" is a name windows reserves for devices"));
+        if let Some(why) = windows_refuses(part) {
+            return Some(why);
         }
     }
     None
+}
+
+/// why windows refuses `part` as a name, if it does.
+fn windows_refuses(part: &str) -> Option<String> {
+    if let Some(c) = part
+        .chars()
+        .find(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
+        return Some(format!(
+            "\"{part}\" has {c:?}, which windows does not allow in names"
+        ));
+    }
+    if part.ends_with(['.', ' ']) {
+        return Some(format!(
+            "\"{part}\" ends with a dot or a space, which windows drops"
+        ));
+    }
+    is_reserved_on_windows(part)
+        .then(|| format!("\"{part}\" is a name windows reserves for devices"))
 }
 
 /// a key for portable collision checks and possible filesystem aliases: composed and lowercased,
