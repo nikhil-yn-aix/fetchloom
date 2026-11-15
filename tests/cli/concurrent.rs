@@ -83,6 +83,9 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
         .as_str()
         .ok_or("missing digest")?;
     let cache = sandbox.folder("shared-cache")?;
+    if warm {
+        sandbox.make_cache(&cache)?;
+    }
     let count = processes * if overlapping { 3 } else { 2 };
     let bodies: Vec<_> = (0..count)
         .map(|index| format!("object-{index:04}\n").into_bytes())

@@ -278,6 +278,24 @@ impl Sandbox {
         Ok(self.command(args).output()?)
     }
 
+    /// makes `folder` a cache as a first run there does, so a test can put files in it as a cache
+    /// holds them: fetchloom takes a folder for its cache only by the tag that run writes.
+    pub(crate) fn make_cache(&self, folder: &Path) -> Result {
+        let made = self
+            .command(&["cache", "verify"])
+            .env("FETCHLOOM_CACHE", folder)
+            .output()?;
+        if !made.status.success() {
+            return Err(format!(
+                "no cache at {}: {}",
+                folder.display(),
+                String::from_utf8_lossy(&made.stderr)
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     /// what a person at a terminal sees from the command: stdout and stderr both on a new pseudo
     /// terminal that `script` opens, read back as text. none when `script` is not installed.
     #[cfg(target_os = "linux")]

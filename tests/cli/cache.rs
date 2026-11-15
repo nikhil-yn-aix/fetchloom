@@ -49,6 +49,7 @@ fn a_download_sealed_but_never_published_is_fetched_again() -> Result {
         vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")],
     )?;
     // a file where each object folder belongs makes publishing fail once the download is sealed
+    sandbox.make_cache(&sandbox.cache())?;
     let objects = sandbox.cache().join("objects");
     fs::create_dir_all(&objects)?;
     let blockers: Vec<_> = (0..=u8::MAX)
@@ -90,6 +91,7 @@ fn unreadable_objects_have_their_own_report() -> Result {
     let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     for json in [false, true] {
         let sandbox = Sandbox::new()?;
+        sandbox.make_cache(&sandbox.cache())?;
         let object = sandbox
             .cache()
             .join("objects")
@@ -144,6 +146,7 @@ fn warnings_name_the_problem_with_or_without_color() -> Result {
     let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     for (choice, colored) in [("always", true), ("never", false), ("auto", false)] {
         let sandbox = Sandbox::new()?;
+        sandbox.make_cache(&sandbox.cache())?;
         let object = sandbox
             .cache()
             .join("objects")
@@ -179,6 +182,7 @@ fn an_unused_empty_file_is_not_reported_as_needed() -> Result {
     let sandbox = Sandbox::new()?;
     let empty = sandbox.run(&["cache"])?;
     assert!(text(&empty.stderr)?.contains("the cache has no data files"));
+    sandbox.make_cache(&sandbox.cache())?;
     let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     let object = sandbox
         .cache()
@@ -321,6 +325,7 @@ fn copy_apart(from: &std::path::Path, to: &std::path::Path) -> Result {
 fn gc_refuses_unreadable_project_records() -> Result {
     for broken in ["registration", "data.toml", "data.lock"] {
         let sandbox = Sandbox::new()?;
+        sandbox.make_cache(&sandbox.cache())?;
         let registrations = sandbox.cache().join("projects");
         fs::create_dir_all(&registrations)?;
         let registration = registrations.join("project.json");
@@ -351,6 +356,64 @@ fn gc_refuses_unreadable_project_records() -> Result {
         assert!(registration.exists());
     }
     Ok(())
+}
+
+/// a folder whose names are a cache's, as a scratch folder's may be, is no cache without
+/// fetchloom's tag: gc, which clears old files from tmp/, refuses it, and nothing is added to it.
+#[test]
+fn gc_refuses_a_folder_with_a_caches_names_and_no_tag() -> Result {
+    use std::time::{Duration, SystemTime};
+    let folders: [&[&str]; 2] = [
+        &["tmp/notes.txt", "objects/pack1"],
+        &["projects/myapp/main.py"],
+    ];
+    for files in folders {
+        let sandbox = Sandbox::new()?;
+        let cache = sandbox.cache();
+        let days_ago = SystemTime::now() - Duration::from_hours(72);
+        for file in files {
+            let path = cache.join(file);
+            fs::create_dir_all(path.parent().ok_or("a file needs a folder")?)?;
+            fs::write(&path, b"a person's file")?;
+            fs::File::options()
+                .write(true)
+                .open(&path)?
+                .set_modified(days_ago)?;
+        }
+        let before = entries(&cache)?;
+        for args in [
+            &["cache", "gc"][..],
+            &["cache", "gc", "--now"],
+            &["cache", "verify"],
+        ] {
+            let output = sandbox.run(args)?;
+            let stderr = text(&output.stderr)?;
+            assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+            assert!(
+                stderr.contains("it holds other files and is not a fetchloom cache"),
+                "{args:?}: {stderr}"
+            );
+            assert_eq!(entries(&cache)?, before, "{args:?}");
+        }
+    }
+    Ok(())
+}
+
+/// every file and folder below `root`, by its path there.
+fn entries(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut found = Vec::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(folder)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                folders.push(path.clone());
+            }
+            found.push(path.strip_prefix(root)?.to_path_buf());
+        }
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// gc runs from one project, so a merge left unfinished in another names that project's folder in
@@ -435,6 +498,7 @@ fn the_cache_report_creates_nothing() -> Result {
 #[test]
 fn verify_reports_unenumerable_object_folders() -> Result {
     let sandbox = Sandbox::new()?;
+    sandbox.make_cache(&sandbox.cache())?;
     let fan = sandbox.cache().join("objects").join("ba");
     fs::create_dir_all(fan.parent().unwrap())?;
     fs::write(&fan, b"not a folder")?;
@@ -453,6 +517,7 @@ fn verify_reports_unenumerable_object_folders() -> Result {
 #[test]
 fn verify_keeps_damage_findings_in_json() -> Result {
     let sandbox = Sandbox::new()?;
+    sandbox.make_cache(&sandbox.cache())?;
     let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     let object = sandbox
         .cache()
@@ -520,6 +585,7 @@ fn gc_keeps_projects_with_inaccessible_metadata() -> Result {
         "project",
     ] {
         let sandbox = Sandbox::new()?;
+        sandbox.make_cache(&sandbox.cache())?;
         let registrations = sandbox.cache().join("projects");
         fs::create_dir_all(&registrations)?;
         let registration = registrations.join("project.json");
@@ -607,6 +673,7 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
     let build = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
     let mut cache = sandbox.cache();
     let object = loop {
+        sandbox.make_cache(&cache)?;
         let object = cache.join("objects").join(&digest[..2]).join(&digest[2..]);
         fs::create_dir_all(object.parent().unwrap())?;
         let file = fs::File::create(&object)?;
@@ -685,6 +752,7 @@ fn gc_reports_refused_removals_to_people_and_scripts() -> Result {
     let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     for json in [false, true] {
         let sandbox = Sandbox::new()?;
+        sandbox.make_cache(&sandbox.cache())?;
         let object = sandbox
             .cache()
             .join("objects")
@@ -1226,6 +1294,7 @@ fn a_ctrl_c_past_the_caches_mark_lets_it_tell_what_it_did() -> Result {
     ] {
         let sandbox = Sandbox::new()?;
         let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        sandbox.make_cache(&sandbox.cache())?;
         let fan = sandbox.cache().join("objects").join(&digest[..2]);
         fs::create_dir_all(&fan)?;
         fs::write(fan.join(&digest[2..]), b"abc")?;

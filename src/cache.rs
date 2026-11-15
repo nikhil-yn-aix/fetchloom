@@ -48,13 +48,16 @@ pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Supply, Use};
 
 use crate::digest::{self, Block, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};
-use crate::volume::{Volume, is_plain, read_unfollowed, refuses_links};
+use crate::volume::{Volume, is_plain, open_unfollowed, read_unfollowed, refuses_links};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
 const FOLDERS: [&str; 10] = [
     "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed", "imported",
     "builds",
 ];
+
+/// the file that keeps spotlight out of the cache on macos, made just before the tag.
+const NEVER_INDEX: &str = ".metadata_never_index";
 
 /// what a system keeps in a folder that holds nothing of a person's: a new disk's lost+found, and
 /// what macos and windows put at a disk's top or in a folder someone looked at.
@@ -68,13 +71,13 @@ const SYSTEM_NAMES: [&str; 7] = [
     "$RECYCLE.BIN",
 ];
 
-/// refuses `root` as the cache unless it is empty, but for what a system keeps there, or a cache
-/// already: fetchloom's tag, its objects and partial folders, or only folders a cache holds, one
-/// besides tmp/ among them. gc clears old files from tmp/, and the tag tells backup tools to skip
-/// the whole folder, which a folder of a person's own files, as a home named by mistake, must not get.
+/// refuses `root` as the cache unless it holds fetchloom's tag, or nothing but what a system keeps
+/// there and what a first run stopped before its tag was whole leaves: the start of the tag and
+/// macos's mark against indexing. gc clears old files from tmp/, and the tag tells backup tools to
+/// skip the whole folder, which a folder of a person's own files must not get, as a home named by
+/// mistake, or a scratch folder whose folders have a cache's names.
 fn adoptable(root: &Path) -> io::Result<()> {
-    let real = |name: &str| fs::symlink_metadata(root.join(name)).is_ok_and(|found| found.is_dir());
-    if tagged(root) || (real("objects") && real("partial")) {
+    if tagged(root) {
         return Ok(());
     }
     let entries = match fs::read_dir(root) {
@@ -82,31 +85,20 @@ fn adoptable(root: &Path) -> io::Result<()> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
-    let (mut empty, mut cached) = (true, false);
     for entry in entries {
         let name = entry?.file_name();
-        if SYSTEM_NAMES.iter().any(|system| name == *system) {
-            continue;
-        }
-        empty = false;
-        if FOLDERS
-            .iter()
-            .any(|folder| name == *folder && *folder != "tmp")
-        {
-            cached = true;
-        } else if name != "tmp" && name != "gc.lock" {
-            cached = false;
-            break;
+        let left = SYSTEM_NAMES.iter().any(|system| name == *system)
+            || name == NEVER_INDEX
+            || (name == "CACHEDIR.TAG" && tag_begun(root));
+        if !left {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "it holds other files and is not a fetchloom cache, and fetchloom makes its cache \
+                 only in an empty folder or a new one",
+            ));
         }
     }
-    if empty || cached {
-        return Ok(());
-    }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "it holds other files and is not a fetchloom cache, and fetchloom makes its cache only \
-         in an empty folder or a new one",
-    ))
+    Ok(())
 }
 
 /// what lets others change the files projects place from the cache folder at `root`: it belongs
@@ -159,14 +151,48 @@ fn exposure(owner: u32, mode: u32, user: u32) -> Option<&'static str> {
     }
 }
 
-/// whether `root` holds the tag fetchloom writes in its cache.
-fn tagged(root: &Path) -> bool {
+/// the start of `CACHEDIR.TAG` in `root`, read without following a link.
+fn tag_text(root: &Path) -> Option<String> {
     let mut text = String::new();
     read_unfollowed(&root.join("CACHEDIR.TAG"))
         .and_then(|file| file.take(4096).read_to_string(&mut text))
-        .is_ok()
-        && text.lines().next() == TAG.lines().next()
-        && text.contains("fetchloom")
+        .ok()?;
+    Some(text)
+}
+
+/// whether `root` holds the tag fetchloom writes in its cache.
+fn tagged(root: &Path) -> bool {
+    tag_text(root)
+        .is_some_and(|text| text.lines().next() == TAG.lines().next() && text.contains("fetchloom"))
+}
+
+/// whether `root` holds the start of fetchloom's tag, as a run stopped while writing it leaves.
+fn tag_begun(root: &Path) -> bool {
+    tag_text(root).is_some_and(|text| TAG.starts_with(&text))
+}
+
+/// writes the tag backup tools look for with `write`, unless one is there, before any folder of
+/// the cache, since a folder without it is no cache. a failed write passes once a whole tag is in
+/// place, as another run opening the cache may have written it meanwhile.
+fn tag(root: &Path, write: impl FnOnce(&Path, &[u8]) -> io::Result<()>) -> io::Result<()> {
+    if tagged(root) {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    exclude_native_backup_and_indexing(root)?;
+    match write(&root.join("CACHEDIR.TAG"), TAG.as_bytes()) {
+        Err(_) if tagged(root) => Ok(()),
+        written => written,
+    }
+}
+
+/// writes `bytes` over the start of the file at `path`, made if missing, never through a link. a
+/// tag a stopped run cut short holds the start of the same bytes, so the file never holds others,
+/// whichever runs write it at once.
+fn write_over(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = open_unfollowed(path, true)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 #[derive(Clone, Debug)]
@@ -328,10 +354,11 @@ impl Cache {
         #[cfg(not(unix))]
         fs::create_dir_all(&root)?;
         adoptable(&root)?;
+        tag(&root, write_over)?;
         for folder in FOLDERS {
             real_folder(&root.join(folder), FolderUse::Cache)?;
         }
-        let cache = Cache {
+        Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
@@ -340,24 +367,7 @@ impl Cache {
             urls: Arc::default(),
             #[cfg(not(unix))]
             remover: Arc::default(),
-        };
-        cache.tag(|tag, bytes| cache.write_atomically(tag, bytes))?;
-        Ok(cache)
-    }
-
-    /// writes the tag backup tools look for with `write`, unless one is there. a failed write with
-    /// a tag in place passes: fat on windows refuses a rename over another run's open tag.
-    fn tag(&self, write: impl FnOnce(&Path, &[u8]) -> io::Result<()>) -> io::Result<()> {
-        let tag = self.root.join("CACHEDIR.TAG");
-        if tag.exists() {
-            return Ok(());
-        }
-        #[cfg(target_os = "macos")]
-        exclude_native_backup_and_indexing(&self.root)?;
-        match write(&tag, TAG.as_bytes()) {
-            Err(_) if tag.exists() => Ok(()),
-            written => written,
-        }
+        })
     }
 
     /// the cache at `root` as it is, creating nothing, for a dry run: a missing cache or folder
@@ -808,7 +818,7 @@ fn exclude_native_backup_and_indexing(root: &Path) -> io::Result<()> {
     match OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(root.join(".metadata_never_index"))
+        .open(root.join(NEVER_INDEX))
     {
         Ok(_) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(()),
@@ -1381,27 +1391,27 @@ pub(crate) mod tests {
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n"));
     }
 
-    /// runs opening a new cache at once each write its tag, and FAT and exFAT refuse one run's
-    /// rename over the tag while another run has it open.
+    /// runs opening a new cache at once each write its tag, and one run's write may be refused
+    /// while another run has the tag open.
     #[test]
     fn a_cache_another_run_tagged_since_the_check_still_opens() {
         let (_dir, cache) = cache();
         let tag = cache.root.join("CACHEDIR.TAG");
         let denied = || io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
-        cache
-            .tag(|_, _| panic!("a tag that is there is not written again"))
-            .unwrap();
+        super::tag(&cache.root, |_, _| {
+            panic!("a tag that is there is not written again")
+        })
+        .unwrap();
         fs::remove_file(&tag).unwrap();
-        cache
-            .tag(|path, bytes| {
-                // the other run's tag lands first, and the rename over it is refused
-                fs::write(path, bytes)?;
-                Err(denied())
-            })
-            .unwrap();
+        super::tag(&cache.root, |path, bytes| {
+            // the other run's tag lands first, and this run's write is refused
+            fs::write(path, bytes)?;
+            Err(denied())
+        })
+        .unwrap();
         assert_eq!(fs::read_to_string(&tag).unwrap(), TAG);
         fs::remove_file(&tag).unwrap();
-        let refused = cache.tag(|_, _| Err(denied())).unwrap_err();
+        let refused = super::tag(&cache.root, |_, _| Err(denied())).unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
         assert!(!tag.exists());
     }
@@ -1439,35 +1449,59 @@ pub(crate) mod tests {
     }
 
     /// gc clears old files from tmp/ and the tag tells backup tools to skip the whole folder, so a
-    /// folder of someone's own files, as a home folder named by mistake, never becomes the cache.
+    /// folder of someone's own files, as a home folder named by mistake, never becomes the cache,
+    /// even when its folders have a cache's names, as a scratch folder's may, or a cache lost its
+    /// tag.
     #[test]
     fn a_folder_of_other_files_never_becomes_the_cache() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        fs::create_dir_all(home.join("tmp")).unwrap();
-        fs::write(home.join("tmp/important.txt"), b"keep these bytes").unwrap();
-        fs::write(home.join("thesis.tex"), b"keep these bytes").unwrap();
+        let folders: [&[&str]; 5] = [
+            &["tmp/important.txt", "thesis.tex"],
+            &["tmp/important.txt"],
+            &["tmp/notes.txt", "objects/pack1"],
+            &["projects/myapp/main.py"],
+            &["objects/ab/cdef", "partial/0/", "gc.lock"],
+        ];
+        for files in folders {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            for file in files {
+                let path = home.join(file);
+                if file.ends_with('/') {
+                    fs::create_dir_all(&path).unwrap();
+                } else {
+                    fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    fs::write(&path, b"keep these bytes").unwrap();
+                }
+            }
+            let before = entries(&home);
 
-        let error = Cache::open(home.clone()).unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-        assert!(Cache::unopened(home.clone()).is_err());
-        fs::rename(home.join("thesis.tex"), dir.path().join("thesis.tex")).unwrap();
-        assert!(
-            Cache::open(home.clone()).is_err(),
-            "a tmp/ alone is no cache"
-        );
-        fs::rename(dir.path().join("thesis.tex"), home.join("thesis.tex")).unwrap();
+            let error = Cache::open(home.clone()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{files:?}");
+            assert!(Cache::unopened(home.clone()).is_err(), "{files:?}");
+            assert_eq!(entries(&home), before, "{files:?}");
+        }
+    }
 
-        let mut left: Vec<_> = fs::read_dir(&home)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
-        left.sort();
-        assert_eq!(left, ["thesis.tex", "tmp"]);
+    /// every file and folder below `root`, by its path there.
+    fn entries(root: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut folders = vec![root.to_path_buf()];
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path.clone());
+                }
+                found.push(path.strip_prefix(root).unwrap().to_path_buf());
+            }
+        }
+        found.sort();
+        found
     }
 
     /// an empty folder, as a new disk with its lost+found, becomes the cache, and a cache opens
-    /// again, even one whose tag someone removed, by its own folders.
+    /// again. so does a folder a first run left as it was stopped before its tag was whole, with
+    /// the start of the tag and macos's mark against indexing, which then gets the whole tag.
     #[test]
     fn an_empty_folder_or_a_cache_opens_as_the_cache() {
         let dir = tempfile::tempdir().unwrap();
@@ -1476,9 +1510,20 @@ pub(crate) mod tests {
         Cache::open(disk.clone()).unwrap();
         fs::write(disk.join("notes.txt"), b"a person's note").unwrap();
         Cache::open(disk.clone()).unwrap();
-        fs::remove_file(disk.join("CACHEDIR.TAG")).unwrap();
-        Cache::open(disk.clone()).unwrap();
         assert!(Cache::unopened(disk).is_ok());
+        // empty, the signature line alone, and up to the word that makes it fetchloom's
+        for cut in [0, 43, 62] {
+            let stopped = dir.path().join(format!("stopped-{cut}"));
+            fs::create_dir_all(&stopped).unwrap();
+            fs::write(stopped.join("CACHEDIR.TAG"), &TAG.as_bytes()[..cut]).unwrap();
+            fs::write(stopped.join(".metadata_never_index"), b"").unwrap();
+            assert!(Cache::unopened(stopped.clone()).is_ok(), "{cut}");
+            Cache::open(stopped.clone()).unwrap();
+            assert_eq!(
+                fs::read_to_string(stopped.join("CACHEDIR.TAG")).unwrap(),
+                TAG
+            );
+        }
     }
 
     /// a team's cache may be another member's folder or one their group writes; only the owner
