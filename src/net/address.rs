@@ -41,13 +41,15 @@ struct Hosts {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Allowed {
     pub(crate) origins: Vec<url::Origin>,
-    /// set by `FETCHLOOM_ALLOWED_ORIGINS`, which wins over the settings file while it is set.
+    /// only `FETCHLOOM_ALLOWED_ORIGINS` changes it for this run: it is set, and wins over the
+    /// settings file, or `--no-config` or `FETCHLOOM_NO_CONFIG` leaves the file unread.
     pub(crate) by_variable: bool,
 }
 
 impl Allowed {
     /// how to let a later run reach `origin` too: the setting's whole value with `origin` added,
-    /// saved with `settings set` or as one run's variable, or the variable alone while it sets it.
+    /// saved with `settings set` or as one run's variable, or the variable alone when only it
+    /// changes the setting.
     pub(crate) fn remedy(&self, origin: &url::Origin) -> String {
         let mut listed: Vec<String> = self
             .origins

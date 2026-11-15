@@ -168,12 +168,14 @@ impl Context {
             .finding_sites(|| crate::auth::site::sites(&crate::machine::env))
     }
 
-    /// the `allowed_origins` setting, and whether its variable sets it.
+    /// the `allowed_origins` setting, and whether only its variable changes it for this run: the
+    /// variable sets it, or the run reads no settings file.
     fn allowed(&self) -> net::Allowed {
         let allowed = &self.settings.allowed_origins;
         net::Allowed {
             origins: allowed.value.clone(),
-            by_variable: allowed.origin == crate::settings::Origin::Environment,
+            by_variable: allowed.origin == crate::settings::Origin::Environment
+                || self.settings.file.bypassed.is_some(),
         }
     }
 

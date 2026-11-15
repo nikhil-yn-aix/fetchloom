@@ -316,6 +316,25 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         "if you trust that server, save it with `fetchloom settings set allowed_origins {origin}`, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run"
     );
     assert_eq!(refused("sync", None, &sandbox.cache())?["help"], untrusted);
+    // a run that reads no settings file cannot use what `settings set` saves, so the variable
+    // is all it offers
+    for (arguments, unread) in [
+        (["--json", "--no-config", "sync"].as_slice(), None),
+        (["--json", "sync"].as_slice(), Some("1")),
+    ] {
+        let mut run = sandbox.command(arguments);
+        if let Some(unread) = unread {
+            run.env("FETCHLOOM_NO_CONFIG", unread);
+        }
+        let output = run.env_remove("FETCHLOOM_ALLOWED_ORIGINS").output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(10), "{document}");
+        assert_eq!(
+            document["errors"][0]["help"],
+            format!("if you trust that server, set `FETCHLOOM_ALLOWED_ORIGINS={origin}`"),
+            "{arguments:?}"
+        );
+    }
     // an empty variable clears what the file allows, so the file is no remedy while it is set
     assert_eq!(
         refused("sync", Some(""), &sandbox.cache())?["help"],
