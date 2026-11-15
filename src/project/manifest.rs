@@ -20,6 +20,8 @@ pub(crate) const DATA_DIR: &str = "data";
 pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
 /// the names the project's own files take beside data.toml, which no data folder may take.
 const PROJECT_FILES: [&str; 3] = [FILE, "data.lock", "data.lock.d"];
+/// the files git reads its rules from in a repository's folders, besides its `.git` folder.
+const GIT_FILES: [&str; 3] = [".gitignore", ".gitattributes", ".gitmodules"];
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
 const DATASET_KEYS: [&str; 13] = [
@@ -1115,14 +1117,20 @@ impl Reader<'_> {
         })
     }
 
-    /// a path inside the project, which may not climb out of it. a dataset's `path` may also be
+    /// a path inside the project, which may not climb out of it, read as written, so a space is
+    /// kept and a folder ending in one refused, as windows drops it; a leading `./` and a trailing
+    /// `/` name the same folder without them. a dataset's `path` may also be
     /// [`DATA_FOLDER_ITSELF`], the data folder.
     fn relative(&self, item: &Item, key: &str) -> Result<String, Error> {
-        let text = self.string(item, key)?.trim().trim_end_matches('/');
+        let written = self.string(item, key)?;
+        let mut text = written.trim_end_matches('/');
+        while let Some(rest) = text.strip_prefix("./") {
+            text = rest;
+        }
         let refused = |reason: &str| {
             self.error(
                 item.span(),
-                format!("{key} = \"{text}\" in data.toml is refused because {reason}"),
+                format!("{key} = \"{written}\" in data.toml is refused because {reason}"),
             )
         };
         if let Some(reason) = name::metadata(text) {
@@ -1156,6 +1164,17 @@ impl Reader<'_> {
                 "{first} is the name of one of the project's own files"
             ))
             .help("use a folder of its own inside the project, such as data"));
+        }
+        // git reads these files in any folder, and a folder of that name stands in for one
+        if key == "data_dir"
+            && let Some(file) = text.split('/').find(|part| {
+                GIT_FILES
+                    .iter()
+                    .any(|git| name::fold(git) == name::fold(part))
+            })
+        {
+            return Err(refused(&format!("{file} is the name of a file git reads"))
+                .help("use a folder of its own inside the project, such as data"));
         }
         match name::escapes(text) {
             // a data.toml is shared with windows clones, where every file would hit the same name

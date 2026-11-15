@@ -234,7 +234,12 @@ const METADATA_COMPONENTS: &[&str] = &[
 ];
 
 fn refuses_metadata(key: &str, table: &str) {
-    for path in [".github", ".gitignore", "data/git", "data/.hgdata"] {
+    let mut taken = vec![".github", "data/git", "data/.hgdata"];
+    // a data_dir named as one of git's own files is refused on its own
+    if key != "data_dir" {
+        taken.push(".gitignore");
+    }
+    for path in taken {
         let text = format!("{table}\n{key} = \"{path}\"\n");
         assert!(
             Manifest::parse(&text).is_ok(),
@@ -277,6 +282,19 @@ fn a_folder_windows_cannot_store_is_refused_as_data_toml_is_read() {
             "data.",
             "\"data.\" ends with a dot or a space, which windows drops",
         ),
+        // a space is kept as written, so the folder data.toml names is the one made
+        (
+            "[project]",
+            "data_dir",
+            "Data ",
+            "\"Data \" ends with a dot or a space, which windows drops",
+        ),
+        (
+            "[project]",
+            "data_dir",
+            " ",
+            "\" \" ends with a dot or a space, which windows drops",
+        ),
         (
             "[project]",
             "data_dir",
@@ -316,6 +334,34 @@ fn a_folder_windows_cannot_store_is_refused_as_data_toml_is_read() {
             "{:?}",
             error.help
         );
+    }
+}
+
+/// a data_dir named as a file git reads is refused as `.git` is, in any case, since git would
+/// read its rules from a folder; `./data` is the folder data.
+#[test]
+fn a_data_dir_is_no_file_git_reads_and_may_start_at_dot() {
+    for (written, file) in [
+        (".gitignore", ".gitignore"),
+        (".GitAttributes", ".GitAttributes"),
+        (".gitmodules", ".gitmodules"),
+        ("inputs/.gitignore", ".gitignore"),
+    ] {
+        let error = fails(&format!("[project]\ndata_dir = '{written}'\n"));
+        assert_eq!(
+            error.message,
+            format!(
+                "data_dir = \"{written}\" in data.toml is refused because {file} is the name of a file git reads"
+            )
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("use a folder of its own inside the project, such as data")
+        );
+    }
+    for (written, read) in [("./data", "data"), ("./inputs/raw/", "inputs/raw")] {
+        let manifest = Manifest::parse(&format!("[project]\ndata_dir = '{written}'\n")).unwrap();
+        assert_eq!(manifest.data_dir, read, "{written}");
     }
 }
 
@@ -1390,14 +1436,19 @@ fn duplicate_datasets_and_duplicate_refs_are_not_silently_overwritten() {
 #[test]
 fn path_dot_means_the_data_folder_and_empty_is_refused() {
     let table = "[datasets.x]\nref = \"https://example.org/x\"\n";
-    for written in [".", "./", " . "] {
+    for (written, read) in [(".", "."), ("./", "."), ("./.", "."), ("./raw", "raw")] {
         let manifest = parse(&format!("{table}path = \"{written}\"\n"));
         assert_eq!(
             manifest.datasets["x"].path.as_deref(),
-            Some("."),
+            Some(read),
             "{written:?}"
         );
     }
+    // spaces are kept as written, and windows drops one at the end of a name
+    assert_eq!(
+        fails(&format!("{table}path = \" . \"\n")).message,
+        "path = \" . \" in data.toml is refused because \" . \" ends with a dot or a space, which windows drops"
+    );
     let empty = fails(&format!("{table}path = \"\"\n"));
     assert_eq!(
         empty.message,
@@ -1410,7 +1461,7 @@ fn path_dot_means_the_data_folder_and_empty_is_refused() {
     for (written, reason) in [
         ("..", "it climbs out of its folder"),
         ("raw/../x", "it climbs out of its folder"),
-        ("./raw", "it has . as a folder name"),
+        ("raw/./x", "it has . as a folder name"),
     ] {
         let error = fails(&format!("{table}path = \"{written}\"\n"));
         assert_eq!(
@@ -1430,7 +1481,6 @@ fn path_dot_means_the_data_folder_and_empty_is_refused() {
 fn data_directories_must_stay_inside_the_project() {
     for directory in [
         "",
-        " ",
         ".",
         "./",
         "../outside",
@@ -1470,7 +1520,7 @@ fn data_directories_must_stay_inside_the_project() {
     );
     assert_eq!(parse("[project]\n").data_dir, "data");
     assert_eq!(
-        parse("[project]\ndata_dir = '  inputs/raw///  '\n").data_dir,
+        parse("[project]\ndata_dir = 'inputs/raw///'\n").data_dir,
         "inputs/raw"
     );
 }
