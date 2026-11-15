@@ -92,20 +92,28 @@ pub(super) fn tell(
                 "{path} was put back as pinned: its bytes had changed though its size and time had not"
             ));
         } else {
-            let said = match changed_copy(placement, path) {
-                Some(copy) => format!(
-                    "{path} was put back as pinned: it is linked to the cache's copy, which was changed. the changed copy is kept as {}",
-                    copy.kept_as
+            let edits = "to edit a dataset's files, set copy = true for it in data.toml";
+            let (said, help) = match changed_copy(placement, path) {
+                // the change may be an edit through the link or damage, which no one can tell
+                // apart from here, so the copy stays until a person deletes it
+                Some(copy) => (
+                    format!(
+                        "{path} was put back as pinned: it is linked to the cache's copy, which was changed. the changed copy is kept as {}",
+                        copy.kept_as
+                    ),
+                    format!(
+                        "if no one meant to change the file, delete {}; {edits}",
+                        copy.kept_as
+                    ),
                 ),
-                None => format!(
-                    "{path} was put back as pinned: it is linked to the cache's copy, which was changed"
+                None => (
+                    format!(
+                        "{path} was put back as pinned: it is linked to the cache's copy, which was changed"
+                    ),
+                    edits.to_owned(),
                 ),
             };
-            output.warn_with(
-                Warning::PlaceRestored,
-                &said,
-                "to edit a dataset's files, set copy = true for it in data.toml",
-            );
+            output.warn_with(Warning::PlaceRestored, &said, &help);
         }
     }
 }

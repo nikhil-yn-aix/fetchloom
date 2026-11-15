@@ -551,7 +551,7 @@ fn a_kept_changed_copy_never_replaces_a_file_already_there() -> Result {
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("the changed copy is kept as data/iris/iris.csv.changed.2"),
+        stderr.contains("the changed copy is kept as data/iris/iris.csv.changed.2\n  help: if no one meant to change the file, delete data/iris/iris.csv.changed.2; to edit a dataset's files, set copy = true for it in data.toml\n"),
         "{stderr}"
     );
     assert_eq!(
