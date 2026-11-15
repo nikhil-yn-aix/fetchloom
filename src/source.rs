@@ -489,6 +489,41 @@ impl Reference {
         }
     }
 
+    /// whether `before`, a reference as data.toml wrote it, names the dataset `now` names at a
+    /// version `now` leaves out, as `kaggle:uciml/iris@2` does `kaggle:uciml/iris`. a source with
+    /// versions writes one after `@`, while an `@` in a link or a bucket's key names other data.
+    pub(crate) fn version_left_out(before: &str, now: &str) -> bool {
+        if before == now {
+            return false;
+        }
+        let (Ok(before), Ok(now)) = (Reference::parse(before), Reference::parse(now)) else {
+            return false;
+        };
+        let versions = matches!(
+            before.reference,
+            Reference::Dryad(_)
+                | Reference::Mendeley(_)
+                | Reference::GitHub(_)
+                | Reference::GitLab(_)
+                | Reference::Dandi(_)
+                | Reference::OpenNeuro(_)
+                | Reference::Figshare(_)
+                | Reference::Dataverse(_)
+                | Reference::HuggingFace(_)
+                | Reference::Kaggle(_)
+                | Reference::Arxiv(_)
+                | Reference::S2Dataset(_)
+        );
+        let named = before.reference.to_string();
+        let version = named
+            .strip_prefix(&now.reference.to_string())
+            .and_then(|rest| rest.strip_prefix('@'));
+        versions
+            && std::mem::discriminant(&before.reference) == std::mem::discriminant(&now.reference)
+            && (&before.file, &before.folder) == (&now.file, &now.folder)
+            && version.is_some_and(|version| !version.is_empty())
+    }
+
     /// the reference as messages and logs show it, a secret in a link masked.
     pub(crate) fn shown(&self) -> String {
         match self {

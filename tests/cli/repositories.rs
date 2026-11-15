@@ -456,6 +456,17 @@ fn bytes_that_differ_from_mendeleys_sha256_are_refused() -> Result {
 /// github's answer for jq's release jq-1.8.2 holding `(name, bytes, sha256)` assets with the
 /// digest stated, and each asset's link on github.com sending its download on to storage.
 fn github(assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
+    Routes::start(release("jq-1.8.2", false, assets)?)
+}
+
+/// github's answers for jq's release `tag`, the latest one when `latest`, holding `(name, bytes,
+/// sha256)` assets with the digest stated, and each asset's link on github.com sending its
+/// download on to storage.
+fn release(
+    tag: &str,
+    latest: bool,
+    assets: &[(&str, &[u8], &str)],
+) -> Result<Vec<(String, Vec<Part>)>> {
     let listed: Vec<_> = assets
         .iter()
         .map(|(name, body, sha256)| {
@@ -464,24 +475,31 @@ fn github(assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
                 "size": body.len(),
                 "state": "uploaded",
                 "digest": format!("sha256:{sha256}"),
-                "browser_download_url": format!("https://github.com/jqlang/jq/releases/download/jq-1.8.2/{name}"),
+                "browser_download_url": format!("https://github.com/jqlang/jq/releases/download/{tag}/{name}"),
             })
         })
         .collect();
-    let release = serde_json::json!({"tag_name": "jq-1.8.2", "name": "jq 1.8.2", "assets": listed});
+    let release =
+        serde_json::json!({"tag_name": tag, "name": format!("jq {tag}"), "assets": listed});
     let mut routes = vec![(
-        "/api.github.com/repos/jqlang/jq/releases/tags/jq-1.8.2".to_owned(),
+        format!("/api.github.com/repos/jqlang/jq/releases/tags/{tag}"),
         answer(&release)?,
     )];
-    for (name, body, _) in assets {
-        let stored = format!("/storage/{name}");
+    if latest {
         routes.push((
-            format!("/github.com/jqlang/jq/releases/download/jq-1.8.2/{name}"),
+            "/api.github.com/repos/jqlang/jq/releases/latest".to_owned(),
+            answer(&release)?,
+        ));
+    }
+    for (name, body, _) in assets {
+        let stored = format!("/storage/{tag}/{name}");
+        routes.push((
+            format!("/github.com/jqlang/jq/releases/download/{tag}/{name}"),
             reply("302 Found", &[("Location", &stored)], b""),
         ));
         routes.push((stored, file(body, &format!("\"{name}\""))));
     }
-    Routes::start(routes)
+    Ok(routes)
 }
 
 /// a pasted release page is pinned at its tag with the SHA-256 github states for each file.
@@ -516,6 +534,53 @@ fn a_github_release_is_pinned_at_its_tag_and_synced_from_the_lock() -> Result {
             .all(|target| !target.starts_with("/api.github.com")),
         "the lock alone says what to download"
     );
+    Ok(())
+}
+
+/// a version taken out of data.toml keeps the release data.lock pins, as uv keeps a locked
+/// version, and only an upgrade takes the latest one.
+#[test]
+fn a_version_taken_out_stays_locked_until_an_upgrade() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut served = release("jq-1.8.2", false, &[("rows.csv", ROWS, &sha256_hex(ROWS))])?;
+    served.extend(release(
+        "jq-1.8.3",
+        true,
+        &[("rows.csv", NOTES, &sha256_hex(NOTES))],
+    )?);
+    let routes = Routes::start(served)?;
+    let run = |args: &[&str]| command(&sandbox, &routes, args).output();
+    ok(&run(&["add", "github:jqlang/jq@jq-1.8.2", "--as", "jq"])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace("github:jqlang/jq@jq-1.8.2", "github:jqlang/jq"),
+    )?;
+    let lock = sandbox.work().join("data.lock");
+    let pinned = |tag: &str| -> Result<bool> {
+        Ok(fs::read_to_string(&lock)?.contains(&format!("resolved = \"github:jqlang/jq@{tag}\"")))
+    };
+
+    let locked = run(&["lock"])?;
+    ok(&locked)?;
+    let said = text(&locked.stderr)?;
+    assert!(!said.contains("Upgraded"), "{said}");
+    assert!(
+        said.contains("hint: data.toml names no version of jq, so it stays at github:jqlang/jq@jq-1.8.2, as data.lock pins it; `fetchloom lock --upgrade jq` takes the newest"),
+        "{said}"
+    );
+    assert!(pinned("jq-1.8.2")?, "{}", fs::read_to_string(&lock)?);
+    ok(&run(&["lock", "--check"])?)?;
+
+    let upgraded = run(&["lock", "--upgrade", "jq"])?;
+    ok(&upgraded)?;
+    let said = text(&upgraded.stderr)?;
+    assert!(
+        said.contains("Upgraded jq · github:jqlang/jq@jq-1.8.2 → github:jqlang/jq@jq-1.8.3"),
+        "{said}"
+    );
+    assert!(pinned("jq-1.8.3")?, "{}", fs::read_to_string(&lock)?);
     Ok(())
 }
 

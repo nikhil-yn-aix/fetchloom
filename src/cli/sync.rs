@@ -52,7 +52,7 @@ pub(super) enum Upgrade {
 }
 
 impl Upgrade {
-    fn includes(&self, name: &str) -> bool {
+    pub(super) fn includes(&self, name: &str) -> bool {
         match self {
             Upgrade::Nothing => false,
             Upgrade::All => true,
@@ -2091,15 +2091,26 @@ pub(super) fn resolves_locally(reference: &Reference) -> bool {
     matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
 }
 
-/// what to resolve for a changed entry: a changed filter resolves the version already locked, so
-/// tidying data.toml never moves data, while a new ref or an upgrade asks for the newest.
+/// what to resolve for a changed entry: a changed filter, or a version taken out of the ref,
+/// resolves the version already locked, so tidying data.toml never moves data, as uv keeps a
+/// locked version, while a new ref or an upgrade asks for the newest.
 fn pinned(source: &Source, previous: Option<&Locked>, upgrading: bool) -> String {
     match previous {
-        Some(locked) if !upgrading && locked.reference == source.reference => {
+        Some(locked)
+            if !upgrading
+                && (locked.reference == source.reference || keeps_version(locked, source)) =>
+        {
             locked.resolved.clone()
         }
         _ => source.reference.clone(),
     }
+}
+
+/// whether `source`'s ref is the one `locked` was pinned for with its version taken out, and
+/// `locked` pins a version of that same dataset, which a lock then keeps until an upgrade.
+pub(super) fn keeps_version(locked: &Locked, source: &Source) -> bool {
+    Reference::version_left_out(&locked.reference, &source.reference)
+        && Reference::version_left_out(&locked.resolved, &source.reference)
 }
 
 /// the download of one locked file. when its recorded link is dead, the source is asked again
@@ -2232,7 +2243,7 @@ pub(super) fn tell_raw(output: &Output, typed: &str, parsed: &Reference) {
 }
 
 /// a reference pinned to a 40-digit commit, shown cut to 7 digits as git does; data.lock keeps 40.
-fn short_revision(reference: String) -> String {
+pub(super) fn short_revision(reference: String) -> String {
     match reference.rsplit_once('@') {
         Some((head, revision))
             if revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
@@ -2495,6 +2506,83 @@ mod tests {
         assert!(!selected.includes("other"));
         assert!(Upgrade::All.includes("other"));
         assert!(!Upgrade::Nothing.includes("set"));
+    }
+
+    /// a version taken out of a ref resolves the one data.lock pins until an upgrade; another
+    /// version, another dataset, an `@` in a link, which names other data, or a pin of something
+    /// else than that dataset asks anew.
+    #[test]
+    fn a_version_taken_out_resolves_the_locked_one_unless_upgrading() {
+        let manifest = Manifest::parse("[datasets.set]\nref = 'kaggle:uciml/iris'\n").unwrap();
+        let entry = manifest.datasets["set"].source().unwrap();
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        for (before, resolved, now, kept) in [
+            (
+                "kaggle:uciml/iris@1",
+                "kaggle:uciml/iris@1",
+                "kaggle:uciml/iris",
+                true,
+            ),
+            (
+                "hf:datasets/x/y@main",
+                &format!("hf:datasets/x/y@{commit}"),
+                "hf:datasets/x/y",
+                true,
+            ),
+            (
+                "openneuro:ds000001@1.0.0",
+                "openneuro:ds000001@1.0.0",
+                "openneuro:ds000001",
+                true,
+            ),
+            (
+                "kaggle:uciml/iris@1",
+                "kaggle:uciml/iris@1",
+                "kaggle:uciml/iris@2",
+                false,
+            ),
+            (
+                "kaggle:uciml/iris@1",
+                "kaggle:uciml/iris@1",
+                "kaggle:uciml/wine",
+                false,
+            ),
+            (
+                "kaggle:uciml/iris",
+                "kaggle:uciml/iris@3",
+                "kaggle:uciml/iris@1",
+                false,
+            ),
+            (
+                "https://example.org/data@2",
+                "https://example.org/data@2",
+                "https://example.org/data",
+                false,
+            ),
+            (
+                "kaggle:uciml/iris@1",
+                "https://example.org/elsewhere",
+                "kaggle:uciml/iris",
+                false,
+            ),
+        ] {
+            let mut previous = locked("set");
+            previous.reference = before.to_owned();
+            previous.resolved = resolved.to_owned();
+            let mut source = entry.clone();
+            source.reference = now.to_owned();
+            let expected = if kept { resolved } else { now };
+            assert_eq!(
+                pinned(&source, Some(&previous), false),
+                expected,
+                "{before} to {now}"
+            );
+            assert_eq!(
+                pinned(&source, Some(&previous), true),
+                now,
+                "{before} to {now}"
+            );
+        }
     }
 
     #[test]

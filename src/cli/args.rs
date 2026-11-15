@@ -996,7 +996,8 @@ pub(crate) struct Status {
 /// bring data.lock in line with data.toml
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Lock {
-    /// check sources again for newer data, keeping any version data.toml names
+    /// check sources again for newer data, keeping any version data.toml names. without it, a
+    /// dataset keeps the version data.lock records, even once data.toml names none
     #[arg(long, value_name = "name", num_args = 0.., help_heading = "options")]
     pub(crate) upgrade: Option<Vec<String>>,
 
