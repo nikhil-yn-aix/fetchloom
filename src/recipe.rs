@@ -383,11 +383,20 @@ impl fmt::Display for Change {
             Change::Renamed(old, new) => write!(f, "{old} was renamed to {new}"),
             Change::Run => f.write_str("run changed"),
             Change::Code(path) => write!(f, "{path} changed"),
+            Change::Gone(path) if is_pattern(path) => write!(f, "{path} is missing: {NO_PATTERNS}"),
             Change::Gone(path) => write!(f, "{path} is missing"),
             Change::Env => f.write_str("env changed"),
             Change::Key => f.write_str("its key in data.lock is not the one its recipe makes"),
         }
     }
+}
+
+/// what a code path with a wildcard in it, missing as a file, most likely meant.
+pub(crate) const NO_PATTERNS: &str = "code takes files and folders, not patterns";
+
+/// whether the code path `path` reads as a pattern, such as `*.py`, which code does not expand.
+pub(crate) fn is_pattern(path: &str) -> bool {
+    path.contains(['*', '?', '['])
 }
 
 /// what moved since data.lock's result of the recipe `name` was built, as [`Step::changes`] finds
@@ -757,6 +766,10 @@ mod tests {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>(),
             ["not built yet", "raw is not pinned yet"]
+        );
+        assert_eq!(
+            Change::Gone("*.py".to_owned()).to_string(),
+            "*.py is missing: code takes files and folders, not patterns"
         );
     }
 }

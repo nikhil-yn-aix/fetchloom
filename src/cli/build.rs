@@ -1093,14 +1093,22 @@ fn keyed(step: &Step) -> Result<Sha256, Error> {
     }
     let name = &step.name;
     if let Some((path, _)) = step.code.iter().find(|(_, code)| code.is_none()) {
+        let help = if recipe::is_pattern(path) {
+            format!(
+                "{} such as {path}: list each file the step reads, or the folder that holds them",
+                recipe::NO_PATTERNS
+            )
+        } else {
+            format!(
+                "bring {path} back: `git restore {}` if git has it, else ask whoever built {name} to commit it; take it out of code in data.toml only once the step no longer reads it",
+                super::shell_word(path)
+            )
+        };
         return Err(Error::new(
             Kind::ProjectInvalid,
             format!("{name} cannot be built: its code {path} is not in the project"),
         )
-        .help(format!(
-            "bring {path} back: `git restore {}` if git has it, else ask whoever built {name} to commit it; take it out of code in data.toml only once the step no longer reads it",
-            super::shell_word(path)
-        )));
+        .help(help));
     }
     let unpinned: Vec<&str> = step
         .inputs
@@ -1516,6 +1524,36 @@ mod tests {
             ),
         ] {
             assert_eq!(closing(built, &repinned), said, "{built:?}");
+        }
+    }
+
+    /// code takes files and folders, so a pattern that is not a file gets no `git restore`, which
+    /// would restore every file it matches, but the way to name what the step reads.
+    #[test]
+    fn missing_code_that_is_a_pattern_is_told_to_name_files() {
+        let step = |path: &str| Step {
+            name: "clean".to_owned(),
+            inputs: Vec::new(),
+            run: vec!["python3".to_owned()],
+            code: vec![(path.to_owned(), None)],
+            env: std::collections::BTreeMap::new(),
+        };
+        for (path, help) in [
+            (
+                "*.py",
+                "code takes files and folders, not patterns such as *.py: list each file the step reads, or the folder that holds them",
+            ),
+            (
+                "clean.py",
+                "bring clean.py back: `git restore clean.py` if git has it, else ask whoever built clean to commit it; take it out of code in data.toml only once the step no longer reads it",
+            ),
+        ] {
+            let error = keyed(&step(path)).unwrap_err();
+            assert_eq!(
+                error.message,
+                format!("clean cannot be built: its code {path} is not in the project")
+            );
+            assert_eq!(error.help.unwrap_or_default().into_string(), help);
         }
     }
 
