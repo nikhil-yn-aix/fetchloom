@@ -22,9 +22,9 @@ use crate::digest::Sha256;
 /// the file at the top of every mirror, which tells a mirror from an empty or unmounted folder.
 pub(crate) const MARKER: &str = "fetchloom-mirror";
 /// the first line of that file.
-pub(crate) const MARKER_LINE: &str = "fetchloom mirror 1";
+const MARKER_LINE: &str = "fetchloom mirror 1";
 /// the largest tree read from a mirror, about 600,000 files. a bigger archive comes as itself.
-pub(crate) const LARGEST_TREE: u64 = 64 * 1024 * 1024;
+const LARGEST_TREE: u64 = 64 * 1024 * 1024;
 pub(crate) const OBJECTS: &str = "objects";
 pub(crate) const TREES: &str = "trees";
 

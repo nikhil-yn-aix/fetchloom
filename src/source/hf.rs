@@ -42,7 +42,7 @@ const PAGES: [&str; 24] = [
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RepoKind {
+enum RepoKind {
     Dataset,
     Model,
     Space,

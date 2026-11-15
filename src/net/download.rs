@@ -51,7 +51,7 @@ pub(crate) struct Expect {
 impl Expect {
     /// whether the download must also compute an MD5. bytes that match a pinned SHA-256 match
     /// the MD5 recorded beside it, and computing both costs over three times the hashing alone.
-    pub(crate) fn needs_md5(&self) -> bool {
+    fn needs_md5(&self) -> bool {
         self.md5.is_some() && self.sha256.is_none()
     }
 

@@ -27,7 +27,7 @@ use crate::work::Work;
 pub(crate) const SPLIT_ABOVE: u64 = 64 * 1024 * 1024;
 
 /// the smallest half of a range that a stream takes from another.
-pub(crate) const SMALLEST_PIECE: u64 = 8 * 1024 * 1024;
+const SMALLEST_PIECE: u64 = 8 * 1024 * 1024;
 /// how long a rate is measured before and after a stream is added.
 pub(crate) const WINDOW: Duration = Duration::from_secs(2);
 /// bytes a second below which one stream, over a window, hands its download over to be split.

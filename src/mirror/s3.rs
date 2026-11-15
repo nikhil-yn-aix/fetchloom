@@ -343,9 +343,9 @@ pub(crate) struct Pusher {
     region: Mutex<Option<String>>,
     stop: Arc<Stop>,
     /// a file bigger than this goes up in parts: 5 GiB, less in tests.
-    pub(crate) multipart_above: u64,
+    multipart_above: u64,
     /// the least size of a part but the last.
-    pub(crate) least_part: u64,
+    least_part: u64,
 }
 
 impl Pusher {

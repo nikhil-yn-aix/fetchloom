@@ -97,7 +97,7 @@ impl Typed {
     }
 
     /// lets the proxy at `host` be reached, wherever its address is.
-    pub(crate) fn add_proxy(&self, host: &str) {
+    fn add_proxy(&self, host: &str) {
         self.hosts().proxies.insert(key(host));
     }
 
@@ -144,7 +144,7 @@ impl Typed {
 
     /// whether `host` may resolve to a private address for a client that keeps `reach`: a proxy
     /// may for every client, a host a trusted origin is on only for the trusted client.
-    pub(crate) fn may_resolve_privately(&self, host: &str, reach: Reach) -> bool {
+    fn may_resolve_privately(&self, host: &str, reach: Reach) -> bool {
         let key = key(host);
         let hosts = self.hosts();
         hosts.proxies.contains(&key) || (reach == Reach::Trusted && hosts.trusts_on(&key))

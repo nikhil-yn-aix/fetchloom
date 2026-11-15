@@ -19,7 +19,7 @@ pub(crate) const FILE: &str = "speeds.json";
 const MOST_HOSTS: usize = 256;
 /// a transfer counts toward its host's rate once it received this much, since a shorter one is
 /// mostly its connection getting up to speed.
-pub(crate) const MEASURED: u64 = 1 << 20;
+const MEASURED: u64 = 1 << 20;
 /// how much a run moves what a host's speed was: a third, so a few recent runs decide it.
 const WEIGHT: f64 = 1.0 / 3.0;
 
@@ -139,7 +139,7 @@ struct Remembered {
 
 /// the hosts the file remembers.
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Memory {
+struct Memory {
     hosts: BTreeMap<String, Remembered>,
 }
 

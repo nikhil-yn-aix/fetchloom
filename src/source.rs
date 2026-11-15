@@ -75,7 +75,7 @@ impl<K: Eq + std::hash::Hash> Pages<K> {
 
     /// the pages of a listing of at most `most` files that follows each page's token, whose first
     /// page, which no token names, is asked for before the guard hears of the next.
-    pub(crate) fn after_first(most: usize) -> Pages<K> {
+    fn after_first(most: usize) -> Pages<K> {
         Pages {
             held: Some(0),
             ..Pages::most(most)
@@ -1094,7 +1094,7 @@ pub(crate) fn invalid(subject: impl fmt::Display, reason: &str) -> Error {
 
 /// the error for a file or folder `reference` lists at `path`, a name fetchloom refuses
 /// `because` of what it holds, which only the dataset's owner can change.
-pub(crate) fn refused_name(reference: &str, path: &str, because: &str) -> Error {
+fn refused_name(reference: &str, path: &str, because: &str) -> Error {
     Error::new(
         Kind::SourceInvalid,
         format!(

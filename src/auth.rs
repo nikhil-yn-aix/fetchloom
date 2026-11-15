@@ -683,7 +683,7 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
 }
 
 /// every dataverse installation a key is known for.
-pub(crate) fn dataverses(var: Var<'_>) -> Vec<String> {
+fn dataverses(var: Var<'_>) -> Vec<String> {
     saved_dataverses(var, &store::saved(var))
 }
 
@@ -733,7 +733,7 @@ pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
 }
 
 /// the token file the hugging face tools read, found as they find it.
-pub(crate) fn hf_file(var: Var<'_>) -> Option<PathBuf> {
+fn hf_file(var: Var<'_>) -> Option<PathBuf> {
     let set = |name: &str| var(name).filter(|value| !value.is_empty());
     set("HF_TOKEN_PATH")
         .map(PathBuf::from)
