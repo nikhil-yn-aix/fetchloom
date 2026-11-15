@@ -36,7 +36,7 @@ build jobs have a 60-minute timeout and the intel check job 20 minutes. attestat
 | job | needs | work |
 |---|---|---|
 | `pypi` | the `pypi` environment and a PyPI trusted publisher naming `publish.yml` and that environment | download the release wheels, check them against `SHA256SUMS` and their provenance attestations, upload them |
-| `crates` | the `crates` environment holding the `CARGO_REGISTRY_TOKEN` secret, scoped to publishing fetchloom | `cargo publish --locked` from the tag |
+| `crates` | the `crates` environment holding the `CARGO_REGISTRY_TOKEN` secret, scoped to publishing fetchloom | `cargo publish --locked --no-verify` from the tag: the release run's source-package job already built the packaged crate, and no build script runs with the token |
 
 both environments deploy only from tags matching `v*.*.*`, and each waits for the owner to approve the run. keep the crates token in the `crates` environment, not among the repository's secrets, which a workflow on any branch can read.
 

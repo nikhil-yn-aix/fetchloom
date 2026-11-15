@@ -79,5 +79,13 @@ class WorkflowTests(unittest.TestCase):
         self.assertRegex(pages, r"\n +mkdir site/apt\n")
 
 
+    def test_the_crates_token_reaches_a_publish_that_builds_nothing(self):
+        """cargo publish builds the crate first unless told not to, which runs every build script
+        and proc macro of the tree with the token in their environment."""
+        given = [step for step in jobs("publish.yml")["crates"].split("\n      - ")[1:] if "secrets." in step]
+        self.assertEqual(len(given), 1)
+        self.assertRegex(given[0], r"\n        run: cargo publish --locked --no-verify(?: #[^\n]*)?\n")
+
+
 if __name__ == "__main__":
     unittest.main()

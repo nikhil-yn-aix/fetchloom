@@ -52,8 +52,10 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
+      # a build would run every build script and proc macro with the token in reach. the release
+      # run's source-package job already built and ran the packaged crate
       - name: publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         # crates.io still uses the scoped token until its trusted publisher is configured.
-        run: cargo publish --locked # zizmor: ignore[use-trusted-publishing]
+        run: cargo publish --locked --no-verify # zizmor: ignore[use-trusted-publishing]
