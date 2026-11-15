@@ -865,7 +865,8 @@ impl<'a> Watch<'a> {
                 of,
                 wait,
                 ref limit,
-            } => self.bar().retrying(next, of, wait, limit.clone()),
+                open,
+            } => self.bar().retrying((next, of, open), wait, limit.clone()),
             Event::Behind(behind) => self.bar().behind(behind),
             Event::Bytes(bytes) => {
                 self.bar().advance(bytes);

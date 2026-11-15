@@ -193,12 +193,14 @@ pub(crate) enum Event {
     /// longer does.
     Behind(bool),
     /// a try failed, and try `next` of at most `of` goes out after `wait`, once the rate limit of
-    /// the host `limit` names resets when it names one.
+    /// the host `limit` names resets when it names one. `open` says the file came on in an
+    /// earlier try, so more tries follow while it keeps coming.
     Retrying {
         next: u32,
         of: u32,
         wait: Duration,
         limit: Option<String>,
+        open: bool,
     },
 }
 

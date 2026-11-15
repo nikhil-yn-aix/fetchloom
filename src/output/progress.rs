@@ -98,6 +98,8 @@ struct Moved {
 struct Retrying {
     next: u32,
     of: u32,
+    /// the file came on in an earlier try, so the count has no last try.
+    open: bool,
     at: Instant,
     /// the host whose rate limit the try waits for, if it waits for one.
     limit: Option<String>,
@@ -161,7 +163,11 @@ impl Moved {
         let retry = self.retry.lock().unwrap_or_else(PoisonError::into_inner);
         let retry = retry.as_ref()?;
         let left = retry.at.saturating_duration_since(Instant::now());
-        Some(next_try(retry.next, retry.of, left, retry.limit.as_deref()))
+        Some(next_try(
+            (retry.next, retry.of, retry.open),
+            left,
+            retry.limit.as_deref(),
+        ))
     }
 
     /// how far the bar got and what it fills to, from indicatif's count of the bytes moved.
@@ -229,9 +235,15 @@ impl Bar {
         }
     }
 
-    /// a failed try, after which try `next` of at most `of` goes out after `wait`, once the rate
-    /// limit of the host `limit` names resets when it names one.
-    pub(crate) fn retrying(&self, next: u32, of: u32, wait: Duration, limit: Option<String>) {
+    /// a failed try, after which try `next` of at most `of`, or of no last one while the file
+    /// keeps coming when `open`, goes out after `wait`, once the rate limit of the host `limit`
+    /// names resets when it names one.
+    pub(crate) fn retrying(
+        &self,
+        (next, of, open): (u32, u32, bool),
+        wait: Duration,
+        limit: Option<String>,
+    ) {
         if self.drawn.is_some() {
             *self
                 .moved
@@ -240,6 +252,7 @@ impl Bar {
                 .unwrap_or_else(PoisonError::into_inner) = Some(Retrying {
                 next,
                 of,
+                open,
                 at: Instant::now() + wait,
                 limit,
             });
@@ -579,12 +592,12 @@ fn counted(done: u64, total: Option<u64>) -> String {
 
 /// what a bar says of the try its download waits to make, `left` from now: which try of how
 /// many, and whose rate limit it waits for when `limit` names a host.
-fn next_try(next: u32, of: u32, left: Duration, limit: Option<&str>) -> String {
+fn next_try((next, of, open): (u32, u32, bool), left: Duration, limit: Option<&str>) -> String {
     let mut parts = Vec::new();
     if let Some(host) = limit {
         parts.push(format!("waiting for {host}'s rate limit"));
     }
-    parts.push(format!("try {next} of {of}"));
+    parts.push(units::try_count(next, of, open));
     if !left.is_zero() {
         parts.push(format!("next in {}", units::seconds(whole_up(left))));
     }
@@ -1678,15 +1691,15 @@ mod tests {
     fn a_bar_waiting_to_try_again_says_which_try_and_when() {
         let second = Duration::from_secs(1);
         assert_eq!(
-            next_try(3, 5, second * 2 + second / 3, None),
+            next_try((3, 5, false), second * 2 + second / 3, None),
             "try 3 of 5 · next in 3 s"
         );
         assert_eq!(
-            next_try(6, 15, second * 3, Some("127.0.0.1")),
+            next_try((6, 15, false), second * 3, Some("127.0.0.1")),
             "waiting for 127.0.0.1's rate limit · try 6 of 15 · next in 3 s"
         );
         assert_eq!(
-            next_try(4, 5, Duration::ZERO, None),
+            next_try((4, 5, false), Duration::ZERO, None),
             "try 4 of 5",
             "under way"
         );
@@ -1698,7 +1711,7 @@ mod tests {
             (false, false),
             Arc::default(),
         );
-        bar.retrying(2, 5, second * 4, None);
+        bar.retrying((2, 5, false), second * 4, None);
         assert_eq!(
             bar.moved.retrying().as_deref(),
             Some("try 2 of 5 · next in 4 s")

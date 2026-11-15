@@ -157,6 +157,16 @@ pub(crate) fn duration(elapsed: Duration) -> String {
     }
 }
 
+/// which try goes next, as a retry line counts it: `try 2 of 5`, or once the file came on in an
+/// earlier try, which earned the tries back, `try 8, more while the file keeps coming`.
+pub(crate) fn try_count(next: u32, of: u32, open: bool) -> String {
+    if open {
+        format!("try {next}, more while the file keeps coming")
+    } else {
+        format!("try {next} of {of}")
+    }
+}
+
 /// an estimate as a person plans around it, rounded to what it can claim: `under 10 s`,
 /// `about 40 s`, `about 3 min`, `about 15 min`, `about 1 h 30 min`, `about 14 h`, `about 3 days`.
 pub(crate) fn about(estimate: Duration) -> String {
@@ -498,6 +508,16 @@ mod tests {
                 "{rounded_up} ms rounds into the next unit"
             );
         }
+    }
+
+    /// a count with a last try says so; one the file earned back by coming on has none.
+    #[test]
+    fn a_try_count_has_a_last_try_only_while_none_made_progress() {
+        assert_eq!(try_count(2, 5, false), "try 2 of 5");
+        assert_eq!(
+            try_count(14, 14, true),
+            "try 14, more while the file keeps coming"
+        );
     }
 
     #[test]

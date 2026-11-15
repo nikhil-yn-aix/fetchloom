@@ -93,6 +93,9 @@ pub(crate) enum Notice {
         next: u32,
         of: u32,
         waited: u32,
+        /// the file came on in an earlier try, which earned the tries back, so more follow
+        /// while it keeps coming and `of` counts only those without progress.
+        open: bool,
     },
     /// requests to `host` wait for its rate limit to reset. `quota` and `window` are the limit,
     /// when the host stated them.

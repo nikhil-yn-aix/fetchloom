@@ -190,11 +190,12 @@ impl Context {
                 next,
                 of,
                 waited,
+                open,
             } => {
                 if lines.tell(&host, Instant::now()) {
                     output.warn(
                         Warning::NetworkRetry,
-                        &retry_line(&what, &reason, wait, (next, of), waited),
+                        &retry_line(&what, &reason, wait, (next, of, open), waited),
                     );
                 }
             }
@@ -360,7 +361,7 @@ fn retry_line(
     what: &str,
     reason: &str,
     wait: Duration,
-    (next, of): (u32, u32),
+    (next, of, open): (u32, u32, bool),
     waited: u32,
 ) -> String {
     let waits = match waited {
@@ -369,8 +370,9 @@ fn retry_line(
         waited => format!(", after {waited} waits for its rate limit"),
     };
     format!(
-        "{reason}. trying {what} again in {} (try {next} of {of}{waits})",
-        units::duration(wait)
+        "{reason}. trying {what} again in {} ({}{waits})",
+        units::duration(wait),
+        units::try_count(next, of, open)
     )
 }
 
@@ -1715,11 +1717,23 @@ mod tests {
     fn a_retry_line_names_its_request_and_the_waits_before_it() {
         let second = Duration::from_millis(1200);
         assert_eq!(
-            retry_line("iris.csv", "127.0.0.1 answered 503", second, (2, 5), 0),
+            retry_line(
+                "iris.csv",
+                "127.0.0.1 answered 503",
+                second,
+                (2, 5, false),
+                0
+            ),
             "127.0.0.1 answered 503. trying iris.csv again in 1.2 s (try 2 of 5)"
         );
         assert_eq!(
-            retry_line("big.bin", "127.0.0.1 answered 429", second, (12, 15), 10),
+            retry_line(
+                "big.bin",
+                "127.0.0.1 answered 429",
+                second,
+                (12, 15, false),
+                10
+            ),
             "127.0.0.1 answered 429. trying big.bin again in 1.2 s (try 12 of 15, after 10 waits for its rate limit)"
         );
     }

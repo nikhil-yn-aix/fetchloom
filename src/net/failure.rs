@@ -75,6 +75,9 @@ pub(super) struct Retry<'a> {
     spent: u32,
     /// the last try moved the file on by [`MOVING`] or more.
     moving: bool,
+    /// a try moved the file on, which earned the tries back, so the count has no last try while
+    /// the file keeps coming.
+    earned: bool,
     limited: u32,
     /// what the run had heard from any host when this request's last try ended, or it began.
     heard: u64,
@@ -93,6 +96,7 @@ impl<'a> Retry<'a> {
             tries: 1,
             spent: 0,
             moving: false,
+            earned: false,
             limited: 0,
             heard: net.heard(),
             lost: 0,
@@ -135,6 +139,7 @@ impl<'a> Retry<'a> {
                 of,
                 wait,
                 limit,
+                open: self.earned,
             });
         }
     }
@@ -144,6 +149,7 @@ impl<'a> Retry<'a> {
     pub(super) fn moved(&mut self, gained: u64) {
         if gained > 0 {
             self.attempt = 1;
+            self.earned = true;
         }
         self.moving = gained >= self.net.moving;
     }
@@ -282,6 +288,7 @@ impl<'a> Retry<'a> {
             next,
             of,
             waited: self.limited,
+            open: self.earned,
         });
         self.tell(wait, None);
         tokio::select! {
@@ -1173,6 +1180,28 @@ mod tests {
             );
             assert!(secure.need.is_some(), "{status}");
         }
+    }
+
+    /// once a try moved the file on, which earned the tries back, a retry line counts no last
+    /// try, since more follow while the file keeps coming; before, it counts toward the last.
+    #[tokio::test(start_paused = true)]
+    async fn a_retry_after_progress_counts_no_last_try() {
+        use std::sync::Mutex;
+
+        let url = Url::parse("https://example.org/file").unwrap();
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let kept = heard.clone();
+        let net = telling(Arc::new(move |notice| {
+            if let Notice::Retrying { next, of, open, .. } = notice {
+                kept.lock().unwrap().push((next, of, open));
+            }
+        }))
+        .with_retries(1);
+        let mut retry = Retry::new(&net, &url);
+        retry.wait("broke".to_owned(), None, false).await.unwrap();
+        retry.moved(1);
+        retry.wait("broke".to_owned(), None, false).await.unwrap();
+        assert_eq!(*heard.lock().unwrap(), [(2, 2, false), (3, 3, true)]);
     }
 
     /// a try that moved the file on counts the tries from the first again; one that moved nothing
