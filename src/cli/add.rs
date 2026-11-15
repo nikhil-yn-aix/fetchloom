@@ -350,6 +350,10 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     };
     if local::is_path(&link) {
         if args.no_sync {
+            // a mistyped path is told first, as an add without --no-sync tells it
+            let here = std::env::current_dir()
+                .map_err(|err| Error::io("cannot read the current folder", &err))?;
+            super::import::located(&link, &here, std::env::home_dir().as_deref())?;
             return Err(stated::refused_path(&link));
         }
         return Ok(Request::Path(link));

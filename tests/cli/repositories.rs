@@ -1702,9 +1702,19 @@ fn no_sync_refuses_files_no_source_hash_pins() -> Result {
         )
     );
     assert_eq!(routes.targets(), Vec::<String>::new(), "nothing downloads");
+    // a mistyped path is told as missing first, as an add without --no-sync tells it
+    let missing = sandbox.run(&["--json", "add", "./flowres", "--no-sync"])?;
+    assert_eq!(
+        json(&missing)?["errors"][0]["message"],
+        json(&sandbox.run(&["--json", "add", "./flowres"])?)?["errors"][0]["message"]
+    );
     fs::create_dir(sandbox.work().join("flowers"))?;
     let output = sandbox.run(&["--json", "add", "./flowers", "--no-sync"])?;
     assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["message"],
+        "--no-sync pins what a source states, and files on this machine have no source"
+    );
     assert!(!sandbox.work().join("data.toml").exists());
     assert!(!sandbox.work().join("data.lock").exists());
     Ok(())
