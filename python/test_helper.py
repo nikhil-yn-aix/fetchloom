@@ -148,24 +148,28 @@ class HelperOptions(unittest.TestCase):
         self.assertEqual(raised.exception.details, error["details"])
 
     # the words of the cli's own case table, quoted as it quotes them, and one that opens and
-    # closes on a single quote, which then stands outside the quotes
+    # closes on a single quote, which then stands outside the quotes. on windows a word no quoting
+    # keeps literal there is withheld, shown as <file> for a path to a file and <name> otherwise
     QUOTED = [
         ("plain", "plain", "plain"),
         ("", '""', '""'),
-        ("hi!.csv", "'hi!.csv'", '"hi!.csv"'),
-        ("$notes", "'$notes'", "'$notes'"),
-        ("a`b`", "'a`b`'", "'a`b`'"),
+        ("hi!.csv", "'hi!.csv'", "<name>"),
+        ("$notes", "'$notes'", "<name>"),
+        ("a`b`", "'a`b`'", "<name>"),
         ("ada's data", '"ada\'s data"', '"ada\'s data"'),
-        ("it's $5!", "'it'\\''s $5!'", "'it''s $5!'"),
+        ("it's $5!", "'it'\\''s $5!'", "<name>"),
         ("my data", '"my data"', '"my data"'),
         ("données é.csv", '"données é.csv"', '"données é.csv"'),
         ("data\\notes", "'data'\\\\'notes'", '"data\\notes"'),
-        ('a"b', "'a\"b'", "'a\"b'"),
+        ('a"b', "'a\"b'", "<name>"),
         ("~notes.csv", '"~notes.csv"', '"~notes.csv"'),
         ("=notes.csv", '"=notes.csv"', '"=notes.csv"'),
         ("@notes.csv", '"@notes.csv"', '"@notes.csv"'),
-        ("ada’s “best” data", '"ada’s “best” data"', "'ada’’s “best” data'"),
-        ("'$5'", "\\''$5'\\'", "'''$5'''"),
+        ("ada’s “best” data", '"ada’s “best” data"', "<name>"),
+        ("ada’s data", '"ada’s data"', '"ada’s data"'),
+        ("notes$ & mkdir PWNED-arch & x.csv", "'notes$ & mkdir PWNED-arch & x.csv'", "<name>"),
+        ("a%PATH%b.csv", "a%PATH%b.csv", "<name>"),
+        ("'$5'", "\\''$5'\\'", "<name>"),
     ]
 
     def test_suggested_words_are_quoted_as_fetchloom_quotes_them(self):
@@ -173,6 +177,11 @@ class HelperOptions(unittest.TestCase):
             with self.subTest(word=word):
                 self.assertEqual(fetchloom._shell_word(word, windows=False), posix)
                 self.assertEqual(fetchloom._shell_word(word, windows=True), windows)
+
+    def test_a_withheld_path_to_a_file_is_a_file_and_a_link_a_name(self):
+        self.assertEqual(fetchloom._shell_word("results\\R&D\\iris.csv", windows=True), "<file>")
+        self.assertEqual(fetchloom._shell_word("results\\R&D", windows=True), "<name>")
+        self.assertEqual(fetchloom._shell_word("https://example.org/a.csv?x=1&y=2", windows=True), "<name>")
 
     @unittest.skipUnless(os.name == "posix", "runs the quoted words in posix shells")
     def test_a_quoted_word_reads_back_whole_in_interactive_bash(self):
@@ -386,6 +395,53 @@ class Errors(unittest.TestCase):
                             call()
                 self.assertEqual(raised.exception.help, f"did you mean `{shown}`?")
                 self.assertEqual(raised.exception.args[3], f"did you mean `{shown}`?")
+
+    def run_on_windows(self, call, error, cwd=r"C:\work"):
+        """the :class:`fetchloom.Error` ``call`` raises when fetchloom answers ``error``, as a run
+        on windows in ``cwd`` would."""
+        answer = {"status": "error", "errors": [error], "warnings": []}
+        response = subprocess.CompletedProcess([], 1, json.dumps(answer), "")
+        with patch.object(fetchloom, "_WINDOWS", True), patch.object(fetchloom, "_program", return_value="fetchloom"), \
+             patch.object(fetchloom, "_call", return_value=response), patch.object(fetchloom.os, "getcwd", return_value=cwd):
+            with self.assertRaises(fetchloom.Error) as raised:
+                call()
+        return raised.exception
+
+    # on windows fetchloom shows a folder no command there can hold safely, as one holding &, by a
+    # placeholder and a line naming it, and an ordinary folder double-quoted
+    FOLDERS = [
+        (r"C:\data\R&D", "<folder>", [r"<folder> is C:\data\R&D, which no command here can hold safely"]),
+        (r"C:\data\study", '"C:\\data\\study"', []),
+    ]
+
+    def test_the_working_folder_leaves_a_command_on_windows_as_fetchloom_shows_it(self):
+        for cwd, shown, named in self.FOLDERS:
+            with self.subTest(cwd=cwd):
+                said = f"`fetchloom -C {shown} build clean` makes it"
+                raised = self.run_on_windows(
+                    lambda: fetchloom.sync(strict=True),
+                    {"kind": "build.unbuilt", "message": "refused", "details": named, "help": said},
+                    cwd,
+                )
+                self.assertEqual((raised.help, raised.details), ("`fetchloom build clean` makes it", []))
+
+    def test_a_mistyped_name_in_a_windows_folder_is_suggested_as_the_call_that_finds_it(self):
+        for project, shown, named in self.FOLDERS:
+            with self.subTest(project=project):
+                raised = self.run_on_windows(lambda: fetchloom.path("irs", project), {
+                    "kind": "usage",
+                    "message": 'data.toml has no dataset called "irs"',
+                    "details": named,
+                    "help": f"did you mean `fetchloom --json --progress -C {shown} path -- iris`?",
+                })
+                call = f"fetchloom.path(\"iris\", project={json.dumps(project)})"
+                self.assertEqual((raised.help, raised.details), (f"did you mean `{call}`?", []))
+
+    def test_a_windows_folder_without_a_project_is_named_as_fetchloom_names_it(self):
+        for project, shown, _ in self.FOLDERS:
+            with self.subTest(project=project), patch.object(fetchloom, "_WINDOWS", True):
+                self.assertIn(f"or run `fetchloom -C {shown} add <link>` to start a project in ",
+                              fetchloom._no_project(project))
 
     def test_a_script_outside_its_project_is_told_to_pass_project(self):
         missing = "there is no data.toml in this folder or any folder above it"

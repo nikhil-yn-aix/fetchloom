@@ -44,6 +44,13 @@ _COMMAND = re.compile(r"`fetchloom ([^`]*)`")
 _NO_PROJECT = "there is no data.toml in this folder or any folder above it"
 # how many of the last lines fetchloom said on stderr an error without a JSON answer repeats
 _TAIL = 20
+# whether fetchloom words the commands it suggests for powershell and cmd, as on windows
+_WINDOWS = sys.platform == "win32"
+# what fetchloom withholds from a command on windows, as src/suggested.rs lists it: what cmd acts
+# on even inside quotes, and what powershell's quoting cannot keep, a double quote straight or curly
+_UNSAFE_ON_WINDOWS = frozenset('&|<>^%!$`"\u201c\u201d\u201e\uf8e0\uf8e1')
+# the line fetchloom adds for each word it withheld, naming it by the placeholder it shows instead
+_WITHHELD = re.compile(r"(<(?:file|folder|name)(?: \d+)?>) is (.*), which no command here can hold safely")
 
 
 def __dir__() -> list[str]:
@@ -117,11 +124,13 @@ def path(
     try:
         answer = _run([*arguments, "--", name], project, keywords)
     except Error as error:
-        meant = _meant(error.help, project)
+        meant = _meant(error.help, project, _placeholders(error.details))
         if meant is None:
             raise
         call = _path_call(meant, project, {"yes": yes, "offline": offline, "locked": locked})
-        raise Error(error.kind, error.message, error.details, f"did you mean `{call}`?", error.code) from None
+        help = f"did you mean `{call}`?"
+        details = _still_named(error.details, error.message, help)
+        raise Error(error.kind, error.message, details, help, error.code) from None
     return Path(answer["path"])
 
 
@@ -218,25 +227,32 @@ def _local(path: str | os.PathLike[str]) -> str:
     return os.path.expanduser(os.fspath(path))
 
 
-def _shell_word(word: str, windows: bool = sys.platform == "win32") -> str:
-    """``word`` quoted as fetchloom quotes the commands it suggests, so a shell reads it as typed.
+def _shell_word(word: str, windows: bool | None = None) -> str:
+    """``word`` as fetchloom shows it in the commands it suggests, so a shell reads it as typed.
 
     a word starting with ``~`` or ``=``, which zsh expands, or ``@``, which powershell splats, is
-    quoted. double quotes keep every other character literal in bash, zsh, fish, powershell and
-    cmd, but for ``$``, a backtick and a double quote; on windows curly double quotes, which
-    powershell reads as double quotes; and elsewhere ``!``, which bash and zsh expand from their
-    history, and a backslash. a word holding one is single-quoted: powershell doubles each single
-    quote inside, curly ones too, and elsewhere a single quote and a backslash go outside the
-    quotes, escaped, since fish reads a backslash inside them as an escape too.
+    quoted. on ``windows``, this machine's system unless given, a word holding what cmd acts on
+    even inside quotes, ``& | < > ^ % !``, or what powershell's quoting cannot keep, ``$``, a
+    backtick or a double quote, straight or curly, is withheld: fetchloom shows ``<file>`` for a
+    path to a file and ``<name>`` for any other, and names the word on a line of its own. any
+    other word there is double-quoted, which powershell and cmd both read as written. elsewhere
+    double quotes keep a word literal unless it holds ``$``, a backtick, a double quote, ``!``,
+    which bash and zsh expand from their history, or a backslash; then it is single-quoted, and a
+    single quote or a backslash goes outside the quotes, escaped, since fish reads a backslash
+    inside them as an escape too.
     """
+    if windows is None:
+        windows = _WINDOWS
+    if windows and _UNSAFE_ON_WINDOWS.intersection(word):
+        # a path to a file, not a host or a link, which only look like one
+        file = ("/" in word or "\\" in word) and "://" not in word and ntpath.splitext(word)[1] != ""
+        return "<file>" if file else "<name>"
     if word[:1] not in ("", "~", "=", "@") and all(
         c.isascii() and (c.isalnum() or c in "-_./:@%+=,~") for c in word
     ):
         return word
-    if not any(c in ('$`"\u201c\u201d\u201e' if windows else '$`"!\\') for c in word):
+    if windows or not any(c in '$`"!\\' for c in word):
         return f'"{word}"'
-    if windows:
-        return "'" + "".join(c * 2 if c in "'\u2018\u2019\u201a\u201b" else c for c in word) + "'"
     quoted, inside = [], False
     for c in word:
         if c in "'\\":
@@ -279,32 +295,58 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
             code=finished.returncode,
         ) from None
 
-    def told(text: str) -> str:
-        return _spoken(_as_typed(text, project), keywords)
+    def told(text: str, placeholders: dict[str, str]) -> str:
+        return _spoken(_as_typed(text, project, placeholders), keywords)
 
     for warning in answer["warnings"]:
         said = f"{warning['message']}; {warning['help']}" if warning["help"] else warning["message"]
-        warnings.warn(told(said), stacklevel=3)
+        warnings.warn(told(said, _placeholders(warning["details"])), stacklevel=3)
     if answer["status"] != "ok":
         error = answer["errors"][0]
+        placeholders = _placeholders(error["details"])
         help = error["help"]
         if error["kind"] == "project.invalid" and error["message"].startswith(_NO_PROJECT):
             # a script or notebook often runs in another folder than its project's
             help = _no_project(project)
         elif help:
-            help = told(help)
-        details = [told(detail) for detail in error["details"]]
-        raise Error(error["kind"], told(error["message"]), details, help, finished.returncode)
+            help = told(help, placeholders)
+        message = told(error["message"], placeholders)
+        details = _still_named([told(detail, placeholders) for detail in error["details"]], message, help)
+        raise Error(error["kind"], message, details, help, finished.returncode)
     return answer["result"]
 
 
-def _as_typed(text: str, project: str | os.PathLike[str]) -> str:
+def _placeholders(details: list[str]) -> dict[str, str]:
+    """each word fetchloom withheld from a command on windows, by the lines of ``details`` naming
+    it, with the placeholder it shows instead."""
+    return {match.group(2): match.group(1) for match in map(_WITHHELD.fullmatch, details) if match}
+
+
+def _still_named(details: list[str], *texts: str | None) -> list[str]:
+    """``details`` without a line naming a withheld word whose placeholder neither ``texts`` nor the
+    other details still show, as once the helper takes ``-C <folder>`` out of a command."""
+    kept = [detail for detail in details if not _WITHHELD.fullmatch(detail)]
+    shown = " ".join([*filter(None, texts), *kept])
+    return [detail for detail in details if (named := _WITHHELD.fullmatch(detail)) is None or named.group(1) in shown]
+
+
+def _folder_shown(folder: str, placeholders: dict[str, str]) -> str | None:
+    """``folder`` as fetchloom shows it after ``-C``: quoted as :func:`_shell_word` quotes it, or on
+    windows, where it withholds a folder no command there can hold, the placeholder ``placeholders``
+    gives it, as given or made absolute as fetchloom names it. none for one withheld without one."""
+    if _WINDOWS and _UNSAFE_ON_WINDOWS.intersection(folder):
+        return placeholders.get(folder) or placeholders.get(os.path.abspath(folder))
+    return _shell_word(folder)
+
+
+def _as_typed(text: str, project: str | os.PathLike[str], placeholders: dict[str, str]) -> str:
     """``text`` with each ``fetchloom`` command in backticks as a person types it at a terminal.
 
     fetchloom words them with the arguments the helper gave it, so each leaves out the
     ``--json`` and ``--progress`` the helper passes, the ``-C`` that names the working folder
-    when ``project`` is that folder, as ``.`` or as fetchloom spells it out, and the ``--`` the
-    helper puts before names, unless a name after it starts with ``-``.
+    when ``project`` is that folder, as ``.``, as fetchloom spells it out or by the placeholder
+    ``placeholders`` gives it, and the ``--`` the helper puts before names, unless a name after it
+    starts with ``-``.
     """
 
     def typed(match: re.Match[str]) -> str:
@@ -313,7 +355,9 @@ def _as_typed(text: str, project: str | os.PathLike[str]) -> str:
             words = words.removeprefix(own)
         if os.fspath(project) == ".":
             for folder in [".", os.getcwd()]:
-                words = words.removeprefix(f"-C {_shell_word(folder)} ")
+                shown = _folder_shown(folder, placeholders)
+                if shown is not None:
+                    words = words.removeprefix(f"-C {shown} ")
         before, separator, names = words.partition(" -- ")
         if separator and not any(name.lstrip("'\"").startswith("-") for name in names.split()):
             words = f"{before} {names}"
@@ -322,11 +366,16 @@ def _as_typed(text: str, project: str | os.PathLike[str]) -> str:
     return _COMMAND.sub(typed, text)
 
 
-def _meant(help: str | None, project: str | os.PathLike[str]) -> str | None:
+def _meant(help: str | None, project: str | os.PathLike[str], placeholders: dict[str, str]) -> str | None:
     """the name fetchloom guessed was meant in ``help``, its did-you-mean for a name given to
-    ``path`` in ``project`` that names nothing, or None for any other help and for a name a shell
-    needs quoted."""
-    folder = "" if os.fspath(project) == "." else f"-C {_shell_word(_local(project))} "
+    ``path`` in ``project``, whose folder ``placeholders`` may name, that names nothing, or None
+    for any other help and for a name a shell needs quoted."""
+    folder = ""
+    if os.fspath(project) != ".":
+        shown = _folder_shown(_local(project), placeholders)
+        if shown is None:
+            return None
+        folder = f"-C {shown} "
     flags = "(?: --(?:yes|offline|locked))*"
     guess = re.fullmatch(
         rf"did you mean `fetchloom {re.escape(folder)}path{flags} ([A-Za-z0-9_./:@%+=,~-]+)`\?", help or ""
@@ -391,9 +440,11 @@ def _forward(stream: IO[str], tail: collections.deque[str]) -> None:
 
 
 def _no_project(project: str | os.PathLike[str]) -> str:
-    """the help for a ``project`` that holds no data.toml, and has none above it."""
+    """the help for a ``project`` that holds no data.toml, and has none above it. a folder windows
+    commands cannot hold is shown as ``<folder>``, which the end of the help names."""
     folder = _local(project)
-    add = "fetchloom add <link>" if os.fspath(project) == "." else f"fetchloom -C {_shell_word(folder)} add <link>"
+    shown = _folder_shown(folder, {}) or "<folder>"
+    add = "fetchloom add <link>" if os.fspath(project) == "." else f"fetchloom -C {shown} add <link>"
     return (
         "give project= the folder that holds data.toml, "
         f"or run `{add}` to start a project in {os.path.abspath(folder)}"
