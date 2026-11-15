@@ -365,7 +365,8 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
                         path.display()
                     ))
                     .help(format!(
-                        "run `fetchloom settings unset {key}` to take it out, with what it holds"
+                        "run `fetchloom settings unset {}` to take it out, with what it holds",
+                        crate::suggested::shell_word(&key)
                     ))
                 };
                 return Err(error);

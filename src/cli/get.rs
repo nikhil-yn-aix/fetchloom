@@ -310,7 +310,8 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
         .detail("several links download together, so each one names what it fetches");
         if links.len() == 1 {
             return Err(error.help(format!(
-                "find its id with `fetchloom search {word}`, then pass that"
+                "find its id with `{}`, then pass that",
+                crate::suggested::anywhere(&format!("search {}", super::shell_word(word)))
             )));
         }
         let example = if links.iter().all(|link| is_search(link)) {

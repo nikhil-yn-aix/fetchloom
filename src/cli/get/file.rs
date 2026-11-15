@@ -23,6 +23,7 @@ use crate::output::Warning;
 use crate::place::{Method, Order, Placer};
 use crate::source::{Listing, Parsed, Reference, Remote};
 use crate::stop::Stop;
+use crate::suggested::shell_word;
 use crate::threads::Threads;
 use crate::volume::Volume;
 use crate::work::Work;
@@ -60,18 +61,15 @@ pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), E
         || fs::metadata(path).is_ok_and(|metadata| metadata.is_dir());
     if folder {
         // --dir would refuse a folder that holds files of its own, as most do
-        let name = links
-            .first()
-            .and_then(|link| named_in(link))
-            .unwrap_or_else(|| "<file>".to_owned());
+        let named = match links.first().and_then(|link| named_in(link)) {
+            Some(name) => shell_word(&path.join(name).display().to_string()).into_owned(),
+            None => path.join("<file>").display().to_string(),
+        };
         return Err(Error::new(
             Kind::Usage,
             format!("-o needs a file name, and {shown} names a folder"),
         )
-        .help(format!(
-            "name the file inside it, as in `-o {}`",
-            path.join(name).display()
-        )));
+        .help(format!("name the file inside it, as in `-o {named}`")));
     }
     if let Some(reason) = path
         .file_name()
@@ -94,7 +92,7 @@ pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), E
         )
         .help(format!(
             "choose another name with -o, such as `-o {}`, or rename {} so a folder can take its name",
-            instead.display(),
+            shell_word(&instead.display().to_string()),
             blocked.display()
         )));
     }
@@ -812,7 +810,7 @@ pub(super) fn only(
     )
     .help(format!(
         "keep one with --select, or use `--dir {}` for all of them",
-        folder.display()
+        crate::suggested::shell_folder(&folder.display().to_string())
     )))
 }
 
@@ -1054,6 +1052,24 @@ fn take(_object: &Path, _path: &Path, _replace: bool) -> io::Result<bool> {
 mod tests {
     use super::*;
 
+    /// a link names the file the help names inside the folder, and a shell would run what its
+    /// name holds: the word is quoted, or on windows held back as `<file>`.
+    #[test]
+    fn a_name_from_the_link_is_quoted_in_the_help() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("downloads");
+        fs::create_dir(&folder).unwrap();
+        let links = ["https://example.org/data/$(id).csv".to_owned()];
+        let error = usage(&folder, &links, false).unwrap_err();
+        let file = folder.join("$(id).csv").display().to_string();
+        let named = if cfg!(windows) {
+            "name the file inside it, as in `-o <file>`".to_owned()
+        } else {
+            format!("name the file inside it, as in `-o '{file}'`")
+        };
+        assert_eq!(error.help.as_deref(), Some(named.as_str()));
+    }
+
     #[test]
     fn output_takes_one_link_and_a_file_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -1065,6 +1081,14 @@ mod tests {
         let ending = format!("downloads{separator}");
         let iris = "https://example.org/data/iris.csv";
         let hugging = "https://huggingface.co/datasets/scikit-learn/iris/blob/main/Iris.csv";
+        // a path with a backslash between folders is quoted for powershell and cmd
+        let quoted = |path: String| {
+            if cfg!(windows) {
+                format!("\"{path}\"")
+            } else {
+                path
+            }
+        };
         for (path, links, listed, message, help) in [
             (
                 "-",
@@ -1093,14 +1117,17 @@ mod tests {
                 &[iris],
                 false,
                 format!("-o needs a file name, and {ending} names a folder"),
-                format!("name the file inside it, as in `-o downloads{separator}iris.csv`"),
+                format!(
+                    "name the file inside it, as in `-o {}`",
+                    quoted(format!("downloads{separator}iris.csv"))
+                ),
             ),
             (
                 ".",
                 &[iris],
                 false,
                 "names a folder".to_owned(),
-                format!("as in `-o .{separator}iris.csv`"),
+                format!("as in `-o {}`", quoted(format!(".{separator}iris.csv"))),
             ),
             (
                 "..",
@@ -1114,7 +1141,10 @@ mod tests {
                 &[hugging],
                 false,
                 "names a folder".to_owned(),
-                format!("as in `-o {folder}{separator}Iris.csv`"),
+                format!(
+                    "as in `-o {}`",
+                    quoted(format!("{folder}{separator}Iris.csv"))
+                ),
             ),
         ] {
             let links: Vec<String> = links.iter().map(|&link| link.to_owned()).collect();

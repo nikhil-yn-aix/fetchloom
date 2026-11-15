@@ -506,11 +506,16 @@ fn output_beneath_a_file_names_the_file_in_the_way() -> Result {
         error["message"],
         "cannot write data/py.csv/x.csv: data/py.csv is a file, not a folder"
     );
-    let separator = std::path::MAIN_SEPARATOR;
+    // a path with a backslash between folders is quoted for powershell and cmd
+    let instead = if cfg!(windows) {
+        r#""data\x.csv""#
+    } else {
+        "data/x.csv"
+    };
     assert_eq!(
         error["help"],
         format!(
-            "choose another name with -o, such as `-o data{separator}x.csv`, or rename data/py.csv so a folder can take its name"
+            "choose another name with -o, such as `-o {instead}`, or rename data/py.csv so a folder can take its name"
         )
     );
     assert!(server.requests().is_empty(), "nothing is downloaded");

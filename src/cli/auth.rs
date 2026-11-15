@@ -1169,7 +1169,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
                         )
                         .help(format!(
                             "to sign them out as well, run `fetchloom auth logout {} --yes`",
-                            logout.account
+                            crate::suggested::shell_word(&logout.account)
                         )));
                     }
                 }
@@ -1198,7 +1198,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             ),
             &format!(
                 "run `fetchloom auth logout {}` again to remove it too",
-                logout.account
+                crate::suggested::shell_word(&logout.account)
             ),
         );
     }

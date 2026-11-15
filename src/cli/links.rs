@@ -298,8 +298,8 @@ fn not_a_link(name: &str, number: usize, line: &str) -> Error {
     )
     .detail(line.clone().into_owned())
     .help(format!(
-        "find its id with `fetchloom search {}`, then list that instead",
-        words.join(" ")
+        "find its id with `{}`, then list that instead",
+        crate::suggested::anywhere(&format!("search {}", words.join(" ")))
     ))
 }
 

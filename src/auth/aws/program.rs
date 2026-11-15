@@ -109,7 +109,8 @@ impl Program {
                 (
                     "signs in to IAM identity center",
                     format!(
-                        "install the AWS CLI, version 2.9 or later, and sign in with `aws sso login --profile {profile}`"
+                        "install the AWS CLI, version 2.9 or later, and sign in with `aws sso login --profile {}`",
+                        crate::suggested::shell_word(profile)
                     ),
                 )
             } else {
@@ -172,7 +173,7 @@ impl Program {
             let help = match self.by {
                 By::Cli { signs_in: true } => format!(
                     "sign in again with `aws sso login --profile {}`, and check this machine's clock",
-                    self.profile
+                    crate::suggested::shell_word(&self.profile)
                 ),
                 _ => "check that the program gives keys that hold, and this machine's clock"
                     .to_owned(),
@@ -197,7 +198,7 @@ impl Program {
             By::Process => format!("the credential_process of the AWS profile {}", self.profile),
             By::Cli { .. } => format!(
                 "`aws configure export-credentials --profile {}`",
-                self.profile
+                crate::suggested::shell_word(&self.profile)
             ),
         }
     }
@@ -212,11 +213,11 @@ impl Program {
             By::Process => "run the credential_process yourself to see what went wrong; fetchloom shows nothing it prints, since that can hold keys".to_owned(),
             By::Cli { signs_in: true } => format!(
                 "sign in again with `aws sso login --profile {0}`, or run `aws configure export-credentials --profile {0}` yourself to see what went wrong",
-                self.profile
+                crate::suggested::shell_word(&self.profile)
             ),
             By::Cli { signs_in: false } => format!(
                 "run `aws configure export-credentials --profile {}` yourself to see what went wrong",
-                self.profile
+                crate::suggested::shell_word(&self.profile)
             ),
         };
         Error::new(Kind::AuthRequired, message).help(help)
