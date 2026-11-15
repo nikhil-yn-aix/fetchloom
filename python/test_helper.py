@@ -443,6 +443,26 @@ class Errors(unittest.TestCase):
                 self.assertIn(f"or run `fetchloom -C {shown} add <link>` to start a project in ",
                               fetchloom._no_project(project))
 
+    def test_a_withheld_folder_a_command_still_shows_is_named_word_for_word(self):
+        # in a warning too, and with a flag the helper sets left in the name as it is
+        folder = r"C:\data\R&D -C"
+        named = rf"<folder> is {folder}, which no command here can hold safely"
+        refused = {"kind": "build.unbuilt", "message": "clean is not built yet", "details": [named],
+                   "help": "run `fetchloom -C <folder> build clean`"}
+        answer = {"status": "error", "errors": [refused], "warnings": [refused]}
+        response = subprocess.CompletedProcess([], 1, json.dumps(answer), "")
+        for project, cwd, help, details in [
+            (folder, r"C:\work", "run `fetchloom -C <folder> build clean`", [named]),
+            (".", folder, "run `fetchloom build clean`", []),
+        ]:
+            with self.subTest(project=project):
+                with patch.object(fetchloom, "_WINDOWS", True), patch.object(fetchloom, "_program", return_value="fetchloom"), \
+                     patch.object(fetchloom, "_call", return_value=response), patch.object(fetchloom.os, "getcwd", return_value=cwd):
+                    with self.assertWarns(UserWarning) as warned, self.assertRaises(fetchloom.Error) as raised:
+                        fetchloom.sync(project, strict=True)
+                self.assertEqual(str(warned.warning), "; ".join(["clean is not built yet", *details, help]))
+                self.assertEqual((raised.exception.details, raised.exception.help), (details, help))
+
     def test_a_script_outside_its_project_is_told_to_pass_project(self):
         missing = "there is no data.toml in this folder or any folder above it"
         start = "run `fetchloom add <link>` to start a project here"

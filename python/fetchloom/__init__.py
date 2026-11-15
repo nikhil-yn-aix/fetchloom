@@ -296,11 +296,18 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
         ) from None
 
     def told(text: str, placeholders: dict[str, str]) -> str:
+        # a line naming a withheld word gives it as fetchloom wrote it, flags and all
+        if _WITHHELD.fullmatch(text):
+            return text
         return _spoken(_as_typed(text, project, placeholders), keywords)
 
     for warning in answer["warnings"]:
-        said = f"{warning['message']}; {warning['help']}" if warning["help"] else warning["message"]
-        warnings.warn(told(said, _placeholders(warning["details"])), stacklevel=3)
+        placeholders = _placeholders(warning["details"])
+        message = told(warning["message"], placeholders)
+        help = told(warning["help"], placeholders) if warning["help"] else None
+        # as fetchloom prints a warning: what a placeholder in it stands for comes before the help
+        said = [message, *_named(warning["details"], message, help), help]
+        warnings.warn("; ".join(filter(None, said)), stacklevel=3)
     if answer["status"] != "ok":
         error = answer["errors"][0]
         placeholders = _placeholders(error["details"])
@@ -322,12 +329,18 @@ def _placeholders(details: list[str]) -> dict[str, str]:
     return {match.group(2): match.group(1) for match in map(_WITHHELD.fullmatch, details) if match}
 
 
+def _named(details: list[str], *texts: str | None) -> list[str]:
+    """the lines of ``details`` naming a withheld word whose placeholder ``texts`` still show."""
+    shown = " ".join(filter(None, texts))
+    return [detail for detail in details if (named := _WITHHELD.fullmatch(detail)) and named.group(1) in shown]
+
+
 def _still_named(details: list[str], *texts: str | None) -> list[str]:
     """``details`` without a line naming a withheld word whose placeholder neither ``texts`` nor the
     other details still show, as once the helper takes ``-C <folder>`` out of a command."""
     kept = [detail for detail in details if not _WITHHELD.fullmatch(detail)]
-    shown = " ".join([*filter(None, texts), *kept])
-    return [detail for detail in details if (named := _WITHHELD.fullmatch(detail)) is None or named.group(1) in shown]
+    named = _named(details, *texts, *kept)
+    return [detail for detail in details if detail in kept or detail in named]
 
 
 def _folder_shown(folder: str, placeholders: dict[str, str]) -> str | None:
