@@ -1324,6 +1324,8 @@ impl<'a> Loop<'a> {
             past,
             freeable,
             largest,
+            by_variable: self.context.settings.cache_budget.origin
+                == crate::settings::Origin::Environment,
         };
         cache_budget::ask(&self.context.output, self.context.yes, &over)
             .map_err(|error| self.as_left(error))

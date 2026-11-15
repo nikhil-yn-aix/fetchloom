@@ -80,9 +80,20 @@ pub(in crate::cli) struct Over<'a> {
     pub(in crate::cli) freeable: Option<(u64, u64)>,
     /// the project's largest datasets, with their bytes, largest first.
     pub(in crate::cli) largest: Vec<(String, u64)>,
+    /// whether `FETCHLOOM_CACHE_BUDGET` sets the budget, which then wins over the settings file.
+    pub(in crate::cli) by_variable: bool,
 }
 
 impl Over<'_> {
+    /// how to raise the budget: the variable that sets it, or `settings set`.
+    fn raising(&self) -> &'static str {
+        if self.by_variable {
+            "raise FETCHLOOM_CACHE_BUDGET"
+        } else {
+            "raise the budget with `fetchloom settings set cache_budget <size>`"
+        }
+    }
+
     /// what the downloads do to the cache, as `would bring` or, once they go on, `brings`.
     fn said(&self, bring: &str) -> String {
         format!(
@@ -162,17 +173,17 @@ pub(in crate::cli) fn ask(output: &Output, yes: bool, over: &Over<'_>) -> Result
         .map_err(|error| error.cancelling(&cancel))?
     {
         Some(true) => Ok(()),
-        Some(false) => Err(Error::new(
-            Kind::Unconfirmed,
-            format!("did not start {}", over.doing),
-        )
-        .cancelled(cancel)),
+        Some(false) => Err(
+            Error::new(Kind::Unconfirmed, format!("did not start {}", over.doing))
+                .cancelled(cancel),
+        ),
         None => Err(room
             .into_iter()
             .fold(Error::new(Kind::Unconfirmed, said), Error::detail)
             .help(format!(
-                "{}, or raise cache_budget in the settings file or FETCHLOOM_CACHE_BUDGET, then run the same command again. add --yes to go on anyway",
-                Over::freeing()
+                "{}, or {}, then run the same command again. add --yes to go on anyway",
+                Over::freeing(),
+                over.raising()
             ))),
     }
 }
@@ -296,6 +307,7 @@ mod tests {
                 .iter()
                 .map(|(name, size)| ((*name).to_owned(), *size))
                 .collect(),
+            by_variable: false,
         };
         let told = over(
             Some((3 * GIB, 0)),
@@ -339,6 +351,7 @@ mod tests {
             },
             freeable: Some((3 * GIB, 0)),
             largest: vec![("imagenet".to_owned(), 180 * GIB)],
+            by_variable: false,
         };
         let style = crate::output::Style {
             color: false,
@@ -369,11 +382,23 @@ mod tests {
                 "this project's largest dataset is imagenet (180.0 GiB)"
             ]
         );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "`fetchloom drop <name>` frees a dataset's files here and keeps it pinned, or `fetchloom remove <name>` and then `fetchloom cache gc --now` free them and take it out of the project, or raise the budget with `fetchloom settings set cache_budget <size>`, then run the same command again. add --yes to go on anyway"
+            )
+        );
+        // the variable wins over the settings file, so the help names it when it sets the budget
+        let by_variable = Over {
+            by_variable: true,
+            ..over
+        };
+        let error = ask(&output, false, &by_variable).unwrap_err();
         assert!(
             error
                 .help
                 .as_deref()
-                .is_some_and(|help| help.ends_with("add --yes to go on anyway")),
+                .is_some_and(|help| help.contains(", or raise FETCHLOOM_CACHE_BUDGET, then run")),
             "{error:?}"
         );
     }

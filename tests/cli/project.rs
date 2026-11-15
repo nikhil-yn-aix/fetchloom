@@ -3029,6 +3029,24 @@ fn a_sync_past_the_cache_budget_stops_without_yes_and_warns_with_it() -> Result 
     );
     assert_eq!(document["work"]["bytes_down"], 0);
     assert!(!fresh.join("data").join("two").exists());
+    // the variable wins over the settings file, so a budget it sets is raised there
+    let help = error["help"].as_str().unwrap_or_default();
+    assert!(
+        help.contains(", or raise FETCHLOOM_CACHE_BUDGET, then "),
+        "{help}"
+    );
+    let set = sandbox.run(&["settings", "set", "cache_budget", "1.5K"])?;
+    assert_eq!(set.status.code(), Some(0), "{}", text(&set.stderr)?);
+    let output = sandbox
+        .command_in(&fresh, &["--json", "sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&output)?;
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(
+        help.contains(", or raise the budget with `fetchloom settings set cache_budget <size>`"),
+        "{document}"
+    );
 
     let output = run(&["--json", "sync", "--yes"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);

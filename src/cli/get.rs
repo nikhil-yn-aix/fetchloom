@@ -1152,6 +1152,7 @@ fn over_budget(context: &Context, cache: &Cache, doing: &str, adding: u64) -> Re
         past,
         freeable: scan.and_then(|scan| super::cache::unneeded_in(cache, &scan, now, threads, stop)),
         largest: Vec::new(),
+        by_variable: context.settings.cache_budget.origin == crate::settings::Origin::Environment,
     };
     cache_budget::ask(&context.output, context.yes, &over).map_err(Error::unchanged)
 }
