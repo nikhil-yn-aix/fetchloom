@@ -170,27 +170,55 @@ fn remove_checks_cache_and_plan_before_changing_metadata() -> Result {
     Ok(())
 }
 
-#[cfg(windows)]
+/// a file remove cannot delete, one another program holds open on windows or in a read-only
+/// folder elsewhere, comes after data.toml and data.lock changed, so the help names the sync that
+/// finishes the removal, never a remove that would no longer find the dataset.
 #[test]
 fn remove_explains_how_to_finish_after_placement_fails() -> Result {
-    use std::os::windows::fs::OpenOptionsExt as _;
-
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
-    let path = sandbox.work().join("data").join("iris").join("iris.csv");
-    let held = fs::OpenOptions::new()
-        .read(true)
-        .share_mode(3)
-        .open(&path)?;
+    let folder = sandbox.work().join("data").join("iris");
+    let path = folder.join("iris.csv");
+    #[cfg(windows)]
+    let holder = {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&path)?
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return crate::support::skipped("unprivileged", "root ignores file permissions");
+        }
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o555))?;
+    }
     let output = sandbox.run(&["--json", "remove", "iris"])?;
+    #[cfg(windows)]
+    drop(holder);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755))?;
+    }
     assert_eq!(output.status.code(), Some(50));
-    let error = json(&output)?;
-    let details = error["errors"][0]["details"].to_string();
-    assert!(details.contains("fetchloom sync"), "{details}");
-    assert!(details.contains("finishes the removal"), "{details}");
+    let error = &json(&output)?["errors"][0];
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with(&format!("could not remove {}:", path.display())),
+        "{message}"
+    );
+    let help = error["help"].as_str().unwrap_or_default();
+    assert!(
+        help.ends_with("then run `fetchloom sync` to finish the removal"),
+        "{help}"
+    );
+    let details = error["details"].to_string();
+    assert!(details.contains("data.toml and data.lock"), "{details}");
     assert!(!fs::read_to_string(sandbox.work().join("data.toml"))?.contains("datasets.iris"));
-    drop(held);
     let synced = sandbox.run(&["sync"])?;
     assert!(synced.status.success(), "{}", text(&synced.stderr)?);
     assert!(!path.exists());

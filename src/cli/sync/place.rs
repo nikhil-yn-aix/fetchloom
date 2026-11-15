@@ -1795,12 +1795,17 @@ fn remove_unwanted(
         match fate {
             Unwanted::Gone => {}
             Unwanted::Remove(look) => {
-                let file = project.root.join(survey.listed.get(&path).unwrap_or(&path));
+                let listed = survey.listed.get(&path).unwrap_or(&path);
+                let file = project
+                    .root
+                    .join(listed.replace('/', std::path::MAIN_SEPARATOR_STR));
                 match now(&file) {
                     Some(current) if current == look => {
                         placer
                             .remove(&file, true, Some(before.method))
-                            .map_err(|err| local(&file, &err))?;
+                            .map_err(|err| {
+                                Error::io(format_args!("could not remove {}", file.display()), &err)
+                            })?;
                         placement.removed += 1;
                         if unplaced(manifest, &before) {
                             *placement.unplaced.entry(before.dataset).or_default() += 1;

@@ -100,10 +100,11 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     project.write(lock::FILE, lock.render().as_bytes())?;
     project.sweep_lists(&lock);
     let placement = placing.remove_only(&context.output).map_err(|error| {
-        error.detail(format!(
-            "data.toml and data.lock were updated; after fixing the error, `{}` finishes the removal",
-            super::project::command("sync")
-        ))
+        error
+            .finished_by(&super::project::command("sync"), "the removal")
+            .detail(format!(
+                "data.toml and data.lock already leave out {listed}"
+            ))
     })?;
     context.output.done("Removed", &listed);
     context.output.next(&format!(

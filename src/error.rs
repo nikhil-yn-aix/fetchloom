@@ -306,6 +306,20 @@ impl Error {
         }
         self
     }
+
+    /// the help with `command` as the step that finishes `what`, for a run that already changed
+    /// what running it again would read, so a help to run the same command again would mislead.
+    pub(crate) fn finished_by(mut self, command: &str, what: &str) -> Error {
+        let named = format!("run `{command}` to finish {what}");
+        let help = match self.help.take() {
+            Some(help) if help.contains("command again") => help
+                .replace("run the same command again", &named)
+                .replace("run the command again", &named),
+            Some(help) => format!("{help}; then {named}"),
+            None => format!("fix that, then {named}"),
+        };
+        self.help(help)
+    }
 }
 
 /// the native filesystem failure inside an archive reader's wrappers, if any.
@@ -625,6 +639,38 @@ pub(crate) mod tests {
         assert_eq!(
             Error::new(Kind::LocalIo, "x").naming("fetchloom sync").help,
             None
+        );
+    }
+
+    /// a run that already changed what a rerun reads names the command that finishes it instead.
+    #[test]
+    fn help_after_a_change_names_what_finishes_it() {
+        let finished = |help: Option<&str>| {
+            let error = Error::new(Kind::LocalIo, "x");
+            let error = match help {
+                Some(help) => error.help(help),
+                None => error,
+            };
+            error.finished_by("fetchloom sync", "the removal").help
+        };
+        assert_eq!(
+            finished(Some(
+                "close the program using the file, then run the command again"
+            ))
+            .as_deref(),
+            Some(
+                "close the program using the file, then run `fetchloom sync` to finish the removal"
+            )
+        );
+        assert_eq!(
+            finished(Some("replace the link with a real folder")).as_deref(),
+            Some(
+                "replace the link with a real folder; then run `fetchloom sync` to finish the removal"
+            )
+        );
+        assert_eq!(
+            finished(None).as_deref(),
+            Some("fix that, then run `fetchloom sync` to finish the removal")
         );
     }
 
