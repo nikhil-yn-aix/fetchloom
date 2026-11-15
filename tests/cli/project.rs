@@ -2045,7 +2045,14 @@ fn status_at_a_terminal_names_a_gone_folder_once_and_caps_each_kind() -> Result 
         screen.contains("            and 5 more · `fetchloom status | less` shows all\n"),
         "{screen}"
     );
-    assert!(screen.contains("Found 53 differences"), "{screen}");
+    // b/kept.csv holds the pinned bytes, which is no difference
+    assert!(
+        screen.contains(
+            "   In place 1 file already holds the pinned bytes; `fetchloom sync` records it as placed\n"
+        ),
+        "{screen}"
+    );
+    assert!(screen.contains("Found 52 differences"), "{screen}");
     Ok(())
 }
 

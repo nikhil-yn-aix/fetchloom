@@ -47,7 +47,8 @@ pub(super) struct Status {
     edited: Vec<String>,
     /// files fetchloom did not place at paths the lock places, with other bytes than it pins.
     untracked: Vec<String>,
-    /// untracked files holding the pinned bytes, which `sync` adopts without `--force`.
+    /// files fetchloom did not place that hold the pinned bytes, as in a copy of the project: no
+    /// difference, since `sync` records them as placed.
     adoptable: Vec<String>,
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
@@ -1057,16 +1058,11 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 
 impl Status {
     /// each kind of file difference with its verb and what follows each path, if anything.
-    fn lists(&self) -> [(&'static str, &Vec<String>, Option<&'static str>); 7] {
+    fn lists(&self) -> [(&'static str, &Vec<String>, Option<&'static str>); 6] {
         [
             ("Missing", &self.missing, None),
             ("Edited", &self.edited, None),
             ("Untracked", &self.untracked, None),
-            (
-                "Untracked",
-                &self.adoptable,
-                Some("it holds the pinned bytes, so `fetchloom sync` adopts it"),
-            ),
             ("Outdated", &self.outdated, None),
             ("Extra", &self.extra, None),
             (
@@ -1112,7 +1108,6 @@ impl Status {
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
             || !self.untracked.is_empty()
-            || !self.adoptable.is_empty()
             || self
                 .damaged
                 .iter()
@@ -1147,6 +1142,24 @@ fn tell_dropped(output: &Output, status: &Status) {
             &format!("{name} · freed on this machine; {back}"),
         );
     }
+}
+
+/// a faint line on stderr counting the files that hold the pinned bytes though fetchloom did not
+/// place them, which are no difference.
+fn tell_adoptable(output: &Output, status: &Status) {
+    let (hold, them) = match status.adoptable.len() {
+        0 => return,
+        1 => ("holds", "it"),
+        _ => ("hold", "them"),
+    };
+    output.faint_step(
+        "In place",
+        &format!(
+            "{} already {hold} the pinned bytes; `{}` records {them} as placed",
+            units::count(status.adoptable.len() as u64, "file", "files"),
+            super::project::command("sync")
+        ),
+    );
 }
 
 /// a line for each dataset with `place = false`: faint on stderr once no file of it is left, else a
@@ -1233,6 +1246,7 @@ fn list(output: &Output, status: &Status) {
     let shown = output.answer_width().map(|_| SHOWN);
     tell_unplaced(output, status);
     tell_dropped(output, status);
+    tell_adoptable(output, status);
     tell_unlocked(output, status);
     for name in &status.removed {
         output.report(
@@ -1455,7 +1469,7 @@ mod tests {
         let clean = Status::default();
         assert!(!clean.needs_sync());
         assert!(!sum_up(&output, &clean));
-        for category in 0..10 {
+        for category in 0..9 {
             let mut status = Status::default();
             let paths = match category {
                 0 => &mut status.removed,
@@ -1464,21 +1478,27 @@ mod tests {
                 3 => &mut status.not_unpacked,
                 4 => &mut status.outdated,
                 5 => &mut status.untracked,
-                6 => &mut status.adoptable,
-                7 => &mut status.unneeded,
-                8 => &mut status.edited,
+                6 => &mut status.unneeded,
+                7 => &mut status.edited,
                 _ => &mut status.extra,
             };
             paths.push("data/set/file.csv".to_owned());
-            assert_eq!(status.needs_sync(), category < 8, "category {category}");
+            assert_eq!(status.needs_sync(), category < 7, "category {category}");
             // an untracked file is a person's own until they say otherwise
             assert_eq!(
                 status.sync_repairs_all(),
-                category < 8 && category != 5,
+                category < 7 && category != 5,
                 "category {category}"
             );
             assert!(sum_up(&output, &status), "category {category}");
         }
+        // a file that holds the pinned bytes is no difference, though sync records it
+        let adoptable = Status {
+            adoptable: vec!["data/set/file.csv".to_owned()],
+            ..Status::default()
+        };
+        assert!(!adoptable.needs_sync());
+        assert!(!sum_up(&output, &adoptable));
         let mut damaged = Status::default();
         damaged.damaged.push("data/set/file.csv".to_owned());
         assert!(damaged.needs_sync() && damaged.sync_repairs_all());

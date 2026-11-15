@@ -81,7 +81,7 @@ status arrays, each a list of project-relative paths or dataset names, as [statu
 | `missing` | pinned files that are absent |
 | `edited` | files fetchloom placed that were changed |
 | `untracked` | files fetchloom did not place, at pinned paths, with other bytes than the pins |
-| `adoptable` | files fetchloom did not place, at pinned paths, holding the pinned bytes, which sync adopts |
+| `adoptable` | files fetchloom did not place, at pinned paths, holding the pinned bytes, which sync records as placed; no difference |
 | `outdated` | unchanged files that sync replaces: pinned to other bytes now, or read-only where the dataset asks for `copy = true` |
 | `damaged` | files fetchloom placed that hold other bytes though no edit of the project's shows, as a hardlink an edit through another link changed |
 | `blocked` | entries in a pinned file's way |

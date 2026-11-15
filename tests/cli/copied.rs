@@ -162,6 +162,42 @@ fn an_offline_check_of_a_copied_project_reads_its_data_folder() -> Result {
     Ok(())
 }
 
+/// every file of a copy holds the pinned bytes, so status finds no difference and says in one
+/// line that a sync records them, as the sync then does, after which status has nothing to say.
+#[test]
+fn a_copied_project_differs_in_nothing_until_a_sync_records_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server, false)?;
+    let (two, cache) = copied(&sandbox, "two")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let ok = "         Ok everything matches data.lock by size and time\n";
+    let status = run(&["status"])?;
+    assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
+    assert_eq!(text(&status.stdout)?, "");
+    assert_eq!(
+        text(&status.stderr)?,
+        format!(
+            "   In place 1 file already holds the pinned bytes; `fetchloom sync` records it as placed\n{ok}"
+        )
+    );
+    let document = json(&run(&["--json", "status"])?)?;
+    assert_eq!(
+        document["result"]["adoptable"],
+        serde_json::json!(["inputs/iris/iris.csv"])
+    );
+    assert_eq!(document["result"]["untracked"], serde_json::json!([]));
+    let synced = run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(text(&run(&["status"])?.stderr)?, ok);
+    Ok(())
+}
+
 #[test]
 fn an_offline_build_runs_a_recipe_whose_input_is_only_in_the_data_folder() -> Result {
     let sandbox = Sandbox::new()?;

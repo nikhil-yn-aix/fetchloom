@@ -80,7 +80,7 @@ a file someone put at a pinned path, such as one downloaded by hand, is adopted 
     Adopted data/iris · 1 file already held the pinned bytes, so it is now linked to the cache
 ```
 
-a file in a dataset with `copy = true`, or whose bytes the cache lacks, is adopted but not linked, and the line ends `so it stays as it is`. before the sync, `status` lists an adoptable file as untracked, holding the pinned bytes, and a dry run lists it under `Would adopt`. `remove` later deletes an adopted file as it deletes the files sync placed, and warns that it was already there.
+a file in a dataset with `copy = true`, or whose bytes the cache lacks, is adopted but not linked, and the line ends `so it stays as it is`. before the sync, `status` counts such files on one `In place` line, as no difference, and a dry run lists them under `Would adopt`. `remove` later deletes an adopted file as it deletes the files sync placed, and warns that it was already there.
 
 a file whose bytes the cache lacks can also come from another file in the data folder that holds them at a pinned path, as when two datasets hold one file, or a recipe copies one, in a project [moved to another machine](cache.md#moving-a-project-to-another-machine). the cache gets a clone or a copy of it, never a link, and keeps it only when it hashes to the pin, so nothing is downloaded and a recipe's result needs no build. stderr from a real run in such a project, after `data/squares/table.csv` was deleted:
 

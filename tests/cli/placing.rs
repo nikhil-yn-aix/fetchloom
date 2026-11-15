@@ -1612,8 +1612,8 @@ fn a_file_already_in_place_is_linked_to_the_download_it_matches() -> Result {
     Ok(())
 }
 
-/// three datasets share `raw`, which already holds each one's file, so status says a plain sync
-/// adopts them rather than offering `--force`.
+/// three datasets share `raw`, which already holds each one's file, so status says in one line
+/// that a plain sync records them, as no difference, rather than offering `--force`.
 #[test]
 fn files_already_in_a_shared_folder_are_adopted_and_told_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1642,13 +1642,14 @@ fn files_already_in_a_shared_folder_are_adopted_and_told_once() -> Result {
     }
     let status = sandbox.run(&["status"])?;
     let told = text(&status.stdout)?;
-    for name in ["a", "b", "c"] {
-        let line = format!(
-            "  Untracked data/raw/{name}.csv · it holds the pinned bytes, so `fetchloom sync` adopts it\n"
-        );
-        assert!(told.contains(&line), "{line:?} in\n{told}");
-    }
+    assert!(!told.contains("data/raw"), "{told}");
     let story = text(&status.stderr)?;
+    assert!(
+        story.contains(
+            "   In place 3 files already hold the pinned bytes; `fetchloom sync` records them as placed\n"
+        ),
+        "{story}"
+    );
     assert!(!format!("{told}{story}").contains("--force"), "{story}");
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(status["result"]["untracked"], serde_json::json!([]));
