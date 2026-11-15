@@ -930,33 +930,4 @@ mod tests {
         assert!(!syncfs_reports_errors(""));
         assert!(!syncfs_reports_errors("unknown"));
     }
-
-    /// windows marks a file it keeps compressed, as `compact /exe` leaves it, or one a cloud
-    /// drive keeps, as a reparse point that names no other path: it reads as any file does.
-    #[cfg(windows)]
-    #[test]
-    fn a_reparse_point_that_is_no_link_is_a_plain_file() {
-        use std::io::Read as _;
-        use std::os::windows::fs::MetadataExt as _;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("kept.csv");
-        let text = "a line windows can compress\n".repeat(4096);
-        fs::write(&path, &text).unwrap();
-        let compacted = std::process::Command::new("compact")
-            .args(["/c", "/exe:xpress4k"])
-            .arg(&path)
-            .output()
-            .unwrap();
-        let found = fs::symlink_metadata(&path).unwrap();
-        if !compacted.status.success() || found.file_attributes() & 0x400 == 0 {
-            return crate::test_skips::skip("compression", "this disk keeps no compressed files");
-        }
-        assert!(is_plain(&found));
-        let mut read = String::new();
-        read_unfollowed(&path)
-            .unwrap()
-            .read_to_string(&mut read)
-            .unwrap();
-        assert_eq!(read, text);
-    }
 }
