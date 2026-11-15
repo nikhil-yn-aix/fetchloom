@@ -82,13 +82,16 @@ fn adoptable(root: &Path) -> io::Result<()> {
     if is_cache(root) {
         return Ok(());
     }
+    meanwhile();
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
     for entry in entries {
-        if !left_before_tag(root, &entry?.file_name()) {
+        // a run making the cache at the same time writes its whole tag before any folder of it,
+        // so a folder that has the tag by now is that cache
+        if !left_before_tag(root, &entry?.file_name()) && !is_cache(root) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, Foreign));
         }
     }
@@ -1638,6 +1641,24 @@ pub(crate) mod tests {
             "{refused}"
         );
         assert_eq!(fs::read(&mine).unwrap(), b"");
+    }
+
+    /// two runs that make one new cache at once: one finds no tag yet, and by the time it lists
+    /// the folder the other has made the whole cache there, its tag first; it opens that cache.
+    #[test]
+    fn a_cache_another_run_made_since_the_tag_was_read_opens() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cache");
+        fs::create_dir(&root).unwrap();
+        let other = root.clone();
+        MEANWHILE.set(Some(Box::new(move || {
+            Cache::open(other).unwrap();
+        })));
+
+        let opened = Cache::open(root);
+
+        assert!(MEANWHILE.take().is_none(), "the other run made the cache");
+        opened.unwrap();
     }
 
     #[test]
