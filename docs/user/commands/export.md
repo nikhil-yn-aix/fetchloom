@@ -91,7 +91,7 @@ a dataset with `place = false` has no files in the data folder, so `sha256` leav
 
 ## what it leaves out
 
-a form leaves out what it has nothing to write for: `links` and `aria2` a recipe's result and files imported from a folder, and `sha256` a dataset with `place = false`. each run says so once on stderr and still exits 0, even when stdout is empty. stderr from real runs in a project whose recipe `clean` copies `iris`, with `place = false` on `tips`; the first run wrote nothing on stdout:
+a form leaves out what it has nothing to write for: `links` and `aria2` a recipe's result and files imported from a folder, and `sha256` a dataset with `place = false` or one [dropped](drop.md) on this machine, as `warning: the list leaves out pets: it is dropped on this machine, so its files are not in the data folder`. each run says so once on stderr and still exits 0, even when stdout is empty. stderr from real runs in a project whose recipe `clean` copies `iris`, with `place = false` on `tips`; the first run wrote nothing on stdout:
 
 ```sh
 $ fetchloom export --format links clean

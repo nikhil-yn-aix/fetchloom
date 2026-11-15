@@ -78,6 +78,8 @@ enum Reason {
     Imported,
     /// `place = false` keeps its files out of the data folder.
     NotPlaced,
+    /// `fetchloom drop` freed its files on this machine.
+    Dropped,
 }
 
 /// a file downloaded for a dataset, as data.lock pins it.
@@ -118,8 +120,12 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     } else {
         lock.refuse_stated(args.names.iter().map(String::as_str))?;
     }
-    let mut report = inventory(&manifest, lock, &super::peek_cache()?, &args.names)?;
-    report.left_out = left_out(&manifest, &args.names, args.format);
+    let dropped = project.dropped();
+    // the data folder as this machine holds it: a dataset dropped here has no files there
+    let mut held = manifest.clone();
+    super::drop::left_out(&mut held, &dropped);
+    let mut report = inventory(&held, lock, &super::peek_cache()?, &args.names)?;
+    report.left_out = left_out(&manifest, &dropped, &args.names, args.format);
     let output = &context.output;
     if manifest.datasets.is_empty() {
         output.done("Ok", "data.toml has no datasets yet");
@@ -189,14 +195,21 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
     );
 }
 
-/// the datasets `names`, or every one when none is named, that `format` never lists.
-fn left_out(manifest: &Manifest, names: &[String], format: Format) -> Vec<LeftOut> {
+/// the datasets `names`, or every one when none is named, that `format` never lists, or that
+/// `dropped` here leaves out of the data folder.
+fn left_out(
+    manifest: &Manifest,
+    dropped: &std::collections::BTreeSet<String>,
+    names: &[String],
+    format: Format,
+) -> Vec<LeftOut> {
     manifest
         .datasets
         .iter()
         .filter(|(name, _)| names.is_empty() || names.contains(name))
         .filter_map(|(name, entry)| {
             let reason = match format {
+                Format::Sha256 if dropped.contains(name) => Reason::Dropped,
                 Format::Sha256 if !entry.place => Reason::NotPlaced,
                 Format::Links | Format::Aria2 if entry.recipe().is_some() => Reason::Recipe,
                 Format::Links | Format::Aria2 if entry.is_import() => Reason::Imported,
@@ -240,6 +253,21 @@ fn tell_left_out(output: &crate::output::Output, report: &Report) {
         output.warn(Warning::ExportLeftOut, &format!(
             "the list leaves out {datasets}: place = false keeps {its} files out of the data folder"
         ));
+    }
+    let dropped = named(Reason::Dropped);
+    if !dropped.is_empty() {
+        let datasets = crate::units::listed(&dropped, "and");
+        let (is, its) = if dropped.len() == 1 {
+            ("it is", "its")
+        } else {
+            ("they are", "their")
+        };
+        output.warn(
+            Warning::ExportLeftOut,
+            &format!(
+                "the list leaves out {datasets}: {is} dropped on this machine, so {its} files are not in the data folder"
+            ),
+        );
     }
 }
 

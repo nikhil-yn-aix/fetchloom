@@ -63,6 +63,21 @@ fn a_dropped_dataset_is_left_out_until_a_sync_names_it() -> Result {
         "{result}"
     );
     assert!(!placed.exists() && !cached.exists());
+    // a list of the data folder's files leaves it out, and says so
+    let exported = sandbox.run(&["export"])?;
+    ok(&exported)?;
+    assert!(
+        !text(&exported.stdout)?.contains("data/iris/"),
+        "{}",
+        text(&exported.stdout)?
+    );
+    assert!(
+        text(&exported.stderr)?.contains(
+            "the list leaves out iris: it is dropped on this machine, so its files are not in the data folder"
+        ),
+        "{}",
+        text(&exported.stderr)?
+    );
     // data.toml and data.lock keep it, and it is no difference
     let output = sandbox.run(&["--json", "status", "--check"])?;
     ok(&output)?;
