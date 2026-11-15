@@ -146,9 +146,9 @@ pub(super) fn change(
     let changed = match action {
         args::SettingsAction::Set(set) => {
             let here = std::env::current_dir().ok();
-            crate::settings::edit::set(var, key, &set.values, here.as_deref())?
+            crate::settings::edit::set(var, key, &set.values, here.as_deref(), &usable)?
         }
-        args::SettingsAction::Unset(_) => crate::settings::edit::unset(var, key)?,
+        args::SettingsAction::Unset(_) => crate::settings::edit::unset(var, key, &usable)?,
     };
     let overridden_by = crate::settings::edit::overridden(var, &changed.key);
     tell_changed(&context.output, &changed, overridden_by);
@@ -163,6 +163,18 @@ pub(super) fn change(
     })
 }
 
+/// what every run checks of its settings once each is read: that mirrors_only has a mirror to
+/// ask, where no `--mirror` gives one.
+fn usable(settings: &crate::settings::Settings) -> Result<(), Error> {
+    super::fetch::mirrors::read(&[], settings)
+        .map(drop)
+        .map_err(|error| {
+            error.help(
+                "keep a mirror in `mirrors`, as `fetchloom settings set mirrors /mnt/lab/fetchloom` saves one, or run `fetchloom settings unset mirrors_only` first",
+            )
+        })
+}
+
 /// says what `changed` did: the key's value before and after, and in which file, then, when a
 /// variable gives the key its value in this run, that the variable wins.
 fn tell_changed(
@@ -173,6 +185,13 @@ fn tell_changed(
     let key = &changed.key;
     let file = units::path(&changed.path);
     let said = |value: Option<&toml_edit::Value>| value.map_or_else(|| "not set".to_owned(), shown);
+    if let Some(broken) = &changed.broken {
+        let said = format!("{}, so every run still stops there", broken.message);
+        match &broken.help {
+            Some(help) => output.warn_with(Warning::SettingsBroken, &said, help),
+            None => output.warn(Warning::SettingsBroken, &said),
+        }
+    }
     if let Some(variable) = overridden_by {
         let help = if changed.after.is_some() {
             format!("unset {variable} where the saved value should hold")

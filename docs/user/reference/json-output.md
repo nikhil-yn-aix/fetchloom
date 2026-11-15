@@ -186,6 +186,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `place.unportable` | files have names windows and fat disks cannot store |
 | `project.not_restored` | a stopped add could not put data.toml and data.lock back as they were |
 | `search.partial` | a search site did not answer in time, or its search failed |
+| `settings.broken` | `settings set` or `settings unset` changed a settings file that still holds a problem every run stops at, such as a key that is no setting, which the change did not bring |
 | `settings.colors_unread` | `FETCHLOOM_COLORS` holds entries fetchloom cannot read, which keep their default colors |
 | `settings.overridden` | `settings set` or `settings unset` changed a setting that a `FETCHLOOM_` variable set here gives its own value, so runs where it is set keep that value |
 | `settings.switch_unread` | `FETCHLOOM_ACCESSIBLE` or `FETCHLOOM_NO_HINTS` holds neither true nor false, so it stays off rather than stopping the run |

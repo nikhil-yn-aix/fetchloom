@@ -18,6 +18,10 @@ use crate::machine::{Machine, Var};
 /// the keys whose text stays text even when it is a whole number.
 const WORDS: [&str; 3] = ["cache", "push_to", "resources"];
 
+/// what a run checks of its settings past reading each one, as that mirrors_only has mirrors to
+/// ask, so a change that would leave every run stopping there is refused.
+pub(crate) type Usable<'a> = &'a dyn Fn(&Settings) -> Result<(), Error>;
+
 /// what `set` or `unset` did to the settings file.
 #[derive(Debug)]
 pub(crate) struct Changed {
@@ -31,16 +35,20 @@ pub(crate) struct Changed {
     pub(crate) written: bool,
     /// whether the change made the file.
     pub(crate) created: bool,
+    /// what still stops every run reading the file, which was there before the change.
+    pub(crate) broken: Option<Error>,
 }
 
 /// sets `name` to `values` in the settings file `var` locates: for a list, every value, each split
 /// at commas as its variable is, else the one value, a relative folder taken from `here`. a value
-/// a run would refuse is refused with the reader's message, and nothing is written.
+/// a run would refuse, or one that leaves a file every run stops at, as `usable` and the reader
+/// tell, is refused with their message, and nothing is written.
 pub(crate) fn set(
     var: Var<'_>,
     name: &str,
     values: &[String],
     here: Option<&Path>,
+    usable: Usable<'_>,
 ) -> Result<Changed, Error> {
     let key = known(name)?;
     let value = given(key, values, here)?;
@@ -61,8 +69,10 @@ pub(crate) fn set(
         after: Some(after.clone()),
         written: false,
         created: !found,
+        broken: None,
     };
     if before.is_some() && before.as_ref().and_then(read_as) == read_as(&after) {
+        changed.broken = whole(&changed.path, &text, &text, usable)?;
         return Ok(changed);
     }
     match document.get_mut(key) {
@@ -75,14 +85,17 @@ pub(crate) fn set(
         Some(item) => *item = Item::Value(after),
         None => appended(&mut document, key, after),
     }
-    write(&changed.path, &document.to_string(), found)?;
+    let written = document.to_string();
+    changed.broken = whole(&changed.path, &text, &written, usable)?;
+    write(&changed.path, &written, found)?;
     changed.written = true;
     Ok(changed)
 }
 
 /// takes `name` out of the settings file `var` locates: a setting, or a key the file holds that
-/// is none, so a mistake that stops every run can be taken out too. comments above it stay.
-pub(crate) fn unset(var: Var<'_>, name: &str) -> Result<Changed, Error> {
+/// is none, so a mistake that stops every run can be taken out too. comments above it stay. a
+/// removal that leaves a file every run stops at, as `usable` and the reader tell, is refused.
+pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Changed, Error> {
     let Opened {
         path,
         text,
@@ -101,12 +114,42 @@ pub(crate) fn unset(var: Var<'_>, name: &str) -> Result<Changed, Error> {
         after: None,
         written: false,
         created: false,
+        broken: None,
     };
-    if removed(&mut document, name) {
-        write(&changed.path, &document.to_string(), found)?;
-        changed.written = true;
+    if !removed(&mut document, name) {
+        changed.broken = whole(&changed.path, &text, &text, usable)?;
+        return Ok(changed);
     }
+    let written = document.to_string();
+    changed.broken = whole(&changed.path, &text, &written, usable)?;
+    write(&changed.path, &written, found)?;
+    changed.written = true;
     Ok(changed)
+}
+
+/// what stops every run reading the settings file at `path` once it holds `after`, where it was
+/// there with `before` too, so a change cannot be blamed for it; a usage error where the change
+/// brings it, so nothing is written.
+fn whole(path: &Path, before: &str, after: &str, usable: Usable<'_>) -> Result<Option<Error>, Error> {
+    let Err(stops) = reads(path, after, usable) else {
+        return Ok(None);
+    };
+    if before == after || reads(path, before, usable).is_err() {
+        return Ok(Some(stops));
+    }
+    Err(stops.detail("nothing was saved, since every run would stop at this"))
+}
+
+/// reads the settings as a run would from a settings file at `path` holding `text`, with no
+/// variable set, then checks them as `usable` does.
+fn reads(path: &Path, text: &str, usable: Usable<'_>) -> Result<(), Error> {
+    let file = File {
+        path: Some(path.to_owned()),
+        values: parse(path, text)?,
+        found: true,
+        bypassed: None,
+    };
+    usable(&Settings::read(&|_| None, file, Machine::default())?)
 }
 
 /// the variable that gives `key` a value for this run in place of the settings file, when one is

@@ -260,6 +260,7 @@ fn only_a_plain_settings_file_of_a_sensible_size_is_read() {
             "jobs",
             &["4".to_owned()],
             None,
+            &|_| Ok(()),
         ) else {
             panic!("{named} was changed as the settings file");
         };

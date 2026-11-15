@@ -100,6 +100,9 @@ pub(crate) enum Warning {
     ProjectNotRestored,
     /// a catalog did not answer a search, or its search failed.
     SearchPartial,
+    /// the settings file `settings set` or `unset` changed still holds a problem every run stops
+    /// at, which the change did not bring.
+    SettingsBroken,
     /// `FETCHLOOM_COLORS` holds entries fetchloom cannot read.
     SettingsColorsUnread,
     /// a variable set here holds a setting the settings file just changed, so runs where it is
@@ -170,6 +173,7 @@ impl Warning {
             Warning::PlaceUnportable => "place.unportable",
             Warning::ProjectNotRestored => "project.not_restored",
             Warning::SearchPartial => "search.partial",
+            Warning::SettingsBroken => "settings.broken",
             Warning::SettingsColorsUnread => "settings.colors_unread",
             Warning::SettingsOverridden => "settings.overridden",
             Warning::SettingsSwitchUnread => "settings.switch_unread",
@@ -251,6 +255,7 @@ mod tests {
             PlaceUnportable,
             ProjectNotRestored,
             SearchPartial,
+            SettingsBroken,
             SettingsColorsUnread,
             SettingsOverridden,
             SettingsSwitchUnread,

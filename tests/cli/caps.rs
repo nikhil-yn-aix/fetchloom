@@ -738,6 +738,51 @@ fn settings_unset_fixes_a_file_that_stops_every_run() -> Result {
     Ok(())
 }
 
+/// a change that would leave a file every run stops at, as mirrors_only with no mirror to ask, is
+/// refused, set or unset, naming the way out; a file a problem stops already still takes a change,
+/// with a warning that the problem is there.
+#[test]
+fn settings_set_refuses_a_file_every_run_would_stop_at() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    std::fs::write(&path, "jobs = 4\n")?;
+    let refused = json(&sandbox.run(&["--json", "settings", "set", "mirrors_only", "true"])?)?;
+    let error = &refused["errors"][0];
+    assert_eq!(
+        error["message"],
+        "mirrors_only in the settings file asks for mirrors alone, but no mirror is set",
+        "{refused}"
+    );
+    let help = error["help"].as_str().unwrap_or_default();
+    assert!(
+        help.contains("`fetchloom settings unset mirrors_only`"),
+        "{help}"
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, "jobs = 4\n");
+    let both = "mirrors = [\"/mnt/lab\"]\nmirrors_only = true\n";
+    std::fs::write(&path, both)?;
+    let refused = sandbox.run(&["settings", "unset", "mirrors"])?;
+    let told = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(2), "{told}");
+    assert!(
+        told.contains("`fetchloom settings unset mirrors_only`"),
+        "{told}"
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, both);
+    std::fs::write(&path, "jbos = 4\n")?;
+    let saved = json(&sandbox.run(&["--json", "settings", "set", "jobs", "8"])?)?;
+    assert_eq!(saved["result"]["changed"], true, "{saved}");
+    let warned = crate::support::warned(&saved);
+    assert!(
+        warned.iter().any(|line| line.contains(
+            "has \"jbos\", which is not a setting, so every run still stops there; did you mean `jobs`?"
+        )),
+        "{warned:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&path)?, "jbos = 4\njobs = 8\n");
+    Ok(())
+}
+
 /// a variable set here still wins, which the change says; `--no-config` and `FETCHLOOM_NO_CONFIG`
 /// leave the file alone, so they refuse a change; a file `FETCHLOOM_SETTINGS` names is made, with
 /// its folder, when missing.
