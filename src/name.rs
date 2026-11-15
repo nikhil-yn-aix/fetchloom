@@ -663,23 +663,29 @@ pub(crate) fn is_reserved_on_windows(name: &str) -> bool {
 /// whether `name`, a file's or folder's own, is one an operating system writes by itself: finder's
 /// `.DS_Store`, a mac's `._` files, a removable disk's system folders, explorer's thumbnails.
 pub(crate) fn made_by_system(name: &str) -> bool {
-    (name.len() > 2 && name.starts_with("._"))
+    system_file(name)
         || name.starts_with(".Trash-")
         || [
-            ".DS_Store",
             "__MACOSX",
             ".Spotlight-V100",
             ".Trashes",
             ".fseventsd",
             ".TemporaryItems",
-            "Thumbs.db",
-            "ehthumbs.db",
-            "desktop.ini",
             "$RECYCLE.BIN",
             "System Volume Information",
         ]
         .iter()
         .any(|made| name.eq_ignore_ascii_case(made))
+}
+
+/// whether `name`, a file's own, is one of the files of [`made_by_system`] a system writes beside
+/// a person's and that hold nothing of theirs, unlike what its folders hold, as a disk's trash
+/// holds what they may still restore.
+pub(crate) fn system_file(name: &str) -> bool {
+    (name.len() > 2 && name.starts_with("._"))
+        || [".DS_Store", "Thumbs.db", "ehthumbs.db", "desktop.ini"]
+            .iter()
+            .any(|made| name.eq_ignore_ascii_case(made))
 }
 
 #[cfg(test)]

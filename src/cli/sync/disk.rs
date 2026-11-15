@@ -345,12 +345,8 @@ impl Survey {
         let mut entries = HashMap::new();
         let mut others = Vec::new();
         let start = vec![(native(root, folder), folder.to_owned())];
-        let made_by_system = |path: &str| {
-            path.strip_prefix(folder)
-                .unwrap_or(path)
-                .split('/')
-                .any(name::made_by_system)
-        };
+        let made_by_system =
+            |path: &str| name::system_file(path.rsplit('/').next().unwrap_or(path));
         // one folder outside the data folder, listed while placing, which looks at the stop itself
         visit_files(
             start,
@@ -446,16 +442,13 @@ impl Survey {
     }
 
     /// whether the file at `path` is one an operating system made rather than fetchloom or a
-    /// person: unplaced, with a name [`name::made_by_system`] knows, its own or a folder's below
-    /// the data folder, as `.DS_Store` or `__MACOSX/._a.csv`. none is a difference.
+    /// person: unplaced, with a name [`name::system_file`] knows, as `.DS_Store` or
+    /// `__MACOSX/._a.csv`. none is a difference. what a system's folder holds otherwise, as a
+    /// disk's trash, may be a person's.
     pub(crate) fn made_by_system(&self, path: &str) -> bool {
-        let below = path
-            .strip_prefix(self.data_dir.as_str())
-            .and_then(|rest| rest.strip_prefix('/'))
-            .unwrap_or(path);
         self.disk.contains_key(path)
             && !self.state.files.contains_key(path)
-            && below.split('/').any(name::made_by_system)
+            && name::system_file(path.rsplit('/').next().unwrap_or(path))
     }
 
     /// windows listings keep a hardlink's size, time and read-only flag as this name last saw

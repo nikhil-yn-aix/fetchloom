@@ -93,3 +93,50 @@ fn files_the_system_makes_are_no_difference() -> Result {
     assert!(b.join(".DS_Store").exists());
     Ok(())
 }
+
+/// what a person files under a folder a system names, as a disk's trash holding what they may
+/// still restore, is theirs: status lists it, and its folder stays when its dataset goes.
+#[test]
+fn files_in_a_folder_a_system_names_are_a_persons() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = Routes::start(vec![
+        ("/files/iris.csv".to_owned(), file(IRIS, "\"i\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b\"")),
+    ])?;
+    sandbox.allow(&source.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/iris.csv", source.url)])?)?;
+    ok(&sandbox.run(&["add", &format!("{}/files/b.csv", source.url)])?)?;
+    let work = sandbox.work();
+    let b = work.join("data/b");
+    let theirs = [
+        "data/b/.Trash-1000/files/thesis.docx",
+        "data/b/.Trash-1000/info/thesis.docx.trashinfo",
+        "data/b/__MACOSX/notes.txt",
+    ];
+    for path in theirs {
+        let path = work.join(path);
+        fs::create_dir_all(path.parent().ok_or("a file has a folder")?)?;
+        fs::write(path, "mine\n")?;
+    }
+    fs::write(b.join(".DS_Store"), "made by the system\n")?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        document["result"]["extra"],
+        serde_json::json!(theirs),
+        "{document}"
+    );
+    let toml = fs::read_to_string(work.join("data.toml"))?;
+    let kept = toml
+        .split("\n\n")
+        .filter(|table| !table.contains("[datasets.b]"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    fs::write(work.join("data.toml"), kept)?;
+    let output = sandbox.run(&["sync"])?;
+    ok(&output)?;
+    let said = text(&output.stderr)?;
+    for path in theirs {
+        assert_eq!(fs::read(work.join(path))?, b"mine\n", "{said}");
+    }
+    Ok(())
+}
