@@ -1544,8 +1544,8 @@ fn a_pin_by_the_sources_md5_is_downloaded_and_completed_by_a_sync() -> Result {
     Ok(())
 }
 
-/// bytes another than the MD5 their source states fail the sync as any pin does, and data.lock
-/// and the data folder stay as they were.
+/// bytes that do not match the MD5 their source states fail the sync as any pin does, and
+/// data.lock and the data folder stay as they were.
 #[test]
 fn a_sync_that_finds_other_bytes_than_the_stated_md5_records_nothing() -> Result {
     let sandbox = Sandbox::new()?;
