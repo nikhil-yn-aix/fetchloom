@@ -13,7 +13,8 @@ pub(crate) enum Warning {
     AuthKeyRemains,
     /// a key holds a character no request header can carry, so it is never sent.
     AuthKeyUnsendable,
-    /// the machine has no credential store, so a key went into a file of fetchloom's.
+    /// a key went into a file of fetchloom's: the machine has no credential store, or
+    /// `FETCHLOOM_KEYRING=false` keeps keys out of it.
     AuthNoKeyring,
     /// other users of the machine may read a file that holds logins or keys.
     AuthReadable,
