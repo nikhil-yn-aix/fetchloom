@@ -67,6 +67,30 @@ struct Owner {
     command: String,
 }
 
+/// the commands that hold a project, the only ones an owner record names.
+const HOLDING: [&str; 8] = [
+    "add", "build", "drop", "exclude", "lock", "path", "remove", "sync",
+];
+
+/// the systems fetchloom is built for, which an owner record names besides this one.
+const SYSTEMS: [&str; 3] = ["linux", "macos", "windows"];
+
+impl Owner {
+    /// the owner record `bytes` hold, when its every word is one fetchloom writes: a clone can
+    /// carry a record, which must neither put its own text in a message nor pass for one.
+    fn read(bytes: &[u8]) -> Option<Owner> {
+        let owner = serde_json::from_slice::<Owner>(bytes).ok()?;
+        let os = owner.os == std::env::consts::OS || SYSTEMS.contains(&owner.os.as_str());
+        let command = HOLDING.contains(&owner.command.as_str());
+        let started = owner.started.len() <= 40
+            && owner
+                .started
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || b"-:.TZ".contains(&byte));
+        (os && command && started).then_some(owner)
+    }
+}
+
 impl Held {
     fn publish_owner(&mut self, path: &Path, record: &[u8]) -> io::Result<()> {
         let (temporary, file) = loop {
@@ -114,6 +138,10 @@ impl Held {
     }
 
     fn claim(mut self, path: &Path, command: &str, now: SystemTime) -> io::Result<Hold> {
+        debug_assert!(
+            HOLDING.contains(&command),
+            "{command} holds the project, so HOLDING lists it"
+        );
         let owner = Owner {
             os: std::env::consts::OS.to_owned(),
             pid: std::process::id(),
@@ -138,7 +166,7 @@ impl Held {
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(err) => return Err(err),
             };
-            let owner = serde_json::from_slice::<Owner>(&bytes).ok();
+            let owner = Owner::read(&bytes);
             // an empty reservation may belong to a paused writer on another OS
             let stale = self.lock.is_some()
                 && owner
@@ -209,7 +237,7 @@ fn remove_stale_owner(path: &Path, bytes: &[u8], modified: SystemTime) -> io::Re
 /// the command the owner record at `path` names, as a waiting command tells it.
 fn holder(path: &Path) -> Option<String> {
     let (bytes, _) = read_owner(path).ok()?;
-    let owner = serde_json::from_slice::<Owner>(&bytes).ok()?;
+    let owner = Owner::read(&bytes)?;
     Some(format!("`fetchloom {}` (pid {})", owner.command, owner.pid))
 }
 
@@ -1311,6 +1339,42 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), record);
         fs::remove_file(&path).unwrap();
         assert!(!path.exists());
+    }
+
+    /// an owner record is read only with the words fetchloom writes in it, since a clone can carry
+    /// one: any other system, command or time reads as a record of another fetchloom, which waits
+    /// and names the file to delete, never the record's own text.
+    #[test]
+    fn an_owner_with_words_fetchloom_never_writes_is_not_shown() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+        let path = project.own_folder().join("owner");
+        for (os, command, started) in [
+            ("plan9", "sync", "2026-10-30T12:00:00Z"),
+            ("windows", "rm -rf ~", "2026-10-30T12:00:00Z"),
+            ("windows", "sync", "\u{1b}]52;c;aGk=\u{7}"),
+        ] {
+            let record = serde_json::json!({
+                "os": os,
+                "pid": 42,
+                "started": started,
+                "command": command,
+            });
+            fs::write(&path, record.to_string()).unwrap();
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            let now = modified + Duration::from_secs(60);
+            let Hold::Owner(message) = project.hold_at("remove", now).unwrap() else {
+                panic!("a record fetchloom never writes needs a person")
+            };
+            assert_eq!(
+                message,
+                format!(
+                    "for another fetchloom working in this project; if that process is gone, delete {}",
+                    path.display()
+                ),
+                "{os} {command} {started:?}"
+            );
+            assert_eq!(holder(&path), None, "{os} {command}");
+        }
     }
 
     #[test]
