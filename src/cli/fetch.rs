@@ -38,12 +38,47 @@ pub(super) struct Job {
 /// the first bytes of a file that came as a web page, which tell a page from data.
 const HEAD: usize = 1024;
 
-/// whether `head`, a file's first bytes, is html: it starts, past a byte order mark and white
-/// space, with `<!doctype html`, or holds `<html`, in any case.
+/// the tags a page may open with that no data file does, as a sign-in redirect's script or
+/// refresh does.
+const PAGE_TAGS: [&[u8]; 5] = [b"<script", b"<meta", b"<head", b"<body", b"<title"];
+
+/// whether `head`, a file's first bytes, is html: past a utf-8 or utf-16 byte order mark, white
+/// space and comments, it opens with `<!doctype html` or a tag only a page opens with, or it
+/// holds `<html`, in any case.
 fn reads_as_html(head: &[u8]) -> bool {
-    let head = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
-    let head = head.trim_ascii_start().to_ascii_lowercase();
-    head.starts_with(b"<!doctype html") || head.windows(5).any(|window| window == b"<html")
+    let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| -> Vec<u8> {
+        let units = rest.as_chunks::<2>().0.iter().map(|&pair| unit(pair));
+        char::decode_utf16(units)
+            .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect::<String>()
+            .into_bytes()
+    };
+    let text = match head {
+        [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head).to_vec(),
+    }
+    .to_ascii_lowercase();
+    let mut opening = text.as_slice();
+    loop {
+        opening = opening.trim_ascii_start();
+        let Some(comment) = opening.strip_prefix(b"<!--") else {
+            break;
+        };
+        opening = comment
+            .windows(3)
+            .position(|window| window == b"-->")
+            .map_or(&[], |end| &comment[end + 3..]);
+    }
+    let opens = |tag: &[u8]| {
+        opening.strip_prefix(tag).is_some_and(|rest| {
+            rest.first()
+                .is_none_or(|&next| next == b'>' || next == b'/' || next.is_ascii_whitespace())
+        })
+    };
+    opening.starts_with(b"<!doctype html")
+        || PAGE_TAGS.into_iter().any(opens)
+        || text.windows(5).any(|window| window == b"<html")
 }
 
 /// how a refusal of a web page says to ask for the page itself, for a download data.toml's entry
@@ -2784,8 +2819,25 @@ mod tests {
                 true,
             ),
             (b"<!-- saved --><HTML><form>login</form></HTML>", true),
+            (b"<script>window.location='/login'</script>", true),
+            (
+                b"  <META http-equiv='refresh' content='0;url=/login'>",
+                true,
+            ),
+            (b"<head><title>Sign in</title>", true),
+            (b"<body onload='go()'>", true),
+            (b"<title>Sign in</title>", true),
+            (b"<!-- sso -->\n<script src='/sso.js'></script>", true),
+            (
+                b"\xff\xfe<\0!\0D\0O\0C\0T\0Y\0P\0E\0 \0h\0t\0m\0l\0>\0",
+                true,
+            ),
+            (b"\xfe\xff\0<\0h\0t\0m\0l\0>", true),
             (b"a,b\n1,2\n", false),
             (b"<?xml version=\"1.0\"?><rows/>", false),
+            (b"<id>,<name>\n1,iris\n", false),
+            (b"<header><row/></header>", false),
+            (b"\xff\xfea\0,\0b\0\n\0", false),
         ] {
             let stored = crate::cache::tests::store(&cache, bytes);
             let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
@@ -2801,9 +2853,10 @@ mod tests {
                 arrived: None,
                 asked: std::time::Duration::ZERO,
             };
+            let shown = String::from_utf8_lossy(bytes);
             match watch.checked(&cache, fetched) {
                 Err(error) => {
-                    assert!(refused, "{bytes:?}");
+                    assert!(refused, "{shown:?}");
                     assert_eq!(
                         error.message,
                         "http://lab.example/data.csv answered with a web page, such as a sign-in page, not a data file"
@@ -2814,7 +2867,7 @@ mod tests {
                         "{advice}"
                     );
                 }
-                Ok(_) => assert!(!refused, "{bytes:?}"),
+                Ok(_) => assert!(!refused, "{shown:?} was kept"),
             }
         }
     }
