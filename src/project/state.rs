@@ -61,6 +61,10 @@ pub(crate) struct State {
     /// findable, and kept while one cannot go back, so each sync and status names it.
     #[serde(default)]
     pub(crate) aside: BTreeMap<String, String>,
+    /// files fetchloom placed that a sync removes to place the pinned ones, written before it
+    /// removes any, so a run cut off at once leaves no later run saying someone deleted them.
+    #[serde(default)]
+    pub(crate) replacing: BTreeSet<String>,
 }
 
 /// which folder a state was written for: its file number, the inode on unix and the file index
@@ -345,6 +349,10 @@ impl State {
             out.extend_from_slice(br#","aside":"#);
             serde_json::to_writer(&mut *out, &self.aside)?;
         }
+        if !self.replacing.is_empty() {
+            out.extend_from_slice(br#","replacing":"#);
+            serde_json::to_writer(&mut *out, &self.replacing)?;
+        }
         out.extend_from_slice(br#","blocks":"#);
         serde_json::to_writer(&mut *out, &blocks)?;
         out.push(b'}');
@@ -375,7 +383,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         use serde::de::Error;
         let mut state = State::default();
         let (mut version, mut files, mut synced, mut candidates) = (None, false, false, false);
-        let (mut dropped, mut folder, mut aside) = (false, false, false);
+        let (mut dropped, mut folder, mut aside, mut replacing) = (false, false, false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -402,6 +410,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "aside" => {
                     state.aside = map.next_value()?;
                     std::mem::replace(&mut aside, true)
+                }
+                "replacing" => {
+                    state.replacing = map.next_value()?;
+                    std::mem::replace(&mut replacing, true)
                 }
                 _ => {
                     map.next_value::<serde::de::IgnoredAny>()?;
@@ -487,7 +499,7 @@ impl serde::de::Visitor<'_> for Kept<'_> {
 type Block = (String, u64, u64);
 
 /// what follows the records: the settled sync, the kept rebuilds, the dropped datasets, the
-/// folder, the files kept aside and the blocks.
+/// folder, the files kept aside, those being replaced and the blocks.
 #[derive(Deserialize)]
 struct Tail {
     #[serde(default)]
@@ -500,6 +512,8 @@ struct Tail {
     folder: Option<Folder>,
     #[serde(default)]
     aside: BTreeMap<String, String>,
+    #[serde(default)]
+    replacing: BTreeSet<String>,
     blocks: Vec<Block>,
 }
 
@@ -544,6 +558,7 @@ fn indexed(
         dropped,
         folder,
         aside,
+        replacing,
         blocks,
     } = index(reading)?;
     let mut files = BTreeMap::new();
@@ -565,6 +580,7 @@ fn indexed(
         dropped,
         folder,
         aside,
+        replacing,
     })
 }
 
@@ -577,6 +593,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         dropped,
         folder,
         aside,
+        replacing,
         blocks,
     } = index(reading)?;
     let mut records = Vec::new();
@@ -601,6 +618,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         dropped,
         folder,
         aside,
+        replacing,
     })
 }
 
@@ -1268,6 +1286,7 @@ mod tests {
             "data/b/.fetchloom-0123456789abcdef.old".to_owned(),
             "data/b/c".to_owned(),
         );
+        state.replacing.insert("data/b/d".to_owned());
         state
     }
 
@@ -1291,6 +1310,7 @@ mod tests {
         assert_eq!(read.candidates, whole.candidates, "{case}");
         assert_eq!(read.dropped, whole.dropped, "{case}");
         assert_eq!(read.aside, whole.aside, "{case}");
+        assert_eq!(read.replacing, whole.replacing, "{case}");
         assert_eq!(read.version, whole.version, "{case}");
     }
 
@@ -1358,6 +1378,7 @@ mod tests {
             let read = by_blocks(&mut reading).expect("its index fits");
             assert_same(&read, &State::parse(&bytes), &format!("blocks of {block}"));
             assert_eq!(read.aside, state.aside, "blocks of {block}");
+            assert_eq!(read.replacing, state.replacing, "blocks of {block}");
             for folders in FOLDERS {
                 let folders: Vec<String> = folders.iter().map(|&folder| folder.into()).collect();
                 let case = format!("{folders:?} in blocks of {block}");

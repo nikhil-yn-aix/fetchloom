@@ -135,7 +135,10 @@ impl Placement {
             .iter()
             .zip(actions)
             .filter(|(target, action)| {
-                matches!(action, Action::Place) && survey.state.files.contains_key(&target.path)
+                matches!(action, Action::Place)
+                    && survey.state.files.contains_key(&target.path)
+                    // one a run cut off at once was replacing went by fetchloom's hand
+                    && !survey.state.replacing.contains(&target.path)
             })
             .map(|(target, _)| target.path.clone())
             .collect();
@@ -1095,6 +1098,7 @@ impl<'a> Placing<'a> {
                     .is_some_and(|placed| placed.checked == checked && placed.sha256 == *sha256)
         });
         let (kept_aside, moved_away) = track_aside(&project.root, state, stays);
+        let replaced = forget_replaced(&project.root, state, checked);
         tell::set_aside(output, manifest, &state.aside);
         let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding
@@ -1106,7 +1110,7 @@ impl<'a> Placing<'a> {
         let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let recorded = removed || adopted || undone || kept_aside || !tallies.is_empty();
-        let dropped = state.forget_removed(manifest) || moved_away;
+        let dropped = state.forget_removed(manifest) || moved_away || replaced;
         record(project, state, synced, recorded, needs_writing || dropped)?;
         if stopped {
             return Err(Stop::stopped());
@@ -1254,6 +1258,7 @@ pub(crate) fn untouched(
         || !survey.vouched.is_empty()
         || survey.leftovers().next().is_some()
         || !state.aside.is_empty()
+        || !state.replacing.is_empty()
         || state.files.iter().any(|(path, placed)| {
             survey.disk.get(path) != Some(&placed.look)
                 // a drop cut short left the files of a dataset dropped here
@@ -1458,6 +1463,20 @@ fn track_aside(root: &Path, state: &mut State, stays: Vec<(String, String)>) -> 
     (recorded, state.aside.len() != before)
 }
 
+/// forgets each file `state` records as being replaced that this run placed, `checked` being the
+/// start of its scan, whose record went, or that is there again; says whether any went.
+fn forget_replaced(root: &Path, state: &mut State, checked: u64) -> bool {
+    let before = state.replacing.len();
+    let files = &state.files;
+    state.replacing.retain(|path| {
+        files
+            .get(path)
+            .is_some_and(|placed| placed.checked != checked)
+            && now(&native(root, path)).is_none()
+    });
+    state.replacing.len() != before
+}
+
 /// gives each file `--force` moved aside its name back where a run cut off at once left it
 /// hidden and nothing took the name since, in any dataset, and returns those names; with `dry`,
 /// only the survey sees them back. a record whose hidden file is gone is forgotten, and one whose
@@ -1524,19 +1543,26 @@ fn planned_aside(
         .ok_or_else(|| std::io::Error::other("no hidden name was written down for it first"))
 }
 
-/// writes to the state, before settling moves anything, the hidden name each file `--force` moves
-/// out of the way takes, so a run cut off at once leaves each moved file findable by the name it
-/// had. writes nothing when settling moves nothing.
+/// writes to the state, before settling moves or removes anything, the hidden name each file
+/// `--force` moves out of the way takes, and the files fetchloom placed that it removes to place
+/// the pinned ones, so a run cut off at once leaves each moved file findable by the name it had
+/// and no removal of fetchloom's own told as someone's. writes nothing when settling moves and
+/// removes nothing.
 fn write_ahead(
     project: &Project,
     survey: &mut Survey,
     (targets, actions): (&[Target], &[Action]),
     placement: &mut Placement,
 ) -> Result<(), Error> {
+    let mut replacing = Vec::new();
     for (target, action) in targets.iter().zip(actions) {
         let moved = match action {
             Action::Overwrite(_) => &target.path,
             Action::Unblock(blocker) if blocker.found == Entry::File => &blocker.path,
+            Action::Replace if survey.state.files.contains_key(&target.path) => {
+                replacing.push(target.path.clone());
+                continue;
+            }
             _ => continue,
         };
         if !placement.aside_names.contains_key(moved) {
@@ -1547,13 +1573,14 @@ fn write_ahead(
             placement.aside_names.insert(moved.clone(), hidden);
         }
     }
-    if placement.aside_names.is_empty() {
+    if placement.aside_names.is_empty() && replacing.is_empty() {
         return Ok(());
     }
     let state = &mut survey.state;
     for (path, hidden) in &placement.aside_names {
         state.aside.insert(hidden.clone(), path.clone());
     }
+    state.replacing.extend(replacing);
     project.write_state(state)
 }
 
@@ -1815,7 +1842,11 @@ fn make_way(
     }
     placer
         .remove(&destination, false, method)
-        .map_err(|err| local(&destination, &err))
+        .map_err(|err| local(&destination, &err))?;
+    // so a CLI test can cut the run off with a replaced file gone and its stead not placed yet
+    #[cfg(debug_assertions)]
+    crate::stop::hold("FETCHLOOM_TEST_HOLD_REPLACE");
+    Ok(())
 }
 
 /// the names a changed copy of `path` may be kept under, in the order tried: `<path>.changed`,
@@ -2499,6 +2530,40 @@ mod tests {
             aside_names("data/a.csv", &HashSet::new()).next().as_deref(),
             Some("data/a.csv.changed")
         );
+    }
+
+    /// a file recorded as being replaced stays so only while its old record stands and nothing
+    /// is at its path: placed by this run, its record gone or a file there again, it is forgotten.
+    #[test]
+    fn a_replacement_is_forgotten_once_it_is_settled() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let record = |checked| Placed {
+            dataset: "d".to_owned(),
+            sha256: crate::digest::sha256(b"d"),
+            method: Method::Copy,
+            look: Look {
+                size: 1,
+                modified: 1,
+            },
+            writable: false,
+            checked,
+            adopted: false,
+            racy_intact: std::sync::OnceLock::new(),
+        };
+        let mut state = State::default();
+        for (path, checked) in [("data/placed", 7), ("data/gone", 3), ("data/back", 3)] {
+            state.files.insert(path.to_owned(), record(checked));
+        }
+        fs::create_dir_all(root.join("data")).unwrap();
+        fs::write(root.join("data").join("back"), b"d").unwrap();
+        state.replacing = ["placed", "unrecorded", "gone", "back"]
+            .into_iter()
+            .map(|name| format!("data/{name}"))
+            .collect();
+        assert!(forget_replaced(root, &mut state, 7));
+        assert_eq!(state.replacing, BTreeSet::from(["data/gone".to_owned()]));
+        assert!(!forget_replaced(root, &mut state, 8));
     }
 
     /// the index finds the first file set aside from a path, as a search from the start would,

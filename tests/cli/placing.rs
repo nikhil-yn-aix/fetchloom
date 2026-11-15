@@ -2486,6 +2486,43 @@ fn a_force_cut_off_at_once_loses_no_name_it_moved_aside() -> Result {
     Ok(())
 }
 
+/// a sync cut off at once after it removed a file it placed for an older pin, before the new one
+/// is in place, leaves no later run saying someone deleted or moved it.
+#[test]
+fn a_replacement_cut_off_after_the_old_file_went_blames_no_one() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V2, "\"v2\"")],
+    )?;
+    copy_iris(&sandbox, &server)?;
+    let upgraded = sandbox.run(&["lock", "--upgrade", "iris"])?;
+    let stderr = text(&upgraded.stderr)?;
+    assert_eq!(upgraded.status.code(), Some(0), "{stderr}");
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    cut_off_at(
+        &sandbox,
+        &["sync", "--offline"],
+        "FETCHLOOM_TEST_HOLD_REPLACE",
+        "the old file to be removed",
+    )?;
+    assert!(
+        !placed.exists(),
+        "the old file went before the new one came"
+    );
+
+    let synced = sandbox.run(&["--json", "sync", "--offline"])?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    assert_eq!(
+        document["result"]["placement"]["put_back"],
+        serde_json::json!([]),
+        "{document}"
+    );
+    assert_eq!(fs::read(&placed)?, V2, "{document}");
+    Ok(())
+}
+
 /// an edit that kept its file's size and time, found by hashing it, stays an edit when a
 /// `sync --force` that moved it aside is cut off at once: the state written before the move does
 /// not vouch for the size and time the edit kept.
