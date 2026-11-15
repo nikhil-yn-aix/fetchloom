@@ -71,6 +71,7 @@ fn choice(action: &Action) -> Choice {
         Action::Leave(Reason::Shared) => Choice::Shared,
         Action::Leave(Reason::Foreign) => Choice::Foreign,
         Action::Leave(Reason::Unneeded) => panic!("a wanted target was called unneeded"),
+        Action::Leave(Reason::Damaged) => panic!("the model builds no recipe's result"),
         Action::Leave(Reason::Blocked)
         | Action::Blocked(_)
         | Action::Unblock(_)

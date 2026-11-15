@@ -797,6 +797,19 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
                 ),
                 "delete it if you do not need it".to_owned(),
             ),
+            Reason::Damaged => {
+                let dataset = kept.dataset.as_deref().unwrap_or_default();
+                (
+                    format!(
+                        "{} is linked to the cache's copy, which was changed, and only a build makes {dataset}'s pinned bytes again",
+                        kept.path
+                    ),
+                    format!(
+                        "run `{}` to make them and put the file back",
+                        crate::cli::project::command(&format!("build {dataset}"))
+                    ),
+                )
+            }
         };
         output.warn_with(Warning::PlaceKept, &message, &help);
     }
@@ -879,6 +892,7 @@ fn overwritten_what(reason: Reason) -> &'static str {
         Reason::Shared => "an edit through a link other projects share",
         Reason::Foreign => "a file fetchloom did not place",
         Reason::Changed | Reason::Unneeded | Reason::Blocked => "your edit",
+        Reason::Damaged => "a file linked to the cache's changed copy",
     }
 }
 

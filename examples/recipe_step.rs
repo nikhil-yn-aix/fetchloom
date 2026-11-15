@@ -7,6 +7,7 @@
 //! |---|---|
 //! | `copy` | copies the files of each folder it reads into the result folder |
 //! | `write <name> <text>` | writes `text` into the file `name` of the result folder |
+//! | `notes <text>` | writes `a.txt` and `b.txt`, each holding its own name and `text` |
 //! | `random` | writes bytes that differ on every run |
 //! | `fail <code>` | prints a few lines, writes a file and exits with `code` |
 //! | `nothing` | writes nothing |
@@ -52,6 +53,11 @@ fn run(args: &[String]) -> io::Result<ExitCode> {
     match (mode.as_str(), rest) {
         ("copy", folders) => copy(folders)?,
         ("write", [name, text, folders @ ..]) => fs::write(out(folders)?.join(name), text)?,
+        ("notes", [text, folders @ ..]) => {
+            for name in ["a.txt", "b.txt"] {
+                fs::write(out(folders)?.join(name), format!("{name} {text}\n"))?;
+            }
+        }
         ("random", folders) => {
             let seed = std::hash::BuildHasher::hash_one(
                 &std::collections::hash_map::RandomState::new(),

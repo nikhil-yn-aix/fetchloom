@@ -365,6 +365,9 @@ pub(crate) enum Reason {
     Foreign,
     /// no dataset needs it now, but it changed since fetchloom placed it.
     Unneeded,
+    /// a recipe's result file linked to the cache's copy, which was changed: only a build makes
+    /// its pinned bytes again.
+    Damaged,
     /// another entry is in its way: a link or special file at its path, or a file where a folder on
     /// its way belongs. `--force` replaces it, though never a folder that holds anything.
     Blocked,
@@ -640,6 +643,21 @@ impl<'a> Placing<'a> {
         names.sort();
         names.dedup();
         names
+    }
+
+    /// keeps in place each file of a recipe's result linked to the cache's changed copy whose
+    /// pinned bytes `holds` says the cache lacks, so the result is not left out for it and its
+    /// intact files stay; the file is told with the build that puts it back.
+    pub(crate) fn keep_changed_links(&mut self, holds: impl Fn(&Sha256, u64) -> bool) {
+        for (target, action) in self.targets.iter().zip(&mut self.actions) {
+            if target.holder == plan::Holder::Result
+                && matches!(action, Action::Replace)
+                && self.survey.elsewhere.contains(&target.path)
+                && !holds(&target.sha256, target.size)
+            {
+                *action = Action::Leave(Reason::Damaged);
+            }
+        }
     }
 
     /// leaves out the results of `names`, which [`Placing::unbuilt`] found nowhere, so the run is

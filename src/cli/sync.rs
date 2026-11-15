@@ -285,6 +285,7 @@ impl<'a> Loop<'a> {
         placing: &mut Placing<'_>,
         holds: impl Fn(&Sha256, u64) -> bool,
     ) -> Result<(), Error> {
+        placing.keep_changed_links(&holds);
         let unbuilt = placing.unbuilt(holds);
         if unbuilt.is_empty() {
             return Ok(());

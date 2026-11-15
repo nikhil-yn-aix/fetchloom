@@ -786,6 +786,69 @@ fn lose_made(sandbox: &Sandbox, placed_too: bool) -> Result {
     Ok(())
 }
 
+/// a notebook writing one file of a result again in place, after `chmod -R u+w data/`, changes the
+/// cache's copy through the link: sync keeps the result's intact files, names the changed one with
+/// the build that makes it again, and that one build puts it back.
+#[test]
+fn a_result_file_changed_through_its_link_is_named_and_one_build_repairs_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["notes", "made"]))?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let (intact, changed) = (
+        placed(&sandbox, "clean", "a.txt"),
+        placed(&sandbox, "clean", "b.txt"),
+    );
+    // FAT and exFAT place copies, which no edit reaches the cache through
+    if !same_file::is_same_file(&changed, object(&sandbox, b"b.txt made\n"))? {
+        return crate::support::skipped("hardlinks", "this disk makes no hardlinks");
+    }
+    let mut writable = fs::metadata(&intact)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test makes a placed file writable as chmod does"
+    )]
+    writable.set_readonly(false);
+    fs::set_permissions(&intact, writable)?;
+    crate::support::edit(&changed, b"edited\n")?;
+    let verified = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(
+        verified.status.code(),
+        Some(30),
+        "{}",
+        text(&verified.stderr)?
+    );
+
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(&intact).ok().as_deref(),
+        Some(&b"a.txt made\n"[..]),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("warning: data/clean/b.txt is linked to the cache's copy, which was changed, and only a build makes clean's pinned bytes again\n  help: run `fetchloom build clean` to make them and put the file back\n"),
+        "{stderr}"
+    );
+    let repaired = build(&sandbox, &["build", "clean"])?;
+    assert_eq!(
+        repaired.status.code(),
+        Some(0),
+        "{}",
+        text(&repaired.stderr)?
+    );
+    assert_eq!(
+        fs::read(&changed)?,
+        b"b.txt made\n",
+        "{}",
+        text(&repaired.stderr)?
+    );
+    assert_eq!(fs::read(&intact)?, b"a.txt made\n");
+    Ok(())
+}
+
 /// the first case is a fresh clone, where every pinned result is missing.
 #[test]
 fn a_dry_run_says_what_the_build_then_does() -> Result {

@@ -129,7 +129,7 @@ pub(in crate::cli) fn after_sync(
         .kept
         .iter()
         .filter_map(|kept| match kept.reason {
-            Reason::Changed | Reason::Shared => Some(Unready::Kept {
+            Reason::Changed | Reason::Shared | Reason::Damaged => Some(Unready::Kept {
                 path: kept.path.clone(),
                 placed: true,
             }),
