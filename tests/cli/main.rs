@@ -16,6 +16,7 @@ mod concurrent;
 mod copied;
 mod diff;
 mod docs;
+mod drop;
 mod dry_run;
 mod exclude;
 mod export;

@@ -21,6 +21,7 @@ use crate::project::lock::LockedFile;
 const LOOKS: usize = 8;
 
 /// a file data.lock pins, to look for.
+#[derive(Clone, Copy)]
 pub(in crate::cli) struct Pinned<'a> {
     pub(in crate::cli) dataset: &'a str,
     pub(in crate::cli) file: &'a LockedFile,
@@ -101,6 +102,56 @@ pub(in crate::cli) enum Lack {
     Unknown(Error),
     /// it was imported from files, and no mirror holds it, so no source can give it.
     Imported,
+}
+
+impl Lack {
+    /// what `--json` calls it: `changed`, `gone`, `refused`, `unknown` or `imported`.
+    pub(in crate::cli) fn outcome(&self) -> &'static str {
+        match self {
+            Lack::Changed { .. } => "changed",
+            Lack::Gone(_) => "gone",
+            Lack::Refused(_) => "refused",
+            Lack::Unknown(_) => "unknown",
+            Lack::Imported => "imported",
+        }
+    }
+
+    /// the size a changed file has now.
+    pub(in crate::cli) fn size(&self) -> Option<u64> {
+        match self {
+            Lack::Changed { size, .. } => Some(*size),
+            _ => None,
+        }
+    }
+
+    /// why no place serves a file pinned at `pinned` bytes, in a source's words where it gave
+    /// them.
+    pub(in crate::cli) fn error(self, pinned: u64) -> Error {
+        match self {
+            Lack::Changed { size, host } => Error::new(
+                Kind::IntegrityMismatch,
+                format!(
+                    "{host} serves {} where data.lock pins {}",
+                    sized(size, pinned),
+                    sized(pinned, size)
+                ),
+            ),
+            Lack::Gone(error) | Lack::Refused(error) | Lack::Unknown(error) => error,
+            Lack::Imported => Error::new(
+                Kind::ReferenceUnresolved,
+                "it was imported from files, and no mirror holds it",
+            ),
+        }
+    }
+}
+
+/// `size` in words, exact to the byte when `other` would read the same once rounded.
+fn sized(size: u64, other: u64) -> String {
+    if crate::units::size(size) == crate::units::size(other) {
+        crate::units::count(size, "byte", "bytes")
+    } else {
+        crate::units::size(size)
+    }
 }
 
 /// how a folder mirror's copy counts.

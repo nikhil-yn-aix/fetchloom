@@ -34,6 +34,12 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files it place
 
 on disk: edits data.toml, and data.lock for files a source lists, and deletes the unchanged files it names from data/. --dry-run writes nothing";
 
+    pub(super) const DROP: &str = "examples:
+  fetchloom drop pets    # free its space here; data.toml and data.lock keep it
+  fetchloom drop pets --dry-run    # check where its files are, freeing nothing
+
+on disk: deletes the unchanged files fetchloom placed for the datasets in data/ and their files in the cache that no other dataset or project needs, and notes in .fetchloom/state that they are dropped here. it first asks the mirrors and sources whether they still have each file. `fetchloom sync <name>` brings one back. --dry-run writes nothing";
+
     pub(super) const SYNC: &str = "examples:
   fetchloom sync    # put every file data.lock lists in the data folder
   fetchloom sync iris    # only iris
@@ -561,6 +567,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom exclude [options] <path>...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::EXCLUDE)]
     Exclude(Exclude),
 
+    /// free a dataset's space here, keeping it in data.lock
+    #[command(override_usage = "fetchloom drop [options] <name>...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(DROP_DRY_RUN)), after_help = examples::DROP)]
+    Drop(Drop),
+
     /// put the files data.lock lists into the data folder
     #[command(override_usage = "fetchloom sync [options] [name]...", help_template = TEMPLATE, after_help = examples::SYNC)]
     Sync(Sync),
@@ -634,6 +644,7 @@ impl Command {
             Command::Add(_) => "add",
             Command::Remove(_) => "remove",
             Command::Exclude(_) => "exclude",
+            Command::Drop(_) => "drop",
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
             Command::Build(_) => "build",
@@ -724,6 +735,7 @@ impl Command {
             Command::Get(get) => (!get.force && !get.web_page) || get.dry.dry_run,
             Command::Remove(Remove { dry, .. })
             | Command::Exclude(Exclude { dry, .. })
+            | Command::Drop(Drop { dry, .. })
             | Command::Build(Build { dry, .. })
             | Command::Cache(Cache {
                 action: Some(CacheAction::Gc(Gc { dry, .. })),
@@ -892,6 +904,10 @@ pub(crate) struct Filter {
 /// `--dry-run` help for commands that never ask a source anything.
 const LOCAL_DRY_RUN: &str = "show what would change on disk without changing it";
 
+/// `--dry-run` help for `drop`, which still asks the mirrors and sources.
+const DROP_DRY_RUN: &str =
+    "ask where each file is found and show what would be freed, deleting nothing";
+
 /// `--dry-run` help for `build`, which says what would run.
 const BUILD_DRY_RUN: &str =
     "say what each step would run, what it reads and where its result goes; run nothing";
@@ -974,6 +990,20 @@ pub(crate) struct Exclude {
     /// already
     #[arg(value_name = "path", required = true, help_heading = "arguments")]
     pub(crate) paths: Vec<PathBuf>,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
+}
+
+/// free a dataset's space here, keeping it in data.lock
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Drop {
+    /// the datasets' names in data.toml. each is freed only once every one of its files is
+    /// found elsewhere: on a folder mirror whose copy still hashes right, or at a web mirror or
+    /// its source at its size; a recipe's result, or a dataset added from a folder, only on a
+    /// mirror
+    #[arg(value_name = "name", required = true, help_heading = "arguments")]
+    pub(crate) names: Vec<String>,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

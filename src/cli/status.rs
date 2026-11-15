@@ -63,6 +63,8 @@ pub(super) struct Status {
     unbuilt: Vec<String>,
     /// datasets data.toml keeps out of the data folder with `place = false`.
     unplaced: Vec<String>,
+    /// datasets `fetchloom drop` freed on this machine, which a plain sync leaves out.
+    dropped: Vec<String>,
     /// entries in the way of files data.lock places, by path, at a file's path or where a folder on
     /// its way belongs; `sync --force` replaces them, except a folder that holds anything.
     #[serde(serialize_with = "blocker_paths")]
@@ -578,6 +580,7 @@ fn check(
     };
     let cache = super::peek_cache()?;
     let mut survey = Survey::read(project, &manifest.data_dir, threads, stop)?;
+    let manifest = dropped_here(&mut status, &manifest, &survey);
     status.unfinished = survey.leftovers().count();
     status.candidates = survey
         .state
@@ -636,6 +639,18 @@ fn check(
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     Ok(status)
+}
+
+/// `manifest` as a plain sync places it, without the datasets dropped here, which `status` names:
+/// a dataset dropped here is no difference, since a plain sync leaves it out.
+fn dropped_here(status: &mut Status, manifest: &Manifest, survey: &Survey) -> Manifest {
+    status.dropped = manifest
+        .datasets
+        .keys()
+        .filter(|name| survey.state.dropped.contains(*name))
+        .cloned()
+        .collect();
+    super::drop::placed_by(manifest, &Scope::All, &survey.state.dropped).into_owned()
 }
 
 /// the files a sync of `status` would download, once each, by the link it starts at: one neither
@@ -1061,6 +1076,19 @@ impl Status {
     }
 }
 
+/// a faint line on stderr for each dataset dropped on this machine.
+fn tell_dropped(output: &Output, status: &Status) {
+    for name in &status.dropped {
+        output.faint_step(
+            "Dropped",
+            &format!(
+                "{name} · freed on this machine; `{}` brings it back",
+                super::project::command(&format!("sync {name}"))
+            ),
+        );
+    }
+}
+
 /// a line for each dataset with `place = false`: faint on stderr once no file of it is left, else a
 /// row saying the next sync removes them.
 fn tell_unplaced(output: &Output, status: &Status) {
@@ -1136,6 +1164,7 @@ fn tell_unlocked(output: &Output, status: &Status) {
 fn list(output: &Output, status: &Status) {
     let shown = output.answer_width().map(|_| SHOWN);
     tell_unplaced(output, status);
+    tell_dropped(output, status);
     tell_unlocked(output, status);
     for name in &status.removed {
         output.report(

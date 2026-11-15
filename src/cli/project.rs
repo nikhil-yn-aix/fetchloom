@@ -371,9 +371,16 @@ async fn sync_held(
     }
     let manifest = Project::parse_manifest(&text)?;
     let scope = selected(&manifest, &args.names, "sync")?;
+    let dropped = project.dropped();
+    super::drop::tell_left_out(&context.output, &manifest, &scope, &dropped);
+    let manifest = super::drop::placed_by(&manifest, &scope, &dropped).into_owned();
+    // a named dataset dropped here comes back, which the last sync's word that all was in place
+    // left out
+    let back = super::drop::names_any(&scope, &dropped);
     if !dry_run
         && !args.locked
         && !args.verify
+        && !back
         && let Some((report, closing)) = settled_named(context, &project, &manifest, &text, &scope)?
     {
         return Ok((report, Some(closing)));
@@ -395,7 +402,8 @@ async fn sync_held(
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
     if dry_run {
-        return preview_sync(context, &project, &manifest, read, &seen, &args, scope)
+        let seen = (!back).then_some(&seen);
+        return preview_sync(context, &project, &manifest, read, seen, &args, scope)
             .await
             .map(|report| (report, None));
     }
@@ -478,11 +486,15 @@ async fn sync_plain(
     let old = lock.map(|(lock, _)| lock);
     let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?).filling();
     let survey = surveyed(&work, &plain.data_dir, false)?;
+    let dropped = survey.state.dropped.clone();
+    super::drop::tell_left_out(&context.output, plain, &Scope::All, &dropped);
+    let plain = &*super::drop::placed_by(plain, &Scope::All, &dropped);
     let (whole, outcome) =
         if let Some(outcome) = settle(&work, plain, &survey, &seen, old.as_ref())? {
             (None, outcome)
         } else {
             let whole = Project::parse_manifest(text)?;
+            let whole = super::drop::placed_by(&whole, &Scope::All, &dropped).into_owned();
             let run = Run {
                 upgrade: Upgrade::Nothing,
                 force: args.force,
@@ -841,7 +853,7 @@ async fn preview_sync(
     project: &Project,
     manifest: &Manifest,
     read: Option<(Lock, String)>,
-    seen: &Seen,
+    seen: Option<&Seen>,
     args: &args::Sync,
     scope: Scope,
 ) -> Result<Report, Error> {
@@ -856,7 +868,7 @@ async fn preview_sync(
         args.force,
         args.verify,
         Vec::new(),
-        Some(seen),
+        seen,
     )
     .await?;
     preview_ignore(&work, manifest)?;
@@ -1415,6 +1427,9 @@ async fn sync_surveyed(
         verify: _,
         read,
     } = run;
+    super::drop::brought_back(&mut survey, &work.scope);
+    let left_out = super::drop::placed_by(manifest, &work.scope, &survey.state.dropped);
+    let manifest = &*left_out;
     let seen = match read {
         Read::Settled(seen) => {
             if let Some(outcome) = settle(work, manifest, &survey, seen, old.as_ref())? {

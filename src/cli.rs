@@ -7,6 +7,7 @@ mod build;
 mod cache;
 mod completions;
 mod diff;
+mod drop;
 mod exclude;
 mod export;
 mod fetch;
@@ -856,6 +857,7 @@ fn reminds(command: &args::Command) -> bool {
         args::Command::Add(args) => !args.dry.dry_run,
         args::Command::Remove(args) => !args.dry.dry_run,
         args::Command::Exclude(args) => !args.dry.dry_run,
+        args::Command::Drop(args) => !args.dry.dry_run,
         args::Command::Sync(args) => !args.dry.dry_run,
         args::Command::Get(_) => true,
         _ => false,
@@ -869,6 +871,7 @@ fn spends(command: &args::Command) -> bool {
         args::Command::Add(_)
             | args::Command::Remove(_)
             | args::Command::Exclude(_)
+            | args::Command::Drop(_)
             | args::Command::Sync(_)
             | args::Command::Lock(_)
             | args::Command::Build(_)
@@ -882,6 +885,7 @@ fn spends(command: &args::Command) -> bool {
     )
 }
 
+#[expect(clippy::too_many_lines, reason = "an arm for each command")]
 fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) -> ExitCode {
     let name = Some(command.name());
     if command.locked() {
@@ -901,6 +905,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Exclude(args) => {
             let outcome = block_on(context, exclude::run(context, args));
+            finish(context, name, outcome, started)
+        }
+        args::Command::Drop(args) => {
+            let outcome = block_on(context, drop::run(context, args));
             finish(context, name, outcome, started)
         }
         args::Command::Sync(args) => {

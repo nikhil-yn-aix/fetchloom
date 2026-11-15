@@ -361,7 +361,7 @@ fn ask_imported(context: &Context) -> Result<HashSet<Sha256>, Error> {
 }
 
 /// the cache, held alone for gc once no other run uses it.
-fn hold(context: &Context) -> Result<Cache, Error> {
+pub(super) fn hold(context: &Context) -> Result<Cache, Error> {
     super::hold_cache(
         super::open_unheld()?,
         Access::Exclusive,
@@ -842,8 +842,35 @@ pub(in crate::cli) fn needed_for_drop(
         candidates: candidates.iter().copied().collect(),
         present: RefCell::new(HashMap::new()),
         threads,
+        here: None,
     };
     Ok(needed_focused(cache, current, stop, false, Uses::Untold, Some(&focus))?.needed)
+}
+
+/// [`needed_for_drop`] with `current` standing for the project at `here` in place of the data.lock
+/// it is registered with, as `fetchloom drop` frees its datasets before or without marking them.
+pub(in crate::cli) fn needed_besides(
+    cache: &Cache,
+    (here, current): (&Path, &Lock),
+    candidates: &[Sha256],
+    threads: Threads,
+    stop: &Stop,
+) -> Result<Needed, Error> {
+    let focus = Focus {
+        candidates: candidates.iter().copied().collect(),
+        present: RefCell::new(HashMap::new()),
+        threads,
+        here: Some(here.to_path_buf()),
+    };
+    Ok(needed_focused(
+        cache,
+        Some(current),
+        stop,
+        false,
+        Uses::Untold,
+        Some(&focus),
+    )?
+    .needed)
 }
 
 /// the archives a drop asks about, and which of their members the cache was found to hold.
@@ -851,9 +878,20 @@ struct Focus {
     candidates: HashSet<Sha256>,
     present: RefCell<HashMap<Sha256, bool>>,
     threads: Threads,
+    /// the project whose needs the walk's `current` lock gives, whose registered lock it skips.
+    here: Option<PathBuf>,
 }
 
 impl Focus {
+    /// whether the walk's `current` lock stands for the project at `root`.
+    fn stands_for(&self, root: &Path) -> bool {
+        self.here.as_deref().is_some_and(|here| {
+            here == root
+                || fs::canonicalize(here)
+                    .is_ok_and(|here| fs::canonicalize(root).is_ok_and(|root| here == root))
+        })
+    }
+
     /// whether one of the files of `archive` is among the candidates.
     fn asks(&self, archive: &archives::Archive<'_>) -> bool {
         archive
@@ -997,6 +1035,13 @@ fn needed_focused(
             .detail(err.message)
             .help(help)
         })?;
+        // a rebuild kept for `fetchloom build --accept` is in no lock, only in the state, and
+        // reading none of its records skips nearly all of it
+        let (state, _) = project.state_within(&[], &|_| false);
+        // a dataset `fetchloom drop` freed there is needed there no more
+        let lock = lock
+            .map(|lock| super::drop::kept_here(lock, &state.dropped))
+            .filter(|_| !focus.is_some_and(|focus| focus.stands_for(&project.root)));
         if let Some(lock) = &lock {
             let read = kept.as_ref().map(|manifest| Read {
                 manifest,
@@ -1005,9 +1050,6 @@ fn needed_focused(
             let grouping = (uses == Uses::Grouped).then_some(&mut groups);
             add_with_stop(&mut needed, cache, lock, read, grouping, focus, stop)?;
         }
-        // a rebuild kept for `fetchloom build --accept` is in no lock, only in the state, and
-        // reading none of its records skips nearly all of it
-        let (state, _) = project.state_within(&[], &|_| false);
         for file in state.candidates.values().flat_map(|kept| &kept.files) {
             stop.check()?;
             needed.add(file.sha256, Use::Output);

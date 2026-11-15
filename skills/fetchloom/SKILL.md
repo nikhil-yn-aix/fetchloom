@@ -79,6 +79,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 ## rules that keep data safe
 
 - preview with `--dry-run` (`-n`): `add`, `remove`, `exclude`, `sync`, `lock`, `push`, `cache gc` and `get` then change nothing and list the paths in `result.changes`, and `build` lists the commands it would run.
+- to free a dataset's space on this machine and keep it pinned, `fetchloom drop <name> --json`: it refuses, freeing nothing, while a mirror or the source lacks a file; `--dry-run` shows what it would free; `fetchloom sync <name>` brings it back.
 - never delete or chmod placed files: they come back at the next sync, and one can be a hardlink shared with other projects. `fetchloom exclude <path>` leaves files out for good; `copy = true` on a dataset in data.toml, then `fetchloom sync --json`, gives writable copies.
 - messages and `--json` show each query or fragment value of a link as `***` unless its name is known to be harmless, such as `dl` or `version`: take a link from the user or from data.toml, never from output.
 - write results outside `data/`. sync keeps files written inside it, but `status` lists them as extra.

@@ -177,46 +177,14 @@ fn gathered(context: &Context, pinned: &[Pinned<'_>], found: Vec<Found>) -> Sour
 
 /// `pinned`, which no mirror or source serves for `lack`.
 fn unserved(pinned: &Pinned<'_>, lack: Lack) -> Unserved {
-    let (outcome, size, error) = match lack {
-        Lack::Changed { size, host } => (
-            "changed",
-            Some(size),
-            Error::new(
-                Kind::IntegrityMismatch,
-                format!(
-                    "{host} serves {} where data.lock pins {}",
-                    sized(size, pinned.file.size),
-                    sized(pinned.file.size, size)
-                ),
-            ),
-        ),
-        Lack::Gone(error) => ("gone", None, error),
-        Lack::Refused(error) => ("refused", None, error),
-        Lack::Unknown(error) => ("unknown", None, error),
-        Lack::Imported => (
-            "imported",
-            None,
-            Error::new(
-                Kind::ReferenceUnresolved,
-                "it was imported from files, and no mirror holds it",
-            ),
-        ),
-    };
+    let (outcome, size) = (lack.outcome(), lack.size());
+    let error = lack.error(pinned.file.size);
     Unserved {
         file: pinned.label(),
         outcome,
         size,
         message: error.message,
         help: error.help.map(String::from),
-    }
-}
-
-/// `size` in words, exact to the byte when `other` would read the same once rounded.
-fn sized(size: u64, other: u64) -> String {
-    if units::size(size) == units::size(other) {
-        units::count(size, "byte", "bytes")
-    } else {
-        units::size(size)
     }
 }
 
@@ -405,13 +373,5 @@ mod tests {
             ready(&sources).unwrap_err().help.as_deref(),
             Some("`fetchloom push` from a machine whose cache holds them keeps a copy on a mirror")
         );
-    }
-
-    /// a changed size reads exact to the byte when both sizes round alike.
-    #[test]
-    fn a_changed_size_reads_exact_when_rounding_hides_it() {
-        assert_eq!(sized(1_048_577, 1_048_576), "1,048,577 bytes");
-        assert_eq!(sized(12, 10), "12 B");
-        assert_eq!(sized(2 << 20, 1 << 20), "2.0 MiB");
     }
 }

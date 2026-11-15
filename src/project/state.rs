@@ -193,16 +193,19 @@ impl State {
     }
 
     /// drops the kept rebuild of each recipe `manifest` no longer has, as relocking drops the
-    /// recipe's pin, and says whether any went.
+    /// recipe's pin, and the mark of each dataset it no longer has, and says whether any went.
     pub(crate) fn forget_removed(&mut self, manifest: &Manifest) -> bool {
-        let before = self.candidates.len();
+        let before = (self.candidates.len(), self.dropped.len());
         self.candidates.retain(|name, _| {
             manifest
                 .datasets
                 .get(name)
                 .is_some_and(|entry| entry.recipe().is_some())
         });
-        self.candidates.len() != before
+        // a dataset added again under a dropped one's name starts out placed
+        self.dropped
+            .retain(|name| manifest.datasets.contains_key(name));
+        (self.candidates.len(), self.dropped.len()) != before
     }
 
     /// the state as one json document: the records in path order, then where each block of them
@@ -863,6 +866,10 @@ mod tests {
         assert!(state.forget_removed(&manifest));
         assert_eq!(state.candidates.keys().collect::<Vec<_>>(), ["clean"]);
         assert!(!state.forget_removed(&manifest));
+        // a mark of a dataset data.toml no longer has goes too, so one added again is placed
+        state.dropped = ["raw".to_owned(), "removed".to_owned()].into();
+        assert!(state.forget_removed(&manifest));
+        assert_eq!(state.dropped.iter().collect::<Vec<_>>(), ["raw"]);
     }
 
     /// a small folder beside a large one reads little past its records, however large the state.

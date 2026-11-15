@@ -124,3 +124,11 @@ fn an_import_and_a_broken_link_ask_no_source() {
     assert_eq!(fetch.expect.size, Some(10));
     assert_eq!(fetch.expect.sha256, Some(file.sha256));
 }
+
+/// a changed size reads exact to the byte when both sizes round alike.
+#[test]
+fn a_changed_size_reads_exact_when_rounding_hides_it() {
+    assert_eq!(sized(1_048_577, 1_048_576), "1,048,577 bytes");
+    assert_eq!(sized(12, 10), "12 B");
+    assert_eq!(sized(2 << 20, 1 << 20), "2.0 MiB");
+}

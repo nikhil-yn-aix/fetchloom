@@ -184,7 +184,7 @@ fn habit(command: &str) -> Option<&'static str> {
         "update" | "upgrade" => {
             "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`"
         }
-        "delete" | "uninstall" => "`fetchloom remove <name>` drops a dataset from the project",
+        "delete" | "uninstall" => "`fetchloom remove <name>` removes a dataset from the project",
         _ => return None,
     })
 }
@@ -661,6 +661,7 @@ mod tests {
             ("get", "get needs <link>"),
             ("search", "search needs <words>"),
             ("exclude", "exclude needs <path>"),
+            ("drop", "drop needs <name>"),
             ("path", "path needs <name>"),
             ("completions", "completions needs <shell>"),
             ("auth login", "auth login needs <account>"),
@@ -896,11 +897,11 @@ mod tests {
             ),
             (
                 "delete",
-                "`fetchloom remove <name>` drops a dataset from the project",
+                "`fetchloom remove <name>` removes a dataset from the project",
             ),
             (
                 "uninstall",
-                "`fetchloom remove <name>` drops a dataset from the project",
+                "`fetchloom remove <name>` removes a dataset from the project",
             ),
         ] {
             let error = problem(&["fetchloom", word])?;

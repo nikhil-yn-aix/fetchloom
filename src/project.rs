@@ -349,6 +349,11 @@ impl Project {
         self.state_within(&[], &|_| false).0.synced
     }
 
+    /// the datasets `fetchloom drop` freed on this machine, read as [`Project::synced`] reads.
+    pub(crate) fn dropped(&self) -> std::collections::BTreeSet<String> {
+        self.state_within(&[], &|_| false).0.dropped
+    }
+
     /// the state file and how it looks, opened without following a link: a planted link to a
     /// device or a fifo would never end, and reads as no state at all.
     pub(crate) fn open_state(&self) -> io::Result<(fs::File, Look)> {

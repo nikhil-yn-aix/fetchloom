@@ -13,6 +13,7 @@ use crate::error::Error;
 use crate::output::plain;
 use crate::plan;
 use crate::project::lock::archives::{self, Archive, Pinned};
+use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Lock, Locked};
 use crate::project::manifest::{Entry, Manifest};
 use crate::source::Access;
@@ -39,6 +40,10 @@ struct Listed {
     /// whether its files are placed in `folder`: false for a dataset with `place = false`, which
     /// is pinned and cached for the recipes that read it.
     placed: bool,
+    /// whether `fetchloom drop` freed it on this machine, so a plain sync leaves it out; only
+    /// a dropped dataset says so.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    dropped: bool,
     /// whether `folder` is the usual `data/<name>`, which a narrow table leaves to the name.
     #[serde(skip)]
     usual_folder: bool,
@@ -87,7 +92,11 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
     .unwrap_or_default();
     let output = &context.output;
     let cache = super::peek_cache().ok();
-    let report = report(&manifest, &lock, cache.as_ref(), name, output.json());
+    let mut report = report(&manifest, &lock, cache.as_ref(), name, output.json());
+    let dropped = project.dropped();
+    for dataset in &mut report.datasets {
+        dataset.dropped = dropped.contains(&dataset.name);
+    }
     if name.is_some() {
         // `--json` prints the report alone, so the lines for a person are not built
         if let Some(dataset) = report.datasets.first()
@@ -372,6 +381,7 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                 bytes: totals.map(|(_, bytes)| bytes),
                 folder: plan::folder(manifest, name),
                 placed: entry.place,
+                dropped: false,
                 usual_folder: plan::folder(manifest, name)
                     == format!("{}/{name}", manifest.data_dir),
                 title: pinned.and_then(|locked| locked.title.clone()),
@@ -380,39 +390,44 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                 access: pinned.map(|locked| locked.access),
                 downloaded: pinned.map(|_| stated.is_none()),
                 pinned_by: stated.map(lock::Stated::digests),
-                locked_files: match (locked, result) {
-                    _ if !view.pinned => None,
-                    (Some(locked), _) => Some(
-                        locked
-                            .files
-                            .iter()
-                            .map(|file| ListedFile {
-                                path: file.path.clone(),
-                                size: file.size,
-                                sha256: file.sha256,
-                                url: super::export::link(&file.url).ok(),
-                            })
-                            .collect(),
-                    ),
-                    (None, Some(result)) => Some(
-                        result
-                            .files
-                            .iter()
-                            .map(|file| ListedFile {
-                                path: file.path.clone(),
-                                size: file.size,
-                                sha256: file.sha256,
-                                url: None,
-                            })
-                            .collect(),
-                    ),
-                    (None, None) => None,
-                },
+                locked_files: view.pinned.then(|| locked_files(locked, result)).flatten(),
                 held,
             }
         })
         .collect();
     Report { datasets }
+}
+
+/// the files `--pinned` lists for a dataset: a source's with the links they download from, a
+/// recipe's result's without.
+fn locked_files(locked: Option<&Locked>, result: Option<&Derived>) -> Option<Vec<ListedFile>> {
+    match (locked, result) {
+        (Some(locked), _) => Some(
+            locked
+                .files
+                .iter()
+                .map(|file| ListedFile {
+                    path: file.path.clone(),
+                    size: file.size,
+                    sha256: file.sha256,
+                    url: super::export::link(&file.url).ok(),
+                })
+                .collect(),
+        ),
+        (None, Some(result)) => Some(
+            result
+                .files
+                .iter()
+                .map(|file| ListedFile {
+                    path: file.path.clone(),
+                    size: file.size,
+                    sha256: file.sha256,
+                    url: None,
+                })
+                .collect(),
+        ),
+        (None, None) => None,
+    }
 }
 
 /// a license longer than this is cut, so one long statement does not push the table off screen.
@@ -609,7 +624,9 @@ fn contents(dataset: &Listed, marks: Marks) -> String {
 
 /// where a dataset's files are, as its row says it, when `folders` shows that folder.
 fn folder(dataset: &Listed, folders: Folders) -> String {
-    if !dataset.placed {
+    if dataset.dropped {
+        "dropped here".to_owned()
+    } else if !dataset.placed {
         "not placed".to_owned()
     } else if folders == Folders::All || (folders == Folders::Unusual && !dataset.usual_folder) {
         plain(&dataset.folder).into_owned()
@@ -734,6 +751,7 @@ mod tests {
             bytes: Some(18_534),
             folder: "data/iris".to_owned(),
             placed: true,
+            dropped: false,
             usual_folder: true,
             title: None,
             license: Some("cc0-1.0".to_owned()),
@@ -817,6 +835,7 @@ mod tests {
             bytes: Some(4551),
             folder: format!("data/{name}"),
             placed: true,
+            dropped: false,
             usual_folder: true,
             title: None,
             license: license.map(str::to_owned),
@@ -892,6 +911,7 @@ mod tests {
             bytes: Some(4551),
             folder: format!("data/{name}"),
             placed: true,
+            dropped: false,
             usual_folder: true,
             title: None,
             license: license.map(str::to_owned),
@@ -958,6 +978,7 @@ mod tests {
             bytes: Some(4551),
             folder: format!("data/{name}"),
             placed: true,
+            dropped: false,
             usual_folder: true,
             title: None,
             license: Some(license.to_owned()),
@@ -1017,6 +1038,7 @@ mod tests {
             bytes: Some(4551),
             folder: "data/ir\u{9b}is".to_owned(),
             placed: true,
+            dropped: false,
             usual_folder: false,
             title: None,
             license: Some("\u{1b}]0;TITLE\u{7}\u{9b}31m".to_owned()),
@@ -1058,6 +1080,7 @@ mod tests {
             bytes: Some(4551),
             folder: format!("data/{name}"),
             placed: true,
+            dropped: false,
             usual_folder: true,
             title: None,
             license: None,

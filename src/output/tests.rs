@@ -519,6 +519,7 @@ fn a_fix_is_only_a_command_the_table_allows() {
         ),
         ("remove", false, &["--dry-run"]),
         ("exclude", false, &["--dry-run"]),
+        ("drop", false, &["--dry-run"]),
         ("sync", true, &["--locked", "--strict", "--dry-run"]),
         ("lock", true, &["--check", "--dry-run"]),
         ("build", false, &["--dry-run"]),

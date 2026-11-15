@@ -104,11 +104,12 @@ impl Over<'_> {
         lines
     }
 
-    /// the commands that free a dataset's files: removing it, then gc, which deletes only what
-    /// no project needs.
+    /// the commands that free a dataset's files: dropping it here, which keeps it pinned, or
+    /// removing it, then gc, which deletes only what no project needs.
     fn freeing() -> String {
         format!(
-            "`{}` and then `fetchloom cache gc` free a dataset's files",
+            "`{}` frees a dataset's files here and keeps it pinned, or `{}` and then `fetchloom cache gc` free them and take it out of the project",
+            crate::suggested::command("drop <name>"),
             crate::suggested::command("remove <name>")
         )
     }
@@ -326,7 +327,7 @@ mod tests {
         assert_eq!(
             output.warned(),
             [
-                "this sync brings the cache to 212.0 GiB, past the 200.0 GiB cache_budget; `fetchloom cache gc` would free 3.0 GiB now; this project's largest dataset is imagenet (180.0 GiB); `fetchloom remove <name>` and then `fetchloom cache gc` free a dataset's files"
+                "this sync brings the cache to 212.0 GiB, past the 200.0 GiB cache_budget; `fetchloom cache gc` would free 3.0 GiB now; this project's largest dataset is imagenet (180.0 GiB); `fetchloom drop <name>` frees a dataset's files here and keeps it pinned, or `fetchloom remove <name>` and then `fetchloom cache gc` free them and take it out of the project"
             ]
         );
         let error = ask(&output, false, &over).unwrap_err();
