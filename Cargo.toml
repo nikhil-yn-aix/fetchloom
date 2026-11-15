@@ -81,7 +81,7 @@ toml = { version = "1.1", default-features = false, features = ["std", "serde", 
 toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-chrome = { version = "0.7", default-features = false }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "fmt", "registry", "std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "fmt", "registry", "std", "tracing-log"] }
 # the columns each character takes on a terminal, so a title cut or padded to fit does. it is
 # already in the tree under console and indicatif
 unicode-width = { version = "0.2", default-features = false }
