@@ -364,8 +364,9 @@ fn owned(entry: &fs::DirEntry) -> bool {
     }
 }
 
-/// [`clear_tree`] for `folder` below the cache's `root`, reached from `root` through handles that
-/// never follow a link, so a folder swapped for one meanwhile, `tmp/` too, leads nowhere else.
+/// removes `folder`, below the cache's `root`, and all it holds, reached from `root` through
+/// handles that never follow a link, so a folder swapped for one meanwhile, `tmp/` too, leads
+/// nowhere else.
 #[cfg(unix)]
 fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
     use rustix::fs::{Mode, OFlags};
@@ -393,26 +394,14 @@ fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
 /// following one, first giving a folder back the access a step may have taken from its owner. it
 /// goes on past a failure and returns the first.
 #[cfg(unix)]
-fn clear_at(parent: &File, name: impl rustix::path::Arg + Copy) -> io::Result<()> {
-    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+pub(crate) fn clear_at(parent: &File, name: impl rustix::path::Arg + Copy) -> io::Result<()> {
+    use rustix::fs::{AtFlags, FileType};
     let found = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
     if FileType::from_raw_mode(found.st_mode) != FileType::Directory {
         return Ok(rustix::fs::unlinkat(parent, name, AtFlags::empty())?);
     }
-    if found.st_mode & 0o700 != 0o700 {
-        // chmodat follows a link, but no one else writes in this user's own build folder
-        let mode = Mode::from_raw_mode((found.st_mode & 0o7777) | 0o700);
-        rustix::fs::chmodat(parent, name, mode, AtFlags::empty())?;
-    }
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let folder = File::from(rustix::fs::openat(parent, name, flags, Mode::empty())?);
-    let mut names = Vec::new();
-    for entry in rustix::fs::Dir::read_from(&folder)? {
-        let entry = entry?;
-        if entry.file_name() != c"." && entry.file_name() != c".." {
-            names.push(entry.file_name().to_owned());
-        }
-    }
+    let folder = enter_at(parent, name)?;
+    let names = names_at(&folder)?;
     let mut first = None;
     for child in &names {
         match clear_at(&folder, child.as_c_str()) {
@@ -427,9 +416,49 @@ fn clear_at(parent: &File, name: impl rustix::path::Arg + Copy) -> io::Result<()
     first.map_or(removed, Err)
 }
 
+/// opens the folder `name` in the folder `parent` holds open, never following a link, first giving
+/// it back the access a step may have taken from its owner.
+#[cfg(unix)]
+pub(crate) fn enter_at(parent: &File, name: impl rustix::path::Arg + Copy) -> io::Result<File> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    let found = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    if FileType::from_raw_mode(found.st_mode) != FileType::Directory {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a link or a file is where a folder should be",
+        ));
+    }
+    if found.st_mode & 0o700 != 0o700 {
+        // chmodat follows a link, but no one else writes in this user's own build folder
+        let mode = Mode::from_raw_mode((found.st_mode & 0o7777) | 0o700);
+        rustix::fs::chmodat(parent, name, mode, AtFlags::empty())?;
+    }
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    Ok(File::from(rustix::fs::openat(
+        parent,
+        name,
+        flags,
+        Mode::empty(),
+    )?))
+}
+
+/// the names in the folder `folder` holds open.
+#[cfg(unix)]
+pub(crate) fn names_at(folder: &File) -> io::Result<Vec<std::ffi::CString>> {
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(folder)? {
+        let entry = entry?;
+        if entry.file_name() != c"." && entry.file_name() != c".." {
+            names.push(entry.file_name().to_owned());
+        }
+    }
+    Ok(names)
+}
+
 /// removes the folder at `root` and everything in it, a link as itself, first giving back the
 /// write access a step may have taken from a folder, or for windows from a read-only file. it goes
 /// on past a failure and returns the first.
+#[cfg(not(unix))]
 pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
     let mut first = None;
     let mut todo = vec![(root.to_path_buf(), false)];
@@ -463,6 +492,7 @@ pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
 
 /// gives the folder at `path`, which `found` describes, back its owner's access, which a step
 /// may have taken.
+#[cfg(not(unix))]
 #[cfg_attr(
     not(unix),
     expect(
@@ -485,6 +515,7 @@ pub(crate) fn enterable(path: &Path, found: &fs::Metadata) -> io::Result<()> {
 }
 
 /// removes the file or link at `path`, which `found` describes, as itself.
+#[cfg(not(unix))]
 fn remove_entry(path: &Path, found: &fs::Metadata) -> io::Result<()> {
     #[cfg(windows)]
     {

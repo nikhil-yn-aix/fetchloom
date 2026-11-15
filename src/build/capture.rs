@@ -15,7 +15,6 @@ use crate::name;
 use crate::place::run_all;
 use crate::stop::Stop;
 use crate::threads::Threads;
-use crate::volume::read_unfollowed;
 use crate::work::Work;
 
 /// what a step wrote that a result cannot hold, by its path in the result folder.
@@ -68,10 +67,89 @@ pub(crate) struct Found {
     pub(crate) tree: Sha256,
 }
 
+/// a step's `out` folder to take a result from. on unix it is held open, and every file in it is
+/// reached from it without following a link, so a folder put in place of the step's own on the
+/// way there is never read.
+pub(crate) struct Out {
+    path: PathBuf,
+    #[cfg(unix)]
+    handle: Arc<fs::File>,
+}
+
+impl Out {
+    /// the folder at `path`, opened without following a link where it ends.
+    #[cfg(any(test, not(unix)))]
+    #[cfg_attr(
+        not(unix),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "unix opens the folder, which windows only names"
+        )
+    )]
+    pub(crate) fn open(path: &Path) -> io::Result<Out> {
+        #[cfg(unix)]
+        {
+            use rustix::fs::{Mode, OFlags};
+            let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            let handle = fs::File::from(rustix::fs::open(path, flags, Mode::empty())?);
+            Ok(Out::held(path.to_path_buf(), handle))
+        }
+        #[cfg(not(unix))]
+        Ok(Out {
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// the folder `handle` holds open, shown as `path`.
+    #[cfg(unix)]
+    pub(crate) fn held(path: PathBuf, handle: fs::File) -> Out {
+        Out {
+            path,
+            handle: Arc::new(handle),
+        }
+    }
+}
+
+/// where a file the step wrote is: its path, for messages and, on windows, for every look, and on
+/// unix its name in the folder held open that holds it.
+#[derive(Clone, Debug)]
+struct Spot {
+    disk: PathBuf,
+    #[cfg(unix)]
+    at: (Arc<fs::File>, std::ffi::CString),
+}
+
+impl Spot {
+    /// the file, opened to read without following a link.
+    fn open(&self) -> io::Result<fs::File> {
+        #[cfg(unix)]
+        {
+            use rustix::fs::{Mode, OFlags};
+            let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            let (folder, name) = &self.at;
+            let file = fs::File::from(rustix::fs::openat(
+                &**folder,
+                name.as_c_str(),
+                flags,
+                Mode::empty(),
+            )?);
+            if !crate::volume::is_plain(&file.metadata()?) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is no longer a plain file", self.disk.display()),
+                ));
+            }
+            Ok(file)
+        }
+        #[cfg(not(unix))]
+        crate::volume::read_unfollowed(&self.disk)
+    }
+}
+
 /// one file of a result: where the step wrote it, what it holds, and how it looked then.
 #[derive(Debug)]
 struct Taken {
-    disk: PathBuf,
+    spot: Spot,
     member: Member,
     /// unix moves a file into the cache and checks it is still the file hashed; windows copies
     /// every file, checking its bytes as it copies.
@@ -81,14 +159,14 @@ struct Taken {
 
 /// reads everything `out` holds, checks every name and hashes every file on `threads`. it fails on
 /// what a result cannot hold, as more than `most` files, on a failed read, or with a stop.
-pub(crate) fn read(out: &Path, most: usize, threads: Threads, stop: &Stop) -> Result<Found, Fault> {
+pub(crate) fn read(out: &Out, most: usize, threads: Threads, stop: &Stop) -> Result<Found, Fault> {
     read_with(out, most, threads, stop, &|_| {})
 }
 
 /// [`read`], calling `read_once` with each file's path once its bytes are read and before it is
 /// looked at again, which a test uses to change it there.
 fn read_with(
-    out: &Path,
+    out: &Out,
     most: usize,
     threads: Threads,
     stop: &Stop,
@@ -101,8 +179,8 @@ fn read_with(
         return Err(Refused::Nothing.into());
     }
     let named = names(&paths)?;
-    let taken = run_all(&named, threads, |(disk, path)| {
-        take(disk, path, stop, read_once)
+    let taken = run_all(&named, threads, |(spot, path)| {
+        take(spot, path, stop, read_once)
     });
     let mut files = taken.into_iter().collect::<Result<Vec<_>, _>>()?;
     files.sort_by(|a, b| a.member.path.cmp(&b.member.path));
@@ -116,9 +194,49 @@ fn read_with(
 
 /// every file under `out` with its path as the disk spells it, found without following a link. a
 /// folder the step took its owner's access from gets it back, so its files can be read and moved.
-fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, Fault> {
+#[cfg(unix)]
+fn walk(out: &Out, most: usize, stop: &Stop) -> Result<Vec<(Spot, String)>, Fault> {
+    use rustix::fs::{AtFlags, FileType};
     let mut files = Vec::new();
-    let mut folders = vec![(out.to_path_buf(), String::new())];
+    let mut folders = vec![(Arc::clone(&out.handle), out.path.clone(), String::new())];
+    while let Some((folder, disk, inside)) = folders.pop() {
+        stop.check_io()?;
+        for name in crate::cache::names_at(&folder)? {
+            let Ok(text) = name.to_str() else {
+                return Err(
+                    Refused::NotText(name::joined(&inside, &name.to_string_lossy())).into(),
+                );
+            };
+            let path = name::joined(&inside, text);
+            let found = rustix::fs::statat(&*folder, name.as_c_str(), AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(io::Error::from)?;
+            match FileType::from_raw_mode(found.st_mode) {
+                FileType::Symlink => return Err(Refused::Link(path).into()),
+                FileType::Directory => {
+                    let inner = crate::cache::enter_at(&folder, name.as_c_str())?;
+                    folders.push((Arc::new(inner), disk.join(text), path));
+                }
+                FileType::RegularFile => {
+                    if files.len() == most {
+                        return Err(Refused::TooMany(most).into());
+                    }
+                    let spot = Spot {
+                        disk: disk.join(text),
+                        at: (Arc::clone(&folder), name),
+                    };
+                    files.push((spot, path));
+                }
+                _ => return Err(Refused::Special(path).into()),
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[cfg(not(unix))]
+fn walk(out: &Out, most: usize, stop: &Stop) -> Result<Vec<(Spot, String)>, Fault> {
+    let mut files = Vec::new();
+    let mut folders = vec![(out.path.clone(), String::new())];
     while let Some((folder, inside)) = folders.pop() {
         stop.check_io()?;
         crate::cache::enterable(&folder, &fs::symlink_metadata(&folder)?)?;
@@ -140,7 +258,7 @@ fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, 
                 if files.len() == most {
                     return Err(Refused::TooMany(most).into());
                 }
-                files.push((entry.path(), path));
+                files.push((Spot { disk: entry.path() }, path));
             } else {
                 return Err(Refused::Special(path).into());
             }
@@ -151,7 +269,7 @@ fn walk(out: &Path, most: usize, stop: &Stop) -> Result<Vec<(PathBuf, String)>, 
 
 /// each file's path in NFC, as data.lock records it, once every name passed: none leaves the
 /// folder, names repository metadata, fails to store on some disk or clashes with another.
-fn names(paths: &[(PathBuf, String)]) -> Result<Vec<(PathBuf, String)>, Refused> {
+fn names<D: Clone>(paths: &[(D, String)]) -> Result<Vec<(D, String)>, Refused> {
     let nfc = ComposingNormalizerBorrowed::new_nfc();
     let mut files: HashMap<String, &str> = HashMap::with_capacity(paths.len());
     let mut folders: HashMap<String, &str> = HashMap::new();
@@ -186,14 +304,14 @@ fn names(paths: &[(PathBuf, String)]) -> Result<Vec<(PathBuf, String)>, Refused>
     Ok(named)
 }
 
-/// hashes the file at `disk` unfollowed, checking it looked the same before and after.
+/// hashes the file at `spot` unfollowed, checking it looked the same before and after.
 fn take(
-    disk: &Path,
+    spot: &Spot,
     path: &str,
     stop: &Stop,
     read_once: &(dyn Fn(&Path) + Sync),
 ) -> Result<Taken, Fault> {
-    let mut file = read_unfollowed(disk)?;
+    let mut file = spot.open()?;
     let before = Seen::of(&file.metadata()?);
     let mut hasher = Hasher::default();
     let mut block = Block::sized(before.size.saturating_add(1));
@@ -210,12 +328,12 @@ fn take(
         hasher.update(&block[..read]);
         size += read as u64;
     }
-    read_once(disk);
+    read_once(&spot.disk);
     if Seen::of(&file.metadata()?) != before || size != before.size {
         return Err(Refused::Changed(path.to_owned()).into());
     }
     Ok(Taken {
-        disk: disk.to_path_buf(),
+        spot: spot.clone(),
         member: Member {
             path: path.to_owned(),
             size,
@@ -289,7 +407,11 @@ fn seal(
     stop.check_io()?;
     #[cfg(unix)]
     if file.seen.movable {
-        match crate::cache::seal_captured(&file.disk, &file.seen, flush) {
+        let sealed = file
+            .spot
+            .open()
+            .and_then(|opened| crate::cache::seal_captured(&opened, &file.seen, flush));
+        match sealed {
             Ok(()) => return Ok(None),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => {
                 return Err(Refused::Changed(file.member.path.clone()).into());
@@ -300,7 +422,7 @@ fn seal(
         }
     }
     match cache.copy_in(
-        &file.disk,
+        &file.spot.disk,
         &file.member.sha256,
         file.member.size,
         flush,
@@ -314,10 +436,29 @@ fn seal(
     }
 }
 
-/// moves a sealed file into `objects/`, and says whether the cache lacked its bytes.
+/// moves a sealed file into `objects/`, and says whether the cache lacked its bytes. it leaves the
+/// step's folder by its name in the folder held open, into the cache's tmp/, so a folder swapped
+/// on the way since never sends another file into the cache.
 #[cfg(unix)]
 fn move_in(cache: &Cache, file: &Taken) -> Result<bool, Fault> {
-    match cache.publish_captured(&file.disk, file.member.sha256, &file.seen) {
+    use std::os::fd::AsFd;
+    let (folder, name) = &file.spot.at;
+    let staged = cache
+        .root()
+        .join("tmp")
+        .join(format!("{:016x}.capture", fastrand::u64(..)));
+    crate::volume::rename_new_at(
+        folder.as_fd(),
+        name.as_c_str(),
+        rustix::fs::CWD,
+        staged.as_path(),
+        crate::volume::Lacking::Nothing,
+    )?;
+    let published = cache.publish_captured(&staged, file.member.sha256, &file.seen);
+    if published.is_err() {
+        let _ = fs::remove_file(&staged);
+    }
+    match published {
         Ok(stored) => Ok(stored.new),
         Err(err) if err.kind() == io::ErrorKind::InvalidData => {
             Err(Refused::Changed(file.member.path.clone()).into())
@@ -341,7 +482,7 @@ mod tests {
     use crate::cache::tests::cache;
 
     fn read_all(out: &Path) -> Result<Found, Fault> {
-        read(out, 100, Threads::default(), &Stop::default())
+        read(&Out::open(out)?, 100, Threads::default(), &Stop::default())
     }
 
     fn refused(out: &Path) -> Refused {
@@ -457,7 +598,13 @@ mod tests {
             let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
             io::Write::write_all(&mut file, b"more\n").unwrap();
         };
-        let during = read_with(&out, 100, Threads::default(), &Stop::default(), &grow);
+        let during = read_with(
+            &Out::open(&out).unwrap(),
+            100,
+            Threads::default(),
+            &Stop::default(),
+            &grow,
+        );
         assert!(
             matches!(during, Err(Fault::Refused(Refused::Changed(ref path))) if path == "a.csv"),
             "{during:?}"

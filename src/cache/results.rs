@@ -199,28 +199,30 @@ impl Cache {
     }
 }
 
-/// readies the file a step wrote at `path` to become its bytes' object where it is: read-only,
-/// dated by its birth and, with `flush`, on disk. one that changed since `seen` is refused.
+/// readies `file`, which a step wrote, to become its bytes' object where it is: read-only, dated
+/// by its birth and, with `flush`, on disk. one that changed since `seen` is refused.
 ///
 /// # Errors
 ///
 /// the file changed, or cannot be sealed, which its caller answers by copying it instead.
 #[cfg(unix)]
-pub(crate) fn seal_captured(path: &Path, seen: &Seen, flush: bool) -> io::Result<()> {
+pub(crate) fn seal_captured(file: &File, seen: &Seen, flush: bool) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let file = crate::volume::read_unfollowed(path)?;
     if Seen::of(&file.metadata()?) != *seen {
-        return Err(changed(path));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "a file changed while fetchloom read it",
+        ));
     }
     file.set_permissions(fs::Permissions::from_mode(0o444))?;
-    super::object::date_by_birth(&file, None)?;
+    super::object::date_by_birth(file, None)?;
     if flush {
         file.sync_all()?;
     }
     // a batched object still needs its plain fsync on macos for the batch's `F_FULLFSYNC`
     #[cfg(target_os = "macos")]
     if !flush {
-        rustix::fs::fsync(&file)?;
+        rustix::fs::fsync(file)?;
     }
     Ok(())
 }

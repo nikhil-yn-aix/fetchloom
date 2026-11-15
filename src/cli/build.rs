@@ -812,7 +812,10 @@ impl<'a> Building<'a> {
         let ran = self.run(step, &staging)?;
         self.same_code(step)?;
         let most = self.context.settings.most_files.value;
-        let found = capture::read(&staging.out(), most, threads, &self.context.stop)
+        let out = staging
+            .out_folder()
+            .map_err(|err| taken(name, err.into()))?;
+        let found = capture::read(&out, most, threads, &self.context.stop)
             .map_err(|fault| taken(name, fault))?;
         capture::publish(
             cache,
