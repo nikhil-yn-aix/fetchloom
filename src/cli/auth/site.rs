@@ -663,7 +663,11 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
         );
         agrees(context, host, saved, &question, false)?;
     }
+    let left = site::kept_out(var, host);
     let origin = site::save(var, host, saved, store::Place::File).map_err(failed)?;
+    if left {
+        super::tell_left_in_store(&context.output, &format!("what was saved for {host}"));
+    }
     if !asked {
         context.output.warn(
             Warning::AuthNoKeyring,
@@ -792,6 +796,10 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
             account: format!("site:{host}"),
             removed_from: None,
         }));
+    }
+    if site::kept_out(var, &host) {
+        let what = format!("what is saved for {host}");
+        return Err(super::left_in_store(&what, &logout.account));
     }
     // a sign-out has nothing to stop, so a stop asked once it starts lets it finish
     context.stop.finish();

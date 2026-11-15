@@ -306,6 +306,7 @@ fn caution(
             error.help.as_deref().unwrap_or_default(),
         );
     }
+    auth::tell_kept_out(output, &crate::machine::env);
     for credential in credentials {
         if reqwest::header::HeaderValue::from_str(&credential.value).is_err() {
             output.warn_with(

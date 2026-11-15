@@ -117,6 +117,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
     if let Some(error) = store::unreadable(&crate::machine::env) {
         unusable(output, &error);
     }
+    tell_kept_out(output, &crate::machine::env);
     if context.mirrors.mirrors.only {
         output.hint(
             "mirrors_only lets fetchloom ask its mirrors alone, so no key is checked with its site",
@@ -790,7 +791,11 @@ fn save(
                     return Ok(None);
                 }
             }
+            let left = store::kept_out(var).contains(&id);
             store::save(var, &id, secret, store::Place::File).map_err(failed)?;
+            if left {
+                tell_left_in_store(output, &format!("the {} key", title(account)));
+            }
             if told {
                 output.warn(
                     Warning::AuthNoKeyring,
@@ -956,6 +961,55 @@ pub(super) fn no_store(var: crate::machine::Var<'_>) -> &'static str {
     }
 }
 
+/// the hint for keys the index lists in the credential store while `FETCHLOOM_KEYRING` keeps
+/// fetchloom out of it, which read as none.
+pub(super) fn tell_kept_out(output: &crate::output::Output, var: crate::machine::Var<'_>) {
+    let names: Vec<String> = store::kept_out(var)
+        .iter()
+        .map(|id| {
+            id.strip_prefix("site:")
+                .or_else(|| id.strip_prefix("dataverse:"))
+                .unwrap_or(id)
+                .to_owned()
+        })
+        .collect();
+    let (keys, them) = match names.len() {
+        0 => return,
+        1 => ("the key", "it"),
+        _ => ("the keys", "them"),
+    };
+    output.hint(&format!(
+        "FETCHLOOM_KEYRING is off, so fetchloom leaves out {keys} for {} in {}; unset FETCHLOOM_KEYRING to use {them}",
+        units::listed(&names, "and"),
+        auth::keyring_name()
+    ));
+}
+
+/// the refusal to remove `what`, a key kept in the credential store while `FETCHLOOM_KEYRING`
+/// keeps fetchloom out of it, which `typed`, the account as typed, signs out of.
+pub(super) fn left_in_store(what: &str, typed: &str) -> Error {
+    Error::new(
+        Kind::Usage,
+        format!(
+            "{what} is in {}, which fetchloom leaves alone while FETCHLOOM_KEYRING is off",
+            auth::keyring_name()
+        ),
+    )
+    .help(format!(
+        "unset FETCHLOOM_KEYRING, then run `fetchloom auth logout {}` again",
+        crate::suggested::shell_word(typed)
+    ))
+}
+
+/// the hint once a key is saved in fetchloom's own file in place of one in the credential store,
+/// which `FETCHLOOM_KEYRING` keeps fetchloom from removing.
+pub(super) fn tell_left_in_store(output: &crate::output::Output, what: &str) {
+    output.hint(&format!(
+        "{what} saved before stays in {}, since FETCHLOOM_KEYRING is off",
+        auth::keyring_name()
+    ));
+}
+
 /// the question before removing a key from `path`, a file `tools` read too.
 fn remove_question(tools: &str, path: &std::path::Path) -> String {
     format!(
@@ -1027,6 +1081,10 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
                 format!("the {} key comes from {name}", title(&account)),
             )
             .help(format!("unset {name} in your environment to sign out")));
+        }
+        Origin::Keyring if !store::keyring_allowed(var) => {
+            let what = format!("the {} key", title(&account));
+            return Err(left_in_store(&what, &logout.account));
         }
         Origin::Keyring => {
             asking_store(output, || store::forget(var, &account.id())).map_err(failed)?;

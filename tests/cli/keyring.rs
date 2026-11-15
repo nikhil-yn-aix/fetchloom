@@ -353,6 +353,88 @@ fn keys_kept_in_the_keyring_are_read_from_it_and_removed_from_it() -> Result {
     Ok(())
 }
 
+/// with `FETCHLOOM_KEYRING` off, keys the index lists in the keyring are never read or removed,
+/// though the keyring answers on the bus: `auth` and a download leave them out and say why,
+/// signing out of one is refused, and signing in again keeps the new key in fetchloom's file
+/// while the old one stays in the keyring.
+#[test]
+fn with_the_keyring_off_its_keys_stay_there_untouched() -> Result {
+    let sandbox = Sandbox::new()?;
+    let Some(keyring) = Keyring::start(&sandbox, true)? else {
+        return Ok(());
+    };
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    for (args, typed) in [
+        (vec!["auth", "login", "zenodo"], "z-key-of-the-test\n"),
+        (
+            vec!["auth", "login", &host, "--token"],
+            "t-key-of-the-test\n",
+        ),
+    ] {
+        let mut args = args;
+        args.extend(["--with-token", "--offline"]);
+        let login = keyring
+            .command(&sandbox, &args)
+            .output_with(Some(typed.as_bytes()))?;
+        assert_eq!(login.status.code(), Some(0), "{}", text(&login.stderr)?);
+    }
+    // the sandbox's own FETCHLOOM_KEYRING, 0, on the keyring's bus
+    let off = |args: &[&str]| {
+        let mut command = sandbox.command(args);
+        command.env("DBUS_SESSION_BUS_ADDRESS", &keyring.address);
+        command
+    };
+    let hint = format!(
+        "hint: FETCHLOOM_KEYRING is off, so fetchloom leaves out the keys for {host} and zenodo in the system keyring; unset FETCHLOOM_KEYRING to use them"
+    );
+    let listed = off(&["auth", "--offline"]).output()?;
+    let stderr = text(&listed.stderr)?;
+    assert_eq!(listed.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&hint), "{stderr}");
+    for unread in [
+        "Signed in to zenodo".to_owned(),
+        format!("Signed in to {host}"),
+    ] {
+        assert!(!stderr.contains(&unread), "{unread}: {stderr}");
+    }
+    let output = off(&["get", &format!("{}/data.csv", site.url)]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&hint), "{stderr}");
+    assert_eq!(heard(&site, "authorization"), [None]);
+    let logout = off(&["--json", "auth", "logout", "zenodo", "--yes"]).output()?;
+    let error = &json(&logout)?["errors"][0];
+    assert_eq!(logout.status.code(), Some(2), "{}", text(&logout.stdout)?);
+    assert_eq!(
+        error["message"],
+        "the zenodo key is in the system keyring, which fetchloom leaves alone while FETCHLOOM_KEYRING is off"
+    );
+    assert_eq!(
+        error["help"],
+        "unset FETCHLOOM_KEYRING, then run `fetchloom auth logout zenodo` again"
+    );
+    let again = off(&["auth", "login", "zenodo", "--with-token", "--offline"])
+        .output_with(Some(b"z-new-key\n"))?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "hint: the zenodo key saved before stays in the system keyring, since FETCHLOOM_KEYRING is off"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(
+        index(&sandbox)?,
+        serde_json::json!({"zenodo": "file", format!("site:{host}"): "keyring"})
+    );
+    assert_eq!(
+        keyring.lookup(&ZENODO)?.as_deref(),
+        Some("z-key-of-the-test")
+    );
+    Ok(())
+}
+
 /// a locked keyring, which gnome keyring can only ask its password for on a screen, keeps the
 /// key: signing out says it could not remove it, rather than that none was saved, and signing in
 /// again says how to keep the key elsewhere. unlocked, the key is still there.

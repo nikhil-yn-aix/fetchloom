@@ -269,6 +269,12 @@ pub(crate) fn save(
     Ok(Origin::saved(var, place))
 }
 
+/// whether what is saved for `host` is in the credential store while `FETCHLOOM_KEYRING` keeps
+/// fetchloom out of it.
+pub(crate) fn kept_out(var: Var<'_>, host: &str) -> bool {
+    store::kept_out(var).contains(&id(host))
+}
+
 /// removes what is saved for `host`. returns where it was, or none when nothing was.
 ///
 /// # Errors

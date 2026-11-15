@@ -117,12 +117,36 @@ pub(crate) fn saved(var: Var<'_>) -> BTreeMap<String, Place> {
         .unwrap_or_default()
 }
 
+/// the ids the index lists in the credential store while `FETCHLOOM_KEYRING` keeps fetchloom out
+/// of it, whose keys read as none.
+pub(crate) fn kept_out(var: Var<'_>) -> Vec<String> {
+    if keyring_allowed(var) {
+        return Vec::new();
+    }
+    saved(var)
+        .into_iter()
+        .filter_map(|(id, place)| (place == Place::Keyring).then_some(id))
+        .collect()
+}
+
 /// the key saved for `id` in `place`, as the index lists it, or none.
 pub(crate) fn read(var: Var<'_>, id: &str, place: Place) -> Option<String> {
+    read_with(&KEYRING, var, id, place)
+}
+
+/// [`read`], with `keyring` as the credential store.
+fn read_with(keyring: &Keyring, var: Var<'_>, id: &str, place: Place) -> Option<String> {
     match place {
-        Place::Keyring => (KEYRING.get)(id).ok(),
+        Place::Keyring => keyring_allowed(var)
+            .then(|| (keyring.get)(id).ok())
+            .flatten(),
         Place::File => file(var).remove(id),
     }
+}
+
+/// the refusal of a change `FETCHLOOM_KEYRING` keeps out of the credential store.
+fn kept_out_of_store() -> io::Error {
+    io::Error::other("FETCHLOOM_KEYRING is off, which keeps fetchloom out of the credential store")
 }
 
 /// the file every change to the saved keys locks, in fetchloom's settings folder.
@@ -189,6 +213,10 @@ fn save_with(
 ) -> io::Result<()> {
     let folder = crate::machine::settings_folder(var)
         .ok_or_else(|| io::Error::other("no folder for fetchloom's settings"))?;
+    let allowed = keyring_allowed(var);
+    if place == Place::Keyring && !allowed {
+        return Err(kept_out_of_store());
+    }
     let _held = hold_in(&folder)?;
     let index_path = folder.join("accounts.json");
     let mut index: BTreeMap<String, Place> = load(&index_path)?;
@@ -200,7 +228,8 @@ fn save_with(
         })?,
     }
     match before {
-        Some(Place::Keyring) if place != Place::Keyring => keyring.delete(id)?,
+        // with the store off, the key saved there before stays, out of the index
+        Some(Place::Keyring) if place != Place::Keyring && allowed => keyring.delete(id)?,
         Some(Place::File) if place != Place::File => edit_file(&folder, |keys| {
             keys.remove(id);
         })?,
@@ -220,6 +249,11 @@ fn edit_file(folder: &Path, change: impl FnOnce(&mut BTreeMap<String, String>)) 
 
 /// removes what was saved for `id`. returns whether anything was.
 pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
+    forget_with(&KEYRING, var, id)
+}
+
+/// [`forget`], with `keyring` as the credential store.
+fn forget_with(keyring: &Keyring, var: Var<'_>, id: &str) -> io::Result<bool> {
     let Some(folder) = crate::machine::settings_folder(var) else {
         return Ok(false);
     };
@@ -229,7 +263,8 @@ pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
         return Ok(false);
     };
     match place {
-        Place::Keyring => KEYRING.delete(id)?,
+        Place::Keyring if !keyring_allowed(var) => return Err(kept_out_of_store()),
+        Place::Keyring => keyring.delete(id)?,
         Place::File => edit_file(&folder, |keys| {
             keys.remove(id);
         })?,
@@ -598,6 +633,47 @@ mod tests {
                 assert!(forget(&var, id).unwrap());
             }
         }
+    }
+
+    /// a credential store that panics once asked anything.
+    const UNTOUCHED: Keyring = Keyring {
+        needs_bus: false,
+        answers: || panic!("the store was asked"),
+        get: |_| panic!("the store was read"),
+        set: |_, _| panic!("the store was written"),
+        remove: |_| panic!("the store was written"),
+    };
+
+    /// with `FETCHLOOM_KEYRING` off, the store is never asked: a key the index lists there reads
+    /// as none, a key saved in its place goes to the file alone, and removing it is refused.
+    #[test]
+    fn the_keyring_variable_keeps_every_read_and_write_out_of_the_store() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().as_os_str().to_owned();
+        let var = |name: &str| -> Option<OsString> {
+            match name {
+                "HOME" | "USERPROFILE" | "APPDATA" | "XDG_CONFIG_HOME" => Some(root.clone()),
+                "FETCHLOOM_KEYRING" => Some("false".into()),
+                _ => None,
+            }
+        };
+        let folder = crate::machine::settings_folder(&var).unwrap();
+        fs::create_dir_all(&folder).unwrap();
+        let listed = r#"{"osf": "keyring", "zenodo": "keyring"}"#;
+        fs::write(folder.join("accounts.json"), listed).unwrap();
+        assert_eq!(read_with(&UNTOUCHED, &var, "zenodo", Place::Keyring), None);
+        assert_eq!(kept_out(&var), ["osf", "zenodo"]);
+        assert!(forget_with(&UNTOUCHED, &var, "zenodo").is_err());
+        assert_eq!(
+            fs::read_to_string(folder.join("accounts.json")).unwrap(),
+            listed
+        );
+        save_with(&UNTOUCHED, &var, "zenodo", "z-file", Place::File).unwrap();
+        assert_eq!(saved(&var).get("zenodo"), Some(&Place::File));
+        assert_eq!(file(&var).remove("zenodo").as_deref(), Some("z-file"));
+        assert_eq!(kept_out(&var), ["osf"]);
+        let on = |name: &str| (name != "FETCHLOOM_KEYRING").then(|| var(name)).flatten();
+        assert_eq!(kept_out(&on), Vec::<String>::new());
     }
 
     /// a key file or index that does not read leaves every key in it unfound, so it is named, by
