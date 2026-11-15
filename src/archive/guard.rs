@@ -7,13 +7,16 @@ use std::path::Path;
 
 use super::names::{Named, Names};
 use super::tar::unreadable_stream;
-use super::{Limits, Skipped, not_written, past};
+use super::{Limits, REFUSED_HELP, Skipped, not_written, past};
 use crate::error::{Error, Kind};
 use crate::space::Filesystem;
 use crate::units;
 
 /// the ratio check waits until this much is written, so a small file of zeros cannot trip it.
 const RATIO_FLOOR: u64 = 4 << 20;
+
+/// a file takes whole blocks of its disk, 4 KiB on most, however few bytes it holds.
+const BLOCK: u64 = 4 << 10;
 
 /// compressed bytes read from the archive file, counted by the reader under the decompressor.
 #[derive(Default)]
@@ -60,6 +63,10 @@ pub(super) struct Guard<'a> {
     links: Vec<(String, String)>,
     /// the cache the members are written to, and the most bytes one file holds on its disk.
     disk: Option<(&'a Path, u64)>,
+    /// the cache the members are written to, and what its disk had free as unpacking began.
+    room: Option<(&'a Path, u64)>,
+    /// the whole blocks the members written so far take on that disk.
+    taken: u64,
 }
 
 impl<'a> Guard<'a> {
@@ -79,11 +86,20 @@ impl<'a> Guard<'a> {
             system: Skipped::default(),
             links: Vec::new(),
             disk: None,
+            room: None,
+            taken: 0,
         }
     }
 
     pub(super) fn writing_to(mut self, cache: &'a Path, filesystem: Filesystem) -> Self {
         self.disk = filesystem.largest_file().map(|largest| (cache, largest));
+        self
+    }
+
+    /// stops the archive before its members take more than the `free` bytes the disk holding
+    /// `cache` had as unpacking began, as a download of no stated size stops at that room.
+    pub(super) fn with_room(mut self, cache: &'a Path, free: Option<u64>) -> Self {
+        self.room = free.map(|free| (cache, free));
         self
     }
 
@@ -160,7 +176,8 @@ impl<'a> Guard<'a> {
         std::mem::take(&mut self.links)
     }
 
-    /// copies one member into `to`, refusing the archive once what was written passes a limit.
+    /// copies one member into `to`, refusing the archive once what was written passes a limit or
+    /// the room its disk had free.
     pub(super) fn copy(
         &mut self,
         path: &str,
@@ -168,15 +185,21 @@ impl<'a> Guard<'a> {
         to: &mut dyn Write,
         buffer: &mut [u8],
     ) -> Result<(), Error> {
+        let mut member = 0;
         loop {
             let read = match from.read(buffer) {
-                Ok(0) => return Ok(()),
+                Ok(0) => {
+                    self.taken = self.taken.saturating_add(blocks(member));
+                    return Ok(());
+                }
                 Ok(read) => read,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
                 Err(err) => return Err(unreadable_stream(Some(path), &err, self.limits.memory)),
             };
             self.written += read as u64;
+            member += read as u64;
             self.check_limits(path)?;
+            self.check_room(member)?;
             to.write_all(&buffer[..read])
                 .map_err(|err| not_written(path, &err))?;
             self.check_stopped()?;
@@ -238,6 +261,27 @@ impl<'a> Guard<'a> {
         self.check_ratio(Some(path))
     }
 
+    /// refuses the archive once the members before, with the `member` bytes of the one being
+    /// written, would take more than the room its disk had free, before those bytes are written.
+    fn check_room(&self, member: u64) -> Result<(), Error> {
+        let Some((cache, free)) = self.room else {
+            return Ok(());
+        };
+        let needed = self.taken.saturating_add(blocks(member));
+        if crate::space::short(needed, Some(free)).is_none() {
+            return Ok(());
+        }
+        Err(Error::new(
+            Kind::LocalIo,
+            format!(
+                "the archive unpacks to more than the {} the disk holding the cache at {} had free",
+                units::size(free),
+                units::path(cache)
+            ),
+        )
+        .help(format!("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again; or {REFUSED_HELP}")))
+    }
+
     fn check_ratio(&self, at: Option<&str>) -> Result<(), Error> {
         let expanded = self.written.saturating_add(self.skipped);
         let compressed = self.meter.compressed.get();
@@ -256,6 +300,11 @@ impl<'a> Guard<'a> {
         }
         Ok(())
     }
+}
+
+/// what a file of `bytes` takes on its disk, in whole blocks.
+fn blocks(bytes: u64) -> u64 {
+    bytes.div_ceil(BLOCK).saturating_mul(BLOCK)
 }
 
 #[cfg(test)]
@@ -289,6 +338,48 @@ mod tests {
             assert_eq!(err.kind, Kind::SourceInvalid);
             assert!(err.message.contains("past 10 B"), "{}", err.message);
         });
+    }
+
+    /// members fill the room the cache's disk had free exactly, each file in whole blocks, and the
+    /// bytes that would pass it stop the archive before they are written, mid-member too.
+    #[test]
+    fn the_room_the_disk_had_free_stops_the_archive_before_it_fills() {
+        let limits = Limits::default();
+        let meter = Meter::default();
+        let never = |_: u64| false;
+        let room = Some(3 * BLOCK);
+        let block = usize::try_from(BLOCK).unwrap();
+        let mut guard = Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), room);
+        assert_eq!(copy(&mut guard, b"a").unwrap(), b"a");
+        assert_eq!(copy(&mut guard, b"b").unwrap(), b"b");
+        let whole = vec![7; block];
+        assert_eq!(copy(&mut guard, &whole).unwrap(), whole);
+        let mut out = Vec::new();
+        let err = guard
+            .copy("c", &mut &b"c"[..], &mut out, &mut [0; 1024])
+            .unwrap_err();
+        assert_eq!(out, b"");
+        assert_eq!(err.kind, Kind::LocalIo);
+        assert_eq!(
+            err.message,
+            "the archive unpacks to more than the 12.0 KiB the disk holding the cache at /cache had free"
+        );
+        assert_eq!(
+            err.help.as_deref(),
+            Some(
+                "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again; or keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract"
+            )
+        );
+
+        let mut guard = Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), room);
+        let large = vec![7; 4 * block];
+        let mut out = Vec::new();
+        let err = guard.copy("large", &mut &large[..], &mut out, &mut [0; 1024]);
+        assert_eq!(err.unwrap_err().kind, Kind::LocalIo);
+        assert_eq!(out.len(), 3 * block);
+
+        let mut unknown = Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), None);
+        assert_eq!(copy(&mut unknown, &large).unwrap(), large);
     }
 
     #[test]

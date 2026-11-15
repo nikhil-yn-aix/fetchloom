@@ -819,6 +819,37 @@ fn an_archive_past_a_limit_names_the_setting_that_lifts_it() -> Result {
     Ok(())
 }
 
+/// an archive whose files would take more than the room the cache's disk had free stops before
+/// it fills that disk, naming the archive and the room, and none of its files are kept.
+#[cfg(debug_assertions)]
+#[test]
+fn an_archive_past_the_room_its_disk_had_free_stops_before_filling_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    let cache = sandbox.folder("small-disk")?;
+    // twice the archive fits, as the room is weighed before downloading, but its four files take
+    // a block of 4 KiB each
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_TEST_FREE", "8192")
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(50), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "local.io", "{document}");
+    assert_eq!(
+        error["message"],
+        format!(
+            "the archive unpacks to more than the 8.0 KiB the disk holding the cache at {} had free",
+            cache.display()
+        )
+    );
+    assert_eq!(error["details"], serde_json::json!(["in dataset.zip"]));
+    assert!(!cache.join("unpacked").join(ZIP_SHA256).exists());
+    Ok(())
+}
+
 /// the start of a rar5 archive. fetchloom unpacks no rar, so the name alone keeps it packed and
 /// nothing reads further.
 const RAR: &[u8] = b"Rar!\x1a\x07\x01\x00no decoder reads this";
