@@ -663,12 +663,59 @@ pub(super) fn classify(
             retry_after: None,
             unreachable: cut_off(err),
         }
+    } else if closed_early(err) {
+        transient(format!(
+            "{} closed the connection before answering",
+            host(url)
+        ))
     } else {
         transient(format!(
             "the request to {} failed: {}",
             host(url),
-            without_link(err)
+            deepest(err)
         ))
+    }
+}
+
+/// whether the server hung up once the request went, before its answer: it closed or reset the
+/// connection, as one under load or a cut on the way does.
+fn closed_early(err: &reqwest::Error) -> bool {
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(current) = cause {
+        if current
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_incomplete_message)
+        {
+            return true;
+        }
+        if let Some(io) = current.downcast_ref::<std::io::Error>()
+            && matches!(
+                io.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof
+            )
+        {
+            return true;
+        }
+        cause = current.source();
+    }
+    false
+}
+
+/// what went wrong, in the words of the innermost cause: reqwest's own words only say a request
+/// failed, and name its link.
+fn deepest(err: &reqwest::Error) -> String {
+    let Some(mut cause) = std::error::Error::source(err) else {
+        return without_link(err);
+    };
+    while let Some(next) = cause.source() {
+        cause = next;
+    }
+    match cause.downcast_ref::<std::io::Error>() {
+        Some(io) => crate::error::said(io),
+        None => cause.to_string(),
     }
 }
 
@@ -1281,6 +1328,31 @@ mod tests {
                     .as_str()
             )
         );
+    }
+
+    /// a server that takes the request and hangs up before answering, as one under load or a
+    /// cut through a middlebox does, is told in plain words, with no library text or link.
+    #[test]
+    fn a_connection_closed_before_the_answer_is_told_plainly() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!(
+            "http://{}/flaky/s3.bin",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut head = [0; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut head);
+        });
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let err = crate::source::recorded::block_on(client.get(url.clone()).send()).unwrap_err();
+        server.join().unwrap();
+        let Failure::Transient { reason, .. } = classify(&url, None, &err, Offline::No) else {
+            panic!("a connection closed before its answer is tried again: {err:?}");
+        };
+        assert_eq!(reason, "127.0.0.1 closed the connection before answering");
     }
 
     #[test]
