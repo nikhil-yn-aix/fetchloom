@@ -745,13 +745,17 @@ impl Project {
                 }
             };
             let owner = folder.join("owner");
-            return Held {
+            let hold = Held {
                 lock,
                 owner: None,
                 removed: None,
             }
             .claim(&owner, command, now)
-            .map_err(|err| not_locked(&owner, &err));
+            .map_err(|err| not_locked(&owner, &err))?;
+            if matches!(hold, Hold::Held(_)) {
+                self.sweep_staged();
+            }
+            return Ok(hold);
         }
         Err(Error::new(
             Kind::LocalIo,
@@ -761,6 +765,21 @@ impl Project {
             ),
         )
         .help("check that nothing but fetchloom changes the .fetchloom folder, then run the command again"))
+    }
+
+    /// removes what a write killed between staging a file in `.fetchloom` and naming it left
+    /// there. only a command that holds the project stages one, so none is being written now.
+    fn sweep_staged(&self) {
+        let Ok(entries) = fs::read_dir(self.own_folder()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let staged = entry.file_name().to_str().is_some_and(is_staged)
+                && entry.file_type().is_ok_and(|found| found.is_file());
+            if staged && let Err(err) = fs::remove_file(entry.path()) {
+                tracing::debug!(%err, path = %entry.path().display(), "could not remove what a stopped write left");
+            }
+        }
     }
 
     /// ends `held`, the hold of a command that set out to start this project and did not, leaving
@@ -1110,6 +1129,20 @@ fn read_only(folder: &Path, err: &io::Error) -> bool {
             false
         }
     }
+}
+
+/// whether `file`, a name in `.fetchloom`, is how [`write_atomically_with`] stages data.toml,
+/// data.lock, the state or a list's part: a dot, the name, a dot and 8 hex digits, then `.tmp`.
+fn is_staged(file: &str) -> bool {
+    file.strip_prefix('.')
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+        .and_then(|rest| rest.rsplit_once('.'))
+        .is_some_and(|(name, random)| {
+            random.len() == 8
+                && random.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && (matches!(name, manifest::FILE | lock::FILE | "state")
+                    || lock::lists::is_part(name))
+        })
 }
 
 /// replaces `path` in one step, so a reader sees the old file or the new one, never half.
@@ -1822,6 +1855,62 @@ mod tests {
         assert!(!path.exists());
         assert!(matches!(project.hold("sync").unwrap(), Hold::Held(_)));
         assert!(!path.exists());
+    }
+
+    /// what a run killed between staging a file and naming it left in `.fetchloom`, a part of
+    /// tens of megabytes as like as data.lock or the state, goes once a command holds the
+    /// project; anything else there stays.
+    #[test]
+    fn holding_the_project_sweeps_what_a_killed_write_staged() {
+        let left = [
+            ".data.lock.0123abcd.tmp",
+            ".data.toml.89abcdef.tmp",
+            ".state.deadbeef.tmp",
+            ".clean.0123456789ab.tsv.zst.0badf00d.tmp",
+        ];
+        let kept = [
+            ".notes.0123abcd.tmp",
+            ".data.lock.tmp",
+            "data.lock.recovery.0123456789abcdef",
+        ];
+        let files: Vec<(String, &str)> = left
+            .iter()
+            .chain(&kept)
+            .map(|name| (format!(".fetchloom/{name}"), "x"))
+            .collect();
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), *text))
+            .collect();
+        let (_dir, project) = project(&files);
+        let own = project.own_folder();
+        // a write stopped between staging and naming, as a kill stops it
+        let stopped = std::panic::catch_unwind(|| {
+            write_atomically_with(&project.root.join(lock::FILE), |_| panic!("killed"))
+        });
+        assert!(stopped.is_err());
+        let staged = || {
+            fs::read_dir(&own)
+                .unwrap()
+                .filter(|entry| {
+                    let name = entry.as_ref().unwrap().file_name();
+                    let name = name.to_string_lossy();
+                    let planted = left.iter().chain(&kept).any(|file| *file == name);
+                    name.starts_with(".data.lock.") && !planted
+                })
+                .count()
+        };
+        assert_eq!(staged(), 1);
+        let Hold::Held(_held) = project.hold("sync").unwrap() else {
+            panic!("free")
+        };
+        assert_eq!(staged(), 0);
+        for name in left {
+            assert!(!own.join(name).exists(), "{name}");
+        }
+        for name in kept {
+            assert!(own.join(name).exists(), "{name}");
+        }
     }
 
     #[test]

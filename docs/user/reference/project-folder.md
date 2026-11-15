@@ -13,7 +13,7 @@ the project folder holds `data.toml` and `data.lock`, and its `.fetchloom/` hold
 | `.fetchloom/state` | compact JSON describing tracked placements |
 | `.fetchloom/builds/<recipe>.log` | the output of the last run of a [recipe](../guides/recipes.md)'s step, made anew for each run, readable by you only on linux and macos, keeping the latest 16 MiB |
 | `.fetchloom/data.toml.recovery.<16 hex digits>`, `.fetchloom/data.lock.recovery.<16 hex digits>` | exact pre-add metadata, retained if rollback fails |
-| `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind |
+| `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind, and the next command that changes the project removes one of `data.toml`, `data.lock`, the state or a list's part |
 | `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
 
 inside a git repository, every command that places files, `add`, `sync` and a `path` that syncs its dataset first, adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself.
