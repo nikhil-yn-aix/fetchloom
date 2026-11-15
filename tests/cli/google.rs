@@ -383,8 +383,8 @@ pub(crate) fn login(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     Ok(folder)
 }
 
-/// every file below `folder`, which no secret may reach.
-fn kept_files(folder: &std::path::Path, found: &mut Vec<(String, Vec<u8>)>) -> Result {
+/// every file below `folder`, with its path, for a search for secrets.
+pub(crate) fn kept_files(folder: &std::path::Path, found: &mut Vec<(String, Vec<u8>)>) -> Result {
     for entry in fs::read_dir(folder)? {
         let path = entry?.path();
         if path.is_dir() {

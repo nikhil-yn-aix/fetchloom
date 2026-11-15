@@ -9,6 +9,7 @@ use std::path::Path;
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use sha2::Sha256;
 
+use crate::google::kept_files;
 use crate::support::{Fetchloom, Part, Result, Routes, Sandbox, Server, reply, text};
 
 const A_CSV: &[u8] = b"site,value\nlab,1\n";
@@ -103,19 +104,6 @@ fn command(sandbox: &Sandbox, routes: &Routes, folder: &Path, args: &[&str]) -> 
     let mut command = sandbox.command_in(folder, args);
     command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
     command
-}
-
-/// every file under `folder`, named, for a search for secrets.
-fn kept_files(folder: &Path, found: &mut Vec<(String, Vec<u8>)>) -> Result {
-    for entry in fs::read_dir(folder)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            kept_files(&path, found)?;
-        } else {
-            found.push((path.display().to_string(), fs::read(&path)?));
-        }
-    }
-    Ok(())
 }
 
 fn assert_no_sas(surfaces: &[(String, Vec<u8>)]) {
