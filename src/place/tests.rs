@@ -1933,11 +1933,32 @@ fn files_in_memory_are_not_read_ahead() {
 
 /// a co-user of a shared cache may set any bit on an object they wrote; a clone keeps none that
 /// would let others run the placed file as the person who placed it.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn a_clone_never_takes_the_setuid_setgid_or_sticky_bit() {
     use std::os::unix::fs::PermissionsExt;
     let special = std::fs::Permissions::from_mode(0o7755);
     assert_eq!(super::clone_mode(special.clone(), false), 0o555);
     assert_eq!(super::clone_mode(special, true), 0o755);
+}
+
+/// a macos clone keeps its object's mode, as fclonefileat copies it, so the mode set through the
+/// placed file's handle drops what the object had beyond read, write and run.
+#[cfg(unix)]
+#[test]
+fn a_placed_file_made_read_only_keeps_no_setuid_bit() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("placed");
+    std::fs::write(&path, b"bytes").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o4755)).unwrap();
+    if std::fs::metadata(&path).unwrap().permissions().mode() & 0o4000 == 0 {
+        return crate::test_skips::skip("setuid", "this disk keeps no setuid bit");
+    }
+    let file = std::fs::File::open(&path).unwrap();
+
+    super::set_file_writable(&file, false).unwrap();
+
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o7777, 0o555, "{mode:o}");
 }

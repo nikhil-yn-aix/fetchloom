@@ -1441,7 +1441,7 @@ fn reflink(
 
 /// the mode a clone of a file of `permissions` gets: its read and run bits, writable as asked,
 /// never the setuid, setgid or sticky bit, which would let others run a placed file as its owner.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn clone_mode(permissions: Permissions, writable: bool) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     writable_as(permissions, writable).mode() & 0o777
@@ -1495,11 +1495,24 @@ fn fill(
     set_file_writable(output, writable)
 }
 
+/// sets the placed file `output` writable as asked, through its own handle, and on unix without
+/// the setuid, setgid or sticky bit a macos clone takes from its object.
 fn set_file_writable(output: &File, writable: bool) -> io::Result<()> {
     let before = output.metadata()?.permissions();
-    let after = writable_as(before.clone(), writable);
-    if before != after {
-        output.set_permissions(after)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = clone_mode(before.clone(), writable);
+        if before.mode() & 0o7777 != mode {
+            output.set_permissions(Permissions::from_mode(mode))?;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let after = writable_as(before.clone(), writable);
+        if before != after {
+            output.set_permissions(after)?;
+        }
     }
     Ok(())
 }
