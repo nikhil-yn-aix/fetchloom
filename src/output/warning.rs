@@ -16,6 +16,9 @@ pub(crate) enum Warning {
     /// a key went into a file of fetchloom's: the machine has no credential store, or
     /// `FETCHLOOM_KEYRING=false` keeps keys out of it.
     AuthNoKeyring,
+    /// after a sign-in, a variable or another file still gives the account a key, which runs use
+    /// before the one saved.
+    AuthOverridden,
     /// other users of the machine may read a file that holds logins or keys.
     AuthReadable,
     /// keys or credentials are set up in a way fetchloom cannot use, as the message says.
@@ -147,6 +150,7 @@ impl Warning {
             Warning::AuthKeyRemains => "auth.key_remains",
             Warning::AuthKeyUnsendable => "auth.key_unsendable",
             Warning::AuthNoKeyring => "auth.no_keyring",
+            Warning::AuthOverridden => "auth.overridden",
             Warning::AuthReadable => "auth.readable",
             Warning::AuthUnusable => "auth.unusable",
             Warning::BuildChanged => "build.changed",
@@ -235,6 +239,7 @@ mod tests {
             AuthKeyRemains,
             AuthKeyUnsendable,
             AuthNoKeyring,
+            AuthOverridden,
             AuthReadable,
             AuthUnusable,
             BuildChanged,

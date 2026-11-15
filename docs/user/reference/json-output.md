@@ -144,6 +144,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `auth.key_remains` | after `auth logout`, another place still holds a key for the account, which requests go on using |
 | `auth.key_unsendable` | a key holds a character no request header can carry, such as a line break, so it is never sent |
 | `auth.no_keyring` | this machine has no credential store, or `FETCHLOOM_KEYRING` is off, so `auth login` saved the key in fetchloom's own file: readable only by you on linux and macos, and on windows protected by your user profile's permissions when the file is inside the profile |
+| `auth.overridden` | `auth login` saved a key, but a variable set here, such as `ZENODO_TOKEN`, or a file the source's tools read first, such as `~/.kaggle/access_token` before `kaggle.json`, gives the account another key, which runs use instead |
 | `auth.readable` | other users of this machine may read a file that holds logins or keys, such as a `.netrc` open to them, or on windows a key file outside your user profile, which takes its folder's permissions |
 | `auth.unusable` | AWS keys, google credentials or azure credentials are set up in a way fetchloom cannot use, as the message says, so buckets and containers that need them fail the same way; `auth` lists the account as having none |
 | `build.changed` | a recipe changed since it was built, and data.lock still pins the result built before |

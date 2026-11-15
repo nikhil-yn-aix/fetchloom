@@ -278,6 +278,84 @@ fn a_key_without_a_home_of_its_own_needs_the_store_or_a_warning() -> Result {
     Ok(())
 }
 
+/// a key saved where a variable or another file still wins over it is kept all the same, and
+/// the sign-in says which key runs use and how to make the new one count, as `settings set`
+/// says of a setting a variable gives; the hint that other tools share the new key is left out.
+#[test]
+fn a_sign_in_says_when_another_key_still_wins() -> Result {
+    let sandbox = Sandbox::new()?;
+    let overridden = |output: &Output| -> Result<serde_json::Value> {
+        let document = json(output)?;
+        document["warnings"]
+            .as_array()
+            .and_then(|warnings| {
+                warnings
+                    .iter()
+                    .find(|warning| warning["kind"] == "auth.overridden")
+                    .cloned()
+            })
+            .ok_or_else(|| format!("no auth.overridden warning: {document}").into())
+    };
+    for (account, variable, key) in [
+        ("zenodo", "ZENODO_TOKEN", "z-key"),
+        ("hf", "HF_TOKEN", "hf_new"),
+    ] {
+        let mut command = sandbox.command(&[
+            "--json",
+            "auth",
+            "login",
+            account,
+            "--with-token",
+            "--offline",
+        ]);
+        command.env(variable, "from-the-variable");
+        let login = with_stdin(command, &format!("{key}\n"))?;
+        assert_eq!(login.status.code(), Some(0), "{}", text(&login.stderr)?);
+        let warning = overridden(&login)?;
+        assert_eq!(
+            warning["message"],
+            format!(
+                "{variable} is set here and wins over the key you saved, so runs where it is set use the key in {variable}"
+            )
+        );
+        assert_eq!(
+            warning["help"],
+            format!("unset {variable} where the key you saved should be used")
+        );
+    }
+    let folder = home(&sandbox).join(".kaggle");
+    std::fs::create_dir_all(&folder)?;
+    std::fs::write(folder.join("access_token"), "KGAT_current\n")?;
+    let pasted = r#"{"username":"ada","key":"api-key"}"#;
+    let login = with_stdin(
+        sandbox.command(&["auth", "login", "kaggle", "--with-token", "--offline"]),
+        pasted,
+    )?;
+    let stderr = text(&login.stderr)?;
+    assert_eq!(login.status.code(), Some(0), "{stderr}");
+    let shown = std::path::Path::new("~")
+        .join(".kaggle")
+        .join("access_token")
+        .display()
+        .to_string();
+    for told in [
+        format!("warning: {shown} holds a kaggle key, which runs use before the one you saved\n"),
+        format!("help: remove {shown} so runs use the key you saved\n"),
+    ] {
+        assert!(stderr.contains(&told), "{told}: {stderr}");
+    }
+    assert!(!stderr.contains("use this key too"), "{stderr}");
+    let kept = with_stdin(
+        sandbox.command(&["auth", "login", "kaggle", "--with-token", "--offline"]),
+        "KGAT_newer\n",
+    )?;
+    let stderr = text(&kept.stderr)?;
+    assert_eq!(kept.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("runs use before"), "{stderr}");
+    assert!(stderr.contains("use this key too"), "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn a_login_lands_in_netrc_for_curl_and_wget_too() -> Result {
     let sandbox = Sandbox::new()?;

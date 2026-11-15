@@ -463,7 +463,10 @@ async fn sign_in(
         saved_to.as_deref(),
         unanswered.as_deref(),
     );
-    if saved_to.is_some()
+    let outranked = saved_to.as_deref().and_then(|to| outranked(account, to));
+    if let Some((message, help)) = &outranked {
+        output.warn_with(Warning::AuthOverridden, message, help);
+    } else if saved_to.is_some()
         && let Some(told) = account.told_shared()
     {
         output.hint(&told);
@@ -473,6 +476,43 @@ async fn sign_in(
         user,
         saved_to,
     })
+}
+
+/// what runs use instead of the key a sign-in just saved to `saved_to`, and how to make the saved
+/// one count: a variable set here, or a file the source's own tools read first.
+fn outranked(account: &Account, saved_to: &str) -> Option<(String, String)> {
+    let var = &crate::machine::env;
+    match account.find(var)?.origin {
+        Origin::Variable(name) => Some((
+            format!(
+                "{name} is set here and wins over the key you saved, so runs where it is set use the key in {name}"
+            ),
+            format!("unset {name} where the key you saved should be used"),
+        )),
+        Origin::File(path) if path.display().to_string() != saved_to => {
+            let shown = units::path(&path);
+            // kagglesdk reads the file KAGGLE_API_TOKEN names before its own
+            let named = var("KAGGLE_API_TOKEN")
+                .is_some_and(|named| std::path::Path::new(&named) == path.as_path());
+            let help = if named {
+                format!(
+                    "unset KAGGLE_API_TOKEN, which names {shown}, so runs use the key you saved"
+                )
+            } else {
+                format!("remove {shown} so runs use the key you saved")
+            };
+            Some((
+                format!(
+                    "{shown} holds a {} key, which runs use before the one you saved",
+                    title(account)
+                ),
+                help,
+            ))
+        }
+        // only fetchloom's index sends runs to the credential store, and it names the key just
+        // saved
+        Origin::File(_) | Origin::Keyring => None,
+    }
 }
 
 /// the line that ends a sign-in: who signed in and where the key went, or, when the source was
