@@ -51,7 +51,7 @@ impl Doi {
     }
 
     /// asks doi.org where the DOI points and returns the source there.
-    pub(super) async fn locate(&self, api: &impl Api) -> Result<Reference, Error> {
+    pub(crate) async fn locate(&self, api: &impl Api) -> Result<Reference, Error> {
         let mut url = Url::parse("https://doi.org/api/handles/")
             .map_err(|_| self.invalid("the handles API URL is invalid"))?;
         // a DOI is opaque, so its slashes, query marks and fragments belong to one path segment

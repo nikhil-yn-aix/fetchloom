@@ -955,6 +955,52 @@ fn a_dataverse_sign_in_for_a_host_data_toml_names_says_so() -> Result {
     Ok(())
 }
 
+/// a dataverse sign-in offered for the host a DOI in data.toml leads to says so as well, naming
+/// the DOI, since doi.org's record of a DOI anyone may register chose that host.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_dataverse_sign_in_for_a_host_a_data_toml_doi_leads_to_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let handle = r#"{"responseCode":1,"handle":"10.1/Z","values":[{"index":1,"type":"URL","data":{"format":"string","value":"https://dv.example.org/dataset.xhtml?persistentId=doi:10.1/Z"}}]}"#;
+    let routes = Routes::start(vec![
+        (
+            "/doi.org/api/handles/10.1%2Fz".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                handle.as_bytes(),
+            ),
+        ),
+        (
+            "/dv.example.org/api/datasets/:persistentId/versions/:latest-published?persistentId=doi%3A10.1%2FZ"
+                .to_owned(),
+            reply("401 Unauthorized", &[("Content-Length", "0")], b""),
+        ),
+    ])?;
+    std::fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.z]\nref = \"doi:10.1/Z\"\n",
+    )?;
+    let mut command = sandbox.command(&["sync"]);
+    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+    let Some((_, screen)) = crate::support::typed(&sandbox.work(), &command, "", "now?", "\r")?
+    else {
+        return Ok(());
+    };
+    let screen = screen.replace('\r', "");
+    assert!(
+        screen.contains("sign in to dataverse at dv.example.org now? [y/N]"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains(
+            "Check that you trust dv.example.org: this project's data.toml named doi:10.1/z, which leads there"
+        ),
+        "{screen}"
+    );
+    Ok(())
+}
+
 /// the command runs again after signing in, and its refusal never offers another sign-in; a key
 /// kept for the command alone is named so, and a saved key's help says how to check it.
 #[cfg(target_os = "linux")]

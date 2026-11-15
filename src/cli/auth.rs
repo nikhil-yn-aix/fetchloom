@@ -1263,12 +1263,9 @@ pub(super) async fn offer(
         ));
     }
     if let Account::Dataverse(host) = account
-        && named_here(account)
+        && let Some(named) = named_here(context, account).await
     {
-        output.say(&format!(
-            "{:>11} that you trust {host}: this project's data.toml named it",
-            "Check"
-        ));
+        output.say(&format!("{:>11} that you trust {host}: {named}", "Check"));
     }
     if need.site {
         let signed = site::offered(context, account)
@@ -1296,14 +1293,37 @@ pub(super) async fn offer(
     Ok(true)
 }
 
-/// whether the data.toml of the project here names a dataset on the dataverse `account` signs in
-/// to, so the host a refusal offers a sign-in for came from a file, not from the person.
-fn named_here(account: &Account) -> bool {
-    std::env::current_dir()
+/// how the data.toml of the project here led to the dataverse `account` signs in to, so the host
+/// a refusal offers a sign-in for came from a file, not from the person: it names a dataset
+/// there, or a DOI that doi.org says leads there. none when it names neither.
+async fn named_here(context: &Context, account: &Account) -> Option<String> {
+    use crate::source::Reference;
+    let (_, manifest) = std::env::current_dir()
         .ok()
-        .and_then(|here| crate::project::Project::find(&here))
-        .and_then(|project| project.manifest().ok())
-        .is_some_and(|(_, manifest)| names(&manifest, account))
+        .and_then(|here| crate::project::Project::find(&here))?
+        .manifest()
+        .ok()?;
+    if names(&manifest, account) {
+        return Some("this project's data.toml named it".to_owned());
+    }
+    let net = context.net();
+    for entry in manifest.datasets.values() {
+        let crate::project::manifest::Origin::Source(source) = &entry.origin else {
+            continue;
+        };
+        let Ok(parsed) = Reference::parse(&source.reference) else {
+            continue;
+        };
+        if let Reference::Doi(doi) = &parsed.reference
+            && let Ok(Reference::Dataverse(dataset)) = doi.locate(&net).await
+            && dataset.account() == *account
+        {
+            return Some(format!(
+                "this project's data.toml named {doi}, which leads there"
+            ));
+        }
+    }
+    None
 }
 
 /// whether `manifest` names a dataset on the dataverse `account` signs in to.
