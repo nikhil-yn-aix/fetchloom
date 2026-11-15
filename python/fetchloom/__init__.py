@@ -382,21 +382,19 @@ def _as_typed(text: str, project: str | os.PathLike[str], placeholders: dict[str
 def _meant(help: str | None, project: str | os.PathLike[str], placeholders: dict[str, str]) -> str | None:
     """the name fetchloom guessed was meant in ``help``, its did-you-mean for a name given to
     ``path`` in ``project``, whose folder ``placeholders`` may name, that names nothing, or None
-    for any other help and for a name a shell needs quoted. fetchloom names that folder after
-    ``-C`` as the system does, absolute, so ``project`` is looked for as given and made absolute."""
-    folders = [""]
+    for any other help and for a name a shell needs quoted. that help repeats the command line as
+    typed, so the folder after ``-C`` is ``project`` as the helper gave it."""
+    folder = ""
     if os.fspath(project) != ".":
-        local = _local(project)
-        shown = [_folder_shown(folder, placeholders) for folder in dict.fromkeys([local, os.path.abspath(local)])]
-        folders = [f"-C {folder} " for folder in shown if folder is not None]
+        shown = _folder_shown(_local(project), placeholders)
+        if shown is None:
+            return None
+        folder = f"-C {shown} "
     flags = "(?: --(?:yes|offline|locked))*"
-    for folder in folders:
-        guess = re.fullmatch(
-            rf"did you mean `fetchloom {re.escape(folder)}path{flags} ([A-Za-z0-9_./:@%+=,~-]+)`\?", help or ""
-        )
-        if guess:
-            return guess.group(1)
-    return None
+    guess = re.fullmatch(
+        rf"did you mean `fetchloom {re.escape(folder)}path{flags} ([A-Za-z0-9_./:@%+=,~-]+)`\?", help or ""
+    )
+    return guess.group(1) if guess else None
 
 
 def _path_call(name: str, project: str | os.PathLike[str], switches: dict[str, bool]) -> str:
