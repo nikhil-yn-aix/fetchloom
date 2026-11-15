@@ -496,13 +496,7 @@ fn tell_swept(
             ),
             &freed.not_removed,
         );
-        let result = serde_json::to_value(collected(swept, inputs)).map_err(|err| {
-            Error::new(
-                Kind::LocalIo,
-                format!("cannot format the cache result: {err}"),
-            )
-        })?;
-        return Err(error.with_result(result));
+        return Err(error.with_report(&collected(swept, inputs)));
     }
     let needs = if projects == 1 { "needs" } else { "need" };
     let projects = units::count(projects as u64, "project", "projects");
@@ -664,13 +658,7 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     context.stop.finish();
     drop((bar, ticker));
     if let Err(error) = report_checked(context, &cache, &checked) {
-        let result = serde_json::to_value(&checked).map_err(|err| {
-            Error::new(
-                Kind::LocalIo,
-                format!("cannot format the cache result: {err}"),
-            )
-        })?;
-        return Err(error.with_result(result));
+        return Err(error.with_report(&checked));
     }
     Ok(checked)
 }
@@ -1377,6 +1365,38 @@ mod tests {
             "nothing is a day old"
         );
         assert_eq!(crate::threads::spawns_left(), Some(usize::MAX));
+    }
+
+    /// a sweep that could not remove a file says so though its report has no JSON form, as where
+    /// the cache's folder is named in bytes that are not UTF-8.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_sweep_says_what_failed_though_its_report_has_no_json() {
+        use std::os::unix::ffi::OsStrExt;
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        let cache = Cache::open(root).unwrap();
+        let digest = crate::digest::sha256(b"abc");
+        fs::create_dir_all(cache.object_path(&digest).join("inside")).unwrap();
+        let mut swept = Swept::default();
+        cache.free_input(&digest, &mut swept.freed.not_removed);
+        assert_eq!(swept.freed.not_removed.len(), 1);
+        let style = Style {
+            color: false,
+            unicode: true,
+            interactive: false,
+            watched: false,
+            links: false,
+            accessible: false,
+        };
+        let context = super::super::Context::new(Output::new(style, Level::Quiet, false, false));
+        let Err(error) = tell_swept(&context, swept, 0, None) else {
+            panic!("the sweep failed");
+        };
+        assert_eq!(
+            error.message,
+            "1 item in the cache could not be read or removed"
+        );
     }
 
     /// a lock pinning set.zip, cached and unpacked to a.txt and b.txt, and the three as stored.

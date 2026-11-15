@@ -795,15 +795,7 @@ fn ask(context: &Context, plan: &Plan) -> Result<bool, Error> {
                 format!("freeing {what} from the cache needs a yes"),
             )
             .help("answer yes at a terminal, or add --yes, once you are sure the mirror named above keeps these files");
-            let result =
-                serde_json::to_value(super::collected(super::Swept::default(), Some(inputs)))
-                    .map_err(|err| {
-                        Error::new(
-                            Kind::LocalIo,
-                            format!("cannot format the cache result: {err}"),
-                        )
-                    })?;
-            Err(error.with_result(result))
+            Err(error.with_report(&super::collected(super::Swept::default(), Some(inputs))))
         }
     }
 }
