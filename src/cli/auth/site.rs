@@ -648,6 +648,7 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
     let file = crate::machine::settings_folder(var)
         .unwrap_or_default()
         .join("credentials.json");
+    let privacy = super::Privacy::of(var, &file);
     let asked = !(told || context.yes);
     if asked {
         let why = if store::keyring_allowed(var) {
@@ -656,7 +657,8 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
             "FETCHLOOM_KEYRING is off"
         };
         let question = format!(
-            "{why}, so {they} would go in a file only you can read\nsave {it} to {}?",
+            "{why}, so {they} would go in {}\nsave {it} to {}?",
+            privacy.file(),
             crate::units::path(&file)
         );
         agrees(context, host, saved, &question, false)?;
@@ -666,12 +668,14 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
         context.output.warn(
             Warning::AuthNoKeyring,
             &format!(
-                "{}, so {they} went in {}, readable only by you",
+                "{}, so {they} went in {}{}",
                 super::no_store(var),
-                crate::units::path(&file)
+                crate::units::path(&file),
+                privacy.saved()
             ),
         );
     }
+    super::warn_if_shared(&context.output, &file, super::KEYRING_OR_PROFILE);
     Ok(origin)
 }
 

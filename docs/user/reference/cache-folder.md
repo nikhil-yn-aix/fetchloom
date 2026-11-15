@@ -18,6 +18,8 @@ fetchloom cache gc
 
 nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working directory after `-C`. on linux and macos, a cache folder fetchloom creates is readable by you only; one that already exists keeps its permissions.
 
+on windows a folder takes its permissions from the folders above it, and fetchloom changes none. inside your user profile, as the default in `%LOCALAPPDATA%` is, they keep the cache yours. a cache folder outside the profile, such as `C:\fetchloom-cache` or `D:\cache`, may let other users of the machine change the files your projects place from it, so each run that opens it warns with `cache.foreign` once. a cache on a FAT or exFAT drive, which keeps no permissions, is never warned about. a team that shares a cache on purpose can leave the warning.
+
 ```text
 <cache>/
   CACHEDIR.TAG

@@ -143,15 +143,15 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `archive.unreadable` | a file named as an archive is no archive fetchloom can read, so it stays as it is |
 | `auth.key_remains` | after `auth logout`, another place still holds a key for the account, which requests go on using |
 | `auth.key_unsendable` | a key holds a character no request header can carry, such as a line break, so it is never sent |
-| `auth.no_keyring` | this machine has no credential store, so `auth login` saved the key in a file readable only by you |
-| `auth.readable` | other users of this machine may read a file that holds logins or keys, such as a `.netrc` open to them |
+| `auth.no_keyring` | this machine has no credential store, or `FETCHLOOM_KEYRING` is off, so `auth login` saved the key in fetchloom's own file: readable only by you on linux and macos, and on windows protected by your user profile's permissions when the file is inside the profile |
+| `auth.readable` | other users of this machine may read a file that holds logins or keys, such as a `.netrc` open to them, or on windows a key file outside your user profile, which takes its folder's permissions |
 | `auth.unusable` | AWS keys, google credentials or azure credentials are set up in a way fetchloom cannot use, as the message says, so buckets and containers that need them fail the same way; `auth` lists the account as having none |
 | `build.changed` | a recipe changed since it was built, and data.lock still pins the result built before |
 | `build.left_out` | a recipe's pinned result is on neither this machine nor a mirror, so the run leaves it out |
 | `build.unbuilt` | a recipe is not built yet |
 | `build.unchecked` | whether a recipe changed since its build could not be told |
 | `cache.changed` | a cached file changed, so it is downloaded again the next time it is needed |
-| `cache.foreign` | the cache folder belongs to another user, or every user of the machine may write to it, so they can change the files projects place from it |
+| `cache.foreign` | the cache folder belongs to another user, or every user of the machine may write to it, or on windows it is outside your user profile on a drive other than FAT or exFAT, so it takes its permissions from the folders above it; any of them may let others change the files projects place from it |
 | `cache.over_budget` | a run told `--yes` goes on though its downloads take the cache past the `cache_budget` setting; `details` says what would free room |
 | `cache.unreadable` | a path in the cache, or the data.lock of a project it keeps files for, could not be read or removed |
 | `cache.unregistered` | the project could not join the cache's list of projects, so `cache gc` may delete files it needs |

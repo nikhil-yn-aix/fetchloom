@@ -1337,3 +1337,54 @@ fn a_cache_folder_others_can_write_is_warned_about() -> Result {
     );
     Ok(())
 }
+
+/// on windows a folder takes its permissions from the folders above it, so a cache outside the
+/// user profile may let the machine's other users change what projects place from it; one inside
+/// the profile does not, nor one on a FAT or exFAT drive, which keeps no permissions.
+#[cfg(windows)]
+#[test]
+fn a_cache_folder_outside_the_windows_profile_is_warned_about() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::create_dir_all(sandbox.cache())?;
+    let root = sandbox.work().parent().ok_or("no sandbox")?.to_path_buf();
+    // the sandbox's USERPROFILE is its home folder, beside the cache rather than above it
+    let report =
+        |profile: Option<&std::path::Path>, disk: Option<&str>| -> Result<serde_json::Value> {
+            let mut command = sandbox.command(&["--json", "cache"]);
+            command.env_remove("FETCHLOOM_TEST_PROFILE");
+            if let Some(profile) = profile {
+                command.env("USERPROFILE", profile);
+            }
+            if let Some(disk) = disk {
+                command.env("FETCHLOOM_TEST_FILESYSTEM", disk);
+            }
+            json(&command.output()?)
+        };
+
+    let outside = report(None, None)?;
+
+    let warning = crate::support::warning(&outside, "cache.foreign");
+    let message = warning["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("the cache folder ")
+            && message.ends_with(" is outside your user profile and takes its permissions from the folders above it, so other users of this machine may be able to change the files projects place from it"),
+        "{outside}"
+    );
+    assert!(
+        warning["help"]
+            .as_str()
+            .is_some_and(|help| help.starts_with("keep the cache inside your user profile")),
+        "{outside}"
+    );
+    for (case, document) in [
+        ("inside the profile", report(Some(&root), None)?),
+        ("on exfat", report(None, Some("exfat"))?),
+        ("on fat32", report(None, Some("fat32"))?),
+    ] {
+        assert!(
+            !crate::support::kinds(&document).contains(&"cache.foreign"),
+            "{case}: {document}"
+        );
+    }
+    Ok(())
+}

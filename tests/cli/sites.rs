@@ -1002,9 +1002,13 @@ fn a_key_saved_without_a_credential_store_names_its_file_as_the_sign_in_line_doe
         assert!(login.status.success(), "{stderr}");
         let warned = stderr.lines().find_map(|line| {
             let told = line.strip_prefix("warning: FETCHLOOM_KEYRING is off, so ")?;
-            told.strip_suffix(", readable only by you")?
-                .rsplit(" in ")
-                .next()
+            // windows gives the file its folder's permissions, which the sandbox's profile keeps
+            let kept = if cfg!(windows) {
+                ", protected by your user profile's permissions"
+            } else {
+                ", readable only by you"
+            };
+            told.strip_suffix(kept)?.rsplit(" in ").next()
         });
         let signed = stderr
             .lines()

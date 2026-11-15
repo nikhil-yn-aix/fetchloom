@@ -355,6 +355,48 @@ pub(crate) fn settings_folder(var: Var<'_>) -> Option<PathBuf> {
         .map(|config| config.join("fetchloom"))
 }
 
+/// whether `path` is inside this user's profile, `USERPROFILE`, where windows keeps a person's
+/// files to themselves: a folder elsewhere takes its permissions from the folders above it, which
+/// may let other users in. both are resolved first, so a link counts where it leads and a file
+/// not made yet where its folder is. a debug build takes the profile from
+/// `FETCHLOOM_TEST_PROFILE` when it is set, since a CLI test's `USERPROFILE` is a sandbox folder
+/// inside the real profile.
+pub(crate) fn in_profile(var: Var<'_>, path: &Path) -> bool {
+    let named = |name: &str| var(name).filter(|value| !value.is_empty());
+    #[cfg(debug_assertions)]
+    let profile = named("FETCHLOOM_TEST_PROFILE").or_else(|| named("USERPROFILE"));
+    #[cfg(not(debug_assertions))]
+    let profile = named("USERPROFILE");
+    profile.is_some_and(|profile| within(&resolved(path), &resolved(Path::new(&profile))))
+}
+
+/// `path` made absolute, its longest start that exists followed through links and junctions.
+fn resolved(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    absolute
+        .ancestors()
+        .find_map(|start| {
+            let real = std::fs::canonicalize(start).ok()?;
+            Some(real.join(absolute.strip_prefix(start).ok()?))
+        })
+        .unwrap_or(absolute)
+}
+
+/// whether `path` is `profile` or inside it, as windows names files: part by part, so
+/// C:\Users\bob-shared is not inside C:\Users\bob, in any case, and with or without the `\\?\` a
+/// resolved path starts with.
+pub(crate) fn within(path: &Path, profile: &Path) -> bool {
+    let plain = |path: &Path| {
+        let text = path.to_string_lossy().to_lowercase();
+        let text = match text.strip_prefix(r"\\?\unc\") {
+            Some(share) => format!(r"\\{share}"),
+            None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
+        };
+        PathBuf::from(text)
+    };
+    plain(path).starts_with(plain(profile))
+}
+
 /// whether the on/off variable `name` is on, as [`switched`] reads it: a value it cannot read is
 /// off.
 pub(crate) fn is_on(var: Var<'_>, name: &str) -> bool {
@@ -386,6 +428,69 @@ pub(crate) fn switched(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// windows keeps a file private inside the user's profile, told part by part and in any case,
+    /// so a folder whose name only starts with the profile's is outside it.
+    #[test]
+    fn a_path_is_in_the_profile_only_at_or_below_it() {
+        let profile = Path::new("C:/Users/Ada");
+        for (path, inside) in [
+            ("C:/Users/Ada", true),
+            (
+                "C:/Users/Ada/AppData/Roaming/fetchloom/credentials.json",
+                true,
+            ),
+            ("c:/users/ada/appdata/local/fetchloom", true),
+            ("C:/Users/Ada-shared/cache", false),
+            ("C:/Users/Public/cache", false),
+            ("C:/Users", false),
+            ("D:/Users/Ada/cache", false),
+            ("C:/fetchloom-cache", false),
+        ] {
+            assert_eq!(within(Path::new(path), profile), inside, "{path}");
+        }
+    }
+
+    /// `fs::canonicalize` on windows starts a path with `\\?\`, or `\\?\UNC\` for a share, which
+    /// names the same folder as the path without it.
+    #[cfg(windows)]
+    #[test]
+    fn a_resolved_windows_path_is_in_the_profile_its_plain_form_is() {
+        let profile = Path::new(r"C:\Users\Ada");
+        assert!(within(
+            Path::new(r"\\?\C:\Users\Ada\AppData\Local\fetchloom"),
+            profile
+        ));
+        assert!(within(
+            Path::new(r"C:\Users\Ada\cache"),
+            Path::new(r"\\?\C:\Users\Ada")
+        ));
+        assert!(!within(Path::new(r"\\?\D:\Users\Ada\cache"), profile));
+        assert!(within(
+            Path::new(r"\\?\UNC\server\homes\ada\cache"),
+            Path::new(r"\\server\homes\Ada")
+        ));
+    }
+
+    /// a link in the profile to a folder outside it holds what it leads to, so it is outside;
+    /// a file not made yet is where its folder is.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_profile_is_outside_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (profile, elsewhere) = (root.path().join("profile"), root.path().join("elsewhere"));
+        fs::create_dir_all(profile.join("AppData")).unwrap();
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, profile.join("linked")).unwrap();
+        let var = |name: &str| (name == "USERPROFILE").then(|| profile.clone().into_os_string());
+        assert!(in_profile(
+            &var,
+            &profile.join("AppData/fetchloom/credentials.json")
+        ));
+        assert!(!in_profile(&var, &profile.join("linked/cache")));
+        assert!(!in_profile(&var, &elsewhere.join("cache")));
+        assert!(!in_profile(&|_: &str| None, &profile.join("AppData")));
+    }
 
     /// a fixture root holding `files`, each a path below the root and its text.
     fn root(files: &[(&str, &str)]) -> tempfile::TempDir {

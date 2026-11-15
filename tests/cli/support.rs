@@ -250,6 +250,10 @@ impl Sandbox {
             .env("LOCALAPPDATA", &home)
             // a test never reads or writes the credential store of the machine running it
             .env("FETCHLOOM_KEYRING", "0")
+            // USERPROFILE is a folder of the sandbox's own, but all it makes sits in this
+            // machine's temp folder, inside the real profile on windows: a test's cache and key
+            // file count as inside the profile, as a person's do
+            .env("FETCHLOOM_TEST_PROFILE", std::env::temp_dir())
             .env("FETCHLOOM_TEST_TICKER", "off")
             // a build's floor would follow the free space of the disk the tests run on; a test
             // of the floor sets its own

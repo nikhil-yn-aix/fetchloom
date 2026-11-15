@@ -731,7 +731,7 @@ fn save(
         |err: std::io::Error| Error::io(format!("could not save the {} key", title(account)), &err);
     match account.home(var, secret) {
         Home::File(path) => {
-            let (question, default) = save_question(account, &path, false);
+            let (question, default) = save_question(account, &path, false, Privacy::of(var, &path));
             if !agrees(question, default)? {
                 return Ok(None);
             }
@@ -741,11 +741,11 @@ fn save(
                 format!("{secret}\n")
             };
             store::write_private(&path, text.as_bytes()).map_err(failed)?;
-            warn_if_shared(output, &path);
+            warn_if_shared(output, &path, PROFILE_OR_PERMISSIONS);
             Ok(Some(path.display().to_string()))
         }
         Home::Netrc(path) => {
-            let (question, default) = save_question(account, &path, false);
+            let (question, default) = save_question(account, &path, false, Privacy::of(var, &path));
             if !agrees(question, default)? {
                 return Ok(None);
             }
@@ -753,7 +753,7 @@ fn save(
                 return Ok(None);
             };
             auth::netrc::save(&path, host, login.unwrap_or_default(), secret).map_err(failed)?;
-            warn_if_shared(output, &path);
+            warn_if_shared(output, &path, PROFILE_OR_PERMISSIONS);
             Ok(Some(path.display().to_string()))
         }
         Home::Store => {
@@ -775,8 +775,12 @@ fn save(
                 .unwrap_or_default()
                 .join("credentials.json");
             if !told {
-                let (question, default) =
-                    save_question(account, &file, !store::keyring_allowed(var));
+                let (question, default) = save_question(
+                    account,
+                    &file,
+                    !store::keyring_allowed(var),
+                    Privacy::of(var, &file),
+                );
                 if !agrees(question, default)? {
                     output.hint(&format!(
                         "to keep it out of files, set {} in your environment instead",
@@ -790,16 +794,66 @@ fn save(
                 output.warn(
                     Warning::AuthNoKeyring,
                     &format!(
-                        "{}, so the key is saved in {}, readable only by you",
+                        "{}, so the key is saved in {}{}",
                         no_store(var),
-                        units::path(&file)
+                        units::path(&file),
+                        Privacy::of(var, &file).saved()
                     ),
                 );
             }
+            warn_if_shared(output, &file, KEYRING_OR_PROFILE);
             Ok(Some(file.display().to_string()))
         }
     }
 }
+
+/// how fetchloom's own key file is kept from other users of this machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Privacy {
+    /// unix makes the file its owner's alone.
+    Owner,
+    /// on windows a file takes its folder's permissions, which inside the user profile are the
+    /// user's own.
+    Profile,
+    /// on windows outside the profile, where its folder's permissions may let others read it.
+    Open,
+}
+
+impl Privacy {
+    /// how the key file at `file` is kept: fetchloom changes no windows permissions, since that
+    /// takes unsafe code or a program that rewrites them, as ransomware does.
+    pub(super) fn of(var: crate::machine::Var<'_>, file: &std::path::Path) -> Privacy {
+        if !cfg!(windows) {
+            Privacy::Owner
+        } else if crate::machine::in_profile(var, file) {
+            Privacy::Profile
+        } else {
+            Privacy::Open
+        }
+    }
+
+    /// what a line says of the file after its name, once keys are saved there; none outside the
+    /// profile, where [`warn_if_shared`] says who may read it.
+    pub(super) fn saved(self) -> &'static str {
+        match self {
+            Privacy::Owner => ", readable only by you",
+            Privacy::Profile => ", protected by your user profile's permissions",
+            Privacy::Open => "",
+        }
+    }
+
+    /// the file as the question before saving names it, short enough for one terminal line.
+    pub(super) fn file(self) -> &'static str {
+        match self {
+            Privacy::Owner => "a file only you can read",
+            Privacy::Profile => "a file your user profile protects",
+            Privacy::Open => "a file other users here may read",
+        }
+    }
+}
+
+/// the help when fetchloom's own key file is outside the windows user profile.
+pub(super) const KEYRING_OR_PROFILE: &str = "to keep it private, leave FETCHLOOM_KEYRING on, so windows credential manager keeps it, or keep APPDATA inside your user profile";
 
 /// where the key of `account` is kept: where it is found, or where the index of saved keys still
 /// lists one the store would not give, as a locked keyring keeps it. none when nothing is.
@@ -826,10 +880,16 @@ fn not_removed(doing: &str, typed: &str, err: &std::io::Error) -> Error {
 }
 
 /// the help when the credential store would not take `it`: to keep it in fetchloom's own file
-/// instead, after unlocking the store when it is `locked`.
+/// instead, after unlocking the store when it is `locked`. only unix makes that file its owner's
+/// alone; on windows it takes its folder's permissions, which the save then tells.
 fn elsewhere(it: &str, locked: bool) -> String {
+    let only = if cfg!(windows) {
+        ""
+    } else {
+        ", readable only by you"
+    };
     let file = format!(
-        "set FETCHLOOM_KEYRING=false to keep {it} in fetchloom's own file, readable only by you, then run it again"
+        "set FETCHLOOM_KEYRING=false to keep {it} in fetchloom's own file{only}, then run it again"
     );
     if !locked {
         return file;
@@ -861,9 +921,14 @@ pub(super) fn asking_store<T>(output: &crate::output::Output, call: impl FnOnce(
 
 /// the question before saving `account`'s key to the file `path`, and the answer enter gives:
 /// yes for a file the source's own tools read, no for the file keys go in without a credential
-/// store, which `off` says `FETCHLOOM_KEYRING` turned off. the tools are named once the key is
-/// saved, so the question fits a terminal.
-fn save_question(account: &Account, path: &std::path::Path, off: bool) -> (String, bool) {
+/// store, which `off` says `FETCHLOOM_KEYRING` turned off and `privacy` says how it is kept. the
+/// tools are named once the key is saved, so the question fits a terminal.
+fn save_question(
+    account: &Account,
+    path: &std::path::Path,
+    off: bool,
+    privacy: Privacy,
+) -> (String, bool) {
     let save = format!("save it to {}?", units::path(path));
     if account.shared_with().is_some() || matches!(account, Account::Login(_)) {
         (save, true)
@@ -874,7 +939,7 @@ fn save_question(account: &Account, path: &std::path::Path, off: bool) -> (Strin
             "no credential store here"
         };
         (
-            format!("{why}, so it would go in a file only you can read\n{save}"),
+            format!("{why}, so it would go in {}\n{save}", privacy.file()),
             false,
         )
     }
@@ -899,28 +964,24 @@ fn remove_question(tools: &str, path: &std::path::Path) -> String {
 }
 
 /// on windows a saved file takes its folder's permissions. the profile keeps other users out, but
-/// a folder elsewhere, such as an `HF_HOME` on another drive, may let them read the key.
-fn warn_if_shared(output: &crate::output::Output, path: &std::path::Path) {
-    if !cfg!(windows) {
-        return;
-    }
-    // compared part by part, so C:\Users\bob-shared is not inside C:\Users\bob
-    let lower =
-        |path: &std::path::Path| std::path::PathBuf::from(path.to_string_lossy().to_lowercase());
-    let inside = crate::machine::env("USERPROFILE")
-        .map(std::path::PathBuf::from)
-        .is_some_and(|profile| lower(path).starts_with(lower(&profile)));
-    if !inside {
+/// a folder elsewhere, such as an `HF_HOME` on another drive, may let them read the key, which a
+/// warning with `help` says.
+fn warn_if_shared(output: &crate::output::Output, path: &std::path::Path, help: &str) {
+    if cfg!(windows) && !crate::machine::in_profile(&crate::machine::env, path) {
         output.warn_with(
             Warning::AuthReadable,
             &format!(
-                "{} is outside your user folder, so other users of this machine may be able to read it",
+                "{} is outside your user profile, so other users of this machine may be able to read it",
                 path.display()
             ),
-            "keep the key in your profile, or limit the folder's permissions",
+            help,
         );
     }
 }
+
+/// the help when a source's own key file is outside the windows user profile.
+const PROFILE_OR_PERMISSIONS: &str =
+    "keep the key in your user profile, or limit the folder's permissions";
 
 /// a `kaggle.json` as the kaggle tools write it, from its pasted contents.
 fn kaggle_json(secret: &str) -> Result<String, Error> {
@@ -1278,10 +1339,15 @@ mod tests {
     }
 
     /// a store that is locked names how to unlock it: on macos the command that asks for the
-    /// keychain's password in a terminal, over ssh too.
+    /// keychain's password in a terminal, over ssh too. the file it offers instead is said to be
+    /// the user's alone only where fetchloom makes it so: windows gives it its folder's permissions.
     #[test]
     fn a_locked_store_says_how_to_unlock_it() {
-        let file = "set FETCHLOOM_KEYRING=false to keep the key in fetchloom's own file, readable only by you, then run it again";
+        let file = if cfg!(windows) {
+            "set FETCHLOOM_KEYRING=false to keep the key in fetchloom's own file, then run it again"
+        } else {
+            "set FETCHLOOM_KEYRING=false to keep the key in fetchloom's own file, readable only by you, then run it again"
+        };
         let unlock = if cfg!(target_os = "macos") {
             "unlock the macos keychain with `security unlock-keychain`"
         } else if cfg!(windows) {
@@ -1429,8 +1495,10 @@ mod tests {
             ),
         ] {
             let path = std::path::Path::new(path);
-            questions.push(save_question(account, path, false).0);
-            questions.push(save_question(account, path, true).0);
+            for privacy in [Privacy::Owner, Privacy::Profile, Privacy::Open] {
+                questions.push(save_question(account, path, false, privacy).0);
+                questions.push(save_question(account, path, true, privacy).0);
+            }
             if let Some(tools) = account.shared_with() {
                 questions.push(remove_question(tools, path));
             }

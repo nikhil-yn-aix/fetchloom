@@ -19,6 +19,55 @@ fn home(sandbox: &Sandbox) -> std::path::PathBuf {
         .unwrap_or_default()
 }
 
+/// on windows fetchloom's own key file takes its folder's permissions: inside the user profile
+/// they keep it the user's, which the saved line says; outside it the line claims nothing, and a
+/// warning says other users may read it and how to keep it private.
+#[cfg(windows)]
+#[test]
+fn a_key_file_outside_the_windows_profile_is_said_to_be_readable_by_others() -> Result {
+    let sandbox = Sandbox::new()?;
+    let login = |appdata: Option<&std::path::Path>| -> Result<String> {
+        let mut command =
+            sandbox.command(&["auth", "login", "zenodo", "--with-token", "--offline"]);
+        // the sandbox's USERPROFILE is its home folder, which holds its APPDATA
+        command.env_remove("FETCHLOOM_TEST_PROFILE");
+        if let Some(appdata) = appdata {
+            command.env("APPDATA", appdata);
+        }
+        let output = with_stdin(command, "z-file\n")?;
+        let stderr = text(&output.stderr)?;
+        assert!(output.status.success(), "{stderr}");
+        Ok(stderr)
+    };
+
+    let inside = login(None)?;
+    assert!(
+        inside.contains("credentials.json, protected by your user profile's permissions"),
+        "{inside}"
+    );
+    assert!(
+        !inside.contains("only by you") && !inside.contains("may be able to read"),
+        "{inside}"
+    );
+
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let outside = login(Some(&elsewhere))?;
+    let file = elsewhere.join("fetchloom").join("credentials.json");
+    assert!(
+        outside.contains(&format!(
+            "{} is outside your user profile, so other users of this machine may be able to read it",
+            file.display()
+        )),
+        "{outside}"
+    );
+    assert!(outside.contains("leave FETCHLOOM_KEYRING on"), "{outside}");
+    assert!(
+        !outside.contains("only by you") && !outside.contains("protected by"),
+        "{outside}"
+    );
+    Ok(())
+}
+
 #[test]
 fn nobody_is_signed_in_on_a_fresh_machine() -> Result {
     let sandbox = Sandbox::new()?;

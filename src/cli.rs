@@ -526,10 +526,17 @@ fn tell_exposed(output: &Output, root: &std::path::Path) {
         // a run may open the cache more than once, and says this only the first time
         static TOLD: std::sync::Once = std::sync::Once::new();
         TOLD.call_once(|| {
+            let keep = if cfg!(windows) {
+                "keep the cache inside your user profile, as the one in LOCALAPPDATA is"
+            } else {
+                "keep the cache in a folder only you can write"
+            };
             output.warn_with(
                 Warning::CacheForeign,
                 &exposed,
-                "keep the cache in a folder only you can write, set with `fetchloom settings set cache <folder>` or FETCHLOOM_CACHE, unless your team shares this one on purpose",
+                &format!(
+                    "{keep}, set with `fetchloom settings set cache <folder>` or FETCHLOOM_CACHE, unless your team shares this one on purpose"
+                ),
             );
         });
     }

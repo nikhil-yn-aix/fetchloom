@@ -110,8 +110,9 @@ fn adoptable(root: &Path) -> io::Result<()> {
 }
 
 /// what lets others change the files projects place from the cache folder at `root`: it belongs
-/// to another user, or every user may write to it. none on windows, where a folder takes its
-/// access from the folders it is in.
+/// to another user, or every user may write to it. on windows, where a folder takes its access
+/// from the folders above it, a folder outside the user's profile, unless on a FAT or exFAT
+/// drive, which keeps no permissions to change and is made to be shared.
 pub(crate) fn exposed(root: &Path) -> Option<String> {
     #[cfg(unix)]
     {
@@ -125,7 +126,21 @@ pub(crate) fn exposed(root: &Path) -> Option<String> {
             )
         })
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use crate::space::Filesystem;
+        let shared = !crate::machine::in_profile(&crate::machine::env, root)
+            && !matches!(Filesystem::of(root), Filesystem::Fat | Filesystem::Exfat);
+        shared.then(|| {
+            format!(
+                "the cache folder {} is outside your user profile and takes its permissions from \
+                 the folders above it, so other users of this machine may be able to change the \
+                 files projects place from it",
+                root.display()
+            )
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = root;
         None
