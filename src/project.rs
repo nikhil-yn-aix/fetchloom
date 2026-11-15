@@ -1012,6 +1012,16 @@ mod tests {
         (dir, project)
     }
 
+    /// links `path` to the file `target`, or false where no symbolic link can be made, as on
+    /// windows without developer mode or admin.
+    fn linked(target: &Path, path: &Path) -> bool {
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(target, path);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(target, path);
+        made.is_ok()
+    }
+
     /// a project folder so deep that `.fetchloom` fits linux's 4,095 bytes a path but nothing
     /// inside it does: the folder this command made goes with the error.
     #[cfg(target_os = "linux")]
@@ -1326,12 +1336,7 @@ mod tests {
         let (_dir, project) = project(&[(".fetchloom/elsewhere", "{}")]);
         let target = project.own_folder().join("elsewhere");
         let path = project.own_folder().join("owner");
-        #[cfg(unix)]
-        let made = std::os::unix::fs::symlink(&target, &path).is_ok();
-        // making a symlink on windows needs developer mode or admin
-        #[cfg(windows)]
-        let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
-        if !made {
+        if !linked(&target, &path) {
             return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
         }
         let err = read_owner(&path).err().map(|err| err.kind());
@@ -1348,12 +1353,7 @@ mod tests {
         let path = folder.join("lock");
         for target in [folder.join("elsewhere"), folder.join("nothing")] {
             let _ = fs::remove_file(&path);
-            #[cfg(unix)]
-            let made = std::os::unix::fs::symlink(&target, &path).is_ok();
-            // making a symlink on windows needs developer mode or admin
-            #[cfg(windows)]
-            let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
-            if !made {
+            if !linked(&target, &path) {
                 return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
             }
             let (answer, answered) = std::sync::mpsc::channel();
@@ -1407,12 +1407,7 @@ mod tests {
         assert_ne!(project.state().1, 0, "a plain state is read");
         let target = project.own_folder().join("elsewhere");
         fs::rename(&path, &target).unwrap();
-        #[cfg(unix)]
-        let made = std::os::unix::fs::symlink(&target, &path).is_ok();
-        // making a symlink on windows needs developer mode or admin
-        #[cfg(windows)]
-        let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
-        if !made {
+        if !linked(&target, &path) {
             return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
         }
         assert_eq!(project.state().1, 0);
