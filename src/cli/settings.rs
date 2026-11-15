@@ -156,6 +156,9 @@ pub(super) fn change(
     };
     let overridden_by = crate::settings::edit::overridden(var, &changed.key);
     tell_changed(&context.output, &changed, overridden_by);
+    if changed.key == "cache" && changed.written && overridden_by.is_none() {
+        tell_old_cache(&context.output, &changed);
+    }
     Ok(Edited {
         file: changed.path.display().to_string(),
         before: changed.before.as_ref().map_or(Value::Null, json_of),
@@ -251,6 +254,27 @@ fn tell_changed(
             &format!("{file} does not set {key}, so nothing changed"),
         ),
     }
+}
+
+/// after the cache moved, that the one before keeps what it cached, since fetchloom moves no
+/// cache, and that deleting it frees that room: data/ holds its own links or copies.
+fn tell_old_cache(output: &Output, changed: &crate::settings::edit::Changed) {
+    let folder = |value: Option<&toml_edit::Value>| {
+        value
+            .and_then(toml_edit::Value::as_str)
+            .map(std::path::PathBuf::from)
+            .or_else(|| crate::cache::Cache::locate(&|name| std::env::var_os(name), None))
+    };
+    let Some(before) = folder(changed.before.as_ref()).filter(|before| before.is_dir()) else {
+        return;
+    };
+    if folder(changed.after.as_ref()).as_deref() == Some(before.as_path()) {
+        return;
+    }
+    output.hint(&format!(
+        "{} keeps what it cached, since fetchloom moves no cache; the data/ folders placed from it keep working without it, so delete it to free that room",
+        units::path(&before)
+    ));
 }
 
 /// a value of the settings file as a person reads it: text as it is, a list's items separated by

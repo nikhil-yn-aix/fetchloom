@@ -101,6 +101,30 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
     Ok(())
 }
 
+/// moving the cache says the one before keeps what it cached, and how to free that room.
+#[test]
+fn a_moved_cache_says_the_old_one_keeps_its_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    let old = sandbox.folder("old-cache")?;
+    std::fs::write(&path, format!("cache = '{}'\n", old.display()))?;
+    let new = sandbox.folder("place")?.join("new-cache");
+    let moved = sandbox
+        .command(&["settings", "set", "cache", &new.display().to_string()])
+        .env_remove("FETCHLOOM_CACHE")
+        .output()?;
+    let stderr = text(&moved.stderr)?;
+    assert_eq!(moved.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "{} keeps what it cached, since fetchloom moves no cache;",
+            old.display()
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a debug build takes the machine from `FETCHLOOM_TEST_PROCESSORS`, `FETCHLOOM_TEST_ROOM` and
 /// `FETCHLOOM_TEST_OPEN_FILES`, so a docs example prints the same anywhere: `settings`, the
 /// settings sized from the machine, and what `-v` says a run spends.
