@@ -1045,6 +1045,8 @@ mod tests {
         let (swapped, aside) = (shut.clone(), folder.join("aside"));
         let link = target.clone();
         LOOKED.set(Some(Box::new(move || {
+            // macos renames no folder its owner may not write, even within one folder
+            fs::set_permissions(&swapped, fs::Permissions::from_mode(0o700)).unwrap();
             fs::rename(&swapped, &aside).unwrap();
             std::os::unix::fs::symlink(&link, &swapped).unwrap();
         })));
