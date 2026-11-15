@@ -70,10 +70,15 @@ pub(crate) struct Candidate {
 impl Candidate {
     /// whether the rebuild answers the recipe and the pin as they are now, which `build --accept`
     /// asks: `key` is the recipe's key now, the result data.lock pins now, `pinned`, must be the
-    /// one it was kept beside, and its files must hash to its tree.
+    /// one it was kept beside, its files must hash to its tree, and no path of them may leave the
+    /// result's folder, since the state is a file anyone with the project can change.
     pub(crate) fn answers(&self, key: Option<Sha256>, pinned: Option<&Derived>) -> bool {
         key == Some(self.key)
             && pinned.is_some_and(|pinned| pinned.key == self.key && pinned.tree == self.pinned)
+            && self
+                .files
+                .iter()
+                .all(|file| crate::name::escapes(&file.path).is_none())
             && crate::cache::tree_hash(&self.files) == self.tree
     }
 }
@@ -777,7 +782,7 @@ mod tests {
     }
 
     /// a kept rebuild answers only the recipe's key, beside the very pin it was kept beside, with
-    /// files that still hash to its tree; any one of the four differing alone refuses it.
+    /// files inside the result that still hash to its tree; any one differing alone refuses it.
     #[test]
     fn a_kept_rebuild_answers_only_its_own_key_pin_and_files() {
         let (key, pinned, other) = (
@@ -799,6 +804,17 @@ mod tests {
         let candidate = kept(key, pinned);
         let unhashed = Candidate {
             tree: other,
+            ..candidate.clone()
+        };
+        // a state anyone can edit may name a file outside the result, with its tree to match
+        let outside = vec![Member {
+            path: "../../notes.txt".to_owned(),
+            size: 3,
+            sha256: digest::sha256(b"abc"),
+        }];
+        let escaping = Candidate {
+            tree: crate::cache::tree_hash(&outside),
+            files: outside,
             ..candidate.clone()
         };
         for (case, rebuild, now, pin, answers) in [
@@ -841,6 +857,13 @@ mod tests {
             (
                 "files of another tree",
                 &unhashed,
+                Some(key),
+                Some(pin(key, pinned)),
+                false,
+            ),
+            (
+                "a file outside the result",
+                &escaping,
                 Some(key),
                 Some(pin(key, pinned)),
                 false,
