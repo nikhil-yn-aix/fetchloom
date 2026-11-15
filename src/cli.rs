@@ -1088,6 +1088,7 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
     }
     about(context, &pinned, &below, started)
 }
+
 /// asks before a large download, or one the cache's disk may lack room for, `room` being the cache
 /// folder and the bytes needed on its disk. `yes` answers it; with no terminal it stops and names
 /// the flag. true when a person said yes to going on without room, which covers the size too.

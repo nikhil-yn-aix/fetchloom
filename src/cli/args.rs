@@ -631,6 +631,7 @@ pub(crate) enum Command {
     /// sign in for private data, or data with terms to accept
     #[command(override_usage = "fetchloom auth [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::AUTH)]
     Auth(Auth),
+
     /// print a script that completes fetchloom's commands in a shell
     #[command(override_usage = "fetchloom completions [options] <shell>", help_template = TEMPLATE, after_help = examples::COMPLETIONS)]
     Completions(Completions),

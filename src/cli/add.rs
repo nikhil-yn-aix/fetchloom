@@ -1881,6 +1881,7 @@ fn taken(name: &str) -> Error {
         super::project::command(&format!("remove {name}"))
     ))
 }
+
 /// how data.toml records a reference: the canonical id where a source has one, and the link as
 /// pasted for drive and dropbox, and the raw endpoint for plain file links.
 fn stored_reference(typed: &str, parsed: &Parsed) -> String {
@@ -1894,16 +1895,6 @@ fn stored_reference(typed: &str, parsed: &Parsed) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn raw_references_are_written_instead_of_repository_pages() {
-        let typed = "https://github.com/org/repo/blob/main/iris.csv";
-        let parsed = crate::source::Reference::parse(typed).unwrap();
-        assert_eq!(
-            super::stored_reference(typed, &parsed),
-            "https://raw.githubusercontent.com/org/repo/main/iris.csv"
-        );
-    }
-
     use super::*;
     use crate::cache::Cache;
     use crate::cli::import::tell_system;
@@ -1911,6 +1902,16 @@ mod tests {
     use crate::output::screen::Screen;
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;
+
+    #[test]
+    fn raw_references_are_written_instead_of_repository_pages() {
+        let typed = "https://github.com/org/repo/blob/main/iris.csv";
+        let parsed = Reference::parse(typed).unwrap();
+        assert_eq!(
+            stored_reference(typed, &parsed),
+            "https://raw.githubusercontent.com/org/repo/main/iris.csv"
+        );
+    }
 
     /// a link with nothing at it, read from a list, is fixed on its own line of that list.
     #[test]
