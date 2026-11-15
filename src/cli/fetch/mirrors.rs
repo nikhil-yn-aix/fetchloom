@@ -328,7 +328,9 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
         flagged.push(location);
     }
     let only = settings.mirrors_only;
-    let mirrors = Mirrors::new(flagged, &settings.mirrors.value, only.value);
+    let flagged = at_endpoints(flagged)?;
+    let listed = at_endpoints(settings.mirrors.value.clone())?;
+    let mirrors = Mirrors::new(flagged, &listed, only.value);
     if mirrors.only && mirrors.list.is_empty() {
         let variable = crate::settings::variable("mirrors_only");
         let (named, undo) = if only.origin == Origin::File {
@@ -348,6 +350,32 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
         )));
     }
     Ok(mirrors)
+}
+
+/// `locations`, with each S3 mirror written as `s3://bucket` at the service the AWS settings send
+/// S3 requests to, as the aws cli takes it, once they name one; `usage` for an endpoint setting
+/// that is no link.
+fn at_endpoints(locations: Vec<Location>) -> Result<Vec<Location>, Error> {
+    let mut endpoint: Option<Option<url::Origin>> = None;
+    let mut homed = Vec::with_capacity(locations.len());
+    for location in locations {
+        let Location::S3(top) = location else {
+            homed.push(location);
+            continue;
+        };
+        if top.bucket().endpoint().is_some() {
+            homed.push(Location::S3(top));
+            continue;
+        }
+        let found = match &endpoint {
+            Some(found) => found.clone(),
+            None => endpoint
+                .insert(crate::auth::aws::s3_endpoint(&crate::machine::env)?)
+                .clone(),
+        };
+        homed.push(Location::S3(top.at(found.as_ref())));
+    }
+    Ok(homed)
 }
 
 /// the error for what only a source gives, `what`, while `mirrors_only` lets fetchloom ask its

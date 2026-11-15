@@ -543,8 +543,9 @@ pub(crate) struct Global {
     )]
     pub(crate) directory: Option<PathBuf>,
 
-    /// ask the mirror at this folder, web address or S3 bucket, as `s3://bucket/prefix`, for
-    /// files before their sources. repeat it for more
+    /// ask the mirror at this folder, web address or S3 bucket, as `s3://bucket/prefix`, or
+    /// `s3:https://host:port/bucket/prefix` at another service, for files before their sources.
+    /// repeat it for more
     #[arg(long, value_name = "url", global = true, help_heading = GLOBAL)]
     pub(crate) mirror: Vec<String>,
 
@@ -1218,8 +1219,10 @@ pub(crate) struct Push {
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) names: Vec<String>,
 
-    /// the mirror to copy the files into: a folder, or an S3 bucket as `s3://bucket/prefix`; the
-    /// `push_to` setting names it otherwise. a new or empty folder, or a prefix with no
+    /// the mirror to copy the files into: a folder, or an S3 bucket as `s3://bucket/prefix`,
+    /// sent where `AWS_ENDPOINT_URL` points when it is set, or as
+    /// `s3:https://host:port/bucket/prefix` at another service; the `push_to` setting names it
+    /// otherwise. a new or empty folder, or a prefix with no
     /// fetchloom-mirror file, becomes a mirror
     #[arg(long, value_name = "mirror", help_heading = "options")]
     pub(crate) to: Option<PathBuf>,

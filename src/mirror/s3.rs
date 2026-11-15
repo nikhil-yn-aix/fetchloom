@@ -125,6 +125,36 @@ impl Top {
         &self.bucket
     }
 
+    /// this top at `endpoint`, the service the AWS settings send S3 requests to, as the aws cli
+    /// takes `s3://bucket` there; one written with its own service keeps it.
+    pub(crate) fn at(self, endpoint: Option<&url::Origin>) -> Top {
+        let (Some(endpoint), None) = (endpoint, self.bucket.endpoint()) else {
+            return self;
+        };
+        let bucket = Bucket::new(Some(endpoint.clone()), self.bucket.name().to_owned());
+        match bucket.base(None) {
+            Some(base) => Top {
+                link: below_prefix(base, &self.prefix),
+                bucket,
+                prefix: self.prefix,
+            },
+            None => self,
+        }
+    }
+
+    /// [`Top::at`] where the AWS settings in the environment `var` reads send S3 requests.
+    ///
+    /// # Errors
+    ///
+    /// `usage` when an endpoint setting is no link.
+    pub(crate) fn at_endpoint(self, var: crate::machine::Var<'_>) -> Result<Top, Error> {
+        if self.bucket.endpoint().is_some() {
+            return Ok(self);
+        }
+        let endpoint = crate::auth::aws::s3_endpoint(var)?;
+        Ok(self.at(endpoint.as_ref()))
+    }
+
     /// the link to the mirror's top in `region`, ending in `/`: where S3 serves every region
     /// when none.
     pub(crate) fn link(&self, region: Option<&str>) -> Url {

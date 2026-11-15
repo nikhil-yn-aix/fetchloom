@@ -162,7 +162,9 @@ a key fetchloom auth login saved:
   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_PROFILE,
   AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE, AWS_REGION, AWS_DEFAULT_REGION,
   AWS_ENDPOINT_URL, AWS_ENDPOINT_URL_S3, AWS_IGNORE_CONFIGURED_ENDPOINT_URLS
-                       S3 buckets in s3_buckets, as the aws cli reads them
+                       S3 buckets in s3_buckets and S3 mirrors, as the aws cli
+                       reads them. with an endpoint set, a mirror written as
+                       s3://bucket/prefix is at that service
   GOOGLE_APPLICATION_CREDENTIALS, CLOUDSDK_CONFIG
                        cloud storage buckets in gcs_buckets and drive items in
                        drive_folders: the key file, else the login that

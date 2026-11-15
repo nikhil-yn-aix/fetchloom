@@ -351,7 +351,7 @@ fn opened(context: &Context, target: Location, verify: bool) -> Result<To, Error
         .help("push to the bucket without --verify: S3 checked each file against its SHA-256 when push sent it")),
         Location::S3(top) => Ok(To::Bucket(Arc::new(Pusher::new(
             Arc::new(context.net()),
-            top,
+            top.at_endpoint(&crate::machine::env)?,
             Arc::clone(&context.stop),
         )?))),
         Location::Folder(root) => Ok(To::Folder {

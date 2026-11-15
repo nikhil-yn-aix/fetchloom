@@ -295,6 +295,43 @@ fn offline_names_the_bucket_mirror_it_did_not_ask() -> Result {
     Ok(())
 }
 
+/// with `AWS_ENDPOINT_URL` set, `s3://bucket` names a bucket at that service, as the aws cli takes
+/// it: push writes there and a clean clone syncs from there, signed for it.
+#[test]
+fn an_endpoint_in_the_aws_settings_takes_s3_buckets_there() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let asked = source.requests().len();
+    let s3 = S3::start(SECRET)?;
+    let at_endpoint = |command: &mut Fetchloom| {
+        command
+            .env("AWS_ENDPOINT_URL", &s3.url)
+            .env("AWS_ACCESS_KEY_ID", "AKIALABPUSHWXYZ")
+            .env("AWS_SECRET_ACCESS_KEY", SECRET);
+    };
+    let mut push = sandbox.command(&["--json", "--yes", "push", "--to", MIRROR]);
+    at_endpoint(&mut push);
+    let output = push.output()?;
+    ok(&output)?;
+    assert_eq!(
+        json(&output)?["result"]["target"],
+        format!("s3:{}/lab-data/mirror", s3.url)
+    );
+    assert!(
+        s3.object("/lab-data/mirror/fetchloom-mirror").is_some(),
+        "{:?}",
+        s3.paths()
+    );
+    assert!(s3.faults().is_empty(), "{:?}", s3.faults());
+    let (clone, cache) = cold(&sandbox, "clone")?;
+    let mut sync = sandbox.command_in(&clone, &["--json", "sync", "--locked", "--mirror", MIRROR]);
+    at_endpoint(&mut sync);
+    ok(&sync.env("FETCHLOOM_CACHE", &cache).output()?)?;
+    holds_the_project(&clone)?;
+    assert_eq!(source.requests().len(), asked, "the bucket gave every file");
+    Ok(())
+}
+
 /// a login typed into a bucket's address is refused, and never repeated.
 #[test]
 fn a_login_in_a_bucket_address_is_refused_unshown() -> Result {

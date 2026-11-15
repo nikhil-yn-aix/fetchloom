@@ -41,8 +41,9 @@ global options:
       --color <when>  when to use color: auto, the default, always or never
   -C <dir>            run as if fetchloom started in <dir>
       --mirror <url>  ask the mirror at this folder, web address or S3 bucket,
-                      as `s3://bucket/prefix`, for files before their sources.
-                      repeat it for more
+                      as `s3://bucket/prefix`, or
+                      `s3:https://host:port/bucket/prefix` at another service,
+                      for files before their sources. repeat it for more
       --no-config     leave the settings file unread for this run
   -h, --help          print help: -h the common part, --help all of it
   -V, --version       print the version
