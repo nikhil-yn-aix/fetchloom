@@ -1054,6 +1054,105 @@ fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>, stop: &Arc<Shutdown>)
     }
 }
 
+/// a server on this machine for `FETCHLOOM_TEST_HOSTS` that hands each request on to `upstream`,
+/// an emulator that tells hosts apart by name, as azure's does: `/<host>/<path>` goes on as
+/// `/<path>` with `Host: <host>`, one request a connection. it keeps each request's head as it
+/// came, lowercased.
+pub(crate) struct Relay {
+    pub(crate) url: String,
+    heads: Arc<Mutex<Vec<String>>>,
+    _running: ServerTask,
+}
+
+impl Relay {
+    pub(crate) fn start(upstream: &str) -> Result<Relay> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let heads = Arc::new(Mutex::new(Vec::new()));
+        let (seen, upstream) = (heads.clone(), upstream.to_owned());
+        let running = ServerTask::start(listener, move |listener, stop| {
+            std::thread::scope(|scope| {
+                while let Some((client, connection)) = stop.accept(&listener) {
+                    let (seen, upstream, stop) = (seen.clone(), upstream.as_str(), &stop);
+                    scope.spawn(move || {
+                        let _connection = connection;
+                        hand_on(client, upstream, &seen, stop);
+                    });
+                }
+            });
+        })?;
+        Ok(Relay {
+            url,
+            heads,
+            _running: running,
+        })
+    }
+
+    /// the head of every request so far, lowercased, as it came.
+    pub(crate) fn requests(&self) -> Vec<String> {
+        self.heads
+            .lock()
+            .map(|heads| heads.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// passes one request of `client` on to `upstream` as [`Relay`] says, then copies bytes both ways
+/// until a side hangs up.
+fn hand_on(mut client: TcpStream, upstream: &str, seen: &Mutex<Vec<String>>, stop: &Arc<Shutdown>) {
+    let head = read_head(&mut client);
+    let mut lines = head.split("\r\n");
+    let mut words = lines.next().unwrap_or_default().splitn(3, ' ');
+    let (method, target, version) = (
+        words.next().unwrap_or_default(),
+        words.next().unwrap_or_default(),
+        words.next().unwrap_or_default(),
+    );
+    let Some(named) = target.strip_prefix('/') else {
+        return;
+    };
+    if let Ok(mut seen) = seen.lock() {
+        seen.push(head.to_ascii_lowercase());
+    }
+    let at = named.find(['/', '?']).unwrap_or(named.len());
+    let (host, rest) = named.split_at(at);
+    let path = if rest.starts_with('?') || rest.is_empty() {
+        format!("/{rest}")
+    } else {
+        rest.to_owned()
+    };
+    let mut forwarded =
+        format!("{method} {path} {version}\r\nHost: {host}\r\nConnection: close\r\n");
+    for line in lines.filter(|line| !line.is_empty()) {
+        let name = line.split(':').next().unwrap_or_default();
+        if !name.eq_ignore_ascii_case("host") && !name.eq_ignore_ascii_case("connection") {
+            let _ = write!(forwarded, "{line}\r\n");
+        }
+    }
+    forwarded.push_str("\r\n");
+    let Ok(mut server) = TcpStream::connect(upstream) else {
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+        return;
+    };
+    let Some(_connection) = stop.track(&server) else {
+        return;
+    };
+    if server.write_all(forwarded.as_bytes()).is_err() {
+        return;
+    }
+    if let (Ok(mut from_client), Ok(mut to_server)) = (client.try_clone(), server.try_clone()) {
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let _ = std::io::copy(&mut from_client, &mut to_server);
+                let _ = to_server.shutdown(std::net::Shutdown::Write);
+            });
+            let _ = std::io::copy(&mut server, &mut client);
+            let _ = client.shutdown(std::net::Shutdown::Both);
+            let _ = server.shutdown(std::net::Shutdown::Both);
+        });
+    }
+}
+
 /// a server on this machine that answers by request target, path and query, as a service with
 /// many URLs does: the same answer every time for a target it knows, and 404 for any other.
 pub(crate) struct Routes {

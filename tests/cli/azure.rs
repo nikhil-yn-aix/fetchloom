@@ -252,7 +252,7 @@ pub(crate) const KEY: &str = "c2VjcmV0LWtleQ==";
 const KEY_BYTES: &[u8] = b"secret-key";
 
 /// base64 with the standard alphabet and padding.
-fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut text = String::new();
     for chunk in bytes.chunks(3) {

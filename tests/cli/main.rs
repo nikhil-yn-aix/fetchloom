@@ -4,6 +4,7 @@ mod add;
 mod archives;
 mod auth;
 mod azure;
+mod azurite;
 mod basics;
 mod buckets;
 mod build;

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "target/ci"
 SKIP = ("source::", "net::", "glob::", "name::", "output::", "units::", "digest::",
         "error::", "basics::", "hints::", "progress::", "proxy::", "secrets::",
-        "split::", "search::", "caps::", "keyring::")
+        "split::", "search::", "caps::", "keyring::", "azurite::")
 CHMOD = "place::tests::a_writable_copy_works_where_the_mount_refuses_chmod"
 # the tests of names a disk takes for one another, which run only where it ignores case
 ALIASES = (
