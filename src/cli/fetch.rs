@@ -14,6 +14,7 @@ use url::Url;
 
 pub(super) use self::again::Again;
 use super::Context;
+use super::sync::cache_budget;
 use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
@@ -295,8 +296,10 @@ struct Approval {
     cache: Option<std::path::PathBuf>,
     /// what the disk holding a folder has free, which tests give.
     free: fn(&std::path::Path) -> Option<u64>,
-    /// what the `cache_budget` setting and its budget leave the cache, when one is set.
+    /// what the cache's files hold and the `cache_budget` setting, when one is set.
     budget: Option<(u64, u64)>,
+    /// whether `FETCHLOOM_CACHE_BUDGET` sets the budget, so its question says to raise that.
+    by_variable: bool,
 }
 
 impl Approval {
@@ -307,6 +310,7 @@ impl Approval {
             cache: None,
             free: crate::space::free,
             budget: None,
+            by_variable: false,
         }
     }
 
@@ -317,9 +321,10 @@ impl Approval {
     }
 
     /// stops a download of no stated size before it takes the cache past `budget`, as the
-    /// `cache_budget` setting gives it, from the `held` bytes the cache's files hold now.
+    /// `cache_budget` setting gives it, from the `held` bytes the cache's files take now, and has
+    /// one whose server states a size past it ask first.
     fn with_budget(mut self, budget: u64, held: u64) -> Approval {
-        self.budget = Some((budget.saturating_sub(held), budget));
+        self.budget = Some((held, budget));
         self
     }
 
@@ -329,7 +334,7 @@ impl Approval {
         let disk = free.map(|free| (free, Bound::Disk));
         let budget = self
             .budget
-            .map(|(room, budget)| (room, Bound::Budget(budget)));
+            .map(|(held, budget)| (budget.saturating_sub(held), Bound::Budget(budget)));
         match (disk, budget) {
             (Some(disk), Some(budget)) if budget.0 < disk.0 => Some(budget),
             (Some(disk), _) => Some(disk),
@@ -652,6 +657,8 @@ impl<'a> Watch<'a> {
                 };
                 let free = free.unwrap_or_default();
                 self.approve(|| super::ask_room(self.output, &doing, needed, free, cache))?;
+            } else if unknown && let Some(past) = self.past_budget(total) {
+                self.approve(|| self.ask_budget(past))?;
             } else if left > self.approval.above {
                 let size = units::size(left);
                 self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
@@ -688,6 +695,29 @@ impl<'a> Watch<'a> {
         self.held.keep(resumed, resumable);
         self.count_kept(resumed);
         Ok(())
+    }
+
+    /// how a download whose size only its server states, as `total`, would take the cache past
+    /// the `cache_budget` setting, the whole file and an archive's files beside it counting, since
+    /// a partial download is no cached file. none within it, or when the server states no size.
+    fn past_budget(&self, total: Option<u64>) -> Option<cache_budget::Past> {
+        let (held, budget) = self.approval.budget?;
+        let adding = room_needed(Some(total?), 0, self.job.fetch.unpack);
+        cache_budget::weigh(Some(budget), adding, || Some(held))
+    }
+
+    /// the question sync and get ask before downloads they know the size of would take the cache
+    /// `past` its budget, here once the server states the size.
+    fn ask_budget(&self, past: cache_budget::Past) -> Result<(), Error> {
+        let doing = format!("downloading {}", self.label());
+        let over = cache_budget::Over {
+            doing: &doing,
+            past,
+            freeable: None,
+            largest: Vec::new(),
+            by_variable: self.approval.by_variable,
+        };
+        cache_budget::ask(self.output, self.yes, &over)
     }
 
     /// the refusal of a web page the job's link answered with where it expected a file, which
@@ -1312,21 +1342,24 @@ async fn run_each(
 }
 
 /// `approval`, bounding downloads of no stated size by what the `cache_budget` setting leaves
-/// the cache, when one is set and the batch has `unknown` sizes. reading what the cache's files
-/// hold takes a scan, so a batch whose sizes are all known skips it.
+/// the cache, when one is set and the batch has `unknown` sizes. the cache's files count as its
+/// disk stores them, as `fetchloom cache` holds them against the budget. reading them takes a
+/// scan, so a batch whose sizes are all known skips it.
 async fn budgeted(context: &Context, cache: &Cache, approval: Approval, unknown: bool) -> Approval {
     let Some(budget) = context.settings.cache_budget.value.filter(|_| unknown) else {
         return approval;
     };
     let (scanned, threads, stop) = (cache.clone(), context.threads, context.stop.clone());
     let held = tokio::task::spawn_blocking(move || {
-        let scan = scanned.scan_objects(threads, &stop).ok()?;
-        let sizes = scan.objects.iter().map(|object| object.size);
-        Some(sizes.fold(0, u64::saturating_add))
+        cache_budget::held(&scanned, threads, &stop).map(|(held, _)| held)
     })
     .await
     .ok()
     .flatten();
+    let approval = Approval {
+        by_variable: context.settings.cache_budget.origin == crate::settings::Origin::Environment,
+        ..approval
+    };
     // a cache whose files cannot be read is taken to fit, as sync's budget check takes it
     match held {
         Some(held) => approval.with_budget(budget, held),
@@ -2014,6 +2047,78 @@ mod tests {
             sized.on(&started(Some(10))).unwrap();
             sized.on(&Event::Bytes(2000)).unwrap();
         }
+    }
+
+    /// a size only the server states is held against `cache_budget` before any byte is written,
+    /// as sync and get hold the sizes they know: 18 bytes cached under a 1 KiB budget leave 1,006,
+    /// and an archive's files count again. past it, a run no one can answer stops, and --yes goes
+    /// on with a warning.
+    #[test]
+    fn a_size_the_server_states_is_held_against_the_budget() {
+        let output = || {
+            let style = Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            };
+            Output::new(style, Level::Normal, false, false)
+        };
+        let job = |unpack| {
+            let mut fetch = Fetch::new(Url::parse("https://example.org/big.bin").unwrap());
+            fetch.unpack = unpack;
+            Job {
+                fetch,
+                label: "big.bin".to_owned(),
+                dataset: None,
+                again: None,
+            }
+        };
+        let overall = overall();
+        let held = Held::default();
+        let started = |total| Event::Started {
+            total: Some(total),
+            resumed: 0,
+            resumable: Resumable::No,
+        };
+        for (total, unpack, past) in [
+            (1006, false, false),
+            (1007, false, true),
+            (600, false, false),
+            (600, true, true),
+        ] {
+            let (output, job) = (output(), job(unpack));
+            let approval = Approval::new(crate::settings::ASK_ABOVE).with_budget(1024, 18);
+            let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
+            let result = watch.on(&started(total));
+            assert_eq!(result.is_err(), past, "{total} {unpack}");
+        }
+        let (output, job) = (output(), job(false));
+        let approval = Approval::new(crate::settings::ASK_ABOVE).with_budget(1024, 18);
+        let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
+        let stopped = watch.on(&started(3000)).unwrap_err();
+        assert_eq!(stopped.kind, Kind::Unconfirmed);
+        assert_eq!(
+            stopped.message,
+            "downloading big.bin would bring the cache to 2.9 KiB, past the 1.0 KiB cache_budget"
+        );
+        let advice = stopped.help.unwrap_or_default();
+        assert!(
+            advice.contains("`fetchloom settings set cache_budget <size>`"),
+            "{advice}"
+        );
+        let approval = Approval::new(crate::settings::ASK_ABOVE).with_budget(1024, 18);
+        let watch = Watch::new(&job, &output, &overall, &approval, true, &held);
+        watch.on(&started(3000)).unwrap();
+        let said = output.said();
+        assert!(
+            said.iter().any(|line| line.starts_with(
+                "warning: downloading big.bin brings the cache to 2.9 KiB, past the 1.0 KiB cache_budget\n"
+            )),
+            "{said:?}"
+        );
     }
 
     #[test]

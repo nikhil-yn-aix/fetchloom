@@ -3213,6 +3213,80 @@ fn a_sync_past_the_cache_budget_stops_without_yes_and_warns_with_it() -> Result 
     Ok(())
 }
 
+/// an add of one link whose size only its server states is held to `cache_budget` before the
+/// download writes a byte: with no one to answer it stops and changes nothing, and --yes goes on
+/// with a warning.
+#[test]
+fn an_add_of_one_link_is_held_to_the_cache_budget() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = vec![b'z'; 3000];
+    let server = Server::start(
+        "/files/big.bin",
+        vec![file(&big, "\"z\""), file(&big, "\"z\"")],
+    )?;
+    sandbox.allow(&server.url);
+    let add = |yes: &str| {
+        let args: Vec<&str> = [yes, "--json", "add", &server.url]
+            .into_iter()
+            .filter(|arg| !arg.is_empty())
+            .collect();
+        sandbox
+            .command_in(&sandbox.work(), &args)
+            .env("FETCHLOOM_CACHE_BUDGET", "1K")
+            .output()
+    };
+    let refused = add("")?;
+    let document = json(&refused)?;
+    assert_eq!(refused.status.code(), Some(1), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed", "{document}");
+    assert_eq!(
+        error["message"],
+        "downloading big.bin would bring the cache to 2.9 KiB, past the 1.0 KiB cache_budget",
+        "{document}"
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
+    let added = add("--yes")?;
+    let document = json(&added)?;
+    assert_eq!(added.status.code(), Some(0), "{document}");
+    let warned = crate::support::warning(&document, "cache.over_budget")["message"].to_string();
+    assert!(
+        warned.contains(
+            "downloading big.bin brings the cache to 2.9 KiB, past the 1.0 KiB cache_budget"
+        ),
+        "{document}"
+    );
+    Ok(())
+}
+
+/// the budget holds the cache's files as the disk stores them, as `fetchloom cache` counts them,
+/// so a link whose size only its answer states finds no room under a budget the cache fills on
+/// disk, though its files' bytes alone would leave room.
+#[test]
+fn a_link_is_held_to_the_budget_as_the_disk_stores_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &first)?;
+    let report = json(&sandbox.run(&["--json", "cache"])?)?;
+    let on_disk = report["result"]["on_disk"].as_u64().unwrap_or_default();
+    if on_disk < IRIS.len() as u64 + 100 {
+        return crate::support::skipped(
+            "disk-blocks",
+            "this disk keeps a small file in no block of its own",
+        );
+    }
+    let second = Server::start("/files/small.bin", vec![file(&[b'z'; 100], "\"z\"")])?;
+    sandbox.allow(&second.url);
+    let output = sandbox
+        .command_in(&sandbox.work(), &["--json", "add", &second.url])
+        .env("FETCHLOOM_CACHE_BUDGET", on_disk.to_string())
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(1), "{document}");
+    assert_eq!(document["errors"][0]["kind"], "unconfirmed", "{document}");
+    Ok(())
+}
+
 /// the budget's question names the command that would pass it.
 #[test]
 fn an_add_past_the_cache_budget_is_named_as_an_add() -> Result {
