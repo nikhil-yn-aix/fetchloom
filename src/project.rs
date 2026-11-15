@@ -38,6 +38,9 @@ pub(crate) enum Ignore {
     /// .gitignore is `why`, as a link a clone holds, which fetchloom never reads or edits: the
     /// rule a person adds to it by hand.
     ByHand { rule: String, why: String },
+    /// git tracks files in the data folder, the project's own work, which the rule would hide
+    /// from git as soon as it changed, so the rule is left for a person to add.
+    Tracked { rule: String },
 }
 
 pub(crate) struct Project {
@@ -874,6 +877,13 @@ impl Project {
         });
         if present {
             return Ok(Ignore::Done);
+        }
+        // files git tracks there are the project's own, which the rule would hide once changed
+        let git = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &self.root));
+        if let Some(git) = git
+            && git::tracked(&git, &self.root, data_dir).is_some_and(|files| !files.is_empty())
+        {
+            return Ok(Ignore::Tracked { rule: entry });
         }
         let mut updated = text;
         if !updated.is_empty() && !updated.ends_with('\n') {

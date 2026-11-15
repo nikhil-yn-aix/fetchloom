@@ -1395,6 +1395,20 @@ fn data_directories_must_stay_inside_the_project() {
         fails("[project]\ndata_dir = '.'\n").message,
         "data_dir = \".\" in data.toml is refused because it would mix data with the project's own files"
     );
+    // the project's own files beside data.toml, in any case a disk may fold, but deeper down
+    for own in ["data.toml", "data.lock", "data.lock.d", "Data.Lock.D/x"] {
+        let first = own.split('/').next().unwrap();
+        assert_eq!(
+            fails(&format!("[project]\ndata_dir = '{own}'\n")).message,
+            format!(
+                "data_dir = \"{own}\" in data.toml is refused because {first} is the name of one of the project's own files"
+            )
+        );
+    }
+    assert_eq!(
+        parse("[project]\ndata_dir = 'inputs/data.lock.d'\n").data_dir,
+        "inputs/data.lock.d"
+    );
     assert_eq!(parse("[project]\n").data_dir, "data");
     assert_eq!(
         parse("[project]\ndata_dir = '  inputs/raw///  '\n").data_dir,

@@ -18,6 +18,8 @@ pub(crate) const FILE: &str = "data.toml";
 pub(crate) const DATA_DIR: &str = "data";
 /// the `path` that puts a dataset's files straight in the data folder.
 pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
+/// the names the project's own files take beside data.toml, which no data folder may take.
+const PROJECT_FILES: [&str; 3] = [FILE, "data.lock", "data.lock.d"];
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
 const DATASET_KEYS: [&str; 13] = [
@@ -1143,6 +1145,17 @@ impl Reader<'_> {
                 _ => Err(refused("it would mix data with the project's own files")
                     .help("use a folder inside the project, such as data")),
             };
+        }
+        let first = text.split('/').next().unwrap_or_default();
+        if key == "data_dir"
+            && PROJECT_FILES
+                .iter()
+                .any(|own| name::fold(own) == name::fold(first))
+        {
+            return Err(refused(&format!(
+                "{first} is the name of one of the project's own files"
+            ))
+            .help("use a folder of its own inside the project, such as data"));
         }
         match name::escapes(text) {
             None => Ok(text.to_owned()),

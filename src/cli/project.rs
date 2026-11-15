@@ -103,18 +103,26 @@ pub(super) fn ignore_data(work: &Loop<'_>, manifest: &Manifest, begins: bool) ->
     Ok(())
 }
 
-/// warns, where `ignore` says .gitignore is one fetchloom never edits, with the line that keeps
-/// the data folder out of git.
+/// warns, where `ignore` says fetchloom leaves the data folder's line out of .gitignore, why and
+/// what a person can do: add the line by hand, or give the data a folder of its own.
 fn by_hand(output: &Output, manifest: &Manifest, ignore: &Ignore) {
-    if let Ignore::ByHand { rule, why } = ignore {
-        output.warn_with(
+    let data_dir = &manifest.data_dir;
+    match ignore {
+        Ignore::ByHand { rule, why } => output.warn_with(
             Warning::GitIgnoreUnedited,
             &format!(".gitignore is {why}, which fetchloom never edits"),
+            &format!("to keep {data_dir}/ out of git, add the line {rule} to it by hand"),
+        ),
+        Ignore::Tracked { rule } => output.warn_with(
+            Warning::GitIgnoreUnedited,
             &format!(
-                "to keep {}/ out of git, add the line {rule} to it by hand",
-                manifest.data_dir
+                "git tracks files in {data_dir}/, so fetchloom leaves it out of .gitignore, which would hide new files there from git"
             ),
-        );
+            &format!(
+                "set data_dir in [project] in data.toml to a folder that holds only data, or add the line {rule} to .gitignore yourself"
+            ),
+        ),
+        Ignore::Done | Ignore::Add(_) => {}
     }
 }
 

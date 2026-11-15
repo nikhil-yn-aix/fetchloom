@@ -48,8 +48,8 @@ pub(crate) enum Warning {
     ExportLeftOut,
     /// git does not have code a recipe runs.
     GitCodeUntracked,
-    /// .gitignore is a link, a special file or too large, which fetchloom never edits, so the data
-    /// folder's rule is for a person to add.
+    /// fetchloom left the data folder's rule out of .gitignore, which is a link, a special file or
+    /// too large, or git tracks files in the data folder, so the rule is for a person to add.
     GitIgnoreUnedited,
     /// files an import read are in the git work tree, where a commit takes or keeps them.
     GitImportInTree,

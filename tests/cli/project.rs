@@ -1203,6 +1203,42 @@ fn inside_git_the_data_folder_is_ignored_once() -> Result {
     Ok(())
 }
 
+/// a data folder that holds files git tracks, the project's own work, never gets the ignore rule,
+/// which would hide new files there from git: the sync warns with the line to add instead.
+#[test]
+fn a_data_folder_git_tracks_files_in_is_not_ignored() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let work = sandbox.work();
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    fs::create_dir(work.join("src"))?;
+    fs::write(work.join("src").join("main.py"), "print(1)\n")?;
+    crate::merge::ok(&sandbox, &["add", "src/main.py"])?;
+    fs::write(
+        work.join("data.toml"),
+        format!(
+            "[project]\ndata_dir = \"src\"\n\n[datasets.iris]\nref = \"{}\"\n",
+            server.url
+        ),
+    )?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert!(!work.join(".gitignore").exists());
+    let document = json(&output)?;
+    assert_eq!(
+        crate::support::warned(&document),
+        [
+            "git tracks files in src/, so fetchloom leaves it out of .gitignore, which would hide new files there from git; set data_dir in [project] in data.toml to a folder that holds only data, or add the line /src/ to .gitignore yourself"
+        ],
+        "{document}"
+    );
+    assert_eq!(crate::support::kinds(&document), ["git.ignore_unedited"]);
+    Ok(())
+}
+
 /// a project begun from a hand-written data.toml gets the ignore rule from its first build, sync
 /// or add outside git, as one an add starts does, so a later `git init` and `git add -A` commit no
 /// data file.
