@@ -29,6 +29,35 @@ pub(crate) fn clone(sandbox: &Sandbox, name: &str) -> Result<std::path::PathBuf>
     Ok(folder)
 }
 
+/// list tells apart two links that differ in a harmless query value, and hides a token.
+#[test]
+fn list_shows_a_harmless_query_and_hides_a_token() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.one]\nref = \"https://lab.example/x.csv?n=1\"\n\n[datasets.two]\nref = \"https://lab.example/x.csv?n=2\"\n\n[datasets.private]\nref = \"https://lab.example/y.csv?n=3&access_token=canary\"\n",
+    )?;
+    let output = sandbox.run(&["--json", "list"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let refs: Vec<&str> = document["result"]["datasets"]
+        .as_array()
+        .ok_or("no datasets")?
+        .iter()
+        .filter_map(|dataset| dataset["ref"].as_str())
+        .collect();
+    assert_eq!(
+        refs,
+        [
+            "https://lab.example/x.csv?n=1",
+            "https://lab.example/y.csv?n=3&access_token=***",
+            "https://lab.example/x.csv?n=2"
+        ]
+    );
+    assert!(!text(&sandbox.run(&["list"])?.stdout)?.contains("canary"));
+    Ok(())
+}
+
 #[test]
 fn list_shows_each_dataset_with_its_source_and_size() -> Result {
     let sandbox = Sandbox::new()?;

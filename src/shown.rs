@@ -128,13 +128,28 @@ impl fmt::Display for Shown<'_> {
 /// masks a login, and each query or fragment value under a name not known to be harmless, even
 /// before a reference is a valid URL.
 pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
-    if let Some(masked) = mask_normalized(text) {
+    masked(text, |name| !is_harmless(name))
+}
+
+/// masks a login, and each query or fragment value under a name that grants access, as a token,
+/// a signature or a `key` does, for `list`, where two links that differ in a harmless value must
+/// look different. messages and logs mask more, with [`mask_query`].
+pub(crate) fn mask_secrets(text: &str) -> Cow<'_, str> {
+    masked(text, |name| {
+        let name = normalized(&percent_decode_str(name).decode_utf8_lossy());
+        is_secret(&name) || name == "key"
+    })
+}
+
+/// `text` with its login and each value under a name `hides` masked.
+fn masked(text: &str, hides: fn(&str) -> bool) -> Cow<'_, str> {
+    if let Some(masked) = mask_normalized(text, hides) {
         return Cow::Owned(masked);
     }
     // pasted, wholly encoded URLs are still sensitive when rejected as arguments
     if !text.contains(':') && text.contains('%') {
         let decoded = percent_decode_str(text).decode_utf8_lossy();
-        if let Some(masked) = mask_normalized(&decoded) {
+        if let Some(masked) = mask_normalized(&decoded, hides) {
             return Cow::Owned(masked);
         }
     }
@@ -153,7 +168,7 @@ pub(crate) fn mask_typed(typed: &str) -> String {
     }
 }
 
-fn mask_normalized(text: &str) -> Option<String> {
+fn mask_normalized(text: &str, hides: fn(&str) -> bool) -> Option<String> {
     // URL parsing removes these characters, even from the scheme or authority
     let normalized = if text.contains(['\t', '\r', '\n']) {
         Cow::Owned(text.replace(['\t', '\r', '\n'], ""))
@@ -161,7 +176,7 @@ fn mask_normalized(text: &str) -> Option<String> {
         Cow::Borrowed(text)
     };
     let login = mask_login(&normalized);
-    if let Cow::Owned(masked) = mask_values(&login) {
+    if let Cow::Owned(masked) = mask_values(&login, hides) {
         return Some(masked);
     }
     match login {
@@ -192,11 +207,11 @@ fn mask_login(text: &str) -> Cow<'_, str> {
     }
 }
 
-fn mask_values(text: &str) -> Cow<'_, str> {
+fn mask_values(text: &str, hides: fn(&str) -> bool) -> Cow<'_, str> {
     let (head, fragment) = text.split_once('#').unwrap_or((text, ""));
     let (address, query) = head.split_once('?').unwrap_or((head, ""));
-    let masked_query = mask_pairs(query);
-    let masked_fragment = mask_pairs(fragment);
+    let masked_query = mask_pairs(query, hides);
+    let masked_fragment = mask_pairs(fragment, hides);
     if matches!(masked_query, Cow::Borrowed(_)) && matches!(masked_fragment, Cow::Borrowed(_)) {
         return Cow::Borrowed(text);
     }
@@ -207,12 +222,12 @@ fn mask_values(text: &str) -> Cow<'_, str> {
     ))
 }
 
-/// `text`, a query or a fragment, with each value under a name not known to be harmless replaced
-/// by `***` and the rest as written.
-fn mask_pairs(text: &str) -> Cow<'_, str> {
+/// `text`, a query or a fragment, with each value under a name `hides` replaced by `***` and the
+/// rest as written.
+fn mask_pairs(text: &str, hides: fn(&str) -> bool) -> Cow<'_, str> {
     let hidden = |pair: &'_ str| {
         pair.split_once('=')
-            .is_some_and(|(name, value)| !value.is_empty() && !is_harmless(name))
+            .is_some_and(|(name, value)| !value.is_empty() && hides(name))
     };
     if !text.split('&').any(hidden) {
         return Cow::Borrowed(text);
@@ -254,6 +269,24 @@ mod tests {
         }
         let plain = "http\rs://example.org/path";
         assert_eq!(mask_query(plain), plain);
+    }
+
+    /// list tells apart links that differ in a harmless value, and still hides what grants access.
+    #[test]
+    fn a_list_shows_harmless_values_and_masks_secrets() {
+        let link = "https://lab.example/x.csv?n=2&api_token=abc&X-Amz-Signature=def&key=ghi#v=3";
+        assert_eq!(
+            mask_secrets(link),
+            "https://lab.example/x.csv?n=2&api_token=***&X-Amz-Signature=***&key=***#v=3"
+        );
+        assert_eq!(
+            mask_query(link),
+            "https://lab.example/x.csv?n=***&api_token=***&X-Amz-Signature=***&key=***#v=***"
+        );
+        assert_eq!(
+            mask_secrets("https://ada:pw@lab.example/x.csv?n=2"),
+            "https://***@lab.example/x.csv?n=2"
+        );
     }
 
     #[test]

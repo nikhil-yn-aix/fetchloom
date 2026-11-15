@@ -374,7 +374,7 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                 name: name.clone(),
                 reference: entry
                     .source()
-                    .map(|source| crate::shown::mask_query(&source.reference).into_owned()),
+                    .map(|source| crate::shown::mask_secrets(&source.reference).into_owned()),
                 from: entry.recipe().map(|recipe| recipe.from.clone()),
                 resolved: pinned.map(|locked| locked.resolved.clone()),
                 files: totals.map(|(files, _)| files),
