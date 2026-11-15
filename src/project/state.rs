@@ -59,11 +59,12 @@ pub(crate) struct State {
 }
 
 /// which folder a state was written for: its file number, the inode on unix and the file index
-/// on windows, and its creation time where the disk keeps one. a rename or a move within the disk
-/// keeps the number, and a move on fat or exfat, which keep no lasting numbers, keeps the time.
-/// the disk's own number is left out, since network disks number it apart on each machine. a
-/// clone, a copy or a state from git matches neither, so the records of a state that came with it,
-/// which anyone could have written, are not used.
+/// on windows, and its creation time where the disk keeps one finer than the second. a rename or a
+/// move within the disk keeps the number, and a move on fat or exfat, which keep no lasting
+/// numbers, keeps the time. hfs+ keeps whole seconds, which a copy made in the same second shares,
+/// so its time is not kept. the disk's own number is left out, since network disks number it apart
+/// on each machine. a clone, a copy or a state from git matches neither, so the records of a state
+/// that came with it, which anyone could have written, are not used.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Folder {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,7 +83,8 @@ impl Folder {
             .as_ref()
             .and_then(|metadata| metadata.created().ok())
             .and_then(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
-            .and_then(|since| u64::try_from(since.as_nanos()).ok());
+            .and_then(|since| u64::try_from(since.as_nanos()).ok())
+            .filter(|_| crate::space::Filesystem::of(root) != crate::space::Filesystem::Hfs);
         #[cfg(unix)]
         let inode = metadata.as_ref().map(std::os::unix::fs::MetadataExt::ino);
         #[cfg(windows)]
@@ -96,13 +98,11 @@ impl Folder {
     }
 
     /// whether a state written for this folder is one for `here`: the same number, or the same
-    /// creation time. what either side cannot tell matches nothing, and a time to the whole second,
-    /// as hfs+ keeps it, cannot tell a copy made in the same second apart.
+    /// creation time. what either side cannot tell matches nothing.
     pub(crate) fn matches(&self, here: &Folder) -> bool {
         let same =
             |recorded: Option<u64>, found: Option<u64>| recorded.is_some() && recorded == found;
-        let fine = |created: Option<u64>| created.filter(|nanos| nanos % 1_000_000_000 != 0);
-        same(self.inode, here.inode) || same(fine(self.created), fine(here.created))
+        same(self.inode, here.inode) || same(self.created, here.created)
     }
 }
 
@@ -816,8 +816,8 @@ mod tests {
 
     /// a state is its folder's when the number or the creation time match, so a move on a disk of
     /// no lasting numbers keeps it, and a copy, whose both differ, does not. what either side
-    /// cannot tell matches nothing: without a creation time, or with one to the whole second, the
-    /// number alone decides, while exfat's 10 ms still match.
+    /// cannot tell matches nothing: without a creation time, as on hfs+, the number alone decides.
+    /// a time that falls on a whole second still matches, as one in a hundred do on fat's 10 ms.
     #[test]
     fn a_folder_matches_by_its_number_or_its_creation_time() {
         let folder = |inode, created| Folder { inode, created };
@@ -835,11 +835,10 @@ mod tests {
             (folder(Some(7), None), folder(Some(8), Some(100)), false),
             (folder(Some(7), Some(100)), folder(Some(8), None), false),
             (folder(None, None), folder(None, None), false),
-            // hfs+ keeps whole seconds, which a copy made in the same second shares
             (
                 folder(Some(7), Some(5_000_000_000)),
                 folder(Some(8), Some(5_000_000_000)),
-                false,
+                true,
             ),
             (
                 folder(Some(7), Some(5_000_000_000)),

@@ -10,12 +10,15 @@ use crate::error::{Error, Kind};
 pub(crate) const FAT_LARGEST: u64 = (1 << 32) - 1;
 
 /// what a disk is formatted as, as far as fetchloom's work changes with it: FAT and exFAT make
-/// no links and change one folder at a time, and FAT holds no file past [`FAT_LARGEST`].
+/// no links and change one folder at a time, FAT holds no file past [`FAT_LARGEST`], and HFS+
+/// keeps creation times to the whole second.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Filesystem {
     /// FAT32, or FAT12 and FAT16 on smaller disks.
     Fat,
     Exfat,
+    /// HFS+, or the HFS before it.
+    Hfs,
     Other,
 }
 
@@ -28,6 +31,8 @@ impl Filesystem {
             Filesystem::Exfat
         } else if is(&["vfat", "fat", "fat12", "fat16", "fat32", "msdos", "msdosfs"]) {
             Filesystem::Fat
+        } else if is(&["hfs", "hfsplus"]) {
+            Filesystem::Hfs
         } else {
             Filesystem::Other
         }
@@ -39,6 +44,7 @@ impl Filesystem {
         match magic {
             0x4d44 => Filesystem::Fat,
             0x2011_bab0 => Filesystem::Exfat,
+            0x482b | 0x4244 => Filesystem::Hfs,
             _ => Filesystem::Other,
         }
     }
@@ -80,7 +86,7 @@ impl Filesystem {
     /// whether its folders change one at a time, as on FAT and exFAT, so changing several at
     /// once only queues the changes.
     pub(crate) fn serializes(self) -> bool {
-        self != Filesystem::Other
+        matches!(self, Filesystem::Fat | Filesystem::Exfat)
     }
 
     /// the most bytes one file holds on this filesystem, when that is less than any disk holds.
@@ -312,11 +318,17 @@ mod tests {
         for name in ["exfat", "exFAT"] {
             assert_eq!(Filesystem::named(name), Filesystem::Exfat, "{name}");
         }
+        for name in ["hfs", "HFS", "hfsplus"] {
+            assert_eq!(Filesystem::named(name), Filesystem::Hfs, "{name}");
+        }
         for name in ["ntfs", "refs", "apfs", "ext4", "xfs", "not-exfat", ""] {
             assert_eq!(Filesystem::named(name), Filesystem::Other, "{name}");
         }
         assert_eq!(Filesystem::from_magic(0x4d44), Filesystem::Fat);
         assert_eq!(Filesystem::from_magic(0x2011_bab0), Filesystem::Exfat);
+        assert_eq!(Filesystem::from_magic(0x482b), Filesystem::Hfs);
+        assert_eq!(Filesystem::from_magic(0x4244), Filesystem::Hfs);
+        assert!(!Filesystem::Hfs.serializes() && Filesystem::Exfat.serializes());
         for magic in [-1, 0, 0xef53, 0x5846_5342] {
             assert_eq!(Filesystem::from_magic(magic), Filesystem::Other);
         }

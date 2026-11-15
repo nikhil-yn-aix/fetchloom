@@ -2459,38 +2459,61 @@ fn remove_in_a_copy_says_what_it_keeps_and_why() -> Result {
     Ok(())
 }
 
+/// iris placed in `sandbox`, its state then recording another folder number but the folder's own
+/// creation time, as a move on fat or exfat leaves it. false on a disk that keeps no creation time,
+/// or keeps it to the whole second, as hfs+ does, where fetchloom records none.
+fn moved_on_a_disk_without_lasting_numbers(sandbox: &Sandbox, server: &Server) -> Result<bool> {
+    let Ok(created) = fs::metadata(sandbox.work())?.created() else {
+        return Ok(false);
+    };
+    let created = created.duration_since(std::time::UNIX_EPOCH)?;
+    if created.subsec_nanos() == 0 {
+        return Ok(false);
+    }
+    added(sandbox, server)?;
+    let path = sandbox.work().join(".fetchloom").join("state");
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+    let inode = state["folder"]["inode"].as_u64().unwrap_or_default();
+    state["folder"] = serde_json::json!({
+        "inode": inode.wrapping_add(1),
+        "created": u64::try_from(created.as_nanos())?,
+    });
+    fs::write(&path, serde_json::to_vec(&state)?)?;
+    Ok(true)
+}
+
 /// fat and exfat keep no lasting file numbers, so a move gives the folder another while its
 /// creation time stays: a state that records that time is still the folder's, and remove deletes
 /// the file fetchloom placed.
 #[test]
 fn a_state_whose_folder_kept_its_creation_time_is_still_used() -> Result {
     let sandbox = Sandbox::new()?;
-    let Ok(created) = fs::metadata(sandbox.work())?.created() else {
-        return crate::support::skipped("creation-time", "this disk keeps no creation time");
-    };
-    // a time to the whole second, as hfs+ keeps it, cannot tell folders apart, so it counts as none
-    if created
-        .duration_since(std::time::UNIX_EPOCH)?
-        .subsec_nanos()
-        == 0
-    {
-        return crate::support::skipped(
-            "creation-time",
-            "this disk keeps creation times to the whole second",
-        );
-    }
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    added(&sandbox, &server)?;
-    let path = sandbox.work().join(".fetchloom").join("state");
-    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
-    let inode = state["folder"]["inode"].as_u64().unwrap_or_default();
-    let created = created.duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-    state["folder"] =
-        serde_json::json!({"inode": inode.wrapping_add(1), "created": u64::try_from(created)?});
-    fs::write(&path, serde_json::to_vec(&state)?)?;
+    if !moved_on_a_disk_without_lasting_numbers(&sandbox, &server)? {
+        return crate::support::skipped("creation-time", "this disk keeps no fine creation time");
+    }
     let removed = sandbox.run(&["--offline", "remove", "iris"])?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
     assert!(!sandbox.work().join("data/iris/iris.csv").exists());
+    Ok(())
+}
+
+/// hfs+ keeps creation times to the whole second, which a copy made in the same second shares, so
+/// there a matching time vouches for no folder: the state is not used, and remove leaves the file
+/// it cannot tell fetchloom placed.
+#[test]
+fn a_creation_time_on_hfs_vouches_for_no_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    if !moved_on_a_disk_without_lasting_numbers(&sandbox, &server)? {
+        return crate::support::skipped("creation-time", "this disk keeps no fine creation time");
+    }
+    let removed = sandbox
+        .command(&["--offline", "remove", "iris"])
+        .env("FETCHLOOM_TEST_FILESYSTEM", "hfs")
+        .output()?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert!(sandbox.work().join("data/iris/iris.csv").exists());
     Ok(())
 }
 
