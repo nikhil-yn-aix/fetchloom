@@ -216,15 +216,13 @@ async fn unfound(
     context: &Context,
     named: &[Named<'_>],
 ) -> Result<BTreeMap<String, Vec<String>>, Error> {
-    let pinned: Vec<Pinned<'_>> = named
+    let locked: Vec<(&Named<'_>, &LockedFile)> = named
         .iter()
-        .flat_map(|named| {
-            named.files.iter().map(|file| Pinned {
-                dataset: named.name,
-                file,
-                page: named.page,
-            })
-        })
+        .flat_map(|named| named.files.iter().map(move |file| (named, file)))
+        .collect();
+    let pinned: Vec<Pinned<'_>> = locked
+        .iter()
+        .map(|(named, file)| Pinned::locked(named.name, file, named.page))
         .collect();
     let results: BTreeSet<&str> = named
         .iter()
@@ -244,8 +242,8 @@ async fn unfound(
         let wanted: Vec<Wanted> = asked
             .iter()
             .map(|at| Wanted {
-                digest: pinned[*at].file.sha256,
-                size: pinned[*at].file.size,
+                digest: locked[*at].1.sha256,
+                size: locked[*at].1.size,
                 label: pinned[*at].label(),
             })
             .collect();
@@ -298,7 +296,7 @@ async fn unfound(
                 "no mirror holds this file of a recipe's result".to_owned()
             }
             Lack::Imported => "it was imported from files, and no mirror holds it".to_owned(),
-            why => format!("{}: {}", why.outcome(), why.error(pinned.file.size).message),
+            why => format!("{}: {}", why.outcome(), why.error(pinned.size).message),
         };
         lack(pinned, said);
     }

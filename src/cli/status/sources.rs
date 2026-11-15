@@ -116,14 +116,16 @@ pub(super) fn check(context: &Context, project: &Project) -> Result<Sources, Err
     let (lock, _) = crate::cli::sync::rename::forecast(&manifest, lock);
     let mut pinned = Vec::new();
     for (name, entry) in &manifest.datasets {
-        let (Some(source), Some(locked)) = (entry.source(), lock.get(name)) else {
+        let Some(source) = entry.source() else {
             continue;
         };
-        pinned.extend(locked.files.iter().map(|file| Pinned {
-            dataset: name,
-            file,
-            page: source.web_page,
-        }));
+        if let Some(locked) = lock.get(name) {
+            let files = locked.files.iter();
+            pinned.extend(files.map(|file| Pinned::locked(name, file, source.web_page)));
+        } else if let Some(stated) = lock.stated(name) {
+            let files = stated.files.iter();
+            pinned.extend(files.map(|file| Pinned::stated(name, file, source.web_page)));
+        }
     }
     if pinned.is_empty() {
         return Ok(Sources::default());
@@ -206,7 +208,7 @@ fn gathered(context: &Context, pinned: &[Pinned<'_>], found: Vec<Found>) -> Sour
 /// `pinned`, which no mirror or source serves for `lack`.
 fn unserved(pinned: &Pinned<'_>, lack: Lack) -> Unserved {
     let (outcome, size) = (lack.outcome(), lack.size());
-    let error = lack.error(pinned.file.size);
+    let error = lack.error(pinned.size);
     Unserved {
         file: pinned.label(),
         outcome,

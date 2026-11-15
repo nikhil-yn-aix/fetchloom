@@ -98,11 +98,7 @@ fn a_refusal_keeps_the_hint_a_download_gives() {
 }
 
 fn pinned(file: &LockedFile) -> Pinned<'_> {
-    Pinned {
-        dataset: "notes",
-        file,
-        page: false,
-    }
+    Pinned::locked("notes", file, false)
 }
 
 /// a file without a link was imported, and a link data.lock broke names nothing, so neither is

@@ -12,10 +12,11 @@ use url::Url;
 use super::Context;
 use super::fetch::Queue;
 use super::fetch::mirrors::Look;
+use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::mirror::Wanted;
 use crate::net::{Expect, Fetch, Net, Probed};
-use crate::project::lock::LockedFile;
+use crate::project::lock::{LockedFile, StatedFile};
 
 /// copies looked at on one folder mirror at once, as sync copies from one.
 const LOOKS: usize = 8;
@@ -24,29 +25,60 @@ const LOOKS: usize = 8;
 #[derive(Clone, Copy)]
 pub(in crate::cli) struct Pinned<'a> {
     pub(in crate::cli) dataset: &'a str,
-    pub(in crate::cli) file: &'a LockedFile,
+    path: &'a str,
+    pub(in crate::cli) size: u64,
+    /// none for a file only its source's MD5 pins, which no mirror keeps.
+    sha256: Option<Sha256>,
+    md5: Option<Md5>,
+    url: &'a str,
     /// whether data.toml asks for its link's web page, so a page is the file.
-    pub(in crate::cli) page: bool,
+    page: bool,
 }
 
-impl Pinned<'_> {
-    /// the name a person knows it by, as `iris/iris.csv`.
-    pub(in crate::cli) fn label(&self) -> String {
-        format!("{}/{}", self.dataset, self.file.path)
+impl<'a> Pinned<'a> {
+    pub(in crate::cli) fn locked(dataset: &'a str, file: &'a LockedFile, page: bool) -> Self {
+        Pinned {
+            dataset,
+            path: &file.path,
+            size: file.size,
+            sha256: Some(file.sha256),
+            md5: file.md5,
+            url: &file.url,
+            page,
+        }
     }
 
-    fn wanted(&self) -> Wanted {
-        Wanted {
-            digest: self.file.sha256,
-            size: self.file.size,
-            label: self.label(),
+    /// a file its source's digests pin before a sync downloads it.
+    pub(in crate::cli) fn stated(dataset: &'a str, file: &'a StatedFile, page: bool) -> Self {
+        Pinned {
+            dataset,
+            path: &file.path,
+            size: file.size,
+            sha256: file.sha256,
+            md5: file.md5,
+            url: &file.url,
+            page,
         }
+    }
+
+    /// the name a person knows it by, as `iris/iris.csv`.
+    pub(in crate::cli) fn label(&self) -> String {
+        format!("{}/{}", self.dataset, self.path)
+    }
+
+    /// what a mirror keeps it as, when its SHA-256 is pinned.
+    fn wanted(&self) -> Option<Wanted> {
+        Some(Wanted {
+            digest: self.sha256?,
+            size: self.size,
+            label: self.label(),
+        })
     }
 
     /// whether a web page may be the file: data.toml asks for one, or its name says it is one.
     fn takes_page(&self) -> bool {
         self.page
-            || std::path::Path::new(&self.file.path)
+            || std::path::Path::new(self.path)
                 .extension()
                 .is_some_and(|extension| {
                     ["htm", "html", "xhtml"]
@@ -58,10 +90,10 @@ impl Pinned<'_> {
     /// the request for its first byte at its source, as a sync asks for the file, or why it has
     /// none: an import names no link, and a broken link names nothing.
     fn request(&self) -> Result<Fetch, Lack> {
-        if self.file.url.is_empty() {
+        if self.url.is_empty() {
             return Err(Lack::Imported);
         }
-        let url = Url::parse(&self.file.url).map_err(|err| {
+        let url = Url::parse(self.url).map_err(|err| {
             Lack::Unknown(Error::new(
                 Kind::ProjectInvalid,
                 format!("data.lock has a broken link for {}: {err}", self.label()),
@@ -69,9 +101,9 @@ impl Pinned<'_> {
         })?;
         Ok(Fetch {
             expect: Expect {
-                sha256: Some(self.file.sha256),
-                md5: self.file.md5,
-                size: Some(self.file.size),
+                sha256: self.sha256,
+                md5: self.md5,
+                size: Some(self.size),
             },
             page: self.page,
             ..crate::source::fetch_plan(&url)
@@ -246,13 +278,14 @@ pub(in crate::cli) async fn find(
             Look::Folder(_) if folders == Folders::Skipped => continue,
             Look::Folder(root) => tokio::task::block_in_place(|| {
                 crate::place::run_all(&asked, context.threads.at_most(LOOKS), |at| {
-                    let file = files[*at].file;
-                    crate::mirror::folder::has(root, &file.sha256, file.size)
+                    let file = &files[*at];
+                    file.sha256
+                        .is_some_and(|sha256| crate::mirror::folder::has(root, &sha256, file.size))
                 })
             }),
             Look::Ask(request) => {
                 let probed = each(context, net, &asked, |at| {
-                    Some(request(&files[at].wanted()))
+                    files[at].wanted().map(|wanted| request(&wanted))
                 })
                 .await?;
                 asked
@@ -260,7 +293,7 @@ pub(in crate::cli) async fn find(
                     .zip(probed)
                     .map(|(at, probed)| {
                         matches!(probed, Some(Probed::File { total: Some(total), page: false })
-                            if total == files[*at].file.size)
+                            if total == files[*at].size)
                     })
                     .collect()
             }
@@ -281,8 +314,8 @@ pub(in crate::cli) async fn find(
     let probed = each(context, net, &asked, |at| files[at].request().ok()).await?;
     for (at, probed) in asked.into_iter().zip(probed) {
         let pinned = &files[at];
-        let judgement = match (probed, Url::parse(&pinned.file.url)) {
-            (Some(probed), Ok(url)) => judged(probed, pinned.file.size, pinned.takes_page(), &url),
+        let judgement = match (probed, Url::parse(pinned.url)) {
+            (Some(probed), Ok(url)) => judged(probed, pinned.size, pinned.takes_page(), &url),
             _ => Err(Lack::Unknown(Error::new(
                 Kind::LocalIo,
                 format!("{} was not asked", pinned.label()),

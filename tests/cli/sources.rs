@@ -292,6 +292,41 @@ fn a_file_not_checked_is_never_called_lost() -> Result {
     Ok(())
 }
 
+/// a file its source's digests pin before any download is asked about by its size too.
+#[test]
+fn a_file_not_downloaded_yet_is_asked_about_too() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = Routes::start(vec![("/files/iris.csv".to_owned(), file(IRIS, "\"i\""))])?;
+    pinned(&sandbox, &source, &["/files/iris.csv"])?;
+    let lock = sandbox.work().join("data.lock");
+    let pins = std::fs::read_to_string(&lock)?;
+    std::fs::write(
+        &lock,
+        pins.replacen("files = [", "downloaded = false\nfiles = [", 1),
+    )?;
+    let asked = source.requests().len();
+    let output = sandbox.run(&["--json", "status", "--sources"])?;
+    ok(&output)?;
+    let document = json(&output)?;
+    assert_eq!(document["result"]["sources"]["files"], 1, "{document}");
+    assert_eq!(dataset(&document, "iris")?["served"], 1);
+    assert_eq!(source.requests().len(), asked + 1);
+    source.change(vec![(
+        "/files/iris.csv".to_owned(),
+        file(b"a,b\n", "\"j\""),
+    )]);
+    let output = sandbox.run(&["--json", "status", "--sources"])?;
+    ok(&output)?;
+    let document = json(&output)?;
+    let changed = &dataset(&document, "iris")?["not_served"][0];
+    assert_eq!(
+        (&changed["outcome"], &changed["size"]),
+        (&"changed".into(), &4.into()),
+        "{changed}"
+    );
+    Ok(())
+}
+
 #[test]
 fn offline_asks_no_source() -> Result {
     let sandbox = Sandbox::new()?;
