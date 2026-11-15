@@ -1267,7 +1267,8 @@ fn add_with_stop(
         gather(&mut groups, group);
     }
     // a result waiting for its file list keeps what the cache recorded of its tree, which a build
-    // places again; a fetched dataset waiting for its list keeps nothing, as its source has it
+    // places again; a fetched dataset waiting for its list keeps nothing, as its source has it,
+    // and an import keeps what was imported, which add_waiting_imports adds
     for result in lock.still_waiting().filter_map(lock::Waiting::result) {
         stop.check()?;
         needed.results.insert((result.key, result.tree));
@@ -1337,7 +1338,30 @@ fn add_with_stop(
         gather(&mut groups, group);
     }
     add_stated(needed, cache, lock, readers.as_mut(), &mut groups, stop)?;
+    add_waiting_imports(needed, cache, lock, stop)?;
     stop.check()
+}
+
+/// adds every object imported from files while `lock` has an import waiting for its list, as on a
+/// branch where data.lock.d is untracked: no source gives one back, and which are its own is
+/// unknown until its list is back.
+fn add_waiting_imports(
+    needed: &mut Needed,
+    cache: &Cache,
+    lock: &Lock,
+    stop: &Stop,
+) -> Result<(), Error> {
+    let waits = lock
+        .still_waiting()
+        .filter_map(lock::Waiting::pin)
+        .any(|pin| crate::source::local::is_imported(&pin.reference));
+    if waits {
+        for digest in cache.imported().into_keys() {
+            stop.check()?;
+            needed.add(digest, Use::Placed);
+        }
+    }
+    Ok(())
 }
 
 /// adds what a first sync cut short downloaded of each dataset `add --no-sync` pinned in `lock`:
@@ -2020,6 +2044,47 @@ mod tests {
         assert_eq!(unread, [message.as_str()]);
         assert!(!report.complete);
         assert_eq!(gc.map(drop).map_err(|error| error.message), Err(message));
+    }
+
+    /// a dataset imported from files on some machine, whose list data.lock.d lacks for now, as on
+    /// a branch where the list is untracked, keeps every imported object: no source gives one back,
+    /// and which are its own is unknown until its list is back.
+    #[test]
+    fn a_waiting_import_keeps_every_imported_object() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let imported = store(&cache, b"measured\n");
+        cache.mark_imported(&[imported.digest]).unwrap();
+        let fetched = store(&cache, b"fetched\n");
+        let project = folder.path().join("p");
+        fs::create_dir(&project).unwrap();
+        fs::write(
+            project.join("data.toml"),
+            "[datasets.meas]\nref = \"local\"\nplace = false\n",
+        )
+        .unwrap();
+        let listed = "ab".repeat(32);
+        fs::write(
+            project.join("data.lock"),
+            format!(
+                "version = 1\n\n[[dataset]]\nname = \"meas\"\nref = \"local\"\nspec = \"sha256:{}\"\nresolved = \"local\"\nlocked = \"2026-11-15T23:47:00Z\"\nfiles_in = [\"data.lock.d/meas.{}.tsv.zst\"]\nfile_count = 1\nfile_bytes = 9\nfiles_sha256 = \"sha256:{listed}\"\n",
+                "cd".repeat(32),
+                &listed[..12]
+            ),
+        )
+        .unwrap();
+        cache.register(&project).unwrap();
+
+        let needed = needed_by_all(&cache, None, &Stop::default()).unwrap();
+
+        assert!(
+            needed.objects.contains(&imported.digest),
+            "the import's own"
+        );
+        assert!(
+            !needed.objects.contains(&fetched.digest),
+            "only what was imported"
+        );
     }
 
     /// a registered project's data.toml that a clone or someone sharing the cache made a fifo, a
