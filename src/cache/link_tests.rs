@@ -368,6 +368,9 @@ fn clearing_a_build_folder_never_follows_a_link_inside_it() {
     let build = cache.root.join("tmp").join("0123456789abcdef.build");
     fs::create_dir_all(build.join("out")).unwrap();
     fs::write(build.join("lock"), b"").unwrap();
+    // open to its owner alone, as a build makes its folder
+    #[cfg(unix)]
+    fs::set_permissions(&build, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
     if crate::test_links::link_folder(&outside, &build.join("linked")).is_err() {
         return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
     }

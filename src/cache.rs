@@ -40,7 +40,7 @@ pub(crate) use staging::Staging;
 #[cfg(not(unix))]
 pub(crate) use staging::clear_tree;
 #[cfg(unix)]
-pub(crate) use staging::{clear_at, enter_at, names_at};
+pub(crate) use staging::{clear_folder, enter_at, is_private, names_at};
 pub(crate) use unpacked::{Member, parts_key, tree, tree_hash};
 #[cfg(test)]
 pub(crate) use upkeep::Object;

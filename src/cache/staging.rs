@@ -20,6 +20,14 @@ const SHARDS: usize = 16;
 /// its lock.
 const BUILD: &str = "build";
 
+#[cfg(test)]
+thread_local! {
+    /// what a test does to a folder's name once a clear has looked at the folder and before its
+    /// owner gets its access back, as a co-user swapping it for a link meanwhile would, once.
+    pub(super) static LOOKED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 pub(crate) struct Staging {
     cache: Cache,
     folder: PathBuf,
@@ -137,13 +145,23 @@ impl Cache {
                 continue;
             }
             let folder = entry.path();
-            let build = folder
+            if folder
                 .extension()
-                .is_some_and(|extension| extension == BUILD);
-            if !build
-                && folder
-                    .extension()
-                    .is_none_or(|extension| extension != "stage")
+                .is_some_and(|extension| extension == BUILD)
+            {
+                // a pretending sweep only counts, since a build's folder is never a cache file
+                match self.sweep_build(&folder, now, stop, !self.volume.is_pretending()) {
+                    Ok(swept) => removed += u64::from(swept),
+                    Err(error) => {
+                        not_removed.push(Failure::new(&folder, &error));
+                        removed += 1;
+                    }
+                }
+                continue;
+            }
+            if folder
+                .extension()
+                .is_none_or(|extension| extension != "stage")
             {
                 continue;
             }
@@ -155,23 +173,53 @@ impl Cache {
                 },
                 Err(_) => None,
             };
-            if build && !owned(&entry) {
-                continue;
-            }
-            if build && (lock.is_some() || old_staging(&folder, now, stop)) {
-                // a pretending sweep only counts, since a build's folder is never a cache file
-                if !self.volume.is_pretending() {
-                    drop(lock);
-                    if let Err(error) = clear_below(&self.root, &folder) {
-                        not_removed.push(Failure::new(&folder, &error));
-                    }
-                }
-                removed += 1;
-            } else if lock.is_some() || old_staging(&folder, now, stop) {
+            if lock.is_some() || old_staging(&folder, now, stop) {
                 removed += self.clear_staging(&folder, lock, stop, not_removed);
             }
         }
         removed
+    }
+
+    /// [`sweep_build_at`] for the build folder at `folder` in tmp/, reached from the cache's root.
+    #[cfg(unix)]
+    fn sweep_build(
+        &self,
+        folder: &Path,
+        now: SystemTime,
+        stop: &Stop,
+        clear: bool,
+    ) -> io::Result<bool> {
+        let tmp = super::folder::walk(&self.root, Path::new("tmp"), false)?;
+        sweep_build_at(&tmp, folder, now, stop, clear)
+    }
+
+    /// clears the build folder at `folder` in tmp/ as [`sweep_build_at`] does on unix. windows
+    /// says no owner safely, so the folders from the cache's root down to it are held while std's
+    /// `remove_dir_all` clears it through handles that never follow a reparse point.
+    #[cfg(not(unix))]
+    fn sweep_build(
+        &self,
+        folder: &Path,
+        now: SystemTime,
+        stop: &Stop,
+        clear: bool,
+    ) -> io::Result<bool> {
+        let lock = match open_unfollowed(&folder.join("lock"), false) {
+            Ok(lock) => match lock.try_lock() {
+                Ok(()) => Some(lock),
+                Err(TryLockError::WouldBlock) => return Ok(false),
+                Err(TryLockError::Error(_)) => None,
+            },
+            Err(_) => None,
+        };
+        if lock.is_none() && !old_staging(folder, now, stop) {
+            return Ok(false);
+        }
+        if clear {
+            drop(lock);
+            clear_held(&self.root, folder, || {})?;
+        }
+        Ok(true)
     }
 
     fn clear_staging(
@@ -347,45 +395,95 @@ fn all_old(folder: &Path, deeper: bool, now: SystemTime, stop: &Stop) -> bool {
     })
 }
 
-/// whether this user owns the entry, as a build folder must for a sweep to clear it: another
-/// user's may hold anything, as links swapped in while it is cleared.
-fn owned(entry: &fs::DirEntry) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        entry
-            .metadata()
-            .is_ok_and(|found| found.uid() == rustix::process::geteuid().as_raw())
+/// clears the build folder at `path`, which the folder `parent` holds by its name, once no build
+/// holds its lock, or on a disk without locks once it is old, and says whether it went, or would
+/// with `clear` false. only a folder this user owns and no one else may open, as
+/// [`Cache::build_folder`] makes one, is cleared, through a handle on it: a folder someone put
+/// there under a build's name, as one of this user's that others can write, stays as it is.
+#[cfg(unix)]
+pub(crate) fn sweep_build_at(
+    parent: &File,
+    path: &Path,
+    now: SystemTime,
+    stop: &Stop,
+    clear: bool,
+) -> io::Result<bool> {
+    use rustix::fs::{Mode, OFlags};
+    let Some(name) = path.file_name() else {
+        return Ok(false);
+    };
+    let Ok(Some(folder)) = private_at(parent, name) else {
+        return Ok(false);
+    };
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let lock = match rustix::fs::openat(&folder, "lock", flags, Mode::empty()) {
+        Ok(lock) => {
+            let lock = File::from(lock);
+            match lock.try_lock() {
+                Ok(()) => Some(lock),
+                Err(TryLockError::WouldBlock) => return Ok(false),
+                Err(TryLockError::Error(_)) => None,
+            }
+        }
+        Err(_) => None,
+    };
+    if lock.is_none() && !old_staging(path, now, stop) {
+        return Ok(false);
     }
-    #[cfg(not(unix))]
-    {
-        let _ = entry;
-        true
+    if clear {
+        drop(lock);
+        clear_folder(parent, name, &folder)?;
     }
+    Ok(true)
 }
 
-/// removes `folder`, below the cache's `root`, and all it holds, reached from `root` through
-/// handles that never follow a link, so a folder swapped for one meanwhile, `tmp/` too, leads
-/// nowhere else.
+/// the folder `name` in the folder `parent` holds, opened without following a link, when this
+/// user owns it and no one else may open it, as [`is_private`] says; none for any other folder.
 #[cfg(unix)]
-fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
-    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "a folder outside the cache");
-    let below = folder.strip_prefix(root).map_err(|_| invalid())?;
-    let (Some(parent), Some(name)) = (below.parent(), below.file_name()) else {
-        return Err(invalid());
-    };
-    clear_at(&super::folder::walk(root, parent, false)?, name)
+pub(crate) fn private_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<Option<File>> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let folder = File::from(rustix::fs::openat(parent, name, flags, Mode::empty())?);
+    Ok(is_private(&rustix::fs::fstat(&folder)?).then_some(folder))
+}
+
+/// whether a folder is this user's and open to no one else: 0700, as a build's folder is made,
+/// a setgid bit aside, which a folder made in a group's cache takes from its parent.
+#[cfg(unix)]
+pub(crate) fn is_private(found: &rustix::fs::Stat) -> bool {
+    found.st_uid == rustix::process::geteuid().as_raw() && found.st_mode & 0o777 == 0o700
+}
+
+/// clears what the folder `folder` holds open holds, then takes its name from the folder `parent`
+/// holds only while the name is still that folder's, not one put in its place. it goes on past a
+/// failure and returns the first.
+#[cfg(unix)]
+pub(crate) fn clear_folder(parent: &File, name: &std::ffi::OsStr, folder: &File) -> io::Result<()> {
+    use rustix::fs::AtFlags;
+    let mut first = None;
+    for child in names_at(folder)? {
+        match clear_at(folder, child.as_c_str()) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => {
+                first.get_or_insert(err);
+            }
+            _ => {}
+        }
+    }
+    if let Some(err) = first {
+        return Err(err);
+    }
+    let named = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    let held = rustix::fs::fstat(folder)?;
+    if (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino) {
+        rustix::fs::unlinkat(parent, name, AtFlags::REMOVEDIR)?;
+    }
+    Ok(())
 }
 
 /// [`clear_tree`] for `folder`, with the folders from `root` down to it held so none is a link or
-/// becomes one meanwhile. windows says no owner of a build folder safely, so the tree is removed
-/// through handles that never follow a reparse point, as std's `remove_dir_all` does there.
-#[cfg(windows)]
-fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
-    clear_held(root, folder, || {})
-}
-
-/// [`clear_below`], running `meanwhile` once the folders on the way are held.
+/// becomes one meanwhile, running `meanwhile` once they are. windows says no owner of a build
+/// folder safely, so the tree is removed through handles that never follow a reparse point, as
+/// std's `remove_dir_all` does there.
 #[cfg(windows)]
 pub(super) fn clear_held(root: &Path, folder: &Path, meanwhile: impl FnOnce()) -> io::Result<()> {
     let _held = crate::place::hold_below(root, folder)?;
@@ -420,29 +518,71 @@ pub(crate) fn clear_at(parent: &File, name: impl rustix::path::Arg + Copy) -> io
 }
 
 /// opens the folder `name` in the folder `parent` holds open, never following a link, first giving
-/// it back the access a step may have taken from its owner.
-#[cfg(unix)]
+/// it back the access a step may have taken from its owner. only a folder this user owns gets it,
+/// through a handle on that very folder, so a link put at its name meanwhile changes nothing.
+#[cfg(target_os = "linux")]
+pub(crate) fn enter_at(parent: &File, name: impl rustix::path::Arg + Copy) -> io::Result<File> {
+    use std::os::fd::AsRawFd;
+
+    use rustix::fs::{Mode, OFlags};
+    use rustix::io::Errno;
+    // a path handle needs no access to the folder, and with these flags a link is refused
+    let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let held = rustix::fs::openat(parent, name, flags, Mode::empty()).map_err(|err| match err {
+        Errno::NOTDIR | Errno::LOOP => not_a_folder(),
+        err => err.into(),
+    })?;
+    let found = rustix::fs::fstat(&held)?;
+    if found.st_mode & 0o700 != 0o700 && found.st_uid == rustix::process::geteuid().as_raw() {
+        #[cfg(test)]
+        if let Some(swap) = LOOKED.take() {
+            swap();
+        }
+        // fchmod refuses a path handle, and its name in /proc/self/fd leads to the folder held
+        let mode = Mode::from_raw_mode((found.st_mode & 0o7777) | 0o700);
+        rustix::fs::chmod(format!("/proc/self/fd/{}", held.as_raw_fd()).as_str(), mode)?;
+    }
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    Ok(File::from(rustix::fs::openat(
+        &held,
+        ".",
+        flags,
+        Mode::empty(),
+    )?))
+}
+
+/// [`enter_at`] where no path handle exists: the mode changes by name without following a link,
+/// and the folder opened must be the one looked at.
+#[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn enter_at(parent: &File, name: impl rustix::path::Arg + Copy) -> io::Result<File> {
     use rustix::fs::{AtFlags, FileType, Mode, OFlags};
     let found = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
     if FileType::from_raw_mode(found.st_mode) != FileType::Directory {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "a link or a file is where a folder should be",
-        ));
+        return Err(not_a_folder());
     }
-    if found.st_mode & 0o700 != 0o700 {
-        // chmodat follows a link, but no one else writes in this user's own build folder
+    if found.st_mode & 0o700 != 0o700 && found.st_uid == rustix::process::geteuid().as_raw() {
+        #[cfg(test)]
+        if let Some(swap) = LOOKED.take() {
+            swap();
+        }
         let mode = Mode::from_raw_mode((found.st_mode & 0o7777) | 0o700);
-        rustix::fs::chmodat(parent, name, mode, AtFlags::empty())?;
+        rustix::fs::chmodat(parent, name, mode, AtFlags::SYMLINK_NOFOLLOW)?;
     }
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    Ok(File::from(rustix::fs::openat(
-        parent,
-        name,
-        flags,
-        Mode::empty(),
-    )?))
+    let folder = File::from(rustix::fs::openat(parent, name, flags, Mode::empty())?);
+    let opened = rustix::fs::fstat(&folder)?;
+    if (opened.st_dev, opened.st_ino) != (found.st_dev, found.st_ino) {
+        return Err(not_a_folder());
+    }
+    Ok(folder)
+}
+
+#[cfg(unix)]
+fn not_a_folder() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "a link or a file is where a folder should be",
+    )
 }
 
 /// the names in the folder `folder` holds open.
@@ -766,6 +906,60 @@ mod tests {
         assert!(old_staging(&folder, now, &Stop::default()));
         File::open(&member).unwrap().set_modified(now).unwrap();
         assert!(!old_staging(&folder, now, &Stop::default()));
+    }
+
+    /// a folder of this user's that others can write, as `builds/<key>` in a group's cache, put in
+    /// tmp/ under a build's name by a co-user, is no build's folder: a sweep leaves all it holds.
+    #[cfg(unix)]
+    #[test]
+    fn a_sweep_leaves_a_build_folder_others_can_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, cache) = cache();
+        let folder = cache.root().join("tmp").join("x.build");
+        fs::create_dir_all(folder.join("kept")).unwrap();
+        fs::write(folder.join("lock"), b"").unwrap();
+        fs::write(folder.join("kept").join("a.csv"), b"mine").unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o775)).unwrap();
+
+        cache.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
+
+        assert_eq!(
+            fs::read(folder.join("kept").join("a.csv")).unwrap(),
+            b"mine"
+        );
+    }
+
+    /// a folder in a build's folder that its step took its owner's access from gets it back
+    /// through a handle on that very folder, so a link put at its name once a sweep looked at it
+    /// leaves what the link leads to as it was.
+    #[cfg(unix)]
+    #[test]
+    fn access_given_back_never_reaches_a_link_swapped_in() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, cache) = cache();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o750)).unwrap();
+        let (folder, lock) = cache.build_folder().unwrap();
+        let shut = folder.join("shut");
+        fs::create_dir(&shut).unwrap();
+        fs::set_permissions(&shut, fs::Permissions::from_mode(0o077)).unwrap();
+        drop(lock);
+        let (swapped, aside) = (shut.clone(), folder.join("aside"));
+        let link = target.clone();
+        LOOKED.set(Some(Box::new(move || {
+            fs::rename(&swapped, &aside).unwrap();
+            std::os::unix::fs::symlink(&link, &swapped).unwrap();
+        })));
+
+        cache.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
+
+        let mode = fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o7777, 0o750);
+        assert!(
+            LOOKED.take().is_none(),
+            "the sweep looked at the shut folder"
+        );
     }
 
     #[cfg(unix)]

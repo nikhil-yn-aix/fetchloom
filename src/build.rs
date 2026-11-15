@@ -123,12 +123,10 @@ impl Drop for Staging {
 }
 
 /// opens `folder`, a step's folder in the cache at `root`, from `root` without following a link,
-/// and refuses it unless it is this user's and the one this run made: it holds `lock`, the lock
-/// file this run holds, or without locks it is open to its owner alone, as made.
+/// and refuses it unless it is this user's, open to its owner alone, as made, and the one this run
+/// made: it holds `lock`, the lock file this run holds, where the disk takes locks.
 #[cfg(unix)]
 fn hold(root: &Path, folder: &Path, lock: Option<&File>) -> io::Result<Held> {
-    use std::os::unix::fs::MetadataExt;
-
     use rustix::fs::{AtFlags, Mode, OFlags};
     let name = folder
         .file_name()
@@ -139,16 +137,15 @@ fn hold(root: &Path, folder: &Path, lock: Option<&File>) -> io::Result<Held> {
     let root = File::open(root)?;
     let tmp = File::from(rustix::fs::openat(&root, "tmp", flags, Mode::empty())?);
     let opened = File::from(rustix::fs::openat(&tmp, &name, flags, Mode::empty())?);
-    let found = opened.metadata()?;
     let another = match lock {
         Some(lock) => {
             let named = rustix::fs::statat(&opened, "lock", AtFlags::SYMLINK_NOFOLLOW)?;
             let held = rustix::fs::fstat(lock)?;
             (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino)
         }
-        None => found.mode() & 0o077 != 0,
+        None => false,
     };
-    if found.uid() != rustix::process::geteuid().as_raw() || another {
+    if !crate::cache::is_private(&rustix::fs::fstat(&opened)?) || another {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("{} is not this user's alone", folder.display()),
@@ -166,19 +163,7 @@ impl Held {
     /// clears the step's folder through its handle, then takes its name from tmp/ only while the
     /// name is still this folder's, not one put in its place.
     fn clear(&self) -> io::Result<()> {
-        use rustix::fs::AtFlags;
-        for name in crate::cache::names_at(&self.folder)? {
-            match crate::cache::clear_at(&self.folder, name.as_c_str()) {
-                Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
-                _ => {}
-            }
-        }
-        let named = rustix::fs::statat(&self.tmp, &self.name, AtFlags::SYMLINK_NOFOLLOW)?;
-        let held = rustix::fs::fstat(&*self.folder)?;
-        if (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino) {
-            rustix::fs::unlinkat(&self.tmp, &self.name, AtFlags::REMOVEDIR)?;
-        }
-        Ok(())
+        crate::cache::clear_folder(&self.tmp, &self.name, &self.folder)
     }
 }
 
@@ -273,6 +258,24 @@ mod tests {
         std::fs::rename(&folder, dir.path().join("away")).unwrap();
         std::fs::create_dir(&folder).unwrap();
         std::fs::write(folder.join("lock"), b"").unwrap();
+
+        let refused = hold(cache.root(), &folder, lock.as_ref()).err().unwrap();
+
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    /// the step's own folder, its lock in place, is refused once others may open it, as a folder
+    /// a co-user could have swapped in through would be.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_others_can_open_is_refused_though_it_holds_the_lock() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, cache) = crate::cache::tests::cache();
+        let (folder, lock) = cache.build_folder().unwrap();
+        if lock.is_none() {
+            return crate::test_skips::skip("file-locks", "this disk takes no file locks");
+        }
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o770)).unwrap();
 
         let refused = hold(cache.root(), &folder, lock.as_ref()).err().unwrap();
 
