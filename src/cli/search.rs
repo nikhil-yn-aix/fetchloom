@@ -225,14 +225,17 @@ pub(super) async fn pick(
         context.output.step("Chose", &reference);
         return Ok(reference);
     }
-    let first = &report.candidates[0].reference;
-    let mut error = Error::new(Kind::ReferenceAmbiguous, format!(
-            "\"{words}\" is not a link or an id, and fetchloom will not guess which dataset you mean"
-        )).help(format!(
-            "run it again with one of these, such as `{}`",
-            super::project::command(&format!("{command} {first}"))
-        ))
-            .with_result(serde_json::json!({"candidates": report.candidates}));
+    let first = super::shell_word(&report.candidates[0].reference.to_string()).into_owned();
+    let message = format!(
+        "\"{words}\" is not a link or an id, and fetchloom will not guess which dataset you mean"
+    );
+    let help = format!(
+        "run it again with one of these, such as `{}`",
+        super::project::command(&format!("{command} {first}"))
+    );
+    let mut error = Error::new(Kind::ReferenceAmbiguous, message)
+        .help(help)
+        .with_result(serde_json::json!({"candidates": report.candidates}));
     let output = &context.output;
     if !output.shows_items() {
         error.details = rows;
