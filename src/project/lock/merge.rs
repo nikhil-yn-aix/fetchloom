@@ -352,7 +352,8 @@ fn read_merged(text: &str) -> Result<Manifest, Error> {
     })
 }
 
-/// values alike on both sides but written apart, as with other comments, keep `frame`'s text.
+/// decides which side's data.toml entry each dataset keeps. values alike on both sides but written
+/// apart, as with other comments, keep `frame`'s text.
 fn decide_entries(
     manifests: &Manifests<'_>,
     frame: Side,
