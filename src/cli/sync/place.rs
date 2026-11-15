@@ -1555,7 +1555,7 @@ fn track_aside(root: &Path, state: &mut State, stays: Vec<(String, String)>) -> 
     let before = state.aside.len();
     state
         .aside
-        .retain(|hidden, _| now(&root.join(hidden)).is_some());
+        .retain(|hidden, _| now(&native(root, hidden)).is_some());
     (recorded, state.aside.len() != before)
 }
 
@@ -2631,6 +2631,27 @@ mod tests {
             aside_names("data/a.csv", &HashSet::new()).next().as_deref(),
             Some("data/a.csv.changed")
         );
+    }
+
+    /// windows reads no `/` as a separator in a path that starts `\\?\`, as a project's root can, so
+    /// the file a person's work is kept under is looked for by native separators.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_kept_aside_is_found_under_a_verbatim_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        assert!(
+            root.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            root.display()
+        );
+        let hidden = "data/d/.fetchloom-0123456789abcdef.old";
+        fs::create_dir_all(root.join("data").join("d")).unwrap();
+        fs::write(native(&root, hidden), b"mine").unwrap();
+        let mut state = State::default();
+        let stays = vec![(hidden.to_owned(), "data/d/sub".to_owned())];
+        assert_eq!(track_aside(&root, &mut state, stays), (true, false));
+        assert_eq!(state.aside.len(), 1);
     }
 
     /// a file recorded as being replaced stays so only while its old record stands and nothing
