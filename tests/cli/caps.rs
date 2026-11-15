@@ -780,6 +780,40 @@ fn settings_set_refuses_a_file_every_run_would_stop_at() -> Result {
     Ok(())
 }
 
+/// a settings file `FETCHLOOM_SETTINGS` names that is not there yet stops the other commands,
+/// since its name may be a typo, with help naming the command that starts one there; `settings
+/// set` makes it, with its folder, and the next run reads it.
+#[test]
+fn settings_set_starts_the_file_fetchloom_settings_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let named = sandbox.work().join("lab").join("settings.toml");
+    let refused = sandbox
+        .command(&["--json", "settings"])
+        .env("FETCHLOOM_SETTINGS", &named)
+        .output()?;
+    assert_eq!(refused.status.code(), Some(2));
+    let document = json(&refused)?;
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(
+        help.contains("`fetchloom settings set <key> <value>` starts a settings file there"),
+        "{document}"
+    );
+    let set = sandbox
+        .command(&["settings", "set", "jobs", "4"])
+        .env("FETCHLOOM_SETTINGS", &named)
+        .output()?;
+    assert_eq!(set.status.code(), Some(0), "{}", text(&set.stderr)?);
+    assert_eq!(std::fs::read_to_string(&named)?, "jobs = 4\n");
+    let document = json(
+        &sandbox
+            .command(&["--json", "settings"])
+            .env("FETCHLOOM_SETTINGS", &named)
+            .output()?,
+    )?;
+    assert_eq!(shown(&document, "jobs")["origin"], "file", "{document}");
+    Ok(())
+}
+
 /// a variable set here still wins, which the change says; `--no-config` and `FETCHLOOM_NO_CONFIG`
 /// leave the file alone, so they refuse a change; a file `FETCHLOOM_SETTINGS` names is made, with
 /// its folder, when missing.

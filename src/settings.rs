@@ -204,7 +204,7 @@ impl File {
                         path.display()
                     ),
                 )
-                .help("unset FETCHLOOM_SETTINGS, or set it to a settings file that exists"));
+                .help("check its name; `fetchloom settings set <key> <value>` starts a settings file there, and unsetting FETCHLOOM_SETTINGS goes back to the usual one"));
             }
             Err(err) => {
                 let help = if named {

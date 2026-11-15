@@ -91,7 +91,7 @@ a settings file keeps settings for every run, so a shared machine or a big scrat
 | macos | `~/Library/Application Support/fetchloom/settings.toml` |
 | windows | `%APPDATA%\fetchloom\settings.toml` |
 
-`FETCHLOOM_SETTINGS` names another file. no file at the default place is fine; a file the variable names must exist. `--no-config`, or `FETCHLOOM_NO_CONFIG=1`, leaves the file unread for one run, also a file that would stop it, and `fetchloom settings` then says it was bypassed.
+`FETCHLOOM_SETTINGS` names another file. no file at the default place is fine; a file the variable names must exist, since its name may be a typo, though `fetchloom settings set` makes it, with its folder. `--no-config`, or `FETCHLOOM_NO_CONFIG=1`, leaves the file unread for one run, also a file that would stop it, and `fetchloom settings` then says it was bypassed.
 
 ```toml
 cache = "/scratch/lab/fetchloom-cache"
