@@ -493,11 +493,26 @@ fn a_help_that_offers_a_choice_has_no_fix() {
             Some("fetchloom auth"),
         ),
         (
-            "close programs using the unreadable files or check their permissions, then run `fetchloom cache verify` again",
+            "a program holds the unreadable files or their permissions keep them from you: `fetchloom cache verify` checks them again",
             Some("fetchloom cache verify"),
         ),
     ] {
         assert_eq!(fix_in(help, false), fix, "{help}");
+    }
+}
+
+/// a command after a step the person takes first is no fix, as the command that failed is once a
+/// file is mended: an agent that ran it at once failed the same way, again and again.
+#[test]
+fn a_command_after_a_step_of_the_persons_is_no_fix() {
+    for help in [
+        "fix that line, then run `fetchloom status --json` again",
+        "save it as UTF-8, then run `fetchloom list` again",
+        "close programs using the unreadable files or check their permissions, then run `fetchloom cache verify` again",
+        "rename it to \"iris\" in data.toml and run `fetchloom status` again",
+        "move the folder aside, then `fetchloom status` says what is missing",
+    ] {
+        assert_eq!(fix_in(help, false), None, "{help}");
     }
 }
 

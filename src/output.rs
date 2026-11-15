@@ -253,6 +253,7 @@ fn fix(
     judge: fn(&str) -> Option<Runnable>,
     written: fn(&str) -> bool,
 ) -> Option<&str> {
+    // a command after `then` or `and run` comes after a step the person takes first
     const NOT_A_FIX: [&str; 9] = [
         "as in",
         "such as",
@@ -260,9 +261,9 @@ fn fix(
         "e.g.",
         "did you mean",
         "own terminal, run",
-        "delete it and run",
-        "by hand, then run",
-        "errors above, then run",
+        "and run",
+        "then run",
+        " then",
     ];
     let mut before = String::new();
     let mut offset = 0;
