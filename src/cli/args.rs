@@ -197,8 +197,8 @@ on disk: removes the saved key. asks first when other tools read it too";
 
     pub(super) const HELP: &str = "examples:
   fetchloom help concepts
+  fetchloom help agents
   fetchloom help recipes
-  fetchloom help exit-codes
   fetchloom help cache gc
 
 on disk: nothing";
@@ -460,6 +460,7 @@ fn linked(root: clap::Command) -> clap::Command {
         root,
         format!(
             "help topics: `fetchloom help concepts`, `recipes`, `environment` or `exit-codes`\n\
+             for agents and scripts: `fetchloom help agents`, what --json and exit codes say\n\
              docs: {SITE}\nreport a bug: {}",
             crate::error::ISSUES
         ),
@@ -1383,7 +1384,7 @@ pub(crate) struct Completions {
 /// explain the ideas behind fetchloom, or one command
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Help {
-    /// concepts, recipes, environment, exit-codes, or a command such as add or cache gc
+    /// agents, concepts, recipes, environment, exit-codes, or a command such as add or cache gc
     #[arg(value_name = "topic", help_heading = "arguments")]
     pub(crate) topic: Vec<String>,
 }

@@ -265,8 +265,64 @@ place = false on iris keeps raw data that only recipes read out of data/.
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/recipes/";
 
+/// `fetchloom help agents`: what an ai agent or a script needs to run fetchloom without a person,
+/// offline. a test holds its kinds and dry runs to the code.
+const AGENTS: &str = "fetchloom for agents and scripts
+
+an ai agent or a script can run every fetchloom command with nobody to
+answer it. the skill skills/fetchloom/SKILL.md, in fetchloom's repository,
+has the usual tasks.
+
+--json, on any command but completions, prints one JSON document on stdout:
+  schema    1
+  command   the command it ran, such as sync or cache gc
+  status    ok or error
+  result    what the command found or did, in fields of its own
+  warnings  each with kind, message, details and help
+  errors    none on success, else one, with kind, message, details, help
+            and fix
+`fetchloom help --json` describes every command and its options.
+
+errors[0].kind, and the exit code it gives:
+    1  unconfirmed, lock.outdated, data.not_ready
+    2  usage
+   10  reference.invalid, reference.unresolved, reference.ambiguous,
+       source.invalid
+   20  network.unreachable, network.status, network.rate_limited,
+       network.refused, offline.missing
+   30  integrity.mismatch
+   40  auth.required
+   50  local.io, local.not_empty, project.invalid, project.changed
+   60  build.needed, build.failed, build.differs
+  130  interrupted
+`fetchloom help exit-codes` says what to do about each.
+
+errors[0].fix is the command to run next, or null. it is safe to run
+without asking: it never deletes, overwrites or repins your files, runs the
+project's code, signs in or answers a question for you, and in a --locked
+run it never writes data.lock. help also names the ways only a person
+should choose.
+
+nothing asks a question with --json, when stdin or stderr is no terminal,
+or where CI, AI_AGENT or a coding agent's own variable is set. a step that
+needs a yes then fails as unconfirmed and says what it would do. --yes
+answers yes, as to a large download or a project in the home folder, but
+never chooses for you: give add the reference of a dataset, which
+`fetchloom search <words> --json` finds, rather than words to pick from.
+
+--dry-run, on add, remove, exclude, drop, sync, lock, build, push, get and
+cache gc, says what would change and changes nothing.
+
+status, diff, list, search, help, lock --check, and settings, cache and
+auth without a subcommand, read and change nothing; export writes only the
+file -o names. path syncs the dataset it names first when that is not
+ready, and cache verify notes changed cached files.
+
+more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/json-output/";
+
 /// help topics that are not commands, each with its text.
-const TOPICS: [(&str, &str); 4] = [
+const TOPICS: [(&str, &str); 5] = [
+    ("agents", AGENTS),
     ("concepts", CONCEPTS),
     ("environment", ENVIRONMENT),
     ("exit-codes", EXIT_CODES),
@@ -486,8 +542,8 @@ fn unknown(topic: &[String]) -> Error {
             error.help(format!("did you mean `{shown}`?"))
         }
         None => error
-            .detail("topics: concepts, recipes, environment, exit-codes")
-            .detail("or a command, such as add or cache gc")
+            .detail("topics: agents, concepts, environment, exit-codes,")
+            .detail("recipes, or a command, such as add or cache gc")
             .help("`fetchloom --help` lists the commands"),
     }
 }
@@ -646,7 +702,7 @@ fn agreed(text: &str) -> String {
 mod tests {
     use clap::CommandFactory;
 
-    use super::{CONCEPTS, ENVIRONMENT, EXIT_CODES, RECIPES, TOPICS, args, arguments};
+    use super::{AGENTS, CONCEPTS, ENVIRONMENT, EXIT_CODES, RECIPES, TOPICS, args, arguments};
 
     #[test]
     fn a_short_only_option_keeps_its_spelling_and_its_value() {
@@ -760,6 +816,74 @@ mod tests {
             assert!(topic.contains(name), "{name}");
             assert!(docs.contains(&format!("`{name}`")), "{name}");
         }
+    }
+
+    /// the agents topic gives every kind fetchloom has with its exit code, and no other.
+    #[test]
+    fn the_agents_topic_gives_every_kind_its_exit_code() {
+        let table: Vec<(u8, String)> = AGENTS
+            .lines()
+            .skip_while(|line| !line.starts_with("errors[0].kind"))
+            .skip(1)
+            .take_while(|line| line.starts_with("  "))
+            .scan(0, |code, line| {
+                let (number, kinds) = line.trim().split_once("  ").unwrap_or(("", line));
+                if let Ok(number) = number.parse() {
+                    *code = number;
+                }
+                Some((*code, kinds.trim().to_owned()))
+            })
+            .flat_map(|(code, kinds)| {
+                let names: Vec<String> = kinds
+                    .split(',')
+                    .map(|name| name.trim().to_owned())
+                    .filter(|name| !name.is_empty())
+                    .collect();
+                names.into_iter().map(move |name| (code, name))
+            })
+            .collect();
+        let mut listed = table.clone();
+        listed.sort();
+        let mut kinds: Vec<(u8, String)> = crate::error::tests::every()
+            .iter()
+            .map(|kind| (kind.exit_code(), kind.name().to_owned()))
+            .collect();
+        kinds.sort();
+        assert_eq!(listed, kinds);
+    }
+
+    /// the agents topic names each command that takes --dry-run, and only those.
+    #[test]
+    fn the_agents_topic_names_every_dry_run() {
+        let sentence: String = AGENTS
+            .split("\n\n")
+            .find(|paragraph| paragraph.starts_with("--dry-run, on "))
+            .unwrap()
+            .replace('\n', " ");
+        let named = sentence
+            .trim_start_matches("--dry-run, on ")
+            .split_once(", says")
+            .unwrap()
+            .0
+            .replace(" and ", ", ");
+        let mut named: Vec<&str> = named.split(", ").collect();
+        named.sort_unstable();
+        let root = args::Args::command();
+        let mut taking: Vec<String> = Vec::new();
+        for command in root.get_subcommands() {
+            let inner = command
+                .get_subcommands()
+                .map(|sub| (format!("{} {}", command.get_name(), sub.get_name()), sub));
+            for (name, command) in
+                std::iter::once((command.get_name().to_owned(), command)).chain(inner)
+            {
+                if command.get_arguments().any(|arg| arg.get_id() == "dry_run") {
+                    taking.push(name);
+                }
+            }
+        }
+        taking.sort_unstable();
+        assert_eq!(named, taking);
     }
 
     /// a step finds a bare `python` on PATH, which has the project's own only while its venv is
@@ -904,10 +1028,10 @@ mod tests {
             .unwrap_err()
             .render()
             .to_string();
-        let listed = full
+        let listed: String = full
             .lines()
-            .find(|line| line.starts_with("help topics: "))
-            .unwrap_or_default();
+            .filter(|line| line.starts_with("help topics: ") || line.starts_with("for agents"))
+            .collect();
         for (name, _) in TOPICS {
             assert!(argument.contains(name), "{argument} lacks {name}");
             assert!(details.contains(name), "{details} lacks {name}");

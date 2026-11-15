@@ -389,7 +389,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// every kind, listed once. a kind missing from the list fails to compile, since the match
@@ -427,10 +427,9 @@ mod tests {
         found
     }
 
-    /// the exit codes page also names no kind that does not exist.
-    #[test]
-    fn every_kind_is_documented_with_its_exit_code_and_next_step() {
-        let kinds = every_kind![
+    /// every kind there is, for the pages that list them.
+    pub(crate) fn every() -> Vec<Kind> {
+        every_kind![
             Usage,
             Unconfirmed,
             ReferenceInvalid,
@@ -454,7 +453,14 @@ mod tests {
             BuildFailed,
             BuildDiffers,
             Interrupted,
-        ];
+        ]
+        .to_vec()
+    }
+
+    /// the exit codes page also names no kind that does not exist.
+    #[test]
+    fn every_kind_is_documented_with_its_exit_code_and_next_step() {
+        let kinds = every();
         let mut coded: Vec<(Option<u8>, String)> = kinds
             .iter()
             .map(|kind| (Some(kind.exit_code()), kind.name().to_owned()))
