@@ -762,7 +762,10 @@ fn save(
                 if !agrees(format!("save it in {}?", auth::keyring_name()), true)? {
                     return Ok(None);
                 }
-                store::save(var, &id, secret, store::Place::Keyring).map_err(|err| {
+                asking_store(output, || {
+                    store::save(var, &id, secret, store::Place::Keyring)
+                })
+                .map_err(|err| {
                     let locked = store::locked(&err);
                     failed(err).help(elsewhere("the key", locked))
                 })?;
@@ -838,6 +841,22 @@ fn elsewhere(it: &str, locked: bool) -> String {
         format!("unlock {}", auth::keyring_name())
     };
     format!("{unlock}, or {file}")
+}
+
+/// what a run waits for while the credential store asks for its password.
+const PROMPT: &str = if cfg!(target_os = "macos") {
+    "for the macos keychain's password prompt"
+} else if cfg!(windows) {
+    "for windows credential manager"
+} else {
+    "for the system keyring's password prompt"
+};
+
+/// `call`, a request to the credential store, said to wait for the store's password prompt once
+/// it lasts a second: a locked macos keychain asks in a window that may be behind others.
+pub(super) fn asking_store<T>(output: &crate::output::Output, call: impl FnOnce() -> T) -> T {
+    let _waiting = output.setup("Waiting", PROMPT);
+    call()
 }
 
 /// the question before saving `account`'s key to the file `path`, and the answer enter gives:
@@ -948,7 +967,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             .help(format!("unset {name} in your environment to sign out")));
         }
         Origin::Keyring => {
-            store::forget(var, &account.id()).map_err(failed)?;
+            asking_store(output, || store::forget(var, &account.id())).map_err(failed)?;
             auth::keyring_name().to_owned()
         }
         Origin::File(path) => {
@@ -983,7 +1002,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
                     auth::netrc::remove(path, host).map_err(failed)?;
                 }
                 _ if store::saved(var).contains_key(&account.id()) => {
-                    store::forget(var, &account.id()).map_err(failed)?;
+                    asking_store(output, || store::forget(var, &account.id())).map_err(failed)?;
                 }
                 _ => std::fs::remove_file(path).map_err(failed)?,
             }
@@ -1241,6 +1260,27 @@ mod tests {
         };
         assert_eq!(elsewhere("the key", true), format!("{unlock}, or {file}"));
         assert_eq!(elsewhere("the key", false), file);
+    }
+
+    /// a call to the credential store that has not returned says what it waits for, as a locked
+    /// macos keychain keeps it waiting on a password prompt that may be behind other windows.
+    #[test]
+    fn a_store_call_that_waits_says_it_waits_for_the_password_prompt() {
+        let screen = crate::output::screen::Screen::default();
+        let output = crate::output::Output::on_screen(screen.clone());
+        let output = &output;
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
+        // the store answers once released, or once a failed check drops `release`
+        std::thread::scope(move |scope| {
+            let call = scope.spawn(move || asking_store(output, move || blocked.recv().is_ok()));
+            assert!(
+                screen.shows(&format!("Waiting {PROMPT}")),
+                "{:?}",
+                screen.records()
+            );
+            release.send(()).unwrap();
+            assert!(call.join().unwrap(), "the store's answer comes back");
+        });
     }
 
     /// a dataverse host a person typed may be on a private network, as `add` allows, so its key

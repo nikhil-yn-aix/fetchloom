@@ -632,7 +632,10 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
             let question = format!("save {it} in {}?", auth::keyring_name());
             agrees(context, host, saved, &question, true)?;
         }
-        return site::save(var, host, saved, store::Place::Keyring).map_err(|err| {
+        return super::asking_store(&context.output, || {
+            site::save(var, host, saved, store::Place::Keyring)
+        })
+        .map_err(|err| {
             let locked = store::locked(&err);
             let error = failed(err);
             if locked || site::too_big_for_windows(saved) {
@@ -788,7 +791,7 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
     }
     // a sign-out has nothing to stop, so a stop asked once it starts lets it finish
     context.stop.finish();
-    let removed = site::forget(var, &host).map_err(|err| {
+    let removed = super::asking_store(output, || site::forget(var, &host)).map_err(|err| {
         let doing = format!("could not remove what was saved for {host}");
         super::not_removed(&doing, &logout.account, &err)
     })?;
