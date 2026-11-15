@@ -6,8 +6,8 @@ use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::support::{
-    Part, Result, Sandbox, Server, delete, delete_folder, edit, file, json, reply, skipped, text,
-    zip_of,
+    Part, Result, Sandbox, Server, delete, delete_folder, edit, file, json, reply, sha256_hex,
+    skipped, text, zip_of,
 };
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -2858,6 +2858,39 @@ fn a_kept_edit_fails_a_strict_sync_and_status_check_until_it_matches() -> Result
         );
     }
     assert_eq!(fs::read(&placed)?, V1);
+    Ok(())
+}
+
+/// on refs, where a hardlink can deadlock the volume, an add and a sync place a file of its own,
+/// a clone or a copy, and never link it to the cache's object.
+#[cfg(debug_assertions)]
+#[test]
+fn a_file_on_refs_is_never_linked_to_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let on_refs = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_FILESYSTEM", "refs")
+            .output()
+    };
+    let added = on_refs(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let hex = sha256_hex(V1);
+    let object = sandbox
+        .cache()
+        .join("objects")
+        .join(&hex[..2])
+        .join(&hex[2..]);
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    assert_eq!(fs::read(&placed)?, V1);
+    assert!(!same_file::is_same_file(&placed, &object)?);
+    delete(&placed)?;
+    let synced = on_refs(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(&placed)?, V1);
+    assert!(!same_file::is_same_file(&placed, &object)?);
     Ok(())
 }
 

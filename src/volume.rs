@@ -9,6 +9,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
+use crate::space::Filesystem;
+
 /// how a volume links, renames and removes files, and whether it can hardlink at all, learned
 /// the first time a removal needs to know.
 #[derive(Debug)]
@@ -18,13 +20,16 @@ pub(crate) struct Volume {
     scratch: PathBuf,
     hard_link: fn(&Path, &Path) -> io::Result<()>,
     rename: fn(&Path, &Path) -> io::Result<()>,
-    /// a rename that never replaces a file already at the new name.
-    rename_new: fn(&Path, &Path) -> io::Result<()>,
+    /// a rename that never replaces a file already at the new name, by a link and a removal only
+    /// where its last argument lets fetchloom make links.
+    rename_new: fn(&Path, &Path, bool) -> io::Result<()>,
     remove_file: fn(&Path) -> io::Result<()>,
     /// removes the file at a path with the removal a caller gives, as through a handle on its
     /// folder, or as `remove_file` does where a test makes removals fail.
     remove_with: RemoveWith,
     links: OnceLock<bool>,
+    /// what the scratch folder's disk is formatted as, read the first time a link is in question.
+    filesystem: OnceLock<Filesystem>,
     /// for a volume that only pretends, every existing path a removal named.
     pretended: Option<Mutex<Pretended>>,
 }
@@ -45,11 +50,21 @@ impl Volume {
             scratch,
             hard_link: |original, link| fs::hard_link(original, link),
             rename: |from, to| fs::rename(from, to),
-            rename_new: |from, to| rename_new(from, to),
+            rename_new: |from, to, links| rename_new(from, to, links),
             remove_file: |path| fs::remove_file(path),
             remove_with: |_, _, unlink| unlink(),
             links: OnceLock::new(),
+            filesystem: OnceLock::new(),
             pretended: None,
+        }
+    }
+
+    /// this volume as if its scratch folder's disk were `filesystem`.
+    #[cfg(test)]
+    pub(crate) fn on(self, filesystem: Filesystem) -> Volume {
+        Volume {
+            filesystem: OnceLock::from(filesystem),
+            ..self
         }
     }
 
@@ -73,10 +88,11 @@ impl Volume {
             scratch,
             hard_link: |_, _| Err(io::Error::other("a dry run links nothing")),
             rename: |_, _| Err(io::Error::other("a dry run renames nothing")),
-            rename_new: |_, _| Err(io::Error::other("a dry run renames nothing")),
+            rename_new: |_, _, _| Err(io::Error::other("a dry run renames nothing")),
             remove_file: |path| fs::symlink_metadata(path).map(|_| ()),
             remove_with: |volume, path, _| (volume.remove_file)(path),
             links: OnceLock::new(),
+            filesystem: OnceLock::new(),
             pretended: Some(Mutex::default()),
         }
     }
@@ -135,7 +151,14 @@ impl Volume {
 
     /// renames `from` to `to`, refusing a taken name with `AlreadyExists`.
     pub(crate) fn rename_new(&self, from: &Path, to: &Path) -> io::Result<()> {
-        (self.rename_new)(from, to)
+        (self.rename_new)(from, to, self.makes_hardlinks())
+    }
+
+    /// whether fetchloom makes hardlinks on this volume, as [`Filesystem::makes_hardlinks`] says.
+    pub(crate) fn makes_hardlinks(&self) -> bool {
+        self.filesystem
+            .get_or_init(|| Filesystem::of(&self.scratch))
+            .makes_hardlinks()
     }
 
     /// renames a verified replacement over an old file without leaving its name empty, clearing a
@@ -269,10 +292,14 @@ impl Volume {
     }
 
     /// whether the volume can hardlink, learned once by linking a new hidden file in the scratch
-    /// folder. none when the probe failed in a way that says nothing about links.
+    /// folder. none when the probe failed in a way that says nothing about links. a disk where
+    /// fetchloom makes no links is not probed: it may hold links an older fetchloom made.
     pub(crate) fn can_hardlink(&self) -> Option<bool> {
         if let Some(links) = self.links.get() {
             return Some(*links);
+        }
+        if !self.makes_hardlinks() {
+            return Some(*self.links.get_or_init(|| true));
         }
         let [probe, link] = ["probe", "link"].map(|ending| {
             self.scratch
@@ -551,7 +578,7 @@ pub(crate) fn syncfs_reports_errors(release: &str) -> bool {
 /// renames `from` to `to`, refusing a taken name with `AlreadyExists`. a disk that can neither
 /// link nor rename that way fails with its refusal of the link.
 #[cfg(unix)]
-pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+pub(crate) fn rename_new(from: &Path, to: &Path, _links: bool) -> io::Result<()> {
     rename_new_at(rustix::fs::CWD, from, rustix::fs::CWD, to, false)
 }
 
@@ -603,29 +630,33 @@ fn lacks_rename_new(error: rustix::io::Errno) -> bool {
     )
 }
 
-/// renames `from` to `to`, refusing a taken name with `AlreadyExists`: by a second link and the
-/// old name's removal, since std's rename replaces, or on fat and exfat, which make no links, by
-/// tempfile's rename, which clears attributes, so a read-only file is made read-only again.
+/// renames `from` to `to`, refusing a taken name with `AlreadyExists`: with `links`, by a second
+/// link and the old name's removal, since std's rename replaces; without, or on fat and exfat,
+/// which make no links, by tempfile's rename, which clears attributes, so a read-only file is made
+/// read-only again.
 #[cfg(windows)]
-pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
-    match fs::hard_link(from, to) {
-        Ok(()) => fs::remove_file(from).inspect_err(|_| {
-            let _ = fs::remove_file(to);
-        }),
-        Err(error) if refuses_links(&error) => {
-            let read_only = fs::symlink_metadata(from)?.permissions().readonly();
-            let mut named = tempfile::TempPath::try_from_path(from)?;
-            // the file is someone's, so a failed rename must not delete it
-            named.disable_cleanup(true);
-            let renamed = named.persist_noclobber(to).map_err(|error| error.error);
-            if read_only {
-                let now = if renamed.is_ok() { to } else { from };
-                let _ = set_read_only(now, true);
+pub(crate) fn rename_new(from: &Path, to: &Path, links: bool) -> io::Result<()> {
+    if links {
+        match fs::hard_link(from, to) {
+            Ok(()) => {
+                return fs::remove_file(from).inspect_err(|_| {
+                    let _ = fs::remove_file(to);
+                });
             }
-            renamed
+            Err(error) if !refuses_links(&error) => return Err(error),
+            Err(_) => {}
         }
-        Err(error) => Err(error),
     }
+    let read_only = fs::symlink_metadata(from)?.permissions().readonly();
+    let mut named = tempfile::TempPath::try_from_path(from)?;
+    // the file is someone's, so a failed rename must not delete it
+    named.disable_cleanup(true);
+    let renamed = named.persist_noclobber(to).map_err(|error| error.error);
+    if read_only {
+        let now = if renamed.is_ok() { to } else { from };
+        let _ = set_read_only(now, true);
+    }
+    renamed
 }
 
 /// `permissions` that let the file's owner write it.
@@ -665,7 +696,7 @@ impl Volume {
                 }
                 fs::rename(from, to)
             },
-            rename_new: |from, to| rename_new(from, to),
+            rename_new: |from, to, links| rename_new(from, to, links),
             remove_file: |path| {
                 if fs::symlink_metadata(path)?.permissions().readonly() {
                     return Err(io::ErrorKind::PermissionDenied.into());
@@ -674,6 +705,12 @@ impl Volume {
             },
             remove_with: |volume, path, _| (volume.remove_file)(path),
             links: OnceLock::new(),
+            // what the volume stands for, whatever disk the test runs on
+            filesystem: OnceLock::from(if links {
+                Filesystem::Other
+            } else {
+                Filesystem::Fat
+            }),
             pretended: None,
         }
     }
@@ -687,9 +724,21 @@ impl Volume {
                 publish_first(from, to)?;
                 fs::rename(from, to)
             },
-            rename_new: |from, to| {
+            rename_new: |from, to, links| {
                 publish_first(from, to)?;
-                rename_new(from, to)
+                rename_new(from, to, links)
+            },
+            ..self
+        }
+    }
+
+    /// this volume, failing the test that asks it for a hardlink or for a rename by one.
+    pub(crate) fn never_linking(self) -> Volume {
+        Volume {
+            hard_link: |original, _| panic!("{} was linked", original.display()),
+            rename_new: |from, to, links| {
+                assert!(!links, "{} was renamed by a link", from.display());
+                rename_new(from, to, links)
             },
             ..self
         }
@@ -699,7 +748,7 @@ impl Volume {
     /// link refuses, as a disk without either does once linux falls back to a link.
     pub(crate) fn replacing_only(self) -> Volume {
         Volume {
-            rename_new: |_, _| Err(io::Error::from_raw_os_error(1)),
+            rename_new: |_, _, _| Err(io::Error::from_raw_os_error(1)),
             ..self
         }
     }
@@ -765,6 +814,39 @@ mod tests {
         assert!(!volume.pretends_removed(&dir.path().join("other")));
         assert_eq!(volume.pretended(), paths, "in the order removed");
         assert!(paths.iter().all(|path| path.exists()), "nothing removed");
+    }
+
+    /// refs takes links, though fetchloom makes none there, so its volume answers that it can
+    /// link without the probe, which here could not even make its file.
+    #[test]
+    fn a_refs_volume_is_not_probed_for_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let refs = Volume::new(missing.clone()).on(Filesystem::Refs);
+        assert_eq!(refs.can_hardlink(), Some(true));
+        assert!(!missing.exists());
+        assert_eq!(
+            Volume::new(missing).on(Filesystem::Other).can_hardlink(),
+            None
+        );
+    }
+
+    /// a volume renames without a link only where fetchloom makes none.
+    #[test]
+    fn a_rename_that_never_replaces_links_only_off_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        for (filesystem, linked) in [(Filesystem::Refs, false), (Filesystem::Other, true)] {
+            let volume = Volume {
+                rename_new: |_, _, links| Err(io::Error::other(links.to_string())),
+                ..Volume::new(dir.path().to_path_buf()).on(filesystem)
+            };
+            let answer = volume.rename_new(&dir.path().join("a"), &dir.path().join("b"));
+            assert_eq!(
+                answer.unwrap_err().to_string(),
+                linked.to_string(),
+                "{filesystem:?}"
+            );
+        }
     }
 
     #[test]

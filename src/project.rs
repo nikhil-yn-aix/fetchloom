@@ -18,6 +18,7 @@ use self::manifest::Manifest;
 use self::state::{Folder, Look, State, Synced};
 use crate::cache::names;
 use crate::error::{Error, Kind};
+use crate::space::Filesystem;
 
 const FOLDER: &str = ".fetchloom";
 
@@ -116,7 +117,8 @@ impl Held {
             fill(file, record)?;
             // windows and WSL do not share OS locks, so an empty reservation could be
             // reclaimed while its writer is still publishing
-            match fs::hard_link(&temporary, path) {
+            let filesystem = Filesystem::of(path.parent().unwrap_or(path));
+            match name_owner(&temporary, path, filesystem) {
                 Ok(()) => self.owner = Some(path.to_path_buf()),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Err(err),
                 Err(_) => {
@@ -1063,6 +1065,17 @@ fn sync_directory(path: &Path) -> io::Result<()> {
 }
 
 /// writes `bytes` into a new file and flushes them to disk.
+/// gives the owner record at `temporary` the name `path`, refusing a taken name with
+/// `AlreadyExists`: by a second name where fetchloom makes hardlinks on `filesystem`, else by a
+/// rename that never replaces.
+fn name_owner(temporary: &Path, path: &Path, filesystem: Filesystem) -> io::Result<()> {
+    if filesystem.makes_hardlinks() {
+        fs::hard_link(temporary, path)
+    } else {
+        crate::volume::rename_new(temporary, path, false)
+    }
+}
+
 fn fill(mut file: File, bytes: &[u8]) -> io::Result<()> {
     #[cfg(test)]
     tests::flushing_file();
@@ -1301,6 +1314,30 @@ mod tests {
         assert_eq!(files, [".gitignore", "lock", "owner"]);
         drop(held);
         assert!(!path.exists());
+    }
+
+    /// on refs the owner record takes its name by a rename, so it never has a second name there;
+    /// elsewhere it is linked. either way a name already taken is refused and kept.
+    #[test]
+    fn an_owner_record_on_refs_is_renamed_never_linked() {
+        let dir = tempfile::tempdir().unwrap();
+        let links = crate::cache::tests::hardlinks(dir.path());
+        let arms = [(Filesystem::Refs, false), (Filesystem::Other, true)];
+        for (filesystem, linked) in arms.into_iter().filter(|&(_, linked)| links || !linked) {
+            let [temporary, path, late] =
+                ["owner.tmp", "owner", "late.tmp"].map(|name| dir.path().join(name));
+            fs::write(&temporary, b"record").unwrap();
+            name_owner(&temporary, &path, filesystem).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), b"record", "{filesystem:?}");
+            assert_eq!(temporary.exists(), linked, "{filesystem:?}");
+            fs::write(&late, b"late").unwrap();
+            let taken = name_owner(&late, &path, filesystem).unwrap_err();
+            assert_eq!(taken.kind(), io::ErrorKind::AlreadyExists, "{filesystem:?}");
+            assert_eq!(fs::read(&path).unwrap(), b"record", "{filesystem:?}");
+            for file in [temporary, path, late] {
+                let _ = fs::remove_file(file);
+            }
+        }
     }
 
     #[test]

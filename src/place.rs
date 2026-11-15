@@ -412,10 +412,8 @@ impl Placer {
     ) -> io::Result<Put<Metadata>> {
         self.stop.check_io()?;
         let location = Arc::new(self.location(destination, false)?);
-        let early_hardlink = cfg!(windows)
-            && !writable
-            && self.synced.is_none()
-            && self.can_hardlink.load(Ordering::Relaxed);
+        let hardlinks = self.makes_hardlinks();
+        let early_hardlink = cfg!(windows) && !writable && self.synced.is_none() && hardlinks;
         if early_hardlink {
             let checked = check_object(object)?;
             match self.link(&location, object, checked) {
@@ -431,11 +429,7 @@ impl Placer {
             }
         }
         // sync clients break hardlinks or upload every link as a full file
-        if !early_hardlink
-            && self.can_hardlink.load(Ordering::Relaxed)
-            && !writable
-            && self.synced.is_none()
-        {
+        if !early_hardlink && hardlinks && !writable && self.synced.is_none() {
             let checked = check_object(object)?;
             match self.link(&location, object, checked) {
                 Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
@@ -643,7 +637,10 @@ impl Placer {
         let from = self.location(&path, false)?;
         loop {
             let aside = parent.join(format!(".fetchloom-{:016x}.old", fastrand::u64(..)));
-            match from.rename_new_to(&self.location(&aside, false)?) {
+            match from.rename_new_to(
+                &self.location(&aside, false)?,
+                self.filesystem().makes_hardlinks(),
+            ) {
                 Ok(()) => return Ok(aside),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
@@ -654,14 +651,21 @@ impl Placer {
     /// gives a file [`Placer::move_aside`] moved to `aside` its name, `path`, back, never
     /// replacing a file there. a stop does not stop it, since it puts things back.
     pub(crate) fn move_back(&self, aside: &Path, path: &Path) -> io::Result<()> {
-        self.location(aside, false)?
-            .rename_new_to(&self.location(path, false)?)
+        self.location(aside, false)?.rename_new_to(
+            &self.location(path, false)?,
+            self.filesystem().makes_hardlinks(),
+        )
     }
 
     /// gives the file at `from` a second name, `to`, between two checked parents below the pinned
-    /// root. a name already taken is refused with `AlreadyExists`, so nothing is replaced.
+    /// root, or a clone of its own where fetchloom makes no hardlinks. a name already taken is
+    /// refused with `AlreadyExists`, so nothing is replaced.
     pub(crate) fn link_file(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.stop.check_io()?;
+        if !self.filesystem().makes_hardlinks() {
+            let writable = !fs::symlink_metadata(from)?.permissions().readonly();
+            return self.copy_file(from, to, writable).map(drop);
+        }
         self.location(from, false)?
             .link_to(&self.location(to, false)?)
     }
@@ -693,7 +697,7 @@ impl Placer {
         unchanged: impl FnOnce(&Metadata) -> bool,
     ) -> io::Result<Option<Metadata>> {
         self.stop.check_io()?;
-        if self.synced.is_some() || !self.can_hardlink.load(Ordering::Relaxed) {
+        if self.synced.is_some() || !self.makes_hardlinks() {
             return Ok(None);
         }
         check_object(object)?;
@@ -739,6 +743,12 @@ impl Placer {
             return Err(refusal());
         }
         link_object(location, object, checked)
+    }
+
+    /// whether placing may make a hardlink: the drive has not refused one, and fetchloom makes
+    /// them on its filesystem.
+    fn makes_hardlinks(&self) -> bool {
+        self.can_hardlink.load(Ordering::Relaxed) && self.filesystem().makes_hardlinks()
     }
 
     /// the filesystem under the root, read once the root exists.

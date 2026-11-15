@@ -207,6 +207,31 @@ fn a_writable_placement_is_a_writable_copy() {
     assert!(is_read_only(&object));
 }
 
+/// on refs a read-only file is placed as a clone or a copy of its own, never a link to its
+/// object, and no later step links it: a copy stays unlinked, and a file kept aside is a clone.
+#[test]
+fn placing_on_refs_makes_no_hardlink() {
+    let (folder, object) = cache(true);
+    let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
+    placer.filesystem.set(Filesystem::Refs).unwrap();
+    let destination = folder.path().join("placed.csv");
+
+    let method = placer.place(&object, &destination, false).unwrap();
+
+    assert_ne!(method, Method::Hardlink);
+    assert!(!same_file::is_same_file(&object, &destination).unwrap());
+    assert!(is_read_only(&destination));
+    let copied = folder.path().join("copied.csv");
+    fs::write(&copied, CONTENTS).unwrap();
+    assert!(placer.relink(&object, &copied, |_| true).unwrap().is_none());
+    assert!(!same_file::is_same_file(&object, &copied).unwrap());
+    let aside = folder.path().join("placed.csv.changed");
+    placer.link_file(&destination, &aside).unwrap();
+    assert!(!same_file::is_same_file(&destination, &aside).unwrap());
+    assert_eq!(fs::read_to_string(&aside).unwrap(), CONTENTS);
+    assert!(is_read_only(&aside));
+}
+
 /// a file copied within the root is a file of its own, so a write to the copy leaves the original
 /// as it was, and a name already taken is refused without a change.
 #[test]
@@ -1032,12 +1057,13 @@ fn a_drive_that_refuses_every_link_is_told_from_a_cache_elsewhere() {
             folder.path(),
         )
         .unwrap();
-    // a cache on this drive helps only where this drive makes links, which FAT does not
-    let blamed = if makes_hardlinks(folder.path()) {
-        Unlinked::OtherDrive
-    } else {
-        Unlinked::NoLinks
-    };
+    // a cache on this drive helps only where this drive makes links or clones, which FAT does not
+    let blamed =
+        if makes_hardlinks(folder.path()) || Filesystem::of(folder.path()) == Filesystem::Refs {
+            Unlinked::OtherDrive
+        } else {
+            Unlinked::NoLinks
+        };
     assert_eq!(elsewhere.unlinked(), Some(blamed));
     let synced = placer(Some("onedrive"));
     synced
@@ -1073,6 +1099,9 @@ fn a_cache_elsewhere_is_not_blamed_for_a_drive_that_links_nothing() {
 /// whether the filesystem holding `folder` makes hardlinks, as NTFS and ext4 do and FAT
 /// and exFAT do not.
 pub(super) fn makes_hardlinks(folder: &Path) -> bool {
+    if !Filesystem::of(folder).makes_hardlinks() {
+        return false;
+    }
     let original = folder.join("probe");
     let link = folder.join("probe-link");
     fs::write(&original, CONTENTS).unwrap();

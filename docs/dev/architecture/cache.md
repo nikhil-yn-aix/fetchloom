@@ -7,7 +7,8 @@
 - never make a hardlinked cache object writable for an edit. every hardlink names the same bytes.
 - a failed damage-mark read or write is an error, not permission to place doubtful bytes.
 - do not remove a changed object before good replacement bytes exist on hardlink-capable volumes.
-- windows read-only removal differs on NTFS, ReFS, exFAT and FAT32. `Volume` probes hardlink support before deciding whether clearing a flag is safe; a known hardlink never has its flag cleared for removal.
+- windows read-only removal differs on NTFS, ReFS, exFAT and FAT32. `Volume` probes hardlink support before deciding whether clearing a flag is safe; a known hardlink never has its flag cleared for removal. ReFS is not probed: it takes links and may hold old ones, so it counts as linking.
+- never make a hardlink on ReFS, which a dev drive is: refs.sys can deadlock until a restart when a link is made while its lazy writer flushes metadata. `Filesystem::makes_hardlinks` decides; there placement clones or copies, and publication renames without replacing.
 - rejected downloads or failed publication can leave unreferenced complete objects. gc owns their later cleanup.
 
 ## tests
@@ -86,7 +87,7 @@ each path goes through `Placer::check_parent` of a placer rooted at the data fol
 
 ### publication and repair
 
-new objects normally publish by hardlinking a sealed file to the digest name, which fails if another writer already published it. a disk without hardlinks, as FAT and exFAT, takes the rename placement publishes with, which refuses a name already taken: `renameat2` with `RENAME_NOREPLACE` on linux, `renameatx_np` with `RENAME_EXCL` on macos, and tempfile's `MoveFileExW` without replacement on windows, after which a read-only file is made read-only again. a disk with neither takes a plain rename: an object's name is its verified SHA-256 and every writer seals its copy before publishing, so a rename that replaces swaps identical bytes. the payload is flushed before either operation. a new digest name can be lost after a power cut and fetched again; publication does not promise to retain every new cache name.
+new objects normally publish by hardlinking a sealed file to the digest name, which fails if another writer already published it. a disk without hardlinks, as FAT and exFAT, or ReFS, where fetchloom makes none, takes the rename placement publishes with, which refuses a name already taken: `renameat2` with `RENAME_NOREPLACE` on linux, `renameatx_np` with `RENAME_EXCL` on macos, and tempfile's `MoveFileExW` without replacement on windows, after which a read-only file is made read-only again. a disk with neither takes a plain rename: an object's name is its verified SHA-256 and every writer seals its copy before publishing, so a rename that replaces swaps identical bytes. the payload is flushed before either operation. a new digest name can be lost after a power cut and fetched again; publication does not promise to retain every new cache name.
 
 safety-critical record writes flush the file, rename it, then flush the destination directory and the source directory when different through the project's shared `sync_directory` helper. a directory-flush error reports that the name was published but its directory could not be flushed. a registration turns read-only once its directory flush succeeds, so a sync that finds it read-only and unchanged neither writes nor flushes; a writable one, as a prior failed flush leaves it, retries its directory flush first. hints and staging lock names remain recoverable without these flushes. the helper flushes directories on unix and retains the existing no-op on other platforms; windows namespace durability is not claimed.
 

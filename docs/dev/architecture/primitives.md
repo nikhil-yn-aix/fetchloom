@@ -64,7 +64,7 @@ the memory a level gives sizes only the hash queues of downloads (`hash_batches`
 
 ### volume, errors and cancellation
 
-`Volume` learns hardlink support only when an operation needs the answer. on filesystems that cannot hardlink, a refused read-only removal may clear the flag and retry. a known hardlink never takes that path because the flag belongs to every name of the file.
+`Volume` learns hardlink support only when an operation needs the answer. ReFS is not probed: fetchloom makes no hardlinks there, yet the disk takes them and may hold old ones, so it counts as linking. on filesystems that cannot hardlink, a refused read-only removal may clear the flag and retry. a known hardlink never takes that path because the flag belongs to every name of the file.
 
 `Kind` maps a stable string to an exit code. `Error` adds one message, details, help and optional partial results; it is hand-written rather than derived through an error framework. a refusal a sign-in could lift carries `auth::Need`, the account to sign in to, set by `Error::needs`, so `error` names `auth`'s types while `auth` returns `Error`. `Stop` shares a `tokio::sync::watch` channel carrying a boolean, beside flags for a run that marked its work as finishing with `Stop::finish`. `ask` sets the boolean under the watch's lock with `send_if_modified`, unless the run is past that mark, which then finishes anyway; `is_asked` reads the current value synchronously, and `asked` subscribes and waits asynchronously for it to become true. what a first ctrl-c does, `Stop::hear`, is in [CLI](cli.md#invariants-and-traps).
 

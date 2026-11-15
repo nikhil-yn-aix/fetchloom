@@ -138,7 +138,8 @@ impl Sandbox {
         std::fs::write(&original, b"links")?;
         let links = Links {
             reflink: reflink_copy::reflink(&original, probe.join("reflink")).is_ok(),
-            hardlink: std::fs::hard_link(&original, probe.join("hardlink")).is_ok(),
+            hardlink: !on_refs(&probe)
+                && std::fs::hard_link(&original, probe.join("hardlink")).is_ok(),
         };
         std::fs::remove_dir_all(&probe)?;
         Ok(links)
@@ -1650,4 +1651,32 @@ fn terminal_commands_use_a_known_shell() -> Result {
         );
     }
     Ok(())
+}
+
+/// whether `path` is on a refs volume, where fetchloom makes no hardlinks: the disk whose mount
+/// point is the longest start of `path` says so, as fetchloom reads it.
+#[cfg(windows)]
+fn on_refs(path: &Path) -> bool {
+    let Ok(path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let Ok(disks) =
+        sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing())
+    else {
+        return false;
+    };
+    disks
+        .iter()
+        .filter_map(|disk| {
+            let mount = std::fs::canonicalize(disk.mount_point()).ok()?;
+            path.starts_with(&mount)
+                .then_some((mount.components().count(), disk))
+        })
+        .max_by_key(|(length, _)| *length)
+        .is_some_and(|(_, disk)| disk.file_system().eq_ignore_ascii_case("refs"))
+}
+
+#[cfg(not(windows))]
+fn on_refs(_: &Path) -> bool {
+    false
 }

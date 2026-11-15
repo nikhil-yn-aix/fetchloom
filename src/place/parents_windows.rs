@@ -135,9 +135,10 @@ impl Location {
         fs::rename(&self.path, &target.path)
     }
 
-    /// renames to `target`'s name, refusing a taken name with `AlreadyExists`.
-    pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
-        crate::volume::rename_new(&self.path, &target.path)
+    /// renames to `target`'s name, refusing a taken name with `AlreadyExists`, by a link and a
+    /// removal only with `links`.
+    pub(super) fn rename_new_to(&self, target: &Location, links: bool) -> io::Result<()> {
+        crate::volume::rename_new(&self.path, &target.path, links)
     }
 
     pub(super) fn link_to(&self, target: &Location) -> io::Result<()> {
