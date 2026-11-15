@@ -18,7 +18,7 @@ mod examples {
   fetchloom add ./flowers    # files on this machine, copied into the cache
   fetchloom add -i links.txt    # a dataset for each link in a list
 
-on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git project's .gitignore. an imported folder is only read. --dry-run writes nothing";
+on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git project's .gitignore. an imported folder is only read. --no-sync writes only data.toml and data.lock. --dry-run writes nothing";
 
     pub(super) const REMOVE: &str = "examples:
   fetchloom remove iris
@@ -908,6 +908,12 @@ pub(crate) struct Add {
     /// does. without it, a page where a file was expected is refused
     #[arg(long, help_heading = "options")]
     pub(crate) web_page: bool,
+
+    /// download nothing: record each file in data.lock by the size and SHA-256 or MD5 its
+    /// source states, for a later `fetchloom sync` to download and check. refused when the
+    /// source states neither for some file, and for files on this machine
+    #[arg(long, conflicts_with = "input_file", help_heading = "options")]
+    pub(crate) no_sync: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

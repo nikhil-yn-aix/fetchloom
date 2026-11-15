@@ -513,6 +513,7 @@ fn a_fix_is_only_a_command_the_table_allows() {
                 "--select",
                 "--exclude",
                 "--no-extract",
+                "--no-sync",
                 "--dry-run",
             ],
         ),

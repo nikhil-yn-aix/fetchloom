@@ -2,6 +2,7 @@
 //! before either file is written, and a failure after that puts back what the add wrote.
 
 mod list;
+mod stated;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -324,6 +325,9 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
         return Ok(Request::Link(words));
     }
     if typed.len() > 1 {
+        if args.no_sync {
+            return Err(stated::refused_several());
+        }
         return several(args, typed).map(Request::List);
     }
     let Some(link) = typed.pop() else {
@@ -336,6 +340,9 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
         );
     };
     if local::is_path(&link) {
+        if args.no_sync {
+            return Err(stated::refused_path(&link));
+        }
         return Ok(Request::Path(link));
     }
     super::search::refuse_local(&link, true)?;
@@ -605,12 +612,15 @@ async fn add_held(
             entry: &addition.entry,
             listing: &addition.listing,
         };
+        if args.no_sync {
+            return stated::again(&work, &adding.manifest, &present, dry_run);
+        }
         return again(&work, adding, old, &present, dry_run, here).await;
     }
     // a dry run downloads nothing, so it names the dataset from the link alone. patterns were
     // written against the link's own name, which the server's name would replace before they apply
     let patterns = !args.filter.select.is_empty() || !args.filter.exclude.is_empty();
-    if args.name.is_none() && !dry_run && !patterns {
+    if args.name.is_none() && !dry_run && !patterns && !args.no_sync {
         learn_names(
             context,
             &net,
@@ -621,19 +631,16 @@ async fn add_held(
         .await
         .map_err(|error| typed(error, false))?;
     }
-    let name = match args.name.take() {
-        Some(asked) => asked,
-        None => choose_name(
-            &context.output,
-            &addition.listing,
-            &parsed,
-            &|name| manifest.datasets.contains_key(name),
-            AS,
-        )?,
-    };
+    let name = new_name(context, &mut args, &addition, &parsed, manifest)?;
     let text = adding.text.as_deref().unwrap_or_default();
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
     let work = Loop::new(context, project, net, cache).telling(&name);
+    if args.no_sync {
+        let shown = parsed.reference.shown();
+        let pinned = stated::pinned(&name, &addition.entry, &addition.listing, (&shown, link))?;
+        let added = (updated.as_str(), &new_manifest);
+        return stated::write(&work, adding, added, old, pinned, (starting, dry_run));
+    }
     if dry_run {
         let given = vec![Given::Listing(name.clone(), addition.listing)];
         return preview_add(&work, &new_manifest, old, (vec![name], given), here, None).await;
@@ -678,6 +685,26 @@ async fn add_held(
         placement: Some(outcome.placed),
         ..Report::default()
     })
+}
+
+/// the name of the dataset `addition` adds: the one --as gives, else one made from its listing.
+fn new_name(
+    context: &Context,
+    args: &mut Add,
+    addition: &Addition,
+    parsed: &Parsed,
+    manifest: &Manifest,
+) -> Result<String, Error> {
+    match args.name.take() {
+        Some(asked) => Ok(asked),
+        None => choose_name(
+            &context.output,
+            &addition.listing,
+            parsed,
+            &|name| manifest.datasets.contains_key(name),
+            AS,
+        ),
+    }
 }
 
 /// where a line of a list or a typed link came from, as messages name it, and the dataset it
@@ -1460,22 +1487,14 @@ impl<'a> Sources<'a> {
     }
 }
 
-/// `add` of a dataset data.toml has already, as [`Sources::present`] finds it. with the same
-/// settings nothing changes, so adding twice is safe; other settings need the person's choice.
-async fn again(
-    work: &Loop<'_>,
-    adding: &AddProject,
-    old: Option<Lock>,
-    present: &Present<'_>,
-    dry_run: bool,
-    here: &Path,
-) -> Result<Report, Error> {
+/// refuses `present`, a dataset data.toml has already, when the add asks for other settings, which
+/// need the person's choice.
+fn same_settings(manifest: &Manifest, present: &Present<'_>) -> Result<(), Error> {
     let Present {
         name,
         entry,
         listing,
     } = *present;
-    let manifest = &adding.manifest;
     let differs = match (manifest.datasets[name].source(), entry.source()) {
         (Some(existing), Some(wanted))
             if existing.select != wanted.select || existing.exclude != wanted.exclude =>
@@ -1487,8 +1506,8 @@ async fn again(
         }
         _ => None,
     };
-    if let Some((differs, setting)) = differs {
-        return Err(Error::new(
+    match differs {
+        Some((differs, setting)) => Err(Error::new(
             Kind::Usage,
             format!(
                 "{} is already in data.toml as {name}, with {differs}",
@@ -1497,8 +1516,24 @@ async fn again(
         )
         .help(format!(
             "change {setting} {name} in data.toml, or pass --as <name> to add it a second time"
-        )));
+        ))),
+        None => Ok(()),
     }
+}
+
+/// `add` of a dataset data.toml has already, as [`Sources::present`] finds it. with the same
+/// settings nothing changes, so adding twice is safe; other settings need the person's choice.
+async fn again(
+    work: &Loop<'_>,
+    adding: &AddProject,
+    old: Option<Lock>,
+    present: &Present<'_>,
+    dry_run: bool,
+    here: &Path,
+) -> Result<Report, Error> {
+    let name = present.name;
+    let manifest = &adding.manifest;
+    same_settings(manifest, present)?;
     if dry_run {
         let outcome = preview_all(work, manifest, old, false, false, Vec::new(), None).await?;
         preview_ignore(work, manifest)?;

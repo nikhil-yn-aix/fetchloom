@@ -27,6 +27,7 @@ fetchloom add [options] -i <file>
 | `--exclude <glob>` | drop matching files; repeat for more exclusions |
 | `--no-extract` | keep archives packed and record `extract = false`; webdataset loaders read `.tar` shards packed |
 | `--web-page` | pin the web page a link answers with as the data and record `web_page = true`; without it such a page is refused, see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) |
+| `--no-sync` | download nothing: data.lock records each file by the size and SHA-256 or MD5 its source states, and a later `fetchloom sync` downloads and checks it. refused when the source states neither for some file, and for a path on this machine |
 | `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 

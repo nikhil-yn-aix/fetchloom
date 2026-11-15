@@ -1,0 +1,259 @@
+//! `add --no-sync`: a dataset pinned in data.lock by what its source states of each file, its size
+//! and SHA-256 or MD5, so nothing downloads until a sync, maybe on another machine, does.
+
+use std::sync::atomic::Ordering;
+use std::time::SystemTime;
+
+use super::super::project::{Report, committed, dry_run_done, ignore_data, register};
+use super::super::sync::{self as engine, Loop};
+use super::{AddProject, BeforeAdd, changed_meanwhile, lock_changed_meanwhile, restore};
+use crate::error::{Error, Kind};
+use crate::project::lock::{self, Lock, Locked, Stated, StatedFile};
+use crate::project::manifest::{self, Entry, Manifest};
+use crate::source::{Listing, Remote};
+use crate::units;
+
+/// the most files an error names; it counts the rest.
+const NAMED: usize = 5;
+
+/// the error for `--no-sync` with files on this machine, which no source states anything of.
+pub(super) fn refused_path(typed: &str) -> Error {
+    Error::new(
+        Kind::Usage,
+        "--no-sync pins what a source states, and files on this machine have no source",
+    )
+    .help(format!(
+        "run `{}` without --no-sync, which copies them into the cache",
+        super::super::project::command(&format!("add {}", crate::suggested::shell_word(typed)))
+    ))
+}
+
+/// the error for `--no-sync` with several links, which it adds one at a time.
+pub(super) fn refused_several() -> Error {
+    Error::new(Kind::Usage, "--no-sync adds one link at a time").help(format!(
+        "run `{}` for each link",
+        super::super::project::command("add <link> --no-sync")
+    ))
+}
+
+/// `add --no-sync` of `present`, which data.toml has already: with the same settings there is
+/// nothing to do, and other settings need the person's choice, as for any add.
+pub(super) fn again(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    present: &super::Present<'_>,
+    dry_run: bool,
+) -> Result<Report, Error> {
+    super::same_settings(manifest, present)?;
+    work.context
+        .output
+        .done("Ok", &format!("{} is already in data.toml", present.name));
+    Ok(Report {
+        project: work.project.root.clone(),
+        dry_run,
+        ..Report::default()
+    })
+}
+
+/// the pin of `name`, which `listing` resolved and `entry` chooses files of, by what its source
+/// states of each file. a file whose source states no size and SHA-256 or MD5 is refused, as is
+/// a dataset of more files than data.lock keeps inline: only their bytes could pin them.
+pub(super) fn pinned(
+    name: &str,
+    entry: &Entry,
+    listing: &Listing,
+    (shown, typed): (&str, &str),
+) -> Result<Stated, Error> {
+    let Some(source) = entry.source() else {
+        return Err(refused_path(typed));
+    };
+    let kept = engine::filter(shown, entry, source, listing)?;
+    let unstated: Vec<&str> = kept
+        .iter()
+        .filter(|remote| stated(remote).is_none())
+        .map(|remote| remote.path.as_str())
+        .collect();
+    let plain = || {
+        format!(
+            "run `{}` without --no-sync where the data can download",
+            super::super::project::command(&format!("add {}", crate::suggested::shell_word(typed)))
+        )
+    };
+    if !unstated.is_empty() {
+        let what = units::count(unstated.len() as u64, "file", "files");
+        return Err(Error::new(
+            Kind::Usage,
+            format!(
+                "{shown} states no size with a SHA-256 or MD5 for {what}: {}",
+                units::some_of(&unstated, NAMED)
+            ),
+        )
+        .help(format!("pinning them needs their bytes: {}", plain())));
+    }
+    let most = lock::lists::inline();
+    if kept.len() > most {
+        return Err(Error::new(
+            Kind::Usage,
+            format!(
+                "{shown} lists {} files, more than the {} data.lock keeps of a dataset not downloaded yet",
+                units::grouped(kept.len() as u64),
+                units::grouped(most as u64)
+            ),
+        )
+        .help(format!("{}, or choose fewer files with --select", plain())));
+    }
+    let mut files: Vec<StatedFile> = kept.iter().filter_map(stated).collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(Stated {
+        pin: Locked {
+            name: name.to_owned(),
+            reference: source.reference.clone(),
+            spec: lock::spec(source),
+            extract: source.extract,
+            web_page: source.web_page,
+            resolved: listing.resolved.to_string(),
+            title: listing.title.clone(),
+            license: listing.license.clone(),
+            doi: listing.doi.clone(),
+            access: listing.access,
+            timestamp: units::timestamp(SystemTime::now()),
+            files: Vec::new(),
+        },
+        files,
+    })
+}
+
+/// `remote` as its source states it, when that pins it: a size its bytes must have, and a SHA-256
+/// or an MD5.
+fn stated(remote: &Remote) -> Option<StatedFile> {
+    let size = remote.expected_size()?;
+    if remote.named_by_server || (remote.sha256.is_none() && remote.md5.is_none()) {
+        return None;
+    }
+    Some(StatedFile {
+        path: remote.path.clone(),
+        size,
+        sha256: remote.sha256,
+        md5: remote.md5,
+        url: remote.url.to_string(),
+    })
+}
+
+/// `old` with `stated` in place of any entry of its name.
+fn with(old: Option<Lock>, stated: Stated) -> Lock {
+    let mut lock = old.unwrap_or_default();
+    let name = stated.name().to_owned();
+    lock.datasets.retain(|locked| locked.name != name);
+    lock.derived.retain(|result| result.name != name);
+    lock.stated.retain(|other| other.name() != name);
+    lock.stated.push(stated);
+    lock.stated.sort_by(|a, b| a.name().cmp(b.name()));
+    lock
+}
+
+/// the line naming what the pin of `stated` holds, as a first pin's line does.
+fn facts(work: &Loop<'_>, stated: &Stated) -> String {
+    let mut facts = vec![stated.pin.resolved.clone()];
+    facts.extend(
+        stated
+            .pin
+            .title
+            .as_deref()
+            .map(|title| work.context.output.clip(title, 50)),
+    );
+    facts.push(units::count(stated.files.len() as u64, "file", "files"));
+    facts.push(units::size(stated.bytes()));
+    format!(
+        "{} in {} by its source's {}: {}",
+        stated.name(),
+        lock::FILE,
+        stated.digests(),
+        facts.join(" \u{b7} ")
+    )
+}
+
+/// writes `updated`, data.toml with the new dataset, and data.lock with `stated`, or with
+/// `--dry-run` says it would. nothing downloads; a failure puts back what the add wrote.
+pub(super) fn write(
+    work: &Loop<'_>,
+    adding: &AddProject,
+    (updated, manifest): (&str, &Manifest),
+    old: Option<Lock>,
+    stated: Stated,
+    (starting, dry_run): (bool, bool),
+) -> Result<Report, Error> {
+    let output = &work.context.output;
+    let project = work.project;
+    let name = stated.name().to_owned();
+    if dry_run {
+        output.step("Would pin", &facts(work, &stated));
+        for file in &stated.files {
+            output.detail(&format!("{name}/{}", file.path));
+        }
+        super::super::project::preview_ignore(work, manifest)?;
+        output.step(
+            "Would add",
+            &format!("{name} to data.toml, downloading nothing"),
+        );
+        dry_run_done(output, None);
+        return Ok(Report {
+            project: project.root.clone(),
+            datasets: vec![name],
+            lock_changed: true,
+            dry_run: true,
+            ..Report::default()
+        });
+    }
+    let said = facts(work, &stated);
+    let lock = with(old, stated);
+    let text = lock.render();
+    let changed = adding.changed();
+    if !changed.is_empty() {
+        return Err(changed_meanwhile(&changed));
+    }
+    let mut saved = BeforeAdd::save(
+        project,
+        (adding.text.as_deref(), adding.lock_text.as_deref()),
+    )?;
+    work.context.stop.keep_at_quit();
+    let written = (|| -> Result<(), Error> {
+        saved.writing(manifest::FILE, updated.as_bytes());
+        project.write(manifest::FILE, updated.as_bytes())?;
+        if adding.differs(lock::FILE, adding.lock_text.as_deref()) {
+            return Err(lock_changed_meanwhile());
+        }
+        saved.writing(lock::FILE, text.as_bytes());
+        work.context
+            .wrote_lists(&project.root, project.write_lists(&lock)?);
+        project.write(lock::FILE, text.as_bytes())
+    })();
+    if let Err(error) = written {
+        let error = restore(project, &mut saved, std::slice::from_ref(&name), error);
+        if saved.keep {
+            adding.unrestored.store(true, Ordering::Relaxed);
+        }
+        return Err(error);
+    }
+    work.context.stop.finish();
+    register(work);
+    if starting {
+        output.step(
+            "Started",
+            &format!("a project in {}", units::path(&project.root)),
+        );
+    }
+    output.step("Pinned", &said);
+    ignore_data(work, manifest)?;
+    output.done("Added", &format!("{name} to data.toml, nothing downloaded"));
+    output.next(&format!(
+        "commit {}; where the data can download, `{}` downloads and checks it",
+        committed(project),
+        super::super::project::command(&format!("sync {name}"))
+    ));
+    Ok(Report {
+        project: project.root.clone(),
+        datasets: vec![name],
+        lock_changed: true,
+        ..Report::default()
+    })
+}
