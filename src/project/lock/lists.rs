@@ -311,6 +311,26 @@ pub(crate) fn compress(text: &str) -> std::io::Result<Vec<u8>> {
     zstd::encode_all(text.as_bytes(), LEVEL)
 }
 
+/// whether the part at `path` holds `text` once decompressed. a link, a special file and a part
+/// that does not decompress hold nothing.
+pub(crate) fn holds(path: &Path, text: &str) -> bool {
+    let Ok(file) = crate::volume::read_unfollowed(path) else {
+        return false;
+    };
+    let Ok(mut decoder) = zstd::stream::read::Decoder::new(file) else {
+        return false;
+    };
+    if decoder.window_log_max(WINDOW_LOG).is_err() {
+        return false;
+    }
+    let mut read = Vec::with_capacity(text.len());
+    // a byte past the text tells a longer part from it
+    decoder
+        .take(text.len() as u64 + 1)
+        .read_to_end(&mut read)
+        .is_ok_and(|_| read == text.as_bytes())
+}
+
 /// [`FOLDER`] below the project at `root`, there or not yet, refused when it is a link or a
 /// file: a cloned project's link would take reading, writing and removing lists outside it.
 pub(crate) fn folder(root: &Path) -> Result<PathBuf, Error> {

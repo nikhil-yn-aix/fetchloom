@@ -317,6 +317,19 @@ pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<(String, String, boo
         .collect()
 }
 
+/// the SHA-256 of each file list data.lock's `text` names as fetchloom writes it, none if it
+/// does not read; a list's lines are not read.
+pub(crate) fn named_lists(text: &str) -> std::collections::HashSet<Sha256> {
+    if !text.contains("files_in") {
+        return std::collections::HashSet::new();
+    }
+    parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|parsed| parsed.written().map(|(listed, _)| listed.sha256))
+        .collect()
+}
+
 /// each dataset data.lock's `text` pins, by name, with the parts of its file list, none if it
 /// does not read; a list's lines are not read.
 pub(crate) fn listed(text: &str) -> Vec<(String, Vec<String>)> {
@@ -1284,6 +1297,18 @@ impl Lock {
 
     /// [`Lock::lists`], as [`Lock::render_with`] names them for `inline`.
     fn lists_with(&self, inline: usize) -> Vec<(String, String)> {
+        self.hashed_lists_with(inline)
+            .into_iter()
+            .map(|(part, text, _)| (part, text))
+            .collect()
+    }
+
+    /// [`Lock::lists`], each part with the SHA-256 of the whole list it is a part of.
+    pub(crate) fn hashed_lists(&self) -> Vec<(String, String, Sha256)> {
+        self.hashed_lists_with(lists::inline())
+    }
+
+    fn hashed_lists_with(&self, inline: usize) -> Vec<(String, String, Sha256)> {
         let mut parts = Vec::new();
         for dataset in &self.datasets {
             if dataset.files.len() <= inline {
@@ -1291,7 +1316,14 @@ impl Lock {
             }
             let texts = lists::texts(&sorted(&dataset.files));
             let listed = lists::listed(&dataset.name, &dataset.files, &texts);
-            parts.extend(listed.parts.into_iter().zip(texts));
+            let sha256 = listed.sha256;
+            parts.extend(
+                listed
+                    .parts
+                    .into_iter()
+                    .zip(texts)
+                    .map(|(part, text)| (part, text, sha256)),
+            );
         }
         for derived in &self.derived {
             parts.extend(derived::parts(derived));
@@ -2306,6 +2338,43 @@ mod tests {
         }
         let text = lock.render();
         (root, text)
+    }
+
+    /// a file under the name a new list gets, as a clone can plant for a result a recipe will
+    /// make, or a damaged one, is written over, so data.lock never names other bytes, even where
+    /// data.lock on disk names a list of that name with another hash; a part that holds the list
+    /// stays as it is.
+    #[test]
+    fn a_file_under_the_name_of_a_new_list_is_written_over() {
+        let lock = Lock {
+            derived: vec![clean()],
+            ..Lock::default()
+        };
+        let root = tempfile::tempdir().unwrap();
+        let project = crate::project::Project {
+            root: root.path().to_path_buf(),
+        };
+        std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+        let (part, _) = lock.lists().remove(0);
+        let other = lists::compress(&lists::texts::<Member>(&[]).remove(0)).unwrap();
+        let rendered = lock.render();
+        // the same part's name, for a list whose hash ends otherwise
+        let hash = lock.hashed_lists()[0].2.hex();
+        let last = if hash.ends_with('0') { '1' } else { '0' };
+        let another = rendered.replace(&hash, &format!("{}{last}", &hash[..63]));
+        for on_disk in [None, Some(&another)] {
+            if let Some(text) = on_disk {
+                std::fs::write(root.path().join(FILE), text).unwrap();
+            }
+            std::fs::write(root.path().join(&part), &other).unwrap();
+            assert_eq!(
+                project.write_lists(&lock).unwrap(),
+                std::slice::from_ref(&part),
+                "{on_disk:?}"
+            );
+            assert_eq!(Lock::read(&rendered, root.path()).unwrap(), lock);
+            assert_eq!(project.write_lists(&lock).unwrap(), Vec::<String>::new());
+        }
     }
 
     /// data.lock as a git commit holds it is text anyone may have written: a part it names that

@@ -505,25 +505,29 @@ impl Project {
     }
 
     /// writes the parts of `lock`'s file lists not yet beside data.lock, returning their paths
-    /// below the project. a part's name changes with its list, so one there already holds the same.
-    /// refused, even with nothing to write, when data.lock.d is a link or a file, and before any
-    /// part is written when a list would hold a path or link longer than a list keeps.
+    /// below the project. a part of a list data.lock on disk names stays as it is; any other file
+    /// under a part's name is written over unless it holds that part, as a clone can plant one for
+    /// the result a recipe will make. refused, even with nothing to write, when data.lock.d is a
+    /// link or a file, and before any part is written when a list would hold a path or link
+    /// longer than a list keeps.
     pub(crate) fn write_lists(&self, lock: &Lock) -> Result<Vec<String>, Error> {
         let folder = lock::lists::folder(&self.root)?;
         lock.listable()?;
-        let parts = lock.lists();
+        let parts = lock.hashed_lists();
         if parts.is_empty() {
             return Ok(Vec::new());
         }
         fs::create_dir_all(&folder).map_err(|err| {
             self.refused(format_args!("could not make {}", lock::lists::FOLDER), &err)
         })?;
+        let named = self.named_lists();
         let mut written = Vec::new();
-        for (part, text) in parts {
+        for (part, text, sha256) in parts {
             let path = self
                 .root
                 .join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
-            if path.is_file() {
+            let there = fs::symlink_metadata(&path).is_ok_and(|found| found.is_file());
+            if there && (named.contains(&sha256) || lock::lists::holds(&path, &text)) {
                 continue;
             }
             let bytes = lock::lists::compress(&text)
@@ -532,6 +536,17 @@ impl Project {
             written.push(part);
         }
         Ok(written)
+    }
+
+    /// the lists data.lock on disk names, by the SHA-256 of each; none when it is no file.
+    fn named_lists(&self) -> std::collections::HashSet<crate::digest::Sha256> {
+        let path = self.root.join(lock::FILE);
+        if !fs::metadata(&path).is_ok_and(|found| found.is_file()) {
+            return std::collections::HashSet::new();
+        }
+        fs::read_to_string(&path)
+            .map(|text| lock::named_lists(&text))
+            .unwrap_or_default()
     }
 
     /// removes the parts of file lists `lock` no longer names, and any a run left half written,

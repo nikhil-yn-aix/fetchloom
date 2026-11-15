@@ -191,12 +191,19 @@ pub(super) fn write_listed(out: &mut String, derived: &Derived, listed: &lists::
     super::write_listed(out, listed);
 }
 
-/// the parts of the result's list, each with its path below the project and its text.
-pub(super) fn parts(derived: &Derived) -> Vec<(String, String)> {
+/// the parts of the result's list, each with its path below the project, its text and the
+/// SHA-256 of the whole list.
+pub(super) fn parts(derived: &Derived) -> Vec<(String, String, Sha256)> {
     let files = sorted(&derived.files);
     let texts = lists::texts(&files);
     let listed = lists::listed(&derived.name, &files, &texts);
-    listed.parts.into_iter().zip(texts).collect()
+    let sha256 = listed.sha256;
+    listed
+        .parts
+        .into_iter()
+        .zip(texts)
+        .map(|(part, text)| (part, text, sha256))
+        .collect()
 }
 
 fn sorted(files: &[Member]) -> Vec<Member> {
