@@ -833,7 +833,10 @@ fn in_data_folder(
     let keep = format!(
         "keep {data_dir}/ as it is by setting data_dir under [project] in data.toml to another folder"
     );
-    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    // both as real paths: windows starts one with `\\?\`, which the current folder lacks, and
+    // counting the folders between them needs the one inside the other
+    let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let (root, here) = (real(root), real(here));
     let manifest = Project { root: root.clone() }
         .manifest()
         .ok()
@@ -874,7 +877,7 @@ fn in_data_folder(
     else {
         return error.help(format!("move it out of {data_dir}/ first, or {keep}"));
     };
-    let up = super::up_to(&root, here);
+    let up = super::up_to(&root, &here);
     let moved = if up.is_empty() {
         format!("./{out}")
     } else {
@@ -886,7 +889,6 @@ fn in_data_folder(
         format!(" --as {name}")
     };
     // `mv .` cannot move the folder it stands in, so that one is named from its parent
-    let here = std::fs::canonicalize(here).unwrap_or_else(|_| here.to_path_buf());
     let from = match here.strip_prefix(start) {
         Ok(inside) => format!("{}{own}", "../".repeat(inside.components().count() + 1)),
         Err(_) => shown.trim().to_owned(),
@@ -1500,6 +1502,29 @@ fn first_other_bytes(copied: &[LockedFile], pinned: &[LockedFile]) -> Option<Str
 mod tests {
     use super::*;
     use crate::project::manifest::Manifest;
+
+    /// the current folder spelled otherwise than the project's real path, as windows spells one
+    /// without the `\\?\` its real path has, still counts its folders up to the project: a
+    /// file is never to be moved onto itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_spelled_another_way_still_counts_its_way_up() {
+        let folder = tempfile::tempdir().unwrap();
+        let work = folder.path().join("work");
+        std::fs::create_dir_all(work.join("data").join("raw")).unwrap();
+        std::fs::write(work.join("data.toml"), "").unwrap();
+        std::fs::write(work.join("data").join("raw").join("visits.csv"), "id\n").unwrap();
+        let alias = folder.path().join("alias");
+        std::os::unix::fs::symlink(&work, &alias).unwrap();
+        let here = alias.join("data").join("raw");
+        let start = std::fs::canonicalize(here.join("visits.csv")).unwrap();
+        let error = in_data_folder((&start, "./visits.csv"), &alias, "data", &here);
+        let help = error.help.unwrap_or_default();
+        assert!(
+            help.starts_with("move it out first, with `mv ./visits.csv ../../visits.csv`, then run `fetchloom add ../../visits.csv` to place its files in ../../data/visits,"),
+            "{help}"
+        );
+    }
 
     fn entry(select: &[&str], exclude: &[&str]) -> Source {
         let quoted = |patterns: &[&str]| {
