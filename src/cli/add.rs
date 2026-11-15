@@ -622,6 +622,10 @@ fn adding_loop<'a>(
     Loop::new(context, project, net, cache).running("this add")
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "each step guards the next write, so they read best in order"
+)]
 async fn add_held(
     context: &Context,
     adding: &mut AddProject,

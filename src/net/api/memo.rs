@@ -182,6 +182,10 @@ impl Flight {
     }
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a lookup's answer is matched at once and never stored"
+)]
 pub(super) enum Found<'a> {
     Ready(Response),
     Waiting(Arc<Flight>),

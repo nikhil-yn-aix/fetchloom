@@ -112,7 +112,7 @@ impl std::error::Error for Foreign {}
 
 /// whether `err` refuses a folder of other files as the cache.
 pub(crate) fn is_foreign(err: &io::Error) -> bool {
-    err.get_ref().is_some_and(|inner| inner.is::<Foreign>())
+    matches!(err.get_ref(), Some(inner) if inner.is::<Foreign>())
 }
 
 /// whether `root` is a fetchloom cache: it holds fetchloom's tag, never only a cache's folder names.

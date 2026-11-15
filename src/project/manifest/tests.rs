@@ -337,7 +337,7 @@ fn a_folder_windows_cannot_store_is_refused_as_data_toml_is_read() {
     }
 }
 
-/// a data_dir named as a file git reads is refused as `.git` is, in any case, since git would
+/// a `data_dir` named as a file git reads is refused as `.git` is, in any case, since git would
 /// read its rules from a folder; `./data` is the folder data.
 #[test]
 fn a_data_dir_is_no_file_git_reads_and_may_start_at_dot() {

@@ -928,7 +928,7 @@ fn a_stopped_get_says_so_in_a_plain_line() -> Result {
     Ok(())
 }
 
-/// a server that names no version, by an ETag or a Last-Modified, leaves nothing to show that
+/// a server that names no version, by an `ETag` or a `Last-Modified`, leaves nothing to show that
 /// kept bytes are the same file, so the rerun starts over and says why once, though a broken
 /// connection restarts it.
 #[cfg(unix)]
@@ -2394,7 +2394,7 @@ fn a_download_the_cache_disk_cannot_hold_asks_first() -> Result {
     Ok(())
 }
 
-/// a get, which has no project, past the cache_budget is told what frees room without one: with
+/// a get, which has no project, past the `cache_budget` is told what frees room without one: with
 /// --yes it warns without the refusal's `add --yes`, and a cache past its budget before the
 /// download is said to be, not to leave the download 0 B.
 #[test]

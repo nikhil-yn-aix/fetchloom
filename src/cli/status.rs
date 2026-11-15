@@ -570,6 +570,10 @@ fn waiting(lock: &Lock, manifest: &Manifest) -> BTreeMap<String, Waiting> {
 /// placed file under its bar. a settled project is answered as sync finds it, without a plan, and a
 /// result is looked for in the cache and folder `mirrors` only, as status makes no request. it
 /// hands back data.toml and data.lock's text as it read them, so the warnings read neither again.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the disk check and the verify pass share one plan"
+)]
 fn check(
     project: &Project,
     threads: Threads,

@@ -671,7 +671,7 @@ fn peek_cache() -> Result<Cache, Error> {
 
 /// for a command that only frees or checks a cache, as gc and verify do: the default cache folder
 /// when it holds no cache yet, which the first command that needs one makes there, or none when a
-/// cache is there. a folder FETCHLOOM_CACHE or the cache setting names that holds none is refused,
+/// cache is there. a folder `FETCHLOOM_CACHE` or the cache setting names that holds none is refused,
 /// so a mistyped one never becomes an empty cache that answers Ok, and the help names where it was
 /// set, which is where a typo would be.
 fn absent_cache(nothing: &str) -> Result<Option<std::path::PathBuf>, Error> {
@@ -755,6 +755,10 @@ fn share(settings: &Settings) {
     sync::disk::set_level(settings.resources.value);
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the arguments, settings and output are set up in the order each needs the last"
+)]
 pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
     let _ = TYPED.set(std::env::args_os().skip(1).collect());

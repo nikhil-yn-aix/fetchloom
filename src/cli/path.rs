@@ -32,6 +32,10 @@ pub(super) struct Report {
     path: PathBuf,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "a placed path is answered at once, else the project is held and synced first"
+)]
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, Error> {
     let project = find(&context.output)?;
     let before = state_stamp(&project);

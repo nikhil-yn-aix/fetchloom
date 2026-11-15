@@ -28,6 +28,10 @@ use crate::units;
 
 /// `add -i`, or several links typed: a dataset for each, resolved, downloaded and placed together,
 /// with data.toml and data.lock each written once. a link data.toml has stays as it is.
+#[expect(
+    clippy::too_many_lines,
+    reason = "every link is resolved before data.toml and data.lock are written once"
+)]
 pub(super) async fn add_list_held(
     context: &Context,
     adding: &mut AddProject,

@@ -520,7 +520,7 @@ fn the_cache_report_creates_nothing() -> Result {
     Ok(())
 }
 
-/// gc and verify work on a cache that is there: a folder FETCHLOOM_CACHE or the cache setting
+/// gc and verify work on a cache that is there: a folder `FETCHLOOM_CACHE` or the cache setting
 /// names that holds none, as a mistyped one, is refused and left as it was, with the help naming
 /// where it was set. the default folder before any command made a cache there has nothing to
 /// free or check yet, and gets no cache either.

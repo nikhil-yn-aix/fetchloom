@@ -111,6 +111,10 @@ impl Checked {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "every name is checked before anything is dropped"
+)]
 pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, Error> {
     let mut given: Vec<String> = Vec::with_capacity(args.names.len());
     for name in args.names {
