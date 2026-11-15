@@ -1,6 +1,6 @@
-//! where each file data.lock pins can still be had, downloading none: on a mirror, a folder mirror's
-//! copy of its size or another mirror's object answered at its size, else at its source, asked for
-//! its first byte through a download's own path. requests run a bounded number at a time, hosts in
+//! where each file data.lock pins can still be had, downloading none: at its source, asked for its
+//! first byte through a download's own path, or on a mirror, a folder mirror's copy of its size or
+//! another mirror's object answered at its size. requests run a bounded number at a time, hosts in
 //! turn, under the per-host limits downloads keep, and a host that gives no answer is asked no more.
 
 use std::collections::HashMap;
@@ -12,9 +12,9 @@ use url::Url;
 use super::Context;
 use super::fetch::Queue;
 use super::fetch::mirrors::Look;
-use crate::digest::{Md5, Sha256};
+use crate::digest::{self, Md5, Sha256};
 use crate::error::{Error, Kind};
-use crate::mirror::Wanted;
+use crate::mirror::{Wanted, folder, web};
 use crate::net::{Expect, Fetch, Net, Probed};
 use crate::project::lock::{LockedFile, StatedFile};
 
@@ -31,6 +31,8 @@ pub(in crate::cli) struct Pinned<'a> {
     sha256: Option<Sha256>,
     md5: Option<Md5>,
     url: &'a str,
+    /// for an archive, the list of the files it unpacks to, which a mirror keeps in its place.
+    tree: Option<Sha256>,
     /// whether data.toml asks for its link's web page, so a page is the file.
     page: bool,
 }
@@ -44,6 +46,7 @@ impl<'a> Pinned<'a> {
             sha256: Some(file.sha256),
             md5: file.md5,
             url: &file.url,
+            tree: file.unpacks_to,
             page,
         }
     }
@@ -57,6 +60,7 @@ impl<'a> Pinned<'a> {
             sha256: file.sha256,
             md5: file.md5,
             url: &file.url,
+            tree: None,
             page,
         }
     }
@@ -114,8 +118,12 @@ impl<'a> Pinned<'a> {
 /// where a pinned file can still be had, or why nowhere.
 #[derive(Debug)]
 pub(in crate::cli) enum Found {
-    /// the mirror at this place in the run's list holds it at its size.
-    Mirror(usize),
+    /// the mirror at `index` in the run's list holds it, and `source` says why its source does
+    /// not serve it, when its source was asked first.
+    Mirror {
+        index: usize,
+        source: Option<Lack>,
+    },
     /// its source serves it at its size.
     Source,
     Nowhere(Lack),
@@ -198,13 +206,16 @@ fn sized(size: u64, other: u64) -> String {
     }
 }
 
-/// how a folder mirror's copy counts.
+/// which places [`find`] asks, in what order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::cli) enum Folders {
-    /// a copy of the pinned size, unread.
-    Sized,
-    /// not at all, as for a caller that hashed the copies itself.
-    Skipped,
+pub(in crate::cli) enum Ask {
+    /// as `status --sources` asks: each file's source, then for a file its source does not serve
+    /// at its size, the mirrors, a folder mirror's copy by its size and an unpacked archive by the
+    /// list of its files a mirror keeps, as push leaves it.
+    Sources,
+    /// as `drop` asks: the web and bucket mirrors, then the source of a file none holds. folder
+    /// mirrors are the caller's, which hashes their copies.
+    Elsewhere,
 }
 
 /// what `probed`, the answer at `url`, says of a file pinned at `size` bytes: served, or why
@@ -256,84 +267,133 @@ pub(in crate::cli) fn judged(
     }
 }
 
-/// where each of `files` can still be had, in order: on the first of the run's mirrors that holds
-/// it, asked in the order sync asks them, with folder mirrors as `folders` says, else at its
-/// source. fails at a stop.
+/// where each of `files` can still be had, in order: at its source or on the first of the run's
+/// mirrors, asked in the order sync asks them, that holds it, both as `ask` says. fails at a stop.
 pub(in crate::cli) async fn find(
     context: &Context,
     net: &Arc<Net>,
     files: &[Pinned<'_>],
-    folders: Folders,
+    ask: Ask,
 ) -> Result<Vec<Found>, Error> {
     let mut found: Vec<Option<Found>> = std::iter::repeat_with(|| None).take(files.len()).collect();
-    let left = |found: &[Option<Found>]| -> Vec<usize> {
-        (0..found.len()).filter(|at| found[*at].is_none()).collect()
-    };
-    for index in context.mirrors.up(context, net).await? {
-        let asked = left(&found);
-        if asked.is_empty() {
-            break;
-        }
-        let held: Vec<bool> = match context.mirrors.look(index) {
-            Look::Folder(_) if folders == Folders::Skipped => continue,
-            Look::Folder(root) => tokio::task::block_in_place(|| {
-                crate::place::run_all(&asked, context.threads.at_most(LOOKS), |at| {
-                    let file = &files[*at];
-                    file.sha256
-                        .is_some_and(|sha256| crate::mirror::folder::has(root, &sha256, file.size))
-                })
-            }),
-            Look::Ask(request) => {
-                let probed = each(context, net, &asked, |at| {
-                    files[at].wanted().map(|wanted| request(&wanted))
-                })
-                .await?;
-                asked
-                    .iter()
-                    .zip(probed)
-                    .map(|(at, probed)| {
-                        matches!(probed, Some(Probed::File { total: Some(total), page: false })
-                            if total == files[*at].size)
-                    })
-                    .collect()
+    let mut lacks: Vec<Option<Lack>> = std::iter::repeat_with(|| None).take(files.len()).collect();
+    if ask == Ask::Sources {
+        at_sources(context, net, files, &mut found, &mut lacks).await?;
+    }
+    if !left(&found).is_empty() {
+        for index in context.mirrors.up(context, net).await? {
+            let asked = left(&found);
+            if asked.is_empty() {
+                break;
             }
-        };
-        for (at, held) in asked.into_iter().zip(held) {
-            if held {
-                found[at] = Some(Found::Mirror(index));
+            let held = held_on(context, net, files, &asked, index, ask).await?;
+            for (at, held) in asked.into_iter().zip(held) {
+                if held {
+                    let source = lacks[at].take();
+                    found[at] = Some(Found::Mirror { index, source });
+                }
             }
         }
     }
-    let mut asked = Vec::new();
-    for at in left(&found) {
-        match files[at].request() {
-            Ok(_) => asked.push(at),
-            Err(lack) => found[at] = Some(Found::Nowhere(lack)),
-        }
-    }
-    let probed = each(context, net, &asked, |at| files[at].request().ok()).await?;
-    for (at, probed) in asked.into_iter().zip(probed) {
-        let pinned = &files[at];
-        let judgement = match (probed, Url::parse(pinned.url)) {
-            (Some(probed), Ok(url)) => judged(probed, pinned.size, pinned.takes_page(), &url),
-            _ => Err(Lack::Unknown(Error::new(
-                Kind::LocalIo,
-                format!("{} was not asked", pinned.label()),
-            ))),
-        };
-        found[at] = Some(match judgement {
-            Ok(()) => Found::Source,
-            Err(lack) => Found::Nowhere(lack),
-        });
+    if ask == Ask::Elsewhere {
+        at_sources(context, net, files, &mut found, &mut lacks).await?;
     }
     Ok(found
         .into_iter()
-        .map(|found| {
+        .zip(lacks)
+        .map(|(found, lack)| {
             found.unwrap_or_else(|| {
-                Found::Nowhere(Lack::Unknown(Error::new(Kind::LocalIo, "not asked")))
+                Found::Nowhere(
+                    lack.unwrap_or_else(|| Lack::Unknown(Error::new(Kind::LocalIo, "not asked"))),
+                )
             })
         })
         .collect())
+}
+
+/// the files left out of `found` yet, as `left` lists them.
+fn left(found: &[Option<Found>]) -> Vec<usize> {
+    (0..found.len()).filter(|at| found[*at].is_none()).collect()
+}
+
+/// asks the source of each of `files` that `found` has no place for yet, putting one that serves
+/// it in `found` and why one does not in `lacks`. fails at a stop.
+async fn at_sources(
+    context: &Context,
+    net: &Arc<Net>,
+    files: &[Pinned<'_>],
+    found: &mut [Option<Found>],
+    lacks: &mut [Option<Lack>],
+) -> Result<(), Error> {
+    let asked = left(found);
+    let probed = each(context, net, &asked, |at| files[at].request().ok()).await?;
+    for (at, probed) in asked.into_iter().zip(probed) {
+        let pinned = &files[at];
+        let judgement = pinned
+            .request()
+            .and_then(|_| match (probed, Url::parse(pinned.url)) {
+                (Some(probed), Ok(url)) => judged(probed, pinned.size, pinned.takes_page(), &url),
+                _ => Err(Lack::Unknown(Error::new(
+                    Kind::LocalIo,
+                    format!("{} was not asked", pinned.label()),
+                ))),
+            });
+        match judgement {
+            Ok(()) => found[at] = Some(Found::Source),
+            Err(lack) => lacks[at] = Some(lack),
+        }
+    }
+    Ok(())
+}
+
+/// whether the mirror at `index` holds each of `files` at `asked`, in order, looked at as `ask`
+/// says. fails at a stop.
+async fn held_on(
+    context: &Context,
+    net: &Arc<Net>,
+    files: &[Pinned<'_>],
+    asked: &[usize],
+    index: usize,
+    ask: Ask,
+) -> Result<Vec<bool>, Error> {
+    let lists = ask == Ask::Sources;
+    match context.mirrors.look(index) {
+        Look::Folder(_) if ask == Ask::Elsewhere => Ok(vec![false; asked.len()]),
+        Look::Folder(root) => Ok(tokio::task::block_in_place(|| {
+            crate::place::run_all(asked, context.threads.at_most(LOOKS), |at| {
+                let file = &files[*at];
+                file.sha256
+                    .is_some_and(|sha256| folder::has(root, &sha256, file.size))
+                    || file.tree.is_some_and(|tree| {
+                        matches!(folder::read_tree(root, &tree, &context.stop),
+                            Ok(folder::Tree::Bytes(bytes)) if digest::sha256(&bytes) == tree)
+                    })
+            })
+        })),
+        Look::Ask(request) => {
+            let probed = each(context, net, asked, |at| {
+                files[at].wanted().map(|wanted| request(&wanted))
+            })
+            .await?;
+            let mut held: Vec<bool> = asked
+                .iter()
+                .zip(probed)
+                .map(|(at, probed)| {
+                    matches!(probed, Some(Probed::File { total: Some(total), page: false })
+                        if total == files[*at].size)
+                })
+                .collect();
+            let location = &context.mirrors.mirrors.list[index];
+            let base = context.mirrors.base(index, location).filter(|_| lists);
+            for (held, at) in held.iter_mut().zip(asked).filter(|(held, _)| !**held) {
+                if let (Some(base), Some(tree)) = (&base, files[*at].tree) {
+                    *held = matches!(web::read_tree(net, base, &tree).await?,
+                        web::Tree::Bytes(bytes) if digest::sha256(&bytes) == tree);
+                }
+            }
+            Ok(held)
+        }
+    }
 }
 
 /// what each later request to `from`'s origin gets in place of an answer, once `error` ended one

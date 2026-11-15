@@ -206,7 +206,7 @@ fn a_refused_key_names_what_the_bucket_must_grant() -> Result {
 }
 
 /// `status --sources` asks a bucket mirror for each file's first byte, so a file its source lost
-/// still counts as had, and the source is asked nothing.
+/// still counts as had, named as one only the mirror serves now.
 #[test]
 fn a_bucket_mirror_counts_for_status_sources() -> Result {
     let sandbox = Sandbox::new()?;
@@ -244,7 +244,12 @@ fn a_bucket_mirror_counts_for_status_sources() -> Result {
     let iris = &document["result"]["sources"]["datasets"][0];
     assert_eq!(iris["name"], "iris", "{document}");
     assert_eq!(iris["on_mirrors"], 1, "{iris}");
-    assert_eq!(source.requests().len(), asked, "the mirror held it");
+    assert_eq!(iris["lost_at_source"][0]["outcome"], "gone", "{iris}");
+    assert_eq!(
+        source.requests().len(),
+        asked + 1,
+        "its source is asked first"
+    );
     assert!(
         s3.asked()
             .iter()

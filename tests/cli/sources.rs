@@ -1,8 +1,10 @@
 //! `status --sources`: whether a mirror or its source still serves each file data.lock pins, asked
 //! for each file's first byte, so nothing is downloaded.
 
-use crate::mirrors::{IRIS, cold, mirror_of, web_mirror_of};
-use crate::support::{Ranged, Result, Routes, Sandbox, file, json, ok, reply, text};
+use crate::mirrors::{IRIS, cold, mirror_of, project, web_mirror_of};
+use crate::support::{
+    Ranged, Result, Routes, Sandbox, file, json, ok, reply, sha256_hex, text, workspace,
+};
 
 /// each of `targets` on `source` added as a dataset of its own, named for its file.
 fn pinned(sandbox: &Sandbox, source: &Routes, targets: &[&str]) -> Result {
@@ -169,16 +171,27 @@ fn a_clone_checks_its_sources_and_a_mirror_stands_in_for_a_lost_one() -> Result 
     let root = sandbox.folder("mirror")?;
     mirror_of(&sandbox, &root)?;
     let web = web_mirror_of(&sandbox)?;
-    let at = format!("{}/m", web.url);
-    for mirror in [root.to_string_lossy().into_owned(), at] {
-        let output = run(&["--json", "status", "--sources", "--check"], Some(&mirror))?;
+    let (folder_mirror, at) = (
+        root.to_string_lossy().into_owned(),
+        format!("{}/m", web.url),
+    );
+    for mirror in [&folder_mirror, &at] {
+        let output = run(&["--json", "status", "--sources", "--check"], Some(mirror))?;
         ok(&output)?;
         let document = json(&output)?;
         let iris = dataset(&document, "iris")?;
         assert_eq!(iris["on_mirrors"], 1, "{mirror}: {iris}");
+        // its source is asked first, so a mirror that became the only copy says so
+        assert_eq!(iris["lost_at_source"][0]["outcome"], "gone", "{iris}");
     }
-    // the mirror held it, so its source was asked nothing
-    assert_eq!(source.requests().len(), asked);
+    assert_eq!(source.requests().len(), asked + 2);
+    let output = run(&["status", "--sources"], Some(&folder_mirror))?;
+    ok(&output)?;
+    let rows = text(&output.stdout)?;
+    assert!(
+        rows.contains("Source lost iris · 1 of 1 file, which only a mirror serves now\n"),
+        "{rows}"
+    );
     let objects: Vec<String> = web
         .requests()
         .into_iter()
@@ -324,6 +337,44 @@ fn a_file_not_downloaded_yet_is_asked_about_too() -> Result {
         (&"changed".into(), &4.into()),
         "{changed}"
     );
+    Ok(())
+}
+
+/// an archive its source lost is served by a mirror that keeps the list of its files and the files,
+/// as a push leaves them, without the archive itself.
+#[test]
+fn a_mirror_keeping_an_archives_files_serves_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let zip = std::fs::read(workspace().join("tests/fixtures/archives/python.zip"))?;
+    let hex = sha256_hex(&zip);
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let object = root.join("objects").join(&hex[..2]).join(&hex[2..]);
+    if object.exists() {
+        std::fs::remove_file(object)?;
+    }
+    let web = web_mirror_of(&sandbox)?;
+    web.change(vec![(
+        format!("/m/objects/{}/{}", &hex[..2], &hex[2..]),
+        missing(),
+    )]);
+    source.change(vec![("/files/dataset.zip".to_owned(), missing())]);
+    for mirror in [
+        root.to_string_lossy().into_owned(),
+        format!("{}/m", web.url),
+    ] {
+        let output = sandbox
+            .command(&["--json", "status", "--sources", "--check"])
+            .arg("--mirror")
+            .arg(&mirror)
+            .output()?;
+        ok(&output)?;
+        let document = json(&output)?;
+        let archive = dataset(&document, "dataset")?;
+        assert_eq!(archive["on_mirrors"], 1, "{mirror}: {archive}");
+        assert_eq!(archive["lost_at_source"][0]["outcome"], "gone", "{archive}");
+    }
     Ok(())
 }
 

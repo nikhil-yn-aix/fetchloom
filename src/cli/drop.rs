@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::args;
-use super::probe::{self, Folders, Found, Lack, Pinned};
+use super::probe::{self, Ask, Found, Lack, Pinned};
 use super::project::{dry_run_done, find, hold, known};
 use super::sync::Scope;
 use super::sync::disk::Survey;
@@ -286,7 +286,7 @@ async fn unfound(
         }
         return Ok(lacking);
     }
-    let answers = probe::find(context, &net, &rest, Folders::Skipped).await?;
+    let answers = probe::find(context, &net, &rest, Ask::Elsewhere).await?;
     for (pinned, answer) in rest.iter().zip(answers) {
         let Found::Nowhere(why) = answer else {
             continue;

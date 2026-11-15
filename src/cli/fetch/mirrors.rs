@@ -74,7 +74,7 @@ impl Mirrored {
 
     /// the link the web or S3 mirror `index` at `location` keeps its files below, once
     /// [`Mirrored::usable`] found it there.
-    fn base(&self, index: usize, location: &Location) -> Option<url::Url> {
+    pub(in crate::cli) fn base(&self, index: usize, location: &Location) -> Option<url::Url> {
         match location {
             Location::Web(base) => Some(base.clone()),
             Location::S3(_) => self.answers().bases.get(&index).cloned(),

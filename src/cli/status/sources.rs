@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::SHOWN;
 use crate::cli::Context;
-use crate::cli::probe::{self, Folders, Found, Lack, Pinned};
+use crate::cli::probe::{self, Ask, Found, Lack, Pinned};
 use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::project::Project;
@@ -48,6 +48,8 @@ struct Dataset {
     not_served: Vec<Unserved>,
     /// each file no mirror or source answered for clearly: refused, or no answer came.
     unchecked: Vec<Unserved>,
+    /// each file a mirror serves while its source lost or changed it, as its source said.
+    lost_at_source: Vec<Unserved>,
     /// the mirrors that hold any, as the run names them.
     #[serde(skip)]
     mirrors: BTreeSet<String>,
@@ -137,7 +139,7 @@ pub(super) fn check(context: &Context, project: &Project) -> Result<Sources, Err
         let places = if context.mirrors.mirrors.list.is_empty() {
             "their sources"
         } else {
-            "their mirrors and sources"
+            "their sources and mirrors"
         };
         let _waiting = context.output.wait(
             "Checking",
@@ -146,7 +148,7 @@ pub(super) fn check(context: &Context, project: &Project) -> Result<Sources, Err
                 units::count(pinned.len() as u64, "file", "files")
             ),
         );
-        runtime.block_on(probe::find(context, &net, &pinned, Folders::Sized))?
+        runtime.block_on(probe::find(context, &net, &pinned, Ask::Sources))?
     };
     Ok(gathered(context, &pinned, found))
 }
@@ -168,6 +170,7 @@ fn gathered(context: &Context, pinned: &[Pinned<'_>], found: Vec<Found>) -> Sour
                 no_size: 0,
                 not_served: Vec::new(),
                 unchecked: Vec::new(),
+                lost_at_source: Vec::new(),
                 mirrors: BTreeSet::new(),
             });
         }
@@ -177,13 +180,16 @@ fn gathered(context: &Context, pinned: &[Pinned<'_>], found: Vec<Found>) -> Sour
         dataset.files += 1;
         sources.files += 1;
         match found {
-            Found::Mirror(index) => {
+            Found::Mirror { index, source } => {
                 dataset.served += 1;
                 dataset.on_mirrors += 1;
                 sources.served += 1;
                 dataset
                     .mirrors
                     .insert(context.mirrors.mirrors.list[index].to_string());
+                if let Some(lack) = source.filter(Lack::lost) {
+                    dataset.lost_at_source.push(unserved(pinned, lack));
+                }
             }
             Found::Source => {
                 dataset.served += 1;
@@ -282,12 +288,15 @@ pub(super) fn tell(output: &Output, sources: &Sources) {
     }
 }
 
-/// a step on stderr for `dataset` when every file is served, else a row on stdout for its files
-/// not served and one for those not checked, each with a row under it for each file, at most
-/// `shown` but for `-v`.
+/// a step on stderr for `dataset` when its sources serve every file, else a row on stdout for its
+/// files not served, one for those not checked and one for those only a mirror serves, each with a
+/// row under it for each file, at most `shown` but for `-v`.
 fn tell_dataset(output: &Output, dataset: &Dataset, shown: Option<usize>) {
     let files = units::count(dataset.files, "file", "files");
-    if dataset.not_served.is_empty() && dataset.unchecked.is_empty() {
+    if dataset.not_served.is_empty()
+        && dataset.unchecked.is_empty()
+        && dataset.lost_at_source.is_empty()
+    {
         let mirrored = match (dataset.on_mirrors, dataset.mirrors.len()) {
             (0, _) => String::new(),
             (on, 1) => format!(
@@ -307,15 +316,23 @@ fn tell_dataset(output: &Output, dataset: &Dataset, shown: Option<usize>) {
         );
         return;
     }
-    for (label, listed) in [
-        ("Not served", &dataset.not_served),
-        ("Unchecked", &dataset.unchecked),
+    for (label, listed, tail) in [
+        ("Not served", &dataset.not_served, ""),
+        ("Unchecked", &dataset.unchecked, ""),
+        (
+            "Source lost",
+            &dataset.lost_at_source,
+            ", which only a mirror serves now",
+        ),
     ] {
         if listed.is_empty() {
             continue;
         }
         let count = units::grouped(listed.len() as u64);
-        output.report(label, &format!("{} · {count} of {files}", dataset.name));
+        output.report(
+            label,
+            &format!("{} · {count} of {files}{tail}", dataset.name),
+        );
         let most = shown.unwrap_or(usize::MAX);
         for file in listed.iter().take(most) {
             output.report("", &file.said());
@@ -432,6 +449,7 @@ mod tests {
                 no_size: 1,
                 not_served: Vec::new(),
                 unchecked: Vec::new(),
+                lost_at_source: Vec::new(),
                 mirrors: BTreeSet::new(),
             }],
         };
