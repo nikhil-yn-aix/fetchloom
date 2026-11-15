@@ -753,11 +753,24 @@ fn warn_packed(context: &Context, remote: &Remote, fetched: &Fetched, destinatio
             "{} holds the archive {file}, kept packed as it came",
             destination.shown
         ),
-        &format!(
-            "use `--dir {}` to unpack it into a folder",
-            crate::name::folder_for(file)
-        ),
+        &unpack_instead(file),
     );
+}
+
+/// the help that names `--dir` for `file`, its folder quoted for a shell, since a server or a
+/// listing chose the name.
+fn unpack_instead(file: &str) -> String {
+    let folder = crate::name::folder_for(file);
+    // a word starting with `-` would be read as an option
+    let folder = if folder.starts_with('-') {
+        format!("./{folder}")
+    } else {
+        folder
+    };
+    format!(
+        "use `--dir {}` to unpack it into a folder",
+        crate::suggested::shell_folder(&folder)
+    )
 }
 
 /// refuses a file its source sent inside a zip, as kaggle may send a competition's file: `-o`
@@ -773,10 +786,7 @@ fn refuse_zipped(cache: &Cache, remote: &Remote, digest: &Sha256) -> Result<(), 
             remote.path
         ),
     )
-    .help(format!(
-        "use `--dir {}` to unpack it into a folder",
-        crate::name::folder_for(&remote.path)
-    )))
+    .help(unpack_instead(&remote.path)))
 }
 
 /// the one file a link keeps for `-o`, or why `--dir` fits it instead.
@@ -1418,6 +1428,28 @@ mod tests {
             Some("use `--dir train` to unpack it into a folder")
         );
         refuse_zipped(&cache, &remote, &plain.digest).unwrap();
+        // a listing names the file, and a shell would run what its name holds
+        let listed = Remote {
+            path: "$(touch PWNED).csv".to_owned(),
+            ..remote
+        };
+        let mut zip = ::zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file(&listed.path, ::zip::write::SimpleFileOptions::default())
+            .unwrap();
+        io::Write::write_all(&mut zip, b"a,b\n1,2\n").unwrap();
+        let zipped = crate::cache::tests::store(&cache, &zip.finish().unwrap().into_inner());
+        let error = refuse_zipped(&cache, &listed, &zipped.digest).unwrap_err();
+        let quoted = if cfg!(windows) {
+            "use `--dir <folder>` to unpack it into a folder"
+        } else {
+            "use `--dir '$(touch PWNED)'` to unpack it into a folder"
+        };
+        assert_eq!(error.help.as_deref(), Some(quoted));
+        assert_eq!(
+            unpack_instead("-rf.zip"),
+            "use `--dir ./-rf` to unpack it into a folder",
+            "a folder fetchloom would read as an option"
+        );
     }
 
     /// another run of the same link may write the file between this run's look and its write,

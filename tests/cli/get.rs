@@ -709,6 +709,42 @@ fn an_archive_saved_under_another_kind_of_name_gets_a_warning() -> Result {
     Ok(())
 }
 
+/// the server names the archive, and its name may hold what a shell runs: the `--dir` the
+/// warning suggests is quoted as every suggested word is, so a pasted line runs only what it shows.
+#[test]
+fn a_folder_named_by_the_server_is_quoted_in_the_warning() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zipped = b"PK\x03\x04 a zip as the server sent it";
+    let length = zipped.len().to_string();
+    let named = "attachment; filename=\"$(touch PWNED)`id`.zip\"";
+    let headers = [
+        ("Content-Length", length.as_str()),
+        ("Content-Disposition", named),
+    ];
+    let server = Server::start("/download", vec![reply("200 OK", &headers, zipped)])?;
+    let output = sandbox.run(&["--json", "get", &server.url, "-o", "out.csv"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let warning = &document["warnings"][0];
+    assert_eq!(warning["kind"], "archive.packed", "{document}");
+    if cfg!(windows) {
+        assert_eq!(
+            warning["help"],
+            "use `--dir <folder>` to unpack it into a folder"
+        );
+        assert_eq!(
+            warning["details"][0],
+            "<folder> is $(touch PWNED)`id`, which no command here can hold safely"
+        );
+    } else {
+        assert_eq!(
+            warning["help"],
+            "use `--dir '$(touch PWNED)`id`'` to unpack it into a folder"
+        );
+    }
+    Ok(())
+}
+
 /// the bytes stay as sent with `Content-Encoding: gzip`, which a published hash matches, and one
 /// warning says so; a name that says gzip needs none.
 #[test]
