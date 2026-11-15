@@ -91,9 +91,19 @@ pub(crate) fn shell_word(word: &str) -> Cow<'_, str> {
 /// [`shell_word`] for a folder, which a withheld word stands for as `<folder>`.
 pub(crate) fn shell_folder(word: &str) -> Cow<'_, str> {
     if cfg!(windows) && !safe_on_windows(word) {
-        return Cow::Owned(format!("{OPEN}{FOLDER}{word}{CLOSE}"));
+        return Cow::Owned(format!("{OPEN}{FOLDER}{}{CLOSE}", without_marks(word)));
     }
     shell_word(word)
+}
+
+/// `word` with [`OPEN`] and [`CLOSE`] given as U+FFFD: a name from data.lock or an archive may
+/// hold them, and one inside a word would end its marks early, leaving the rest unquoted.
+fn without_marks(word: &str) -> Cow<'_, str> {
+    if word.contains([OPEN, CLOSE]) {
+        Cow::Owned(word.replace([OPEN, CLOSE], "\u{fffd}"))
+    } else {
+        Cow::Borrowed(word)
+    }
 }
 
 /// the marks around a word withheld from a command on windows, which [`withheld`] turns into a
@@ -199,6 +209,9 @@ pub(crate) fn unmarked(text: &str) -> Cow<'_, str> {
 /// backslash; then it is single-quoted, a single quote or backslash escaped outside the quotes,
 /// since fish reads a backslash inside them as an escape.
 pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
+    if let Cow::Owned(word) = without_marks(word) {
+        return Cow::Owned(shell_word_for(&word, windows).into_owned());
+    }
     if windows && !safe_on_windows(word) {
         // a path to a file, not a host or a link, which only look like one
         let file = word.contains(['/', '\\'])
@@ -427,6 +440,65 @@ pub(crate) mod tests {
             unmarked(&format!("of {}", shell_word_for(file, true))),
             format!("of {file}")
         );
+    }
+
+    /// a name holding the marks fetchloom puts around a withheld word, as a crafted data.lock
+    /// path or archive member can, never ends them early: nothing of it follows the placeholder.
+    #[test]
+    fn a_name_holding_the_marks_stays_within_its_placeholder() {
+        let crafted = format!("data/a{CLOSE} & mkdir PWNED & {OPEN}fb.csv");
+        let shown = "data/a\u{fffd} & mkdir PWNED & \u{fffd}fb.csv";
+        let command = format!("run `fetchloom exclude {}`", shell_word_for(&crafted, true));
+        assert_eq!(
+            withheld(&command),
+            (
+                Cow::Owned("run `fetchloom exclude <file>`".to_owned()),
+                vec![format!(
+                    "<file> is {shown}, which no command here can hold safely"
+                )]
+            )
+        );
+        let elsewhere = format!(
+            "run `fetchloom exclude {}`",
+            shell_word_for(&crafted, false)
+        );
+        assert_eq!(
+            withheld(&elsewhere),
+            (
+                Cow::Owned(format!("run `fetchloom exclude \"{shown}\"`")),
+                vec![]
+            )
+        );
+    }
+
+    /// two names in one command, one holding the opening mark and the other the closing one, as
+    /// tracked data.lock.d parts can, are never joined across their quotes: each reads back whole.
+    #[test]
+    fn marks_in_two_names_never_join_their_quotes() {
+        let names = [
+            format!("data.lock.d/a{OPEN}b.aaaaaaaaaaaa.tsv.zst"),
+            format!("data.lock.d/c{CLOSE}$(mkdir PWNED)\"'.bbbbbbbbbbbb.tsv.zst"),
+        ];
+        let words: Vec<Cow<'_, str>> = names
+            .iter()
+            .map(|name| shell_word_for(name, false))
+            .collect();
+        let help = format!("run `git rm {} {}`, then commit", words[0], words[1]);
+        let (shown, lines) = withheld(&help);
+        assert!(lines.is_empty(), "{lines:?}");
+        let command = shown
+            .strip_prefix("run `")
+            .and_then(|rest| rest.strip_suffix("`, then commit"))
+            .unwrap_or_default();
+        let expected: Vec<String> = ["git".to_owned(), "rm".to_owned()]
+            .into_iter()
+            .chain(
+                names
+                    .iter()
+                    .map(|name| name.replace([OPEN, CLOSE], "\u{fffd}")),
+            )
+            .collect();
+        assert_eq!(command_words(command, false), Some(expected), "{shown}");
     }
 
     /// each word's command as fetchloom prints it on windows, pasted into powershell and into cmd,
