@@ -32,6 +32,8 @@ pub(super) struct Sources {
     served: u64,
     unchecked: u64,
     datasets: Vec<Dataset>,
+    /// the datasets a recipe makes, whose files are not asked about, since a build makes them.
+    recipes: Vec<String>,
 }
 
 /// one dataset's files, by where they are served.
@@ -111,8 +113,17 @@ pub(super) fn askable(context: &Context) -> Result<(), Error> {
 /// files, only the archive. fails offline, which asks nobody, or at a stop.
 pub(super) fn check(context: &Context, project: &Project) -> Result<Sources, Error> {
     let (_, manifest) = project.manifest()?;
+    let recipes = manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| entry.recipe().is_some())
+        .map(|(name, _)| name.clone())
+        .collect();
     let Some(lock) = project.lock()? else {
-        return Ok(Sources::default());
+        return Ok(Sources {
+            recipes,
+            ..Sources::default()
+        });
     };
     // a sync carries a pin over to the name data.toml gives it now, as status reads it
     let (lock, _) = crate::cli::sync::rename::forecast(&manifest, lock);
@@ -130,7 +141,10 @@ pub(super) fn check(context: &Context, project: &Project) -> Result<Sources, Err
         }
     }
     if pinned.is_empty() {
-        return Ok(Sources::default());
+        return Ok(Sources {
+            recipes,
+            ..Sources::default()
+        });
     }
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|err| Error::new(Kind::LocalIo, format!("cannot ask the sources: {err}")))?;
@@ -150,7 +164,10 @@ pub(super) fn check(context: &Context, project: &Project) -> Result<Sources, Err
         );
         runtime.block_on(probe::find(context, &net, &pinned, Ask::Sources))?
     };
-    Ok(gathered(context, &pinned, found))
+    Ok(Sources {
+        recipes,
+        ..gathered(context, &pinned, found)
+    })
 }
 
 /// what `found` says of each of `pinned`, by dataset in their order.
@@ -233,6 +250,18 @@ pub(super) fn tell(output: &Output, sources: &Sources) {
         .map(|_| SHOWN);
     for dataset in &sources.datasets {
         tell_dataset(output, dataset, shown);
+    }
+    if let Some(said) = match sources.recipes.as_slice() {
+        [] => None,
+        [one] => Some(format!(
+            "{one} · a recipe's result, which a build makes again"
+        )),
+        many => Some(format!(
+            "{} · recipes' results, which a build makes again",
+            units::listed(many, "and")
+        )),
+    } {
+        output.step("Skipped", &format!("{said}, so not asked about"));
     }
     let unserved = sources.files - sources.served - sources.unchecked;
     if unserved == 0 && sources.unchecked == 0 {
@@ -452,6 +481,7 @@ mod tests {
                 lost_at_source: Vec::new(),
                 mirrors: BTreeSet::new(),
             }],
+            recipes: Vec::new(),
         };
         assert!(ready(&sources).is_ok());
         let pets = &mut sources.datasets[0];
