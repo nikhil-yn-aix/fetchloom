@@ -27,7 +27,7 @@ fetchloom add [options] -i <file>
 | `--exclude <glob>` | drop matching files; repeat for more exclusions |
 | `--no-extract` | keep archives packed and record `extract = false`; webdataset loaders read `.tar` shards packed |
 | `--web-page` | pin the web page a link answers with as the data and record `web_page = true`; without it such a page is refused, see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) |
-| `--no-sync` | download nothing: data.lock records each file by the size and SHA-256 or MD5 its source states, and a later `fetchloom sync` downloads and checks it. a link data.toml has already is pinned the same way when data.lock does not pin it as data.toml asks, and data.toml stays as it is. refused when the source states neither for some file, and for a path on this machine |
+| `--no-sync` | download nothing: data.lock records each file by the size and SHA-256 or MD5 its source states, and a later `fetchloom sync` downloads and checks it. a link data.toml has already is pinned the same way when data.lock does not pin it as data.toml asks, and data.toml stays as it is; a pin data.lock holds under the name the dataset was [renamed](../reference/data-toml.md#dataset-names) from counts, as sync carries it, and the add says `Ok flowers is already in data.toml, and data.lock pins it as iris`. refused when the source states neither for some file, and for a path on this machine |
 | `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 

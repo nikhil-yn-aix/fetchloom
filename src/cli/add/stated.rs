@@ -37,7 +37,8 @@ pub(super) fn refused_several() -> Error {
 }
 
 /// `add --no-sync` of `present`, which data.toml has already: other settings need the person's
-/// choice, as for any add. while data.lock pins it as data.toml asks there is nothing to do;
+/// choice, as for any add. while data.lock pins it as data.toml asks there is nothing to do, a
+/// pin under a name data.toml renamed included, which a sync carries without asking the source;
 /// else it is pinned as a first add pins it, and data.toml stays as it is.
 pub(super) fn again(
     work: &Loop<'_>,
@@ -51,10 +52,27 @@ pub(super) fn again(
     super::same_settings(manifest, present)?;
     let name = present.name;
     let entry = &manifest.datasets[name];
-    if old.as_ref().is_some_and(|lock| pins(lock, name, entry)) {
-        work.context
-            .output
-            .done("Ok", &format!("{name} is already in data.toml"));
+    let is_pinned = old.as_ref().is_some_and(|lock| pins(lock, name, entry));
+    let renamed = if is_pinned {
+        None
+    } else {
+        carried(manifest, old.as_ref(), name, entry)
+    };
+    if is_pinned || renamed.is_some() {
+        let output = &work.context.output;
+        match renamed {
+            Some(old) => {
+                output.done(
+                    "Ok",
+                    &format!("{name} is already in data.toml, and data.lock pins it as {old}"),
+                );
+                output.hint(&format!(
+                    "`{}` keeps that pin under this name without asking the source",
+                    super::super::project::command("sync")
+                ));
+            }
+            None => output.done("Ok", &format!("{name} is already in data.toml")),
+        }
         return Ok(Report {
             project: work.project.root.clone(),
             dry_run,
@@ -87,6 +105,14 @@ fn pins(lock: &Lock, name: &str, entry: &Entry) -> bool {
             .stated
             .iter()
             .any(|stated| stated.name() == name && stated.pin.drift(entry).is_none())
+}
+
+/// the name data.lock pins `name` under, one data.toml no longer has, when a sync carries that
+/// pin to `name` as `entry` asks, as status foretells it.
+fn carried(manifest: &Manifest, old: Option<&Lock>, name: &str, entry: &Entry) -> Option<String> {
+    let (lock, renamed) = super::super::sync::rename::forecast(manifest, old?.clone());
+    let rename = renamed.into_iter().find(|rename| rename.new == name)?;
+    pins(&lock, name, entry).then_some(rename.old)
 }
 
 /// the pin of `name`, which `listing` resolved and `entry` chooses files of, by what its source

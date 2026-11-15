@@ -1872,6 +1872,37 @@ fn add_no_sync_pins_a_dataset_data_toml_has_without_a_pin() -> Result {
     Ok(())
 }
 
+/// `add --no-sync` of the link of a dataset data.toml renamed keeps the pin data.lock holds under
+/// the old name, which a sync carries, and never pins what the source states now: the next sync
+/// keeps the pinned bytes under the new name.
+#[test]
+fn add_no_sync_keeps_the_pin_of_a_renamed_dataset() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7";
+    let first = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    ok(&command(&sandbox, &first, &["add", page, "--as", "ds"]).output()?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let renamed = fs::read_to_string(&manifest)?.replace("[datasets.ds]", "[datasets.renamed]");
+    fs::write(&manifest, renamed)?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    // what the source states now differs from what data.lock pins
+    let now = dryad(&[("rows.csv", NOTES, &md5_hex(NOTES))])?;
+    let output = command(&sandbox, &now, &["add", page, "--no-sync"]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok renamed is already in data.toml, and data.lock pins it as ds"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
+    ok(&command(&sandbox, &now, &["sync"]).output()?)?;
+    assert_eq!(
+        fs::read(sandbox.work().join("data/renamed/rows.csv"))?,
+        ROWS
+    );
+    Ok(())
+}
+
 /// a pin by MD5 alone is only as strong as MD5 until the first sync records each file's
 /// SHA-256, and the add says so in one line; one by SHA-256 says nothing more.
 #[test]
