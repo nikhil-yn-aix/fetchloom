@@ -1,7 +1,9 @@
-# what `cargo deny check` accepts: no crate with an open security advisory, only the licenses
-# below, and crates from crates.io alone. ci runs it on linux.
+# what `cargo deny check` accepts: no crate with an open security advisory or yanked release,
+# only the licenses below, and crates from crates.io alone. ci runs it on linux.
 
 [advisories]
+# a yanked release was withdrawn by its authors, often for a flaw that has no advisory yet.
+yanked = "deny"
 # each advisory that has no fixed release in range, with why it is accepted.
 ignore = [
     # zvariant, zvariant_derive and zbus_names were folded into zbus 6. keyring's

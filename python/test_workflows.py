@@ -149,5 +149,11 @@ class WorkflowTests(unittest.TestCase):
                 self.assertRegex(entry, r"\n    cooldown:\n      default-days: 7\n")
 
 
+    def test_cargo_deny_refuses_yanked_crates(self):
+        """cargo-deny only warns about a release its authors withdrew unless told to refuse it."""
+        deny = tomllib.loads((ROOT / "deny.toml").read_text(encoding="utf-8"))
+        self.assertEqual(deny["advisories"].get("yanked"), "deny")
+
+
 if __name__ == "__main__":
     unittest.main()
