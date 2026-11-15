@@ -215,7 +215,25 @@ fn access_refusals_use_the_shared_error() {
 #[test]
 fn a_handle_answer_that_cannot_be_used_says_why() {
     type Change = fn(&mut serde_json::Value);
-    let rows: [(&str, Change, &str); 4] = [
+    let rows: [(&str, Change, &str); 7] = [
+        (
+            "a bucket the person may have keys for",
+            |value| value["values"][1]["data"]["value"] = "s3://lab-private/scans/".into(),
+            "the URL value is not a web link",
+        ),
+        (
+            "a google storage bucket",
+            |value| value["values"][1]["data"]["value"] = "gs://lab-private/".into(),
+            "the URL value is not a web link",
+        ),
+        (
+            "a dataverse on a host the person never named",
+            |value| {
+                value["values"][1]["data"]["value"] =
+                    "dataverse:intranet.lab:8443/doi:10.1/x".into();
+            },
+            "the URL value is not a web link",
+        ),
         (
             "no URL value",
             |value| value["values"] = serde_json::json!([]),

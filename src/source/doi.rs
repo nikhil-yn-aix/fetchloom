@@ -103,6 +103,14 @@ impl Doi {
     }
 
     fn target(&self, location: &str) -> Result<Reference, Error> {
+        // a record names a web page: another scheme could steer a run to a bucket the person has
+        // keys for, or to a host nobody named
+        let web = location.split_once(':').is_some_and(|(scheme, _)| {
+            scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+        });
+        if !web {
+            return Err(self.invalid("the URL value is not a web link"));
+        }
         let parsed = Reference::parse(location).map_err(|_| {
             let known = Url::parse(location)
                 .ok()
