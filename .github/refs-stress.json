@@ -1,1 +1,1 @@
-{"try": 2, "jobs": [1, 2, 3, 4, 5, 6, 7, 8], "parallel": "8", "minutes": "12", "arms": "link,clone,rename,fix", "seconds": "40", "threads": "16"}
+{"try": 3, "jobs": [1, 2, 3, 4, 5, 6, 7, 8], "parallel": "8", "minutes": "14", "arms": "seal-link,seal-fix,tests", "seconds": "40", "threads": "16", "build": "43684564324", "filter": "test(/^concurrent::/) | test(/^archives::/) | test(/^placing::/) | test(/^get::/) | test(/^copied::/) | test(/^cache::/) | test(/^moved::/)"}

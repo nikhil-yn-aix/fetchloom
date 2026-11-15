@@ -4,11 +4,14 @@ param(
     [int]$Threads = 16,
     [int]$Seconds = 40,
     [int]$Minutes = 20,
-    [int]$Job = 1
+    [int]$Job = 1,
+    [string]$Archive = '',
+    [string]$Filter = 'test(/^concurrent::/) | test(/^archives::/) | test(/^placing::/)'
 )
 
 # runs refs-stress.exe, one arm per new refs volume made as the windows refs lane makes it, the
-# arms taking turns. a run where some thread makes no progress for 15 s is a hang: the volume is
+# arms taking turns; the arm "tests" runs fetchloom's own tests $Filter picks from the nextest
+# archive $Archive instead, $Threads at once. a run where some thread makes no progress for 15 s is a hang: the volume is
 # left to its stuck process, a short plain run on a new volume checks that refs still works
 # elsewhere, and the loop goes on there. a hang outside the link arm saves kernel stacks.
 
@@ -246,8 +249,56 @@ function Start-Stress([string]$Arm, [int]$For, [string]$Progress) {
     $process
 }
 
+# runs fetchloom's tests once on the current volume, as the refs lane runs them, through a batch
+# file in a console of its own
+function Start-Tests([string]$Log) {
+    $batch = "$Log.cmd"
+    Set-Content -Path $batch -Encoding ascii -Value @(
+        '@echo off'
+        "set `"TMP=$($script:Drive):\sandboxes`""
+        "set `"TEMP=$($script:Drive):\sandboxes`""
+        'set "FETCHLOOM_CI_VOLUME=refs"'
+        'set "INSTA_UPDATE=no"'
+        'set "INSTA_FORCE_PASS=0"'
+        ('"{0}" nextest run --profile ci --no-fail-fast --color never --test-threads {1} --archive-file "{2}" --extract-to "{3}" --extract-overwrite --workspace-remap "{3}" -E "{4}" < NUL > "{5}.out" 2> "{5}"' -f
+            (Get-Command cargo-nextest).Source, $Threads, $Archive, $Root, $Filter, $Log)
+        'exit /b %ERRORLEVEL%'
+    )
+    $process = Start-Process -FilePath 'cmd.exe' -ArgumentList "/d /c `"$batch`"" -WorkingDirectory $Root -WindowStyle Hidden -PassThru
+    $null = $process.Handle
+    $process
+}
+
+# runs the tests once: how many finished, and whether some test made no progress for 60 s
+function Invoke-Tests {
+    $log = Join-Path $Work ("run-{0}-tests.txt" -f $script:Iteration)
+    $process = Start-Tests $log
+    $finished = 0
+    $progress = Get-Date
+    $hung = $false
+    while (-not $process.HasExited) {
+        Start-Sleep -Seconds 1
+        $text = Read-Log $log
+        $count = ([regex]::Matches($text, '\[\s*[\d.]+s\]\s+\(\s*\d+/\d+\)')).Count
+        if ($count -ne $finished) {
+            $finished = $count
+            $progress = Get-Date
+        }
+        if (((Get-Date) - $progress).TotalSeconds -ge 60 -or $text -match 'SLOW \[>\s*60') {
+            $hung = $true
+            break
+        }
+    }
+    $text = Read-Log $log
+    $failed = if (-not $hung -and $process.ExitCode -ne 0) { "exit $($process.ExitCode): $(@($text -split "`n" | Where-Object { $_ -match '^\s*(FAIL|error)' } | Select-Object -First 3) -join ' / ')" } else { '' }
+    $stall = [int]((Get-Date) - $progress).TotalSeconds
+    if ($hung -or $failed) { Set-Content (Join-Path $Out "tests-$script:Iteration.log") $text }
+    [pscustomobject]@{ Ops = $finished; Hung = $hung; Line = "0 $finished $stall"; Failed = $failed; Process = $process }
+}
+
 # runs one arm for $For seconds on the current volume: ops, the longest stall, and whether it hung
 function Invoke-Arm([string]$Arm, [int]$For) {
+    if ($Arm -eq 'tests') { return Invoke-Tests }
     $progress = Join-Path $Work ("run-{0}-{1}.txt" -f $script:Iteration, $Arm)
     $process = Start-Stress $Arm $For $progress
     $deadline = (Get-Date).AddSeconds($For + 45)
@@ -306,7 +357,7 @@ while ((Get-Date) -lt $deadline) {
     if (-not $run.Hung) { continue }
     $counts[$arm].Hangs++
     Write-Host "::warning::job ${Job}: $arm hung on run $script:Iteration on $($script:Drive):"
-    if ($arm -ne 'link') { Save-Hang "$script:Iteration-$arm" $run.Process }
+    if ($arm -notin 'link', 'seal-link', 'tests') { Save-Hang "$script:Iteration-$arm" $run.Process }
     # the stuck process keeps its volume; refs must still work on a new one for the loop to go on
     $next = [string][char]([int][char]$script:Drive + 1)
     if ($next -gt 'Z') { break }

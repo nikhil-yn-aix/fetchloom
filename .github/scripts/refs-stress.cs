@@ -1,7 +1,9 @@
 // churns files on a refs volume as fetchloom does, one way per run, to find which way deadlocks
 // refs. usage: refs-stress <arm> <root> <threads> <seconds> <progress file>
 // arms: plain (write, delete), link (write, hard link, delete), rename (write, rename without
-// replacing), clone (write, block clone, delete), fix (publish by rename, place by clone and rename)
+// replacing), clone (write, block clone, delete), fix (publish by rename, place by clone and rename),
+// seal-link and seal-fix (as link and fix, each file sealed as fetchloom seals an object: written,
+// dated, flushed and read-only, and removed by a posix delete that ignores read-only)
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -18,6 +20,16 @@ static class RefsStress
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     static extern bool MoveFileExW(string from, string to, uint flags);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security,
+        uint disposition, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetFileInformationByHandle(SafeFileHandle file, int type, ref uint flags, int size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetFileTime(SafeFileHandle file, IntPtr created, IntPtr accessed, ref long written);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool DeviceIoControl(SafeFileHandle device, uint code, IntPtr input, int inputSize,
@@ -99,6 +111,35 @@ static class RefsStress
         Check(MoveFileExW(from, to, 0), "rename " + from);
     }
 
+    // as fetchloom seals an object: made read-only, written, dated just past its birth, flushed
+    static void Seal(string path, byte[] bytes)
+    {
+        using (FileStream file = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read))
+        {
+            file.Write(bytes, 0, bytes.Length);
+            long written = DateTime.UtcNow.ToFileTimeUtc();
+            Check(SetFileTime(file.SafeFileHandle, IntPtr.Zero, IntPtr.Zero, ref written), "date " + path);
+            file.Flush(true);
+        }
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+    }
+
+    // as rust's remove_file: a posix delete that ignores read-only, else a plain one
+    static void Remove(string path)
+    {
+        const uint DELETE = 0x10000, SHARE_ALL = 7, OPEN_EXISTING = 3;
+        const uint OPEN_REPARSE_POINT = 0x00200000, BACKUP_SEMANTICS = 0x02000000;
+        using (SafeFileHandle file = CreateFileW(path, DELETE, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING,
+            OPEN_REPARSE_POINT | BACKUP_SEMANTICS, IntPtr.Zero))
+        {
+            Check(!file.IsInvalid, "open to delete " + path);
+            uint posix = 0x1 | 0x2 | 0x10;
+            if (SetFileInformationByHandle(file, 21, ref posix, 4)) return;
+            uint plain = 0x1 | 0x10;
+            Check(SetFileInformationByHandle(file, 21, ref plain, 4), "delete " + path);
+        }
+    }
+
     static void Work(object state)
     {
         int index = (int)state;
@@ -118,7 +159,8 @@ static class RefsStress
                 string c = Path.Combine(root, "c" + random.Next(Folders));
                 string written = Path.Combine(a, name + ".part");
                 string named = Path.Combine(b, name + ".obj");
-                File.WriteAllBytes(written, bytes);
+                bool sealing = arm.StartsWith("seal-");
+                if (sealing) Seal(written, bytes); else File.WriteAllBytes(written, bytes);
                 switch (arm)
                 {
                     case "plain":
@@ -147,10 +189,34 @@ static class RefsStress
                         kept.Enqueue(named);
                         kept.Enqueue(placed);
                         break;
+                    case "seal-link":
+                        Check(CreateHardLinkW(named, written, IntPtr.Zero), "link " + named);
+                        Remove(written);
+                        string linked = Path.Combine(c, name + ".csv");
+                        Check(CreateHardLinkW(linked, named, IntPtr.Zero), "link " + linked);
+                        kept.Enqueue(named);
+                        kept.Enqueue(linked);
+                        break;
+                    case "seal-fix":
+                        // tempfile's rename clears the attributes first, and fetchloom seals again
+                        File.SetAttributes(written, FileAttributes.Normal);
+                        Rename(written, named);
+                        File.SetAttributes(named, FileAttributes.ReadOnly);
+                        string copy = Path.Combine(c, "." + name + ".copy");
+                        string cloned = Path.Combine(c, name + ".csv");
+                        Clone(named, copy, size);
+                        Rename(copy, cloned);
+                        File.SetAttributes(cloned, FileAttributes.ReadOnly);
+                        kept.Enqueue(named);
+                        kept.Enqueue(cloned);
+                        break;
                     default:
                         throw new ArgumentException("no arm " + arm);
                 }
-                while (kept.Count > Kept) File.Delete(kept.Dequeue());
+                while (kept.Count > Kept)
+                {
+                    if (sealing) Remove(kept.Dequeue()); else File.Delete(kept.Dequeue());
+                }
                 Interlocked.Increment(ref ops);
                 Interlocked.Exchange(ref last[index], Stopwatch.GetTimestamp());
             }
