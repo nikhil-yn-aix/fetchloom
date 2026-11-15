@@ -542,28 +542,41 @@ pub(crate) fn syncfs_reports_errors(release: &str) -> bool {
     }
 }
 
-/// renames `from` to `to`, refusing a taken name with `AlreadyExists`. a disk that can neither
-/// link nor rename that way fails with its refusal of the link.
+/// renames `from` to `to`, refusing a taken name with `AlreadyExists`, as [`rename_new_at`] does.
 #[cfg(unix)]
 pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
-    rename_new_at(rustix::fs::CWD, from, rustix::fs::CWD, to, false)
+    rename_new_at(rustix::fs::CWD, from, rustix::fs::CWD, to, Lacking::Nothing)
+}
+
+/// what a disk lacks that [`rename_new_at`] would use. only tests say anything but
+/// [`Lacking::Nothing`], to take the way a disk lacking it takes.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lacking {
+    Nothing,
+    /// a rename that refuses a taken name, as linux before 3.15.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only tests ask for this way on purpose")
+    )]
+    RenameNew,
+    /// that rename and links, as exfat on macos.
+    RenameNewAndLinks,
 }
 
 /// renames `from` in `from_parent` to `to` in `to_parent` without replacing anything: by the
-/// rename linux and macos have that refuses a taken name, else, or with `fallback`, by a link to
-/// the new name and the old name's removal.
+/// rename linux and macos have that refuses a taken name, else by a link to the new name and the
+/// old name's removal.
 #[cfg(unix)]
 pub(crate) fn rename_new_at<P: rustix::path::Arg + Copy, Q: rustix::path::Arg + Copy>(
     from_parent: std::os::fd::BorrowedFd<'_>,
     from: P,
     to_parent: std::os::fd::BorrowedFd<'_>,
     to: Q,
-    fallback: bool,
+    lacking: Lacking,
 ) -> io::Result<()> {
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let _ = fallback;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if !fallback {
+    if lacking == Lacking::Nothing {
         match rustix::fs::renameat_with(
             from_parent,
             from,
@@ -576,14 +589,62 @@ pub(crate) fn rename_new_at<P: rustix::path::Arg + Copy, Q: rustix::path::Arg + 
             Err(_) => {}
         }
     }
-    rustix::fs::linkat(
-        from_parent,
-        from,
+    let linked = if lacking == Lacking::RenameNewAndLinks {
+        Err(rustix::io::Errno::NOTSUP)
+    } else {
+        rustix::fs::linkat(
+            from_parent,
+            from,
+            to_parent,
+            to,
+            rustix::fs::AtFlags::empty(),
+        )
+    };
+    match linked {
+        Ok(()) => rustix::fs::unlinkat(from_parent, from, rustix::fs::AtFlags::empty())
+            .map_err(Into::into),
+        Err(error)
+            if error == rustix::io::Errno::NOTSUP || error == rustix::io::Errno::OPNOTSUPP =>
+        {
+            rename_over_reserved(from_parent, from, to_parent, to)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// renames `from` to `to` on a disk with neither a rename that refuses a taken name nor links, as
+/// exfat on macos: a new empty file made at `to` refuses a taken name, then the rename replaces it
+/// once it is still empty. what someone writes into that empty file in the moment between the look
+/// and the rename is replaced, and a run killed in that moment leaves the empty file at `to`.
+#[cfg(unix)]
+fn rename_over_reserved<P: rustix::path::Arg + Copy, Q: rustix::path::Arg + Copy>(
+    from_parent: std::os::fd::BorrowedFd<'_>,
+    from: P,
+    to_parent: std::os::fd::BorrowedFd<'_>,
+    to: Q,
+) -> io::Result<()> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+    let empty = || {
+        rustix::fs::statat(to_parent, to, AtFlags::SYMLINK_NOFOLLOW).is_ok_and(|found| {
+            FileType::from_raw_mode(found.st_mode) == FileType::RegularFile && found.st_size == 0
+        })
+    };
+    let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    drop(rustix::fs::openat(
         to_parent,
         to,
-        rustix::fs::AtFlags::empty(),
-    )?;
-    rustix::fs::unlinkat(from_parent, from, rustix::fs::AtFlags::empty()).map_err(Into::into)
+        flags,
+        Mode::from_bits_truncate(0o600),
+    )?);
+    if !empty() {
+        return Err(io::ErrorKind::AlreadyExists.into());
+    }
+    rustix::fs::renameat(from_parent, from, to_parent, to).map_err(|error| {
+        if empty() {
+            let _ = rustix::fs::unlinkat(to_parent, to, AtFlags::empty());
+        }
+        error.into()
+    })
 }
 
 /// whether `error`, from a rename asked never to replace, says the system or the filesystem has

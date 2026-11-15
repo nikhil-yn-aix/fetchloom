@@ -14,6 +14,7 @@ use rustix::fs::{self as native, AtFlags, Mode, OFlags};
 use rustix::io::Errno;
 
 use crate::space::Filesystem;
+use crate::volume::Lacking;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Identity {
@@ -183,7 +184,7 @@ impl Location {
             self.name.as_os_str(),
             target.parent.file.as_fd(),
             target.name.as_os_str(),
-            false,
+            Lacking::Nothing,
         )
     }
 
@@ -370,7 +371,7 @@ impl Staged {
     }
 
     fn name_in(&mut self, parent: &File) -> io::Result<()> {
-        publish(parent, &self.hidden, &self.name, false)?;
+        publish(parent, &self.hidden, &self.name, Lacking::Nothing)?;
         self.published = true;
         Ok(())
     }
@@ -400,13 +401,13 @@ fn metadata(parent: &File, name: &OsStr) -> io::Result<Metadata> {
     file.metadata()
 }
 
-fn publish(parent: &File, hidden: &str, name: &OsStr, fallback: bool) -> io::Result<()> {
+fn publish(parent: &File, hidden: &str, name: &OsStr, lacking: Lacking) -> io::Result<()> {
     crate::volume::rename_new_at(
         parent.as_fd(),
         OsStr::new(hidden),
         parent.as_fd(),
         name,
-        fallback,
+        lacking,
     )
 }
 
@@ -672,10 +673,14 @@ mod tests {
         fs::write(dir.path().join("source"), b"new").unwrap();
         fs::write(dir.path().join("target"), b"old").unwrap();
         symlink("target", dir.path().join("link")).unwrap();
-        for fallback in [false, true] {
+        for lacking in [
+            Lacking::Nothing,
+            Lacking::RenameNew,
+            Lacking::RenameNewAndLinks,
+        ] {
             for name in ["target", "link"] {
                 assert_eq!(
-                    publish(&root, "source", OsStr::new(name), fallback)
+                    publish(&root, "source", OsStr::new(name), lacking)
                         .unwrap_err()
                         .kind(),
                     io::ErrorKind::AlreadyExists
@@ -684,6 +689,26 @@ mod tests {
                 assert_eq!(fs::read(dir.path().join("target")).unwrap(), b"old");
             }
         }
+    }
+
+    /// a disk with neither a rename that refuses a taken name nor links, as exfat on macos, still
+    /// gets each file under its name.
+    #[test]
+    fn publication_names_the_file_where_a_disk_lacks_links_and_rename_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = open_root(dir.path(), false, true).unwrap();
+        fs::write(dir.path().join("source"), b"new").unwrap();
+
+        publish(
+            &root,
+            "source",
+            OsStr::new("named"),
+            Lacking::RenameNewAndLinks,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(dir.path().join("named")).unwrap(), b"new");
+        assert!(!dir.path().join("source").exists());
     }
 
     #[test]
