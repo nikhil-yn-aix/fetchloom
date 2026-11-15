@@ -97,7 +97,8 @@ fn names(current: &str, before: &[String]) -> Option<Vec<String>> {
     }
     let start = std::path::absolute(from_home(directory.unwrap_or("."))).ok()?;
     let project = crate::project::Project::find(&start)?;
-    let text = std::fs::read_to_string(project.manifest_path()).ok()?;
+    // a fifo there would hold the tab until something wrote to it
+    let text = project.manifest_text().ok()?;
     dataset_names(&text)
 }
 

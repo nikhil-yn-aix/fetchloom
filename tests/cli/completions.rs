@@ -252,6 +252,30 @@ fn bash_completes_the_dataset_names_data_toml_has() -> Result {
     Ok(())
 }
 
+/// a data.toml that is no file, such as a fifo, is never opened, so a tab never waits on it.
+#[cfg(unix)]
+#[test]
+fn names_never_open_a_data_toml_that_is_no_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let manifest = sandbox.work().join("data.toml");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&manifest)
+            .status()?
+            .success()
+    );
+    // a read of the fifo would wait for this writer, then offer the name it writes
+    std::thread::spawn(move || {
+        if let Ok(mut writer) = std::fs::OpenOptions::new().write(true).open(manifest) {
+            let _ = std::io::Write::write_all(&mut writer, b"[datasets.iris]\nref = \"x\"\n");
+        }
+    });
+    let output = sandbox.run(&["completions", "bash", "--names=ir", "--", "path"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    assert!(output.stdout.is_empty(), "{}", text(&output.stdout)?);
+    Ok(())
+}
+
 /// a name a cloned data.toml could hold if no rule stopped it, which runs a command wherever a
 /// shell reads it as code instead of as a word.
 #[cfg(unix)]
