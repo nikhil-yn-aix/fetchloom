@@ -246,7 +246,7 @@ impl<'a> Retry<'a> {
                 .and_then(|wire| wire.proxies.carrier(self.url));
             let error = gave_up(
                 self.url,
-                (self.tries, self.net.retries),
+                (self.tries, self.net.retries, self.net.idle),
                 &reason,
                 has_copy,
                 through.as_ref(),
@@ -868,11 +868,11 @@ pub(super) fn interrupted(url: &Url) -> Error {
     )
 }
 
-/// the error once the `tries` for `url` ran out, of the `retries` it may get, `through` the
-/// proxy that carries it, if one does.
+/// the error once the `tries` for `url` ran out, of the `retries` it may get, each of which may
+/// last the `timeout`, `through` the proxy that carries it, if one does.
 fn gave_up(
     url: &Url,
-    (tries, retries): (u32, u32),
+    (tries, retries, timeout): (u32, u32, Duration),
     reason: &str,
     has_copy: bool,
     through: Option<&address::Carrier>,
@@ -920,8 +920,8 @@ fn gave_up(
         format!("{check} and run the same command again")
     } else {
         format!(
-            "{check} and run the same command again, with FETCHLOOM_RETRIES={more} to keep trying for {}",
-            units::about(keeps_trying(more))
+            "{check} and run the same command again, with FETCHLOOM_RETRIES={more} to keep trying for up to {}",
+            units::about(keeps_trying(more, timeout))
         )
     };
     match through {
@@ -944,17 +944,19 @@ fn rate_limited(url: &Url, asked: Duration) -> Error {
     .help("run the same command again later")
 }
 
-/// how long `retries` keep a request trying, as the waits between them take on average: half
-/// of each ceiling [`backoff`] draws from.
-fn keeps_trying(retries: u32) -> Duration {
-    (1..=retries)
+/// how long `retries` may keep a request trying: the waits between them, as they take on
+/// average, half of each ceiling [`backoff`] draws from, and each try, which may last the
+/// `timeout` when its server stays silent.
+fn keeps_trying(retries: u32, timeout: Duration) -> Duration {
+    let waits: Duration = (1..=retries)
         .map(|attempt| {
             FIRST_WAIT
                 .saturating_mul(1 << attempt.saturating_sub(1).min(6))
                 .min(LONGEST_WAIT)
                 / 2
         })
-        .sum()
+        .sum();
+    waits.saturating_add(timeout.saturating_mul(retries))
 }
 
 /// how long to wait before the next try: a random share of a ceiling that doubles each try from
@@ -1361,7 +1363,13 @@ mod tests {
             panic!("a refusal is tried again")
         };
         assert_eq!(reason, format!("127.0.0.1:{port} refused the connection"));
-        let error = gave_up(&url, (5, RETRIES), &reason, false, None);
+        let error = gave_up(
+            &url,
+            (5, RETRIES, crate::net::TIMEOUT),
+            &reason,
+            false,
+            None,
+        );
         assert_eq!(
             error.help.as_deref(),
             Some(
@@ -1402,7 +1410,7 @@ mod tests {
         for has_copy in [false, true] {
             let error = gave_up(
                 &url,
-                (RETRIES + 1, RETRIES),
+                (RETRIES + 1, RETRIES, crate::net::TIMEOUT),
                 "connection broke",
                 has_copy,
                 None,
@@ -1555,7 +1563,7 @@ mod tests {
         let help = |through| {
             gave_up(
                 &url,
-                (RETRIES + 1, RETRIES),
+                (RETRIES + 1, RETRIES, crate::net::TIMEOUT),
                 "connection broke",
                 false,
                 through,
@@ -1618,7 +1626,7 @@ mod tests {
         let url = Url::parse("https://example.org/list").unwrap();
         let limited = gave_up(
             &url,
-            (RETRIES + 1, RETRIES),
+            (RETRIES + 1, RETRIES, crate::net::TIMEOUT),
             "example.org answered 429",
             false,
             None,
@@ -1627,7 +1635,7 @@ mod tests {
         assert!(limited.help.unwrap().contains("limiting requests"));
         let down = gave_up(
             &url,
-            (RETRIES + 1, RETRIES),
+            (RETRIES + 1, RETRIES, crate::net::TIMEOUT),
             "example.org answered 503",
             true,
             None,
@@ -2000,10 +2008,10 @@ mod tests {
     #[test]
     fn running_out_of_tries_offers_more_for_as_long_as_they_take() {
         let url = Url::parse("https://example.org/list").unwrap();
-        let help = |retries| {
+        let help = |retries, timeout| {
             gave_up(
                 &url,
-                (retries + 1, retries),
+                (retries + 1, retries, timeout),
                 "connection broke",
                 false,
                 None,
@@ -2012,17 +2020,25 @@ mod tests {
             .unwrap_or_default()
             .to_string()
         };
-        assert_eq!(keeps_trying(10), Duration::from_millis(151_500));
+        // ten tries' waits average 151.5 s, and each try may take the timeout on top
         assert_eq!(
-            help(RETRIES),
-            "check the connection and run the same command again, with FETCHLOOM_RETRIES=10 to keep trying for about 3 min"
+            keeps_trying(10, Duration::from_secs(30)),
+            Duration::from_millis(451_500)
         );
         assert_eq!(
-            help(10),
-            "check the connection and run the same command again, with FETCHLOOM_RETRIES=20 to keep trying for about 8 min"
+            help(RETRIES, crate::net::TIMEOUT),
+            "check the connection and run the same command again, with FETCHLOOM_RETRIES=10 to keep trying for up to about 8 min"
         );
         assert_eq!(
-            help(MOST_RETRIES),
+            help(RETRIES, Duration::from_secs(1)),
+            "check the connection and run the same command again, with FETCHLOOM_RETRIES=10 to keep trying for up to about 3 min"
+        );
+        assert_eq!(
+            help(10, crate::net::TIMEOUT),
+            "check the connection and run the same command again, with FETCHLOOM_RETRIES=20 to keep trying for up to about 20 min"
+        );
+        assert_eq!(
+            help(MOST_RETRIES, crate::net::TIMEOUT),
             "check the connection and run the same command again"
         );
     }
