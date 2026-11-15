@@ -429,6 +429,10 @@ mod tests {
         let (dir, cache) = crate::cache::tests::cache();
         let outside = dir.path().join("outside");
         std::fs::create_dir(&outside).unwrap();
+        // fat and exfat make no junction, so no one can swap one in there
+        if crate::test_links::link_folder(&outside, &dir.path().join("probe")).is_err() {
+            return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
+        }
         std::fs::write(outside.join("bait.csv"), b"someone's own bytes").unwrap();
         let staging = Staging::new(&cache, dir.path()).unwrap();
         let inner = staging.out().join("zzz");

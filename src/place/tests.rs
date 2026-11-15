@@ -372,6 +372,33 @@ fn a_copy_looks_as_its_folder_lists_it() {
     );
 }
 
+/// a folder a placement holds can be neither renamed nor removed by anyone until the placement
+/// lets go, on every windows filesystem: the hold asks for an access the system counts in sharing,
+/// where one that only reads attributes withholds delete sharing from no one.
+#[cfg(windows)]
+#[test]
+fn a_held_folder_cannot_be_renamed_or_removed_meanwhile() {
+    let dir = tempfile::tempdir().unwrap();
+    let outer = dir.path().join("a");
+    let inner = outer.join("b");
+    fs::create_dir_all(&inner).unwrap();
+
+    let held = super::hold_below(dir.path(), &inner.join("file.csv")).unwrap();
+
+    let moved = fs::rename(&inner, outer.join("c"));
+    assert!(moved.is_err(), "the held folder was renamed");
+    assert!(
+        fs::rename(&outer, dir.path().join("z")).is_err(),
+        "its held parent was renamed"
+    );
+    assert!(
+        fs::remove_dir(&inner).is_err(),
+        "the held folder was removed"
+    );
+    drop(held);
+    fs::rename(&inner, outer.join("c")).unwrap();
+}
+
 /// waits until a file written in `folder` gets a later time than `time`: a coarse clock, such
 /// as fat's two seconds, moves on only once a tick passes.
 #[cfg(windows)]

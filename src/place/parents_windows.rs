@@ -1,4 +1,7 @@
-//! windows directory handles deny delete sharing while a placement uses their paths.
+//! windows directory handles deny delete sharing while a placement uses their paths: each folder
+//! from a placement's root down to the file is held with traverse access, which the system counts
+//! in sharing as it counts no open that only reads attributes, so no one renames or removes one of
+//! them meanwhile. a folder above the root that this user may not traverse is only looked at.
 
 use std::ffi::OsStr;
 use std::fs::{self, File, Metadata};
@@ -265,14 +268,37 @@ impl Staged {
     }
 }
 
+const FILE_READ_ATTRIBUTES: u32 = 0x80;
+/// a folder's execute access. the system counts an open in sharing only when it asks to read,
+/// write, execute or delete, so only a hold that asks for it keeps the delete sharing it withholds.
+const FILE_TRAVERSE: u32 = 0x20;
+
+/// opens the folder at `path` to hold it, as [`open_folder`] does.
 fn lock_folder(path: &Path, make: bool, allow_link: bool) -> io::Result<File> {
-    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    open_folder(path, make, allow_link, FILE_READ_ATTRIBUTES | FILE_TRAVERSE)
+}
+
+/// [`lock_folder`] for a folder above a placement's root, where the person chose the root: held
+/// where this user may traverse it, else only looked at, since the bypass-traverse privilege lets
+/// a person reach below a folder whose permissions refuse them traverse.
+fn lock_above(path: &Path, make: bool, allow_link: bool) -> io::Result<File> {
+    match lock_folder(path, make, allow_link) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            open_folder(path, make, allow_link, FILE_READ_ATTRIBUTES)
+        }
+        held => held,
+    }
+}
+
+/// opens the folder at `path` with `access`, sharing reads and writes but not deletes, as itself
+/// when it is a link, which only `allow_link` lets through; with `make`, a missing one is made.
+fn open_folder(path: &Path, make: bool, allow_link: bool, access: u32) -> io::Result<File> {
     const FILE_SHARE_READ_WRITE: u32 = 3;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let open = || {
         fs::OpenOptions::new()
-            .access_mode(FILE_READ_ATTRIBUTES)
+            .access_mode(access)
             .share_mode(FILE_SHARE_READ_WRITE)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path)
@@ -311,7 +337,12 @@ fn lock_chain(path: &Path, make: bool, allow_root_link: bool) -> io::Result<Vec<
             Component::Prefix(_) | Component::RootDir => at.push(component),
             Component::Normal(name) => {
                 at.push(name);
-                handles.push(lock_folder(&at, make, allow_root_link && at == path)?);
+                let allow_link = allow_root_link && at == path;
+                handles.push(if at == path {
+                    lock_folder(&at, make, allow_link)?
+                } else {
+                    lock_above(&at, make, allow_link)?
+                });
             }
             Component::CurDir => {}
             Component::ParentDir => {
