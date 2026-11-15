@@ -348,7 +348,7 @@ impl RetryLines {
 
 /// the project's folder `root` as a path from `here`, a folder inside it: `../` for each folder
 /// between them, so a command a help line names works where the person ran fetchloom.
-pub(crate) fn up_to(root: &std::path::Path, here: &std::path::Path) -> String {
+fn up_to(root: &std::path::Path, here: &std::path::Path) -> String {
     let depth = here
         .strip_prefix(root)
         .map_or(0, |inside| inside.components().count());

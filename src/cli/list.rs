@@ -379,6 +379,7 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                 },
             };
             let pinned = locked.or(stated.map(|stated| &stated.pin));
+            let folder = plan::folder(manifest, name);
             Listed {
                 name: name.clone(),
                 reference: entry
@@ -388,12 +389,11 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                 resolved: pinned.map(|locked| locked.resolved.clone()),
                 files: totals.map(|(files, _)| files),
                 bytes: totals.map(|(_, bytes)| bytes),
-                folder: plan::folder(manifest, name),
+                usual_folder: folder == format!("{}/{name}", manifest.data_dir),
+                folder,
                 placed: entry.place,
                 dropped: false,
                 waiting: None,
-                usual_folder: plan::folder(manifest, name)
-                    == format!("{}/{name}", manifest.data_dir),
                 title: pinned.and_then(|locked| locked.title.clone()),
                 license: pinned.and_then(|locked| locked.license.clone()),
                 doi: pinned.and_then(|locked| locked.doi.clone()),

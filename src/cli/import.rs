@@ -531,16 +531,16 @@ fn preview_import(
     let folder = plan::folder(manifest, name);
     let files = units::count(walked.files.len() as u64, "file", "files");
     let size = units::size(walked.bytes());
-    if supplying {
-        output.step(
-            "Would supply",
-            &format!("{name} · {files} · {size} into the cache; {shown} stays unchanged"),
-        );
+    let verb = if supplying {
+        "Would supply"
     } else {
-        output.step(
-            "Would import",
-            &format!("{name} · {files} · {size} into the cache; {shown} stays unchanged"),
-        );
+        "Would import"
+    };
+    output.step(
+        verb,
+        &format!("{name} · {files} · {size} into the cache; {shown} stays unchanged"),
+    );
+    if !supplying {
         output.step(
             "Would add",
             &format!(
@@ -552,14 +552,12 @@ fn preview_import(
     dry_run_done(output, None);
     Report {
         project: work.project.root.clone(),
-        selected: None,
         datasets: if supplying {
             Vec::new()
         } else {
             vec![name.to_owned()]
         },
         lock_changed: !supplying,
-        placement: None,
         dry_run: true,
         changes: Some(Changes {
             place: walked
@@ -569,7 +567,7 @@ fn preview_import(
                 .collect(),
             ..Changes::default()
         }),
-        merge: None,
+        ..Report::default()
     }
 }
 

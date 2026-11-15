@@ -22,7 +22,7 @@ use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{Entry, Manifest};
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 pub(super) struct Report {
     /// the file `-o` wrote, or none when the answer went to stdout or was not written.
     file: Option<PathBuf>,
@@ -174,9 +174,6 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
         .iter()
         .map(|(name, _)| name.as_str())
         .collect();
-    if names.is_empty() {
-        return;
-    }
     let datasets = crate::units::listed(&names, "and");
     let (they_were, them) = if files == 1 {
         ("it was", "it")
@@ -280,19 +277,7 @@ fn inventory(
     names: &[String],
 ) -> Result<Report, Error> {
     let wanted = |name: &str| names.is_empty() || names.iter().any(|named| named == name);
-    let mut report = Report {
-        file: None,
-        placed: Vec::new(),
-        sources: Vec::new(),
-        unlocked: Vec::new(),
-        not_unpacked: Vec::new(),
-        no_link: Vec::new(),
-        left_out: Vec::new(),
-        stale: Vec::new(),
-        unbuilt: Vec::new(),
-        refused: Vec::new(),
-        imported: Vec::new(),
-    };
+    let mut report = Report::default();
     for (name, entry) in &manifest.datasets {
         if !wanted(name) {
             continue;

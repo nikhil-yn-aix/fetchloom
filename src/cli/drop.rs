@@ -728,18 +728,23 @@ fn preview(
     report.bytes = freed.iter().map(|(_, size)| **size).sum::<u64>() + removed;
     context.output.step(
         "Would drop",
-        &format!(
-            "{} · free {}: {} from {}/ and {} from the cache",
-            units::listed(&report.dropped, "and"),
-            units::size(report.bytes),
-            units::count(report.files, "file", "files"),
-            manifest.data_dir,
-            units::count(report.objects, "file", "files")
-        ),
+        &freed_line(report, "free", &manifest.data_dir),
     );
     tell_kept(&context.output, &preview.placement, "would keep");
     report.placement = Some(preview.placement);
     Ok(())
+}
+
+/// what `report` frees, after `verb`: its datasets, their bytes, and their files in the data
+/// folder `data_dir` and in the cache.
+fn freed_line(report: &Report, verb: &str, data_dir: &str) -> String {
+    format!(
+        "{} · {verb} {}: {} from {data_dir}/ and {} from the cache",
+        units::listed(&report.dropped, "and"),
+        units::size(report.bytes),
+        units::count(report.files, "file", "files"),
+        units::count(report.objects, "file", "files")
+    )
 }
 
 /// a warning for each changed file a drop keeps, or with `verb` "would keep", would keep.
@@ -829,17 +834,9 @@ fn free(
     report.objects = freed;
     report.bytes = bytes + removed;
     report.placement = Some(placement);
-    context.output.done(
-        "Dropped",
-        &format!(
-            "{} · freed {}: {} from {}/ and {} from the cache",
-            units::listed(&report.dropped, "and"),
-            units::size(report.bytes),
-            units::count(report.files, "file", "files"),
-            manifest.data_dir,
-            units::count(report.objects, "file", "files")
-        ),
-    );
+    context
+        .output
+        .done("Dropped", &freed_line(report, "freed", &manifest.data_dir));
     Ok(())
 }
 

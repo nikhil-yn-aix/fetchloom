@@ -207,7 +207,7 @@ fn tell(context: &Context, project: &Project, manifest: &Manifest, accepted: &[S
 }
 
 /// what to run for a new kept rebuild of `name`.
-pub(crate) fn again(name: &str) -> String {
+pub(in crate::cli) fn again(name: &str) -> String {
     format!(
         "`{}` runs its step again as data.lock pins it now, and keeps its files when they differ",
         crate::cli::project::command(&format!("build --check {name}"))

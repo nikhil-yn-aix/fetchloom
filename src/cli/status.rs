@@ -692,10 +692,8 @@ fn dropped_here(status: &mut Status, manifest: &Manifest, survey: &Survey) -> Ma
         .iter()
         .filter_map(|name| {
             let entry = &manifest.datasets[name];
-            let imported = entry
-                .source()
-                .is_some_and(|source| source.reference == "local");
-            (entry.recipe().is_some() || imported).then(|| (name.clone(), entry.recipe().is_some()))
+            let result = entry.recipe().is_some();
+            (result || entry.is_import()).then(|| (name.clone(), result))
         })
         .collect();
     super::drop::placed_by(manifest, &Scope::All, &survey.state.dropped).into_owned()
