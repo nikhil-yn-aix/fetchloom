@@ -768,7 +768,7 @@ pub(super) fn near(typed: &str, path: &Path) -> Option<String> {
 
 /// refuses to import `start`, run from `here`, where it overlaps what fetchloom keeps: a folder
 /// holding the project, anything in its data folder `data_dir`, which placing writes, or the cache.
-pub(super) fn refuse_overlap(
+fn refuse_overlap(
     (start, shown): (&Path, &str),
     root: &Path,
     data_dir: &str,
@@ -1222,11 +1222,7 @@ pub(super) struct Copied {
 
 /// copies every file `walked` found into the cache and pins each. none is in the cache under its
 /// hash until every one is on disk, so a failure or a stop leaves none of them there.
-pub(super) fn into_cache(
-    context: &Context,
-    cache: &Cache,
-    walked: &Walked,
-) -> Result<Copied, Error> {
+fn into_cache(context: &Context, cache: &Cache, walked: &Walked) -> Result<Copied, Error> {
     let found = &walked.files;
     // many objects flush together, since one flush each costs far more than writing a small file
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1461,7 +1457,7 @@ pub(super) fn pinned(name: &str, source: &Source, files: Vec<LockedFile>) -> Loc
 
 /// the first way `found` differs from `pinned`, both sorted by path: a file only one has, or
 /// another size. none when they may hold the same bytes, which only hashing tells.
-pub(super) fn first_difference(found: &[Found], pinned: &[LockedFile]) -> Option<String> {
+fn first_difference(found: &[Found], pinned: &[LockedFile]) -> Option<String> {
     let mut found = found.iter().peekable();
     let mut pinned = pinned.iter().peekable();
     loop {
@@ -1492,7 +1488,7 @@ pub(super) fn first_difference(found: &[Found], pinned: &[LockedFile]) -> Option
 
 /// the first file of `copied` that holds other bytes than `pinned` pins at its path, both sorted
 /// by path and alike in paths and sizes.
-pub(super) fn first_other_bytes(copied: &[LockedFile], pinned: &[LockedFile]) -> Option<String> {
+fn first_other_bytes(copied: &[LockedFile], pinned: &[LockedFile]) -> Option<String> {
     copied
         .iter()
         .zip(pinned)
