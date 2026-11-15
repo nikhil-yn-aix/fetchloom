@@ -495,6 +495,7 @@ async fn sync_held(
         lock_changed,
         &placement,
         args.verify,
+        &waiting,
     );
     let report = Report {
         selected: Some(work.scope.clone()),
@@ -583,6 +584,7 @@ async fn sync_plain(
         lock_changed,
         &placement,
         false,
+        &waiting,
     );
     let report = Report {
         selected: Some(work.scope.clone()),
@@ -664,14 +666,15 @@ fn settled_named(
     context.stop.finish();
     register(&work);
     ignore_data(&work, manifest, false)?;
-    let closing = closing(project, manifest, scope, false, &placement, false);
+    let waiting = waiting_in(&lock);
+    let closing = closing(project, manifest, scope, false, &placement, false, &waiting);
     let report = Report {
         selected: Some(scope.clone()),
         project: project.root.clone(),
         datasets: Vec::new(),
         lock_changed: false,
         placement: Some(placement),
-        waiting: waiting_in(&lock),
+        waiting,
         ..Report::default()
     };
     Ok(Some((report, closing)))
@@ -729,7 +732,16 @@ fn settled_unheld(
     if held && let Err(err) = cache.register(&project.root) {
         tracing::debug!(%err, "could not list a read-only project in the cache");
     }
-    let closing = closing(project, &manifest, &scope, false, &placement, args.verify);
+    // a settled sync follows a complete one, which no dataset waiting for its list allows
+    let closing = closing(
+        project,
+        &manifest,
+        &scope,
+        false,
+        &placement,
+        args.verify,
+        &[],
+    );
     let report = Report {
         project: project.root.clone(),
         selected: Some(scope),
@@ -770,14 +782,16 @@ fn closing(
     lock_changed: bool,
     placement: &Placement,
     verified: bool,
+    waiting: &[lock::Waiting],
 ) -> Closing {
+    let waiting = waiting_named(waiting, manifest, scope);
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
         && placement.unbuilt.is_empty()
         && placement.adopted.is_empty()
     {
-        let found = in_place(manifest, scope, verified);
+        let found = in_place(manifest, scope, verified, &waiting);
         let text = if verified {
             format!("{found}; nothing to do")
         } else {
@@ -789,7 +803,13 @@ fn closing(
             next: None,
         };
     }
-    let (verb, text) = synced(manifest, scope, placement.kept.len(), &placement.unbuilt);
+    let (verb, text) = synced(
+        manifest,
+        scope,
+        placement.kept.len(),
+        &placement.unbuilt,
+        &waiting,
+    );
     // `path` answers only a dataset placed in the data folder, and the line names one this
     // sync just placed
     let first = placement.filled.iter().find(|name| {
@@ -816,12 +836,27 @@ fn closing(
     Closing { verb, text, next }
 }
 
-/// the last line of a sync of `scope` that changed something, as its verb and text.
+/// the datasets a sync of every dataset places that wait for their file lists, which have nothing
+/// in place, as their warning says; none for a sync of named datasets.
+fn waiting_named(waiting: &[lock::Waiting], manifest: &Manifest, scope: &Scope) -> Vec<String> {
+    if *scope != Scope::All {
+        return Vec::new();
+    }
+    waiting
+        .iter()
+        .map(|waiting| waiting.name.clone())
+        .filter(|name| manifest.datasets.get(name).is_some_and(|entry| entry.place))
+        .collect()
+}
+
+/// the last line of a sync of `scope` that changed something, as its verb and text. the datasets
+/// `waiting` for their file lists placed nothing, so they are named apart.
 fn synced(
     manifest: &Manifest,
     scope: &Scope,
     kept: usize,
     unbuilt: &[String],
+    waiting: &[String],
 ) -> (&'static str, String) {
     let kept = match kept {
         0 => String::new(),
@@ -830,12 +865,22 @@ fn synced(
             units::count(kept as u64, "file left unchanged", "files left unchanged")
         ),
     };
+    let waits = match waiting {
+        [] => String::new(),
+        [one] => format!(" · {one} waits for its file list"),
+        many => format!(
+            " · {} wait for their file lists",
+            units::listed(many, "and")
+        ),
+    };
     let (datasets, others) = match scope {
         Scope::All => {
             let placed = manifest
                 .datasets
                 .iter()
-                .filter(|(name, entry)| entry.place && !unbuilt.contains(*name))
+                .filter(|(name, entry)| {
+                    entry.place && !unbuilt.contains(*name) && !waiting.contains(*name)
+                })
                 .count();
             if placed == 0 {
                 let until = match unbuilt {
@@ -847,7 +892,10 @@ fn synced(
                     ),
                 };
                 let data = &manifest.data_dir;
-                return ("Ok", format!("nothing to place in {data}{until}{kept}"));
+                return (
+                    "Ok",
+                    format!("nothing to place in {data}{until}{waits}{kept}"),
+                );
             }
             (units::count(placed as u64, "dataset", "datasets"), 0)
         }
@@ -873,17 +921,28 @@ fn synced(
         let left = units::count(unbuilt.len() as u64, "result", "results");
         said = format!("{said} · {left} left out until built");
     }
-    ("Synced", format!("{said}{kept}"))
+    ("Synced", format!("{said}{waits}{kept}"))
 }
 
-/// what a sync of `scope` with nothing to do found in place.
-fn in_place(manifest: &Manifest, scope: &Scope, verified: bool) -> String {
+/// what a sync of `scope` with nothing to do found in place, leaving out the files of the datasets
+/// `waiting` for their file lists, which are not.
+fn in_place(manifest: &Manifest, scope: &Scope, verified: bool, waiting: &[String]) -> String {
     let placed = |name: &String| manifest.datasets.get(name).is_some_and(|entry| entry.place);
     let (files, unplaced) = match scope {
         Scope::All if !manifest.datasets.keys().any(placed) => {
             return format!("nothing to place in {}", manifest.data_dir);
         }
-        Scope::All => ("all pinned files".to_owned(), None),
+        Scope::All => match waiting {
+            [] => ("all pinned files".to_owned(), None),
+            [one] => (format!("all pinned files but {one}'s"), None),
+            many => (
+                format!(
+                    "all pinned files but those of {}",
+                    units::listed(many, "and")
+                ),
+                None,
+            ),
+        },
         Scope::Only(names) => {
             let (shown, unplaced): (BTreeSet<String>, BTreeSet<String>) =
                 names.iter().cloned().partition(placed);
@@ -927,6 +986,7 @@ async fn preview_sync(
     scope: Scope,
 ) -> Result<Report, Error> {
     let old = read.map(|(lock, _)| lock);
+    let waits = old.as_ref().map(waiting_in).unwrap_or_default();
     let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?)
         .within(scope)
         .filling();
@@ -942,10 +1002,11 @@ async fn preview_sync(
     .await?;
     preview_ignore(&work, manifest)?;
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
+    let waiting = waiting_named(&waits, manifest, &work.scope);
     dry_run_done(
         &context.output,
         nothing
-            .then(|| in_place(manifest, &work.scope, args.verify))
+            .then(|| in_place(manifest, &work.scope, args.verify, &waiting))
             .as_deref(),
     );
     let pins = outcome.pins.clone();
@@ -2570,7 +2631,7 @@ pub(crate) mod tests {
             ),
         ] {
             let manifest = Manifest::parse(&tables.join("\n")).unwrap();
-            let (verb, text) = synced(&manifest, &Scope::All, kept, &unbuilt);
+            let (verb, text) = synced(&manifest, &Scope::All, kept, &unbuilt, &[]);
             assert_eq!((verb, text.as_str()), said, "{tables:?}");
         }
     }

@@ -988,7 +988,10 @@ impl<'a> Placing<'a> {
     /// removes what no dataset needs, places what is missing or outdated and records it, `synced`
     /// complete if every file the lock asks for is in place. `told` names an add's datasets, whose
     /// lines wait for `-v` since the add tells them, and whose files go if placing fails or stops.
-    #[expect(clippy::too_many_lines, reason = "one pass over the plan, in the order it is told")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one pass over the plan, in the order it is told"
+    )]
     pub(crate) fn apply(
         self,
         output: &Output,

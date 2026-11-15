@@ -1326,6 +1326,38 @@ fn commands_of_other_datasets_go_on_while_a_list_is_missing() -> Result {
     Ok(())
 }
 
+/// a sync's closing line counts only the datasets it placed and names the recipe that waits for
+/// its file list, never calling every pinned file in place.
+#[test]
+fn a_sync_names_the_recipe_that_waits_in_its_closing_line() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    // a clone of a commit without data.lock.d, so clean's list is not there
+    let clone = crate::project::clone(&sandbox, "clone")?;
+    let run = |args: &[&str]| -> Result<String> {
+        let output = building_in(&sandbox, &clone, args)?.output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        Ok(stderr)
+    };
+    let first = run(&["sync"])?;
+    assert!(
+        first.contains("Synced 1 dataset into data · clean waits for its file list\n"),
+        "{first}"
+    );
+    let again = run(&["sync"])?;
+    assert!(
+        again.contains(
+            "Ok all pinned files but clean's are in place by size and time, nothing to do\n"
+        ),
+        "{again}"
+    );
+    Ok(())
+}
+
 /// the first case is a fresh clone, where every pinned result is missing.
 #[test]
 fn a_dry_run_says_what_the_build_then_does() -> Result {
