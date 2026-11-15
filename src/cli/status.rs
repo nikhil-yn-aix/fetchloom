@@ -1157,7 +1157,11 @@ impl Status {
         [
             ("Missing", &self.missing, None),
             ("Edited", &self.edited, None),
-            ("Untracked", &self.untracked, None),
+            (
+                "Untracked",
+                &self.untracked,
+                Some("holds other bytes than data.lock pins".to_owned()),
+            ),
             ("Outdated", &self.outdated, None),
             ("Extra", &self.extra, None),
             (

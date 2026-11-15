@@ -829,7 +829,7 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
             ),
             Reason::Foreign => (
                 format!(
-                    "{} is not a file fetchloom placed, and it differs from data.lock, so it stays",
+                    "{} holds other bytes than data.lock pins, and fetchloom did not place it, so it stays",
                     kept.path
                 ),
                 format!("`{force}` replaces it"),
