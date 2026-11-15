@@ -53,19 +53,60 @@ pub(super) fn encoding(headers: &HeaderMap) -> Option<String> {
 /// a strong `ETag`, else a modification date whose saved response clock is a minute later.
 /// RFC 9110 section 13.1.5 allows no weak date; the minute allows for clock uncertainty.
 pub(super) fn if_range(validators: &Validators) -> Option<&str> {
+    version(validators).ok()
+}
+
+/// why validators name no version a request for part of a file may name, as [`if_range`] finds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoVersion {
+    /// no `ETag` or `Last-Modified`.
+    Unsent,
+    /// a weak `ETag`, which RFC 9110 keeps out of `If-Range`, and a date beside it too.
+    WeakTag,
+    /// an `ETag` that is not a quoted tag.
+    BadTag,
+    /// a `Last-Modified` less than a minute before the `Date` it came with.
+    FreshDate,
+    /// a `Last-Modified` with no `Date` to tell its age, or one of them that cannot be read.
+    Undated,
+}
+
+/// what [`if_range`] sends, or why it sends nothing.
+pub(super) fn version(validators: &Validators) -> Result<&str, NoVersion> {
     if let Some(tag) = &validators.etag {
-        let opaque = tag.strip_prefix('"')?.strip_suffix('"')?;
-        return opaque
-            .bytes()
-            .all(|byte| matches!(byte, b'!' | b'#'..=b'~' | 0x80..=0xff))
-            .then_some(tag.as_str());
+        if tag.starts_with("W/") {
+            return Err(NoVersion::WeakTag);
+        }
+        let quoted = tag
+            .strip_prefix('"')
+            .and_then(|tag| tag.strip_suffix('"'))
+            .is_some_and(|opaque| {
+                opaque
+                    .bytes()
+                    .all(|byte| matches!(byte, b'!' | b'#'..=b'~' | 0x80..=0xff))
+            });
+        return if quoted {
+            Ok(tag.as_str())
+        } else {
+            Err(NoVersion::BadTag)
+        };
     }
-    let modified = validators.last_modified.as_deref()?;
-    let date = httpdate::parse_http_date(validators.date.as_deref()?).ok()?;
-    let age = date
-        .duration_since(httpdate::parse_http_date(modified).ok()?)
-        .ok()?;
-    (age >= std::time::Duration::from_secs(60)).then_some(modified)
+    let modified = validators
+        .last_modified
+        .as_deref()
+        .ok_or(NoVersion::Unsent)?;
+    let read = |date: Option<&str>| {
+        date.and_then(|date| httpdate::parse_http_date(date).ok())
+            .ok_or(NoVersion::Undated)
+    };
+    let age = read(validators.date.as_deref())?
+        .duration_since(read(Some(modified))?)
+        .unwrap_or_default();
+    if age >= std::time::Duration::from_secs(60) {
+        Ok(modified)
+    } else {
+        Err(NoVersion::FreshDate)
+    }
 }
 
 /// whether a response states an `ETag` or `Last-Modified` other than the one `recorded`, so its
@@ -344,21 +385,31 @@ mod tests {
     #[test]
     fn a_date_guards_a_resume_only_when_no_etag_was_recorded() {
         let date = "Tue, 01 Oct 2024 10:00:00 GMT";
-        for (etag, last_modified, sent) in [
-            (Some("W/\"a\""), None, None),
+        let later = Some("Tue, 01 Oct 2024 10:01:00 GMT");
+        for (etag, last_modified, answered, sent) in [
+            (Some("W/\"a\""), None, later, Err(NoVersion::WeakTag)),
             // RFC 9110 section 13.1.5: never a weak tag, and never a date beside an entity tag
-            (Some("W/\"a\""), Some(date), None),
-            (Some("\"a\""), Some(date), Some("\"a\"")),
-            (None, Some(date), Some(date)),
-            (None, None, None),
+            (Some("W/\"a\""), Some(date), later, Err(NoVersion::WeakTag)),
+            (Some("\"a\""), Some(date), later, Ok("\"a\"")),
+            (Some("a"), None, later, Err(NoVersion::BadTag)),
+            (None, Some(date), later, Ok(date)),
+            (
+                None,
+                Some(date),
+                Some("Tue, 01 Oct 2024 10:00:30 GMT"),
+                Err(NoVersion::FreshDate),
+            ),
+            (None, Some(date), None, Err(NoVersion::Undated)),
+            (None, None, later, Err(NoVersion::Unsent)),
         ] {
             let validators = Validators {
                 etag: etag.map(str::to_owned),
                 last_modified: last_modified.map(str::to_owned),
-                date: Some("Tue, 01 Oct 2024 10:01:00 GMT".to_owned()),
+                date: answered.map(str::to_owned),
                 version: None,
             };
-            assert_eq!(if_range(&validators), sent, "{validators:?}");
+            assert_eq!(version(&validators), sent, "{validators:?}");
+            assert_eq!(if_range(&validators), sent.ok(), "{validators:?}");
         }
     }
 

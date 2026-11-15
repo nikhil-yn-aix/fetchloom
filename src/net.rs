@@ -46,6 +46,7 @@ pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_m
 #[cfg(debug_assertions)]
 pub(crate) use google::test_token_endpoint;
 pub(crate) use google::{Authorized, DriveAnswered, Google, Private};
+pub(crate) use headers::NoVersion;
 pub(crate) use rate::Rate;
 pub(crate) use rules::{Relink, Rules};
 

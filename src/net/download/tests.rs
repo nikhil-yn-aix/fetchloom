@@ -1671,14 +1671,14 @@ fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
             &ranges[..],
             false,
             None,
-            Resumable::Unproven,
+            Resumable::Unproven(NoVersion::Unsent),
         ),
         (
             StatusCode::PARTIAL_CONTENT,
             &[][..],
             false,
             None,
-            Resumable::Unproven,
+            Resumable::Unproven(NoVersion::Unsent),
         ),
         // the rest of the same version was asked for, and all of it came
         (StatusCode::OK, &same[..], true, Some(&kept), Resumable::No),
@@ -1715,13 +1715,21 @@ fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
         ),
     ] {
         assert_eq!(
-            Resumable::answered(status, &head(pairs), proven, asked),
+            Resumable::answered(
+                status,
+                &head(pairs),
+                (!proven).then_some(NoVersion::Unsent),
+                asked
+            ),
             resumable,
             "{status} {pairs:?} proven: {proven}, asked for the rest of {asked:?}"
         );
     }
-    assert_eq!(Resumable::kept(true), Resumable::Maybe);
-    assert_eq!(Resumable::kept(false), Resumable::Unproven);
+    assert_eq!(Resumable::kept(None), Resumable::Maybe);
+    assert_eq!(
+        Resumable::kept(Some(NoVersion::WeakTag)),
+        Resumable::Unproven(NoVersion::WeakTag)
+    );
 }
 
 #[test]

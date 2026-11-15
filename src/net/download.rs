@@ -13,7 +13,7 @@ use serde::Serialize;
 use url::Url;
 
 use super::failure::{self, Failure, Retry};
-use super::headers::{self, if_range};
+use super::headers::{self, NoVersion, if_range};
 use super::{Net, Splitting, host};
 use crate::cache::{Cache, Claim, Partial, PartialWriter, Stored, UrlRecord, Validators};
 use crate::digest::{Md5, Sha256};
@@ -220,23 +220,24 @@ pub(crate) enum Resumable {
     /// the server said it sends no parts, so a later run starts over.
     No,
     /// nothing proves the bytes are one file, neither a hash a pin or the source states nor a
-    /// version the server named, so a later run starts over.
-    Unproven,
+    /// version the server named, for the reason it holds, so a later run starts over.
+    Unproven(NoVersion),
 }
 
 impl Resumable {
-    /// what an answer of `status` with `head` allows, for bytes `proven` to be one file. asked for
-    /// the rest of kept bytes with validators `asked`, a whole answer of that version means the
-    /// server sends no parts, whatever its `Accept-Ranges` says, since the next run asks it the
-    /// same; one of another version is a restart that says nothing about parts.
+    /// what an answer of `status` with `head` allows, for bytes proven to be one file unless
+    /// `unproven` says why not. asked for the rest of kept bytes with validators `asked`, a whole
+    /// answer of that version means the server sends no parts, whatever its `Accept-Ranges` says,
+    /// since the next run asks it the same; one of another version is a restart that says nothing
+    /// about parts.
     fn answered(
         status: StatusCode,
         head: &header::HeaderMap,
-        proven: bool,
+        unproven: Option<NoVersion>,
         asked: Option<&Validators>,
     ) -> Resumable {
-        if !proven {
-            return Resumable::Unproven;
+        if let Some(why) = unproven {
+            return Resumable::Unproven(why);
         }
         let ignored = status == StatusCode::OK
             && asked.is_some_and(|kept| headers::same_version(kept, &headers::validators(head)));
@@ -253,13 +254,18 @@ impl Resumable {
 
     /// what bytes an earlier run kept allow before any server answers: whatever the record
     /// proves, since the record does not say whether the server sends parts.
-    fn kept(proven: bool) -> Resumable {
-        if proven {
-            Resumable::Maybe
-        } else {
-            Resumable::Unproven
-        }
+    fn kept(unproven: Option<NoVersion>) -> Resumable {
+        unproven.map_or(Resumable::Maybe, Resumable::Unproven)
     }
+}
+
+/// why bytes under `validators` are not proven one file, unless a hash `expect` states proves
+/// them or the validators name a version a request for the rest may name.
+fn unproven(expect: &Expect, validators: &Validators) -> Option<NoVersion> {
+    if expect.proves() {
+        return None;
+    }
+    headers::version(validators).err()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -733,7 +739,7 @@ impl Net {
             done: false,
         };
         let continuable =
-            |resumable: &Resumable| !matches!(resumable, Resumable::No | Resumable::Unproven);
+            |resumable: &Resumable| !matches!(resumable, Resumable::No | Resumable::Unproven(_));
         let heard = |event: Event| {
             if let Event::Kept { resumable, .. } = &event {
                 let kept = continuable(resumable);
@@ -1041,7 +1047,8 @@ impl Net {
             page: headers::is_html(&head),
         };
         refuse_other_length(fetch, total)?;
-        let proven = fetch.expect.proves() || if_range(&validators).is_some();
+        let unproven = unproven(&fetch.expect, &validators);
+        let proven = unproven.is_none();
         let splits = state.split && self.may_split(total, status, &head, proven);
         tracing::debug!(
             splits,
@@ -1069,7 +1076,7 @@ impl Net {
             Resumable::answered(
                 status,
                 &head,
-                proven,
+                unproven,
                 earlier.as_ref().map(|(_, kept)| kept),
             )
         };
@@ -1949,10 +1956,9 @@ fn kept_before(
     else {
         return Ok(None);
     };
-    let proven = fetch.expect.proves() || if_range(&validators).is_some();
     on(Event::Kept {
         bytes: received,
-        resumable: Resumable::kept(proven),
+        resumable: Resumable::kept(unproven(&fetch.expect, &validators)),
     })?;
     let stated = partial.length().or(fetch.expect.size);
     let whole = fetch.expect.pins() && received > 0 && stated == Some(received);

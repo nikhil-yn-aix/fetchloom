@@ -192,7 +192,8 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
 
 /// a try that cannot go on from the bytes an earlier try of the run brought starts over, and says
 /// why: a server that sent the whole file again, as a whole answer or as a part from its first
-/// byte, whatever its `Accept-Ranges` says, or a file that changed on the server.
+/// byte, whatever its `Accept-Ranges` says, a file that changed on the server, or what the server
+/// sent that names no version a request for the rest may name.
 #[test]
 fn a_try_that_starts_over_says_why() -> Result {
     let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
@@ -216,26 +217,61 @@ fn a_try_that_starts_over_says_why() -> Result {
         reply("206 Partial Content", &headers, &body)
     };
     let again = "since the server sent the whole file again instead of the rest";
-    for (answers, expected, why) in [
-        (vec![whole("\"v1\"", "", &body)], &body, again),
-        (vec![whole("\"v1\"", "bytes", &body)], &body, again),
+    let tagged = [("ETag", "\"v1\"")];
+    let weak = [
+        ("ETag", "W/\"v1\""),
+        ("Last-Modified", "Sun, 01 Nov 2026 10:00:00 GMT"),
+        ("Date", "Sun, 01 Nov 2026 11:00:00 GMT"),
+    ];
+    let fresh = [
+        ("Last-Modified", "Sun, 01 Nov 2026 10:00:00 GMT"),
+        ("Date", "Sun, 01 Nov 2026 10:00:05 GMT"),
+    ];
+    let unproven = |what: &str| format!("since nothing shows they are the same file: {what}");
+    for (first, answers, expected, why) in [
         (
-            vec![from_the_start(), whole("\"v1\"", "bytes", &body)],
+            &tagged[..],
+            vec![whole("\"v1\"", "", &body)],
             &body,
-            again,
+            again.to_owned(),
         ),
         (
+            &tagged[..],
+            vec![whole("\"v1\"", "bytes", &body)],
+            &body,
+            again.to_owned(),
+        ),
+        (
+            &tagged[..],
+            vec![from_the_start(), whole("\"v1\"", "bytes", &body)],
+            &body,
+            again.to_owned(),
+        ),
+        (
+            &tagged[..],
             vec![whole("\"v2\"", "", &changed)],
             &changed,
-            "since the file changed on the server",
+            "since the file changed on the server".to_owned(),
+        ),
+        (
+            &weak[..],
+            vec![whole("W/\"v1\"", "", &body)],
+            &body,
+            unproven("the server's ETag is weak, which cannot vouch for part of a file"),
+        ),
+        (
+            &fresh[..],
+            vec![reply("200 OK", &[("Content-Length", &length)], &body)],
+            &body,
+            unproven(
+                "the server's Last-Modified is less than a minute before its Date, too close to tell versions apart",
+            ),
         ),
     ] {
         let sandbox = Sandbox::new()?;
-        let mut responses = vec![reply(
-            "200 OK",
-            &[("Content-Length", &length), ("ETag", "\"v1\"")],
-            &body[..cut],
-        )];
+        let mut head = vec![("Content-Length", length.as_str())];
+        head.extend_from_slice(first);
+        let mut responses = vec![reply("200 OK", &head, &body[..cut])];
         responses.extend(answers);
         let server = Server::start("/big.bin", responses)?;
         let output = sandbox.run(&["get", &server.url, "-o", "big.bin"])?;

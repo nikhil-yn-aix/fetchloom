@@ -19,7 +19,7 @@ use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
-use crate::net::{Event, Expect, Fetch, Fetched, Net, Origin, Resumable, estimate};
+use crate::net::{Event, Expect, Fetch, Fetched, Net, NoVersion, Origin, Resumable, estimate};
 use crate::output::{Bar, Output, Ticker, Warning};
 use crate::source::{self, Remote};
 use crate::stop::Stop;
@@ -638,14 +638,15 @@ impl<'a> Watch<'a> {
             )
         } else {
             let why = match (self.held.resumable(), resumable) {
-                (Resumable::Unproven, _) => {
-                    "nothing shows they are the same file: the server sent no ETag or Last-Modified"
+                (Resumable::Unproven(why), _) => format!(
+                    "nothing shows they are the same file: {}",
+                    unnamed(why, "the server")
+                ),
+                (Resumable::No, _) => "the server cannot continue from them".to_owned(),
+                (_, Resumable::No | Resumable::Unproven(_)) => {
+                    "the server sent the whole file again instead of the rest".to_owned()
                 }
-                (Resumable::No, _) => "the server cannot continue from them",
-                (_, Resumable::No | Resumable::Unproven) => {
-                    "the server sent the whole file again instead of the rest"
-                }
-                _ => "the file changed on the server",
+                _ => "the file changed on the server".to_owned(),
             };
             format!(
                 "the {} downloaded so far cannot be continued, since {why}",
@@ -1630,13 +1631,19 @@ fn kept(error: Error, held: &[Held]) -> Error {
         return error;
     }
     let (mut sure, mut maybe, mut lost, mut unproven) = (0_u64, 0_u64, 0_u64, 0_u64);
+    let mut reasons = Vec::new();
     for held in held {
         let bytes = held.bytes.load(Ordering::Relaxed);
         let sum = match held.resumable() {
             Resumable::Yes => &mut sure,
             Resumable::Maybe => &mut maybe,
             Resumable::No => &mut lost,
-            Resumable::Unproven => &mut unproven,
+            Resumable::Unproven(why) => {
+                if bytes > 0 {
+                    reasons.push(why);
+                }
+                &mut unproven
+            }
         };
         *sum = sum.saturating_add(bytes);
     }
@@ -1653,7 +1660,11 @@ fn kept(error: Error, held: &[Held]) -> Error {
         )),
     };
     let unproven_why = |server: &str| {
-        format!("nothing shows it is the same file: {server} sent no ETag or Last-Modified")
+        let why = match reasons.as_slice() {
+            [first, rest @ ..] if rest.iter().all(|why| why == first) => unnamed(*first, server),
+            _ => "their servers named no version a resume can check".to_owned(),
+        };
+        format!("nothing shows it is the same file: {why}")
     };
     let deleted = [
         (
@@ -1681,6 +1692,25 @@ fn kept(error: Error, held: &[Held]) -> Error {
         told = true;
     }
     error
+}
+
+/// what `server` sent that names no version a request for the rest of a file may name.
+fn unnamed(why: NoVersion, server: &str) -> String {
+    match why {
+        NoVersion::Unsent => format!("{server} sent no ETag or Last-Modified"),
+        NoVersion::WeakTag => {
+            format!("{server}'s ETag is weak, which cannot vouch for part of a file")
+        }
+        NoVersion::BadTag => format!("{server}'s ETag is not a quoted tag"),
+        NoVersion::FreshDate => format!(
+            "{server}'s Last-Modified is less than a minute before its Date, too close to tell versions apart"
+        ),
+        NoVersion::Undated => {
+            format!(
+                "{server}'s Last-Modified comes with no Date fetchloom can read to tell its age"
+            )
+        }
+    }
 }
 
 /// how many failed files one error names. the rest are counted.
@@ -3075,10 +3105,28 @@ mod tests {
             ]
         );
         assert_eq!(
-            said(&[(mib, Resumable::No), (2 * mib, Resumable::Unproven)]),
+            said(&[
+                (mib, Resumable::No),
+                (2 * mib, Resumable::Unproven(NoVersion::Unsent))
+            ]),
             [
                 "the 1.0 MiB downloaded so far is deleted, since the server cannot continue from it",
                 "the other 2.0 MiB is deleted, since nothing shows it is the same file: its server sent no ETag or Last-Modified"
+            ]
+        );
+        assert_eq!(
+            said(&[(2 * mib, Resumable::Unproven(NoVersion::WeakTag))]),
+            [
+                "the 2.0 MiB downloaded so far is deleted, since nothing shows it is the same file: the server's ETag is weak, which cannot vouch for part of a file"
+            ]
+        );
+        assert_eq!(
+            said(&[
+                (mib, Resumable::Unproven(NoVersion::FreshDate)),
+                (mib, Resumable::Unproven(NoVersion::Unsent))
+            ]),
+            [
+                "the 2.0 MiB downloaded so far is deleted, since nothing shows it is the same file: their servers named no version a resume can check"
             ]
         );
         assert_eq!(said(&[(0, Resumable::Yes)]), Vec::<String>::new());
