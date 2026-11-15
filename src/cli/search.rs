@@ -263,13 +263,7 @@ pub(super) async fn pick(
             output.item(&format!("  {}", shown.facts));
             continue;
         }
-        let row = [shown.title.as_str(), shown.facts.as_str()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .fold(format!("{:pad$}", shown.reference), |row, part| {
-                format!("{row}  {part}")
-            });
-        output.item(row.trim_end());
+        output.item(&shown.line(pad));
     }
     Err(error)
 }
@@ -451,6 +445,20 @@ struct Shown {
     facts: String,
     below: bool,
     title_below: bool,
+}
+
+impl Shown {
+    /// the row on one line: the reference padded to `pad` columns, then its title and facts.
+    fn line(&self, pad: usize) -> String {
+        [self.title.as_str(), self.facts.as_str()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .fold(format!("{:pad$}", self.reference), |row, part| {
+                format!("{row}  {part}")
+            })
+            .trim_end()
+            .to_owned()
+    }
 }
 
 /// the fewest columns a title keeps before it gives way altogether, and the most it takes.
@@ -681,22 +689,9 @@ fn rows(
     let parts = parts(output, candidates, width, lead);
     let width = widest(parts.iter().map(|shown| shown.reference.as_str()))
         .min(crate::output::REFERENCE_COLUMN);
-    parts
-        .into_iter()
-        .map(|shown| {
-            let mut row = format!("{:width$}", shown.reference);
-            if !shown.title.is_empty() {
-                row.push_str("  ");
-                row.push_str(&shown.title);
-            }
-            if !shown.facts.is_empty() {
-                row.push_str("  ");
-                row.push_str(&shown.facts);
-            }
-            row.trim_end().to_owned()
-        })
-        .collect()
+    parts.iter().map(|shown| shown.line(width)).collect()
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
