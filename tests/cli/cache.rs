@@ -1187,24 +1187,29 @@ fn a_ctrl_c_past_the_caches_mark_lets_it_tell_what_it_did() -> Result {
     Ok(())
 }
 
-/// a file imported from a folder comes back from no source once the cache frees it, so gc counts
-/// such bytes apart, and `--now` frees them only after a yes.
-#[test]
-fn gc_now_frees_imported_bytes_only_after_a_yes() -> Result {
-    let sandbox = Sandbox::new()?;
+/// a project's import, removed from it, so only the cache holds its bytes, at the path returned.
+fn imported_then_removed(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     let precious = sandbox.folder("precious")?;
     fs::write(precious.join("notes.csv"), NOTES)?;
     let added = sandbox.run(&["add", "../precious"])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let removed = sandbox.run(&["remove", "precious", "--yes"])?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    let hex = crate::support::sha256_hex(NOTES);
+    Ok(sandbox
+        .cache()
+        .join("objects")
+        .join(&hex[..2])
+        .join(&hex[2..]))
+}
+
+/// a file imported from a folder comes back from no source once the cache frees it, so gc counts
+/// such bytes apart, and `--now` frees them only after a yes.
+#[test]
+fn gc_now_frees_imported_bytes_only_after_a_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = imported_then_removed(&sandbox)?;
     let object = |exists: bool| -> Result {
-        let hex = crate::support::sha256_hex(NOTES);
-        let path = sandbox
-            .cache()
-            .join("objects")
-            .join(&hex[..2])
-            .join(&hex[2..]);
         assert_eq!(path.exists(), exists);
         Ok(())
     };
@@ -1241,4 +1246,28 @@ fn gc_now_frees_imported_bytes_only_after_a_yes() -> Result {
         "{document}"
     );
     object(false)
+}
+
+/// at a terminal, `--now` asks before it frees imported bytes: a no keeps them, a yes frees them.
+#[cfg(target_os = "linux")]
+#[test]
+fn gc_now_at_a_terminal_frees_imported_bytes_on_a_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let object = imported_then_removed(&sandbox)?;
+    let gc = sandbox.command(&["cache", "gc", "--now"]);
+    let asked = "free it anyway? [y/N]";
+    for (keys, code, kept) in [("n\r", 1, true), ("y\r", 0, false)] {
+        let Some((exit, screen)) = crate::support::typed(&sandbox.work(), &gc, "", asked, keys)?
+        else {
+            return Ok(());
+        };
+        assert_eq!(exit, Some(code), "{keys:?}: {screen}");
+        assert_eq!(
+            screen.contains("Cancelled freeing 1 file · 32 B from the cache, so nothing changed"),
+            kept,
+            "{keys:?}: {screen}"
+        );
+        assert_eq!(object.exists(), kept, "{keys:?}: {screen}");
+    }
+    Ok(())
 }
