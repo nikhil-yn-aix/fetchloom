@@ -1675,3 +1675,23 @@ fn a_hostile_pin_not_downloaded_from_a_clone_is_refused() -> Result {
     assert_eq!(routes.targets().len(), asked, "nothing was asked");
     Ok(())
 }
+
+/// an add after `add --no-sync` places everything it can, but leaves the pin to download, so the
+/// next sync, plain or strict, still downloads it rather than finding the project settled.
+#[test]
+fn a_later_add_leaves_a_pin_not_downloaded_to_the_next_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    added_unsynced(&sandbox, &routes)?;
+    let files = Routes::start(vec![("/files/notes.txt".to_owned(), file(NOTES, "\"n1\""))])?;
+    ok(&sandbox.run(&["add", &format!("{}/files/notes.txt", files.url)])?)?;
+    let synced = command(&sandbox, &routes, &["--json", "sync", "--strict"]).output()?;
+    ok(&synced)?;
+    assert_eq!(
+        fs::read(sandbox.work().join("data/archiving/rows.csv"))?,
+        ROWS
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(!lock.contains("downloaded = false"), "{lock}");
+    Ok(())
+}

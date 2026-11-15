@@ -454,6 +454,9 @@ impl<'a> Loop<'a> {
         let nested = placing.nested();
         let files = units::count(placing.files() as u64, "file", "files");
         let _placing = self.context.output.lasting("Placing", files);
+        // a pin only its source's digests make waits for a sync, so no run leaves the project
+        // settled while data.lock holds one
+        let synced = synced.filter(|_| lock.stated.is_empty());
         let placement = placing.apply(
             &self.context.output,
             &self.context.work,
