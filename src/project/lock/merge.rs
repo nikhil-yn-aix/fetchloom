@@ -8,6 +8,7 @@ mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::Path;
 
 use serde::Serialize;
@@ -912,7 +913,7 @@ fn from_commit(
         )
     })?;
     for part in parts {
-        let bytes = match std::fs::read(below(root, part)) {
+        let bytes = match read_part(&below(root, part)) {
             Ok(bytes) => bytes,
             Err(_) => match committed(side, part) {
                 Some(bytes) => bytes,
@@ -927,6 +928,19 @@ fn from_commit(
         written.map_err(|err| Error::io(format_args!("could not keep {part} for {name}"), &err))?;
     }
     Ok(Some(found))
+}
+
+/// the most bytes of a list part read whole, which is the most git gives for one too.
+const PART_MOST: u64 = 256 << 20;
+
+/// the bytes of the part at `path`, a plain file read without following a link, up to
+/// [`PART_MOST`]: past that, its hash, checked later, cannot match.
+fn read_part(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    crate::volume::read_unfollowed(path)?
+        .take(PART_MOST)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// `part`, a path from the project with `/` between folders, below `folder`.

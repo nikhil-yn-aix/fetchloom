@@ -312,7 +312,11 @@ pub(crate) fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Res
         let file: Box<dyn Read> = match parts {
             Parts::Folder(root) => {
                 let path = root.join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
-                Box::new(fs::File::open(&path).map_err(|err| unreadable(name, part, &err))?)
+                // a clone can hold a link to a fifo or a device, which would hang or fill memory
+                Box::new(
+                    crate::volume::read_unfollowed(&path)
+                        .map_err(|err| unreadable(name, part, &err))?,
+                )
             }
             Parts::Given(given) => Box::new(std::io::Cursor::new(given(part)?)),
         };
@@ -633,6 +637,25 @@ mod tests {
             Some(
                 "where set was pinned, run `git add data.lock.d` and commit, then pull that commit here. a part deleted here comes back with `git checkout -- data.lock.d`"
             )
+        );
+    }
+
+    /// a part is read only as a plain file: a link, as a clone can hold, to a fifo, a device or
+    /// a file elsewhere is refused before anything is read through it.
+    #[cfg(unix)]
+    #[test]
+    fn a_part_that_is_a_link_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let listed = write(root.path(), "set", &files(2));
+        let part = root.path().join(&listed.parts[0]);
+        let elsewhere = root.path().join("elsewhere.tsv.zst");
+        fs::rename(&part, &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &part).unwrap();
+        let error = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
+        assert!(
+            error.message.contains("is a link or a special file"),
+            "{}",
+            error.message
         );
     }
 
