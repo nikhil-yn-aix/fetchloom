@@ -35,15 +35,14 @@ impl Building<'_> {
             .map(|(step, _)| step.name.as_str())
             .collect();
         let free = space::free(cache.root());
-        let besides = besides(&unknown);
         let has = free.map_or_else(String::new, |free| {
             format!(", which has {} free", units::size(free))
         });
         self.context.output.step(
             "Needs",
             &format!(
-                "up to {}{besides} on the disk holding the cache{has}",
-                units::size(peak)
+                "{} on the disk holding the cache{has}",
+                taken(peak, &unknown)
             ),
         );
         let needed = peak.saturating_add(self.floor);
@@ -212,18 +211,24 @@ fn below(floor: u64, free: u64, cache: &Path) -> Error {
     .help("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one. to let steps leave less free, lower build_floor in the settings file or FETCHLOOM_BUILD_FLOOR")
 }
 
-/// what the `Needs` line adds for the steps `unknown` whose result's size is not known yet.
-fn besides(unknown: &[&str]) -> String {
-    match unknown {
-        [] => String::new(),
-        [name] => format!(", besides what {name} writes,"),
-        names => format!(", besides what {} write,", units::listed(names, "and")),
+/// what the `Needs` line says the steps take: up to `peak` bytes, besides what the steps `unknown`
+/// write, whose result's size is not known yet, or only that when nothing else takes room.
+fn taken(peak: u64, unknown: &[&str]) -> String {
+    let writes = match unknown {
+        [] => return format!("up to {}", units::size(peak)),
+        [name] => format!("what {name} writes"),
+        names => format!("what {} write", units::listed(names, "and")),
+    };
+    if peak == 0 {
+        writes
+    } else {
+        format!("up to {}, besides {writes},", units::size(peak))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Fits, besides, fits};
+    use super::{Fits, fits, taken};
 
     /// short of room above the floor, a person is asked, since the room errs on more and the floor
     /// still stops a step; below it nobody is asked, and a disk that does not say is never short.
@@ -241,13 +246,19 @@ mod tests {
         }
     }
 
+    /// a step whose result's size is not known yet is named, alone when nothing else takes room,
+    /// as for a recipe that reads no dataset and was never built.
     #[test]
-    fn what_the_steps_write_agrees_with_how_many_they_are() {
-        assert_eq!(besides(&[]), "");
-        assert_eq!(besides(&["clean"]), ", besides what clean writes,");
+    fn the_room_names_the_steps_whose_results_are_not_known_yet() {
+        assert_eq!(taken(5, &[]), "up to 5 B");
         assert_eq!(
-            besides(&["thumbs", "index", "clean"]),
-            ", besides what thumbs, index and clean write,"
+            taken(5, &["clean"]),
+            "up to 5 B, besides what clean writes,"
         );
+        assert_eq!(
+            taken(5, &["thumbs", "index", "clean"]),
+            "up to 5 B, besides what thumbs, index and clean write,"
+        );
+        assert_eq!(taken(0, &["sim"]), "what sim writes");
     }
 }
