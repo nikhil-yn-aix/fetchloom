@@ -23,12 +23,21 @@ on:
         description: which slice of at most ten of the file's mutants to test, from 0; each run says how many there are
         type: number
         default: 0
+      mutants:
+        description: a python regex finding one to ten of the file's mutants by the names a run lists, tested instead of a slice
+        type: string
+        default: ''
+      os:
+        description: the runner the mutation pilot builds and tests on
+        type: choice
+        options: [ubuntu-24.04, macos-15, windows-2025]
+        default: ubuntu-24.04
 
 permissions:
   contents: read
 
 concurrency:
-  group: deep-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check || 'all' }}
+  group: deep-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check || 'all' }}-${{ inputs.os || 'ubuntu-24.04' }}
   cancel-in-progress: false
 
 env:
@@ -198,8 +207,11 @@ jobs:
 
   mutants:
     if: github.event_name == 'workflow_dispatch' && inputs.check == 'mutants'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.os }}
     timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
     env:
       CARGO_BUILD_JOBS: 2
       RUST_TEST_THREADS: 2
@@ -212,18 +224,23 @@ jobs:
         with:
           tool: ${{ env.PIN_MUTANTS }}
       - name: list and test at most ten mutations in one file
+        # macos has no coreutils timeout; a step limit under the job's still lets the summary and upload run
+        timeout-minutes: 28
         env:
           MUTATION_FILE: ${{ inputs.file }}
           MUTATION_TESTS: ${{ inputs.tests }}
           MUTATION_SLICE: ${{ inputs.slice }}
+          MUTATION_NAMES: ${{ inputs.mutants }}
           # cargo-mutants builds a copy of the tree without .git, where build.rs finds no commit and
           # the version test of tests=all fails the baseline; the release build names it the same way
           FETCHLOOM_COMMIT: ${{ github.sha }}
-        shell: bash
         run: |
           mkdir -p target/ci-mutants
-          timeout --signal=TERM --kill-after=30s 28m python3 python/run_mutants.py "$MUTATION_FILE" \
-            --tests "$MUTATION_TESTS" --slice "$MUTATION_SLICE" 2>&1 | tee target/ci-mutants/run.log
+          # windows-2025 names its interpreter python, as ci.yml's windows job runs it
+          python=python3
+          if [ "$RUNNER_OS" = Windows ]; then python=python; fi
+          "$python" python/run_mutants.py "$MUTATION_FILE" --tests "$MUTATION_TESTS" --slice "$MUTATION_SLICE" \
+            "--mutants=$MUTATION_NAMES" 2>&1 | tee target/ci-mutants/run.log
       - name: summarize the mutation scope
         if: always()
         run: |

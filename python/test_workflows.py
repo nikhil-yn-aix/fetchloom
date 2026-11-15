@@ -32,10 +32,11 @@ class WorkflowTests(unittest.TestCase):
                     self.assertNotRegex(line, r"^\s+(?:tool|version|checksum): [^$]*\d", "name a PIN_ variable")
 
     def test_jobs_run_on_named_images(self):
-        """a -latest label moves to a new image without a change here, so a job never uses one."""
+        """a -latest label moves to a new image without a change here, so a job never uses one, nor
+        does a dispatch option that picks a job's runner."""
         for path in WORKFLOWS:
             with self.subTest(workflow=path.name):
-                self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?m)^\s+runs-on: \S*-latest\b")
+                self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?m)^\s+(?:runs-on|options): .*-latest\b")
 
 
 if __name__ == "__main__":

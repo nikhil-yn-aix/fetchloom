@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,8 @@ import check_coverage
 from check_coverage import summary
 from ci_journey import ROOT
 import run_mutants
-from run_mutants import arguments, mutation_run, require_selection, selection, source_file
+from run_mutants import (arguments, exactly, marked, mutation_run, named, require_selection, selection,
+                         source_file)
 
 
 def coverage(root, main=1, lib=1):
@@ -116,6 +118,32 @@ class MutationTests(unittest.TestCase):
             with self.subTest(actual=actual), self.assertRaises(AssertionError):
                 require_selection(expected, actual)
 
+    def test_a_name_regex_finds_one_to_ten_mutants_and_matches_only_them(self):
+        file = 'src/place.rs'
+        names = [f'{file}:1454:21: replace match guard size <= BLOCK with {value} in transfer'
+                 for value in ['true', 'false']]
+        names += [f'{file}:1452:5: replace transfer -> io::Result<()> with Ok(())',
+                  f'{file}:1460:28: replace == with != in transfer']
+        found = named(file, '\n'.join(names), r':(1452|1454):')
+        self.assertEqual(found, names[:3])
+        pattern = exactly(found)
+        self.assertEqual([name for name in names if re.search(pattern, name)], found)
+        self.assertIsNone(re.search(pattern, names[2] + ' twice'))
+        many = '\n'.join(f'{file}:{line}:5: replace place -> bool with false' for line in range(11))
+        for text, regex in [('\n'.join(names), ':1999:'), (many, 'place')]:
+            with self.subTest(regex=regex), self.assertRaisesRegex(AssertionError, 'name one to ten'):
+                named(file, text, regex)
+
+    def test_the_diff_adds_the_line_each_named_mutant_starts_on(self):
+        file = 'src/place.rs'
+        source = 'one\ntwo\nthree\nfour\nfive\nsix\n'
+        names = [f'{file}:{line}:{column}: change' for line, column in [(5, 1), (2, 1), (3, 1), (3, 9)]]
+        self.assertEqual(marked(file, source, names).splitlines(), [
+            '--- a/src/place.rs', '+++ b/src/place.rs',
+            '@@ -1,0 +2,2 @@', '+two', '+three',
+            '@@ -2,0 +5,1 @@', '+five',
+        ])
+
     def test_lib_tests_judge_each_mutant_unless_every_target_is_asked_for(self):
         self.assertEqual(arguments(['src/place.rs']).tests, 'lib')
         for tests, wanted, unwanted in [('lib', '--lib', '--all-targets'), ('all', '--all-targets', '--lib')]:
@@ -146,7 +174,8 @@ class MutationTests(unittest.TestCase):
 
 class MutationRun(unittest.TestCase):
     """run_mutants.py against a stand-in for cargo-mutants 27.1, which deep.yml pins: its slice k
-    of n is the k-th run of the listing's first ceil(total / n) mutants, then the next."""
+    of n is the k-th run of the listing's first ceil(total / n) mutants, then the next, and its
+    --re lets through the struct-field mutants it does not name."""
 
     FILE = 'src/place.rs'
 
@@ -160,6 +189,7 @@ class MutationRun(unittest.TestCase):
         self.code = 0
         self.planned = None
         self.executed = None
+        self.unnamed = []
         self.ran = []
 
     def mutants(self, command, **options):
@@ -170,6 +200,9 @@ class MutationRun(unittest.TestCase):
                 k, n = map(int, command[command.index('--shard') + 1].split('/'))
                 size = self.slices or -(-len(names) // n)
                 names = names[k * size:(k + 1) * size]
+            if '--re' in command:
+                pattern = command[command.index('--re') + 1]
+                names = [name for name in names if re.search(pattern, name) or name in self.unnamed]
             listing = [{'file': self.files.get(name, self.FILE), 'name': name} for name in names]
             return subprocess.CompletedProcess(command, 0, json.dumps(listing), '')
         self.ran.append(command)
@@ -212,6 +245,36 @@ class MutationRun(unittest.TestCase):
         self.assertEqual(printed.splitlines()[0], f'6 selected mutants in {self.FILE}, slice 1 of 2, judged by the lib tests; '
                                                   'the unmutated baseline runs first')
         self.assertEqual(self.ran[0][6:9], ['--shard', '1/2', '--sharding'])
+
+    def test_named_mutants_are_announced_and_run_by_their_lines_and_names(self):
+        self.planned = [self.names[3], self.names[7]]
+        exit_code, printed = self.main('--mutants', ':(3|7):')
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(printed.splitlines(), [
+            f'2 selected mutants in {self.FILE}, found by :(3|7):, judged by the lib tests; '
+            'the unmutated baseline runs first', *self.planned])
+        command = self.ran[0]
+        self.assertNotIn('--shard', command)
+        regex = command[command.index('--re') + 1]
+        self.assertEqual([name for name in self.names if re.search(regex, name)], self.planned)
+        diff = Path(command[command.index('--in-diff') + 1]).read_text(encoding='utf-8')
+        self.assertEqual([line for line in diff.splitlines() if line.startswith('@@')],
+                         ['@@ -2,0 +3,1 @@', '@@ -5,0 +7,1 @@'])
+
+    def test_a_named_run_is_refused_before_it_builds(self):
+        field = f'{self.FILE}:3:9: delete field limit from struct Placer expression in place'
+        for case, options, said in [
+            ('with a slice', ('--mutants', ':3:5:', '--slice', '1'), 'not both'),
+            ('none found', ('--mutants', ':99:'), 'name one to ten'),
+            ('a field let through', ('--mutants', ':3:5:'), 'differs from the announced selection'),
+        ]:
+            with self.subTest(case):
+                self.setUp()
+                self.names.append(field)
+                self.unnamed = [field]
+                with self.assertRaisesRegex(AssertionError, said):
+                    self.main(*options)
+                self.assertEqual(self.ran, [])
 
     def test_a_run_that_tested_other_mutants_fails(self):
         # the plan is checked whatever the run's end, the outcomes when it judged every mutant:
