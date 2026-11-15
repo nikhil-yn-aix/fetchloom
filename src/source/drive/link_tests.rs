@@ -229,7 +229,33 @@ fn live_drive_file() {
         },
         ..crate::source::fetch_plan(&remote.url)
     };
-    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    let fetched = match block_on(net.download(&fetch, &cache, &|_| Ok(()))) {
+        Ok(fetched) => fetched,
+        // drive's quota page, or another page in place of the file, fails in fetchloom's words
+        Err(error) => {
+            let link = format!("https://drive.google.com/file/d/{id}");
+            let paged = [
+                (
+                    Kind::NetworkRateLimited,
+                    "drive refused the download: too many people downloaded this file recently"
+                        .to_owned(),
+                ),
+                (
+                    Kind::SourceInvalid,
+                    format!("drive refused the download of {link}"),
+                ),
+                (
+                    Kind::SourceInvalid,
+                    format!("drive sent a page instead of {link}"),
+                ),
+            ];
+            assert!(
+                paged.contains(&(error.kind, error.message.clone())),
+                "{error:?}"
+            );
+            panic!("drive sent a page in place of the file: {}", error.message);
+        }
+    };
     eprintln!(
         "drive: {} as {:?}, {} bytes, {}, {} requests, {:?}",
         listing.resolved,

@@ -47,8 +47,13 @@ fn a_dropbox_html_answer_is_not_a_file() {
     let recorded = Recorded::default().fixture(from.as_str(), "dropbox/download-page.html");
     let response = block_on(recorded.get(&from)).unwrap();
     let error = divert.unwrap()(&response.url, response.status, &response.text()).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert!(error.message.contains("dropbox"));
+    assert_eq!(
+        (error.kind, error.message.as_str()),
+        (
+            Kind::SourceInvalid,
+            "dropbox sent an HTML page instead of the shared file or folder"
+        )
+    );
     assert!(error.help.unwrap().contains("browser"));
 }
 
@@ -130,7 +135,24 @@ fn live_dropbox() {
         },
         ..crate::source::fetch_plan(&remote.url)
     };
-    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    let fetched = match block_on(net.download(&fetch, &cache, &|_| Ok(()))) {
+        Ok(fetched) => fetched,
+        // a page in place of the file fails in fetchloom's words
+        Err(error) => {
+            assert_eq!(
+                (error.kind, error.message.as_str()),
+                (
+                    Kind::SourceInvalid,
+                    "dropbox sent an HTML page instead of the shared file or folder"
+                ),
+                "{error:?}"
+            );
+            panic!(
+                "dropbox sent a page in place of the file: {}",
+                error.message
+            );
+        }
+    };
     eprintln!(
         "dropbox: {} as {:?}, {} bytes, {}, {} requests, {:?}",
         listing.resolved,
