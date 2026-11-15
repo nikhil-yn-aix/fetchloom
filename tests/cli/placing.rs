@@ -2443,6 +2443,64 @@ fn cut_off_at(sandbox: &Sandbox, args: &[&str], variable: &str, what: &str) -> R
     Ok(())
 }
 
+/// a file `--force` could not put back stays named by later runs though the run that kept it could
+/// not write the state at its end, as on a full disk: its name was written before it moved.
+#[cfg(unix)]
+#[test]
+fn a_file_force_kept_aside_stays_named_when_the_last_state_write_fails() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::support::{Running, wait_until, warning};
+    if rustix::process::geteuid().is_root() {
+        return skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let bytes = zip_of(&[
+        ("top.csv", b"top\n"),
+        ("sub/a.csv", b"first\n"),
+        ("sub/b.csv", b"second\n"),
+    ])?;
+    let server = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.d]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let folder = sandbox.work().join("data").join("d");
+    fs::create_dir_all(&folder)?;
+    fs::write(folder.join("sub"), b"my notes\n")?;
+    let blocked = sandbox.run(&["sync"])?;
+    assert_eq!(blocked.status.code(), Some(0), "{}", text(&blocked.stderr)?);
+    // b.csv cannot be placed, so sub cannot go back once a.csv made the folder
+    let object = crate::recipes::object(&sandbox.cache(), b"second\n");
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o000))?;
+    let own = sandbox.work().join(".fetchloom");
+    let release = sandbox.folder("hold")?.join("release");
+    let held = sandbox.folder("hold")?.join("release.held");
+    let mut forced = sandbox.command(&["sync", "--force", "--offline"]);
+    forced.env("FETCHLOOM_TEST_HOLD_ASIDE", &release);
+    let running = Running::start(&mut forced)?;
+    wait_until("sub to be moved aside", || Ok(held.exists()))?;
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o555))?;
+    fs::write(&release, b"")?;
+    let output = running.finish();
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o755))?;
+    fs::set_permissions(&object, fs::Permissions::from_mode(0o444))?;
+    let output = output?;
+    assert_ne!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+
+    let again = sandbox.run(&["--json", "sync", "--offline"])?;
+    let document = json(&again)?;
+    let found = warning(&document, "place.set_aside");
+    assert!(
+        found["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("data/d/sub")),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// a `sync --force` cut off at once after it moved a person's edit aside leaves the edit's name on
 /// record: status names it, and the next sync puts it back and blames no one.
 #[test]

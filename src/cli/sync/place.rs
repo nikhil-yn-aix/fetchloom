@@ -2048,6 +2048,8 @@ fn clear(
             aside,
             stead: Vec::new(),
         });
+        #[cfg(debug_assertions)]
+        crate::stop::hold("FETCHLOOM_TEST_HOLD_ASIDE");
         return Ok(true);
     }
     let removed = if blocker.found == Entry::Folder {
