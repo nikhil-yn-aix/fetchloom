@@ -120,21 +120,38 @@ pub(crate) fn absent(root: &Path) -> bool {
     }
 }
 
-/// what lets others change the files projects place from the cache folder at `root`: it belongs
-/// to another user, or every user may write to it. on windows, where a folder takes its access
-/// from the folders above it, a folder outside the user's profile, unless on a FAT or exFAT
-/// drive, which keeps no permissions to change and is made to be shared.
+/// what lets others change the files projects place from the cache folder at `root`: it, or a
+/// folder fetchloom writes in inside it that every user may reach, belongs to another user, or
+/// every user may write to it. on windows, where a folder takes its access from the folders above
+/// it, a folder outside the user's profile, unless on a FAT or exFAT drive, which keeps no
+/// permissions to change and is made to be shared.
 pub(crate) fn exposed(root: &Path) -> Option<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         let found = fs::metadata(root).ok()?;
         let user = rustix::process::geteuid().as_raw();
-        exposure(found.uid(), found.mode(), user).map(|what| {
-            format!(
+        if let Some(what) = exposure(found.uid(), found.mode(), user) {
+            return Some(format!(
                 "the cache folder {} {what}, so they can change the files projects place from it",
                 root.display()
-            )
+            ));
+        }
+        // no one else reaches what a folder only its owner and group may enter holds
+        if found.mode() & 0o001 == 0 {
+            return None;
+        }
+        FOLDERS.iter().find_map(|name| {
+            let folder = root.join(name);
+            let inside = fs::symlink_metadata(&folder)
+                .ok()
+                .filter(fs::Metadata::is_dir)?;
+            exposure(inside.uid(), inside.mode(), user).map(|what| {
+                format!(
+                    "the folder {} in the cache {what}, so they can change the files projects place from it",
+                    folder.display()
+                )
+            })
         })
     }
     #[cfg(windows)]
@@ -1560,6 +1577,36 @@ pub(crate) mod tests {
             super::exposure(1000, 0o40777, 1000),
             Some("lets every user of this machine write to it")
         );
+    }
+
+    /// a folder fetchloom writes in that every user may write, in a cache folder every user may
+    /// enter, lets them change what projects place as much as the cache folder itself would; in a
+    /// cache folder only its owner may enter, it does not.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_in_the_cache_that_anyone_writes_is_exposed() {
+        use std::os::unix::fs::PermissionsExt;
+        for inner in ["objects", "tmp"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("cache");
+            Cache::open(root.clone()).unwrap();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(root.join(inner), fs::Permissions::from_mode(0o777)).unwrap();
+
+            let told = exposed(&root).unwrap_or_default();
+
+            let folder = root.join(inner).display().to_string();
+            assert!(
+                told.contains(&folder) && told.contains("lets every user of this machine write"),
+                "{inner}: {told}"
+            );
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(
+                exposed(&root),
+                None,
+                "{inner} in a folder only its owner enters"
+            );
+        }
     }
 
     #[test]
