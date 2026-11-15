@@ -264,18 +264,25 @@ pub(in crate::cli) fn drop_archives(
     current: Option<&Lock>,
     threads: Threads,
 ) {
-    if archives.is_empty() {
+    // an archive an earlier run dropped has nothing left to drop, and asking what needs it would
+    // read every registered project and look at each member of every archive
+    let held: Vec<Sha256> = archives
+        .iter()
+        .filter(|archive| std::fs::symlink_metadata(cache.object_path(archive)).is_ok())
+        .copied()
+        .collect();
+    if held.is_empty() {
         return;
     }
     let stop = crate::stop::Stop::default();
-    let needed = match needed_for_drop(cache, current, archives, threads, &stop) {
+    let needed = match needed_for_drop(cache, current, &held, threads, &stop) {
         Ok(needed) => needed,
         Err(err) => {
             tracing::debug!(err = %err.message, "kept unpacked archives, since a lock could not be read");
             return;
         }
     };
-    for archive in archives
+    for archive in held
         .iter()
         .filter(|archive| !needed.objects.contains(archive))
     {
@@ -1079,6 +1086,26 @@ mod tests {
         std::fs::create_dir(root.join("data.toml")).unwrap();
         drop_archives(&cache, &[archive.digest], None, Threads::default());
         assert!(cache.find(&archive.digest, None).is_some());
+    }
+
+    /// archives an earlier run dropped leave nothing to drop, so asking about them reads no
+    /// registered project; one the cache still holds is asked about once and dropped.
+    #[test]
+    fn dropping_archives_already_gone_reads_no_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("data.toml"), b"").unwrap();
+        cache.register(&root).unwrap();
+        let gone = digest::sha256(b"dropped by an earlier run");
+        let before = crate::project::manifest::tests::reads();
+        drop_archives(&cache, &[gone], None, Threads::default());
+        assert_eq!(crate::project::manifest::tests::reads() - before, 0);
+        let held = store(&cache, b"unpacked by this run");
+        drop_archives(&cache, &[gone, held.digest], None, Threads::default());
+        assert_eq!(crate::project::manifest::tests::reads() - before, 1);
+        assert!(cache.find(&held.digest, None).is_none());
     }
 
     /// gc forgets a registered project whose data.toml is gone and frees what it alone needed,
