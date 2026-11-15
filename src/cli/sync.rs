@@ -269,10 +269,13 @@ impl<'a> Loop<'a> {
                 match self.place_whole(manifest, lock, force, synced, changed) {
                     Ok(Some(partial)) => Err(self.partly(error, partial)),
                     Ok(None) => Err(self.before_placing(error)),
-                    Err(other) => {
-                        tracing::debug!(%other, "could not place the datasets the cache holds whole");
+                    Err(other) if other.kind == Kind::Interrupted => {
                         Err(self.before_placing(error))
                     }
+                    Err(other) => Err(self.before_placing(error.detail(format!(
+                        "could not place the datasets this machine has whole either: {}",
+                        other.message
+                    )))),
                 }
             }
             Err(error) => Err(self.before_placing(error)),

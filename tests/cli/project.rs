@@ -3681,6 +3681,54 @@ fn a_sync_that_lacks_some_files_places_the_datasets_it_has_whole() -> Result {
     Ok(())
 }
 
+/// a partial sync whose placing of the datasets the cache holds whole fails too says so beside the
+/// error that stopped the run, so the second failure is not a surprise of the next run.
+#[cfg(unix)]
+#[test]
+fn a_partial_sync_names_a_dataset_it_could_not_place_whole() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return crate::support::skipped("unprivileged", "root ignores folder permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let (one, two) = (vec![b'x'; 1024], vec![b'y'; 1024]);
+    let first = Server::start("/one.bin", vec![file(&one, "\"a\"")])?;
+    let second = Server::start("/two.bin", vec![file(&two, "\"b\"")])?;
+    for server in [&first, &second] {
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let hex = sha256_hex(&two);
+    delete(
+        &sandbox
+            .cache()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..]),
+    )?;
+    let fresh = clone(&sandbox, "fresh")?;
+    let refusing = fresh.join("data").join("one");
+    fs::create_dir_all(&refusing)?;
+    fs::set_permissions(&refusing, fs::Permissions::from_mode(0o555))?;
+    let output = sandbox
+        .command_in(&fresh, &["--json", "sync", "--offline"])
+        .output();
+    fs::set_permissions(&refusing, fs::Permissions::from_mode(0o755))?;
+    let document = json(&output?)?;
+    assert_eq!(
+        document["errors"][0]["kind"], "offline.missing",
+        "{document}"
+    );
+    let details = document["errors"][0]["details"].to_string();
+    assert!(
+        details.contains("could not place the datasets this machine has whole either")
+            && details.contains("one.bin"),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// a `--json` sync of a fresh clone of the work folder's project, with an empty cache of its own.
 fn synced_fresh(sandbox: &Sandbox) -> Result<(std::path::PathBuf, std::process::Output)> {
     let fresh = clone(sandbox, "fresh")?;
