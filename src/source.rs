@@ -452,7 +452,13 @@ impl Reference {
                 bucket::Store::Azure,
                 rest,
             )?)),
-            _ => Err(unknown(text)),
+            other => Err(match site_named(other) {
+                Some(prefix) => unknown(text).help(format!(
+                    "did you mean {}?",
+                    crate::shown::mask_query(&format!("{prefix}:{rest}"))
+                )),
+                None => unknown(text),
+            }),
         }
     }
 
@@ -1168,6 +1174,32 @@ pub(crate) fn refused(host: &str, reference: &str) -> Error {
         None => error.help("if the dataset is private or restricted, ask its owner for a public link"),
     }
 }
+/// sites people call by another name than their prefix, as `huggingface` for `hf`.
+const SITE_NAMES: [(&str, &str); 3] = [
+    ("huggingface", "hf"),
+    ("semanticscholar", "s2"),
+    ("googledrive", "drive"),
+];
+
+/// the prefix a person meant by `scheme` when it is a site's name, or one typo from one, as
+/// `hugging-face` and `hugingface` are; letters alone count, whatever their case.
+fn site_named(scheme: &str) -> Option<&'static str> {
+    let word: String = scheme
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let name = SITE_NAMES
+        .iter()
+        .map(|(name, _)| *name)
+        .find(|name| *name == word)
+        .or_else(|| crate::name::sole_closest(&word, SITE_NAMES.map(|(name, _)| name)))?;
+    SITE_NAMES
+        .iter()
+        .find(|(site, _)| *site == name)
+        .map(|(_, prefix)| *prefix)
+}
+
 fn unknown(text: &str) -> Error {
     let text = crate::shown::mask_query(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
@@ -1187,6 +1219,42 @@ fn malformed(text: &str, expected: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a site's own name, or one typo from it, before the colon gets the prefix fetchloom reads.
+    #[test]
+    fn a_sites_name_as_a_prefix_suggests_its_own() {
+        for (typed, meant) in [
+            (
+                "huggingface:datasets/scikit-learn/iris",
+                "hf:datasets/scikit-learn/iris",
+            ),
+            (
+                "hugingface:datasets/scikit-learn/iris",
+                "hf:datasets/scikit-learn/iris",
+            ),
+            (
+                "Hugging-Face:datasets/mnist/mnist",
+                "hf:datasets/mnist/mnist",
+            ),
+            ("hugginface:org/data?token=abc", "hf:org/data?token=***"),
+            ("semantic-scholar:CorpusID:1", "s2:CorpusID:1"),
+        ] {
+            let error = Reference::parse(typed).unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid, "{typed}");
+            assert_eq!(
+                error.help.as_deref(),
+                Some(format!("did you mean {meant}?").as_str()),
+                "{typed}"
+            );
+        }
+        let error = Reference::parse("lab:iris").unwrap_err();
+        assert!(
+            error
+                .help
+                .is_some_and(|help| help.starts_with("use a name to search for")),
+            "a word near no site keeps the general help"
+        );
+    }
 
     /// a listing holds at most the files its run's network allows, here a test's few.
     #[test]
