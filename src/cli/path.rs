@@ -261,7 +261,8 @@ fn unbuilt(manifest: &Manifest, lock: Option<&Lock>, name: &str) -> Result<(), E
     )))
 }
 
-/// validates the answer against the same plan used to check readiness.
+/// where `file` in `name`, or `name`'s folder, is among what `planned` places: the plan that
+/// decided whether it is ready, so the answer never names a path that plan leaves out.
 fn planned_path(
     project: &Project,
     manifest: &Manifest,
@@ -339,7 +340,8 @@ fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
     ))
 }
 
-/// a ready answer from one lock snapshot and one plan, without a mutation hold.
+/// the answer when the files it names are in place, from one read of data.lock and one plan,
+/// without holding the project; none when a sync must place them first.
 fn ready_path(
     context: &Context,
     project: &Project,

@@ -329,7 +329,7 @@ pub(in crate::cli) async fn find(
         .collect())
 }
 
-/// the files left out of `found` yet, as `left` lists them.
+/// the indexes of the files `found` has no place for yet.
 fn left(found: &[Option<Found>]) -> Vec<usize> {
     (0..found.len()).filter(|at| found[*at].is_none()).collect()
 }
