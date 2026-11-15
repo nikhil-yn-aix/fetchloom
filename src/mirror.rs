@@ -85,12 +85,15 @@ impl Location {
             }
         }
         if !url.username().is_empty() || url.password().is_some() {
-            let host = url.host_str().unwrap_or("the host");
+            // a sign-in is kept for its host and port, as `auth login` takes them
+            let host = match url.port() {
+                Some(port) => format!("{}:{port}", crate::net::host(&url)),
+                None => crate::net::host(&url).to_owned(),
+            };
+            let sign_in = crate::account::Account::Login(host).command();
             return Err(Refusal {
                 reason: "it holds a login".to_owned(),
-                instead: format!(
-                    "write the address without it, and sign in with `fetchloom auth login {host}`"
-                ),
+                instead: format!("write the address without it, and sign in with `{sign_in}`"),
             });
         }
         if url.query().is_some() || url.fragment().is_some() {
@@ -233,6 +236,15 @@ mod tests {
             (
                 "https://ada:secret@lab.example/m",
                 "write the address without it, and sign in with `fetchloom auth login lab.example`",
+            ),
+            // a login is kept for its host and port, and a host goes quoted for a shell
+            (
+                "https://ada:secret@lab.example:8443/m",
+                "write the address without it, and sign in with `fetchloom auth login lab.example:8443`",
+            ),
+            (
+                "https://ada:secret@x$(id).example/m",
+                "write the address without it, and sign in with `fetchloom auth login 'x$(id).example'`",
             ),
             (
                 "https://lab.example/m?token=abc",
