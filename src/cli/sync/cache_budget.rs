@@ -82,20 +82,29 @@ pub(in crate::cli) struct Over<'a> {
     pub(in crate::cli) largest: Vec<(String, u64)>,
     /// whether `FETCHLOOM_CACHE_BUDGET` sets the budget, which then wins over the settings file.
     pub(in crate::cli) by_variable: bool,
+    /// whether the run has no project, as `get`, whose datasets could be dropped or removed.
+    pub(in crate::cli) projectless: bool,
 }
 
-/// what a run stopped at the budget may do next: free room, or raise the budget where it is set,
-/// `FETCHLOOM_CACHE_BUDGET` when that variable sets it, since it wins over the settings file.
-pub(in crate::cli) fn refused_help(by_variable: bool) -> String {
+/// what a run stopped at the budget may do next: what [`freeing_help`] says, then run again, or
+/// go on with `--yes`.
+pub(in crate::cli) fn refused_help(by_variable: bool, projectless: bool) -> String {
+    format!(
+        "{}, then run the same command again. add --yes to go on anyway",
+        freeing_help(by_variable, projectless)
+    )
+}
+
+/// what frees room in the cache, without a project's datasets for a run that has none, or
+/// raises the budget where it is set: `FETCHLOOM_CACHE_BUDGET` when that variable sets it, since
+/// it wins over the settings file. a run that went past it with `--yes` is told this alone.
+pub(in crate::cli) fn freeing_help(by_variable: bool, projectless: bool) -> String {
     let raising = if by_variable {
         "raise FETCHLOOM_CACHE_BUDGET"
     } else {
         "raise the budget with `fetchloom settings set cache_budget <size>`"
     };
-    format!(
-        "{}, or {raising}, then run the same command again. add --yes to go on anyway",
-        Over::freeing()
-    )
+    format!("{}, or {raising}", Over::freeing(projectless))
 }
 
 impl Over<'_> {
@@ -142,8 +151,11 @@ impl Over<'_> {
 
     /// the commands that free a dataset's files: dropping it here, which keeps it pinned, or
     /// removing it, then gc, which deletes only what no project needs, at once with `--now`, as
-    /// gc alone keeps a file a day.
-    fn freeing() -> String {
+    /// gc alone keeps a file a day. a run with no project, `projectless`, has gc alone.
+    fn freeing(projectless: bool) -> String {
+        if projectless {
+            return "`fetchloom cache gc --now` frees what no project needs".to_owned();
+        }
         format!(
             "`{}` frees a dataset's files here and keeps it pinned, or `{}` and then `fetchloom cache gc --now` free them and take it out of the project",
             crate::suggested::command("drop <name>"),
@@ -158,7 +170,7 @@ pub(in crate::cli) fn ask(output: &Output, yes: bool, over: &Over<'_>) -> Result
     let room = over.room();
     if yes {
         let mut help = room.clone();
-        help.push(Over::freeing());
+        help.push(Over::freeing(over.projectless));
         output.warn_detailed(
             Warning::CacheOverBudget,
             &over.said("brings"),
@@ -185,7 +197,7 @@ pub(in crate::cli) fn ask(output: &Output, yes: bool, over: &Over<'_>) -> Result
         None => Err(room
             .into_iter()
             .fold(Error::new(Kind::Unconfirmed, said), Error::detail)
-            .help(refused_help(over.by_variable))),
+            .help(refused_help(over.by_variable, over.projectless))),
     }
 }
 
@@ -310,6 +322,7 @@ mod tests {
                 .map(|(name, size)| ((*name).to_owned(), *size))
                 .collect(),
             by_variable: false,
+            projectless: false,
         };
         let told = over(
             Some((3 * GIB, 0)),
@@ -354,6 +367,7 @@ mod tests {
             freeable: Some((3 * GIB, 0)),
             largest: vec![("imagenet".to_owned(), 180 * GIB)],
             by_variable: false,
+            projectless: false,
         };
         let style = crate::output::Style {
             color: false,

@@ -355,6 +355,8 @@ struct Approval {
     budget: Option<(u64, u64)>,
     /// whether `FETCHLOOM_CACHE_BUDGET` sets the budget, so its question says to raise that.
     by_variable: bool,
+    /// whether the run has no project, as `get`, so the budget's help names no dataset.
+    projectless: bool,
 }
 
 impl Approval {
@@ -366,6 +368,7 @@ impl Approval {
             free: crate::space::free,
             budget: None,
             by_variable: false,
+            projectless: false,
         }
     }
 
@@ -389,7 +392,7 @@ impl Approval {
         let disk = free.map(|free| (free, Bound::Disk));
         let budget = self
             .budget
-            .map(|(held, budget)| (budget.saturating_sub(held), Bound::Budget(budget)));
+            .map(|(held, budget)| (budget.saturating_sub(held), Bound::Budget { budget, held }));
         match (disk, budget) {
             (Some(disk), Some(budget)) if budget.0 < disk.0 => Some(budget),
             (Some(disk), _) => Some(disk),
@@ -399,21 +402,21 @@ impl Approval {
 }
 
 /// what ends a download of no stated size: the free room on the cache's disk, or what the
-/// `cache_budget` setting, of these bytes, leaves the cache.
+/// `cache_budget` setting leaves the cache past the bytes its files `held` before the download.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Bound {
     Disk,
-    Budget(u64),
+    Budget { budget: u64, held: u64 },
 }
 
 /// the error, or for a person who can answer the question, of a download of no stated size that
 /// took `room`, all that `bound` leaves it on the disk holding `cache`, and what to do: the budget's
-/// help names the variable that set it, when one did.
+/// help names the variable that set it, when one did, and no dataset for a run `projectless`.
 fn unbounded(
     label: &str,
     (room, bound): (u64, Bound),
     cache: &std::path::Path,
-    by_variable: bool,
+    (by_variable, projectless): (bool, bool),
 ) -> (String, String) {
     let (took, help) = match bound {
         Bound::Disk => (
@@ -424,20 +427,28 @@ fn unbounded(
             ),
             "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again".to_owned(),
         ),
-        Bound::Budget(budget) if room >= budget => (
+        Bound::Budget { budget, held } if held >= budget => (
+            format!(
+                "the cache already held {}, past its {} cache_budget, before downloading {label}",
+                units::size(held),
+                units::size(budget)
+            ),
+            cache_budget::refused_help(by_variable, projectless),
+        ),
+        Bound::Budget { budget, .. } if room >= budget => (
             format!(
                 "downloading {label} took all of the {} cache_budget",
                 units::size(budget)
             ),
-            cache_budget::refused_help(by_variable),
+            cache_budget::refused_help(by_variable, projectless),
         ),
-        Bound::Budget(budget) => (
+        Bound::Budget { budget, .. } => (
             format!(
                 "downloading {label} took the {} the {} cache_budget leaves the cache",
                 units::size(room),
                 units::size(budget)
             ),
-            cache_budget::refused_help(by_variable),
+            cache_budget::refused_help(by_variable, projectless),
         ),
     };
     (format!("{took}, and its server never said its size"), help)
@@ -662,18 +673,14 @@ impl<'a> Watch<'a> {
             return Ok(());
         }
         let bound = *self.bound.lock().unwrap_or_else(PoisonError::into_inner);
-        let budgeted = matches!(bound, Bound::Budget(_));
-        let (took, help) = unbounded(
-            &self.job.label,
-            (room, bound),
-            cache,
-            self.approval.by_variable,
-        );
+        let budgeted = matches!(bound, Bound::Budget { .. });
+        let told = (self.approval.by_variable, self.approval.projectless);
+        let (took, help) = unbounded(&self.job.label, (room, bound), cache, told);
         if budgeted && self.yes {
             self.output.warn_with(
                 Warning::CacheOverBudget,
                 &format!("{took}; --yes goes on while the disk has room"),
-                &help,
+                &cache_budget::freeing_help(told.0, told.1),
             );
             self.on_the_disk(arrived, cache);
             return Ok(());
@@ -853,6 +860,7 @@ impl<'a> Watch<'a> {
             freeable: None,
             largest: Vec::new(),
             by_variable: self.approval.by_variable,
+            projectless: self.approval.projectless,
         };
         cache_budget::ask(self.output, self.yes, &over)
     }
@@ -1412,7 +1420,8 @@ async fn run_each(
     let in_flight = context.settings.jobs.value * 2;
     let mut done = 0;
     // unknown source sizes share one answer, once headers or received bytes show a large file
-    let approval = Approval::new(context.settings.ask_above.value).with_room(cache.root());
+    let mut approval = Approval::new(context.settings.ask_above.value).with_room(cache.root());
+    approval.projectless = context.projectless;
     let approval = Arc::new(budgeted(context, cache, approval, overall.sizes.1 > 0).await);
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
@@ -2260,7 +2269,7 @@ mod tests {
             resumed: 0,
             resumable: Resumable::No,
         };
-        let budget_help = crate::cli::sync::cache_budget::refused_help(false);
+        let budget_help = crate::cli::sync::cache_budget::refused_help(false, false);
         for (budget, yes, room, kind, message, help) in [
             (
                 None,
@@ -2319,9 +2328,15 @@ mod tests {
     fn a_stop_at_the_whole_budget_names_it_once() {
         let (said, help) = unbounded(
             "big.bin",
-            (9000, Bound::Budget(9000)),
+            (
+                9000,
+                Bound::Budget {
+                    budget: 9000,
+                    held: 0,
+                },
+            ),
             std::path::Path::new("/cache"),
-            true,
+            (true, false),
         );
         assert_eq!(
             said,

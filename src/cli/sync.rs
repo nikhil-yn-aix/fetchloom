@@ -1396,6 +1396,7 @@ impl<'a> Loop<'a> {
             largest,
             by_variable: self.context.settings.cache_budget.origin
                 == crate::settings::Origin::Environment,
+            projectless: false,
         };
         cache_budget::ask(&self.context.output, self.context.yes, &over)
             .map_err(|error| self.as_left(error))

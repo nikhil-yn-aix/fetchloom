@@ -2394,6 +2394,60 @@ fn a_download_the_cache_disk_cannot_hold_asks_first() -> Result {
     Ok(())
 }
 
+/// a get, which has no project, past the cache_budget is told what frees room without one: with
+/// --yes it warns without the refusal's `add --yes`, and a cache past its budget before the
+/// download is said to be, not to leave the download 0 B.
+#[test]
+fn a_get_past_the_budget_is_told_what_frees_room_without_a_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'x'; 4096];
+    // without a length, the body ends when the server hangs up
+    let server = Server::start(
+        PATH,
+        vec![reply("200 OK", &[], &body), reply("200 OK", &[], &body)],
+    )?;
+    let get = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_CACHE_BUDGET", "1B")
+            .output()
+    };
+    let gone_on = get(&["--json", "get", "--yes", &server.url])?;
+    let document = json(&gone_on)?;
+    assert_eq!(gone_on.status.code(), Some(0), "{document}");
+    let warned = crate::support::warning(&document, "cache.over_budget");
+    assert_eq!(
+        warned["message"],
+        "downloading iris.csv took all of the 1 B cache_budget, and its server never said its size; --yes goes on while the disk has room",
+        "{document}"
+    );
+    assert_eq!(
+        warned["help"],
+        "`fetchloom cache gc --now` frees what no project needs, or raise FETCHLOOM_CACHE_BUDGET",
+        "{document}"
+    );
+    let refused = get(&["--json", "get", "-o", "again.csv", &server.url])?;
+    let document = json(&refused)?;
+    assert_eq!(refused.status.code(), Some(1), "{document}");
+    let error = &document["errors"][0];
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("the cache already held ")
+            && message.ends_with(
+                ", past its 1 B cache_budget, before downloading iris.csv, and its server never said its size"
+            ),
+        "{document}"
+    );
+    let help = error["help"].as_str().unwrap_or_default();
+    assert!(
+        help.starts_with(
+            "`fetchloom cache gc --now` frees what no project needs, or raise FETCHLOOM_CACHE_BUDGET, then run "
+        ) && help.ends_with(" again. add --yes to go on anyway"),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// the bytes are counted as they come, so it stops before the disk fills; `--yes` goes on.
 #[test]
 fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {

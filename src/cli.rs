@@ -85,6 +85,8 @@ struct Context {
     lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
     /// what this machine remembers of each host's speed, and what this run's transfers add.
     speeds: net::speeds::Speeds,
+    /// whether the command works with no project, as `get` does, so no advice names a dataset.
+    projectless: bool,
     /// how the run's downloads hash, read from its settings once, shared by every download.
     hashing: crate::cache::Hashing,
 }
@@ -124,6 +126,7 @@ impl Context {
             building: None,
             lists: std::sync::Mutex::default(),
             speeds: net::speeds::Speeds::default(),
+            projectless: false,
             hashing: crate::cache::Hashing::default(),
         }
     }
@@ -773,6 +776,7 @@ pub(crate) fn run() -> ExitCode {
         context.output.warn(Warning::TraceUnwritable, refused);
     }
     context.yes = global.yes;
+    context.projectless = matches!(args.command, Some(args::Command::Get(_)));
     context.speeds = net::speeds::Speeds::at(net::speeds::folder(&var));
     context.building = var("FETCHLOOM_BUILDING")
         .filter(|value| !value.is_empty())
