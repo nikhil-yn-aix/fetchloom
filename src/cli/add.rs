@@ -1218,6 +1218,8 @@ pub(super) async fn sync_add(
     let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads, stop)?;
     survey.check_doubted(&project.root, &work.cache)?;
     disk::audit(project, &survey, &work.cache)?;
+    // a dataset dropped here that the add names comes back, as `sync <name>` brings it back
+    super::drop::brought_back(&mut survey, &names.iter().cloned().collect());
     work.placing_next();
     let (lock, before) = work
         .relock(manifest, old, &Upgrade::Nothing, given)
@@ -1681,6 +1683,7 @@ async fn again(
         return Ok(Report::dry(work.project.root.clone(), Vec::new(), outcome));
     }
     let names = [name.to_owned()];
+    let back = work.project.dropped().contains(name);
     let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
     // a project that became a git repository after its first add gets its ignore rule now
     ignore_data(work, manifest, false)?;
@@ -1692,9 +1695,15 @@ async fn again(
     } else {
         "its archives contain no regular files".to_owned()
     };
-    work.context
-        .output
-        .done("Ok", &format!("{name} is already in data.toml, {contents}"));
+    let back = if back {
+        " and back on this machine"
+    } else {
+        ""
+    };
+    work.context.output.done(
+        "Ok",
+        &format!("{name} is already in data.toml{back}, {contents}"),
+    );
     Ok(Report {
         project: work.project.root.clone(),
         datasets: Vec::new(),

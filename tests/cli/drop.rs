@@ -110,6 +110,29 @@ fn a_dropped_dataset_is_left_out_until_a_sync_names_it() -> Result {
     Ok(())
 }
 
+/// adding a dropped dataset's link again brings it back, as `sync <name>` does, and says so.
+#[test]
+fn an_add_of_a_dropped_dataset_brings_it_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = iris(&sandbox)?;
+    let placed = sandbox.work().join("data/iris/iris.csv");
+    ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
+    assert!(!placed.exists());
+    let output = sandbox.run(&["add", &format!("{}/files/iris.csv", source.url)])?;
+    ok(&output)?;
+    let told = text(&output.stderr)?;
+    assert!(
+        told.contains(
+            "Ok iris is already in data.toml and back on this machine, its files are in data/iris"
+        ),
+        "{told}"
+    );
+    assert_eq!(fs::read(&placed)?, IRIS);
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["dropped"], json!([]), "{status}");
+    Ok(())
+}
+
 #[test]
 fn a_dataset_no_mirror_or_source_has_stays_and_a_mirror_brings_one_back() -> Result {
     let sandbox = Sandbox::new()?;
