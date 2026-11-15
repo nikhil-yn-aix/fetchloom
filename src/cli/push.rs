@@ -1430,7 +1430,8 @@ fn other_bytes(label: &str) -> Error {
         format!("the cache's copy of {label} does not hold its pinned bytes, so it was not pushed"),
     )
     .help(format!(
-        "run `fetchloom cache verify`, which notes it, then `{}` to fetch it again",
+        "run `{}`, which notes it, then `{}` to fetch it again",
+        crate::suggested::anywhere("cache verify"),
         super::project::command("sync")
     ))
 }

@@ -244,8 +244,15 @@ pub(crate) struct Runnable {
 
 /// the first `fetchloom` command quoted in `help`, without its backticks, when a script may run it
 /// as the next step. json-output.md's `errors[].fix` lists what never is: an example, a guess, a
-/// person's choice, one of the ways offered with `or`, or under `locked` a write to data.lock.
-fn fix(help: &str, locked: bool, judge: fn(&str) -> Option<Runnable>) -> Option<&str> {
+/// person's choice, one of the ways offered with `or`, under `locked` a write to data.lock, or a
+/// command this run did not write itself, as `written` tells, such as one a name from a project
+/// file or a server spells out between backticks, or the command that failed, given back.
+fn fix(
+    help: &str,
+    locked: bool,
+    judge: fn(&str) -> Option<Runnable>,
+    written: fn(&str) -> bool,
+) -> Option<&str> {
     const NOT_A_FIX: [&str; 9] = [
         "as in",
         "such as",
@@ -275,7 +282,7 @@ fn fix(help: &str, locked: bool, judge: fn(&str) -> Option<Runnable>) -> Option<
             && !part.contains(['<', '>'])
             && let Some(runnable) = judge(part)
         {
-            if !runnable.harmless {
+            if !runnable.harmless || !written(part) {
                 return None;
             }
             if !locked || !runnable.changes_lock {
@@ -1140,10 +1147,14 @@ impl Output {
                 message: &error.message,
                 details: &error.details,
                 help: error.help.as_deref(),
-                fix: error
-                    .help
-                    .as_deref()
-                    .and_then(|help| fix(help, self.locked.load(Ordering::Relaxed), judge)),
+                fix: error.help.as_deref().and_then(|help| {
+                    fix(
+                        help,
+                        self.locked.load(Ordering::Relaxed),
+                        judge,
+                        crate::suggested::is_written,
+                    )
+                }),
                 failures: (!error.failures.is_empty()).then_some(&*error.failures),
             }],
         };

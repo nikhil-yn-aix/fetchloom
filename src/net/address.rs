@@ -415,7 +415,8 @@ fn not_proxy(name: &str, value: &str) -> Error {
         ),
     )
     .help(format!(
-        "set {name} to a proxy, such as http://proxy.example.org:8080, or unset {name} to connect without one. `fetchloom help environment` lists the proxy settings"
+        "set {name} to a proxy, such as http://proxy.example.org:8080, or unset {name} to connect without one. `{}` lists the proxy settings",
+        crate::suggested::anywhere("help environment")
     ))
 }
 

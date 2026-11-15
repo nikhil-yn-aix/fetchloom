@@ -171,33 +171,42 @@ fn message(err: &clap::Error) -> String {
 
 /// what a command people bring from pip, git, gh, npm or wget is called here: the nearest
 /// spelling would send `install` to `list` and `update` to `path`.
-fn habit(command: &str) -> Option<&'static str> {
+fn habit(command: &str) -> Option<String> {
+    let anywhere = crate::suggested::anywhere;
     Some(match command {
-        "auth status" => "`fetchloom auth` alone lists each account and whether it is signed in",
-        "init" => "no init needed: `fetchloom add <link>` starts a project in this folder",
-        "new" => "no setup needed: `fetchloom add <link>` starts a project in this folder",
-        "install" => "`fetchloom add <name>` adds a dataset; `fetchloom sync` fills data/",
+        "auth status" => format!(
+            "`{}` alone lists each account and whether it is signed in",
+            anywhere("auth")
+        ),
+        "init" => "no init needed: `fetchloom add <link>` starts a project in this folder".to_owned(),
+        "new" => "no setup needed: `fetchloom add <link>` starts a project in this folder".to_owned(),
+        "install" => "`fetchloom add <name>` adds a dataset; `fetchloom sync` fills data/".to_owned(),
         "download" | "fetch" => {
-            "`fetchloom get <name>` downloads once; `fetchloom add <name>` pins it"
+            "`fetchloom get <name>` downloads once; `fetchloom add <name>` pins it".to_owned()
         }
-        "pull" => "`fetchloom sync` puts the files data.lock pins into data/",
+        "pull" => "`fetchloom sync` puts the files data.lock pins into data/".to_owned(),
         "update" | "upgrade" => {
-            "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`"
+            "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`".to_owned()
         }
-        "delete" | "uninstall" => "`fetchloom remove <name>` removes a dataset from the project",
-        "config" | "configure" => {
-            "`fetchloom settings` shows each setting; `fetchloom settings set <key> <value>` changes one"
+        "delete" | "uninstall" => {
+            "`fetchloom remove <name>` removes a dataset from the project".to_owned()
         }
+        "config" | "configure" => format!(
+            "`{}` shows each setting; `fetchloom settings set <key> <value>` changes one",
+            anywhere("settings")
+        ),
         "clean" | "clear" => {
-            "`fetchloom cache gc` frees what no project needs; `fetchloom drop <name>` frees a dataset here"
+            "`fetchloom cache gc` frees what no project needs; `fetchloom drop <name>` frees a dataset here".to_owned()
         }
-        "import" => "`fetchloom add <path>` adds files on this machine to the project",
-        "settings get" | "settings show" | "settings list" => {
-            "`fetchloom settings` shows each setting, its value and where it came from"
-        }
-        "show" | "info" => {
-            "`fetchloom list` shows the project's datasets; `fetchloom list <name>` one"
-        }
+        "import" => "`fetchloom add <path>` adds files on this machine to the project".to_owned(),
+        "settings get" | "settings show" | "settings list" => format!(
+            "`{}` shows each setting, its value and where it came from",
+            anywhere("settings")
+        ),
+        "show" | "info" => format!(
+            "`{}` shows the project's datasets; `fetchloom list <name>` one",
+            super::project::command("list")
+        ),
         _ => return None,
     })
 }
@@ -352,7 +361,7 @@ fn describe(
             }
         })
     {
-        meant.to_owned()
+        meant
     } else if let Some(meant) = guess(err, parent) {
         format!("did you mean `{meant}`?")
     } else if let Some(reason) = (err.kind() == ErrorKind::ValueValidation)

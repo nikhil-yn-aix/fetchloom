@@ -650,7 +650,8 @@ pub(super) fn proxy_down(url: &Url, carrier: &address::Carrier, reason: &str) ->
         ),
     )
     .help(format!(
-        "{check}. `fetchloom help environment` lists the proxy settings"
+        "{check}. `{}` lists the proxy settings",
+        crate::suggested::anywhere("help environment")
     ))
 }
 
@@ -983,7 +984,8 @@ fn gave_up(
     };
     match through {
         Some(_) => error.help(format!(
-            "{help}. `fetchloom help environment` lists the proxy settings"
+            "{help}. `{}` lists the proxy settings",
+            crate::suggested::anywhere("help environment")
         )),
         None => error.help(help),
     }

@@ -1601,11 +1601,11 @@ fn with_key_here(error: Error, var: crate::machine::Var<'_>) -> Error {
     } else {
         named
     };
-    with_key(
-        error,
-        &key,
-        Some("`fetchloom auth` shows where it comes from and whose it is"),
-    )
+    let check = format!(
+        "`{}` shows where it comes from and whose it is",
+        crate::suggested::anywhere("auth")
+    );
+    with_key(error, &key, Some(&check))
 }
 
 /// `error`, a refusal signing in could lift, refused with `key`: its help says the key was refused

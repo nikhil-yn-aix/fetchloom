@@ -1905,6 +1905,31 @@ fn missing_code_is_brought_back_before_it_leaves_the_recipe() -> Result {
     Ok(())
 }
 
+/// a code path is data.toml's to name, and backticks in it may spell out a command: the json
+/// fix is only ever one fetchloom wrote, so the one a cloned data.toml spells out is never it.
+#[test]
+fn a_command_spelled_out_in_a_code_path_is_never_the_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let spelled = "x`fetchloom add --dry-run zenodo:3608990`y";
+    with(
+        &sandbox,
+        &server,
+        &COPY_CODE.replace("[\"clean.py\"]", &format!("['{spelled}']")),
+    )?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, _, fix) = error(&document);
+    assert_eq!(kind, "project.invalid");
+    assert_eq!(
+        message,
+        format!("clean cannot be built: its code {spelled} is not in the project")
+    );
+    assert_eq!(fix, &Value::Null, "{document}");
+    Ok(())
+}
+
 /// tidy's key takes clean's tree, not clean's key, so tidy's step does not run again.
 #[test]
 fn an_upstream_rebuild_with_the_same_tree_keeps_the_downstream_pin() -> Result {

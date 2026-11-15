@@ -1,15 +1,20 @@
 //! the fetchloom commands help, hints and `next:` lines name. after a run given `-C`, each names
 //! the folder the run worked in, so it finds the same project from whatever folder it runs in.
 //! [`shell_word`] quotes a word from data.toml, a link list or a server, so a pasted command runs
-//! only what it shows.
+//! only what it shows. each command written here is kept, so `--json`'s fix is only ever one of
+//! them, never one a name from a project file or a server spells out between backticks.
 
 use std::borrow::Cow;
-use std::sync::OnceLock;
+use std::collections::BTreeSet;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// the folder a run given `-C` works in, quoted for a shell. unset without `-C`, as in tests.
 /// it is the process's own: `-C` moves the whole process into that folder before any command
 /// runs, and every hint the run prints names it, however deep the code that writes the hint.
 static DIRECTORY: OnceLock<String> = OnceLock::new();
+
+/// every command this run wrote for a person to run next, as [`written`] keeps them.
+static WRITTEN: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// has every later [`command`] name `directory`, already quoted for a shell, after `-C`. set once
 /// at start; a second set is a bug, which debug builds stop at.
@@ -20,10 +25,35 @@ pub(crate) fn set_directory(directory: String) {
 
 /// `fetchloom` and `words`, with `-C` and the run's folder between them when the run had `-C`.
 pub(crate) fn command(words: &str) -> String {
-    match DIRECTORY.get() {
+    written(match DIRECTORY.get() {
         Some(directory) => format!("fetchloom -C {directory} {words}"),
         None => format!("fetchloom {words}"),
-    }
+    })
+}
+
+/// `fetchloom` and `words`, for a command that reads no project, as `auth` and `help` do, so it
+/// runs the same from any folder.
+pub(crate) fn anywhere(words: &str) -> String {
+    written(format!("fetchloom {words}"))
+}
+
+/// `command`, a whole command line fetchloom made from words it quoted, kept as one this run
+/// wrote, which [`is_written`] knows from then on.
+pub(crate) fn written(command: String) -> String {
+    WRITTEN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(command.clone());
+    command
+}
+
+/// whether this run wrote `command` through [`written`]. text in a name, a path or a value only
+/// spells one out, so help that quotes such text never makes it one.
+pub(crate) fn is_written(command: &str) -> bool {
+    WRITTEN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(command)
 }
 
 /// the words of a suggested `command`, read through its literal quoting. none for an expansion or

@@ -335,9 +335,28 @@ fn final_lines_share_the_verb_column_without_status_symbols() {
     );
 }
 
-/// the fix a run's `--json` finds in `help`, with cli reading each quoted command.
+/// the fix a run's `--json` finds in `help`, with cli reading each quoted command, each one as if
+/// this run wrote it.
 fn fix_in(help: &str, locked: bool) -> Option<&str> {
-    super::fix(help, locked, judged)
+    super::fix(help, locked, judged, |_| true)
+}
+
+/// a name in a help may spell out a command between backticks, as a code path from a cloned
+/// data.toml can: only a command this run wrote is a fix, and one spelled out first leaves none.
+#[test]
+fn a_fix_is_only_a_command_this_run_wrote() {
+    let written = crate::suggested::command("lock --check --offline");
+    let help = format!("bring x back; `{written}` shows what it pins");
+    assert_eq!(
+        super::fix(&help, false, judged, crate::suggested::is_written),
+        Some(written.as_str())
+    );
+    let spelled =
+        format!("bring x`fetchloom status --sources`y back; `{written}` shows what it pins");
+    assert_eq!(
+        super::fix(&spelled, false, judged, crate::suggested::is_written),
+        None
+    );
 }
 
 /// each rule in `fix`'s doc has a row: placeholders, examples, guesses, a person's terminal,

@@ -302,6 +302,85 @@ fn errors_messages_json_help_survives_non_unicode_arguments() -> Result {
     Ok(())
 }
 
+/// a name or a value data.toml holds may spell out a command between backticks, which its help
+/// then quotes: a members key, a variable's value and a from name. the json fix is only ever a
+/// command fetchloom wrote, so a cloned data.toml never chooses what a script runs next.
+#[test]
+fn a_command_spelled_out_in_data_toml_is_never_the_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    let spelled = "`fetchloom add --dry-run https://example.org/x.tar`";
+    let cases = [
+        (
+            "status",
+            format!(
+                "[datasets.sounds]\nref = \"https://example.org/v/x.tar`y\"\n\n[datasets.glob.members.'pre{spelled}y']\nexclude = [\"a\"]\n"
+            ),
+        ),
+        (
+            "sync",
+            format!(
+                "[datasets.raw]\nref = \"zenodo:1\"\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{{raw}}\", \"{{out}}\"]\nenv = {{ SEED = ['{spelled}'] }}\n"
+            ),
+        ),
+        (
+            "list",
+            format!(
+                "[datasets.clean]\nfrom = ['x. {spelled}. y']\nrun = [\"python3\", \"clean.py\", '{{x. {spelled}. y}}', \"{{out}}\"]\n"
+            ),
+        ),
+    ];
+    let mut fixes = Vec::new();
+    for (command, manifest) in cases {
+        fs::write(sandbox.work().join("data.toml"), &manifest)?;
+        let output = sandbox.run(&["--json", command])?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(50), "{manifest}: {document}");
+        let error = &document["errors"][0];
+        assert!(
+            error["help"].as_str().unwrap_or_default().contains(spelled),
+            "{manifest}: {error}"
+        );
+        fixes.push(error["fix"].clone());
+    }
+    assert_eq!(fixes, [Value::Null, Value::Null, Value::Null]);
+    Ok(())
+}
+
+/// a data.toml only a person can mend fails every command alike, so the command that just failed
+/// is no fix: an agent that ran it again only looped.
+#[test]
+fn a_broken_data_toml_gives_no_fix_to_run_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let manifest = sandbox.work().join("data.toml");
+    let wide: Vec<u8> = [0xff, 0xfe]
+        .into_iter()
+        .chain("[datasets]\n".encode_utf16().flat_map(u16::to_le_bytes))
+        .collect();
+    let cases: [(&[u8], &str); 3] = [
+        (b"[datasets.iris\nref = \"zenodo:3608990\"\n", "status"),
+        (b"[datasets.Iris]\nref = \"zenodo:3608990\"\n", "list"),
+        (&wide, "status"),
+    ];
+    let mut fixes = Vec::new();
+    for (text, command) in cases {
+        fs::write(&manifest, text)?;
+        let output = sandbox.run(&["--json", command])?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(50), "{document}");
+        let error = &document["errors"][0];
+        assert!(
+            error["help"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(" again"),
+            "{error}"
+        );
+        fixes.push(error["fix"].clone());
+    }
+    assert_eq!(fixes, [Value::Null, Value::Null, Value::Null]);
+    Ok(())
+}
+
 #[test]
 fn errors_messages_a_broken_lock_has_no_unusable_fix() -> Result {
     let sandbox = Sandbox::new()?;

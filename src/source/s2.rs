@@ -176,7 +176,10 @@ fn refused_key(about: &str, origin: &Origin) -> Error {
         Origin::Variable(name) => format!(
             "the key may be old or wrong: set {name} to a current key from {S2_KEYS}, or unset {name} to use the key `fetchloom auth login s2` saves"
         ),
-        _ => "the key may be old or wrong: `fetchloom auth` shows where it comes from".to_owned(),
+        _ => format!(
+            "the key may be old or wrong: `{}` shows where it comes from",
+            crate::suggested::anywhere("auth")
+        ),
     };
     Error::new(
         Kind::AuthRequired,

@@ -1821,13 +1821,16 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
                 return error.help("run `fetchloom add <link>` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`");
             };
             // after -C, the folder below it is named whole, as the run's own folder is
-            let run = super::typed::in_folder(first).unwrap_or_else(|| {
-                let folder = here.join(first);
-                format!(
-                    "fetchloom -C {} <command>",
-                    crate::suggested::shell_folder(&folder.to_string_lossy())
-                )
-            });
+            let run = super::typed::in_folder(first).map_or_else(
+                || {
+                    let folder = here.join(first);
+                    format!(
+                        "fetchloom -C {} <command>",
+                        crate::suggested::shell_folder(&folder.to_string_lossy())
+                    )
+                },
+                crate::suggested::written,
+            );
             let folders: Vec<String> = below.iter().map(|folder| format!("{folder}/")).collect();
             if let [one] = folders.as_slice() {
                 error.help(format!("there is one in {one}: run `{run}`"))

@@ -88,9 +88,12 @@ fn unanswered(catalog: Catalog, words: &str, grace: Duration) -> Short {
             grace.as_secs()
         ),
         help: Some(format!(
-            "`fetchloom search {} --source {}` waits for it",
-            crate::suggested::shell_word(words),
-            catalog.name()
+            "`{}` waits for it",
+            crate::suggested::anywhere(&format!(
+                "search {} --source {}",
+                crate::suggested::shell_word(words),
+                catalog.name()
+            ))
         )),
     }
 }

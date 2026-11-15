@@ -231,8 +231,10 @@ impl Repo {
             Origin::Variable(name) => format!(
                 "the key may be old or wrong: set {name} to a current key from {TOKENS}, or unset {name} to use the key `fetchloom auth login hf` saves"
             ),
-            _ => "the key may be old or wrong: `fetchloom auth` shows where it comes from and whose it is"
-                .to_owned(),
+            _ => format!(
+                "the key may be old or wrong: `{}` shows where it comes from and whose it is",
+                crate::suggested::anywhere("auth")
+            ),
         };
         Error::new(
             Kind::AuthRequired,
