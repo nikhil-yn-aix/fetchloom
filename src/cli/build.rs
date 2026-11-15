@@ -371,7 +371,7 @@ impl<'a> Building<'a> {
 
     /// runs the step of `name` again from the inputs data.lock pins: a rebuild that matches enters
     /// the cache as the pinned result, and one that differs is kept for `--accept`.
-    async fn check_step(&mut self, name: &str) -> Result<Done, Error> {
+    async fn check_step(&self, name: &str) -> Result<Done, Error> {
         let output = &self.context.output;
         let step = Step::read(&self.work.project.root, &self.manifest, &self.lock, name)?
             .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
