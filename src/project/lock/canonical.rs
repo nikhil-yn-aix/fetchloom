@@ -194,13 +194,14 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
         }
     }
     let [title, license, doi] = optional;
-    let mut access = Access::Unknown;
-    if lines.sets("access") {
+    let access = if lines.sets("access") {
         let word = lines.value("access")?;
-        access = [Access::Public, Access::Login, Access::Terms]
+        [Access::Public, Access::Login, Access::Terms]
             .into_iter()
-            .find(|access| access.word() == word)?;
-    }
+            .find(|access| access.word() == word)?
+    } else {
+        Access::Unknown
+    };
     let timestamp = lines.value("locked")?;
     let mut locked = Locked {
         name,
