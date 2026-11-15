@@ -1,6 +1,7 @@
 """the workflows pin each tool's version once, in their env, agree on the tools they share and run
 on named images."""
 
+import itertools
 from pathlib import Path
 import re
 import tomllib
@@ -97,6 +98,18 @@ class WorkflowTests(unittest.TestCase):
         for install in installs:
             with self.subTest(install=install[0]):
                 self.assertGreater(install.start(), after.index("name: packages-"))
+
+
+    def test_install_action_never_falls_back(self):
+        """for a tool or version it has no checked release of, install-action otherwise turns to
+        cargo-binstall, which takes a binary from wherever it finds one."""
+        for path in WORKFLOWS:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for number, line in enumerate(lines):
+                if "uses: taiki-e/install-action@" in line:
+                    step = itertools.takewhile(lambda following: following.startswith(" " * 8), lines[number + 1:])
+                    with self.subTest(workflow=path.name, line=number + 1):
+                        self.assertIn(" " * 10 + "fallback: none", list(step))
 
 
 if __name__ == "__main__":

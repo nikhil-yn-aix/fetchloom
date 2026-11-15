@@ -51,7 +51,8 @@ env:
   PIN_NEXTEST: cargo-nextest@0.9.151
   PIN_LLVM_COV: cargo-llvm-cov@0.9.1
   PIN_BOLERO: cargo-bolero@0.13.5
-  PIN_LYCHEE: lychee@0.24.2
+  PIN_LYCHEE: 0.24.2
+  PIN_LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
   PIN_MUTANTS: cargo-mutants@27.1.0
   PIN_NIGHTLY: nightly-2026-11-03
 
@@ -70,6 +71,7 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: ${{ env.PIN_LLVM_COV }},${{ env.PIN_NEXTEST }}
+          fallback: none
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: coverage
@@ -109,9 +111,8 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install "$PIN_NIGHTLY" --profile minimal
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
-        with:
-          tool: ${{ env.PIN_BOLERO }}
+      # install-action has no cargo-bolero, so it is built from its crates.io source
+      - run: cargo "+$PIN_NIGHTLY" install --locked "$PIN_BOLERO"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: fuzz-${{ env.PIN_NIGHTLY }}
@@ -184,9 +185,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
-        with:
-          tool: ${{ env.PIN_LYCHEE }}
+      # install-action has no lychee, so its release archive is checked against the pinned hash
+      - name: install lychee
+        run: |
+          archive="$RUNNER_TEMP/lychee.tar.gz"
+          curl --proto =https --tlsv1.2 -fsSL --retry 3 -o "$archive" \
+            "https://github.com/lycheeverse/lychee/releases/download/lychee-v$PIN_LYCHEE/lychee-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$PIN_LYCHEE_SHA256  $archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/lychee-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
       - name: check external documentation links
         run: |
           mkdir -p target/links
@@ -223,6 +230,7 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: ${{ env.PIN_MUTANTS }}
+          fallback: none
       - name: list and test at most ten mutations in one file
         # macos has no coreutils timeout; a step limit under the job's still lets the summary and upload run
         timeout-minutes: 28
