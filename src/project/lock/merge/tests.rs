@@ -604,6 +604,7 @@ fn recipe_results_merge_by_name() {
     let with_result = Lock {
         datasets: vec![core.clone()],
         derived: vec![clean.clone()],
+        stated: Vec::new(),
     };
     fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
     for (part, text) in with_result.lists() {
@@ -634,6 +635,7 @@ fn recipe_results_merge_by_name() {
             key: digest::sha256(b"another key"),
             ..clean.clone()
         }],
+        stated: Vec::new(),
     };
     let both = sides(with_result.render(), rebuilt.render(), None);
     let error = merging(&manifest, &both, &choices).unwrap_err();

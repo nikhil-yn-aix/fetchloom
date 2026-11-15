@@ -1282,6 +1282,7 @@ mod tests {
                 files,
             }],
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
@@ -1557,6 +1558,7 @@ mod tests {
                 pinned(&manifest, "untouched", &[("only.bin", false)]),
             ],
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         let mut beta = leaves(&[], &[("parts.zip", "a/one.txt")]);
         beta.copied.insert(
@@ -1622,6 +1624,7 @@ mod tests {
                     })
                     .collect(),
                 derived: Vec::new(),
+                stated: Vec::new(),
             };
             let edits: BTreeMap<&str, Edit> = names
                 .iter()
@@ -1662,6 +1665,7 @@ mod tests {
                 pinned(&manifest, "d", &[("whole.zip", true)]),
             ],
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();

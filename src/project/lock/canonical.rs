@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use super::derived::{self, Code, Derived, Input};
 use super::lists::Listed;
-use super::{Locked, LockedFile, Parsed, VERSION, prefixed};
+use super::{Locked, LockedFile, Parsed, Stated, StatedFile, VERSION, prefixed};
 use crate::digest::{Md5, Sha256};
 use crate::name;
 use crate::source::Access;
@@ -202,27 +202,7 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
             .find(|access| access.word() == word)?;
     }
     let timestamp = lines.value("locked")?;
-    let mut files: Vec<LockedFile> = Vec::new();
-    let mut listed = None;
-    match lines.next()? {
-        "files = []" => {}
-        "files = [" if !keep(&name) && lines.pass_files() => {}
-        "files = [" => loop {
-            let line = lines.next()?;
-            if line == "]" {
-                break;
-            }
-            let file = file(line)?;
-            if files.last().is_some_and(|last| last.path >= file.path)
-                || name::escapes(&file.path).is_some()
-            {
-                return None;
-            }
-            files.push(file);
-        },
-        line => listed = Some(list(line, lines)?),
-    }
-    let locked = Locked {
+    let mut locked = Locked {
         name,
         reference,
         spec,
@@ -234,9 +214,62 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
         doi,
         access,
         timestamp,
-        files,
+        files: Vec::new(),
     };
+    if lines.sets("downloaded") {
+        if lines.next()? != "downloaded = false" {
+            return None;
+        }
+        return stated(locked, lines, keep);
+    }
+    let mut listed = None;
+    match lines.next()? {
+        "files = []" => {}
+        "files = [" if !keep(&locked.name) && lines.pass_files() => {}
+        "files = [" => loop {
+            let line = lines.next()?;
+            if line == "]" {
+                break;
+            }
+            let file = file(line)?;
+            if locked
+                .files
+                .last()
+                .is_some_and(|last| last.path >= file.path)
+                || name::escapes(&file.path).is_some()
+            {
+                return None;
+            }
+            locked.files.push(file);
+        },
+        line => listed = Some(list(line, lines)?),
+    }
     Some(Parsed::Source(locked, listed))
+}
+
+/// a dataset not downloaded yet, after its `downloaded = false`: its files inline, each with the
+/// digests its source states. a source `keep` refuses is read with no files, as in [`dataset`].
+fn stated(pin: Locked, lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
+    let mut files: Vec<StatedFile> = Vec::new();
+    match lines.next()? {
+        "files = []" => {}
+        "files = [" if !keep(&pin.name) && lines.pass_files() => {}
+        "files = [" => loop {
+            let line = lines.next()?;
+            if line == "]" {
+                break;
+            }
+            let file = stated_file(line)?;
+            if files.last().is_some_and(|last| last.path >= file.path)
+                || name::escapes(&file.path).is_some()
+            {
+                return None;
+            }
+            files.push(file);
+        },
+        _ => return None,
+    }
+    Some(Parsed::Stated(Stated { pin, files }))
 }
 
 /// a list kept beside data.lock: the line `files_in = ["…", "…"]`, then the lines of
@@ -398,6 +431,41 @@ fn file(line: &str) -> Option<LockedFile> {
     })
 }
 
+/// one line of the files of a dataset not downloaded yet: `  { path = "…", size = 1, sha256 =
+/// "…", md5 = "…", url = "…" },`, with at least one of `sha256` and `md5`.
+fn stated_file(line: &str) -> Option<StatedFile> {
+    let (path, rest) = string(line.strip_prefix("  { path = ")?)?;
+    let rest = rest.strip_prefix(", size = ")?;
+    let digits = rest.find(|c: char| !c.is_ascii_digit())?;
+    let size = integer(&rest[..digits])?;
+    let rest = &rest[digits..];
+    let (sha256, rest) = match rest.strip_prefix(", sha256 = ") {
+        Some(rest) => {
+            let (sha256, rest) = string(rest)?;
+            (Some(Sha256::from_hex(&sha256)?), rest)
+        }
+        None => (None, rest),
+    };
+    let (md5, rest) = match rest.strip_prefix(", md5 = ") {
+        Some(rest) => {
+            let (md5, rest) = string(rest)?;
+            (Some(Md5::from_hex(&md5)?), rest)
+        }
+        None => (None, rest),
+    };
+    if sha256.is_none() && md5.is_none() {
+        return None;
+    }
+    let (url, rest) = string(rest.strip_prefix(", url = ")?)?;
+    (rest == " },").then(|| StatedFile {
+        path: path.into_owned(),
+        size,
+        sha256,
+        md5,
+        url: url.into_owned(),
+    })
+}
+
 /// a size as the writer prints it: digits without a leading zero, no larger than TOML allows.
 fn integer(digits: &str) -> Option<u64> {
     if digits.is_empty() || (digits.len() > 1 && digits.starts_with('0')) {
@@ -514,6 +582,7 @@ mod tests {
                     dataset("c", &files[3..], false),
                 ],
                 derived: vec![recipe("b-small", 2), recipe("d", 0)],
+                stated: Vec::new(),
             },
         ]
     }

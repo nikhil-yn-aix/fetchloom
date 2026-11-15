@@ -1692,6 +1692,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
                 tree: crate::cache::tree_hash(&files),
                 files,
             }],
+            stated: Vec::new(),
         };
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
@@ -1725,6 +1726,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
                 locked("vault", Access::Login),
             ],
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         let asks = asking(&manifest, &lock, &["report".to_owned(), "other".to_owned()]);
         assert_eq!(asks.len(), 1);
@@ -1737,6 +1739,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
                 locked("vault", Access::Public),
             ],
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         assert!(asking(&manifest, &public, &["report".to_owned()]).is_empty());
     }

@@ -37,7 +37,15 @@ pub(in crate::cli) fn forecast(manifest: &Manifest, lock: Lock) -> (Lock, Vec<Re
     ));
     datasets.extend(others);
     datasets.sort_by(|a, b| a.name.cmp(&b.name));
-    (Lock { datasets, derived }, renamed)
+    let stated = lock.stated;
+    (
+        Lock {
+            datasets,
+            derived,
+            stated,
+        },
+        renamed,
+    )
 }
 
 struct Match<'a> {

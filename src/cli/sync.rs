@@ -359,6 +359,7 @@ impl<'a> Loop<'a> {
                 .cloned()
                 .collect(),
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         let planned = plan::inputs(manifest, &sources, &self.cache)?;
         let unknown: Vec<(String, &LockedFile)> = planned
@@ -657,6 +658,7 @@ impl<'a> Loop<'a> {
         let others = Lock {
             datasets: others,
             derived: dropped,
+            stated: Vec::new(),
         };
         let mut asks = Vec::new();
         for (name, entry) in &manifest.datasets {
@@ -1798,6 +1800,7 @@ fn settled(
         Lock {
             datasets,
             derived: results,
+            stated: Vec::new(),
         },
         kept,
     )
@@ -2916,6 +2919,7 @@ mod tests {
         let old = Lock {
             datasets: vec![raw],
             derived: vec![result],
+            stated: Vec::new(),
         };
         let relock = |manifest: &Manifest| {
             block_on(runner.relock(manifest, Some(old.clone()), &Upgrade::Nothing, Vec::new()))

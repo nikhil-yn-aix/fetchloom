@@ -554,6 +554,7 @@ mod tests {
                 files,
             }],
             derived: Vec::new(),
+            stated: Vec::new(),
         }
     }
 

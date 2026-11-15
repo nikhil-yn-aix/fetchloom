@@ -1152,6 +1152,13 @@ fn pinned(locks: &Locks, name: &str, side: Side) -> Vec<String> {
         None => return vec!["not in data.lock".to_owned()],
         Some(Parsed::Source(locked, listed)) => (None, &locked.files, listed.as_ref()),
         Some(Parsed::Derived(derived, listed)) => (Some(derived.key), &[], Some(listed)),
+        Some(Parsed::Stated(stated)) => {
+            return vec![format!(
+                "{} \u{b7} {}, not downloaded yet",
+                units::count(stated.files.len() as u64, "file", "files"),
+                units::size(stated.bytes())
+            )];
+        }
     };
     let (count, bytes) = listed.map_or_else(
         || (files.len() as u64, files.iter().map(|file| file.size).sum()),

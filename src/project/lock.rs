@@ -104,6 +104,59 @@ pub(crate) struct Lock {
     pub(crate) datasets: Vec<Locked>,
     /// the datasets a recipe made, sorted by name. no name is in both lists.
     pub(crate) derived: Vec<Derived>,
+    /// the datasets pinned by what their sources state, not downloaded yet, sorted by name. no
+    /// name is in two lists.
+    pub(crate) stated: Vec<Stated>,
+}
+
+/// a dataset `add --no-sync` pinned by what its source states of each file, its size and SHA-256
+/// or MD5, before anything downloaded it. only a sync, which downloads it and pins it whole, uses
+/// its files; every other command that needs them refuses it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Stated {
+    /// the pin as a downloaded dataset's says it, but its `files`, which stay empty.
+    pub(crate) pin: Locked,
+    /// sorted by path.
+    pub(crate) files: Vec<StatedFile>,
+}
+
+/// a file as its source states it: a SHA-256, an MD5 or both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StatedFile {
+    pub(crate) path: String,
+    pub(crate) size: u64,
+    pub(crate) sha256: Option<Sha256>,
+    pub(crate) md5: Option<Md5>,
+    pub(crate) url: String,
+}
+
+impl Stated {
+    pub(crate) fn name(&self) -> &str {
+        &self.pin.name
+    }
+
+    /// what pins its files, as messages say it: each file's SHA-256 where its source states one,
+    /// else its MD5.
+    pub(crate) fn digests(&self) -> &'static str {
+        let sha256 = self
+            .files
+            .iter()
+            .filter(|file| file.sha256.is_some())
+            .count();
+        match sha256 {
+            0 => "MD5",
+            all if all == self.files.len() => "SHA-256",
+            _ => "SHA-256 and MD5",
+        }
+    }
+
+    /// the bytes of its files.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.files
+            .iter()
+            .map(|file| file.size)
+            .fold(0, u64::saturating_add)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -177,6 +230,8 @@ enum Parsed {
     Source(Locked, Option<lists::Listed>),
     /// a dataset a recipe made, with none of its files yet and the list that holds them.
     Derived(Derived, lists::Listed),
+    /// a dataset pinned by what its source states, its files always in data.lock.
+    Stated(Stated),
 }
 
 impl Parsed {
@@ -185,6 +240,7 @@ impl Parsed {
         match self {
             Parsed::Source(locked, None) => locked.files.len() as u64,
             Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed) => listed.count,
+            Parsed::Stated(stated) => stated.files.len() as u64,
         }
     }
 
@@ -192,6 +248,7 @@ impl Parsed {
         match self {
             Parsed::Source(locked, _) => &locked.name,
             Parsed::Derived(derived, _) => &derived.name,
+            Parsed::Stated(stated) => stated.name(),
         }
     }
 }
@@ -226,12 +283,27 @@ struct StoredDataset {
     key: Option<String>,
     #[serde(rename = "locked")]
     timestamp: String,
+    downloaded: Option<bool>,
     tree: Option<String>,
-    files: Option<Vec<LockedFile>>,
+    files: Option<Vec<StoredFile>>,
     files_in: Option<Vec<String>>,
     file_count: Option<u64>,
     file_bytes: Option<u64>,
     files_sha256: Option<String>,
+}
+
+/// one file of a `files` list: a downloaded dataset's with its SHA-256, or one its source states
+/// with a SHA-256, an MD5 or both.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredFile {
+    path: String,
+    size: u64,
+    sha256: Option<Sha256>,
+    md5: Option<Md5>,
+    url: String,
+    #[serde(default, deserialize_with = "tree")]
+    unpacks_to: Option<Sha256>,
 }
 
 #[derive(Deserialize)]
@@ -270,7 +342,14 @@ impl StoredDataset {
                 "data.lock gives {name} neither ref, spec and resolved, nor the from, run, key and tree of a recipe"
             )));
         };
-        let files = match (self.files, &listed) {
+        let stated = self.downloaded == Some(false);
+        if stated && listed.is_some() {
+            return Err(broken(format!(
+                "data.lock keeps the files of {name}, which is not downloaded yet, in {}, where fetchloom never keeps them",
+                lists::FOLDER
+            )));
+        }
+        let stored = match (self.files, &listed) {
             (Some(files), None) => files,
             (None, Some(_)) => Vec::new(),
             _ => {
@@ -279,7 +358,7 @@ impl StoredDataset {
                 )));
             }
         };
-        let locked = Locked {
+        let mut locked = Locked {
             name,
             reference,
             spec,
@@ -291,8 +370,35 @@ impl StoredDataset {
             doi: self.doi,
             access: self.access.unwrap_or_default(),
             timestamp: self.timestamp,
-            files,
+            files: Vec::new(),
         };
+        if stated {
+            let files = stored
+                .into_iter()
+                .map(|file| stated_file(&locked.name, file))
+                .collect::<Result<_, _>>()?;
+            return Ok(Parsed::Stated(Stated { pin: locked, files }));
+        }
+        locked.files = stored
+            .into_iter()
+            .map(|file| {
+                let Some(sha256) = file.sha256 else {
+                    return Err(broken(format!(
+                        "data.lock gives {} the file {} without its sha256",
+                        locked.name,
+                        quoted(&file.path)
+                    )));
+                };
+                Ok(LockedFile {
+                    path: file.path,
+                    size: file.size,
+                    sha256,
+                    md5: file.md5,
+                    url: file.url,
+                    unpacks_to: file.unpacks_to,
+                })
+            })
+            .collect::<Result<_, _>>()?;
         Ok(Parsed::Source(locked, listed))
     }
 
@@ -340,6 +446,7 @@ impl StoredDataset {
             ("license", self.license.is_some()),
             ("doi", self.doi.is_some()),
             ("access", self.access.is_some()),
+            ("downloaded", self.downloaded.is_some()),
             ("files", self.files.is_some()),
         ];
         if let Some((key, _)) = fetched.iter().find(|(_, set)| *set) {
@@ -421,6 +528,29 @@ impl StoredDataset {
     }
 }
 
+/// a file of `name`, a dataset not downloaded yet, as its source states it: with a SHA-256, an MD5
+/// or both, and never what it unpacks to, which only its bytes tell.
+fn stated_file(name: &str, file: StoredFile) -> Result<StatedFile, Error> {
+    let path = quoted(&file.path);
+    if file.unpacks_to.is_some() {
+        return Err(broken(format!(
+            "data.lock gives the file {path} of {name}, which is not downloaded yet, what it unpacks to, which only its bytes tell"
+        )));
+    }
+    if file.sha256.is_none() && file.md5.is_none() {
+        return Err(broken(format!(
+            "data.lock gives the file {path} of {name}, which is not downloaded yet, neither a sha256 nor an md5"
+        )));
+    }
+    Ok(StatedFile {
+        path: file.path,
+        size: file.size,
+        sha256: file.sha256,
+        md5: file.md5,
+        url: file.url,
+    })
+}
+
 /// a lock's `version` alone, of any type: a lock in another format may not read as this one.
 #[derive(Deserialize)]
 struct VersionOnly {
@@ -470,6 +600,63 @@ impl Lock {
         self.derived.get(index)
     }
 
+    /// the dataset named `name` that its source's digests pin before a sync downloads it.
+    pub(crate) fn stated(&self, name: &str) -> Option<&Stated> {
+        let index = self
+            .stated
+            .binary_search_by(|stated| stated.name().cmp(name))
+            .ok()?;
+        self.stated.get(index)
+    }
+
+    /// refuses the datasets of `names` that only their sources' digests pin, since a command
+    /// that needs their files can use them only once a sync downloaded them.
+    ///
+    /// # Errors
+    ///
+    /// `data.not_ready`, naming each such dataset and the sync that downloads it.
+    pub(crate) fn refuse_stated<'n>(
+        &self,
+        names: impl IntoIterator<Item = &'n str>,
+    ) -> Result<(), Error> {
+        let mut found: Vec<&Stated> = names
+            .into_iter()
+            .filter_map(|name| self.stated(name))
+            .collect();
+        found.sort_by(|a, b| a.name().cmp(b.name()));
+        found.dedup_by(|a, b| a.name() == b.name());
+        match stated_error(&found) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+/// the error for `found`, datasets only their sources' digests pin, which a sync downloads.
+pub(crate) fn stated_error(found: &[&Stated]) -> Option<Error> {
+    let message = match found {
+        [] => return None,
+        [one] => format!(
+            "{} is pinned by its source's {} until a sync downloads it",
+            one.name(),
+            one.digests()
+        ),
+        many => {
+            let names: Vec<&str> = many.iter().map(|stated| stated.name()).collect();
+            format!(
+                "{} are pinned by their sources' digests until a sync downloads them",
+                crate::units::listed(&names, "and")
+            )
+        }
+    };
+    let names: Vec<&str> = found.iter().map(|stated| stated.name()).collect();
+    Some(Error::new(Kind::NotReady, message).help(format!(
+        "run `{}` where the data can download, then commit data.lock",
+        crate::suggested::command(&format!("sync {}", names.join(" ")))
+    )))
+}
+
+impl Lock {
     /// the lock's text, the same bytes for the same contents. a source past [`lists::INLINE`]
     /// files, and every recipe result, names its list from [`Lock::lists`] instead of its files.
     pub(crate) fn render(&self) -> String {
@@ -481,6 +668,7 @@ impl Lock {
         enum Table<'a> {
             Source(&'a Locked),
             Derived(&'a Derived),
+            Stated(&'a Stated),
         }
         let mut tables: Vec<(&str, Table)> = self
             .datasets
@@ -491,6 +679,11 @@ impl Lock {
                     .iter()
                     .map(|derived| (derived.name.as_str(), Table::Derived(derived))),
             )
+            .chain(
+                self.stated
+                    .iter()
+                    .map(|stated| (stated.name(), Table::Stated(stated))),
+            )
             .collect();
         tables.sort_by(|a, b| a.0.cmp(b.0));
         let mut out = format!("version = {VERSION}\n");
@@ -498,14 +691,16 @@ impl Lock {
             match table {
                 Table::Source(dataset) => write_source(&mut out, dataset, inline),
                 Table::Derived(derived) => derived::write(&mut out, derived),
+                Table::Stated(stated) => write_stated(&mut out, stated),
             }
         }
         out
     }
 }
 
-/// a source's table in the order data.lock keeps its keys, optional ones only when set.
-fn write_source(out: &mut String, dataset: &Locked, inline: usize) {
+/// the keys of a fetched dataset's table up to `locked`, in the order data.lock keeps them,
+/// optional ones only when set.
+fn write_head(out: &mut String, dataset: &Locked) {
     out.push_str("\n[[dataset]]\n");
     for (key, value) in [
         ("name", &dataset.name),
@@ -534,6 +729,11 @@ fn write_source(out: &mut String, dataset: &Locked, inline: usize) {
         let _ = writeln!(out, "access = \"{}\"", dataset.access.word());
     }
     let _ = writeln!(out, "locked = {}", quoted(&dataset.timestamp));
+}
+
+/// a source's table in the order data.lock keeps its keys, optional ones only when set.
+fn write_source(out: &mut String, dataset: &Locked, inline: usize) {
+    write_head(out, dataset);
     if dataset.files.len() > inline {
         let texts = lists::texts(&sorted(&dataset.files));
         write_listed(out, &lists::listed(&dataset.name, &dataset.files, &texts));
@@ -562,6 +762,36 @@ fn write_source(out: &mut String, dataset: &Locked, inline: usize) {
             let _ = write!(out, ", unpacks_to = \"sha256:{tree}\"");
         }
         out.push_str(" },\n");
+    }
+    out.push_str("]\n");
+}
+
+/// the table of a dataset not downloaded yet: a downloaded one's keys, `downloaded = false`, then
+/// each file inline with the digests its source states, in the order a downloaded file's are kept.
+fn write_stated(out: &mut String, stated: &Stated) {
+    write_head(out, &stated.pin);
+    out.push_str("downloaded = false\n");
+    if stated.files.is_empty() {
+        out.push_str("files = []\n");
+        return;
+    }
+    let mut files: Vec<&StatedFile> = stated.files.iter().collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    out.push_str("files = [\n");
+    for file in files {
+        let _ = write!(
+            out,
+            "  {{ path = {}, size = {}",
+            quoted(&file.path),
+            file.size
+        );
+        if let Some(sha256) = file.sha256 {
+            let _ = write!(out, ", sha256 = \"{sha256}\"");
+        }
+        if let Some(md5) = file.md5 {
+            let _ = write!(out, ", md5 = \"{md5}\"");
+        }
+        let _ = writeln!(out, ", url = {} }},", quoted(&file.url));
     }
     out.push_str("]\n");
 }
@@ -606,7 +836,7 @@ pub(crate) fn parts(text: &str) -> Vec<String> {
         .into_iter()
         .flat_map(|parsed| match parsed {
             Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed) => listed.parts,
-            Parsed::Source(_, None) => Vec::new(),
+            Parsed::Source(_, None) | Parsed::Stated(_) => Vec::new(),
         })
         .collect()
 }
@@ -642,7 +872,7 @@ fn parse_only(text: &str, keep: &dyn Fn(&str) -> bool) -> Result<Vec<Parsed>, Er
         )));
     }
     for entry in &mut parsed {
-        if let Parsed::Source(locked, _) = entry {
+        if let Parsed::Source(locked, _) | Parsed::Stated(Stated { pin: locked, .. }) = entry {
             for words in [&mut locked.title, &mut locked.license, &mut locked.doi]
                 .into_iter()
                 .flatten()
@@ -712,11 +942,26 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
                         pair[0].path, dataset.name
                     )));
                 }
-                check_paths(dataset)?;
+                check_paths(&dataset.name, dataset.files.iter().map(|file| &file.path))?;
             }
             Parsed::Derived(derived, _) => {
                 derived.code.sort_by(|a, b| a.path.cmp(&b.path));
                 derived::check(derived)?;
+            }
+            Parsed::Stated(stated) => {
+                stated.files.sort_by(|a, b| a.path.cmp(&b.path));
+                if let Some(pair) = stated
+                    .files
+                    .windows(2)
+                    .find(|pair| pair[0].path == pair[1].path)
+                {
+                    return Err(broken(format!(
+                        "data.lock lists {} twice in {}",
+                        pair[0].path,
+                        stated.name()
+                    )));
+                }
+                check_paths(stated.name(), stated.files.iter().map(|file| &file.path))?;
             }
         }
     }
@@ -736,9 +981,10 @@ fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
                 if let Some(listed) = listed {
                     let root = project(root, &dataset.name)?;
                     dataset.files = lists::read(root, &dataset.name, &listed)?;
-                    check_paths(&dataset)?;
+                    check_paths(&dataset.name, dataset.files.iter().map(|file| &file.path))?;
                 }
-                check_links(&dataset, is_listed)?;
+                let links = dataset.files.iter().map(|file| (&file.path, &file.url));
+                check_links(&dataset.name, links, is_listed)?;
                 lock.datasets.push(dataset);
             }
             Parsed::Derived(mut derived, listed) => {
@@ -747,9 +993,30 @@ fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
                 derived::check_files(&derived)?;
                 lock.derived.push(derived);
             }
+            Parsed::Stated(stated) => {
+                check_resolved(&stated.pin)?;
+                check_stated_count(&stated, lists::inline().min(most_files()))?;
+                let links = stated.files.iter().map(|file| (&file.path, &file.url));
+                check_links(stated.name(), links, false)?;
+                lock.stated.push(stated);
+            }
         }
     }
     Ok(lock)
+}
+
+/// refuses a dataset not downloaded yet with more than `most` files, the most data.lock keeps
+/// inline, since fetchloom never writes one: a list beside data.lock holds only downloaded files.
+fn check_stated_count(stated: &Stated, most: usize) -> Result<(), Error> {
+    if stated.files.len() <= most {
+        return Ok(());
+    }
+    Err(broken(format!(
+        "data.lock gives {}, which is not downloaded yet, {} files, more than the {} fetchloom writes",
+        stated.name(),
+        crate::units::grouped(stated.files.len() as u64),
+        crate::units::grouped(most as u64)
+    )))
 }
 
 /// the project folder whose [`lists::FOLDER`] holds the files of `name`.
@@ -848,13 +1115,12 @@ fn prefixed(text: &str) -> Option<Sha256> {
 
 /// refuses a lock that would place a file outside its dataset's folder. fetchloom never writes
 /// such a path, so the lock was edited or made by someone else.
-fn check_paths(dataset: &Locked) -> Result<(), Error> {
-    for file in &dataset.files {
-        if let Some(reason) = name::escapes(&file.path) {
+fn check_paths<'a>(dataset: &str, paths: impl Iterator<Item = &'a String>) -> Result<(), Error> {
+    for path in paths {
+        if let Some(reason) = name::escapes(path) {
             return Err(broken(format!(
-                "data.lock lists {} in {}, which fetchloom refuses because {reason}",
-                quoted(&file.path),
-                dataset.name
+                "data.lock lists {} in {dataset}, which fetchloom refuses because {reason}",
+                quoted(path)
             )));
         }
     }
@@ -863,12 +1129,16 @@ fn check_paths(dataset: &Locked) -> Result<(), Error> {
 
 /// refuses a file link carrying a login or a secret: fetchloom never pins one, so the lock was
 /// edited, and a download would send it on. a listed link's help is to restore from git.
-fn check_links(dataset: &Locked, is_listed: bool) -> Result<(), Error> {
+fn check_links<'a>(
+    dataset: &str,
+    files: impl Iterator<Item = (&'a String, &'a String)>,
+    is_listed: bool,
+) -> Result<(), Error> {
     // parsing each of a million links doubled the time a lock took to read. links mostly differ
     // in the values of the same keys, so a cleared link's keys are reused where keys alone decide
     let mut cleared: Option<Vec<&str>> = None;
-    for file in &dataset.files {
-        let text = file.url.as_str();
+    for (path, url) in files {
+        let text = url.as_str();
         let marks = Marks::of(text);
         if !marks.at && !marks.split {
             continue;
@@ -890,7 +1160,7 @@ fn check_links(dataset: &Locked, is_listed: bool) -> Result<(), Error> {
             } else {
                 carried.mend()
             };
-            let subject = format!("the link data.lock gives {}/{}", dataset.name, file.path);
+            let subject = format!("the link data.lock gives {dataset}/{path}");
             return Err(carried.refused(&subject).help(help));
         }
         if is_plain && !raw_keys(text).any(crate::shown::depends_on_path) {
@@ -1089,6 +1359,167 @@ mod tests {
             dataset.files.sort_by(|a, b| a.path.cmp(&b.path));
         }
         sorted
+    }
+
+    /// `mnist`, pinned by what its source states: an MD5 alone, a SHA-256 alone, and both.
+    fn stated() -> Stated {
+        let file = |path: &str, sha256: Option<&[u8]>, md5: Option<&str>| StatedFile {
+            path: path.to_owned(),
+            size: 7,
+            sha256: sha256.map(digest::sha256),
+            md5: md5.and_then(Md5::from_hex),
+            url: format!("https://zenodo.org/api/records/1/files/{path}/content"),
+        };
+        Stated {
+            pin: Locked {
+                name: "mnist".to_owned(),
+                reference: "zenodo:1".to_owned(),
+                spec: "sha256:22".to_owned(),
+                extract: true,
+                web_page: false,
+                resolved: "zenodo:1".to_owned(),
+                title: Some("MNIST".to_owned()),
+                license: None,
+                doi: None,
+                access: Access::Public,
+                timestamp: "2026-11-15T07:00:00Z".to_owned(),
+                files: Vec::new(),
+            },
+            files: vec![
+                file("train.zip", None, Some("d41d8cd98f00b204e9800998ecf8427e")),
+                file("labels.csv", Some(b"labels"), None),
+                file(
+                    "test.csv",
+                    Some(b"test"),
+                    Some("0cc175b9c0f1b6a831c399e269772661"),
+                ),
+            ],
+        }
+    }
+
+    /// [`sample`] with [`stated`], as a lock keeps them.
+    fn with_stated() -> Lock {
+        let mut lock = sample_sorted();
+        let mut stated = stated();
+        stated.files.sort_by(|a, b| a.path.cmp(&b.path));
+        lock.stated.push(stated);
+        lock
+    }
+
+    /// a dataset not downloaded yet is written inline with the digests its source states, in a
+    /// downloaded file's order of keys, and every reader gives it back as written.
+    #[test]
+    fn a_dataset_not_downloaded_round_trips_through_every_reader() {
+        let lock = with_stated();
+        let text = lock.render();
+        let expected = format!(
+            "\n[[dataset]]\nname = \"mnist\"\nref = \"zenodo:1\"\nspec = \"sha256:22\"\nresolved = \"zenodo:1\"\ntitle = \"MNIST\"\naccess = \"public\"\nlocked = \"2026-11-15T07:00:00Z\"\ndownloaded = false\nfiles = [\n  {{ path = \"labels.csv\", size = 7, sha256 = \"{}\", url = \"https://zenodo.org/api/records/1/files/labels.csv/content\" }},\n  {{ path = \"test.csv\", size = 7, sha256 = \"{}\", md5 = \"0cc175b9c0f1b6a831c399e269772661\", url = \"https://zenodo.org/api/records/1/files/test.csv/content\" }},\n  {{ path = \"train.zip\", size = 7, md5 = \"d41d8cd98f00b204e9800998ecf8427e\", url = \"https://zenodo.org/api/records/1/files/train.zip/content\" }},\n]\n",
+            digest::sha256(b"labels"),
+            digest::sha256(b"test")
+        );
+        assert!(text.contains(&expected), "{text}");
+        assert!(
+            text.find("name = \"iris\"") < text.find("name = \"mnist\"")
+                && text.find("name = \"mnist\"") < text.find("name = \"zeta\""),
+            "tables of every kind go by name"
+        );
+        assert!(
+            lock.lists_with(0)
+                .iter()
+                .all(|(part, _)| !part.contains("mnist"))
+        );
+        for read in every_form(&lock) {
+            let read = read.unwrap();
+            assert_eq!(read.stated, lock.stated);
+            assert_eq!(read.stated("mnist").unwrap().digests(), "SHA-256 and MD5");
+            assert!(
+                read.get("mnist").is_none(),
+                "no command takes it for a downloaded one"
+            );
+        }
+        assert_eq!(Lock::parse(&text).unwrap().render(), text);
+        let kept = Lock::read_only(&text, Path::new("."), &|name| name == "zeta").unwrap();
+        assert_eq!(kept.stated, []);
+        let only = Lock::read_only(&text, Path::new("."), &|name| name == "mnist").unwrap();
+        assert_eq!(only.stated, lock.stated);
+    }
+
+    /// a cloned lock is untrusted: an entry not downloaded yet gets every check another gets, and
+    /// those only its kind needs.
+    #[test]
+    fn a_hostile_dataset_not_downloaded_is_refused_by_every_reader() {
+        let text = with_stated().render();
+        let md5 = "md5 = \"d41d8cd98f00b204e9800998ecf8427e\"";
+        for (changed, says) in [
+            (
+                text.replacen("path = \"train.zip\"", "path = \"../train.zip\"", 1),
+                "data.lock lists \"../train.zip\" in mnist, which fetchloom refuses",
+            ),
+            (
+                text.replacen(&format!(", {md5}"), "", 1),
+                "the file \"train.zip\" of mnist, which is not downloaded yet, neither a sha256 nor an md5",
+            ),
+            (
+                text.replacen(md5, &format!("{md5}, unpacks_to = \"sha256:{}\"", digest::sha256(b"t")), 1),
+                "what it unpacks to, which only its bytes tell",
+            ),
+            (
+                text.replacen("train.zip/content\"", "train.zip/content?token=canary\"", 1),
+                "the link data.lock gives mnist/train.zip carries token",
+            ),
+            (
+                text.replacen("path = \"test.csv\"", "path = \"labels.csv\"", 1),
+                "data.lock lists labels.csv twice in mnist",
+            ),
+            (
+                text.replacen(
+                    "downloaded = false\nfiles = [",
+                    &format!(
+                        "downloaded = false\nfiles_in = [\"data.lock.d/mnist.tsv.zst\"]\nfile_count = 1\nfile_bytes = 7\nfiles_sha256 = \"sha256:{}\"\nfiles = [",
+                        digest::sha256(b"list")
+                    ),
+                    1,
+                ),
+                "data.lock keeps the files of mnist, which is not downloaded yet, in data.lock.d",
+            ),
+        ] {
+            let error = Lock::parse(&changed).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{says}");
+            assert!(error.message.contains(says), "{says}: {}", error.message);
+            // links are checked once either reader is done
+            if !says.contains("carries") {
+                assert_eq!(canonical::read(&changed, false), None, "{changed}");
+            }
+            assert!(!format!("{error:?}").contains("canary"), "{error:?}");
+        }
+        let error = check_stated_count(&stated(), 2).unwrap_err();
+        assert_eq!(
+            error.message,
+            "data.lock gives mnist, which is not downloaded yet, 3 files, more than the 2 fetchloom writes"
+        );
+        assert!(check_stated_count(&stated(), 3).is_ok());
+        let parsed = parse(&text).unwrap();
+        // iris's 2, zeta's 1 and mnist's 3
+        assert!(fits(&parsed, BASE + 6 * PER_FILE).is_ok());
+        assert!(fits(&parsed, BASE + 6 * PER_FILE - 1).is_err());
+    }
+
+    /// a command that needs a dataset's files refuses one only its source's digests pin, saying
+    /// which sync downloads it.
+    #[test]
+    fn a_dataset_not_downloaded_is_refused_where_its_files_are_needed() {
+        let lock = with_stated();
+        assert!(lock.refuse_stated(["iris", "zeta"]).is_ok());
+        let error = lock.refuse_stated(["iris", "mnist"]).unwrap_err();
+        assert_eq!(error.kind, Kind::NotReady);
+        assert_eq!(
+            error.message,
+            "mnist is pinned by its source's SHA-256 and MD5 until a sync downloads it"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("run `fetchloom sync mnist` where the data can download, then commit data.lock")
+        );
     }
 
     #[test]

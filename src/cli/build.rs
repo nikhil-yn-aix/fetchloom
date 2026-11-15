@@ -528,6 +528,7 @@ impl<'a> Building<'a> {
                 .cloned()
                 .collect(),
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         let project = self.work.project;
         let cache = &self.work.cache;

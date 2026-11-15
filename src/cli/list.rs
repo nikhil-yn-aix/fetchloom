@@ -1215,6 +1215,7 @@ mod tests {
                 tree: crate::cache::tree_hash(&result_files),
                 files: result_files,
             }],
+            stated: Vec::new(),
         };
         (manifest, lock, folder, cache)
     }

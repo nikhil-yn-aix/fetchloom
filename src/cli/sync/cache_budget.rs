@@ -246,6 +246,7 @@ mod tests {
                 dataset("mnist", &[4608]),
             ],
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         assert_eq!(
             largest(&lock, 3),

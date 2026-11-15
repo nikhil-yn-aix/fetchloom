@@ -108,7 +108,11 @@ fn generated(bytes: &[u8]) -> Lock {
     let derived = (0..input.byte() % 3)
         .map(|index| recipe(&mut input, index))
         .collect();
-    Lock { datasets, derived }
+    Lock {
+        datasets,
+        derived,
+        stated: Vec::new(),
+    }
 }
 
 /// a recipe's result with names, arguments and variables of every awkward kind, which a program

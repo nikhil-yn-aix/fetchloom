@@ -268,6 +268,7 @@ impl<'a> Ahead<'a> {
                 .cloned()
                 .collect(),
             derived: Vec::new(),
+            stated: Vec::new(),
         };
         let planned = plan::inputs(manifest, &sources, self.cache)?;
         let mut added = Vec::new();
