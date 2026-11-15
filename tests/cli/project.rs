@@ -2638,6 +2638,43 @@ pub(crate) fn writable(root: &std::path::Path, yes: bool) -> Result {
     Ok(())
 }
 
+/// a folder where fetchloom keeps a file of its own, the cache's lock or the project's list of
+/// placed files, is named with what to do about it.
+#[test]
+fn a_folder_in_place_of_a_file_fetchloom_keeps_is_named_with_the_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let lock = sandbox.cache().join("gc.lock");
+    delete(&lock)?;
+    fs::create_dir(&lock)?;
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "{} is a folder where fetchloom keeps its lock file: remove that folder",
+            lock.display()
+        )),
+        "{stderr}"
+    );
+    fs::remove_dir(&lock)?;
+    let state = sandbox.work().join(".fetchloom").join("state");
+    delete(&state)?;
+    fs::create_dir(&state)?;
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "help: remove the folder {}, where fetchloom keeps that list",
+            state.display()
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a job often syncs before it reads, on a checkout it may not write.
 #[cfg(unix)]
 #[test]

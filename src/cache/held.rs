@@ -98,6 +98,18 @@ impl Cache {
 /// the lock file at `path`, made the first time. a read-only root can serve shared readers
 /// without creating it, but cannot authorize collection of writable child mounts.
 fn open_lock(path: &Path) -> io::Result<Option<File>> {
+    if path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.is_dir())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::IsADirectory,
+            format!(
+                "{} is a folder where fetchloom keeps its lock file: remove that folder",
+                path.display()
+            ),
+        ));
+    }
     match open_unfollowed(path, true) {
         Ok(file) => Ok(Some(file)),
         // another user's lock file in a shared cache still locks when opened only to read

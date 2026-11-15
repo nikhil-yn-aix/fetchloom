@@ -526,13 +526,21 @@ impl Project {
         let folder = self.inner()?;
         let path = folder.join("state");
         write_atomically(&path, &state.render()).map_err(|err| {
-            Error::io(
+            let error = Error::io(
                 format_args!(
                     "could not save the list of placed files in {}",
                     path.display()
                 ),
                 &err,
-            )
+            );
+            if path.symlink_metadata().is_ok_and(|metadata| metadata.is_dir()) {
+                error.help(format!(
+                    "remove the folder {}, where fetchloom keeps that list, then run the same command again",
+                    path.display()
+                ))
+            } else {
+                error
+            }
         })
     }
 
