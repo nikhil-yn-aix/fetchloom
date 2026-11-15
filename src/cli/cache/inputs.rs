@@ -124,8 +124,8 @@ struct Plan {
     dropped: HashSet<Sha256>,
     /// whether `mirrors_only` lets a build ask mirrors alone, so no source brings a file back.
     only_mirrors: bool,
-    /// whether web mirrors are set, which gc `--inputs` never counts.
-    web: bool,
+    /// whether a mirror on a web server or in a bucket is set, which gc `--inputs` never counts.
+    remote: bool,
 }
 
 /// frees the raw input a folder mirror holds, then what plain gc frees.
@@ -301,7 +301,7 @@ fn plan(
         fates,
         dropped: HashSet::new(),
         only_mirrors: mirrors.only,
-        web: mirrors.web().next().is_some(),
+        remote: mirrors.any_remote(),
     })
 }
 
@@ -738,8 +738,9 @@ fn said(plan: &Plan, group: &Group, reason: Reason, at: Option<usize>, files: u6
         Reason::Linked => {
             "they are linked outside the cache too, so freeing them would free nothing".to_owned()
         }
-        Reason::NoMirror if plan.web => {
-            "no folder mirror is set, and web mirrors do not count".to_owned()
+        Reason::NoMirror if plan.remote => {
+            "no folder mirror is set, and a mirror on a web server or in a bucket does not count"
+                .to_owned()
         }
         Reason::NoMirror => "no folder mirror is set".to_owned(),
         Reason::NoCopy => "no folder mirror holds a copy".to_owned(),
@@ -842,6 +843,37 @@ mod tests {
     use crate::output::{Level, Style};
     use crate::project::lock::Lock;
     use crate::project::manifest::Manifest;
+
+    /// only a folder mirror's copy lets gc free an input, so a mirror on a web server or in a
+    /// bucket is said not to count rather than left unsaid.
+    #[test]
+    fn a_mirror_on_the_network_is_said_not_to_count() {
+        let group = Group {
+            project: PathBuf::new(),
+            name: "raw".to_owned(),
+            used: Use::Placed,
+            readers: Vec::new(),
+            unbuilt: Vec::new(),
+            objects: Vec::new(),
+        };
+        let plan = |remote| Plan {
+            groups: Vec::new(),
+            mirrors: Vec::new(),
+            sizes: HashMap::new(),
+            fates: HashMap::new(),
+            dropped: HashSet::new(),
+            only_mirrors: false,
+            remote,
+        };
+        assert_eq!(
+            said(&plan(true), &group, Reason::NoMirror, None, 1),
+            "no folder mirror is set, and a mirror on a web server or in a bucket does not count"
+        );
+        assert_eq!(
+            said(&plan(false), &group, Reason::NoMirror, None, 1),
+            "no folder mirror is set"
+        );
+    }
 
     /// output nobody sees, as `--json` keeps it off the terminal.
     fn quiet() -> Output {

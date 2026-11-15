@@ -37,7 +37,7 @@ pub(super) struct Info {
     /// the `cache_budget` setting, which `bytes` is held against, none when no budget is set.
     budget: Option<u64>,
     projects: Vec<PathBuf>,
-    /// downloads a run stopped before they finished, kept so a later run can continue them.
+    /// downloads runs left unfinished, which a later run continues where the server allows.
     unfinished_downloads: u64,
     unfinished_bytes: u64,
 }
@@ -100,7 +100,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         output.label(
             "Unfinished",
             &format!(
-                "{} · {}, kept so a later run can continue",
+                "{} · {}, which a later run continues where the server allows",
                 units::count(unfinished.downloads, "download", "downloads"),
                 units::size(unfinished.bytes)
             ),

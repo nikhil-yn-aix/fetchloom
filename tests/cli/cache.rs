@@ -1149,8 +1149,8 @@ fn gc_names_each_project_it_forgets() -> Result {
     Ok(())
 }
 
-/// an interrupted download keeps its bytes so a later run can continue it; `--now` frees them
-/// however new, but never those a running fetchloom holds.
+/// an interrupted download keeps its bytes so a later run can continue it where the server
+/// allows; `--now` frees them however new, but never those a running fetchloom holds.
 #[test]
 fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1175,6 +1175,10 @@ fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     assert_eq!(report["result"]["unfinished_bytes"], held, "{report}");
     let told = text(&sandbox.run(&["cache"])?.stderr)?;
     assert!(told.contains("Unfinished 2 downloads · "), "{told}");
+    assert!(
+        told.contains(", which a later run continues where the server allows\n"),
+        "{told}"
+    );
     let freed = on_disk(&at(&left, "part"))? + on_disk(&at(&left, "json"))?;
     let young = sandbox.run(&["cache", "gc"])?;
     assert_eq!(young.status.code(), Some(0), "{}", text(&young.stderr)?);

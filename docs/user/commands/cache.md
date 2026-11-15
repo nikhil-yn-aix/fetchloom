@@ -40,7 +40,7 @@ it also says where the space goes. stderr from a test on a drive that makes hard
 
 the sizes count what the files hold, while a disk stores each file in whole blocks, often 4 KiB, so `du` counts more, many times more for many small files: 4,000 files of about 33 bytes on ext4 were `4,000 files · 128.9 KiB` to `fetchloom cache` and 17388 KiB to `du -sk`. plan free space by `du`. JSON adds `needed`, `linked`, `unneeded`, `freeable`, `copies`, `unlinked_copies`, `cloned` and `inputs_only`, as [JSON output](../reference/json-output.md#command-results) defines; a script that wants what `cache gc` frees now reads `freeable`, not `bytes`. the report looks once at each placed file of each project, so a project on a slow network drive slows it.
 
-downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them, and `fetchloom cache` counts them on an `Unfinished` line, as JSON's `unfinished_downloads` and `unfinished_bytes`. [cache folder](../reference/cache-folder.md) says where the cache is; `FETCHLOOM_CACHE` moves it.
+downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them where the server allows, and `fetchloom cache` counts them on an `Unfinished` line, as JSON's `unfinished_downloads` and `unfinished_bytes`. [cache folder](../reference/cache-folder.md) says where the cache is; `FETCHLOOM_CACHE` moves it.
 
 ### copies and backups
 
@@ -193,7 +193,7 @@ each file kept says why:
 | `derived` | a recipe makes it, and the next build would put it back |
 | `shared` | the same bytes are needed another way too, as by a dataset that places them |
 | `linked` | a name outside the cache links it too, so freeing it would free nothing |
-| `no_mirror` | no folder mirror is set; web mirrors do not count |
+| `no_mirror` | no folder mirror is set; a mirror on a web server or in a bucket does not count |
 | `no_copy` | no folder mirror holds a copy |
 | `damaged` | the copy on a mirror is of another size or does not hash to its name |
 | `unreadable` | the copy on a mirror could not be read |
