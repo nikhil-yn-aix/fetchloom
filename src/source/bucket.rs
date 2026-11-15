@@ -382,7 +382,7 @@ impl Prefix {
             401 | 403 => response
                 .authorized
                 .clone()
-                .unwrap_or(net::Authorized::Anonymous {
+                .unwrap_or_else(|| net::Authorized::Anonymous {
                     bucket: self.bucket.clone(),
                     listed: false,
                 })
