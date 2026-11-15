@@ -239,7 +239,7 @@ fn the_settings_file_sets_what_the_environment_leaves_and_names_its_errors() {
     let wrong = self::file("jobs = true\n").unwrap_err();
     assert_eq!(
         wrong.message,
-        "jobs in the settings file /home/ada/.config/fetchloom/settings.toml is a boolean, not a whole number or text in quotes"
+        "jobs in the settings file /home/ada/.config/fetchloom/settings.toml is true or false, not a whole number or text in quotes"
     );
     assert!(self::file("jobs = [").is_err());
 }
@@ -678,13 +678,12 @@ fn allowed_origins_are_exact_origins_from_the_environment_or_the_file() {
     let wrong = self::file("allowed_origins = [8080]\n").unwrap_err();
     assert_eq!(
         wrong.message,
-        "allowed_origins in the settings file /home/ada/.config/fetchloom/settings.toml holds a integer, not text in quotes"
+        "allowed_origins in the settings file /home/ada/.config/fetchloom/settings.toml holds a whole number, not text in quotes"
     );
     let elsewhere = self::file("jobs = [32]\n").unwrap_err();
-    assert!(
-        elsewhere.message.contains("is a array"),
-        "{}",
-        elsewhere.message
+    assert_eq!(
+        elsewhere.message,
+        "jobs in the settings file /home/ada/.config/fetchloom/settings.toml is a list, not a whole number or text in quotes"
     );
 }
 

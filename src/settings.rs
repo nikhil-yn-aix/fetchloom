@@ -405,24 +405,37 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
                         .map(|item| match item {
                             toml::Value::String(text) => Ok(text),
                             other => Err(invalid(format!(
-                                "{key} in the settings file {} holds a {}, not text in quotes",
+                                "{key} in the settings file {} holds {}, not text in quotes",
                                 path.display(),
-                                other.type_str()
+                                kind(&other)
                             ))),
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
                 other => {
                     return Err(invalid(format!(
-                        "{key} in the settings file {} is a {}, not a whole number or text in quotes",
+                        "{key} in the settings file {} is {}, not a whole number or text in quotes",
                         path.display(),
-                        other.type_str()
+                        kind(&other)
                     )));
                 }
             };
             Ok((key, value))
         })
         .collect()
+}
+
+/// what `value` is, in plain words rather than TOML's names for its types.
+fn kind(value: &toml::Value) -> &'static str {
+    match value {
+        toml::Value::String(_) => "text in quotes",
+        toml::Value::Integer(_) => "a whole number",
+        toml::Value::Float(_) => "a decimal number",
+        toml::Value::Boolean(_) => "true or false",
+        toml::Value::Datetime(_) => "a date",
+        toml::Value::Array(_) => "a list",
+        toml::Value::Table(_) => "a table",
+    }
 }
 
 /// every setting a run uses.
