@@ -1490,7 +1490,7 @@ mod tests {
         };
         let sizeless = estimate::Total {
             sizes_unknown: 4,
-            ..total.clone()
+            ..total
         };
         let cached = [fetched(Origin::NotModified), fetched(Origin::Cache)];
         let downloaded = [fetched(Origin::Cache), fetched(Origin::Network)];

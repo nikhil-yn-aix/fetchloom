@@ -169,7 +169,7 @@ fn a_clone_checks_its_sources_and_a_mirror_stands_in_for_a_lost_one() -> Result 
     mirror_of(&sandbox, &root)?;
     let web = web_mirror_of(&sandbox)?;
     let at = format!("{}/m", web.url);
-    for mirror in [root.to_string_lossy().into_owned(), at.clone()] {
+    for mirror in [root.to_string_lossy().into_owned(), at] {
         let output = run(&["--json", "status", "--sources", "--check"], Some(&mirror))?;
         ok(&output)?;
         let document = json(&output)?;

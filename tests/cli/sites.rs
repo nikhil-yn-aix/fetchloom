@@ -333,10 +333,7 @@ fn a_sign_in_page_after_a_saved_token_names_the_command_that_saves_a_new_one() -
     assert!(!stderr.contains("t-old"), "{stderr}");
     assert!(!sandbox.work().join("data.csv").exists());
     // a page the link moved to is no page the person asked for, nor one a `.html` link named
-    for (moved, asked) in [
-        (link.clone(), true),
-        (format!("{}/report.html", site.url), false),
-    ] {
+    for (moved, asked) in [(link, true), (format!("{}/report.html", site.url), false)] {
         let mut args = vec!["get", moved.as_str(), "-o", "moved.html"];
         if asked {
             args.push("--web-page");

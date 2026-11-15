@@ -1317,7 +1317,7 @@ fn auth_names_googles_credentials_by_file_and_kind() -> Result {
         ),
         (
             "CLOUDSDK_CONFIG",
-            gcloud.clone(),
+            gcloud,
             saved.display().to_string(),
             serde_json::Value::Null,
             "authorized_user",
@@ -1432,7 +1432,7 @@ fn auth_names_where_azure_credentials_would_come_from() -> Result {
                 ]),
             ]
             .concat(),
-            vec![row("azure:lab", "AZURE_STORAGE_KEY", None, "key"), none.clone()],
+            vec![row("azure:lab", "AZURE_STORAGE_KEY", None, "key"), none],
             vec![
                 "Signed in to azure account lab with its key \u{b7} AZURE_STORAGE_KEY".to_owned(),
                 "Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet, aws, google, azure".to_owned(),

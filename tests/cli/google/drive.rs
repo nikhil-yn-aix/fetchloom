@@ -405,7 +405,7 @@ fn a_teammate_finds_a_private_folders_files_through_the_same_refusal() -> Result
         ),
         (format!("{API_PATH}/{ROOT}"), login_token.clone(), ROOT),
         (format!("{API_PATH}/{A}"), login_token.clone(), A),
-        (format!("{API_PATH}/{B}"), login_token.clone(), B),
+        (format!("{API_PATH}/{B}"), login_token, B),
     ] {
         let wanted = (path, token, about.to_owned());
         assert!(again.contains(&wanted), "{wanted:?} not in {again:?}");

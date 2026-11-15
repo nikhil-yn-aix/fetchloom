@@ -153,7 +153,7 @@ fn rows_still_in_the_log_count_up_to_its_last_whole_commit() {
     changed[last] ^= 1;
     assert_eq!(count(&changed), 20);
     // a log of another database, whose salts differ, adds nothing
-    let mut other = log.clone();
+    let mut other = log;
     other[16] ^= 1;
     assert_eq!(count(&other), 10);
 }
@@ -203,7 +203,7 @@ fn a_log_of_another_page_size_adds_nothing() {
     };
     assert_eq!(count(&log), 30);
     assert_eq!(count(&larger), 10);
-    let mut renamed = log.clone();
+    let mut renamed = log;
     renamed[8..12].copy_from_slice(&2048_u32.to_be_bytes());
     summed(&mut renamed, 1024);
     assert_eq!(count(&renamed), 10);

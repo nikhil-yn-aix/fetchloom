@@ -305,7 +305,7 @@ mod tests {
                 rate: 100.0 * A_MIB,
                 overhead: 0.1,
             }),
-            ..papers.clone()
+            ..papers
         };
         assert_eq!(time(&[fast], LIMITS), Some(about(300)));
         let slow = Host {
@@ -331,7 +331,7 @@ mod tests {
         assert_eq!(time(std::slice::from_ref(&unknown), LIMITS), None);
         let spaced = Host {
             spacing: Some(Duration::from_secs(1)),
-            ..unknown.clone()
+            ..unknown
         };
         assert_eq!(time(&[spaced], LIMITS), None);
         let unsure = Host {

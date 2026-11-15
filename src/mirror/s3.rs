@@ -1334,7 +1334,7 @@ mod tests {
         );
         assert_eq!(error.details, ["S3 said AccessDenied: Access Denied"]);
         let unsigned = Keyed::Unsigned {
-            bucket: top.bucket.clone(),
+            bucket: top.bucket,
             listed: true,
         };
         let error = pusher.refusal(&answer(403, b"", unsigned));

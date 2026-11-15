@@ -540,7 +540,7 @@ fn tries_that_move_the_file_on_earn_the_tries_back() {
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let net = net(&url);
-    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
     let stored = fs::read(cache.object_path(&fetched.digest)).unwrap();
     assert_eq!(stored, body.as_bytes());
     assert_eq!(asked.lock().unwrap().len(), total);
@@ -608,7 +608,7 @@ fn a_download_that_keeps_moving_keeps_going() {
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let mut net = net(&url);
     net.moving = step;
-    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
     assert_eq!(fetched.size, total);
     assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));
     assert_eq!(asked.load(Ordering::SeqCst), 52);
@@ -634,7 +634,7 @@ fn a_download_waits_for_a_lost_network_instead_of_spending_its_tries() {
     }));
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
-    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
     assert_eq!(
         fs::read(cache.object_path(&fetched.digest)).unwrap(),
         b"abcdefgh"
@@ -1129,7 +1129,7 @@ fn a_download_moves_its_whole_size_and_a_cached_file_nothing() {
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let net = net(&url);
-    let mut fetch = Fetch::new(url.clone());
+    let mut fetch = Fetch::new(url);
     let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
     assert_eq!(
         (fetched.origin, fetched.size, fetched.moved),
@@ -1360,7 +1360,7 @@ fn file_bodies_use_the_separate_connection_pool() {
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let net = net(&url);
-    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
     assert_eq!(
         fs::read(cache.object_path(&fetched.digest)).unwrap(),
         b"data"
@@ -1404,7 +1404,7 @@ fn a_checksum_restart_reacquires_released_download_slots() {
     drop(writer);
     drop(partial);
     let net = net(&url);
-    let mut fetch = Fetch::new(url.clone());
+    let mut fetch = Fetch::new(url);
     fetch.expect.sha256 = Some(crate::digest::sha256(b"bbbbbbbb"));
     let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
     assert_eq!(
@@ -1428,7 +1428,7 @@ fn an_s3_version_comes_with_the_bytes_however_they_arrive() {
     let asking = net(&url);
     let fetch = Fetch {
         revalidate: true,
-        ..Fetch::new(url.clone())
+        ..Fetch::new(url)
     };
     let fetched = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
     assert_eq!(fetched.version.as_deref(), Some(version.1));

@@ -463,7 +463,7 @@ fn a_pinned_file_keeps_its_parts_when_another_server_labels_them_differently() {
         assert_ne!(parts(&server), Vec::<String>::new(), "{why}");
         assert_eq!(from_the_start(&server), 1, "{why}: started over");
     }
-    let server = serve(body.clone(), drifting);
+    let server = serve(body, drifting);
     let net = net(&server.url, 8);
     let (_folder, cache) = cache();
     let fetched = download(&net, &cache, &server.url, Expect::default());

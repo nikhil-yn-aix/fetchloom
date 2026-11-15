@@ -61,7 +61,7 @@ fn downloads_asked_together_send_no_more_than_the_host_has_left() {
     // a window opens with the first request after the last one ended and lasts a second
     let window: Arc<Mutex<Option<(Instant, u64)>>> = Arc::default();
     let refused = Arc::new(AtomicUsize::new(0));
-    let (counted, refusals) = (window.clone(), refused.clone());
+    let (counted, refusals) = (window, refused.clone());
     let (url, asked) = route(move |_| {
         let now = Instant::now();
         let taken = {

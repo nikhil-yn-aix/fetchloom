@@ -469,7 +469,7 @@ fn a_refused_s3_listing_says_whether_a_key_went_with_it_and_what_to_do() {
         ),
         (
             Some(Keyed::Signed {
-                bucket: bucket.clone(),
+                bucket,
                 key: "\u{2026}WXYZ from AWS_ACCESS_KEY_ID".to_owned(),
                 region: "us-east-1".to_owned(),
             }),
@@ -525,7 +525,7 @@ fn a_refused_download_says_whether_a_key_went_with_it_and_what_to_do() {
         ),
         (
             Keyed::Unsigned {
-                bucket: lab.clone(),
+                bucket: lab,
                 listed: true,
             },
             &scan,
@@ -1053,7 +1053,7 @@ fn malformed_s3_pages_are_invalid_listings() {
             .unwrap()
             .replace("<IsTruncated>false</IsTruncated>", "")
             .into_bytes(),
-        truncated.clone().into_bytes(),
+        truncated.into_bytes(),
         String::from_utf8(page(true, &[("d%2Fa", "\"x\"")]))
             .unwrap()
             .replace("<Size>1</Size>", "<Size>-1</Size>")

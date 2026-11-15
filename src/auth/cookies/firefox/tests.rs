@@ -123,7 +123,7 @@ fn the_profile_used_last_is_read_unless_one_is_named() {
             .unwrap();
     }
     let roots = [root.to_path_buf()];
-    assert_eq!(file(&roots, None), Some(used.clone()));
+    assert_eq!(file(&roots, None), Some(used));
     assert_eq!(file(&roots, Some("work")), Some(older.clone()));
     assert_eq!(file(&roots, Some("def456.work")), Some(older));
     assert_eq!(file(&roots, Some("lab")), Some(elsewhere.clone()));

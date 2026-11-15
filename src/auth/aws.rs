@@ -897,10 +897,7 @@ mod tests {
         );
         assert_eq!(
             run("full"),
-            (
-                keys.clone(),
-                vec!["--region".to_owned(), "eu-west-1".to_owned()]
-            )
+            (keys, vec!["--region".to_owned(), "eu-west-1".to_owned()])
         );
         // keys in the credentials file come before a program, as the AWS tools take them
         let pairs = [("AWS_PROFILE", "written"), ("PATH", path)];

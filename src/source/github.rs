@@ -132,7 +132,7 @@ impl Release {
     async fn get(&self, api: &impl Api, url: &Url, signed_in: bool) -> Result<Response, Error> {
         let response = api.get(url).await.map_err(|error| {
             if error.kind == Kind::NetworkRateLimited {
-                limited(signed_in).detail(error.message.clone())
+                limited(signed_in).detail(error.message)
             } else {
                 error
             }
