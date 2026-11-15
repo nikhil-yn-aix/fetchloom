@@ -409,7 +409,8 @@ fn expected(context: &Context, candidate: &Candidate) -> Option<crate::net::esti
 
 /// one candidate for a script reading stdout: its reference first, then its title and, when
 /// known, its size, separated by tabs so the first column stays the reference. a control in the
-/// title reads as a space, and a bidi control as its escape, as the story writes one.
+/// title reads as a space, and a bidi control as its escape, as the story writes one; the
+/// reference, which comes from a catalog too, shows both as escapes.
 fn line(candidate: &Candidate) -> String {
     let mut shown = String::with_capacity(candidate.title.len());
     for c in candidate.title.chars() {
@@ -422,7 +423,15 @@ fn line(candidate: &Candidate) -> String {
         }
     }
     let title = units::clip(&shown, usize::MAX, "");
-    let mut line = format!("{}\t{title}", candidate.reference);
+    let mut reference = String::new();
+    for c in candidate.reference.to_string().chars() {
+        if c.is_control() || crate::name::is_bidi_control(c) {
+            reference.extend(c.escape_default());
+        } else {
+            reference.push(c);
+        }
+    }
+    let mut line = format!("{reference}\t{title}");
     if let Some(size) = candidate.size {
         line.push('\t');
         line.push_str(&units::size(size));
@@ -754,6 +763,15 @@ mod tests {
             line(&reversed),
             "kaggle:uciml/iris\tIris \\u{202e}vsc.sirI\t3.6 KiB"
         );
+        // nor can a catalog's id, which goes first and unclipped
+        let turned = Candidate {
+            reference: Reference::parse("doi:10.5061/x\u{202e}vsc")
+                .unwrap()
+                .reference,
+            title: "Iris".to_owned(),
+            ..reversed
+        };
+        assert_eq!(line(&turned), "doi:10.5061/x\\u{202e}vsc\tIris\t3.6 KiB");
     }
 
     #[test]
