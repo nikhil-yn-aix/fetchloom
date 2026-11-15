@@ -13,7 +13,7 @@ use crate::error::Error;
 use crate::output::plain;
 use crate::plan;
 use crate::project::lock::archives::{self, Archive, Pinned};
-use crate::project::lock::{Lock, Locked};
+use crate::project::lock::{self, Lock, Locked};
 use crate::project::manifest::{Entry, Manifest};
 use crate::source::Access;
 use crate::units;
@@ -50,6 +50,12 @@ struct Listed {
     access: Option<Access>,
     /// each source file data.lock pins, named so because `files` is the count.
     locked_files: Option<Vec<ListedFile>>,
+    /// for a fetched dataset data.lock pins, whether a sync downloaded its files: false while only
+    /// the size and SHA-256 or MD5 its source states pin them.
+    downloaded: Option<bool>,
+    /// what pins the files of a dataset not downloaded yet, such as its source's MD5.
+    #[serde(skip)]
+    pinned_by: Option<&'static str>,
     /// the files `files` and `bytes` count, by their paths in the dataset's folder, with their
     /// sizes.
     #[serde(skip)]
@@ -136,6 +142,16 @@ fn one(output: &crate::output::Output, dataset: &Listed) {
         output.done("Ok", &format!("{} has no files", dataset.name));
     } else {
         output.answer(&file_lines(files));
+    }
+    if let Some(by) = dataset.pinned_by {
+        output.mark(
+            "To download",
+            &format!(
+                "{} · pinned by its source's {by}, not downloaded yet; `{}` downloads and checks it",
+                dataset.name,
+                super::project::command(&format!("sync {}", dataset.name))
+            ),
+        );
     }
 }
 
@@ -306,6 +322,7 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
         .map(|(name, entry)| {
             let locked = lock.get(name).filter(|_| entry.source().is_some());
             let result = lock.result(name).filter(|_| entry.recipe().is_some());
+            let stated = lock.stated(name).filter(|_| entry.source().is_some());
             let (held, totals) = match (locked, result) {
                 (Some(locked), _) if view.paths => {
                     let held = held(manifest, name, locked, cache);
@@ -329,25 +346,40 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                             .fold((0, 0), counted),
                     ),
                 ),
-                (None, None) => (None, None),
+                (None, None) => match stated {
+                    Some(stated) => (
+                        view.paths.then(|| {
+                            stated
+                                .files
+                                .iter()
+                                .map(|file| (file.path.clone(), file.size))
+                                .collect()
+                        }),
+                        Some((stated.files.len() as u64, stated.bytes())),
+                    ),
+                    None => (None, None),
+                },
             };
+            let pinned = locked.or(stated.map(|stated| &stated.pin));
             Listed {
                 name: name.clone(),
                 reference: entry
                     .source()
                     .map(|source| crate::shown::mask_query(&source.reference).into_owned()),
                 from: entry.recipe().map(|recipe| recipe.from.clone()),
-                resolved: locked.map(|locked| locked.resolved.clone()),
+                resolved: pinned.map(|locked| locked.resolved.clone()),
                 files: totals.map(|(files, _)| files),
                 bytes: totals.map(|(_, bytes)| bytes),
                 folder: plan::folder(manifest, name),
                 placed: entry.place,
                 usual_folder: plan::folder(manifest, name)
                     == format!("{}/{name}", manifest.data_dir),
-                title: locked.and_then(|locked| locked.title.clone()),
-                license: locked.and_then(|locked| locked.license.clone()),
-                doi: locked.and_then(|locked| locked.doi.clone()),
-                access: locked.map(|locked| locked.access),
+                title: pinned.and_then(|locked| locked.title.clone()),
+                license: pinned.and_then(|locked| locked.license.clone()),
+                doi: pinned.and_then(|locked| locked.doi.clone()),
+                access: pinned.map(|locked| locked.access),
+                downloaded: pinned.map(|_| stated.is_none()),
+                pinned_by: stated.map(lock::Stated::digests),
                 locked_files: match (locked, result) {
                     _ if !view.pinned => None,
                     (Some(locked), _) => Some(
@@ -558,6 +590,12 @@ fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
 /// what a dataset holds, as its row says it: its files and bytes, or why it has none yet.
 fn contents(dataset: &Listed, marks: Marks) -> String {
     match (dataset.files, dataset.bytes) {
+        (Some(files), Some(bytes)) if dataset.downloaded == Some(false) => format!(
+            "{} {} {}, not downloaded yet",
+            units::count(files, "file", "files"),
+            marks.dot,
+            units::size(bytes)
+        ),
         (Some(files), Some(bytes)) => format!(
             "{} {} {}",
             units::count(files, "file", "files"),
@@ -701,6 +739,8 @@ mod tests {
             doi: None,
             access: None,
             locked_files: None,
+            downloaded: None,
+            pinned_by: None,
             held: None,
         };
         assert_eq!(
@@ -777,6 +817,8 @@ mod tests {
             doi: None,
             access: Some(Access::Unknown),
             locked_files: Some(Vec::new()),
+            downloaded: None,
+            pinned_by: None,
             held: Some(Vec::new()),
         };
         let datasets = [
@@ -850,6 +892,8 @@ mod tests {
             doi: None,
             access: None,
             locked_files: None,
+            downloaded: None,
+            pinned_by: None,
             held: Some(Vec::new()),
         };
         let datasets = [
@@ -914,6 +958,8 @@ mod tests {
             doi: None,
             access: Some(Access::Public),
             locked_files: Some(Vec::new()),
+            downloaded: None,
+            pinned_by: None,
             held: Some(Vec::new()),
         };
         let datasets = [
@@ -971,6 +1017,8 @@ mod tests {
             doi: None,
             access: Some(Access::Public),
             locked_files: None,
+            downloaded: None,
+            pinned_by: None,
             held: None,
         };
         let full = table(std::slice::from_ref(&dataset), None, UNICODE);
@@ -1010,6 +1058,8 @@ mod tests {
             doi: None,
             access: Some(Access::Unknown),
             locked_files: Some(Vec::new()),
+            downloaded: None,
+            pinned_by: None,
             held: Some(Vec::new()),
         };
         let mut stations = listed("field-station-measurements");
@@ -1236,12 +1286,12 @@ mod tests {
                 .collect()
         };
         let expected = [
-            r#"{"access":null,"bytes":700,"doi":null,"files":1,"folder":"data/clean","from":["iris"],"license":null,"locked_files":[{"path":"iris-clean.csv","sha256":"3b066804f6d1d077173cfe4d06002e6a61e6f21c2b2e648417962115f1afcd8e","size":700,"url":null}],"name":"clean","placed":true,"ref":null,"resolved":null,"title":null}"#,
-            r#"{"access":"unknown","bytes":9,"doi":null,"files":1,"folder":"data/hidden","from":null,"license":"cc-by-4.0","locked_files":[{"path":"h.bin","sha256":"0925728359a07a9b354226d3f74b9438c96b02f383533dae71cf688daf5ace47","size":9,"url":"https://example.org/h.bin"}],"name":"hidden","placed":false,"ref":"zenodo:4","resolved":"hidden-v1","title":"the hidden set"}"#,
-            r#"{"access":"unknown","bytes":4563,"doi":null,"files":2,"folder":"data/iris","from":null,"license":"cc-by-4.0","locked_files":[{"path":"iris.csv","sha256":"ab7cabb5c193f27616d6c479b5880441ab13117bebe91fdddc797bdfe88d3e08","size":4551,"url":null},{"path":"readme.txt","sha256":"9e6e4772050998a5c0dc3c61acf3dab0a7e594566171fa5746d6b62f9598efb6","size":12,"url":"https://example.org/readme.txt"}],"name":"iris","placed":true,"ref":"https://example.org/iris.csv?token=***","resolved":"iris-v1","title":"the iris set"}"#,
-            r#"{"access":null,"bytes":null,"doi":null,"files":null,"folder":"data/later","from":null,"license":null,"locked_files":null,"name":"later","placed":true,"ref":"zenodo:3","resolved":null,"title":null}"#,
-            r#"{"access":"unknown","bytes":8030,"doi":null,"files":3,"folder":"data/pets","from":null,"license":"cc-by-4.0","locked_files":[{"path":"pets.zip","sha256":"fa70fd5c3721e72a45715d3e82a49fcd15c1ed46aa714627a6fc0582b95c50c5","size":4000,"url":"https://example.org/pets.zip"},{"path":"labels.csv","sha256":"6bf6d3cb41de5ffae32a537c49ee7c4d8667314c5245cfdcd37399e1046d530e","size":30,"url":"https://example.org/labels.csv"}],"name":"pets","placed":true,"ref":"zenodo:2","resolved":"pets-v1","title":"the pets set"}"#,
-            r#"{"access":"unknown","bytes":60000,"doi":null,"files":1,"folder":"data/scans","from":null,"license":"cc-by-4.0","locked_files":[{"path":"scans.zip","sha256":"662d753124e3d540e95f3e4c988a0beb71357f542a7fa8358107c3cdb54e2d04","size":60000,"url":"https://example.org/scans.zip"}],"name":"scans","placed":true,"ref":"zenodo:5","resolved":"scans-v1","title":"the scans set"}"#,
+            r#"{"access":null,"bytes":700,"doi":null,"downloaded":null,"files":1,"folder":"data/clean","from":["iris"],"license":null,"locked_files":[{"path":"iris-clean.csv","sha256":"3b066804f6d1d077173cfe4d06002e6a61e6f21c2b2e648417962115f1afcd8e","size":700,"url":null}],"name":"clean","placed":true,"ref":null,"resolved":null,"title":null}"#,
+            r#"{"access":"unknown","bytes":9,"doi":null,"downloaded":true,"files":1,"folder":"data/hidden","from":null,"license":"cc-by-4.0","locked_files":[{"path":"h.bin","sha256":"0925728359a07a9b354226d3f74b9438c96b02f383533dae71cf688daf5ace47","size":9,"url":"https://example.org/h.bin"}],"name":"hidden","placed":false,"ref":"zenodo:4","resolved":"hidden-v1","title":"the hidden set"}"#,
+            r#"{"access":"unknown","bytes":4563,"doi":null,"downloaded":true,"files":2,"folder":"data/iris","from":null,"license":"cc-by-4.0","locked_files":[{"path":"iris.csv","sha256":"ab7cabb5c193f27616d6c479b5880441ab13117bebe91fdddc797bdfe88d3e08","size":4551,"url":null},{"path":"readme.txt","sha256":"9e6e4772050998a5c0dc3c61acf3dab0a7e594566171fa5746d6b62f9598efb6","size":12,"url":"https://example.org/readme.txt"}],"name":"iris","placed":true,"ref":"https://example.org/iris.csv?token=***","resolved":"iris-v1","title":"the iris set"}"#,
+            r#"{"access":null,"bytes":null,"doi":null,"downloaded":null,"files":null,"folder":"data/later","from":null,"license":null,"locked_files":null,"name":"later","placed":true,"ref":"zenodo:3","resolved":null,"title":null}"#,
+            r#"{"access":"unknown","bytes":8030,"doi":null,"downloaded":true,"files":3,"folder":"data/pets","from":null,"license":"cc-by-4.0","locked_files":[{"path":"pets.zip","sha256":"fa70fd5c3721e72a45715d3e82a49fcd15c1ed46aa714627a6fc0582b95c50c5","size":4000,"url":"https://example.org/pets.zip"},{"path":"labels.csv","sha256":"6bf6d3cb41de5ffae32a537c49ee7c4d8667314c5245cfdcd37399e1046d530e","size":30,"url":"https://example.org/labels.csv"}],"name":"pets","placed":true,"ref":"zenodo:2","resolved":"pets-v1","title":"the pets set"}"#,
+            r#"{"access":"unknown","bytes":60000,"doi":null,"downloaded":true,"files":1,"folder":"data/scans","from":null,"license":"cc-by-4.0","locked_files":[{"path":"scans.zip","sha256":"662d753124e3d540e95f3e4c988a0beb71357f542a7fa8358107c3cdb54e2d04","size":60000,"url":"https://example.org/scans.zip"}],"name":"scans","placed":true,"ref":"zenodo:5","resolved":"scans-v1","title":"the scans set"}"#,
         ];
         let table_text = "clean   made from iris                          1 file · 700 B     data/clean\nhidden  zenodo:4                                1 file · 9 B       not placed  cc-by-4.0\niris    https://example.org/iris.csv?token=***  2 files · 4.5 KiB  data/iris   cc-by-4.0\nlater   zenodo:3                                not locked yet     data/later\npets    zenodo:2                                3 files · 7.8 KiB  data/pets   cc-by-4.0\nscans   zenodo:5                                1 file · 58.6 KiB  data/scans  cc-by-4.0";
         let views: [(&str, &str, Option<&str>); 6] = [

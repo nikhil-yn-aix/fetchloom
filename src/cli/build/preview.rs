@@ -124,6 +124,9 @@ pub(super) fn preview(
         let scope = Scope::Only(closure.iter().map(|name| (*name).to_owned()).collect());
         pinned_as_asked(project, manifest, read.as_ref(), instead, &scope)?;
     }
+    if let Some((lock, _)) = &read {
+        lock.refuse_stated(closure.iter().copied())?;
+    }
     let lock = read.map(|(lock, _)| lock).unwrap_or_default();
     let cache = peek_cache()?;
     let ahead = Ahead::new(context, project, manifest, &cache);

@@ -40,6 +40,8 @@ pub(super) struct Status {
     unlocked: Vec<String>,
     /// datasets still in data.lock whose entries were removed from data.toml.
     removed: Vec<String>,
+    /// datasets data.lock pins by what their sources state, which a sync downloads and checks.
+    not_downloaded: Vec<String>,
     missing: Vec<String>,
     /// files fetchloom placed that changed since.
     edited: Vec<String>,
@@ -99,6 +101,9 @@ pub(super) struct Status {
     /// damaged files only hashing every placed file found, which a plain sync cannot see.
     #[serde(skip)]
     hashed_only: HashSet<String>,
+    /// what pins each of `not_downloaded`, as its row names it, such as its source's MD5.
+    #[serde(skip)]
+    pinned_by: HashMap<String, &'static str>,
     /// outdated files that are links to the cache's copy someone made writable.
     #[serde(skip)]
     unsealed: HashSet<String>,
@@ -459,6 +464,7 @@ fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
             entry.source().is_some()
                 && lock
                     .get(name)
+                    .or(lock.stated(name).map(|stated| &stated.pin))
                     .is_none_or(|locked| locked.drift(entry).is_some())
         })
         .map(|(name, _)| name.clone())
@@ -466,10 +472,37 @@ fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
     let names = lock.datasets.iter().map(|dataset| &dataset.name);
     let removed = names
         .chain(lock.derived.iter().map(|result| &result.name))
+        .chain(lock.stated.iter().map(|stated| &stated.pin.name))
         .filter(|name| !manifest.datasets.contains_key(*name))
         .cloned()
         .collect();
     (unlocked, removed)
+}
+
+/// the datasets of data.toml that data.lock pins by their sources' digests alone, but those
+/// `unlocked`, with what pins each.
+fn not_downloaded(
+    manifest: &Manifest,
+    lock: &Lock,
+    unlocked: &[String],
+) -> (Vec<String>, HashMap<String, &'static str>) {
+    let pinned: Vec<&crate::project::lock::Stated> = lock
+        .stated
+        .iter()
+        .filter(|stated| {
+            manifest.datasets.contains_key(stated.name())
+                && !unlocked.iter().any(|name| name == stated.name())
+        })
+        .collect();
+    let names = pinned
+        .iter()
+        .map(|stated| stated.name().to_owned())
+        .collect();
+    let by = pinned
+        .iter()
+        .map(|stated| (stated.name().to_owned(), stated.digests()))
+        .collect();
+    (names, by)
 }
 
 /// each stale recipe, with what moved since it was built.
@@ -524,12 +557,15 @@ fn check(
     unlocked.extend(renamed.keys().cloned());
     unlocked.sort();
     unlocked.dedup();
+    let (not_downloaded, pinned_by) = not_downloaded(&manifest, &lock, &unlocked);
     let mut status = Status {
         project: project.root.clone(),
         verified: verify.is_some(),
         lockless,
         unlocked,
         removed,
+        not_downloaded,
+        pinned_by,
         building,
         renamed,
         unplaced: manifest
@@ -1008,6 +1044,7 @@ impl Status {
     /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.
     fn places(&self) -> bool {
         !self.removed.is_empty()
+            || !self.not_downloaded.is_empty()
             || self
                 .unlocked
                 .iter()
@@ -1048,6 +1085,20 @@ fn tell_unplaced(output: &Output, status: &Status) {
         for path in paths {
             report_detail(output, path);
         }
+    }
+}
+
+/// a row for each dataset only its source's digests pin, saying which sync downloads it.
+fn tell_not_downloaded(output: &Output, status: &Status) {
+    for name in &status.not_downloaded {
+        let by = status.pinned_by.get(name).copied().unwrap_or("digests");
+        output.report(
+            "To download",
+            &format!(
+                "{name} · pinned by its source's {by}, not downloaded yet; `{}` downloads and checks it",
+                super::project::command(&format!("sync {name}"))
+            ),
+        );
     }
 }
 
@@ -1092,6 +1143,7 @@ fn list(output: &Output, status: &Status) {
             &format!("{name} · not in data.toml, so `fetchloom sync` takes it out of data.lock"),
         );
     }
+    tell_not_downloaded(output, status);
     for kept in &status.candidates {
         tell_kept(output, kept, shown);
     }
@@ -1245,6 +1297,7 @@ fn report_detail(output: &Output, text: &str) {
 fn sum_up(output: &Output, status: &Status) -> bool {
     let differences = status.removed.len()
         + status.unlocked.len()
+        + status.not_downloaded.len()
         + status.not_unpacked.len()
         + status.unbuilt.len()
         + status.blocked.len()

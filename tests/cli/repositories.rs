@@ -1460,3 +1460,235 @@ fn a_private_openneuro_dataset_is_refused_and_says_why() -> Result {
     assert!(!sandbox.work().join("data.toml").exists());
     Ok(())
 }
+
+/// `add --no-sync` of dryad's `files`, stated `(path, bytes, md5)`, as `archiving`, downloading
+/// nothing, and data.lock as it left it.
+fn added_unsynced(sandbox: &Sandbox, routes: &Routes) -> Result<String> {
+    let page = "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7";
+    let asked = routes.targets().len();
+    let output = command(
+        sandbox,
+        routes,
+        &["add", page, "--as", "archiving", "--no-sync"],
+    )
+    .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let downloads: Vec<String> = routes
+        .targets()
+        .split_off(asked)
+        .into_iter()
+        .filter(|target| target.ends_with("/download"))
+        .collect();
+    assert_eq!(downloads, Vec::<String>::new(), "nothing downloads");
+    assert!(!sandbox.work().join("data/archiving").exists());
+    Ok(fs::read_to_string(sandbox.work().join("data.lock"))?)
+}
+
+/// a dataset pinned by dryad's MD5 alone is written as not downloaded, counts as locked, and a
+/// clone's first sync downloads it, checks each MD5 and size, pins it whole and places it.
+#[test]
+fn a_pin_by_the_sources_md5_is_downloaded_and_completed_by_a_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (rows, notes) = (md5_hex(ROWS), md5_hex(NOTES));
+    let routes = dryad(&[("rows.csv", ROWS, &rows), ("notes.txt", NOTES, &notes)])?;
+    let lock = added_unsynced(&sandbox, &routes)?;
+    let expected = format!(
+        "downloaded = false\nfiles = [\n  {{ path = \"notes.txt\", size = {}, md5 = \"{notes}\", url = \"https://datadryad.org/api/v2/files/102/download\" }},\n  {{ path = \"rows.csv\", size = {}, md5 = \"{rows}\", url = \"https://datadryad.org/api/v2/files/101/download\" }},\n]\n",
+        NOTES.len(),
+        ROWS.len()
+    );
+    assert!(lock.contains(&expected), "{lock}");
+    assert!(!lock.contains("sha256 = "), "{lock}");
+    let check = sandbox.run(&["--json", "lock", "--check"])?;
+    ok(&check)?;
+    // only a sync downloads it: any other relock carries the pin as it is
+    ok(&command(&sandbox, &routes, &["lock"]).output()?)?;
+    assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
+
+    let status = sandbox.run(&["status"])?;
+    assert!(
+        text(&status.stdout)?.contains(
+            "To download archiving · pinned by its source's MD5, not downloaded yet; `fetchloom sync archiving` downloads and checks it"
+        ),
+        "{}",
+        text(&status.stdout)?
+    );
+    let listed = json(&sandbox.run(&["--json", "list", "archiving"])?)?;
+    assert_eq!(
+        listed["result"]["datasets"][0]["downloaded"], false,
+        "{listed}"
+    );
+    assert_eq!(listed["result"]["datasets"][0]["files"], 2, "{listed}");
+    let path = sandbox.run(&["--json", "path", "archiving"])?;
+    assert_eq!(path.status.code(), Some(1), "{}", text(&path.stderr)?);
+    let error = &json(&path)?["errors"][0];
+    assert_eq!(error["kind"], "data.not_ready");
+    assert_eq!(
+        error["message"],
+        "archiving is pinned by its source's MD5 until a sync downloads it"
+    );
+    assert_eq!(
+        error["help"],
+        "run `fetchloom sync archiving` where the data can download, then commit data.lock"
+    );
+
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["--json", "sync"])?;
+    ok(&synced)?;
+    assert_eq!(fs::read(teammate.join("data/archiving/rows.csv"))?, ROWS);
+    assert_eq!(fs::read(teammate.join("data/archiving/notes.txt"))?, NOTES);
+    let filled = fs::read_to_string(teammate.join("data.lock"))?;
+    assert!(!filled.contains("downloaded"), "{filled}");
+    assert!(
+        filled.contains(&format!(
+            "{{ path = \"rows.csv\", size = {}, sha256 = \"{}\", md5 = \"{rows}\", url = \"https://datadryad.org/api/v2/files/101/download\" }},",
+            ROWS.len(),
+            sha256_hex(ROWS)
+        )),
+        "{filled}"
+    );
+    let date = |lock: &str| {
+        lock.lines()
+            .find(|line| line.starts_with("locked = "))
+            .map(str::to_owned)
+    };
+    assert_eq!(date(&filled), date(&lock), "the pin keeps its date");
+    let again = sandbox
+        .command_in(&teammate, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&again)?;
+    Ok(())
+}
+
+/// bytes another than the MD5 their source states fail the sync as any pin does, and data.lock
+/// and the data folder stay as they were.
+#[test]
+fn a_sync_that_finds_other_bytes_than_the_stated_md5_records_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(NOTES))])?;
+    let lock = added_unsynced(&sandbox, &routes)?;
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["--json", "sync"])?;
+    assert_eq!(synced.status.code(), Some(30), "{}", text(&synced.stderr)?);
+    assert_eq!(json(&synced)?["errors"][0]["kind"], "integrity.mismatch");
+    assert_eq!(fs::read_to_string(teammate.join("data.lock"))?, lock);
+    assert!(!teammate.join("data/archiving/rows.csv").exists());
+    Ok(())
+}
+
+/// `--locked` refuses a pin a sync would complete, since data.lock would change, saying which
+/// sync completes it; the check without it counts the pin as locked.
+#[test]
+fn a_locked_sync_refuses_a_pin_not_downloaded_yet() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    let unsynced = added_unsynced(&sandbox, &routes)?;
+    // another add rewrites data.lock and carries the pin as it is
+    let files = Routes::start(vec![("/files/notes.txt".to_owned(), file(NOTES, "\"n1\""))])?;
+    ok(&sandbox.run(&["add", &format!("{}/files/notes.txt", files.url)])?)?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let pin = &unsynced[unsynced.find("[[dataset]]").unwrap_or_default()..];
+    assert!(
+        lock.contains(pin) && lock.contains("name = \"notes\""),
+        "{lock}"
+    );
+    for args in [
+        &["--json", "sync", "--locked"][..],
+        &["--json", "sync", "archiving", "--locked"],
+    ] {
+        let output = command(&sandbox, &routes, args).output()?;
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "lock.outdated", "{args:?}");
+        assert_eq!(
+            error["message"],
+            "data.lock would change: archiving is pinned by its source's MD5 until a sync downloads it"
+        );
+        assert_eq!(
+            error["help"],
+            "run `fetchloom sync archiving` where the data can download, then commit data.lock"
+        );
+    }
+    assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
+    // data.toml changing the dataset makes the pin out of date, as any pin
+    let manifest = sandbox.work().join("data.toml");
+    let table = "[datasets.archiving]\nref = \"dryad:10.5061/dryad.j1fd7\"\n";
+    let excluding = fs::read_to_string(&manifest)?
+        .replace(table, &format!("{table}exclude = [\"notes.txt\"]\n"));
+    fs::write(&manifest, excluding)?;
+    let check = sandbox.run(&["--json", "lock", "--check"])?;
+    assert_eq!(check.status.code(), Some(1));
+    assert_eq!(
+        json(&check)?["errors"][0]["details"][0],
+        "archiving changed in data.toml"
+    );
+    Ok(())
+}
+
+/// an archive pinned by its source's MD5 gets the tree of what it unpacks to once a sync
+/// downloads it, and its files are placed unpacked.
+#[test]
+fn an_archive_pinned_by_its_md5_gets_its_tree_from_the_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = crate::support::zip_of(&[("rows.csv", ROWS), ("notes.txt", NOTES)])?;
+    let routes = dryad(&[("bundle.zip", &zip, &md5_hex(&zip))])?;
+    let lock = added_unsynced(&sandbox, &routes)?;
+    assert!(!lock.contains("unpacks_to"), "{lock}");
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["--json", "sync"])?;
+    ok(&synced)?;
+    let filled = fs::read_to_string(teammate.join("data.lock"))?;
+    assert!(filled.contains(", unpacks_to = \"sha256:"), "{filled}");
+    assert_eq!(fs::read(teammate.join("data/archiving/rows.csv"))?, ROWS);
+    assert_eq!(fs::read(teammate.join("data/archiving/notes.txt"))?, NOTES);
+    Ok(())
+}
+
+/// a source that states no hash of a file is refused before anything is written, naming it; so
+/// is a path on this machine.
+#[test]
+fn no_sync_refuses_files_no_source_hash_pins() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![("/files/rows.csv".to_owned(), file(ROWS, "\"r1\""))])?;
+    let link = format!("{}/files/rows.csv", routes.url);
+    let output = sandbox.run(&["--json", "add", &link, "--no-sync"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "usage");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.ends_with("states no size with a SHA-256 or MD5 for 1 file: rows.csv"),
+        "{message}"
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "pinning them needs their bytes: run `fetchloom add {link}` without --no-sync where the data can download"
+        )
+    );
+    assert_eq!(routes.targets(), Vec::<String>::new(), "nothing downloads");
+    fs::create_dir(sandbox.work().join("flowers"))?;
+    let output = sandbox.run(&["--json", "add", "./flowers", "--no-sync"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    assert!(!sandbox.work().join("data.toml").exists());
+    assert!(!sandbox.work().join("data.lock").exists());
+    Ok(())
+}
+
+/// a clone's data.lock is untrusted: a pin not downloaded yet that would place a file outside its
+/// folder is refused before anything downloads.
+#[test]
+fn a_hostile_pin_not_downloaded_from_a_clone_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    let lock = added_unsynced(&sandbox, &routes)?;
+    fs::write(
+        sandbox.work().join("data.lock"),
+        lock.replace("path = \"rows.csv\"", "path = \"../../rows.csv\""),
+    )?;
+    let asked = routes.targets().len();
+    let output = command(&sandbox, &routes, &["--json", "sync"]).output()?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+    assert_eq!(json(&output)?["errors"][0]["kind"], "project.invalid");
+    assert_eq!(routes.targets().len(), asked, "nothing was asked");
+    Ok(())
+}

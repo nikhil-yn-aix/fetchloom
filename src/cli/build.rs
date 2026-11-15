@@ -267,6 +267,9 @@ impl<'a> Building<'a> {
         if let Some(instead) = current {
             pinned_as_asked(project, &manifest, read.as_ref(), instead, &scope)?;
         }
+        if let (Some((lock, _)), Scope::Only(names)) = (&read, &scope) {
+            lock.refuse_stated(names.iter().map(String::as_str))?;
+        }
         let old = read.map(|(lock, text)| (lock, digest::sha256(text.as_bytes())));
         let work =
             Loop::new(context, project, Arc::new(context.net()), open_cache()?).within(scope);

@@ -193,6 +193,9 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     }
     let target = opened(context, target)?;
     let lock = project.lock()?;
+    if let Some(lock) = &lock {
+        lock.refuse_stated(datasets.iter().map(String::as_str))?;
+    }
     let scope = Scope::Only(datasets.iter().cloned().collect());
     locked(
         &project,

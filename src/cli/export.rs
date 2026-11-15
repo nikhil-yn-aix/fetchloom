@@ -113,6 +113,11 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
             .map(|(lock, _)| lock)
     }
     .unwrap_or_default();
+    if args.names.is_empty() {
+        lock.refuse_stated(manifest.datasets.keys().map(String::as_str))?;
+    } else {
+        lock.refuse_stated(args.names.iter().map(String::as_str))?;
+    }
     let mut report = inventory(&manifest, lock, &super::peek_cache()?, &args.names)?;
     report.left_out = left_out(&manifest, &args.names, args.format);
     let output = &context.output;
