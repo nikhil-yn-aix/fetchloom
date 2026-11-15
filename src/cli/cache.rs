@@ -306,6 +306,7 @@ pub(super) fn gc(
     inputs: bool,
     dry_run: bool,
 ) -> Result<Collected, Error> {
+    super::refuse_absent_cache("to free")?;
     if inputs {
         return inputs::gc(context, now, dry_run);
     }
@@ -635,6 +636,7 @@ fn tell_dry_gc(
 }
 
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
+    super::refuse_absent_cache("to check")?;
     let cache = open_cache()?;
     let scan = cache.scan_objects(context.threads, &context.stop)?;
     let total: u64 = scan.objects.iter().map(|object| object.size).sum();

@@ -495,6 +495,53 @@ fn the_cache_report_creates_nothing() -> Result {
     Ok(())
 }
 
+/// gc and verify work on a cache that is there: a folder holding none, as a mistyped
+/// FETCHLOOM_CACHE names, is refused and left as it was, with the help naming where it was set.
+#[test]
+fn gc_and_verify_refuse_a_folder_holding_no_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let missing = sandbox.folder("place")?.join("no-cache-yet");
+    let empty = sandbox.folder("empty")?;
+    for (args, nothing) in [
+        (&["--json", "cache", "gc"][..], "to free"),
+        (&["--json", "cache", "gc", "--now"], "to free"),
+        (&["--json", "cache", "gc", "--dry-run"], "to free"),
+        (&["--json", "cache", "gc", "--now", "--dry-run"], "to free"),
+        (&["--json", "cache", "gc", "--inputs"], "to free"),
+        (&["--json", "cache", "verify"], "to check"),
+    ] {
+        for folder in [&missing, &empty] {
+            let output = sandbox
+                .command(args)
+                .env("FETCHLOOM_CACHE", folder)
+                .output()?;
+            assert_eq!(
+                output.status.code(),
+                Some(50),
+                "{args:?}: {}",
+                text(&output.stdout)?
+            );
+            let error = &json(&output)?["errors"][0];
+            assert_eq!(error["kind"], "local.io", "{args:?}");
+            assert_eq!(
+                error["message"],
+                format!(
+                    "there is no cache at {}, so there is nothing {nothing}",
+                    folder.display()
+                ),
+                "{args:?}"
+            );
+            assert_eq!(
+                error["help"], "FETCHLOOM_CACHE names that folder: check it for a typo",
+                "{args:?}"
+            );
+        }
+        assert!(!missing.exists(), "{args:?}");
+        assert_eq!(fs::read_dir(&empty)?.count(), 0, "{args:?}");
+    }
+    Ok(())
+}
+
 #[test]
 fn verify_reports_unenumerable_object_folders() -> Result {
     let sandbox = Sandbox::new()?;
@@ -625,8 +672,7 @@ fn sync_warns_when_gc_registration_fails() -> Result {
     }
     for json in [false, true] {
         let sandbox = Sandbox::new()?;
-        // the cache comes into being with its first use, which a report is not
-        assert!(sandbox.run(&["cache", "verify"])?.status.success());
+        first_use(&sandbox)?;
         fs::write(sandbox.work().join("data.toml"), "")?;
         let registrations = sandbox.cache().join("projects");
         let before = fs::metadata(&registrations)?.permissions();
@@ -1073,8 +1119,7 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
     }
     let sandbox = Sandbox::new()?;
     let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
-    // the cache comes into being with its first use, which a report is not
-    assert!(sandbox.run(&["cache", "verify"])?.status.success());
+    first_use(&sandbox)?;
     let mut folders = vec![sandbox.cache()];
     for entry in fs::read_dir(sandbox.cache())? {
         let path = entry?.path();
@@ -1222,8 +1267,7 @@ fn gc_names_each_project_it_forgets() -> Result {
 #[test]
 fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     let sandbox = Sandbox::new()?;
-    // the cache comes into being with its first use, which a report is not
-    assert!(sandbox.run(&["cache", "verify"])?.status.success());
+    first_use(&sandbox)?;
     // each download sits in one of the folders under partial/, named by its key's first digit
     let partial = sandbox.cache().join("partial");
     let at =
@@ -1264,6 +1308,17 @@ fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
         report["result"]["removed_leftover_bytes"], freed,
         "{report}"
     );
+    Ok(())
+}
+
+/// makes the sandbox's cache through its first use, a sync of an empty project of its own, as a
+/// report, gc or verify never does.
+fn first_use(sandbox: &Sandbox) -> Result {
+    let project = sandbox.folder("first-use")?;
+    fs::write(project.join("data.toml"), "")?;
+    let output = sandbox.command_in(&project, &["sync"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(sandbox.cache().join("projects").is_dir());
     Ok(())
 }
 

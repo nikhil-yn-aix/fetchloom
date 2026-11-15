@@ -86,11 +86,7 @@ fn adoptable(root: &Path) -> io::Result<()> {
         Err(err) => return Err(err),
     };
     for entry in entries {
-        let name = entry?.file_name();
-        let left = SYSTEM_NAMES.iter().any(|system| name == *system)
-            || name == NEVER_INDEX
-            || (name == "CACHEDIR.TAG" && tag_begun(root));
-        if !left {
+        if !left_before_tag(root, &entry?.file_name()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "it holds other files and is not a fetchloom cache, and fetchloom makes its cache \
@@ -99,6 +95,29 @@ fn adoptable(root: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// whether `name` in `root` is what a system keeps in a folder, or what a first run stopped
+/// before its tag was whole leaves: the start of the tag and macos's mark against indexing.
+fn left_before_tag(root: &Path, name: &std::ffi::OsStr) -> bool {
+    SYSTEM_NAMES.iter().any(|system| name == *system)
+        || name == NEVER_INDEX
+        || (name == "CACHEDIR.TAG" && tag_begun(root))
+}
+
+/// whether `root` holds no cache yet: it is missing, or holds no tag and nothing but what
+/// [`left_before_tag`] passes. a command that only reads or frees a cache makes none there, where
+/// another makes one.
+pub(crate) fn absent(root: &Path) -> bool {
+    if tagged(root) {
+        return false;
+    }
+    match fs::read_dir(root) {
+        Ok(mut entries) => {
+            entries.all(|entry| entry.is_ok_and(|entry| left_before_tag(root, &entry.file_name())))
+        }
+        Err(err) => err.kind() == io::ErrorKind::NotFound,
+    }
 }
 
 /// what lets others change the files projects place from the cache folder at `root`: it belongs

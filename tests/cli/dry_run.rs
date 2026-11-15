@@ -422,8 +422,6 @@ fn a_dry_run_leaves_an_empty_cache_folder_empty() -> Result {
         vec!["sync", "--dry-run"],
         vec!["add", other.url.as_str(), "--dry-run"],
         vec!["remove", "iris", "--dry-run"],
-        vec!["cache", "gc", "--dry-run"],
-        vec!["cache", "gc", "--now", "--dry-run"],
     ] {
         let output = sandbox
             .command(&args)

@@ -279,10 +279,13 @@ impl Sandbox {
     }
 
     /// makes `folder` a cache as a first run there does, so a test can put files in it as a cache
-    /// holds them: fetchloom takes a folder for its cache only by the tag that run writes.
+    /// holds them: fetchloom takes a folder for its cache only by the tag that run writes. the run
+    /// is a sync of an empty project of its own, since gc and verify make no cache.
     pub(crate) fn make_cache(&self, folder: &Path) -> Result {
+        let project = self.folder("first-use")?;
+        std::fs::write(project.join("data.toml"), "")?;
         let made = self
-            .command(&["cache", "verify"])
+            .command_in(&project, &["sync"])
             .env("FETCHLOOM_CACHE", folder)
             .output()?;
         if !made.status.success() {

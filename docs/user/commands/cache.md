@@ -19,6 +19,13 @@ fetchloom cache verify [options]
 
 `cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --inputs` also frees raw data that only built recipes read, where a folder mirror holds a copy that hashes right, once you say yes, as [raw input a mirror holds](#raw-input-a-mirror-holds) describes. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. [global options](global-options.md) apply to all three forms.
 
+`fetchloom cache` makes no cache where there is none, and gc and verify, in every form, work only on a cache that is there: a missing or empty cache folder, as a mistyped `FETCHLOOM_CACHE` names, stops them with `local.io`, exit 50, and nothing is made there. the help says where the folder was set: `FETCHLOOM_CACHE`, the `cache` setting, or the default folder, where the first command that needs the cache makes it. stderr of `fetchloom cache gc` with `FETCHLOOM_CACHE` mistyped, the folder above it shortened to `/home/me`:
+
+```text
+error: there is no cache at /home/me/cahce, so there is nothing to free
+  help: FETCHLOOM_CACHE names that folder: check it for a typo
+```
+
 ## inspect
 
 `fetchloom cache` reports the cache path, the bytes it holds and the projects using it, each on a `Used by` line while there are at most three, or counted on one line, which `-v` expands. the bare path goes to stdout only when stdout is not a terminal or `-q` hides the story, so `fetchloom -q cache` prints it for a script. JSON returns it in `result.path`, and every project in `result.projects`.
@@ -224,6 +231,7 @@ verification does not check copies in `data/`. after it finds changed bytes, run
 | successful inspection, gc or verification | 0 |
 | verification found changed bytes | 30, `integrity.mismatch` |
 | verification found unreadable paths but no changed bytes | 50, `local.io` |
+| the cache folder is missing or empty, so gc or verify has no cache to work on | 50, `local.io`; nothing is made |
 | gc could not acquire its exclusive cache lock | 50, `local.io`; nothing is removed |
 | gc could not remove or inspect a cleanup path | 50, `local.io`, even after other removals succeeded |
 | `gc --inputs` had something to free and nobody said yes, or the answer was no | 1, `unconfirmed`; nothing is removed |
