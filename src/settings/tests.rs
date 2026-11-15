@@ -271,6 +271,33 @@ fn only_a_plain_settings_file_of_a_sensible_size_is_read() {
     }
 }
 
+/// settings under a heading, as `[settings]`, are told to go at the top, not taken for a key
+/// only a variable sets; a table of no setting is told as one, and `settings unset` takes it out.
+#[test]
+fn a_table_in_the_settings_file_is_told_as_one() {
+    let error = file("[settings]\njobs = 4\n").unwrap_err();
+    assert_eq!(error.kind, Kind::Usage);
+    assert_eq!(
+        error.message,
+        "the settings file /home/ada/.config/fetchloom/settings.toml puts settings under [settings], and they go at its top, with no [settings] line"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some("take out the [settings] line, so the settings below it are at the top")
+    );
+    let error = file("jobs = 4\n[mystuff]\na = 1\n").unwrap_err();
+    assert_eq!(
+        error.message,
+        "the settings file /home/ada/.config/fetchloom/settings.toml has a [mystuff] table, which is not a setting"
+    );
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("settings.toml");
+    std::fs::write(&path, "jobs = 4\n\n[mystuff]\na = 1\n").unwrap();
+    let named = path.to_str().unwrap();
+    edit::unset(&env(&[("FETCHLOOM_SETTINGS", named)]), "mystuff", &|_| Ok(())).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "jobs = 4\n");
+}
+
 /// the error never shows the text where reading stopped, which may hold a login.
 #[test]
 fn a_settings_file_that_is_not_toml_names_where_reading_stopped() {

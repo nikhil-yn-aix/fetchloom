@@ -346,7 +346,31 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
     table(path, text)?
         .into_iter()
         .map(|(key, value)| {
-            if !KEYS.iter().any(|(known, _)| *known == key) {
+            let setting = |name: &str| KEYS.iter().any(|(known, _)| *known == name);
+            if let toml::Value::Table(inner) = &value
+                && !setting(&key)
+            {
+                // settings under a heading, as `[settings]`, are settings in the wrong place
+                let error = if inner.keys().any(|inner| setting(inner)) {
+                    invalid(format!(
+                        "the settings file {} puts settings under [{key}], and they go at its top, with no [{key}] line",
+                        path.display()
+                    ))
+                    .help(format!(
+                        "take out the [{key}] line, so the settings below it are at the top"
+                    ))
+                } else {
+                    invalid(format!(
+                        "the settings file {} has a [{key}] table, which is not a setting",
+                        path.display()
+                    ))
+                    .help(format!(
+                        "run `fetchloom settings unset {key}` to take it out, with what it holds"
+                    ))
+                };
+                return Err(error);
+            }
+            if !setting(&key) {
                 let variable = format!("FETCHLOOM_{}", key.to_ascii_uppercase());
                 if OTHERS.contains(&variable.as_str()) {
                     return Err(Error::new(
