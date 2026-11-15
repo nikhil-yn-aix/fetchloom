@@ -405,6 +405,33 @@ fn private_repositories_are_skipped_and_gated_ones_marked() {
     );
 }
 
+/// zenodo lists a restricted record's files only to an account that may read them, so its empty
+/// list says nothing of its size: it is marked as needing access, never offered as `0 B`.
+#[test]
+fn a_restricted_zenodo_record_is_marked_rather_than_empty() {
+    let mut zenodo: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("search/zenodo.json")).unwrap();
+    zenodo["hits"]["hits"][1]["files"] = serde_json::json!([]);
+    zenodo["hits"]["hits"][1]["metadata"]["access_right"] = "restricted".into();
+    zenodo["hits"]["hits"][2]["metadata"]["access_right"] = "open".into();
+    let api = recorded().on(ZENODO, 200, serde_json::to_vec(&zenodo).unwrap());
+    let result = block_on(search(&api, "iris", &[], Some(LIMIT))).unwrap();
+    let zenodo: Vec<_> = result
+        .candidates
+        .iter()
+        .filter(|item| item.source == "zenodo")
+        .map(|item| (item.size, item.files, item.note.as_deref()))
+        .collect();
+    assert_eq!(
+        zenodo,
+        [
+            (Some(1_147_253_099), Some(2), None),
+            (None, None, Some("needs access")),
+            (Some(5_342_063_818), Some(1), None),
+        ]
+    );
+}
+
 #[test]
 fn a_failed_source_warns_without_discarding_the_others() {
     let api = recorded().on(KAGGLE, 403, b"denied".to_vec());

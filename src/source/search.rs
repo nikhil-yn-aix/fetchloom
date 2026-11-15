@@ -621,6 +621,8 @@ struct ZenodoMatch {
 #[derive(Deserialize)]
 struct Metadata {
     title: String,
+    /// `open`, or `restricted`, `embargoed` or `closed` for a record only some accounts read.
+    access_right: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -685,9 +687,16 @@ async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
         .into_iter()
         .take(limit)
         .map(|item| {
+            // zenodo lists a restricted record's files only to an account that may read them
             let sizes: Option<Vec<u64>> = item
                 .files
+                .filter(|files| !files.is_empty())
                 .and_then(|files| files.iter().map(|file| file.size).collect());
+            let open = item
+                .metadata
+                .access_right
+                .as_deref()
+                .is_none_or(|access| access == "open");
             Ok(Candidate {
                 reference: reference(&format!("zenodo:{}", item.id))?,
                 title: item.metadata.title,
@@ -699,7 +708,7 @@ async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
                 }),
                 downloads: item.stats.and_then(|stats| stats.unique_downloads),
                 byline: None,
-                note: None,
+                note: (!open).then(|| "needs access".to_owned()),
                 time: None,
                 files: sizes.as_ref().map(|sizes| sizes.len() as u64),
                 largest: sizes.as_ref().and_then(|sizes| sizes.iter().max().copied()),
