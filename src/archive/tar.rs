@@ -192,10 +192,12 @@ fn hardlink(
         .link_name_bytes()
         .map(|target| String::from_utf8_lossy(&target).into_owned())
         .unwrap_or_default();
+    // looked up before the link's own name is added, so a link to itself finds nothing
+    let earlier = guard.earlier_file(&target);
     match guard.name(raw, false)? {
         Named::System(path) => guard.leave_out(path),
         Named::File(path) => {
-            let Some(earlier) = guard.earlier_file(&target) else {
+            let Some(earlier) = earlier else {
                 return Err(refused_member(
                     raw,
                     &format!(
@@ -461,8 +463,9 @@ mod tests {
         tar.append(&header, &[][..]).unwrap();
     }
 
-    /// a hardlink to an earlier file unpacks to that file's bytes again; a later file, a folder or
-    /// a path outside the archive is refused, since such a link could reach outside it.
+    /// a hardlink to an earlier file unpacks to that file's bytes again; a later file, a folder,
+    /// the link itself or a path outside the archive is refused, since such a link could reach
+    /// outside it.
     #[test]
     fn a_hardlink_to_an_earlier_file_unpacks_as_that_file() {
         let tar = built(|tar| {
@@ -482,7 +485,16 @@ mod tests {
             assert_eq!(member.sha256, digest::sha256(b"RIFF"), "{}", member.path);
         }
         assert_eq!(scratch.cache.objects().len(), 1);
-        for target in ["h/later.wav", "h", "/etc/passwd", "../a.wav", "h/A.wav"] {
+        let refused = [
+            "h/later.wav",
+            "h",
+            "/etc/passwd",
+            "../a.wav",
+            "h/A.wav",
+            "h/b.wav",
+            "./h/b.wav",
+        ];
+        for target in refused {
             let tar = built(|tar| {
                 raw_entry(tar, b"h/a.wav", EntryType::Regular, b"RIFF");
                 hardlink(tar, b"h/b.wav", target.as_bytes());
