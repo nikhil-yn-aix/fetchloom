@@ -10,7 +10,7 @@ use toml_edit::{DocumentMut, Item};
 
 use super::{
     BOOLEANS, CLEARED, File, KEYS, LISTS, OTHERS, Origin, Settings, Value, located, parse, split,
-    table, text_at, undo,
+    plain, table, text_at, undo,
 };
 use crate::error::{Error, Kind};
 use crate::machine::{Machine, Var};
@@ -44,9 +44,14 @@ pub(crate) fn set(
 ) -> Result<Changed, Error> {
     let key = known(name)?;
     let value = given(key, values, here)?;
-    let (path, text, found) = open(var)?;
-    let mut document = document(&path, &text)?;
     let after = written_as(key, &value);
+    let Opened {
+        path,
+        text,
+        found,
+        held: _held,
+    } = open(var, true)?;
+    let mut document = document(&path, &text)?;
     check(key, &after, &path)?;
     let before = document.get(key).and_then(Item::as_value).cloned();
     let mut changed = Changed {
@@ -68,9 +73,7 @@ pub(crate) fn set(
             *held.decor_mut() = decor;
         }
         Some(item) => *item = Item::Value(after),
-        None => {
-            document.insert(key, Item::Value(after));
-        }
+        None => appended(&mut document, key, after),
     }
     write(&changed.path, &document.to_string(), found)?;
     changed.written = true;
@@ -80,7 +83,12 @@ pub(crate) fn set(
 /// takes `name` out of the settings file `var` locates: a setting, or a key the file holds that
 /// is none, so a mistake that stops every run can be taken out too. comments above it stay.
 pub(crate) fn unset(var: Var<'_>, name: &str) -> Result<Changed, Error> {
-    let (path, text, found) = open(var)?;
+    let Opened {
+        path,
+        text,
+        found,
+        held: _held,
+    } = open(var, false)?;
     let mut document = document(&path, &text)?;
     if !document.contains_key(name) {
         known(name)?;
@@ -217,9 +225,22 @@ fn from(key: &str, text: String, here: Option<&Path>) -> Result<String, Error> {
     })
 }
 
-/// the settings file `var` locates, past a link to it, with its text, empty while it is not
-/// there, and whether it is.
-fn open(var: Var<'_>) -> Result<(PathBuf, String, bool), Error> {
+/// the settings file as a change finds it.
+struct Opened {
+    /// where it is, past a link to it.
+    path: PathBuf,
+    /// its text, empty while it is not there.
+    text: String,
+    found: bool,
+    /// the lock that keeps a second change off the file until this one is written, so both stay.
+    /// none where the disk cannot lock, or where no folder holds the file yet and `open` was not
+    /// asked to make one.
+    held: Option<fs::File>,
+}
+
+/// the settings file `var` locates, read under its lock. `making` makes its folder when missing,
+/// to lock in it, as a set writes the file there.
+fn open(var: Var<'_>, making: bool) -> Result<Opened, Error> {
     let (path, _) = located(var);
     let path = path.ok_or_else(|| {
         Error::new(
@@ -238,13 +259,59 @@ fn open(var: Var<'_>) -> Result<(PathBuf, String, bool), Error> {
         })?,
         _ => path,
     };
-    match text_at(&path) {
-        Ok(text) => Ok((path, text, true)),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((path, String::new(), false)),
-        Err(err) => Err(Error::io(
+    let unread = |err: &io::Error| {
+        Error::io(
             format_args!("could not read the settings file {}", path.display()),
-            &err,
-        )),
+            err,
+        )
+    };
+    // what is no file to change is told as such, before a lock is made beside it
+    match plain(&path) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(unread(&err)),
+        _ => {}
+    }
+    let held = hold(&path, making)?;
+    let (text, found) = match text_at(&path) {
+        Ok(text) => (text, true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => (String::new(), false),
+        Err(err) => return Err(unread(&err)),
+    };
+    Ok(Opened {
+        path,
+        text,
+        found,
+        held,
+    })
+}
+
+/// the lock on the settings file at `path`, taken on a file beside it, since a write replaces the
+/// settings file itself. `making` makes the folder first; else a missing folder, with no file to
+/// change, needs no lock.
+fn hold(path: &Path, making: bool) -> Result<Option<fs::File>, Error> {
+    let failed = |err: &io::Error| {
+        Error::io(
+            format_args!("could not lock the settings file {}", path.display()),
+            err,
+        )
+    };
+    let folder = path.parent().unwrap_or_else(|| Path::new("."));
+    if making {
+        fs::create_dir_all(folder).map_err(|err| failed(&err))?;
+    } else if !folder.is_dir() {
+        return Ok(None);
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(folder.join(format!(".{name}.lock")))
+        .map_err(|err| failed(&err))?;
+    match lock.lock() {
+        Ok(()) => Ok(Some(lock)),
+        Err(err) if err.kind() == io::ErrorKind::Unsupported => Ok(None),
+        Err(err) => Err(failed(&err)),
     }
 }
 
@@ -331,6 +398,20 @@ fn read_as(value: &toml_edit::Value) -> Option<Value> {
     }
 }
 
+/// puts `key` last in `document`, below the comments that end it, as a file holding only a
+/// heading comment has them, so they stay above what is added.
+fn appended(document: &mut DocumentMut, key: &str, value: toml_edit::Value) {
+    let ending = document.trailing().as_str().unwrap_or_default().to_owned();
+    document.insert(key, Item::Value(value));
+    if ending.trim().is_empty() {
+        return;
+    }
+    document.set_trailing("");
+    if let Some((mut written, _)) = document.get_key_value_mut(key) {
+        written.leaf_decor_mut().set_prefix(ending);
+    }
+}
+
 /// takes `key` out of `document`, moving the comments above it to what follows, so only the key
 /// and what trails it on its line go. false when the document has no such key.
 fn removed(document: &mut DocumentMut, key: &str) -> bool {
@@ -391,11 +472,24 @@ fn write(path: &Path, text: &str, found: bool) -> Result<(), Error> {
     let folder = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(folder).map_err(|err| failed(&err))?;
     let kept = if found {
-        Some(
-            fs::metadata(path)
-                .map_err(|err| failed(&err))?
-                .permissions(),
-        )
+        let permissions = fs::metadata(path)
+            .map_err(|err| failed(&err))?
+            .permissions();
+        // the rename would replace a file its mode keeps from writes, which someone set so
+        if permissions.readonly() || !may_write(path) {
+            return Err(Error::new(
+                Kind::LocalIo,
+                format!(
+                    "the settings file {} is read-only, so it was left as it is",
+                    path.display()
+                ),
+            )
+            .help(format!(
+                "if it is yours to change, make it writable first, as `chmod u+w {}` does; else set FETCHLOOM_SETTINGS to a settings file of your own",
+                crate::suggested::shell_word(&path.to_string_lossy())
+            )));
+        }
+        Some(permissions)
     } else {
         None
     };
@@ -415,6 +509,17 @@ fn write(path: &Path, text: &str, found: bool) -> Result<(), Error> {
     // the rename is done; a folder that cannot be flushed leaves it to the system to write
     let _ = crate::volume::sync_directory(folder);
     Ok(())
+}
+
+/// whether this user may write the file at `path`, as its mode and owner say.
+#[cfg(unix)]
+fn may_write(path: &Path) -> bool {
+    rustix::fs::access(path, rustix::fs::Access::WRITE_OK).is_ok()
+}
+
+#[cfg(not(unix))]
+fn may_write(_: &Path) -> bool {
+    true
 }
 
 #[cfg(test)]

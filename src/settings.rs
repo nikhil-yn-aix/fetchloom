@@ -267,27 +267,35 @@ impl File {
 /// a device or a pipe there would never end, and only up to MOST_BYTES. `InvalidData`, saying
 /// what is there, for anything else.
 fn text_at(path: &Path) -> io::Result<String> {
-    let refused = |what: String| io::Error::new(io::ErrorKind::InvalidData, what);
-    let meta = std::fs::metadata(path)?;
-    if meta.is_dir() {
-        return Err(refused("it is a folder, not a file".to_owned()));
-    }
-    if !meta.is_file() {
-        return Err(refused(
-            "it is a device or a pipe, not a plain file".to_owned(),
-        ));
-    }
+    plain(path)?;
     let mut text = String::new();
     std::fs::File::open(path)?
         .take(MOST_BYTES + 1)
         .read_to_string(&mut text)?;
     if text.len() as u64 > MOST_BYTES {
-        return Err(refused(format!(
-            "it holds more than {}, far more than any settings take",
-            units::size(MOST_BYTES)
-        )));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "it holds more than {}, far more than any settings take",
+                units::size(MOST_BYTES)
+            ),
+        ));
     }
     Ok(text)
+}
+
+/// whether what is at `path`, past a link, is a plain file: `NotFound` when nothing is, and
+/// `InvalidData`, saying what it is, for a folder, a device or a pipe.
+fn plain(path: &Path) -> io::Result<()> {
+    let meta = std::fs::metadata(path)?;
+    let what = if meta.is_dir() {
+        "it is a folder, not a file"
+    } else if !meta.is_file() {
+        "it is a device or a pipe, not a plain file"
+    } else {
+        return Ok(());
+    };
+    Err(io::Error::new(io::ErrorKind::InvalidData, what))
 }
 
 /// where the settings file is: the one `FETCHLOOM_SETTINGS` names, which must then be there, else

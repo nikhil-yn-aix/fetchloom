@@ -314,6 +314,67 @@ fn the_file_is_made_when_missing_and_keeps_its_permissions() {
     assert_eq!(fs::read_to_string(&target).unwrap(), "jobs = 4\n");
 }
 
+/// a read-only settings file, as a lab marks the file it shares, is refused and left as it was,
+/// though the folder would let a new file take its place.
+#[test]
+fn a_read_only_file_is_refused_and_left_as_it_was() {
+    let text = "# the lab's, do not edit\njobs = 4\n";
+    let (_folder, path, var) = settings("settings.toml", Some(text));
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&path, permissions).unwrap();
+    let error = set(&var, "jobs", &values(&["12"]), None).unwrap_err();
+    assert_eq!(
+        error.message,
+        format!(
+            "the settings file {} is read-only, so it was left as it is",
+            path.display()
+        )
+    );
+    assert!(
+        error.help.as_deref().unwrap().contains("chmod u+w"),
+        "{error:?}"
+    );
+    assert!(unset(&var, "jobs").is_err());
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    assert!(fs::metadata(&path).unwrap().permissions().readonly());
+}
+
+/// changes made at once each read the file the one before wrote, so every key stays, and a file
+/// holding only a heading comment keeps it at the top.
+#[test]
+fn changes_at_once_keep_every_key() {
+    let (_folder, path, var) = settings("settings.toml", Some("# race test\n"));
+    let changes = [
+        ("jobs", "3"),
+        ("host_jobs", "2"),
+        ("retries", "5"),
+        ("timeout", "60"),
+        ("ask_above", "20G"),
+        ("cache_budget", "50G"),
+        ("build_floor", "2G"),
+        ("memory", "512M"),
+        ("most_files", "200000"),
+        ("archive_ratio", "100"),
+    ];
+    let start = std::sync::Barrier::new(changes.len());
+    std::thread::scope(|scope| {
+        for (key, value) in changes {
+            let (start, var) = (&start, &var);
+            scope.spawn(move || {
+                start.wait();
+                set(var, key, &values(&[value]), None).unwrap();
+            });
+        }
+    });
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("# race test\n"), "{text}");
+    let kept: Vec<String> = read(&path).into_iter().map(|(key, _)| key).collect();
+    for (key, _) in changes {
+        assert!(kept.iter().any(|kept| kept == key), "{key} was lost: {text}");
+    }
+}
+
 /// a variable overrides a key while it is set, and an empty one only where it clears the key.
 #[test]
 fn a_set_variable_overrides_its_key() {
