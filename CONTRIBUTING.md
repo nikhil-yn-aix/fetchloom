@@ -8,4 +8,4 @@ a change goes like this:
 4. keep the boundaries [decisions](docs/dev/decisions/README.md) records, or say in the pull request why one should move.
 5. write prose, comments and commit messages as [style](docs/dev/style.md) says, and fill in the pull request template's checklist.
 
-everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md). report a security weakness privately, as [security](SECURITY.md) describes, never in a public issue.
+everyone taking part follows the [code of conduct](.github/CODE_OF_CONDUCT.md). report a security weakness privately, as [security](.github/SECURITY.md) describes, never in a public issue.
