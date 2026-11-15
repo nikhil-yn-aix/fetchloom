@@ -44,6 +44,9 @@ struct Listed {
     /// a dropped dataset says so.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     dropped: bool,
+    /// the part of its file list that data.lock names and that is not beside it, so it waits.
+    #[serde(skip)]
+    waiting: Option<String>,
     /// whether `folder` is the usual `data/<name>`, which a narrow table leaves to the name.
     #[serde(skip)]
     usual_folder: bool,
@@ -94,9 +97,15 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
     let cache = super::peek_cache().ok();
     let mut report = report(&manifest, &lock, cache.as_ref(), name, output.json());
     let dropped = project.dropped();
+    let waiting = project.waiting();
     for dataset in &mut report.datasets {
         dataset.dropped = dropped.contains(&dataset.name);
+        dataset.waiting = waiting
+            .iter()
+            .find(|waiting| waiting.name == dataset.name)
+            .map(|waiting| waiting.part.clone());
     }
+    super::project::tell_waiting(output, &project, &super::sync::Scope::All);
     if name.is_some() {
         // `--json` prints the report alone, so the lines for a person are not built
         if let Some(dataset) = report.datasets.first()
@@ -382,6 +391,7 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                 folder: plan::folder(manifest, name),
                 placed: entry.place,
                 dropped: false,
+                waiting: None,
                 usual_folder: plan::folder(manifest, name)
                     == format!("{}/{name}", manifest.data_dir),
                 title: pinned.and_then(|locked| locked.title.clone()),
@@ -618,6 +628,7 @@ fn contents(dataset: &Listed, marks: Marks) -> String {
             marks.dot,
             units::size(bytes)
         ),
+        _ if dataset.waiting.is_some() => "waiting for its file list".to_owned(),
         _ if dataset.from.is_some() => "not built yet".to_owned(),
         _ => "not locked yet".to_owned(),
     }
@@ -753,6 +764,7 @@ mod tests {
             folder: "data/iris".to_owned(),
             placed: true,
             dropped: false,
+            waiting: None,
             usual_folder: true,
             title: None,
             license: Some("cc0-1.0".to_owned()),
@@ -837,6 +849,7 @@ mod tests {
             folder: format!("data/{name}"),
             placed: true,
             dropped: false,
+            waiting: None,
             usual_folder: true,
             title: None,
             license: license.map(str::to_owned),
@@ -918,6 +931,7 @@ mod tests {
             folder: format!("data/{name}"),
             placed: true,
             dropped: false,
+            waiting: None,
             usual_folder: true,
             title: None,
             license: license.map(str::to_owned),
@@ -985,6 +999,7 @@ mod tests {
             folder: format!("data/{name}"),
             placed: true,
             dropped: false,
+            waiting: None,
             usual_folder: true,
             title: None,
             license: Some(license.to_owned()),
@@ -1045,6 +1060,7 @@ mod tests {
             folder: "data/ir\u{9b}is".to_owned(),
             placed: true,
             dropped: false,
+            waiting: None,
             usual_folder: false,
             title: None,
             license: Some("\u{1b}]0;TITLE\u{7}\u{9b}31m".to_owned()),

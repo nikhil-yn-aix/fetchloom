@@ -43,6 +43,8 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     })?;
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
+    // before data.toml changes: data.lock, written after it, would refuse to drop a waiting pin
+    project.not_waiting(&|_| true)?;
     let imported: Vec<Sha256> = names
         .iter()
         .filter(|name| manifest.datasets[name.as_str()].is_import())

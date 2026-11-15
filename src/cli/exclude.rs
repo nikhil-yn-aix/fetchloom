@@ -131,6 +131,8 @@ pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Erro
     };
     let (text, manifest) = project.manifest()?;
     let lock = project.lock()?.unwrap_or_default();
+    // before data.toml changes: data.lock, written after it, would refuse to drop a waiting pin
+    project.not_waiting(&|_| true)?;
     let cache = if dry_run {
         peek_cache()?
     } else {

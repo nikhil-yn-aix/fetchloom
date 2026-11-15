@@ -75,7 +75,7 @@ status arrays, each a list of project-relative paths or dataset names, as [statu
 
 | field | entries |
 |---|---|
-| `unlocked` | datasets data.lock does not pin as data.toml asks, and recipes whose result is not pinned as building them now would make |
+| `unlocked` | datasets data.lock does not pin as data.toml asks, recipes whose result is not pinned as building them now would make, and datasets that wait for their file list, which a `lock.list_missing` warning names |
 | `removed` | datasets in data.lock but no longer in data.toml |
 | `candidates` | recipes with a kept rebuild that differs from data.lock, each with `name`, `tree`, `stale`, true when `--accept` would refuse it, and `files`, each with `path`, `difference` (`changed`, `missing` or `extra`), and nullable `file` and `pinned`, the cache files of the rebuild's bytes and of the pinned ones |
 | `missing` | pinned files that are absent |
@@ -165,6 +165,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `git.lock_part_untracked` | git does not have lists in `data.lock.d` that data.lock names, so a clone cannot read data.lock; `details` names them |
 | `import.skipped` | an import left out links or special files, which fetchloom never follows; `details` names them |
 | `license.restricted` | a dataset's license does not allow some uses, which the message names |
+| `lock.list_missing` | a dataset waits for its file list, which data.lock names and `data.lock.d` lacks, as in a clone of a commit that left it out; every other dataset is used. `details` names the part |
 | `lock.stale_part` | `data.lock.d` holds lists data.lock no longer names; `details` names them |
 | `merge.formatting` | a merge kept one side's entry of a dataset, which the other side writes differently only in comments or spacing |
 | `merge.unpinned` | after a merge, neither side's data.lock pins datasets as data.toml now asks |

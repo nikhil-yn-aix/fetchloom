@@ -213,6 +213,13 @@ fn names(name: &str, sha256: &Sha256, count: usize) -> Vec<String> {
         .collect()
 }
 
+/// whether `part`, a path below the project at `root` as data.lock names it, is not there at
+/// all, as a link or a damaged part still is.
+pub(crate) fn missing(root: &Path, part: &str) -> bool {
+    let path = root.join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
+    fs::symlink_metadata(path).is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+}
+
 /// whether `listed` names its parts as fetchloom writes them for `name`, each a file of
 /// [`FOLDER`]: the only paths a list is read from, since data.lock may come from someone else.
 pub(crate) fn named_as_written(name: &str, listed: &Listed) -> bool {
@@ -424,20 +431,33 @@ fn broken(message: String) -> Error {
 /// the error for `part` of `name`'s list, which did not read as `err` says.
 fn unreadable(name: &str, part: &str, err: &std::io::Error) -> Error {
     if err.kind() == std::io::ErrorKind::NotFound {
-        // the usual cause is a commit of data.lock without the new list, which a fresh pin of
-        // every dataset would not mend: it drops every recipe's pin
-        return Error::new(
-            Kind::ProjectInvalid,
-            format!("data.lock names {part}, the file list of {name}, which is not there"),
-        )
-        .detail(format!(
-            "{FOLDER} was probably not committed with data.lock: `git commit -a` leaves new files out"
-        ))
-        .help(format!(
-            "where {name} was pinned, run `git add {FOLDER}` and commit, then pull that commit here. a part deleted here comes back with `git checkout -- {FOLDER}`"
-        ));
+        return not_there(name, part, false);
     }
     broken(format!("could not read {part}: {err}"))
+}
+
+/// the error for `part` of `name`'s list, which is not beside data.lock. the usual cause is a
+/// commit of data.lock without the new list, which a fresh pin of every dataset would not mend: it
+/// drops every recipe's pin. a recipe's result, `made`, a build makes again here.
+pub(crate) fn not_there(name: &str, part: &str, made: bool) -> Error {
+    let build = if made {
+        format!(
+            ", or run `{}` to make it here",
+            crate::suggested::command(&format!("build {name}"))
+        )
+    } else {
+        String::new()
+    };
+    Error::new(
+        Kind::ProjectInvalid,
+        format!("data.lock names {part}, the file list of {name}, which is not there"),
+    )
+    .detail(format!(
+        "{FOLDER} was probably not committed with data.lock: `git commit -a` leaves new files out"
+    ))
+    .help(format!(
+        "where {name} was pinned, run `git add {FOLDER}` and commit, then pull that commit here{build}. a part deleted here comes back with `git checkout -- {FOLDER}`"
+    ))
 }
 
 fn damaged(part: &str, line: usize) -> Error {

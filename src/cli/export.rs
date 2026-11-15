@@ -115,6 +115,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
             .map(|(lock, _)| lock)
     }
     .unwrap_or_default();
+    project.not_waiting(&|_| true)?;
     if args.names.is_empty() {
         lock.refuse_stated(manifest.datasets.keys().map(String::as_str))?;
     } else {

@@ -180,9 +180,11 @@ fn answerable(manifest: &Manifest, name: &str, rest: &str) -> Result<(), Error> 
 /// data.lock with only the pins of [`needed`] for `name`, or none when the project has none yet.
 fn pins(project: &Project, manifest: &Manifest, name: &str) -> Result<Option<Lock>, Error> {
     let needed = needed(manifest, name);
-    Ok(project
+    let lock = project
         .lock_only(&|other| needed.contains(other))?
-        .map(|(lock, _)| lock))
+        .map(|(lock, _)| lock);
+    project.not_waiting(&|other| other == name)?;
+    Ok(lock)
 }
 
 /// the datasets path reads from data.lock for `name`: it, those whose folders meet its folder, so

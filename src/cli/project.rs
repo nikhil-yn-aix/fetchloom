@@ -339,6 +339,14 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let strict = args.strict.then(|| args.names.clone());
     let (report, closing) = sync_as_asked(context, args).await?;
+    let synced = Project {
+        root: report.project.clone(),
+    };
+    tell_waiting(
+        &context.output,
+        &synced,
+        report.selected.as_ref().unwrap_or(&Scope::All),
+    );
     let ready = match (strict, &report.placement) {
         (Some(names), Some(placement)) => {
             let project = Project {
@@ -603,7 +611,7 @@ fn settled_named(
     drop(lock_text);
     let work =
         Loop::new(context, project, Arc::new(context.net()), open_cache()?).within(scope.clone());
-    refuse_unbuilt(manifest, Some(&lock), scope)?;
+    refuse_unbuilt(project, manifest, Some(&lock), scope)?;
     let folders: Vec<String> = names
         .iter()
         .map(|name| plan::folder(manifest, name))
@@ -970,6 +978,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     context.stop.finish();
     // lock keeps a recipe's pin, which only a build moves, so it says which ones moved
     let stale = work.tell_stale(&manifest, &lock);
+    tell_waiting(&context.output, &project, &Scope::All);
     let changed = work.write_lock(&before, &lock)?.is_some();
     work.drop_unpacked(&lock);
     engine::tell_upgrades(
@@ -1348,7 +1357,7 @@ pub(super) async fn sync_all(
     given: Option<(String, Listing)>,
     run: Run<'_>,
 ) -> Result<Outcome<Placement>, Error> {
-    refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
+    refuse_unbuilt(work.project, manifest, old.as_ref(), &work.scope)?;
     let survey = surveyed(work, &manifest.data_dir, run.verify)?;
     sync_surveyed(work, manifest, old, given, run, survey).await
 }
@@ -1534,7 +1543,7 @@ pub(super) async fn preview_all(
     given: Vec<Given>,
     seen: Option<&Seen>,
 ) -> Result<Outcome<Preview>, Error> {
-    refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
+    refuse_unbuilt(work.project, manifest, old.as_ref(), &work.scope)?;
     let reading = work.context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(
         work.project,
@@ -1604,10 +1613,16 @@ pub(super) async fn preview_all(
 
 /// refuses a run of named datasets that names a recipe `lock` pins no result of, before
 /// anything else: only `fetchloom build` makes one, so the run has nothing to place for it.
-fn refuse_unbuilt(manifest: &Manifest, lock: Option<&Lock>, scope: &Scope) -> Result<(), Error> {
+fn refuse_unbuilt(
+    project: &Project,
+    manifest: &Manifest,
+    lock: Option<&Lock>,
+    scope: &Scope,
+) -> Result<(), Error> {
     let Scope::Only(names) = scope else {
         return Ok(());
     };
+    project.not_waiting(&|name| names.contains(name))?;
     let unbuilt: Vec<(String, Vec<Change>)> = names
         .iter()
         .filter(|name| {
@@ -1620,6 +1635,25 @@ fn refuse_unbuilt(manifest: &Manifest, lock: Option<&Lock>, scope: &Scope) -> Re
         .map(|name| (name.clone(), vec![Change::Unbuilt]))
         .collect();
     needs_building(&unbuilt).map_or(Ok(()), Err)
+}
+
+/// warns of each dataset of `scope` that waits for its file list, as this run's reads of data.lock
+/// found them, with the part that is not there and how to bring it back.
+pub(super) fn tell_waiting(output: &Output, project: &Project, scope: &Scope) {
+    for waiting in project.waiting() {
+        if let Scope::Only(names) = scope
+            && !names.contains(&waiting.name)
+        {
+            continue;
+        }
+        let error = waiting.error();
+        output.warn_detailed(
+            Warning::LockListMissing,
+            &format!("{}, so {} waits for it", error.message, waiting.name),
+            error.help.as_deref(),
+            [&waiting.part],
+        );
+    }
 }
 
 /// the last line of every dry run, with what it found when there is nothing to do.

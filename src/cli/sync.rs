@@ -1853,10 +1853,19 @@ pub(super) fn tell_stale(
     scope: &Scope,
 ) -> Vec<String> {
     let mut stale = Vec::new();
+    let waiting = crate::project::Project {
+        root: root.to_path_buf(),
+    }
+    .waiting();
     for (name, entry) in &manifest.datasets {
         let Some(recipe) = entry.recipe().filter(|_| scope.includes(name)) else {
             continue;
         };
+        // its own warning names the list it waits for, which a build makes again too
+        if waiting.iter().any(|waiting| waiting.name == *name) {
+            stale.push(name.clone());
+            continue;
+        }
         let changes = match crate::recipe::drift(root, manifest, lock, name) {
             Ok(changes) => changes,
             Err(error) => {

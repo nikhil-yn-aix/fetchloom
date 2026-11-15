@@ -38,6 +38,8 @@ pub(in crate::cli) enum Unready {
     Unpinned(Option<String>),
     /// a dataset its source's digests pin, `by` naming them, that no sync has downloaded yet.
     NotDownloaded { name: String, by: &'static str },
+    /// a dataset whose file list, which data.lock names, is not beside it.
+    Waiting(crate::project::lock::Waiting),
 }
 
 impl Unready {
@@ -92,6 +94,20 @@ impl Unready {
                 "there is no data.lock, so nothing pins the files yet: ask whoever shares the project to commit it, or `{}` pins what the sources serve today",
                 command("sync")
             ),
+            Unready::Waiting(waiting) => {
+                let build = if waiting.made {
+                    format!(
+                        ", or `{}` makes it here",
+                        command(&format!("build {}", waiting.name))
+                    )
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{} waits for its file list {}, which is not there: commit data.lock.d where it was pinned{build}",
+                    waiting.name, waiting.part
+                )
+            }
         }
     }
 
@@ -162,6 +178,13 @@ pub(in crate::cli) fn after_sync(
             }
         }
     }
+    unready.extend(
+        project
+            .waiting()
+            .into_iter()
+            .filter(|waiting| scope.includes(&waiting.name))
+            .map(Unready::Waiting),
+    );
     Ok(unready)
 }
 
@@ -175,10 +198,13 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
             status
                 .unlocked
                 .iter()
-                .filter(|name| !status.building.contains_key(*name))
+                .filter(|name| {
+                    !status.building.contains_key(*name) && !status.waiting.contains_key(*name)
+                })
                 .map(|name| Unready::Unpinned(Some(name.clone()))),
         );
     }
+    unready.extend(status.waiting.values().cloned().map(Unready::Waiting));
     unready.extend(
         status
             .not_downloaded

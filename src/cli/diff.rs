@@ -154,6 +154,7 @@ fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
         (before, after)
     } else {
         let now = project.lock()?;
+        project.not_waiting(&|_| true)?;
         let after = Read {
             found: now.is_some(),
             lock: now.unwrap_or_default(),

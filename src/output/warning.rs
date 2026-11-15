@@ -60,6 +60,8 @@ pub(crate) enum Warning {
     ImportSkipped,
     /// a dataset's license does not allow some use.
     LicenseRestricted,
+    /// a dataset waits for its file list, which data.lock names and data.lock.d lacks.
+    LockListMissing,
     /// data.lock.d holds lists data.lock no longer names.
     LockStalePart,
     /// a merge kept one side's entry of a dataset, which the other side writes differently
@@ -163,6 +165,7 @@ impl Warning {
             Warning::GitLockPartUntracked => "git.lock_part_untracked",
             Warning::ImportSkipped => "import.skipped",
             Warning::LicenseRestricted => "license.restricted",
+            Warning::LockListMissing => "lock.list_missing",
             Warning::LockStalePart => "lock.stale_part",
             Warning::MergeFormatting => "merge.formatting",
             Warning::MergeUnpinned => "merge.unpinned",
@@ -249,6 +252,7 @@ mod tests {
             GitLockPartUntracked,
             ImportSkipped,
             LicenseRestricted,
+            LockListMissing,
             LockStalePart,
             MergeFormatting,
             MergeUnpinned,

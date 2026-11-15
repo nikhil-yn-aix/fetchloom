@@ -1027,28 +1027,32 @@ fn needed_focused(
         let kept = std::str::from_utf8(&text)
             .ok()
             .and_then(|text| Manifest::parse(text).ok());
-        let lock = project.lock().map_err(|err| {
-            // a broken lock is fixed in its own project, which is not where gc runs
-            let here = format!("`{}`", crate::suggested::command("lock"));
-            let there = format!(
-                "`fetchloom -C {} lock`",
-                super::shell_word(&project.root.to_string_lossy())
-            );
-            let help = match err.help.as_deref() {
-                Some(lock::BROKEN) => format!("in that project, {}", lock::BROKEN),
-                Some(help) => help.replace(&here, &there),
-                None => "fix that project's data.lock, then try again".to_owned(),
-            };
-            Error::new(
-                err.kind,
-                format!(
-                    "{} cannot be read, so the cache stays as it is",
-                    project.root.join(lock::FILE).display()
-                ),
-            )
-            .detail(err.message)
-            .help(help)
-        });
+        let lock = project
+            .lock()
+            // the files a pin that waits for its list needs are not known
+            .and_then(|lock| project.not_waiting(&|_| true).map(|()| lock))
+            .map_err(|err| {
+                // a broken lock is fixed in its own project, which is not where gc runs
+                let here = format!("`{}`", crate::suggested::command("lock"));
+                let there = format!(
+                    "`fetchloom -C {} lock`",
+                    super::shell_word(&project.root.to_string_lossy())
+                );
+                let help = match err.help.as_deref() {
+                    Some(lock::BROKEN) => format!("in that project, {}", lock::BROKEN),
+                    Some(help) => help.replace(&here, &there),
+                    None => "fix that project's data.lock, then try again".to_owned(),
+                };
+                Error::new(
+                    err.kind,
+                    format!(
+                        "{} cannot be read, so the cache stays as it is",
+                        project.root.join(lock::FILE).display()
+                    ),
+                )
+                .detail(err.message)
+                .help(help)
+            });
         let lock = match lock {
             Ok(lock) => lock,
             Err(error) if uses == Uses::Told => {

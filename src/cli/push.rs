@@ -285,6 +285,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     }
     let target = opened(context, target, args.verify)?;
     let lock = project.lock()?;
+    project.not_waiting(&|name| datasets.iter().any(|named| named == name))?;
     if let Some(lock) = &lock {
         lock.refuse_stated(datasets.iter().map(String::as_str))?;
     }

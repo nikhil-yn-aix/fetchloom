@@ -19,7 +19,7 @@ use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::Project;
 use crate::project::lock::archives::{self, Pinned};
-use crate::project::lock::{Lock, Locked};
+use crate::project::lock::{Lock, Locked, Waiting};
 use crate::project::manifest::{Manifest, Members};
 use crate::project::state::Candidate;
 use crate::recipe;
@@ -125,6 +125,10 @@ pub(super) struct Status {
     /// have, which a sync carries over, each with that name.
     #[serde(skip)]
     renamed: BTreeMap<String, String>,
+    /// the datasets among `unlocked` that wait for their file list, by name, which a commit of
+    /// data.lock.d or a build brings back.
+    #[serde(skip)]
+    waiting: BTreeMap<String, Waiting>,
     /// the fetched datasets each of `unbuilt` is made from that the cache lacks files of, which
     /// building it reads first.
     #[serde(skip)]
@@ -193,6 +197,7 @@ pub(super) fn run(
     status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
     warn_git(output, &project, &manifest, lock.as_deref());
+    super::project::tell_waiting(output, &project, &super::sync::Scope::All);
     list(output, &status);
     if sum_up(output, &status) {
         let total = &status.to_download;
@@ -517,15 +522,17 @@ fn not_downloaded(
     (names, by)
 }
 
-/// each stale recipe, with what moved since it was built.
+/// each stale recipe, with what moved since it was built. one that waits for its file list is
+/// not stale: [`waiting`] names it.
 fn unbuilt(
     project: &Project,
     manifest: &Manifest,
     lock: &Lock,
 ) -> Result<BTreeMap<String, Vec<recipe::Change>>, Error> {
+    let waiting = project.waiting();
     let mut building = BTreeMap::new();
     for (name, entry) in &manifest.datasets {
-        if entry.recipe().is_none() {
+        if entry.recipe().is_none() || waiting.iter().any(|waiting| waiting.name == *name) {
             continue;
         }
         let changes = recipe::drift(&project.root, manifest, lock, name)?;
@@ -534,6 +541,27 @@ fn unbuilt(
         }
     }
     Ok(building)
+}
+
+/// the datasets data.toml keeps out of the data folder with `place = false`.
+fn not_placed(manifest: &Manifest) -> Vec<String> {
+    manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| !entry.place)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// the datasets of data.toml that wait for their file list, as this run's reads of data.lock
+/// found them, by name.
+fn waiting(project: &Project, manifest: &Manifest) -> BTreeMap<String, Waiting> {
+    project
+        .waiting()
+        .into_iter()
+        .filter(|waiting| manifest.datasets.contains_key(&waiting.name))
+        .map(|waiting| (waiting.name.clone(), waiting))
+        .collect()
 }
 
 /// compares the data folder with data.lock by what the disk says, or with `verify` by hashing every
@@ -565,7 +593,8 @@ fn check(
         .collect();
     let (mut unlocked, removed) = out_of_date(&manifest, &lock);
     let building = unbuilt(project, &manifest, &lock)?;
-    unlocked.extend(building.keys().cloned());
+    let waiting = waiting(project, &manifest);
+    unlocked.extend(building.keys().chain(waiting.keys()).cloned());
     unlocked.extend(renamed.keys().cloned());
     unlocked.sort();
     unlocked.dedup();
@@ -580,12 +609,8 @@ fn check(
         pinned_by,
         building,
         renamed,
-        unplaced: manifest
-            .datasets
-            .iter()
-            .filter(|(_, entry)| !entry.place)
-            .map(|(name, _)| name.clone())
-            .collect(),
+        waiting,
+        unplaced: not_placed(&manifest),
         ..Status::default()
     };
     let cache = super::peek_cache()?;
@@ -1103,7 +1128,7 @@ impl Status {
             || self
                 .unlocked
                 .iter()
-                .any(|name| !self.building.contains_key(name))
+                .any(|name| !self.building.contains_key(name) && !self.waiting.contains_key(name))
             || !self.missing.is_empty()
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
@@ -1219,6 +1244,13 @@ fn tell_unlocked(output: &Output, status: &Status) {
         "data.toml changed since data.lock was written"
     };
     for name in &status.unlocked {
+        if let Some(waiting) = status.waiting.get(name) {
+            output.report(
+                "Waiting",
+                &format!("{name} · its file list {} is not there", waiting.part),
+            );
+            continue;
+        }
         // a recipe that moved has its pin; only a build makes it again
         let (verb, reason) = match (status.building.get(name), status.renamed.get(name)) {
             (Some(moved), _) if moved.first() == Some(&recipe::Change::Unbuilt) => {

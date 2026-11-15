@@ -165,6 +165,40 @@ impl Words {
     }
 }
 
+/// a dataset data.lock pins in a list that is not beside it, which waits while every other
+/// dataset is used, as [`Lock::read_waiting`] finds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Waiting {
+    pub(crate) name: String,
+    /// the first part of its list that is not there, by its path below the project.
+    pub(crate) part: String,
+    /// whether a recipe made it, so a build can make it again here.
+    pub(crate) made: bool,
+}
+
+impl Waiting {
+    /// what a command that needs it says: the part that is not there, and how to bring it back.
+    pub(crate) fn error(&self) -> Error {
+        lists::not_there(&self.name, &self.part, self.made)
+    }
+}
+
+/// each dataset data.lock's `text` pins, by name, with the parts of its file list, none if it
+/// does not read.
+pub(crate) fn listed(text: &str) -> Vec<(String, Vec<String>)> {
+    parse(text)
+        .unwrap_or_default()
+        .iter()
+        .map(|parsed| {
+            let parts = parsed
+                .listed()
+                .map(|listed| listed.parts.clone())
+                .unwrap_or_default();
+            (parsed.name().to_owned(), parts)
+        })
+        .collect()
+}
+
 /// a file as its source states it: a SHA-256, an MD5 or both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StatedFile {
@@ -296,6 +330,14 @@ impl Parsed {
             Parsed::Derived(_, listed) => Some(listed),
             Parsed::Stated(_) => None,
         }
+    }
+
+    /// [`Parsed::listed`] when data.lock names its parts as fetchloom writes them, with whether a
+    /// recipe made it.
+    fn written(&self) -> Option<(&lists::Listed, bool)> {
+        let listed = self.listed()?;
+        let made = matches!(self, Parsed::Derived(..));
+        lists::named_as_written(self.name(), listed).then_some((listed, made))
     }
 
     fn name(&self) -> &str {
@@ -617,18 +659,20 @@ struct VersionOnly {
 }
 
 impl Lock {
-    /// a test's lock that lists every file in itself; runs read through [`Lock::read`].
+    /// a test's lock that lists every file in itself; runs read through [`Lock::read_waiting`].
     #[cfg(test)]
     pub(crate) fn parse(text: &str) -> Result<Lock, Error> {
         resolve(parse(text)?, None)
     }
 
-    /// the lock `text` holds, its lists in [`lists::FOLDER`] below `root` read and checked.
+    /// a test's [`Lock::read_waiting`] of every dataset, where a list that is not there stops the
+    /// read too.
+    #[cfg(test)]
     pub(crate) fn read(text: &str, root: &Path) -> Result<Lock, Error> {
         resolve(parse(text)?, Some(root))
     }
 
-    /// [`Lock::read`] of a lock kept elsewhere, as in a git commit, within the same limits: `part`
+    /// [`Lock::read_waiting`] of a lock kept elsewhere, as in a git commit, within the same limits: `part`
     /// gives a part of a list by its path below the project, once the path is one fetchloom
     /// writes for the list data.lock names. a dataset with a part `has` lacks, as a commit made
     /// without data.lock.d lacks it, is kept with no files and named in what comes back. `taken`
@@ -707,27 +751,49 @@ impl Lock {
         BASE.saturating_add(files.saturating_mul(PER_FILE))
     }
 
-    /// [`Lock::read`] of only the datasets `keep` accepts by name: the others are left out, and
-    /// their lists beside data.lock are not read.
-    pub(crate) fn read_only(
+    /// the lock `text` holds of the datasets `keep` accepts by name, their lists in
+    /// [`lists::FOLDER`] below `root` read and checked; the others are left out, their lists not
+    /// read. a dataset whose list is not beside data.lock, as in a clone of a commit that left
+    /// data.lock.d out, waits: it is left out and named, so every other dataset can be used. a
+    /// list that is there but does not read, one named otherwise than fetchloom writes it, and a
+    /// data.lock.d that is no real folder still stop the read.
+    pub(crate) fn read_waiting(
         text: &str,
         root: &Path,
         keep: &dyn Fn(&str) -> bool,
-    ) -> Result<Lock, Error> {
-        Lock::read_only_within(text, root, keep, ROOM.get().copied().unwrap_or(u64::MAX))
+    ) -> Result<(Lock, Vec<Waiting>), Error> {
+        Lock::read_waiting_within(text, root, keep, ROOM.get().copied().unwrap_or(u64::MAX))
     }
 
-    /// [`Lock::read_only`] with its text held to `memory`, the room a container leaves, as a whole
-    /// read's is.
-    fn read_only_within(
+    /// [`Lock::read_waiting`] with its text held to `memory`, the room a container leaves.
+    fn read_waiting_within(
         text: &str,
         root: &Path,
         keep: &dyn Fn(&str) -> bool,
         memory: u64,
-    ) -> Result<Lock, Error> {
+    ) -> Result<(Lock, Vec<Waiting>), Error> {
         let mut parsed = parse_within(text, keep, memory)?;
         parsed.retain(|entry| keep(entry.name()));
-        resolve(parsed, Some(root))
+        // a part looked for through a linked data.lock.d would be looked for outside the project
+        if parsed.iter().any(|entry| entry.written().is_some()) {
+            lists::folder(root)?;
+        }
+        let mut waiting = Vec::new();
+        parsed.retain(|entry| {
+            let Some((listed, made)) = entry.written() else {
+                return true;
+            };
+            let Some(part) = listed.parts.iter().find(|part| lists::missing(root, part)) else {
+                return true;
+            };
+            waiting.push(Waiting {
+                name: entry.name().to_owned(),
+                part: part.clone(),
+                made,
+            });
+            false
+        });
+        Ok((resolve(parsed, Some(root))?, waiting))
     }
 
     /// the dataset named `name`, found by halving, since every lock keeps its datasets sorted by
@@ -1664,9 +1730,9 @@ mod tests {
             );
         }
         assert_eq!(Lock::parse(&text).unwrap().render(), text);
-        let kept = Lock::read_only(&text, Path::new("."), &|name| name == "zeta").unwrap();
+        let (kept, _) = Lock::read_waiting(&text, Path::new("."), &|name| name == "zeta").unwrap();
         assert_eq!(kept.stated, []);
-        let only = Lock::read_only(&text, Path::new("."), &|name| name == "mnist").unwrap();
+        let (only, _) = Lock::read_waiting(&text, Path::new("."), &|name| name == "mnist").unwrap();
         assert_eq!(only.stated, lock.stated);
     }
 
@@ -2065,7 +2131,9 @@ mod tests {
         let (root, text) = written(&lock);
         let whole = Lock::read(&text, root.path()).unwrap();
         for keep in [&["iris"][..], &["zeta", "clean"], &[]] {
-            let read = Lock::read_only(&text, root.path(), &|name| keep.contains(&name)).unwrap();
+            let (read, waiting) =
+                Lock::read_waiting(&text, root.path(), &|name| keep.contains(&name)).unwrap();
+            assert_eq!(waiting, []);
             let kept: Vec<&Locked> = whole
                 .datasets
                 .iter()
@@ -2341,7 +2409,7 @@ mod tests {
                 .kind,
             Kind::ProjectInvalid
         );
-        let error = Lock::read_only_within(&garbage, root.path(), &|_| true, 1999).unwrap_err();
+        let error = Lock::read_waiting_within(&garbage, root.path(), &|_| true, 1999).unwrap_err();
         assert_eq!(error.kind, Kind::LocalIo, "{error:?}");
         assert_eq!(
             error.help.as_deref(),
@@ -2429,6 +2497,67 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    /// a list that is not there, as in a clone of a commit that left data.lock.d out, leaves its
+    /// dataset waiting and the others read. a list named otherwise than fetchloom writes it, a
+    /// part that is a link and a data.lock.d that is a link still stop the read.
+    #[test]
+    fn a_dataset_whose_list_is_not_there_waits_alone() {
+        let lock = sample();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+        let parts = lock.lists_with(0);
+        for (part, text) in &parts {
+            std::fs::write(root.path().join(part), lists::compress(text).unwrap()).unwrap();
+        }
+        let text = lock.render_with(0);
+        let gone = lock.datasets[1].name.clone();
+        let prefix = format!("{}/{gone}.", lists::FOLDER);
+        let (part, _) = parts
+            .iter()
+            .find(|(part, _)| part.starts_with(&prefix))
+            .unwrap();
+        std::fs::remove_file(root.path().join(part)).unwrap();
+        let (read, waiting) = Lock::read_waiting(&text, root.path(), &|_| true).unwrap();
+        assert_eq!(
+            waiting,
+            [Waiting {
+                name: gone.clone(),
+                part: part.clone(),
+                made: false,
+            }]
+        );
+        let names = |lock: &Lock| -> Vec<String> {
+            lock.datasets
+                .iter()
+                .map(|locked| locked.name.clone())
+                .filter(|name| *name != gone)
+                .collect()
+        };
+        assert_eq!(read.datasets.len(), lock.datasets.len() - 1);
+        assert_eq!(names(&read), names(&lock));
+        let renamed = text.replace(part.as_str(), &format!("{}/{gone}.tsv.zst", lists::FOLDER));
+        let error = Lock::read_waiting(&renamed, root.path(), &|_| true).unwrap_err();
+        assert!(
+            error.message.contains("in files fetchloom does not write"),
+            "{error:?}"
+        );
+        #[cfg(unix)]
+        {
+            let elsewhere = root.path().join("elsewhere");
+            std::os::unix::fs::symlink(&elsewhere, root.path().join(part)).unwrap();
+            let error = Lock::read_waiting(&text, root.path(), &|_| true).unwrap_err();
+            assert!(
+                error.message.contains("is a link or a special file"),
+                "{error:?}"
+            );
+            let folder = root.path().join(lists::FOLDER);
+            std::fs::rename(&folder, root.path().join("moved")).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &folder).unwrap();
+            let error = Lock::read_waiting(&text, root.path(), &|_| true).unwrap_err();
+            assert!(error.message.contains("only in a real folder"), "{error:?}");
+        }
     }
 
     #[test]

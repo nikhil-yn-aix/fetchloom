@@ -949,6 +949,94 @@ fn a_result_left_out_after_a_pull_leaves_none_of_its_files() -> Result {
     Ok(())
 }
 
+/// a clone of a commit that left a recipe's list out of data.lock.d: that recipe alone waits,
+/// named with the part that is not there and how to bring it back, and the rest is used as before.
+#[test]
+fn a_recipe_whose_list_was_not_committed_waits_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let [entry] = fs::read_dir(sandbox.work().join("data.lock.d"))?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .try_into()
+        .map_err(|_| "one list")?;
+    let part = format!("data.lock.d/{}", entry.file_name().to_string_lossy());
+    let clone = crate::project::clone(&sandbox, "clone")?;
+    let lock = fs::read(clone.join("data.lock"))?;
+    let run = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(building_in(&sandbox, &clone, args)?.output()?)
+    };
+    let said = format!("data.lock names {part}, the file list of clean, which is not there");
+
+    let synced = run(&["sync", "iris"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        fs::read(clone.join("data").join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    let status = run(&["--json", "status"])?;
+    assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
+    let warned: Vec<String> = crate::support::warned(&json(&status)?)
+        .into_iter()
+        .filter(|warning| warning.contains("file list of clean"))
+        .collect();
+    assert_eq!(
+        warned,
+        [format!(
+            "{said}, so clean waits for it; where clean was pinned, run `git add data.lock.d` and commit, then pull that commit here, or run `fetchloom build clean` to make it here. a part deleted here comes back with `git checkout -- data.lock.d`"
+        )]
+    );
+    let told = text(&run(&["status"])?.stdout)?;
+    assert!(
+        told.contains(&format!(
+            "Waiting clean · its file list {part} is not there"
+        )),
+        "{told}"
+    );
+    for args in [&["sync"][..], &["list"], &["path", "iris"]] {
+        let output = run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(!stderr.contains("not built yet"), "{args:?}: {stderr}");
+    }
+    let listed = text(&run(&["list"])?.stdout)?;
+    assert!(listed.contains("waiting for its file list"), "{listed}");
+    let checked = json(&run(&["--json", "status", "--check"])?)?;
+    assert_eq!(
+        error(&checked).2,
+        [format!(
+            "clean waits for its file list {part}, which is not there: commit data.lock.d where it was pinned, or `fetchloom build clean` makes it here"
+        )]
+    );
+    for command in ["path", "sync"] {
+        let output = run(&["--json", command, "clean"])?;
+        assert_eq!(output.status.code(), Some(50), "{command}");
+        let document = json(&output)?;
+        let (kind, message, _, help, _) = error(&document);
+        assert_eq!((kind, message), ("project.invalid", said.as_str()));
+        assert!(
+            help.contains("run `fetchloom build clean` to make it here"),
+            "{help}"
+        );
+    }
+    // gc cannot see which files the pin that waits needs
+    let gc = run(&["--json", "cache", "gc", "--now"])?;
+    assert_eq!(gc.status.code(), Some(50), "{}", text(&gc.stderr)?);
+    assert_eq!(error(&json(&gc)?).2, [said.as_str()]);
+    assert_eq!(fs::read(clone.join("data.lock"))?, lock);
+
+    let rebuilt = run(&["build"])?;
+    assert_eq!(rebuilt.status.code(), Some(0), "{}", text(&rebuilt.stderr)?);
+    assert_eq!(
+        fs::read(clone.join("data").join("clean").join("iris.csv"))?,
+        IRIS
+    );
+    assert!(clone.join(&part).is_file(), "the same list again");
+    Ok(())
+}
+
 /// the first case is a fresh clone, where every pinned result is missing.
 #[test]
 fn a_dry_run_says_what_the_build_then_does() -> Result {
