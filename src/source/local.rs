@@ -42,14 +42,14 @@ pub(crate) fn changed(name: &str) -> Error {
 }
 
 /// the refusal of `name`, an import that data.lock holds no pin of: nothing tells which files
-/// it was.
+/// it was, not even a rename, since every import's table reads the same.
 pub(crate) fn unpinned(name: &str) -> Error {
     Error::new(
         Kind::ReferenceUnresolved,
         format!("{name} was imported from files, and data.lock holds no pin of them"),
     )
     .help(format!(
-        "restore data.lock from git, or run `{}` where the files are",
+        "give it back its old name if you renamed it in data.toml, restore data.lock from git, or import the files again with `{}` where they are",
         crate::suggested::command(&format!("add <folder> --as {name}"))
     ))
 }

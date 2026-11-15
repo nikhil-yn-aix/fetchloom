@@ -401,6 +401,46 @@ fn an_import_is_never_resolved_again() -> Result {
     Ok(())
 }
 
+/// every import's table reads `ref = "local"`, so one that goes while another comes in the same
+/// edit is no rename: the new one is refused as written by hand, and nothing moves.
+#[test]
+fn an_import_is_never_carried_to_another_name() -> Result {
+    let sandbox = Sandbox::new()?;
+    flowers(&sandbox)?;
+    assert_eq!(
+        sandbox
+            .run(&["add", "../flowers", "--as", "alpha"])?
+            .status
+            .code(),
+        Some(0)
+    );
+    let work = sandbox.work();
+    let lock = fs::read(work.join("data.lock"))?;
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    fs::write(
+        work.join("data.toml"),
+        manifest.replace("[datasets.alpha]", "[datasets.gamma]"),
+    )?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "gamma was imported from files, and data.lock holds no pin of them"
+    );
+    assert_eq!(
+        error["help"],
+        "give it back its old name if you renamed it in data.toml, restore data.lock from git, or import the files again with `fetchloom add <folder> --as gamma` where they are"
+    );
+    assert_eq!(fs::read(work.join("data.lock"))?, lock);
+    assert!(!work.join("data/gamma").exists());
+    // importing the files again under the new name, as the help says, pins them there
+    let again = sandbox.run(&["add", "../flowers", "--as", "gamma"])?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    assert!(work.join("data/gamma/sepals.csv").is_file());
+    Ok(())
+}
+
 #[test]
 fn a_lost_pin_of_an_import_is_pinned_again_from_its_files() -> Result {
     let sandbox = Sandbox::new()?;

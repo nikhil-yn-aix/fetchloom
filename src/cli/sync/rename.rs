@@ -102,7 +102,8 @@ fn rename_to(name: &mut String, new: &str, moved: bool) -> Rename {
 
 /// carries the entries of renamed fetched datasets into `kept` under their new names, for new names
 /// the run may pin, matched one to one by spec and `extract`: one from `others` moves, and one from
-/// `kept`, which a named run leaves alone, is copied. both keep data.lock's name order.
+/// `kept`, which a named run leaves alone, is copied. both keep data.lock's name order. an import
+/// stays: every import's table reads `ref = "local"`, so a match tells no rename from a new table.
 pub(super) fn carry(
     manifest: &Manifest,
     scope: &Scope,
@@ -125,7 +126,10 @@ pub(super) fn carry(
     let old = kept
         .iter()
         .chain(others.iter())
-        .filter(|locked| !manifest.datasets.contains_key(&locked.name))
+        .filter(|locked| {
+            !manifest.datasets.contains_key(&locked.name)
+                && !crate::source::local::is_imported(&locked.reference)
+        })
         .map(|locked| {
             (
                 (Cow::Borrowed(locked.spec.as_str()), locked.extract),
@@ -301,6 +305,7 @@ mod tests {
         }
     }
 
+    /// an import that went is not carried to the new import, whose table could be any import's.
     #[test]
     fn fetched_renames_keep_bytes_and_report_new_name_order() {
         let manifest = Manifest::parse(
@@ -322,34 +327,25 @@ mod tests {
         );
         assert_eq!(
             renamed,
-            [
-                Rename {
-                    old: "old_local".into(),
-                    new: "alpha".into(),
-                    moved: true
-                },
-                Rename {
-                    old: "before".into(),
-                    new: "zeta".into(),
-                    moved: true
-                },
-            ]
+            [Rename {
+                old: "before".into(),
+                new: "zeta".into(),
+                moved: true
+            }]
         );
-        let mut alpha = imported;
-        alpha.name = "alpha".into();
         let mut zeta = before;
         zeta.name = "zeta".into();
-        assert_eq!(kept, [alpha, stay, zeta]);
-        assert_eq!(others, []);
+        assert_eq!(kept, [stay, zeta]);
+        assert_eq!(others, [imported]);
     }
 
     #[test]
     fn named_rename_copies_the_pin_and_excludes_other_new_names() {
         let manifest = Manifest::parse(
-            "[datasets.chosen]\nref = \"local\"\n[datasets.other]\nref = \"local\"\n",
+            "[datasets.chosen]\nref = \"https://example.org/source\"\n[datasets.other]\nref = \"https://example.org/source\"\n",
         )
         .unwrap();
-        let old = fetched("old", "local", true);
+        let old = fetched("old", "https://example.org/source", true);
         let mut kept = vec![old.clone()];
         let mut others = Vec::new();
         let renamed = carry(
@@ -383,13 +379,17 @@ mod tests {
         ] {
             let mut text = String::new();
             for name in new_names {
-                writeln!(text, "[datasets.{name}]\nref = \"local\"").unwrap();
+                writeln!(
+                    text,
+                    "[datasets.{name}]\nref = \"https://example.org/source\""
+                )
+                .unwrap();
             }
             let manifest = Manifest::parse(&text).unwrap();
             let mut kept = Vec::new();
             let mut others: Vec<_> = old_names
                 .iter()
-                .map(|name| fetched(name, "local", extract))
+                .map(|name| fetched(name, "https://example.org/source", extract))
                 .collect();
             let before = others.clone();
             assert_eq!(
@@ -410,14 +410,15 @@ mod tests {
 
     #[test]
     fn given_and_upgraded_names_are_not_rename_candidates() {
-        let manifest = Manifest::parse("[datasets.new]\nref = \"local\"\n").unwrap();
+        let manifest =
+            Manifest::parse("[datasets.new]\nref = \"https://example.org/source\"\n").unwrap();
         for (upgrade, given) in [
             (Upgrade::Nothing, HashSet::from(["new"])),
             (Upgrade::All, HashSet::new()),
             (Upgrade::Only(["new".to_owned()].into()), HashSet::new()),
         ] {
             let mut kept = Vec::new();
-            let mut others = vec![fetched("old", "local", true)];
+            let mut others = vec![fetched("old", "https://example.org/source", true)];
             let before = others.clone();
             assert_eq!(
                 carry(
