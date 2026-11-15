@@ -620,18 +620,13 @@ fn recipe_said(was: &Derived, now: &Derived) -> Vec<String> {
         was.env.keys().chain(now.env.keys()).collect();
     for name in variables {
         let name_shown = plain(name);
+        // a value may hold a key, so only the name of what changed shows
         match (was.env.get(name), now.env.get(name)) {
-            (Some(before), Some(after)) if before != after => said.push(format!(
-                "env {name_shown}={} \u{2192} {name_shown}={}",
-                plain(before),
-                plain(after)
-            )),
-            (None, Some(after)) => {
-                said.push(format!("env {name_shown}={} added", plain(after)));
+            (Some(before), Some(after)) if before != after => {
+                said.push(format!("env {name_shown} changed"));
             }
-            (Some(before), None) => {
-                said.push(format!("env {name_shown}={} taken out", plain(before)));
-            }
+            (None, Some(_)) => said.push(format!("env {name_shown} added")),
+            (Some(_), None) => said.push(format!("env {name_shown} taken out")),
             _ => {}
         }
     }
@@ -670,7 +665,29 @@ fn fields(before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Vec<Field> {
             after: value(&now, name),
         })
         .filter(|field| field.before != field.after)
+        .map(|field| match field.name {
+            // compared whole, then shown by name alone, as merge and data.toml's errors show them
+            "env" => Field {
+                before: before.and_then(variables),
+                after: after.and_then(variables),
+                ..field
+            },
+            _ => field,
+        })
         .collect()
+}
+
+/// a recipe's variables by their names alone, as `SEED=***`, since a value may hold a key.
+fn variables(pin: Pin<'_>) -> Option<String> {
+    let Pin::Made(derived) = pin else {
+        return None;
+    };
+    let named: Vec<String> = derived
+        .env
+        .keys()
+        .map(|name| format!("{name}=***"))
+        .collect();
+    Some(named.join(" "))
 }
 
 /// the files added, removed and changed from `before` to `after`, each sorted by path, as data.lock

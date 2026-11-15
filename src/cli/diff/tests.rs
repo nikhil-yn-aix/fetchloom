@@ -140,7 +140,7 @@ fn each_dataset_and_file_that_differs_has_a_line() {
             "A  new/new.csv  5 B",
             "old removed: zenodo:old@1; 1 file removed, 9 B",
             "D  old/old.csv  9 B",
-            "sim changed: env SEED=7 \u{2192} SEED=8; 1 file changed",
+            "sim changed: env SEED changed; 1 file changed",
             "M  sim/draws.csv  4 B, other bytes",
         ]
     );
@@ -156,6 +156,12 @@ fn each_dataset_and_file_that_differs_has_a_line() {
     );
     assert_eq!(datasets[1].kind, "fetched");
     assert_eq!(datasets[3].kind, "recipe");
+    // a recipe's env values may hold a key, so --json names the variables alone
+    let env = datasets[3].fields.iter().find(|field| field.name == "env");
+    assert_eq!(
+        env.map(|field| (field.before.as_deref(), field.after.as_deref())),
+        Some((Some("SEED=***"), Some("SEED=***")))
+    );
     assert!(diffed(&after, &after).is_empty());
 }
 
@@ -279,7 +285,7 @@ fn a_recipe_change_names_what_changed_in_it() {
     };
     assert_eq!(
         told(&diffed(&before, &after)),
-        ["sim changed: iris changed; sim.py changed; env RUNS=3 added; the same files"]
+        ["sim changed: iris changed; sim.py changed; env RUNS added; the same files"]
     );
     now.from.push(Input {
         name: "penguins".to_owned(),
@@ -346,7 +352,7 @@ fn a_dataset_whose_list_a_commit_lacks_is_said_so() {
     assert_eq!(
         told(&datasets),
         [
-            "sim changed: env SEED=7 \u{2192} SEED=8; its file list is not in B, so its files were not compared"
+            "sim changed: env SEED changed; its file list is not in B, so its files were not compared"
         ]
     );
     assert_eq!(datasets[0].unlisted, ["to"]);

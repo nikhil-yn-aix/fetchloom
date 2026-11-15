@@ -88,7 +88,7 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
          A  extra/extra.csv  1 B\n\
          notes removed: made by a recipe; 1 file removed, 5 B\n\
          D  notes/notes.txt  5 B\n\
-         sim changed: env SEED=7 \u{2192} SEED=8; 1 file changed\n\
+         sim changed: env SEED changed; 1 file changed\n\
          M  sim/draws.csv  20 B \u{2192} 19 B\n"
     );
     let quiet = text(&run(&sandbox, &study, &["-q", "diff"])?.stdout)?;
@@ -203,7 +203,7 @@ fn diff_says_what_a_commit_lacks_and_goes_on() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         text(&output.stdout)?,
-        "sim changed: env SEED=7 \u{2192} SEED=8; its file list is not in HEAD, so its files were not compared\n"
+        "sim changed: env SEED changed; its file list is not in HEAD, so its files were not compared\n"
     );
     assert!(stderr.contains("`git add data.lock.d`"), "{stderr}");
     let document = json(&run(
