@@ -280,6 +280,10 @@ struct Approval {
     answer: OnceLock<Result<(), Error>>,
     above: u64,
     cache: Option<std::path::PathBuf>,
+    /// what the disk holding a folder has free, which tests give.
+    free: fn(&std::path::Path) -> Option<u64>,
+    /// what the `cache_budget` setting and its budget leave the cache, when one is set.
+    budget: Option<(u64, u64)>,
 }
 
 impl Approval {
@@ -288,6 +292,8 @@ impl Approval {
             answer: OnceLock::new(),
             above,
             cache: None,
+            free: crate::space::free,
+            budget: None,
         }
     }
 
@@ -296,6 +302,65 @@ impl Approval {
         self.cache = Some(cache.to_path_buf());
         self
     }
+
+    /// stops a download of no stated size before it takes the cache past `budget`, as the
+    /// `cache_budget` setting gives it, from the `held` bytes the cache's files hold now.
+    fn with_budget(mut self, budget: u64, held: u64) -> Approval {
+        self.budget = Some((budget.saturating_sub(held), budget));
+        self
+    }
+
+    /// the most a download of no stated size may take, with what bounds it, from what the cache's
+    /// disk has `free`: the disk, or the budget when that leaves less. none when neither is known.
+    fn unbounded_room(&self, free: Option<u64>) -> Option<(u64, Bound)> {
+        let disk = free.map(|free| (free, Bound::Disk));
+        let budget = self
+            .budget
+            .map(|(room, budget)| (room, Bound::Budget(budget)));
+        match (disk, budget) {
+            (Some(disk), Some(budget)) if budget.0 < disk.0 => Some(budget),
+            (Some(disk), _) => Some(disk),
+            (None, budget) => budget,
+        }
+    }
+}
+
+/// what ends a download of no stated size: the free room on the cache's disk, or what the
+/// `cache_budget` setting, of these bytes, leaves the cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Bound {
+    Disk,
+    Budget(u64),
+}
+
+/// the error, or for a person who can answer the question, of a download of no stated size that
+/// took `room`, all that `bound` leaves it on the disk holding `cache`.
+fn unbounded(
+    label: &str,
+    (room, bound): (u64, Bound),
+    cache: &std::path::Path,
+) -> (String, &'static str) {
+    let took = match bound {
+        Bound::Disk => format!(
+            "downloading {label} took the {} the disk holding the cache at {} had free",
+            units::size(room),
+            units::path(cache)
+        ),
+        Bound::Budget(budget) => format!(
+            "downloading {label} took the {} the {} cache_budget leaves the cache",
+            units::size(room),
+            units::size(budget)
+        ),
+    };
+    let help = match bound {
+        Bound::Disk => {
+            "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again"
+        }
+        Bound::Budget(_) => {
+            "free room with `fetchloom cache gc`, or raise cache_budget with `fetchloom settings set cache_budget <size>`, then run the same command again"
+        }
+    };
+    (format!("{took}, and its server never said its size"), help)
 }
 
 /// one download as it runs: its bar, its part of the overall progress, and the question before
@@ -314,9 +379,11 @@ struct Watch<'a> {
     /// when the download gets large.
     unbounded: AtomicBool,
     received: AtomicU64,
-    /// for a download of no stated size, what the cache's disk had free as it started, `u64::MAX`
-    /// when unwatched, and `received` then: bytes past that free space stop it, in [`Watch::room`].
+    /// for a download of no stated size, the room it may take as it started, `u64::MAX` when
+    /// unwatched, what bounds that room, and `received` then: bytes past it stop the download,
+    /// in [`Watch::room`].
     free: AtomicU64,
+    bound: Mutex<Bound>,
     free_from: AtomicU64,
     /// what this download holds for the next run. the batch owns it, to say what a stop kept.
     held: &'a Held,
@@ -362,6 +429,7 @@ impl<'a> Watch<'a> {
             unbounded: AtomicBool::new(false),
             received: AtomicU64::new(0),
             free: AtomicU64::new(u64::MAX),
+            bound: Mutex::new(Bound::Disk),
             free_from: AtomicU64::new(0),
             held,
             earlier: AtomicU64::new(0),
@@ -440,19 +508,42 @@ impl<'a> Watch<'a> {
         }
     }
 
-    /// stops a download of no stated size once `received` passes what the cache's disk had free as
-    /// it started, before writing the bytes that just arrived, so the disk is left near full.
+    /// stops a download of no stated size once `received` passes the room it may take, before
+    /// writing the bytes that just arrived, so the disk is left near full and the budget kept. a
+    /// person at a terminal may let it go on; with --yes, or with no one to ask, nothing else
+    /// would end a body that never ends, so it stops.
     fn room(&self, received: u64) -> Result<(), Error> {
-        let free = self.free.load(Ordering::Relaxed);
+        let room = self.free.load(Ordering::Relaxed);
         let arrived = received.saturating_sub(self.free_from.load(Ordering::Relaxed));
         let Some(cache) = self.approval.cache.as_deref() else {
             return Ok(());
         };
-        if free == u64::MAX || crate::space::short(arrived, Some(free)).is_none() {
+        if room == u64::MAX || crate::space::short(arrived, Some(room)).is_none() {
             return Ok(());
         }
-        let doing = format!("downloading {}", self.job.label);
-        self.approve(|| super::ask_room(self.output, &doing, arrived, free, cache))?;
+        let bound = *self.bound.lock().unwrap_or_else(PoisonError::into_inner);
+        let (took, help) = unbounded(&self.job.label, (room, bound), cache);
+        let stop = || Err(Error::new(Kind::LocalIo, took.clone()).help(help));
+        if self.yes || !self.output.can_ask() {
+            return stop();
+        }
+        let label = &self.job.label;
+        self.approve(|| {
+            let cancel = format!("the download of {label}");
+            match self
+                .output
+                .confirm(&format!("{took}. go on anyway?"))
+                .map_err(|error| error.cancelling(&cancel))?
+            {
+                Some(true) => Ok(()),
+                Some(false) => Err(Error::new(
+                    Kind::Unconfirmed,
+                    format!("did not finish downloading {label}"),
+                )
+                .cancelled(cancel)),
+                None => stop(),
+            }
+        })?;
         self.free.store(u64::MAX, Ordering::Relaxed);
         Ok(())
     }
@@ -503,7 +594,7 @@ impl<'a> Watch<'a> {
         }
         let left = total.map_or(0, |total| total.saturating_sub(resumed));
         let unknown = self.job.fetch.expect.size.is_none();
-        let free = self.approval.cache.as_deref().map(crate::space::free);
+        let free = self.approval.cache.as_deref().map(self.approval.free);
         // a download that may have found its bytes unchanged was not asked about before
         if unknown || self.job.fetch.held.is_some() {
             let needed = room_needed(total, resumed, unknown && self.job.fetch.unpack);
@@ -534,9 +625,18 @@ impl<'a> Watch<'a> {
             }
             self.unbounded.store(total.is_none(), Ordering::Relaxed);
             self.received.store(resumed, Ordering::Relaxed);
-            let watched = free.flatten().filter(|_| total.is_none() && !self.yes);
-            self.free
-                .store(watched.unwrap_or(u64::MAX), Ordering::Relaxed);
+            // with --yes too: a body of no stated size has no end but this
+            let watched = self
+                .approval
+                .unbounded_room(free.flatten())
+                .filter(|_| total.is_none());
+            if let Some((_, bound)) = watched {
+                *self.bound.lock().unwrap_or_else(PoisonError::into_inner) = bound;
+            }
+            self.free.store(
+                watched.map_or(u64::MAX, |(room, _)| room),
+                Ordering::Relaxed,
+            );
             self.free_from.store(resumed, Ordering::Relaxed);
         }
         self.restarting(resumed, resumable);
@@ -1069,8 +1169,8 @@ async fn run_each(
     let in_flight = context.settings.jobs.value * 2;
     let mut done = 0;
     // unknown source sizes share one answer, once headers or received bytes show a large file
-    let approval =
-        Arc::new(Approval::new(context.settings.ask_above.value).with_room(cache.root()));
+    let approval = Approval::new(context.settings.ask_above.value).with_room(cache.root());
+    let approval = Arc::new(budgeted(context, cache, approval, overall.sizes.1 > 0).await);
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
     let held: Arc<[Held]> = std::iter::repeat_with(Held::default).take(count).collect();
@@ -1166,6 +1266,29 @@ async fn run_each(
         }
     }
     Ok(results.into_iter().flatten().collect())
+}
+
+/// `approval`, bounding downloads of no stated size by what the `cache_budget` setting leaves
+/// the cache, when one is set and the batch has `unknown` sizes. reading what the cache's files
+/// hold takes a scan, so a batch whose sizes are all known skips it.
+async fn budgeted(context: &Context, cache: &Cache, approval: Approval, unknown: bool) -> Approval {
+    let Some(budget) = context.settings.cache_budget.value.filter(|_| unknown) else {
+        return approval;
+    };
+    let (scanned, threads, stop) = (cache.clone(), context.threads, context.stop.clone());
+    let held = tokio::task::spawn_blocking(move || {
+        let scan = scanned.scan_objects(threads, &stop).ok()?;
+        let sizes = scan.objects.iter().map(|object| object.size);
+        Some(sizes.fold(0, u64::saturating_add))
+    })
+    .await
+    .ok()
+    .flatten();
+    // a cache whose files cannot be read is taken to fit, as sync's budget check takes it
+    match held {
+        Some(held) => approval.with_budget(budget, held),
+        None => approval,
+    }
 }
 
 /// waits for the downloads still running to wind down from a stop, leaving in `held` what each
@@ -1781,6 +1904,72 @@ mod tests {
         told.on(&small).unwrap();
         told.on(&Event::Bytes(2 * crate::settings::ASK_ABOVE))
             .unwrap();
+    }
+
+    /// a body of no stated size stops at the room it may take, with --yes too and where no one
+    /// can answer, naming what bounds it: the disk's free room, or `cache_budget` when that leaves
+    /// less. a stated size was weighed against the disk before the download began.
+    #[test]
+    fn a_download_of_no_stated_size_stops_at_the_room_it_may_take() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
+            label: "big.bin".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let overall = overall();
+        let held = Held::default();
+        let cache = std::path::Path::new("/cache");
+        let started = |total| Event::Started {
+            total,
+            resumed: 0,
+            resumable: Resumable::No,
+        };
+        for (budget, yes, room, message, help) in [
+            (
+                None,
+                true,
+                1000,
+                "downloading big.bin took the 1000 B the disk holding the cache at /cache had free, and its server never said its size",
+                "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again",
+            ),
+            (
+                Some((9000, 8500)),
+                false,
+                500,
+                "downloading big.bin took the 500 B the 8.8 KiB cache_budget leaves the cache, and its server never said its size",
+                "free room with `fetchloom cache gc`, or raise cache_budget with `fetchloom settings set cache_budget <size>`, then run the same command again",
+            ),
+        ] {
+            let mut approval = Approval::new(crate::settings::ASK_ABOVE).with_room(cache);
+            approval.free = |_| Some(1000);
+            if let Some((budget, held)) = budget {
+                approval = approval.with_budget(budget, held);
+            }
+            let watch = Watch::new(&job, &output, &overall, &approval, yes, &held);
+            watch.on(&started(None)).unwrap();
+            watch.on(&Event::Bytes(room)).unwrap();
+            let stopped = watch.on(&Event::Bytes(1)).unwrap_err();
+            assert_eq!(stopped.kind, Kind::LocalIo);
+            assert_eq!(stopped.message, message);
+            assert_eq!(stopped.help.as_deref(), Some(help));
+            let sized = Watch::new(&job, &output, &overall, &approval, yes, &held);
+            sized.on(&started(Some(10))).unwrap();
+            sized.on(&Event::Bytes(2000)).unwrap();
+        }
     }
 
     #[test]

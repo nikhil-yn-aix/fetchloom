@@ -2366,43 +2366,40 @@ fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {
         PATH,
         vec![reply("200 OK", &[], &body), reply("200 OK", &[], &body)],
     )?;
-    let output = sandbox
-        .command(&["--json", "get", &server.url])
-        .env("FETCHLOOM_TEST_FREE", "1000")
-        .output()?;
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
-    let document = json(&output)?;
-    let error = &document["errors"][0];
-    assert_eq!(error["kind"], "unconfirmed", "{error}");
-    let message = error["message"].as_str().unwrap_or_default();
-    assert!(
-        message.starts_with("downloading iris.csv needs at least ")
-            && message.ends_with(&format!(
-                " on the disk holding the cache at {}, which has 1000 B free",
+    // with --yes too: nothing else would end a body that never ends
+    for args in [
+        ["--json", "get", server.url.as_str()].as_slice(),
+        ["--json", "get", "--yes", server.url.as_str()].as_slice(),
+    ] {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_FREE", "1000")
+            .output()?;
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+        let document = json(&output)?;
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "local.io", "{error}");
+        assert_eq!(
+            error["message"],
+            format!(
+                "downloading iris.csv took the 1000 B the disk holding the cache at {} had free, and its server never said its size",
                 sandbox.cache().display()
-            )),
-        "{message}"
-    );
-    assert!(!sandbox.work().join("iris").exists());
-    let kept: u64 = partial_files(&sandbox.cache())
-        .iter()
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "part")
-        })
-        .filter_map(|path| fs::metadata(path).ok())
-        .map(|metadata| metadata.len())
-        .sum();
-    assert!(kept <= 1000, "{kept} bytes went to a disk with 1000 B free");
-    let output = sandbox
-        .command(&["get", "--yes", &server.url])
-        .env("FETCHLOOM_TEST_FREE", "1000")
-        .output()?;
-    assert!(output.status.success(), "{}", text(&output.stderr)?);
-    assert_eq!(
-        fs::read(sandbox.work().join("iris").join("iris.csv"))?,
-        body
-    );
+            ),
+            "{args:?}"
+        );
+        assert!(!sandbox.work().join("iris").exists());
+        // no later run could go on from bytes of no length or version, so none are kept
+        let kept: u64 = partial_files(&sandbox.cache())
+            .iter()
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "part")
+            })
+            .filter_map(|path| fs::metadata(path).ok())
+            .map(|metadata| metadata.len())
+            .sum();
+        assert_eq!(kept, 0, "{args:?}");
+    }
     Ok(())
 }
 
