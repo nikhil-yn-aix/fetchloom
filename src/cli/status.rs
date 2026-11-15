@@ -104,7 +104,7 @@ pub(super) struct Status {
     unsealed: HashSet<String>,
     /// recipes among `unlocked` with what moved since each was built, which only a build fixes.
     #[serde(skip)]
-    building: BTreeMap<String, String>,
+    building: BTreeMap<String, Vec<recipe::Change>>,
     /// the datasets among `unlocked` that data.lock pins under another name data.toml does not
     /// have, which a sync carries over, each with that name.
     #[serde(skip)]
@@ -451,7 +451,7 @@ fn unbuilt(
     project: &Project,
     manifest: &Manifest,
     lock: &Lock,
-) -> Result<BTreeMap<String, String>, Error> {
+) -> Result<BTreeMap<String, Vec<recipe::Change>>, Error> {
     let mut building = BTreeMap::new();
     for (name, entry) in &manifest.datasets {
         if entry.recipe().is_none() {
@@ -459,7 +459,7 @@ fn unbuilt(
         }
         let changes = recipe::drift(&project.root, manifest, lock, name)?;
         if !changes.is_empty() {
-            building.insert(name.clone(), super::project::said(&changes));
+            building.insert(name.clone(), changes);
         }
     }
     Ok(building)
@@ -1025,26 +1025,41 @@ fn tell_unplaced(output: &Output, status: &Status) {
     }
 }
 
-/// a row on stdout per difference, so a pipe or file gets rows and stderr the story; a script gets
-/// every file, a terminal one row per folder gone whole and at most `SHOWN` per kind.
-fn list(output: &Output, status: &Status) {
-    let shown = output.answer_width().map(|_| SHOWN);
-    tell_unplaced(output, status);
+/// a row per dataset data.lock does not pin as data.toml has it now.
+fn tell_unlocked(output: &Output, status: &Status) {
     let unpinned = if status.lockless {
         "data.lock does not exist"
     } else {
         "data.toml changed since data.lock was written"
     };
     for name in &status.unlocked {
-        let reason = match (status.building.get(name), status.renamed.get(name)) {
-            (Some(moved), _) => moved.clone(),
-            (None, Some(old)) => format!(
-                "data.lock pins it as {old}, which data.toml does not have, and `fetchloom sync` keeps that pin under this name without asking the source"
+        // a recipe that moved has its pin; only a build makes it again
+        let (verb, reason) = match (status.building.get(name), status.renamed.get(name)) {
+            (Some(moved), _) if moved.first() == Some(&recipe::Change::Unbuilt) => {
+                ("Unbuilt", super::project::said(moved))
+            }
+            (Some(moved), _) => (
+                "Stale",
+                format!("{} since it was built", super::project::said(moved)),
             ),
-            (None, None) => unpinned.to_owned(),
+            (None, Some(old)) => (
+                "Unlocked",
+                format!(
+                    "data.lock pins it as {old}, which data.toml does not have, and `fetchloom sync` keeps that pin under this name without asking the source"
+                ),
+            ),
+            (None, None) => ("Unlocked", unpinned.to_owned()),
         };
-        output.report("Unlocked", &format!("{name} · {reason}"));
+        output.report(verb, &format!("{name} · {reason}"));
     }
+}
+
+/// a row on stdout per difference, so a pipe or file gets rows and stderr the story; a script gets
+/// every file, a terminal one row per folder gone whole and at most `SHOWN` per kind.
+fn list(output: &Output, status: &Status) {
+    let shown = output.answer_width().map(|_| SHOWN);
+    tell_unplaced(output, status);
+    tell_unlocked(output, status);
     for name in &status.removed {
         output.report(
             "Removed",

@@ -150,6 +150,7 @@ pub(in crate::cli) fn after_sync(
     if recipes && let Some(lock) = project.lock()? {
         for (name, moved) in super::unbuilt(project, &manifest, &lock)? {
             if scope.includes(&name) {
+                let moved = crate::cli::project::said(&moved);
                 unready.push(Unready::Stale { name, moved });
             }
         }
@@ -173,7 +174,7 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
     }
     unready.extend(status.building.iter().map(|(name, moved)| Unready::Stale {
         name: name.clone(),
-        moved: moved.clone(),
+        moved: crate::cli::project::said(moved),
     }));
     let each = |paths: &[String], make: fn(String) -> Unready| {
         paths.iter().cloned().map(make).collect::<Vec<_>>()

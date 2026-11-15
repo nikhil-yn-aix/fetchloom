@@ -170,6 +170,11 @@ fn status_names_what_changed() -> Result {
         &format!("{COPY_CODE}env = {{ SEED = \"1\" }}\n"),
     )?;
     fs::write(sandbox.work().join("clean.py"), "print('before')\n")?;
+    let unbuilt = text(&sandbox.run(&["status"])?.stdout)?;
+    assert!(
+        unbuilt.contains("    Unbuilt clean · not built yet\n"),
+        "{unbuilt}"
+    );
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
     fs::write(sandbox.work().join("clean.py"), "print('after')\n")?;
     let manifest = sandbox.work().join("data.toml");
@@ -179,7 +184,7 @@ fn status_names_what_changed() -> Result {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let stdout = text(&output.stdout)?;
     assert!(
-        stdout.contains("Unlocked clean · clean.py changed; env changed\n"),
+        stdout.contains("Stale clean · clean.py changed; env changed since it was built\n"),
         "{stdout}"
     );
     let stderr = text(&output.stderr)?;
