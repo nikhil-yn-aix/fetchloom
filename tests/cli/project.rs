@@ -369,6 +369,41 @@ fn a_force_after_a_run_with_c_names_its_project() -> Result {
     Ok(())
 }
 
+/// status rows that name a sync, as its hints do, name the project after a run given `-C`.
+#[test]
+fn status_rows_after_c_name_its_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut servers = Vec::new();
+    for path in ["/a.csv", "/b.csv", "/c.csv"] {
+        let server = Server::start(path, vec![file(path.as_bytes(), "\"v\"")])?;
+        added(&sandbox, &server)?;
+        servers.push(server);
+    }
+    let work = sandbox.work();
+    // b leaves data.toml, and c the data folder
+    fs::write(
+        work.join("data.toml"),
+        format!(
+            "[datasets.a]\nref = \"{}\"\n\n[datasets.c]\nref = \"{}\"\nplace = false\n",
+            servers[0].url, servers[2].url
+        ),
+    )?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let project = fs::canonicalize(&work)?;
+    let typed = work.to_string_lossy();
+    let output = sandbox
+        .command_in(&elsewhere, &["-C", &typed, "status"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let rows = text(&output.stdout)?;
+    assert_eq!(rows.lines().count(), 3, "{rows}");
+    for row in rows.lines() {
+        let named = named_folder(row, " sync`").ok_or_else(|| format!("no -C in {row}"))?;
+        assert_eq!(fs::canonicalize(named)?, project, "{row}");
+    }
+    Ok(())
+}
+
 /// two datasets imported from folders of this machine, birds and cows, each one file.
 #[cfg(target_os = "linux")]
 fn birds_and_cows(sandbox: &Sandbox) -> Result {

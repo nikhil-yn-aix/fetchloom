@@ -2506,6 +2506,22 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
         told.contains("       Kept clean · a rebuild that differs from data.lock; `fetchloom build --accept clean` pins it\n"),
         "{told}"
     );
+    // after -C, the row names the project, as the hints do
+    let typed = sandbox.work().to_string_lossy().into_owned();
+    let outside = building_in(&sandbox, &elsewhere, &["-C", &typed, "status"])?
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    let rows = text(&outside.stdout)?;
+    let kept = rows
+        .lines()
+        .find(|row| row.contains("Kept clean"))
+        .ok_or_else(|| rows.clone())?;
+    assert!(
+        kept.starts_with(
+            "       Kept clean · a rebuild that differs from data.lock; `fetchloom -C "
+        ) && kept.ends_with(" build --accept clean` pins it"),
+        "{kept}"
+    );
     // another build here makes the same files again
     let hints = text(&status.stderr)?;
     assert!(!hints.contains("makes it on this machine"), "{hints}");

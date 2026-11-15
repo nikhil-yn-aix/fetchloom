@@ -1146,7 +1146,7 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 
 impl Status {
     /// each kind of file difference with its verb and what follows each path, if anything.
-    fn lists(&self) -> [(&'static str, &Vec<String>, Option<&'static str>); 6] {
+    fn lists(&self) -> [(&'static str, &Vec<String>, Option<String>); 6] {
         [
             ("Missing", &self.missing, None),
             ("Edited", &self.edited, None),
@@ -1156,9 +1156,10 @@ impl Status {
             (
                 "Extra",
                 &self.unneeded,
-                Some(
-                    "fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it",
-                ),
+                Some(format!(
+                    "fetchloom placed it and no dataset needs it now, so `{}` removes it",
+                    super::project::command("sync")
+                )),
             ),
         ]
     }
@@ -1268,7 +1269,8 @@ fn tell_unplaced(output: &Output, status: &Status) {
         output.report(
             "Not placed",
             &format!(
-                "{name} · place = false in data.toml, so `fetchloom sync` removes {files} from {folder}"
+                "{name} · place = false in data.toml, so `{}` removes {files} from {folder}",
+                super::project::command("sync")
             ),
         );
         for path in paths {
@@ -1326,7 +1328,8 @@ fn tell_unlocked(output: &Output, status: &Status) {
             (None, Some(old)) => (
                 "Unlocked",
                 format!(
-                    "data.lock pins it as {old}, which data.toml does not have, and `fetchloom sync` keeps that pin under this name without asking the source"
+                    "data.lock pins it as {old}, which data.toml does not have, and `{}` keeps that pin under this name without asking the source",
+                    super::project::command("sync")
                 ),
             ),
             (None, None) => ("Unlocked", unpinned.to_owned()),
@@ -1346,7 +1349,10 @@ fn list(output: &Output, status: &Status) {
     for name in &status.removed {
         output.report(
             "Removed",
-            &format!("{name} · not in data.toml, so `fetchloom sync` takes it out of data.lock"),
+            &format!(
+                "{name} · not in data.toml, so `{}` takes it out of data.lock",
+                super::project::command("sync")
+            ),
         );
     }
     tell_not_downloaded(output, status);
@@ -1373,7 +1379,7 @@ fn list(output: &Output, status: &Status) {
                     rows[at].0 =
                         format!("{folder} · {}", units::count(rows[at].1, "file", "files"));
                 }
-            } else if let Some(said) = said {
+            } else if let Some(said) = &said {
                 rows.push((format!("{path} · {said}"), 1));
             } else if let Some(file) = status.set_aside.get(path) {
                 rows.push((set_aside_row(path, file), 1));
@@ -1474,12 +1480,18 @@ fn tell_kept(output: &Output, kept: &Kept, shown: Option<usize>) {
     if kept.stale {
         output.report(
             "Kept",
-            &format!("{name} · a rebuild from another recipe or pin than data.lock has now, so `fetchloom build --accept` refuses it"),
+            &format!(
+                "{name} · a rebuild from another recipe or pin than data.lock has now, so `{}` refuses it",
+                super::project::command("build --accept")
+            ),
         );
     } else {
         output.report(
             "Kept",
-            &format!("{name} · a rebuild that differs from data.lock; `fetchloom build --accept {name}` pins it"),
+            &format!(
+                "{name} · a rebuild that differs from data.lock; `{}` pins it",
+                super::project::command(&format!("build --accept {name}"))
+            ),
         );
     }
     let most = shown.unwrap_or(usize::MAX);
