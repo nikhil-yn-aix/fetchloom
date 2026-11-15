@@ -442,19 +442,35 @@ fn a_failed_source_warns_without_discarding_the_others() {
     assert!(result.warnings[0].starts_with("kaggle search failed: "));
 }
 
+/// a search every site failed names each site and what went wrong there, keeping the first
+/// failure's kind for the exit and the account a sign-in could lift its refusal with.
 #[test]
-fn all_failed_sources_return_the_first_error() {
+fn a_search_every_site_failed_names_each_one() {
     let api = recorded()
         .on(HF, 403, Vec::new())
         .on(KAGGLE, 400, Vec::new())
         .on(ZENODO, 404, Vec::new())
-        .on(ENA, 500, Vec::new())
         .on(GEO, 400, Vec::new())
-        .on(DANDI, 404, Vec::new())
         .on(&openneuro("iris", 3), 400, Vec::new());
     let error = block_on(search(&api, "iris", &[], Some(LIMIT))).unwrap_err();
     assert_eq!(error.kind, Kind::AuthRequired);
-    assert!(error.message.contains("huggingface.co"));
+    assert_eq!(error.message, "the search failed at every site");
+    let sites: Vec<&str> = error
+        .details
+        .iter()
+        .filter_map(|line| line.split(" search failed: ").next())
+        .collect();
+    assert_eq!(
+        sites,
+        ["hugging face", "kaggle", "zenodo", "GEO", "openneuro"],
+        "{:?}",
+        error.details
+    );
+    assert!(error.need.is_some());
+    assert_eq!(
+        error.help.as_deref(),
+        Some("fix the errors above, then run the same command again")
+    );
 }
 
 #[test]

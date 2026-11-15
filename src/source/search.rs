@@ -258,7 +258,7 @@ pub(crate) async fn search(
         }
     }
     let mut result = Search::default();
-    let mut first_error = None;
+    let mut failed = Vec::new();
     let mut lists = Vec::new();
     for (place, (catalog, answer)) in asked.into_iter().zip(answers).enumerate() {
         let source = catalog.label();
@@ -274,14 +274,12 @@ pub(crate) async fn search(
                 result
                     .warnings
                     .push(format!("{source} search failed: {error}"));
-                first_error.get_or_insert(error);
+                failed.push(error);
             }
         }
     }
-    if lists.is_empty()
-        && let Some(error) = first_error
-    {
-        return Err(error);
+    if lists.is_empty() && !failed.is_empty() {
+        return Err(everywhere(failed, result.warnings));
     }
     let mut ranked = Vec::new();
     for rank in 0..limit {
@@ -298,6 +296,25 @@ pub(crate) async fn search(
         .candidates
         .sort_by_key(|candidate| !exact(candidate, &wanted));
     Ok(result)
+}
+
+/// the error of a search that no site answered, from the errors of those that `failed` and a line
+/// `told` for each site: the one site's own error when only one was asked, else one naming every
+/// site, with their help when they share it and the first account a sign-in could lift one with.
+fn everywhere(mut failed: Vec<Error>, told: Vec<String>) -> Error {
+    if told.len() == 1 {
+        return failed.swap_remove(0);
+    }
+    let first = &failed[0];
+    let mut error = Error::new(first.kind, "the search failed at every site");
+    error.help = if failed.iter().all(|error| error.help == first.help) {
+        first.help.clone()
+    } else {
+        Some("fix the errors above, then run the same command again".into())
+    };
+    error.need = failed.iter().find_map(|error| error.need.clone());
+    error.details = told;
+    error
 }
 
 /// a check of each of `found`, the matches of the catalog at `place`, that add might refuse as
