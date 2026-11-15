@@ -3711,11 +3711,19 @@ fn a_partial_sync_puts_back_what_verify_found_changed() -> Result {
     )?;
     let synced = sandbox.run(&["sync"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    // a state written in a later tick than the files vouches for their size and time
     let state = sandbox.work().join(".fetchloom").join("state");
-    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
     let placed = sandbox.work().join("data/one/one.csv");
     let time = fs::metadata(&placed)?.modified()?;
+    // fat and exfat can give the state the time of the files written just before it. a sync then
+    // hashes them, and calls a change it finds an edit, which stays; a sync a tick later settles
+    // them, writing the state again, after which only --verify reads them
+    fs::File::options()
+        .write(true)
+        .open(&state)?
+        .set_modified(time)?;
+    sandbox.wait_for_a_later_time(time)?;
+    let settled = sandbox.run(&["sync"])?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
     fs::write(&placed, b"ONE\n")?;
     fs::File::options()
         .write(true)
