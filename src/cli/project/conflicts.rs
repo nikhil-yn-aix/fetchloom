@@ -60,7 +60,7 @@ pub(super) fn merge(
             &project.root,
         ));
     }
-    let (manifest, lock) = sides(project, &conflicted);
+    let (manifest, lock) = sides(program.as_deref(), &project.root, &conflicted);
     let told = |line: &str| context.output.detail(line);
     let committed = |side: Side, part: &str| {
         git::in_commit(
@@ -186,12 +186,9 @@ fn read(project: &Project) -> Result<Option<Conflicted>, Error> {
     }))
 }
 
-/// data.lock's sides come whole from git's index when git has them, so no pin mixes both sides.
+/// data.lock's sides come whole from git's index when `git` has them, so no pin mixes both sides.
 /// data.toml keeps its conflict lines' sides, which hold what git merged itself and edits since.
-fn sides(project: &Project, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
-    let program = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &project.root));
-    let git = program.as_deref();
-    let root = &project.root;
+fn sides(git: Option<&Path>, root: &Path, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
     let reads = |file: &'static str| move |base: &String| merge::reads(file, base);
     let manifest = match &conflicted.manifest_sides {
         Some(sides) => {
