@@ -61,7 +61,7 @@ pub(super) struct Built {
     project: PathBuf,
     /// the recipes named, or every recipe when none was.
     selected: Vec<String>,
-    /// the datasets whose pins changed: new, moved to other files, or dropped.
+    /// the datasets whose pins changed: new, moved to other files, or taken out of data.lock.
     datasets: Vec<String>,
     lock_changed: bool,
     /// each recipe the selected ones need, in the order the build took them.
