@@ -26,8 +26,8 @@ pub(crate) const LEAST_MEMORY: u64 = 256 << 20;
 pub(crate) struct Machine {
     /// processors the run may use, after a container's cpu quota and the affinity mask.
     pub(crate) processors: usize,
-    /// bytes of memory a run may use: on linux what the system has available, or what is left
-    /// under a container's memory limit when that is less. none elsewhere.
+    /// bytes of memory a run may use: what the system has available, or on linux what is left
+    /// under a container's memory limit when that is less. none where the system does not say.
     pub(crate) memory: Option<u64>,
     /// whether `memory` is what a cgroup's limit leaves, less than the system has available.
     pub(crate) memory_in_cgroup: bool,
@@ -78,11 +78,39 @@ fn memory() -> Option<Room> {
     memory_under(Path::new("/"))
 }
 
-/// other systems tell their free memory only through calls this crate keeps out, as it holds
-/// no unsafe code, so a run there uses `FETCHLOOM_MEMORY` or the smallest budget.
-#[cfg(not(target_os = "linux"))]
+/// windows and macos tell their free memory only through calls this crate keeps out, as it holds
+/// no unsafe code, so sysinfo makes them.
+#[cfg(any(windows, target_os = "macos"))]
+fn memory() -> Option<Room> {
+    let mut system = sysinfo::System::new().ok()?;
+    system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
+    counted(
+        system.total_memory(),
+        system.used_memory(),
+        system.available_memory(),
+    )
+}
+
+/// other systems tell their free memory only through calls this crate keeps out, so a run there
+/// uses `FETCHLOOM_MEMORY` or the smallest budget.
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 fn memory() -> Option<Room> {
     None
+}
+
+/// the memory a process may use by sysinfo's count: the total less what it counts used. on
+/// windows that is the available physical memory; on macos the free, purgeable and file cache
+/// pages, as linux counts available, where sysinfo's own `available` also counts the pages
+/// programs are using. none when the count failed, which leaves `available` at zero.
+#[cfg(any(windows, target_os = "macos", test))]
+fn counted(total: u64, used: u64, available: u64) -> Option<Room> {
+    let bytes = total
+        .checked_sub(used)
+        .filter(|&bytes| bytes > 0 && available > 0)?;
+    Some(Room {
+        bytes,
+        in_cgroup: false,
+    })
 }
 
 /// the memory a process may use, from `/proc` and `/sys` below `root`: what the kernel reports
@@ -439,6 +467,32 @@ mod tests {
         ]);
         let found = memory_under(root.path()).unwrap();
         assert_eq!((found.bytes, found.in_cgroup), (8_000_000 * 1024, false));
+    }
+
+    const GIB: u64 = 1 << 30;
+
+    /// windows' used is its total less the available physical memory, while macos' available
+    /// also counts the pages programs are using, so both leave a run what is not used.
+    #[test]
+    fn a_system_count_leaves_a_run_what_is_not_used() {
+        let windows = counted(16 * GIB, 10 * GIB, 6 * GIB);
+        assert_eq!(
+            windows,
+            Some(Room {
+                bytes: 6 * GIB,
+                in_cgroup: false
+            })
+        );
+        let macos = counted(16 * GIB, 10 * GIB, 14 * GIB);
+        assert_eq!(macos.map(|room| room.bytes), Some(6 * GIB));
+    }
+
+    /// a failed count leaves windows' numbers at zero and macos' at its total alone, and either
+    /// says nothing, so a run takes the smallest budget rather than none or all of memory.
+    #[test]
+    fn a_failed_system_count_says_nothing() {
+        assert_eq!(counted(0, 0, 0), None);
+        assert_eq!(counted(16 * GIB, 0, 0), None);
     }
 
     #[test]

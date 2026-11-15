@@ -128,8 +128,13 @@ reflink-copy = { version = "0.1", default-features = false }
 # the step's process, as process-wrap's tokio job object takes it
 tokio = { version = "1.54", features = ["process"] }
 winapi-util = "0.1"
-# safe volume filesystem names for the optional placement worker policy
-sysinfo = { version = "0.40", default-features = false, features = ["disk"] }
+# safe volume filesystem names for the optional placement worker policy, and the memory a run may
+# use, which windows tells only through calls this crate keeps out
+sysinfo = { version = "0.40", default-features = false, features = ["disk", "system"] }
+
+# the memory a run may use, which macos tells only through calls this crate keeps out
+[target.'cfg(target_os = "macos")'.dependencies]
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 # 7z archives for tests, written by the same crate that reads them. aes256 stays off: features

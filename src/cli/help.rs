@@ -79,8 +79,8 @@ const ENVIRONMENT: &str = "fetchloom environment
                        a try fails, 1 to 3600; 30 by default
   FETCHLOOM_ASK_ABOVE  a download bigger than this needs a yes, as 20G;
                        10G by default
-  FETCHLOOM_MEMORY     memory for download buffers, as 512M; on linux a quarter
-                       of what is free by default, from 256M to 4G; else 256M
+  FETCHLOOM_MEMORY     memory for download buffers, as 512M; a quarter of what
+                       is free by default, from 256M to 4G
   FETCHLOOM_MOST_FILES the most files one dataset may list; by default 1 for
                        each 2K of FETCHLOOM_MEMORY, at least 100000
   FETCHLOOM_ARCHIVE_FILES, FETCHLOOM_ARCHIVE_SIZE, FETCHLOOM_ARCHIVE_RATIO

@@ -22,7 +22,7 @@ the variable wins over the file, so `FETCHLOOM_RESOURCES=default` runs once at t
 |---|---|---|---|
 | `jobs`, requests at once | 2 | 8 | 32 |
 | `host_jobs`, requests at once to one host | 2 | 4 | 16 |
-| `memory`, the budget download buffers aim to stay within | 128 MiB, or the default budget when that is smaller | on linux a quarter of the memory available, or of what a cgroup's limit leaves, from 256 MiB to 4 GiB but never more than half of it; 256 MiB on macos and windows | as `default` |
+| `memory`, the budget download buffers aim to stay within | 128 MiB, or the default budget when that is smaller | a quarter of the memory available, or on linux of what a cgroup's limit leaves, from 256 MiB to 4 GiB but never more than half of it; 256 MiB where the system does not say | as `default` |
 | local workers, as `FETCHLOOM_THREADS` caps them | 2, or 1 on a machine with one processor | up to the processors | as `default` |
 
 `max` leaves memory and local workers at the default. checking placed files spreads a few large files over the local workers, as it does many small ones, but a ceiling of one or two workers keeps each file on one, so lean adds no hashing buffers. at `default` and `max`, a project whose state file holds 16 MiB or more, some 65,000 files, has it read on a thread of its own while its data folder is listed, which made a settled sync of 100,000 files take 0.79 of its time and cost 1,000,000 files 6 to 7% more peak memory; lean reads it first, as every level does a smaller one.
