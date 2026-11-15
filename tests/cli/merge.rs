@@ -228,8 +228,10 @@ fn lock_reads_the_merge_base_from_git_or_asks_for_choices() -> Result {
     let error = &json(&output)?["errors"][0];
     assert_eq!(error["kind"], "unconfirmed");
     assert!(
-        error["details"][2]
-            .as_str()
+        error["details"]
+            .as_array()
+            .and_then(|details| details.last())
+            .and_then(serde_json::Value::as_str)
             .is_some_and(|detail| detail.starts_with("no merge base was found")),
         "{error}"
     );
@@ -304,18 +306,18 @@ fn lock_stops_on_competing_upgrades_and_takes_the_side_a_person_names() -> Resul
         conflicted,
         "nothing is written"
     );
-    // -v shows what each side pins, so the choice is not blind, and still chooses nothing
-    let verbose = run(&sandbox, &["-v", "lock"])?;
-    assert_eq!(verbose.status.code(), Some(1));
-    let told = text(&verbose.stderr)?;
+    // the refusal shows what each side pins, so the choice is not blind, and chooses nothing
+    let refused = run(&sandbox, &["lock"])?;
+    assert_eq!(refused.status.code(), Some(1));
+    let told = text(&refused.stderr)?;
     for (side, bytes) in [("ours", b"2,left\n".as_slice()), ("theirs", b"3,right\n")] {
-        assert!(told.contains(&format!("version, {side}: 1 file")), "{told}");
-        let file = format!(
-            "version.csv · {} B · sha256 {}",
+        let pinned = format!(
+            "version on {side}: 1 file · {} B; version.csv · {} B · sha256 {}",
+            bytes.len(),
             bytes.len(),
             &sha256_hex(bytes)[..12]
         );
-        assert!(told.contains(&file), "{told}");
+        assert!(told.contains(&pinned), "{told}");
     }
     assert_eq!(
         fs::read_to_string(sandbox.work().join("data.lock"))?,
@@ -455,8 +457,7 @@ fn lock_reads_the_base_around_lines_zdiff3_moved_out_of_a_conflict() -> Result {
     let document = json(&output)?;
     let error = &document["errors"][0];
     assert_eq!(
-        error["details"],
-        serde_json::json!(["labels: each side added it its own way"]),
+        error["details"][0], "labels: each side added it its own way",
         "{error}"
     );
     let merge = &document["result"]["merge"];
@@ -572,12 +573,12 @@ fn removal_meets_a_new_pin(
         let document = json(&asked)?;
         let error = &document["errors"][0];
         assert_eq!(error["kind"], "unconfirmed", "{meeting:?}: {error}");
-        assert_eq!(
-            error["details"],
-            serde_json::json!([format!(
-                "{name}: one side changed it and the other removed it"
-            )]),
-            "{meeting:?}"
+        let details = error["details"].as_array().ok_or("no details")?;
+        let why = format!("{name}: one side changed it and the other removed it");
+        let gone = format!("{name} on {removal_side}: not in data.toml");
+        assert!(
+            details[0] == why && details.contains(&gone.into()),
+            "{meeting:?}: {error}"
         );
         assert_eq!(error["fix"], serde_json::Value::Null, "only a person picks");
         let merge = &document["result"]["merge"];
@@ -927,6 +928,107 @@ fn keeping_a_side_brings_back_the_list_the_merge_deleted() -> Result {
         assert!(sandbox.work().join(&old).is_file(), "{meeting:?}");
         succeeded(&run(&sandbox, &["lock", "--check"])?)?;
         abandon(&sandbox)?;
+    }
+    Ok(())
+}
+
+/// a project importing kappa, committed on main, then placed in tables-tom on branch tom and in
+/// tables-priya on main, each in a commit of its own. none without git.
+fn placed_apart(sandbox: &Sandbox) -> Result<Option<()>> {
+    fs::write(sandbox.folder("base")?.join("k.csv"), "k")?;
+    if git(sandbox, &sandbox.work(), &["init", "-q"])?.is_none() {
+        return Ok(None);
+    }
+    succeeded(&run(sandbox, &["add", "../base", "--as", "kappa"])?)?;
+    ok(sandbox, &["add", "."])?;
+    ok(sandbox, &["commit", "-qm", "kappa"])?;
+    let manifest = sandbox.work().join("data.toml");
+    let place = |folder: &str, why: &str| -> Result {
+        let text = fs::read_to_string(&manifest)?;
+        fs::write(&manifest, format!("{text}path = \"{folder}\"\n"))?;
+        ok(sandbox, &["commit", "-qam", why])?;
+        Ok(())
+    };
+    ok(sandbox, &["checkout", "-qb", "tom"])?;
+    place("tables-tom", "tom keeps the tables apart")?;
+    ok(sandbox, &["checkout", "-q", "main"])?;
+    place("tables-priya", "priya keeps the tables apart")?;
+    Ok(Some(()))
+}
+
+/// `what`'s commit as `git log --oneline` shows it, such as `main`'s.
+fn oneline(sandbox: &Sandbox, what: &str) -> Result<String> {
+    let output = git(
+        sandbox,
+        &sandbox.work(),
+        &["log", "-1", "--format=%h %s", what],
+    )?
+    .ok_or("git went away")?;
+    assert!(output.status.success(), "{what}: {}", text(&output.stderr)?);
+    Ok(text(&output.stdout)?.trim().to_owned())
+}
+
+/// a dataset each side changed its own way is shown as each side holds it, beside whose each side
+/// is and its commit, in the refusal and in `--json`: a rebase turns git's ours and theirs around.
+#[test]
+fn a_needed_choice_shows_what_each_side_holds_and_whose_it_is() -> Result {
+    let sandbox = Sandbox::new()?;
+    if placed_apart(&sandbox)?.is_none() {
+        return Ok(());
+    }
+    let (priya, tom) = (oneline(&sandbox, "main")?, oneline(&sandbox, "tom")?);
+    let (priyas, toms) = ("path = \"tables-priya\"", "path = \"tables-tom\"");
+    let meetings = [
+        (
+            "merge",
+            [
+                ("the branch you are on", &priya, priyas),
+                ("the branch you are merging", &tom, toms),
+            ],
+        ),
+        (
+            "rebase",
+            [
+                ("the branch you are rebasing onto", &tom, toms),
+                ("your commit being replayed", &priya, priyas),
+            ],
+        ),
+    ];
+    for (
+        meeting,
+        [
+            (our_role, our_commit, ours),
+            (their_role, their_commit, theirs),
+        ],
+    ) in meetings
+    {
+        stopped(&sandbox, &[meeting, "-q", "tom"])?;
+        let output = run(&sandbox, &["--json", "lock"])?;
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+        let document = json(&output)?;
+        assert_eq!(
+            document["errors"][0]["details"],
+            serde_json::json!([
+                "kappa: each side changed it its own way",
+                format!("kappa on ours: {ours}"),
+                format!("kappa on theirs: {theirs}"),
+                format!("ours is {our_role}: {our_commit}"),
+                format!("theirs is {their_role}: {their_commit}"),
+            ]),
+            "{meeting}"
+        );
+        assert_eq!(
+            document["result"]["merge"]["sides"]["kappa"],
+            serde_json::json!({ "ours": [ours], "theirs": [theirs] }),
+            "{meeting}"
+        );
+        let refused = text(&run(&sandbox, &["lock"])?.stderr)?;
+        assert!(
+            refused.contains(&format!("theirs is {their_role}: {their_commit}")),
+            "{refused}"
+        );
+        abandon(&sandbox)?;
+        ok(&sandbox, &["checkout", "-q", "main"])?;
     }
     Ok(())
 }

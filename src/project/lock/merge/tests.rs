@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fs;
 
 use super::*;
@@ -209,7 +210,7 @@ fn a_base_shown_but_unread_names_no_conflict_style() {
     locks.shows_base = true;
     let error = merged(&manifest, &locks, &[]).unwrap_err();
     assert_eq!(
-        error.details[2],
+        error.details.last().unwrap(),
         "no merge base fetchloom can read was found: git on PATH, before `git add` marks the files resolved, lets fetchloom see what each side changed"
     );
 }
@@ -230,19 +231,30 @@ fn one_sided_datasets_without_a_base_need_a_choice() {
     assert_eq!(error.kind, Kind::Unconfirmed);
     assert_eq!(error.message, "the merge needs a choice for 2 datasets");
     assert_eq!(
-        error.details[..2],
+        error.details[..6],
         [
             "alpha: only ours has it, and fetchloom cannot tell whether ours added it or theirs removed it",
+            "alpha on ours: ref = \"zenodo:1\"",
+            "alpha on theirs: not in data.toml",
             "beta: only theirs has it, and fetchloom cannot tell whether theirs added it or ours removed it",
+            "beta on ours: not in data.toml",
+            "beta on theirs: ref = \"zenodo:2\"",
         ]
     );
-    assert!(error.details[2].starts_with("no merge base was found"));
+    assert!(error.details[6].starts_with("no merge base was found"));
     let help = error.help.as_deref().unwrap();
     assert!(help.contains("`fetchloom lock --ours <name>`"), "{help}");
     let result = error.result.unwrap();
     assert_eq!(
         result["merge"]["conflicts"],
         serde_json::json!(["alpha", "beta"])
+    );
+    assert_eq!(
+        result["merge"]["sides"],
+        serde_json::json!({
+            "alpha": { "ours": ["ref = \"zenodo:1\""], "theirs": ["not in data.toml"] },
+            "beta": { "ours": ["not in data.toml"], "theirs": ["ref = \"zenodo:2\""] },
+        })
     );
     assert_eq!(
         result["merge"]["same"],
@@ -298,10 +310,40 @@ fn two_changes_to_one_dataset_need_a_choice() {
         lock(vec![pinned(b"3,right")]),
         Some(lock(vec![pinned(b"1,base")])),
     );
-    let error = merged(&manifest, &locks, &[]).unwrap_err();
+    let root = tempfile::tempdir().unwrap();
+    let told = RefCell::new(Vec::new());
+    let error = merge(
+        &manifest,
+        Some(&locks),
+        &Choices::new(),
+        root.path(),
+        &|line| told.borrow_mut().push(line.to_owned()),
+        None,
+    )
+    .unwrap_err();
     assert_eq!(error.kind, Kind::Unconfirmed);
     assert_eq!(error.message, "the merge needs a choice for version");
-    assert_eq!(error.details, ["version: each side changed it its own way"]);
+    let pins = |bytes: &[u8]| {
+        format!(
+            "1 file \u{b7} {} B; version.csv \u{b7} {} B \u{b7} sha256 {}",
+            bytes.len(),
+            bytes.len(),
+            digest::sha256(bytes).short()
+        )
+    };
+    assert_eq!(
+        error.details,
+        [
+            "version: each side changed it its own way".to_owned(),
+            format!("version on ours: {}", pins(b"2,left")),
+            format!("version on theirs: {}", pins(b"3,right")),
+        ]
+    );
+    assert_eq!(
+        told.into_inner(),
+        Vec::<String>::new(),
+        "-v adds nothing the refusal shows"
+    );
     let theirs = merged(&manifest, &locks, &[("version", Side::Theirs)]).unwrap();
     assert_eq!(theirs.lock.unwrap().datasets, [pinned(b"3,right")]);
     assert_eq!(theirs.summary.from_theirs, ["version"]);
@@ -316,6 +358,45 @@ fn two_changes_to_one_dataset_need_a_choice() {
     );
     let upgraded = merged(&manifest, &locks, &[]).unwrap();
     assert_eq!(upgraded.lock.unwrap().datasets, [pinned(b"3,right")]);
+}
+
+/// a dataset both sides changed in data.toml shows the keys each side holds apart, each on one
+/// line however data.toml spreads it, and `-v` adds what each side pins.
+#[test]
+fn a_needed_choice_shows_the_keys_each_side_holds_apart() {
+    let base = "[datasets.x]\nref = \"zenodo:1\"\n".to_owned();
+    let ours =
+        format!("{base}select = [\n  \"a.csv\", # the first\n  \"b.csv\",\n]\npath = \"x\"\n");
+    let theirs = format!("{base}select = [\"a.csv\"]\nexclude = [\"*.tmp\"]\n");
+    let pinned = lock(vec![pin("x", "zenodo:1", b"x")]);
+    let locks = sides(pinned.clone(), pinned.clone(), Some(pinned));
+    let root = tempfile::tempdir().unwrap();
+    let told = RefCell::new(Vec::new());
+    let error = merge(
+        &sides(ours, theirs, Some(base)),
+        Some(&locks),
+        &Choices::new(),
+        root.path(),
+        &|line| told.borrow_mut().push(line.to_owned()),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.details,
+        [
+            "x: each side changed it its own way",
+            "x on ours: no exclude; path = \"x\"; select = [\"a.csv\", \"b.csv\"]",
+            "x on theirs: exclude = [\"*.tmp\"]; no path; select = [\"a.csv\"]",
+        ]
+    );
+    assert_eq!(
+        error.result.unwrap()["merge"]["sides"]["x"]["theirs"],
+        serde_json::json!(["exclude = [\"*.tmp\"]", "no path", "select = [\"a.csv\"]"])
+    );
+    assert_eq!(
+        told.into_inner(),
+        ["x, ours: 1 file \u{b7} 1 B", "x, theirs: 1 file \u{b7} 1 B"]
+    );
 }
 
 /// `extract` and `access` sit beside the spec: a pin one side made again with archives kept
@@ -349,7 +430,14 @@ fn a_pin_one_side_made_again_for_extract_or_access_wins() {
         Some(lock(vec![unpacked.clone()])),
     );
     let error = merged(&manifest, &locks, &[]).unwrap_err();
-    assert_eq!(error.details, ["x: each side changed it its own way"]);
+    assert_eq!(
+        error.details,
+        [
+            "x: each side changed it its own way",
+            "x on ours: extract = false",
+            "x on theirs: no extract",
+        ]
+    );
     let ours = merged(&manifest, &locks, &[("x", Side::Ours)]).unwrap();
     assert_eq!(ours.manifest, packed_toml);
     assert_eq!(ours.lock.unwrap().datasets, [packed]);
@@ -380,7 +468,14 @@ fn the_lock_record_follows_the_chosen_entry_by_spec() {
         Some(lock(vec![pin("x", "zenodo:1", b"one")])),
     );
     let error = merged(&manifest, &relocked, &[]).unwrap_err();
-    assert_eq!(error.details, ["x: each side changed it its own way"]);
+    assert_eq!(
+        error.details,
+        [
+            "x: each side changed it its own way",
+            "x on ours: ref = \"zenodo:2\"",
+            "x on theirs: ref = \"zenodo:3\"",
+        ]
+    );
     let theirs = merged(&manifest, &relocked, &[("x", Side::Theirs)]).unwrap();
     assert_eq!(theirs.manifest, toml(&[("x", "zenodo:3")]));
     assert_eq!(
@@ -523,28 +618,15 @@ fn recipe_results_merge_by_name() {
         Some(lock(vec![core.clone()])),
     );
     let choices = Choices::new();
-    let merged = merge(
-        &manifest,
-        Some(&added),
-        &choices,
-        root.path(),
-        &|_| {},
-        None,
-    )
-    .unwrap();
+    let merging = |manifest: &Sides, locks: &Sides, choices: &Choices| {
+        merge(manifest, Some(locks), choices, root.path(), &|_| {}, None)
+    };
+    let merged = merging(&manifest, &added, &choices).unwrap();
     assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
     assert_eq!(merged.summary.from_ours, ["clean"]);
     // the one result data.toml's recipe has is its pin, whatever the base was
     let unknown = sides(added.ours.clone(), added.theirs.clone(), None);
-    let merged = merge(
-        &manifest,
-        Some(&unknown),
-        &choices,
-        root.path(),
-        &|_| {},
-        None,
-    )
-    .unwrap();
+    let merged = merging(&manifest, &unknown, &choices).unwrap();
     assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
     let rebuilt = Lock {
         datasets: vec![core.clone()],
@@ -554,18 +636,22 @@ fn recipe_results_merge_by_name() {
         }],
     };
     let both = sides(with_result.render(), rebuilt.render(), None);
-    let error = merge(&manifest, Some(&both), &choices, root.path(), &|_| {}, None).unwrap_err();
+    let error = merging(&manifest, &both, &choices).unwrap_err();
     assert_eq!(error.message, "the merge needs a choice for clean");
     // a result goes with its recipe, as a fetched dataset's pin goes with its entry, unless the
     // other side built it anew: then removing the recipe waits for a choice
     let dropped = sides(text.clone(), toml(&[("core", "zenodo:3")]), Some(text));
-    let error = merge(&dropped, Some(&added), &choices, root.path(), &|_| {}, None).unwrap_err();
+    let error = merging(&dropped, &added, &choices).unwrap_err();
     assert_eq!(
         error.details,
-        ["clean: one side changed it and the other removed it"]
+        [
+            "clean: one side changed it and the other removed it",
+            "clean on ours: from = [\"core\"]; run = [\"python3\", \"clean.py\", \"{core}\", \"{out}\"]",
+            "clean on theirs: not in data.toml",
+        ]
     );
     let removal = Choices::from([("clean".to_owned(), Side::Theirs)]);
-    let merged = merge(&dropped, Some(&added), &removal, root.path(), &|_| {}, None).unwrap();
+    let merged = merging(&dropped, &added, &removal).unwrap();
     assert!(!merged.manifest.contains("clean"), "{}", merged.manifest);
     assert_eq!(merged.lock.unwrap().derived, []);
     let built_before = sides(
@@ -573,15 +659,7 @@ fn recipe_results_merge_by_name() {
         lock(vec![core.clone()]),
         Some(with_result.render()),
     );
-    let merged = merge(
-        &dropped,
-        Some(&built_before),
-        &choices,
-        root.path(),
-        &|_| {},
-        None,
-    )
-    .unwrap();
+    let merged = merging(&dropped, &built_before, &choices).unwrap();
     assert_eq!(merged.lock.unwrap().derived, []);
     assert_eq!(merged.summary.removed, ["clean"]);
 }
@@ -701,7 +779,14 @@ fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
     assert_eq!(error.kind, Kind::Unconfirmed);
     assert_eq!(
         error.details,
-        ["beta: one side changed it and the other removed it"]
+        [
+            "beta: one side changed it and the other removed it".to_owned(),
+            "beta on ours: not in data.lock".to_owned(),
+            format!(
+                "beta on theirs: 1 file \u{b7} 3 B; beta.csv \u{b7} 3 B \u{b7} sha256 {}",
+                digest::sha256(b"new").short()
+            ),
+        ]
     );
     let result = error.result.unwrap();
     assert_eq!(result["merge"]["conflicts"], serde_json::json!(["beta"]));

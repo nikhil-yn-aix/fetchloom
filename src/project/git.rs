@@ -91,13 +91,34 @@ pub(crate) fn stages(git: &Path, root: &Path, file: &str) -> Option<Stages> {
     })
 }
 
-/// the commits an unfinished merge, rebase, cherry-pick or revert brings in, of which one is under
-/// way. a revert brings in the parent of the commit it takes back.
-const THEIRS: [&str; 4] = [
-    "MERGE_HEAD",
-    "REBASE_HEAD",
-    "CHERRY_PICK_HEAD",
-    "REVERT_HEAD^",
+/// what git stops at a conflict in, which decides whose side git calls ours and whose theirs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Operation {
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+}
+
+impl Operation {
+    /// git's name for the commit this brings in, theirs. a revert brings in the parent of the
+    /// commit it takes back.
+    pub(crate) fn theirs(self) -> &'static str {
+        match self {
+            Operation::Merge => "MERGE_HEAD",
+            Operation::Rebase => "REBASE_HEAD",
+            Operation::CherryPick => "CHERRY_PICK_HEAD",
+            Operation::Revert => "REVERT_HEAD^",
+        }
+    }
+}
+
+/// each operation, in the order git's commits for them are looked for: one is under way at a time.
+const OPERATIONS: [Operation; 4] = [
+    Operation::Merge,
+    Operation::Rebase,
+    Operation::CherryPick,
+    Operation::Revert,
 ];
 
 /// `file` in `root`, which git merged by itself, whole as each side of the unfinished merge,
@@ -115,10 +136,52 @@ pub(crate) fn in_commit(git: &Path, root: &Path, file: &str, theirs: bool) -> Op
         read_objects(git, root, &["cat-file", "blob", &blob])
     };
     if theirs {
-        THEIRS.into_iter().find_map(read)
+        OPERATIONS
+            .into_iter()
+            .find_map(|operation| read(operation.theirs()))
     } else {
         read("HEAD")
     }
+}
+
+/// the merge, rebase, cherry-pick or revert under way in the repository at `root`, none when git
+/// is in none of them.
+pub(crate) fn operation(git: &Path, root: &Path) -> Option<Operation> {
+    OPERATIONS.into_iter().find(|operation| {
+        run(
+            git,
+            root,
+            &["rev-parse", "-q", "--verify", operation.theirs()],
+        )
+        .is_ok()
+    })
+}
+
+/// `commit`, as `HEAD` or [`Operation::theirs`] names it, by its short name and subject, as
+/// `git log --oneline` shows it. it is read from the commit object, since `git log` runs whatever
+/// signature checker the repository's settings name. none when git cannot tell.
+pub(crate) fn commit(git: &Path, root: &Path, commit: &str) -> Option<String> {
+    let short = text(
+        run(
+            git,
+            root,
+            &["rev-parse", "-q", "--verify", "--short", commit],
+        )
+        .ok()?,
+    )?;
+    let object = read_objects(git, root, &["cat-file", "commit", commit])?;
+    let object = String::from_utf8_lossy(&object);
+    // headers end at the first blank line, and the subject is the message's first paragraph
+    let message = object.split_once("\n\n").map_or("", |(_, message)| message);
+    let subject = message
+        .split("\n\n")
+        .find(|paragraph| !paragraph.trim().is_empty())
+        .unwrap_or_default();
+    let words: Vec<&str> = short
+        .split_whitespace()
+        .chain(subject.split_whitespace())
+        .collect();
+    (!words.is_empty()).then(|| words.join(" "))
 }
 
 fn text(bytes: Vec<u8>) -> Option<String> {
@@ -474,6 +537,76 @@ mod tests {
             "{printed}"
         );
         assert_eq!(std::fs::read(dot.join("config")).unwrap(), config);
+    }
+
+    /// a repository that came as a folder, as in an archive, can carry settings that name a
+    /// program to check signatures, which `git log` runs for a signed commit. a side's commit is
+    /// read without it, as `git log --oneline` shows it.
+    #[cfg(unix)]
+    #[test]
+    fn a_commit_is_read_without_running_a_program_the_repository_names() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt;
+        let Some(git) = git() else {
+            return;
+        };
+        let folder = tempfile::tempdir().unwrap();
+        let at = folder.path();
+        git_in(&git, at, &["init", "-q"]);
+        std::fs::write(at.join("notes"), "base\n").unwrap();
+        git_in(&git, at, &["add", "."]);
+        git_in(&git, at, &["commit", "-qm", "keep the\nnotes\n\nwhy"]);
+        if !trusted(&git, at) {
+            return;
+        }
+        let unsigned = run(&git, at, &["cat-file", "commit", "HEAD"]).unwrap();
+        let signature = "gpgsig -----BEGIN PGP SIGNATURE-----\n \n -----END PGP SIGNATURE-----\n\n";
+        let signed =
+            String::from_utf8(unsigned)
+                .unwrap()
+                .replacen("\n\n", &format!("\n{signature}"), 1);
+        let mut writing = plain(&git, at)
+            .args(["hash-object", "-w", "-t", "commit", "--stdin"])
+            .current_dir(at)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writing
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(signed.as_bytes())
+            .unwrap();
+        let written = writing.wait_with_output().unwrap();
+        let id = String::from_utf8(written.stdout).unwrap();
+        git_in(&git, at, &["update-ref", "HEAD", id.trim()]);
+        let (checker, ran) = (at.join("checker"), at.join("ran"));
+        std::fs::write(&checker, format!("#!/bin/sh\ntouch '{}'\n", ran.display())).unwrap();
+        std::fs::set_permissions(&checker, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git_in(&git, at, &["config", "log.showSignature", "true"]);
+        git_in(
+            &git,
+            at,
+            &["config", "gpg.program", &checker.display().to_string()],
+        );
+
+        let short = run(&git, at, &["rev-parse", "--short", "HEAD"]).unwrap();
+        let short = String::from_utf8(short).unwrap();
+        assert_eq!(
+            commit(&git, at, "HEAD"),
+            Some(format!("{} keep the notes", short.trim()))
+        );
+        assert!(!ran.exists(), "reading the commit ran the checker");
+        plain(&git, at)
+            .args(["log", "-1"])
+            .current_dir(at)
+            .output()
+            .unwrap();
+        assert!(
+            ran.exists(),
+            "git log, as the repository sets it, runs the checker"
+        );
     }
 
     /// a partial clone without a blob: reading it fails and fetches nothing, whatever git does

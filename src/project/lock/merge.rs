@@ -93,6 +93,17 @@ pub(crate) struct Summary {
     /// those that need a choice, in an error's result only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) conflicts: Vec<String>,
+    /// what each side holds of each dataset that needs a choice, in an error's result only.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) sides: BTreeMap<String, Held>,
+}
+
+/// what each side holds of a dataset that needs a choice, as lines to compare: each key of its
+/// data.toml entry the sides hold apart, or, where data.toml has it alike, what data.lock pins.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct Held {
+    pub(crate) ours: Vec<String>,
+    pub(crate) theirs: Vec<String>,
 }
 
 /// which version of one dataset a merge keeps.
@@ -251,9 +262,9 @@ impl Manifests<'_> {
 
 /// data.toml and data.lock merged from their sides, the lists data.lock keeps read below `root`,
 /// or as git's `committed` gives a part that is not there, none without git; `lock` is none when
-/// neither side has one. a
-/// dataset the base cannot settle and `choices` does not name is `unconfirmed`, after `told` gets
-/// each side's pin, as `-v` shows. an unneeded choice is `usage`; an unreadable side, or text
+/// neither side has one. a dataset the base cannot settle and `choices` does not name is
+/// `unconfirmed`, saying what each side holds of it; `told` gets each side's pin where that is
+/// its data.toml entry, as `-v` shows. an unneeded choice is `usage`; an unreadable side, or text
 /// outside the datasets both changed, `project.invalid`.
 pub(crate) fn merge(
     manifest: &Sides,
@@ -292,14 +303,23 @@ pub(crate) fn merge(
         }
         _ => (text, merged),
     };
-    let summary = summarize(&decided, &merged, records.as_deref());
+    let mut summary = summarize(&decided, &merged, records.as_deref());
     if !decided.conflicts.is_empty() {
-        if let Some(locks) = &locks {
-            for name in decided.conflicts.keys() {
-                for line in pinned_on_each_side(locks, name) {
-                    told(&line);
+        for name in decided.conflicts.keys() {
+            let held = match (entry_held(&manifests, name), &locks) {
+                (Some(held), Some(locks)) => {
+                    for line in pinned_on_each_side(locks, name) {
+                        told(&line);
+                    }
+                    held
                 }
-            }
+                (Some(held), None) => held,
+                (None, locks) => Held {
+                    ours: pins_held(locks.as_ref(), name, Side::Ours),
+                    theirs: pins_held(locks.as_ref(), name, Side::Theirs),
+                },
+            };
+            summary.sides.insert(name.clone(), held);
         }
         let shown = manifest.shows_base || lock.is_some_and(|lock| lock.shows_base);
         return Err(undecided(&decided.conflicts, &summary, shown));
@@ -1000,68 +1020,183 @@ fn result<'a>(records: &'a [Parsed], name: &str) -> Option<&'a Parsed> {
     find(records, name).filter(|record| matches!(record, Parsed::Derived(..)))
 }
 
+/// what each side holds of `name`, which needs a choice, where data.toml tells the sides apart:
+/// each key of its entry that one side lacks or holds otherwise, as git's whole side writes it
+/// where it can, and `not in data.toml` for a side without it. none where data.toml has it alike.
+fn entry_held(manifests: &Manifests<'_>, name: &str) -> Option<Held> {
+    let entry = |side: Side| {
+        let text = match manifests.whole(side) {
+            Some(whole) => whole.tables.get(name),
+            None => manifests.texts[usize::from(side == Side::Theirs)].get(name),
+        };
+        text.map(|text| keys(text, name))
+    };
+    let held = match (entry(Side::Ours), entry(Side::Theirs)) {
+        (Some(ours), Some(theirs)) => Held {
+            ours: differing(&ours, &theirs),
+            theirs: differing(&theirs, &ours),
+        },
+        (None, None) => return None,
+        (ours, theirs) => {
+            let lines = |entry: Option<toml::Table>| {
+                entry.map_or_else(
+                    || vec!["not in data.toml".to_owned()],
+                    |entry| differing(&entry, &toml::Table::new()),
+                )
+            };
+            Held {
+                ours: lines(ours),
+                theirs: lines(theirs),
+            }
+        }
+    };
+    (!held.ours.is_empty() || !held.theirs.is_empty()).then_some(held)
+}
+
+/// the keys of `name`'s entry in `text`, its own text as [`manifest::tables`] gives it.
+fn keys(text: &str, name: &str) -> toml::Table {
+    let entry = toml::from_str::<toml::Table>(text)
+        .ok()
+        .and_then(|mut document| match document.remove("datasets")? {
+            toml::Value::Table(mut datasets) => datasets.remove(name),
+            _ => None,
+        });
+    match entry {
+        Some(toml::Value::Table(entry)) => entry,
+        _ => toml::Table::new(),
+    }
+}
+
+/// each key `entry` holds otherwise than `other`, as data.toml writes it on one line, or as
+/// `no <key>` where only `other` has it.
+fn differing(entry: &toml::Table, other: &toml::Table) -> Vec<String> {
+    let names: BTreeSet<&String> = entry.keys().chain(other.keys()).collect();
+    names
+        .into_iter()
+        .filter(|key| entry.get(*key) != other.get(*key))
+        .map(|key| match entry.get(key) {
+            Some(value) => format!("{} = {}", written_key(key), written(value)),
+            None => format!("no {}", written_key(key)),
+        })
+        .collect()
+}
+
+/// `value` on one line, as data.toml writes it.
+fn written(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(text) => super::quoted(text),
+        toml::Value::Integer(number) => number.to_string(),
+        toml::Value::Float(number) => number.to_string(),
+        toml::Value::Boolean(yes) => yes.to_string(),
+        toml::Value::Datetime(when) => when.to_string(),
+        toml::Value::Array(values) => {
+            let values: Vec<String> = values.iter().map(written).collect();
+            format!("[{}]", values.join(", "))
+        }
+        toml::Value::Table(table) if table.is_empty() => "{}".to_owned(),
+        toml::Value::Table(table) => {
+            let pairs: Vec<String> = table
+                .iter()
+                .map(|(key, value)| format!("{} = {}", written_key(key), written(value)))
+                .collect();
+            format!("{{ {} }}", pairs.join(", "))
+        }
+    }
+}
+
+/// `key` as data.toml writes it: bare, or quoted when it holds more than letters, digits, `_`
+/// and `-`.
+fn written_key(key: &str) -> String {
+    let bare = !key.is_empty()
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    if bare {
+        key.to_owned()
+    } else {
+        super::quoted(key)
+    }
+}
+
+/// what `side`'s data.lock pins of `name`, as [`pinned`] says it.
+fn pins_held(locks: Option<&Locks>, name: &str, side: Side) -> Vec<String> {
+    locks.map_or_else(
+        || vec!["not in data.lock".to_owned()],
+        |locks| pinned(locks, name, side),
+    )
+}
+
 /// the most files a side's pin of a dataset that needs a choice shows of those only it pins.
 const SHOWN: usize = 3;
 
 /// what each side pins for `name`, which needs a choice, as lines to compare, never saying which
 /// to take: a result's key, the files and bytes, and up to [`SHOWN`] files only that side pins.
 fn pinned_on_each_side(locks: &Locks, name: &str) -> Vec<String> {
-    let [ours, theirs] = [Side::Ours, Side::Theirs].map(|side| find(locks.of(side), name));
     let mut lines = Vec::new();
-    for (side, record, other) in [(Side::Ours, ours, theirs), (Side::Theirs, theirs, ours)] {
-        let side = side.word();
-        let (key, files, listed): (_, &[LockedFile], _) = match record {
-            None => {
-                lines.push(format!("{name}, {side}: not in data.lock"));
-                continue;
-            }
-            Some(Parsed::Source(locked, listed)) => (None, &locked.files, listed.as_ref()),
-            Some(Parsed::Derived(derived, listed)) => (Some(derived.key), &[], Some(listed)),
-        };
-        let (count, bytes) = listed.map_or_else(
-            || (files.len() as u64, files.iter().map(|file| file.size).sum()),
-            |listed| (listed.count, listed.bytes),
-        );
-        let mut head = format!("{name}, {side}: ");
-        if let Some(key) = key {
-            let _ = write!(head, "key {}, ", key.short());
+    for side in [Side::Ours, Side::Theirs] {
+        let mut pinned = pinned(locks, name, side).into_iter();
+        if let Some(head) = pinned.next() {
+            lines.push(format!("{name}, {}: {head}", side.word()));
         }
-        let _ = write!(
-            head,
-            "{} \u{b7} {}",
-            units::count(count, "file", "files"),
-            units::size(bytes)
-        );
-        if let Some(listed) = listed {
-            let _ = write!(head, ", listed in {}", listed.parts.join(", "));
-        }
-        lines.push(head);
-        let others: &[LockedFile] = match other {
-            Some(Parsed::Source(locked, None)) => &locked.files,
-            _ => &[],
-        };
-        let only: Vec<&LockedFile> = files
-            .iter()
-            .filter(|file| {
-                !others.iter().any(|other| {
-                    (&other.path, other.size, other.sha256) == (&file.path, file.size, file.sha256)
-                })
+        lines.extend(pinned.map(|line| format!("  {line}")));
+    }
+    lines
+}
+
+/// what `side` pins for `name`, as [`pinned_on_each_side`] shows it, without the name: its key,
+/// files and bytes first, then a line for each file only it pins, up to [`SHOWN`].
+fn pinned(locks: &Locks, name: &str, side: Side) -> Vec<String> {
+    let record = find(locks.of(side), name);
+    let other = find(locks.of(side.other()), name);
+    let (key, files, listed): (_, &[LockedFile], _) = match record {
+        None => return vec!["not in data.lock".to_owned()],
+        Some(Parsed::Source(locked, listed)) => (None, &locked.files, listed.as_ref()),
+        Some(Parsed::Derived(derived, listed)) => (Some(derived.key), &[], Some(listed)),
+    };
+    let (count, bytes) = listed.map_or_else(
+        || (files.len() as u64, files.iter().map(|file| file.size).sum()),
+        |listed| (listed.count, listed.bytes),
+    );
+    let mut head = String::new();
+    if let Some(key) = key {
+        let _ = write!(head, "key {}, ", key.short());
+    }
+    let _ = write!(
+        head,
+        "{} \u{b7} {}",
+        units::count(count, "file", "files"),
+        units::size(bytes)
+    );
+    if let Some(listed) = listed {
+        let _ = write!(head, ", listed in {}", listed.parts.join(", "));
+    }
+    let mut lines = vec![head];
+    let others: &[LockedFile] = match other {
+        Some(Parsed::Source(locked, None)) => &locked.files,
+        _ => &[],
+    };
+    let only: Vec<&LockedFile> = files
+        .iter()
+        .filter(|file| {
+            !others.iter().any(|other| {
+                (&other.path, other.size, other.sha256) == (&file.path, file.size, file.sha256)
             })
-            .collect();
-        for file in only.iter().take(SHOWN) {
-            lines.push(format!(
-                "  {} \u{b7} {} \u{b7} sha256 {}",
-                file.path,
-                units::size(file.size),
-                file.sha256.short()
-            ));
-        }
-        if only.len() > SHOWN {
-            lines.push(format!(
-                "  and {} only {side} pins",
-                units::count((only.len() - SHOWN) as u64, "more file", "more files")
-            ));
-        }
+        })
+        .collect();
+    for file in only.iter().take(SHOWN) {
+        lines.push(format!(
+            "{} \u{b7} {} \u{b7} sha256 {}",
+            file.path,
+            units::size(file.size),
+            file.sha256.short()
+        ));
+    }
+    if only.len() > SHOWN {
+        lines.push(format!(
+            "and {} only {} pins",
+            units::count((only.len() - SHOWN) as u64, "more file", "more files"),
+            side.word()
+        ));
     }
     lines
 }
@@ -1167,6 +1302,14 @@ fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary, shown: bool) 
                 side.other().word()
             ),
         });
+        if let Some(held) = summary.sides.get(name) {
+            for (side, lines) in [(Side::Ours, &held.ours), (Side::Theirs, &held.theirs)] {
+                if !lines.is_empty() {
+                    let lines = lines.join("; ");
+                    error = error.detail(format!("{name} on {}: {lines}", side.word()));
+                }
+            }
+        }
     }
     if conflicts
         .values()

@@ -1,16 +1,21 @@
 //! `fetchloom lock` where a git merge left both sides in data.toml or data.lock, merged a dataset
 //! at a time, each side whole from git where it can tell, with nothing resolved or downloaded.
 
+use std::fmt::Write as _;
+use std::path::Path;
+
 use super::{Changes, Report, committed, dry_run_done};
 use crate::cli::Context;
 use crate::cli::args;
 use crate::error::{Error, Kind};
 use crate::output::Warning;
+use crate::project::Project;
+use crate::project::git::{self, Operation};
 use crate::project::lock::merge::markers::{self, Sides};
 use crate::project::lock::merge::{self, Choices, Merged, Side, Summary};
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
-use crate::project::{Project, git};
+use crate::units;
 
 /// data.toml and data.lock as a merge left them, with sides for each holding conflict lines.
 struct Conflicted {
@@ -72,7 +77,13 @@ pub(super) fn merge(
         &told,
         program.is_some().then_some(&committed),
     )
-    .map_err(|error| in_project(error, project))?;
+    .map_err(|error| {
+        whose(
+            in_project(error, project),
+            program.as_deref(),
+            &project.root,
+        )
+    })?;
     for warning in &merged.warnings {
         context.output.warn(Warning::MergeFormatting, warning);
     }
@@ -195,6 +206,44 @@ fn same(text: &str, whole: Option<[String; 2]>) -> Sides {
         ..Sides::default()
     }
 }
+
+/// `error`, a merge that needs a choice, with whose each side is and its commit, since a rebase
+/// turns git's ours and theirs around from the branch a person is on. any other error stays as
+/// it is.
+fn whose(mut error: Error, git: Option<&Path>, root: &Path) -> Error {
+    let Some((git, operation)) = git
+        .filter(|_| error.kind == Kind::Unconfirmed)
+        .and_then(|git| Some((git, git::operation(git, root)?)))
+    else {
+        return error;
+    };
+    let [our_role, their_role] = match operation {
+        Operation::Merge => ["the branch you are on", "the branch you are merging"],
+        Operation::Rebase => [
+            "the branch you are rebasing onto",
+            "your commit being replayed",
+        ],
+        Operation::CherryPick => ["the branch you are on", "the commit you are picking"],
+        Operation::Revert => [
+            "the branch you are on",
+            "the commit before the one you are reverting",
+        ],
+    };
+    for (side, role, commit) in [
+        ("ours", our_role, "HEAD"),
+        ("theirs", their_role, operation.theirs()),
+    ] {
+        let mut line = format!("{side} is {role}");
+        if let Some(commit) = git::commit(git, root, commit) {
+            let _ = write!(line, ": {}", units::clip(&commit, SUBJECT, "\u{2026}"));
+        }
+        error = error.detail(line);
+    }
+    error
+}
+
+/// the most columns a commit's short name and subject take in a message.
+const SUBJECT: usize = 72;
 
 /// `error` with the project beside what the merge found, so `--json` names both.
 fn in_project(error: Error, project: &Project) -> Error {
