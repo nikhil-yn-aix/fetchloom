@@ -8,7 +8,7 @@ use super::super::project::{Report, committed, dry_run_done, ignore_data, regist
 use super::super::sync::{self as engine, Loop};
 use super::{AddProject, BeforeAdd, changed_meanwhile, lock_changed_meanwhile, restore};
 use crate::error::{Error, Kind};
-use crate::project::lock::{self, Lock, Locked, Stated, StatedFile};
+use crate::project::lock::{self, Lock, Locked, Stated, StatedFile, Words};
 use crate::project::manifest::{self, Entry, Manifest};
 use crate::source::{Listing, Remote};
 use crate::units;
@@ -104,21 +104,23 @@ pub(super) fn pinned(
     }
     let mut files: Vec<StatedFile> = kept.iter().filter_map(stated).collect();
     files.sort_by(|a, b| a.path.cmp(&b.path));
+    let pin = Locked {
+        name: name.to_owned(),
+        reference: source.reference.clone(),
+        spec: lock::spec(source),
+        extract: source.extract,
+        web_page: source.web_page,
+        resolved: listing.resolved.to_string(),
+        title: listing.title.clone(),
+        license: listing.license.clone(),
+        doi: listing.doi.clone(),
+        access: listing.access,
+        timestamp: units::timestamp(SystemTime::now()),
+        files: Vec::new(),
+    };
     Ok(Stated {
-        pin: Locked {
-            name: name.to_owned(),
-            reference: source.reference.clone(),
-            spec: lock::spec(source),
-            extract: source.extract,
-            web_page: source.web_page,
-            resolved: listing.resolved.to_string(),
-            title: listing.title.clone(),
-            license: listing.license.clone(),
-            doi: listing.doi.clone(),
-            access: listing.access,
-            timestamp: units::timestamp(SystemTime::now()),
-            files: Vec::new(),
-        },
+        written: Words::of(&pin),
+        pin,
         files,
     })
 }

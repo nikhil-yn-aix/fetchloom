@@ -215,6 +215,7 @@ fn a_dataset_not_downloaded_yet_is_said_and_compared_by_its_stated_digests() {
     let mut pin = fetched("zen", 1, Vec::new());
     pin.title = None;
     let stated = Stated {
+        written: crate::project::lock::Words::of(&pin),
         pin,
         files: vec![stated_file("a.csv", b"aa"), stated_file("b.csv", b"bbb")],
     };

@@ -1103,6 +1103,7 @@ fn a_pin_not_downloaded_yet_merges_as_any_pin() {
                     url: file.url.clone(),
                 })
                 .collect(),
+            written: super::super::Words::of(&whole),
             pin: Locked {
                 files: Vec::new(),
                 ..whole

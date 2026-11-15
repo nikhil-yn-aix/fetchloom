@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use super::derived::{self, Code, Derived, Input};
 use super::lists::Listed;
-use super::{Locked, LockedFile, Parsed, Stated, StatedFile, VERSION, prefixed};
+use super::{Locked, LockedFile, Parsed, Stated, StatedFile, VERSION, Words, prefixed};
 use crate::digest::{Md5, Sha256};
 use crate::name;
 use crate::source::Access;
@@ -270,7 +270,12 @@ fn stated(pin: Locked, lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option
         },
         _ => return None,
     }
-    Some(Parsed::Stated(Stated { pin, files }))
+    let written = Words::of(&pin);
+    Some(Parsed::Stated(Stated {
+        pin,
+        files,
+        written,
+    }))
 }
 
 /// a list kept beside data.lock: the line `files_in = ["…", "…"]`, then the lines of

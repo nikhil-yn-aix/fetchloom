@@ -118,6 +118,27 @@ pub(crate) struct Stated {
     pub(crate) pin: Locked,
     /// sorted by path.
     pub(crate) files: Vec<StatedFile>,
+    /// the title, license and doi as data.lock writes them. a reader escapes the control
+    /// characters in `pin`'s for display; writing and filling the pin keep these instead.
+    pub(crate) written: Words,
+}
+
+/// a pin's title, license and doi.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Words {
+    pub(crate) title: Option<String>,
+    pub(crate) license: Option<String>,
+    pub(crate) doi: Option<String>,
+}
+
+impl Words {
+    pub(crate) fn of(locked: &Locked) -> Words {
+        Words {
+            title: locked.title.clone(),
+            license: locked.license.clone(),
+            doi: locked.doi.clone(),
+        }
+    }
 }
 
 /// a file as its source states it: a SHA-256, an MD5 or both.
@@ -377,7 +398,12 @@ impl StoredDataset {
                 .into_iter()
                 .map(|file| stated_file(&locked.name, file))
                 .collect::<Result<_, _>>()?;
-            return Ok(Parsed::Stated(Stated { pin: locked, files }));
+            let written = Words::of(&locked);
+            return Ok(Parsed::Stated(Stated {
+                pin: locked,
+                files,
+                written,
+            }));
         }
         locked.files = stored
             .into_iter()
@@ -779,7 +805,20 @@ fn write_source(out: &mut String, dataset: &Locked, inline: usize) {
 /// the table of a dataset not downloaded yet: a downloaded one's keys, `downloaded = false`, then
 /// each file inline with the digests its source states, in the order a downloaded file's are kept.
 fn write_stated(out: &mut String, stated: &Stated) {
-    write_head(out, &stated.pin);
+    let Words {
+        title,
+        license,
+        doi,
+    } = stated.written.clone();
+    write_head(
+        out,
+        &Locked {
+            title,
+            license,
+            doi,
+            ..stated.pin.clone()
+        },
+    );
     out.push_str("downloaded = false\n");
     if stated.files.is_empty() {
         out.push_str("files = []\n");
@@ -1385,21 +1424,23 @@ mod tests {
             md5: md5.and_then(Md5::from_hex),
             url: format!("https://zenodo.org/api/records/1/files/{path}/content"),
         };
+        let pin = Locked {
+            name: "mnist".to_owned(),
+            reference: "zenodo:1".to_owned(),
+            spec: "sha256:22".to_owned(),
+            extract: true,
+            web_page: false,
+            resolved: "zenodo:1".to_owned(),
+            title: Some("MNIST".to_owned()),
+            license: None,
+            doi: None,
+            access: Access::Public,
+            timestamp: "2026-11-15T07:00:00Z".to_owned(),
+            files: Vec::new(),
+        };
         Stated {
-            pin: Locked {
-                name: "mnist".to_owned(),
-                reference: "zenodo:1".to_owned(),
-                spec: "sha256:22".to_owned(),
-                extract: true,
-                web_page: false,
-                resolved: "zenodo:1".to_owned(),
-                title: Some("MNIST".to_owned()),
-                license: None,
-                doi: None,
-                access: Access::Public,
-                timestamp: "2026-11-15T07:00:00Z".to_owned(),
-                files: Vec::new(),
-            },
+            written: Words::of(&pin),
+            pin,
             files: vec![
                 file("train.zip", None, Some("d41d8cd98f00b204e9800998ecf8427e")),
                 file("labels.csv", Some(b"labels"), None),
@@ -1517,6 +1558,27 @@ mod tests {
         // iris's 2, zeta's 1 and mnist's 3
         assert!(fits(&parsed, BASE + 6 * PER_FILE).is_ok());
         assert!(fits(&parsed, BASE + 6 * PER_FILE - 1).is_err());
+    }
+
+    /// a title with control characters is shown escaped, but written back byte for byte, so
+    /// data.lock's bytes never depend on which command wrote them.
+    #[test]
+    fn a_dataset_not_downloaded_keeps_its_words_as_written() {
+        let mut lock = with_stated();
+        lock.stated[0].pin.title = Some("MNIST\u{1b}]0;x\u{7}".to_owned());
+        lock.stated[0].written.title = lock.stated[0].pin.title.clone();
+        let text = lock.render();
+        assert!(
+            text.contains("title = \"MNIST\\u001B]0;x\\u0007\"\n"),
+            "{text}"
+        );
+        for read in every_form(&lock) {
+            let read = read.unwrap();
+            let mnist = read.stated("mnist").unwrap();
+            assert_eq!(mnist.pin.title.as_deref(), Some("MNIST\\u{1b}]0;x\\u{7}"));
+            assert_eq!(mnist.written.title.as_deref(), Some("MNIST\u{1b}]0;x\u{7}"));
+            assert_eq!(read.render(), text);
+        }
     }
 
     /// a command that needs a dataset's files refuses one only its source's digests pin, saying

@@ -161,9 +161,9 @@ fn listing(stated: &Stated) -> Result<Listing, Error> {
         .collect::<Result<_, Error>>()?;
     Ok(Listing {
         resolved,
-        title: stated.pin.title.clone(),
-        license: stated.pin.license.clone(),
-        doi: stated.pin.doi.clone(),
+        title: stated.written.title.clone(),
+        license: stated.written.license.clone(),
+        doi: stated.written.doi.clone(),
         access: stated.pin.access,
         files,
         unavailable: Vec::new(),
@@ -223,4 +223,26 @@ fn broken(name: &str, why: &str) -> Error {
         "restore data.lock from git, or run `{}`, which resolves it again and may pin newer data",
         crate::cli::project::command(&format!("lock --upgrade {name}"))
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// the listing a sync fills a pin from carries its title as data.lock writes it, not the
+    /// escaped text a reader shows, so the whole pin keeps the bytes `add` would write.
+    #[test]
+    fn a_fill_lists_the_words_as_data_lock_writes_them() {
+        let text = "version = 1\n\n[[dataset]]\nname = \"dv\"\nref = \"zenodo:1\"\nspec = \"sha256:22\"\nresolved = \"zenodo:1\"\ntitle = \"QA \\u001B]0;x\\u0007 set\"\nlocked = \"2026-11-15T07:00:00Z\"\ndownloaded = false\nfiles = [\n  { path = \"a.csv\", size = 1, md5 = \"0cc175b9c0f1b6a831c399e269772661\", url = \"https://zenodo.org/api/records/1/files/a.csv/content\" },\n]\n";
+        let lock = Lock::parse(text).unwrap();
+        let stated = &lock.stated[0];
+        assert_eq!(
+            stated.pin.title.as_deref(),
+            Some("QA \\u{1b}]0;x\\u{7} set")
+        );
+        assert_eq!(
+            listing(stated).unwrap().title.as_deref(),
+            Some("QA \u{1b}]0;x\u{7} set")
+        );
+    }
 }
