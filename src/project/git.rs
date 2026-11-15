@@ -170,7 +170,10 @@ fn rebasing(git: &Path, root: &Path) -> bool {
         return false;
     };
     let listed = String::from_utf8_lossy(&listed);
-    let paths: Vec<PathBuf> = listed.lines().map(|line| root.join(line)).collect();
+    let paths: Vec<PathBuf> = listed
+        .lines()
+        .map(|line| super::native(root, line))
+        .collect();
     match paths.as_slice() {
         [merging, applying, am] => merging.is_dir() || (applying.is_dir() && !am.exists()),
         _ => false,

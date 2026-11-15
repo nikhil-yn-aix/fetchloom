@@ -27,6 +27,7 @@ use crate::place::Method;
 use crate::project::lock::archives::{self, Pinned as Packed};
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
+use crate::project::native;
 use crate::project::state::State;
 use crate::units;
 
@@ -215,7 +216,7 @@ fn here(root: &Path, state: &State, cache: Option<&Cache>, lock: &Lock, name: &s
     let placed = state
         .files
         .iter()
-        .any(|(path, placed)| placed.dataset == name && root.join(path).exists());
+        .any(|(path, placed)| placed.dataset == name && native(root, path).exists());
     placed
         || cache.is_some_and(|cache| {
             let named = BTreeSet::from([name.to_owned()]);
@@ -796,7 +797,7 @@ fn free(
     tell_kept(&context.output, &placement, "keeps");
     let removed: u64 = copies
         .iter()
-        .filter(|(path, _)| !project.root.join(path).exists())
+        .filter(|(path, _)| !native(&project.root, path).exists())
         .map(|(_, size)| size)
         .sum();
     let objects = held(&cache, lock, freeing);

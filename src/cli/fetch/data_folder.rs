@@ -15,10 +15,10 @@ use crate::mirror::Wanted;
 use crate::output::Output;
 use crate::place::Placer;
 use crate::plan;
-use crate::project::Project;
 use crate::project::lock::Lock;
 use crate::project::manifest::Manifest;
 use crate::project::state::Look;
+use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::units;
 use crate::volume::is_plain;
@@ -325,7 +325,7 @@ impl DataFolder {
             .get(&want.digest)
             .into_iter()
             .flatten()
-            .map(|place| (place, self.root.join(&place.path)))
+            .map(|place| (place, native(&self.root, &place.path)))
     }
 }
 

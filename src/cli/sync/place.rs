@@ -24,10 +24,10 @@ use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
-use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
 use crate::project::state::{Look, Placed, State, Synced};
+use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::work::Work;
 
@@ -456,7 +456,7 @@ impl<'a> Placing<'a> {
             .iter()
             .map(|target| {
                 if scope.includes(target.dataset) {
-                    decide(target, &survey, force, &project.root.join(&target.path))
+                    decide(target, &survey, force, &native(&project.root, &target.path))
                 } else {
                     Ok(Action::Unselected)
                 }
@@ -849,7 +849,7 @@ impl<'a> Placing<'a> {
                     if !matches!(action, Action::Unblock(_))
                         && self.survey.elsewhere.contains(&target.path)
                         && let Some(kept_as) = aside_names(&target.path, &taken).find(|name| {
-                            fs::symlink_metadata(self.project.root.join(name)).is_err()
+                            fs::symlink_metadata(native(&self.project.root, name)).is_err()
                         })
                     {
                         placement.changed_copies.push(ChangedCopy {
@@ -1313,7 +1313,7 @@ fn link_adopted(
         let Some(record) = state.files.get_mut(&target.path) else {
             continue;
         };
-        let destination = project.root.join(&target.path);
+        let destination = native(&project.root, &target.path);
         if !record.adopted || place::has_other_names(&destination) {
             continue;
         }
@@ -1376,7 +1376,7 @@ fn undo(
             continue;
         }
         if *placed_here {
-            let file = project.root.join(path);
+            let file = native(&project.root, path);
             if now(&file) != Some(record.look) {
                 continue;
             }
@@ -1410,7 +1410,7 @@ fn settle_aside(
     for set in &placement.set_aside {
         let back = !set.stead.iter().all(&in_place);
         let done = if back {
-            placer.move_back(&set.aside, &project.root.join(&set.path))
+            placer.move_back(&set.aside, &native(&project.root, &set.path))
         } else {
             placer.remove(&set.aside, false, None)
         };
@@ -1489,7 +1489,7 @@ fn settle<'t, 'a>(
                 }
             }
             // removal ran first and cleared the way, unless what stood there had changed
-            Action::Freed(blocker) if now(&project.root.join(&blocker.path)).is_none() => {
+            Action::Freed(blocker) if now(&native(&project.root, &blocker.path)).is_none() => {
                 placement.placed += 1;
                 todo.push(target);
             }
@@ -1511,7 +1511,7 @@ fn settle<'t, 'a>(
             }
             Action::Leave(reason) => placement.kept.push(Kept::of(target, reason, survey)),
             Action::Replace | Action::Overwrite(_) => {
-                let destination = project.root.join(&target.path);
+                let destination = native(&project.root, &target.path);
                 match now(&destination) {
                     Some(look) if survey.disk.get(&target.path) != Some(&look) => {
                         let reason = if survey.state.files.contains_key(&target.path) {
@@ -1605,7 +1605,7 @@ fn adopt(
     seen: Look,
     placement: &mut Placement,
 ) {
-    let destination = project.root.join(&target.path);
+    let destination = native(&project.root, &target.path);
     let mut found = adoption(target, seen, &destination, cache, survey.started);
     if found.method != Method::Hardlink && !survey.state.files.contains_key(&target.path) {
         found.adopted = true;
@@ -1653,7 +1653,7 @@ fn make_way(
         });
         return Ok(());
     }
-    let destination = project.root.join(path);
+    let destination = native(&project.root, path);
     if forced {
         let aside = placer
             .move_aside(&destination)
@@ -1702,11 +1702,11 @@ fn keep_aside(
     path: &str,
     method: Option<Method>,
 ) -> Result<String, Error> {
-    let from = project.root.join(path);
+    let from = native(&project.root, path);
     let shared = place::has_other_names(&from);
     let writable = now_writable(&from);
     for name in aside_names(path, taken) {
-        let aside = project.root.join(&name);
+        let aside = native(&project.root, &name);
         let kept = if shared {
             placer.copy_file(&from, &aside, writable).map(drop)
         } else {
@@ -1740,7 +1740,7 @@ fn clear(
     blocker: &Blocker,
     placement: &mut Placement,
 ) -> Result<bool, Error> {
-    let path = project.root.join(&blocker.path);
+    let path = native(&project.root, &blocker.path);
     let Ok(metadata) = fs::symlink_metadata(&path) else {
         return Ok(true);
     };
@@ -1909,9 +1909,7 @@ fn remove_unwanted(
             Unwanted::Gone => {}
             Unwanted::Remove(look) => {
                 let listed = survey.listed.get(&path).unwrap_or(&path);
-                let file = project
-                    .root
-                    .join(listed.replace('/', std::path::MAIN_SEPARATOR_STR));
+                let file = native(&project.root, listed);
                 match now(&file) {
                     Some(current) if current == look => {
                         placer
@@ -1952,7 +1950,7 @@ fn clear_system_made(project: &Project, placer: &mut Placer, retired: &[Retired]
             if placer.stop().is_asked() {
                 return;
             }
-            let file = project.root.join(path);
+            let file = native(&project.root, path);
             if let Err(err) = placer.remove(&file, true, None) {
                 tracing::debug!(%path, %err, "could not delete a file the system made");
             }
@@ -1986,7 +1984,7 @@ fn sweep(
         if folders.is_some_and(|folders| !folders.contains(folder)) {
             continue;
         }
-        let file = project.root.join(path);
+        let file = native(&project.root, path);
         if !wanted.contains(path.as_str())
             && now(&file).is_some_and(|look| survey.disk.get(path) == Some(&look))
             && let Err(err) = placer.remove(&file, false, None)
@@ -2124,7 +2122,7 @@ fn unwanted(
 /// fat settles a file's time after writing. only a readable file of the placed size is hashed.
 fn still_placed<'s>(survey: &'s Survey, root: &'s Path) -> impl Fn(&str, &Placed, &Look) -> bool {
     move |path, placed, look| {
-        let file = root.join(survey.listed.get(path).map_or(path, String::as_str));
+        let file = native(root, survey.listed.get(path).map_or(path, String::as_str));
         look.size == placed.look.size
             && Sha256::of_file(&file, Block::sized(look.size.saturating_add(1)))
                 .is_ok_and(|digest| digest == placed.sha256)

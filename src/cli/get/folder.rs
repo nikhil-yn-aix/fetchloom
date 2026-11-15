@@ -106,7 +106,7 @@ pub(super) fn put_all(
     let mut orders = Vec::new();
     for (index, target) in targets.iter().enumerate() {
         context.stop.check()?;
-        let destination = folder.join(&target.path);
+        let destination = crate::project::native(folder, &target.path);
         match inspect(cache, &mut placer, target, &destination)? {
             Checked::AlreadyThere => outcomes.push(Outcome::AlreadyThere),
             Checked::Place { object, before } => {

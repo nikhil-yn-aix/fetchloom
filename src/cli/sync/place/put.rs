@@ -9,8 +9,8 @@ use crate::cache::Cache;
 use crate::error::{Error, Kind};
 use crate::place::{Method, Order, Placer};
 use crate::plan::Target;
-use crate::project::Project;
 use crate::project::state::{Look, State};
+use crate::project::{Project, native};
 use crate::work::Work;
 
 /// what one dataset's placing cost, for its summary line.
@@ -40,7 +40,7 @@ pub(super) fn put_all<'t>(
         let target = todo[index];
         Order {
             object: cache.object_path(&target.sha256),
-            destination: project.root.join(&target.path),
+            destination: native(&project.root, &target.path),
             writable: target.copy,
             size: target.size,
         }
@@ -311,6 +311,60 @@ mod tests {
             state.files[&targets[0].path].look.size,
             bytes.len() as u64,
             "the edit was recorded as the placed file"
+        );
+    }
+
+    /// a file that cannot be placed is named with this system's separators, as a person's own
+    /// tools name it, never as data.lock writes it.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_that_cannot_be_placed_is_named_with_native_separators() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let stored = crate::cache::tests::store(&cache, b"station,temperature\n");
+        let locked = LockedFile {
+            path: "weather.csv".to_owned(),
+            size: stored.size,
+            sha256: stored.digest,
+            md5: None,
+            url: "https://example.org/weather.csv".to_owned(),
+            unpacks_to: None,
+        };
+        let target = Target {
+            dataset: "weather",
+            path: "data/weather/weather.csv".to_owned(),
+            sha256: stored.digest,
+            size: stored.size,
+            copy: false,
+            holder: Holder::File(&locked),
+        };
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        let data = project.root.join("data");
+        fs::create_dir_all(&data).unwrap();
+        // a file where the dataset's folder belongs
+        fs::write(data.join("weather"), "in the way\n").unwrap();
+        let mut placer = Placer::new(&data);
+        let mut state = State::default();
+        let (_, failure) = put_all(
+            &project,
+            &mut placer,
+            &cache,
+            &[&target],
+            &mut state,
+            0,
+            &Work::default(),
+        );
+        let message = failure.unwrap().message;
+        let destination = data.join("weather").join("weather.csv");
+        assert!(
+            message.starts_with(&format!(
+                "could not place {} at {}: ",
+                cache.object_path(&stored.digest).display(),
+                destination.display()
+            )),
+            "{message}"
         );
     }
 }

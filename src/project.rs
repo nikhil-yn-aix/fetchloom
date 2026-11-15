@@ -995,6 +995,16 @@ impl Project {
     }
 }
 
+/// the file at `path`, a path in the project with `/` between names, below `root` and written with
+/// this system's separators, so a message names it as the person's own tools do.
+pub(crate) fn native(root: &Path, path: &str) -> PathBuf {
+    if cfg!(windows) {
+        root.join(path.replace('/', "\\"))
+    } else {
+        root.join(path)
+    }
+}
+
 /// whether `folder` is where a git repository begins: it holds `.git`, as a folder or as the file
 /// a submodule or worktree has.
 fn is_repository(folder: &Path) -> bool {

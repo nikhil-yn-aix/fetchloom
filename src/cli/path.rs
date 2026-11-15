@@ -20,10 +20,10 @@ use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
 use crate::plan;
-use crate::project::Project;
 use crate::project::lock::Lock;
 use crate::project::manifest::Manifest;
 use crate::project::state::Look;
+use crate::project::{Project, native};
 
 /// what `path --json` reports, as an object so it can grow.
 #[derive(Serialize)]
@@ -381,9 +381,7 @@ fn planned_path(
             wanted
         }
     };
-    Ok(project
-        .root
-        .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR)))
+    Ok(native(&project.root, &relative))
 }
 
 /// a path `fetchloom path` did not find in dataset `name`, with the paths `inside` it nearest to

@@ -37,7 +37,7 @@ pub(crate) fn make(
         let file = &files[index];
         Order {
             object: cache.object_path(&file.sha256),
-            destination: folder.join(&file.path),
+            destination: crate::project::native(folder, &file.path),
             writable: false,
             size: file.size,
         }

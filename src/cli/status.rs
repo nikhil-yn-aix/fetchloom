@@ -17,11 +17,11 @@ use crate::error::Error;
 use crate::mirror::{Location, Mirrors};
 use crate::output::{Output, Warning};
 use crate::plan;
-use crate::project::Project;
 use crate::project::lock::archives::{self, Pinned};
 use crate::project::lock::{Lock, Locked, LockedFile, Waiting};
 use crate::project::manifest::{Manifest, Members};
 use crate::project::state::Candidate;
+use crate::project::{Project, native};
 use crate::recipe;
 use crate::stop::Stop;
 use crate::threads::Threads;
@@ -952,7 +952,7 @@ fn compare(
     let mut listed = HashSet::new();
     for target in targets {
         let seen = survey.disk.get(&target.path);
-        let file = project.root.join(&target.path);
+        let file = native(&project.root, &target.path);
         let list = match (seen, survey.state.files.get(&target.path)) {
             (None, _) => match survey.blocker(&target.path) {
                 // what sync removes before it places anything stands in no file's way

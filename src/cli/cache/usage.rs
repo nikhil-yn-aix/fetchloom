@@ -12,8 +12,8 @@ use crate::cache::{GRACE, Needed, Scan, Use};
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::place::Method;
-use crate::project::Project;
 use crate::project::state::{Look, Placed};
+use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::threads::Threads;
 
@@ -146,12 +146,7 @@ impl Usage {
             .collect();
         let found = crate::place::run_all(&files, threads, |(path, placed)| {
             (!stop.is_asked())
-                .then(|| {
-                    copied(
-                        &root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR)),
-                        placed,
-                    )
-                })
+                .then(|| copied(&native(root, path), placed))
                 .flatten()
         });
         stop.check()?;

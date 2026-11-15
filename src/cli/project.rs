@@ -26,7 +26,7 @@ use crate::project::lock::merge;
 use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
-use crate::project::{Held, Hold, Ignore, Project, git};
+use crate::project::{Held, Hold, Ignore, Project, git, native};
 use crate::recipe::{self, Change};
 use crate::source::{Listing, local};
 pub(crate) use crate::suggested::command;
@@ -174,7 +174,7 @@ pub(super) fn remind_lists(context: &Context) {
 /// the parts of `parts`, lists below the project at `root`, that are there and that git does not
 /// have, sorted. none when git cannot tell, as with no git or outside a repository.
 pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -> Vec<String> {
-    let mut parts: Vec<&str> = parts.filter(|part| root.join(part).is_file()).collect();
+    let mut parts: Vec<&str> = parts.filter(|part| native(root, part).is_file()).collect();
     if parts.is_empty() {
         return Vec::new();
     }
@@ -1308,9 +1308,12 @@ fn mispinned(project: &Project, manifest: &Manifest, lock: &Lock, scope: &Scope)
             let Some(placed) = state.files.get(&path) else {
                 continue;
             };
-            if let Some(actual) =
-                place::placed_other_size(&project.root.join(&path), placed, &file.sha256, file.size)
-            {
+            if let Some(actual) = place::placed_other_size(
+                &native(&project.root, &path),
+                placed,
+                &file.sha256,
+                file.size,
+            ) {
                 let label = format!("{}/{}", locked.name, file.path);
                 return Some(place::mispinned(&label, file.size, actual));
             }

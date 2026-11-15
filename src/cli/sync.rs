@@ -30,12 +30,12 @@ use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::{Output, Warning};
 use crate::plan;
-use crate::project::Project;
 use crate::project::lock::archives::{self, Archive};
 use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest, Source};
 use crate::project::state::Synced;
+use crate::project::{Project, native};
 use crate::source::{self, Listing, Reference, Remote, local};
 use crate::units;
 
@@ -994,7 +994,7 @@ impl<'a> Loop<'a> {
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     damaged.insert(placed.sha256);
                 }
-                Err(err) => return Err(place::local(&self.project.root.join(path), &err)),
+                Err(err) => return Err(place::local(&native(&self.project.root, path), &err)),
             }
         }
         Ok(damaged)

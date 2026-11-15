@@ -394,7 +394,9 @@ fn meant(manifest: &Manifest, (root, here): (&Path, &Path), arg: &Path) -> Optio
                 .datasets
                 .keys()
                 .map(|name| format!("{}/{typed}", plan::folder(manifest, name)))
-                .filter(|path| std::fs::symlink_metadata(root.join(path)).is_ok());
+                .filter(|path| {
+                    std::fs::symlink_metadata(crate::project::native(root, path)).is_ok()
+                });
             let only = holding.next()?;
             holding.next().is_none().then_some(only)?
         }

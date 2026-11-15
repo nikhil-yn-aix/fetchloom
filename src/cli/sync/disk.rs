@@ -16,8 +16,8 @@ use crate::error::Error;
 use crate::output::Output;
 use crate::place::{self, Method};
 use crate::plan::Target;
-use crate::project::Project;
 use crate::project::state::{Look, State};
+use crate::project::{Project, native};
 use crate::settings::Level;
 use crate::stop::Stop;
 use crate::threads::Threads;
@@ -278,7 +278,7 @@ impl Survey {
             outside: Vec::new(),
         };
         let other_device = !survey.state.files.is_empty()
-            && apart(&project.root.join(data_dir), &project.own_folder());
+            && apart(&native(&project.root, data_dir), &project.own_folder());
         survey.hash_racy(&project.root, written, other_device);
         // after hash_racy, so a record found under another spelling is looked through too
         survey.look_through_links(&project.root);
@@ -344,7 +344,7 @@ impl Survey {
     fn not_placed(&self, root: &Path, folder: &str) -> Vec<String> {
         let mut entries = HashMap::new();
         let mut others = Vec::new();
-        let start = vec![(root.join(folder), folder.to_owned())];
+        let start = vec![(native(root, folder), folder.to_owned())];
         let made_by_system = |path: &str| {
             path.strip_prefix(folder)
                 .unwrap_or(path)
@@ -465,7 +465,7 @@ impl Survey {
         for (path, placed) in &self.state.files {
             if placed.method == Method::Hardlink
                 && let Some(seen) = self.disk.get_mut(path)
-                && let Ok(metadata) = fs::metadata(root.join(path))
+                && let Ok(metadata) = fs::metadata(native(root, path))
             {
                 *seen = Look::of(&metadata);
                 if metadata.permissions().readonly() {
@@ -527,7 +527,7 @@ impl Survey {
         );
         let unchanged = place::run_all(&racy, self.threads, |(path, placed)| {
             let block = Block::sized(placed.look.size.saturating_add(1));
-            Sha256::of_file(&root.join(path), block).is_ok_and(|digest| digest == placed.sha256)
+            Sha256::of_file(&native(root, path), block).is_ok_and(|digest| digest == placed.sha256)
         });
         for ((path, placed), unchanged) in racy.into_iter().zip(unchanged) {
             if unchanged {
@@ -704,11 +704,8 @@ impl Survey {
                 };
                 let mark = marks.get(&placed.sha256);
                 let is_object = || {
-                    same_file::is_same_file(
-                        root.join(path.as_str()),
-                        cache.object_path(&placed.sha256),
-                    )
-                    .unwrap_or(false)
+                    same_file::is_same_file(native(root, path), cache.object_path(&placed.sha256))
+                        .unwrap_or(false)
                 };
                 let changed = *seen != placed.look
                     || (!self.edited.is_empty() && self.edited.contains(*path));
@@ -720,7 +717,7 @@ impl Survey {
                 }
                 is_object()
                     || mark.is_some_and(|mark| {
-                        cache::Identity::of(&root.join(path.as_str()))
+                        cache::Identity::of(&native(root, path))
                             .is_ok_and(|copy| mark.copies.contains(&copy))
                     })
             })
@@ -743,7 +740,7 @@ impl Survey {
         let files = &self.state.files;
         let intact = place::run_all(&doubted, self.threads, |path| {
             let block = Block::sized(files[path].look.size.saturating_add(1));
-            Sha256::of_file(&root.join(path), block).map(|digest| digest == files[path].sha256)
+            Sha256::of_file(&native(root, path), block).map(|digest| digest == files[path].sha256)
         });
         let marks = cache.marks()?;
         for (path, intact) in doubted.into_iter().zip(intact) {
@@ -752,7 +749,7 @@ impl Survey {
                     self.vouched.insert(path);
                 }
                 Ok(false) => {
-                    let file = root.join(&path);
+                    let file = native(root, &path);
                     let marked = marks.get(&files[&path].sha256).is_some_and(|mark| {
                         cache::Identity::of(&file).is_ok_and(|copy| mark.copies.contains(&copy))
                     });
@@ -815,7 +812,7 @@ impl Survey {
             }
         };
         let path: place::FilePath<'_, (&String, &crate::project::state::Placed)> =
-            &|(path, _)| std::borrow::Cow::Owned(root.join(path.as_str()));
+            &|(path, _)| std::borrow::Cow::Owned(native(root, path));
         let ahead = place::ReadAhead::when_cold(&files, path);
         let intact = place::run_hashes(
             &files,
@@ -823,7 +820,7 @@ impl Survey {
             self.threads,
             ahead.as_ref(),
             |(path, placed)| {
-                let file = fs::File::open(root.join(path.as_str()))?;
+                let file = fs::File::open(native(root, path))?;
                 let block = Block::sized(placed.look.size.saturating_add(1));
                 Sha256::of_reader_telling(file, block, &read).map(|digest| digest == placed.sha256)
             },
@@ -848,7 +845,7 @@ impl Survey {
         for (path, linked) in changed {
             tracing::debug!(%path, "hashing found bytes changed under an unchanged look");
             found.insert(path.clone());
-            if linked && place::has_other_names(&root.join(&path)) {
+            if linked && place::has_other_names(&native(root, &path)) {
                 self.elsewhere.insert(path);
             } else {
                 self.damaged.insert(path);
@@ -891,7 +888,7 @@ fn aliases<'a>(
 type Listings = HashMap<std::path::PathBuf, HashSet<std::ffi::OsString>>;
 
 fn same_entry(root: &Path, path: &str, listed: &str, look: Look, listings: &mut Listings) -> bool {
-    let Ok(metadata) = fs::symlink_metadata(root.join(path)) else {
+    let Ok(metadata) = fs::symlink_metadata(native(root, path)) else {
         return false;
     };
     if !metadata.is_file() || Look::of(&metadata) != look {
@@ -902,7 +899,7 @@ fn same_entry(root: &Path, path: &str, listed: &str, look: Look, listings: &mut 
         use std::os::unix::fs::MetadataExt as _;
 
         let _ = listings;
-        let Ok(other) = fs::symlink_metadata(root.join(listed)) else {
+        let Ok(other) = fs::symlink_metadata(native(root, listed)) else {
             return false;
         };
         other.is_file()
@@ -997,12 +994,13 @@ fn plain_in_real_folders(root: &Path, path: &str, real: &mut HashMap<String, boo
     let folders_real = path.match_indices('/').all(|(end, _)| {
         let folder = &path[..end];
         *real.entry(folder.to_owned()).or_insert_with(|| {
-            fs::symlink_metadata(root.join(folder))
+            fs::symlink_metadata(native(root, folder))
                 .is_ok_and(|found| found.is_dir() && !found.file_type().is_symlink())
         })
     });
     folders_real
-        && fs::symlink_metadata(root.join(path)).is_ok_and(|found| crate::volume::is_plain(&found))
+        && fs::symlink_metadata(native(root, path))
+            .is_ok_and(|found| crate::volume::is_plain(&found))
 }
 
 /// whether `path`, outside the data folder `data_dir` as written, is the same file as the one at
@@ -1015,7 +1013,11 @@ fn same_inside(root: &Path, path: &str, data_dir: &str) -> bool {
         return false;
     };
     name::fold(&outer.join("/")) == name::fold(data_dir)
-        && same_file::is_same_file(root.join(path), root.join(data_dir).join(rest)).unwrap_or(false)
+        && same_file::is_same_file(
+            native(root, path),
+            native(root, &format!("{data_dir}/{rest}")),
+        )
+        .unwrap_or(false)
 }
 
 /// whether `a` and `b` sit on different devices, whose filesystems may keep times to different
@@ -1069,11 +1071,11 @@ fn scan(
     let mut parents = 0;
     let mut entries = HashMap::new();
     let starts = match within {
-        None => vec![(root.join(data_dir), data_dir.to_owned())],
+        None => vec![(native(root, data_dir), data_dir.to_owned())],
         Some(folders) => folders
             .iter()
             .filter(|folder| way_down(root, data_dir, folder, &mut entries, &mut scanned))
-            .map(|folder| (root.join(folder), folder.clone()))
+            .map(|folder| (native(root, folder), folder.clone()))
             .collect(),
     };
     let walked = visit_files(
@@ -1161,7 +1163,7 @@ fn way_down(
     for part in below.split('/') {
         path.push('/');
         path.push_str(part);
-        let Ok(found) = fs::symlink_metadata(root.join(&path)) else {
+        let Ok(found) = fs::symlink_metadata(native(root, &path)) else {
             return false;
         };
         let kind = found.file_type();
@@ -1280,7 +1282,7 @@ pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result
         if placed.method != Method::Hardlink {
             continue;
         }
-        let file = project.root.join(path);
+        let file = native(&project.root, path);
         if survey.elsewhere.contains(path) {
             let marked = if same_file::is_same_file(&file, cache.object_path(&placed.sha256))
                 .unwrap_or(false)
