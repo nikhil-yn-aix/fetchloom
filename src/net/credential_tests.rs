@@ -31,12 +31,17 @@ fn net() -> Net {
         };
         Some(OsString::from(token))
     };
+    carrying(crate::auth::credentials(&var))
+}
+
+/// a network whose requests carry `credentials` and no other keys.
+fn carrying(credentials: Vec<Credential>) -> Net {
     Net::new(
         Options {
-            offline: crate::net::Offline::No,
+            offline: Offline::No,
             jobs: 1,
-            credentials: crate::auth::credentials(&var),
-            split: crate::net::Splitting::WhenSlow,
+            credentials,
+            split: Splitting::WhenSlow,
         },
         Arc::default(),
         Arc::default(),
@@ -95,17 +100,7 @@ fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
 #[test]
 fn a_semantic_scholar_key_goes_to_its_api_alone() {
     let var = |name: &str| (name == "S2_API_KEY").then(|| OsString::from("s2-test"));
-    let net = Net::new(
-        Options {
-            offline: crate::net::Offline::No,
-            jobs: 1,
-            credentials: crate::auth::credentials(&var),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        Arc::default(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let net = carrying(crate::auth::credentials(&var));
     let client = any_client(&net);
     let api = Url::parse("https://api.semanticscholar.org/datasets/v1/release/latest").unwrap();
     let request = net.request(client, &api, true).build().unwrap();
@@ -199,32 +194,22 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
 
 #[test]
 fn a_saved_login_answers_on_any_hop_to_its_own_host_and_nowhere_else() {
-    let net = Net::new(
-        Options {
-            offline: crate::net::Offline::No,
-            jobs: 1,
-            credentials: vec![
-                Credential {
-                    host: "urs.earthdata.nasa.gov".to_owned(),
-                    header: "authorization",
-                    value: "Basic YWRhOnB3".to_owned(),
-                    every_hop: true,
-                    every_port: false,
-                },
-                Credential {
-                    host: "zenodo.org".to_owned(),
-                    header: "authorization",
-                    value: "Bearer z".to_owned(),
-                    every_hop: false,
-                    every_port: false,
-                },
-            ],
-            split: crate::net::Splitting::WhenSlow,
+    let net = carrying(vec![
+        Credential {
+            host: "urs.earthdata.nasa.gov".to_owned(),
+            header: "authorization",
+            value: "Basic YWRhOnB3".to_owned(),
+            every_hop: true,
+            every_port: false,
         },
-        Arc::default(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+        Credential {
+            host: "zenodo.org".to_owned(),
+            header: "authorization",
+            value: "Bearer z".to_owned(),
+            every_hop: false,
+            every_port: false,
+        },
+    ]);
     // the way an earthdata archive signs a person in: away to the login host and back
     let hops = [
         "http://urs.earthdata.nasa.gov/oauth",
@@ -265,17 +250,7 @@ fn keyed(hosts: &[&str]) -> Net {
             every_port: false,
         })
         .collect();
-    Net::new(
-        Options {
-            offline: crate::net::Offline::No,
-            jobs: 1,
-            credentials,
-            split: crate::net::Splitting::WhenSlow,
-        },
-        Arc::default(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    )
+    carrying(credentials)
 }
 
 /// a key for port 443 never reaches another port of its host, as curl's CVE-2022-27776 let one.
@@ -320,17 +295,7 @@ fn a_netrc_line_for_the_port_asked_wins_over_one_without_a_port() {
     .unwrap();
     let root = home.path().as_os_str().to_owned();
     let var = |name: &str| matches!(name, "HOME" | "USERPROFILE").then(|| root.clone());
-    let net = Net::new(
-        Options {
-            offline: crate::net::Offline::No,
-            jobs: 1,
-            credentials: crate::auth::credentials(&var),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        Arc::default(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    );
+    let net = carrying(crate::auth::credentials(&var));
     let client = any_client(&net);
     let sent = |url: &str| {
         let url = Url::parse(url).unwrap();
@@ -434,20 +399,6 @@ fn a_redirect_cannot_pick_up_another_sources_credentials() {
     assert_eq!(sent(&asked, "authorization"), [None, None, None, None]);
 }
 
-fn verification_net(credentials: Vec<Credential>) -> Net {
-    Net::new(
-        Options {
-            offline: Offline::No,
-            jobs: 1,
-            credentials,
-            split: Splitting::WhenSlow,
-        },
-        Arc::default(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    )
-}
-
 fn redirect_headers(net: &Net, start: &str, hops: &[String], header: &str) -> Vec<Option<String>> {
     trust_all(
         net,
@@ -480,7 +431,7 @@ fn configured_dataverse_keys_do_not_return_after_an_origin_change() {
         ] {
             let credentials = crate::auth::credentials(&var);
             assert_eq!(credentials.len(), 1);
-            let net = verification_net(credentials);
+            let net = carrying(credentials);
             let start = format!("https://{owner}/start");
             let hops = [
                 format!("https://{owner}/same"),
@@ -519,7 +470,7 @@ fn netrc_logins_return_only_over_https_to_the_host_and_ports_their_line_names() 
         let var = |name: &str| (name == "NETRC").then(|| path.clone().into_os_string());
         let credentials = crate::auth::credentials(&var);
         assert_eq!(credentials.len(), 1);
-        let net = verification_net(credentials);
+        let net = carrying(credentials);
         let hops = [
             format!("https://{owner}/login"),
             format!("https://{other_port}/other-port"),
@@ -548,7 +499,7 @@ fn osf_exceptions_keep_their_own_scheme_host_and_port_boundaries() {
         let var = |name: &str| (name == "OSF_TOKEN").then(|| OsString::from(token));
         let credentials = crate::auth::credentials(&var);
         assert_eq!(credentials.len(), 3);
-        let net = verification_net(credentials);
+        let net = carrying(credentials);
         let hops: Vec<_> = [
             "https://osf.io/download",
             "https://files.osf.io/download",
@@ -611,18 +562,7 @@ fn signing_net(
         .iter()
         .map(|text| crate::net::s3::Bucket::parse(text).unwrap())
         .collect();
-    Net::new(
-        Options {
-            offline: crate::net::Offline::No,
-            jobs: 1,
-            credentials: Vec::new(),
-            split: crate::net::Splitting::WhenSlow,
-        },
-        Arc::default(),
-        Arc::default(),
-        Arc::new(|_| {}),
-    )
-    .with_signing(crate::net::s3::Signing::new(listed, Arc::new(var)))
+    carrying(Vec::new()).with_signing(crate::net::s3::Signing::new(listed, Arc::new(var)))
 }
 
 /// checks a request head's signature as S3 does: the canonical request rebuilt from what
