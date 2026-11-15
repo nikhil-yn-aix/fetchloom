@@ -123,7 +123,7 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_LOG        a log filter such as fetchloom=debug, as -vv uses
   FETCHLOOM_TRACE      a file to write a timeline of the run to, for profiling
   FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff
-  FETCHLOOM_NO_HINTS   true drops the hint: and next: lines
+  FETCHLOOM_NO_HINTS   true leaves out the hint: and next: lines
   FETCHLOOM_ACCESSIBLE true asks on plain lines, takes a choice by its number
                        and draws no live progress, for screen readers
   FETCHLOOM_KEYRING    false keeps keys out of the system's credential store

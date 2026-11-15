@@ -1239,7 +1239,7 @@ pub(crate) struct Export {
     pub(crate) force: bool,
 }
 
-/// copy the files data.lock lists into a folder mirror
+/// copy the files data.lock lists into a folder or S3 bucket mirror
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Push {
     /// the datasets to push, by their names in data.toml; every dataset sync places when none
