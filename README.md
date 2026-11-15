@@ -87,4 +87,4 @@ bare `fetchloom` prints this outside a project, below its name and version; insi
 
 ## license
 
-apache-2.0. see [LICENSE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE) and [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE).
+apache-2.0. see [LICENSE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE).

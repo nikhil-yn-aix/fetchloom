@@ -60,13 +60,13 @@ the archives are packed so the same files give the same bytes. the build job exp
 
 | artifact | contents |
 |---|---|
-| `fetchloom-0.1.0-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, LICENSE, NOTICE, README.md, THIRD-PARTY-LICENSES and the manual page `fetchloom.1` in a matching top-level folder |
+| `fetchloom-0.1.0-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, LICENSE, README.md, THIRD-PARTY-LICENSES and the manual page `fetchloom.1` in a matching top-level folder |
 | `fetchloom-0.1.0-aarch64-pc-windows-msvc.zip` | same layout for arm64 windows |
-| `fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, LICENSE, NOTICE, README.md, THIRD-PARTY-LICENSES and `fetchloom.1` in a matching folder |
+| `fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz` | `fetchloom`, LICENSE, README.md, THIRD-PARTY-LICENSES and `fetchloom.1` in a matching folder |
 | `fetchloom-0.1.0-aarch64-unknown-linux-musl.tar.gz` | same layout for arm64 linux |
 | `fetchloom-0.1.0-x86_64-apple-darwin.tar.gz` | same layout for x86_64 macos |
 | `fetchloom-0.1.0-aarch64-apple-darwin.tar.gz` | same layout for arm64 macos |
-| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, with `/usr/bin/fl` a link to it, license, notice and third-party licenses in `/usr/share/doc/fetchloom`, and the manual page, which `man fetchloom` and `man fl` open |
+| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, with `/usr/bin/fl` a link to it, the license and third-party licenses in `/usr/share/doc/fetchloom`, and the manual page, which `man fetchloom` and `man fl` open |
 | `fetchloom-0.1.0-py3-none-win_amd64.whl` | windows executable and typed python module |
 | `fetchloom-0.1.0-py3-none-win_arm64.whl` | same for arm64 windows |
 | `fetchloom-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | static linux executable and python module, tagged for glibc and musl |
@@ -112,7 +112,7 @@ every wheel the release builds also has `fl`, a console script. maturin refuses 
 
 5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` and `pages.yml` start. watch them with `gh run watch`.
 6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version`, `fl --version` and the python helper. check `cargo install fetchloom` and both installers on a clean machine or container.
-7. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
+7. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `NikhilYN.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update NikhilYN.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
 
 to rehearse without a tag, dispatch `release.yml` against the branch being checked. only its read-only artifact workflow runs; `attest` and `release` remain tag-only. no branch trigger, tag or publication is needed.
 
@@ -183,4 +183,4 @@ try {
 
 stop the local server with ctrl-c when finished and remove only the test folders you created. also test a deliberately wrong checksum and an archive whose executable cannot run: installation must fail before replacing the installed executable.
 
-contributions and distributions use [Apache-2.0](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE). include [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE), which names Nikhil Y N and KairosLab India Private Limited. [decisions](../decisions/interface-and-maintenance.md#apache-20) explains the license boundary.
+contributions and distributions use [Apache-2.0](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE). [decisions](../decisions/interface-and-maintenance.md#apache-20) explains the license boundary.

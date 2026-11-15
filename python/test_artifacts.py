@@ -370,7 +370,7 @@ class PackageContentTests(unittest.TestCase):
                 ('another folder', [('other/', b''), *entries], 'unexpected archive directory'),
                 ('a file twice', [*entries, entries[1]], 'unexpected or duplicate archive entry'),
                 ('another file', [*entries, (f'{folder}/notes.txt', b'')], 'unexpected or duplicate archive entry'),
-                ('no notice', [entry for entry in entries if not entry[0].endswith('/NOTICE')], 'release archive is incomplete'),
+                ('no license', [entry for entry in entries if not entry[0].endswith('/LICENSE')], 'release archive is incomplete'),
             ]:
                 with self.subTest(suffix=suffix, case=case), tempfile.TemporaryDirectory() as directory:
                     path = Path(directory) / f'release{suffix}'
@@ -440,11 +440,11 @@ class ArchiveCheckTests(unittest.TestCase):
         self.built.write_bytes(elf(EM_X86_64))
         (self.root / 'dist').mkdir()
 
-    def check(self, program=None, notice=None):
+    def check(self, program=None, license_text=None):
         folder = f'fetchloom-{VERSION}-{self.TARGET}'
         entries = [(f'{folder}/fetchloom', self.built.read_bytes() if program is None else program)]
         for name, source in SHIPPED.items():
-            body = notice if name == 'NOTICE' and notice is not None else (self.checkout / source).read_bytes()
+            body = license_text if name == 'LICENSE' and license_text is not None else (self.checkout / source).read_bytes()
             entries.append((f'{folder}/{name}', body))
         write_tar(self.root / 'dist' / archive_name(self.TARGET, VERSION), entries)
         arguments = ['check_archive.py', '--target', self.TARGET, '--version', VERSION, '--commit', COMMIT,
@@ -469,8 +469,8 @@ class ArchiveCheckTests(unittest.TestCase):
                                                  '--report', str(self.root / 'proofs/archive.json')])
         self.assertEqual(run.call_args.kwargs, {'check': True})
 
-    def test_a_changed_notice_another_build_or_machine_is_refused(self):
-        for case, change, said in [('notice', {'notice': b'edited\n'}, 'archive changed NOTICE'),
+    def test_a_changed_license_another_build_or_machine_is_refused(self):
+        for case, change, said in [('license', {'license_text': b'edited\n'}, 'archive changed LICENSE'),
                                    ('build', {'program': elf(EM_X86_64) + b'rebuilt'}, 'differs from the checked release build'),
                                    ('machine', {'program': elf(EM_AARCH64)}, 'wrong ELF architecture')]:
             with self.subTest(case), self.assertRaisesRegex(AssertionError, said):

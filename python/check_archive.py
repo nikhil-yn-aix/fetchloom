@@ -9,8 +9,8 @@ from check_artifacts import archive_name
 from ci_journey import ROOT, digest, require
 
 # the files every archive carries beside the executable, each with where the checkout has it
-SHIPPED = {"LICENSE": "LICENSE", "NOTICE": "NOTICE", "README.md": "README.md",
-           "THIRD-PARTY-LICENSES": "THIRD-PARTY-LICENSES", "fetchloom.1": "docs/man/fetchloom.1"}
+SHIPPED = {"LICENSE": "LICENSE", "README.md": "README.md", "THIRD-PARTY-LICENSES": "THIRD-PARTY-LICENSES",
+           "fetchloom.1": "docs/man/fetchloom.1"}
 # a release file this size or larger is refused unread
 LARGEST = 256 * 1024 * 1024
 
