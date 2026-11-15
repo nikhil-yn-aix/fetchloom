@@ -140,6 +140,18 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
 /// the refusal of `word`, written as a path that names nothing in `here`, never sent to a search
 /// site: a typo of a near name is likelier, which `pins` says the command can import.
 fn no_such_path(word: &str, here: &std::path::Path, pins: bool) -> Error {
+    let missing = format!("there is no file or folder \"{word}\" here");
+    if let Some(link) = as_link(word) {
+        let alone = if pins {
+            super::project::command(&format!("add {}", super::shell_word(&link)))
+        } else {
+            format!("fetchloom get {}", super::shell_word(&link))
+        };
+        let line = super::meant(&[word], &[&link], alone);
+        return Error::new(Kind::Usage, missing).help(format!(
+            "did you mean `{line}`? a link starts with https://"
+        ));
+    }
     let search = format!(
         "run `fetchloom search {}` to search for these words",
         super::shell_word(word.trim_end_matches('\\'))
@@ -160,11 +172,24 @@ fn no_such_path(word: &str, here: &std::path::Path, pins: bool) -> Error {
         None if pins => format!("check the path, or {search}"),
         None => format!("give a link, a DOI or an id, or {search}"),
     };
-    Error::new(
-        Kind::Usage,
-        format!("there is no file or folder \"{word}\" here"),
-    )
-    .help(help)
+    Error::new(Kind::Usage, missing).help(help)
+}
+
+/// `word` as an https link when it reads as one without its scheme, as `zenodo.org/records/1`
+/// does: a host name of two or more parts, the last of letters alone, then a path.
+fn as_link(word: &str) -> Option<String> {
+    let (host, _) = word.split_once('/')?;
+    let name = host.split_once(':').map_or(host, |(name, _)| name);
+    let labels: Vec<&str> = name.split('.').collect();
+    let named = labels.len() > 1
+        && labels.iter().all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+        && labels
+            .last()
+            .is_some_and(|last| last.len() > 1 && last.chars().all(|c| c.is_ascii_alphabetic()));
+    let link = format!("https://{word}");
+    (named && url::Url::parse(&link).is_ok()).then_some(link)
 }
 
 pub(super) async fn pick(

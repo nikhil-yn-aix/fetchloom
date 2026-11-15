@@ -992,6 +992,14 @@ fn a_mistyped_path_never_reaches_a_catalog() -> Result {
             format!("check the path, or {}", search("nonexistent.csv")),
         ),
         (
+            &["add", "zenodo.org/records/3608990", "--dry-run"],
+            "did you mean `fetchloom --json add https://zenodo.org/records/3608990 --dry-run`? a link starts with https://".to_owned(),
+        ),
+        (
+            &["get", "huggingface.co/datasets/scikit-learn/iris"],
+            "did you mean `fetchloom --json get https://huggingface.co/datasets/scikit-learn/iris`? a link starts with https://".to_owned(),
+        ),
+        (
             &["get", "nonexistent.csv"],
             format!(
                 "give a link, a DOI or an id, or {}",
