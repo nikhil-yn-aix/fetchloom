@@ -1034,7 +1034,7 @@ fn needed_focused(
         stop.check()?;
         let project = Project { root };
         let manifest = project.manifest_path();
-        let text = match fs::read(&manifest) {
+        let text = match read_manifest(&manifest) {
             Ok(text) => text,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 if collect_stale {
@@ -1117,6 +1117,53 @@ fn needed_focused(
         groups,
         unread,
     })
+}
+
+/// the most bytes a registered project's data.toml may hold for gc to read it: far more than any
+/// written by hand or by `fetchloom add`, and far less than would take a machine's memory.
+const MANIFEST_MOST: u64 = 256 << 20;
+
+/// the bytes of a registered project's data.toml at `path`: a file of [`MANIFEST_MOST`] bytes at
+/// most, opened without waiting on a fifo. a commit pulled into a clone, or anyone sharing the
+/// cache in their own project, can make it a fifo or a link to /dev/zero, which every walk of the
+/// projects reads: gc, the cache report, and every unpack in any project.
+fn read_manifest(path: &Path) -> io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        rustix::fs::OFlags::NONBLOCK.bits().cast_signed(),
+    );
+    let file = options.open(path)?;
+    let found = file.metadata()?;
+    if !found.is_file() {
+        let what = if found.is_dir() {
+            "it is a folder, not a file"
+        } else {
+            "it is a special file, not a file"
+        };
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, what));
+    }
+    let too_large = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "it is larger than {}, more than gc reads of any data.toml",
+                units::size(MANIFEST_MOST)
+            ),
+        )
+    };
+    if found.len() > MANIFEST_MOST {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    file.take(MANIFEST_MOST + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MANIFEST_MOST {
+        return Err(too_large());
+    }
+    Ok(bytes)
 }
 
 /// a registered project's data.toml as [`add_with_stop`] reads it, with the project's folder
@@ -1876,6 +1923,62 @@ mod tests {
 
         assert!(needed.objects.contains(&iris.digest), "by its SHA-256");
         assert!(needed.objects.contains(&species.digest), "by its MD5");
+    }
+
+    /// a registered project's data.toml that a clone or someone sharing the cache made a fifo, a
+    /// link to /dev/zero or to a huge file is refused at once by every walk of the projects, as
+    /// gc's, never waited on for a writer or read without end.
+    #[cfg(unix)]
+    #[test]
+    fn a_registered_data_toml_that_is_no_plain_file_is_refused_at_once() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let project = folder.path().join("clone");
+        fs::create_dir(&project).unwrap();
+        cache.register(&project).unwrap();
+        let manifest = project.join("data.toml");
+        let walk = || {
+            needed_by_all(&cache, None, &Stop::default())
+                .map(drop)
+                .map_err(|error| error.message)
+        };
+        let special = Err(format!(
+            "cannot read {}: it is a special file, not a file",
+            manifest.display()
+        ));
+
+        let made = std::process::Command::new("mkfifo")
+            .arg(&manifest)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // a writer answers a reader that waits for one, so an open that waits still ends
+        let path = manifest.clone();
+        let writer = std::thread::spawn(move || {
+            let mut opened = fs::OpenOptions::new().write(true).open(path).unwrap();
+            // a reader that refused the fifo is gone, so the write may find none
+            let _ = io::Write::write_all(&mut opened, b"[datasets]\n");
+        });
+        let fifo = walk();
+        let flags = rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK;
+        let released = rustix::fs::open(&manifest, flags, rustix::fs::Mode::empty()).unwrap();
+        writer.join().unwrap();
+        drop(released);
+        assert_eq!(fifo, special, "a fifo");
+
+        fs::remove_file(&manifest).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", &manifest).unwrap();
+        assert_eq!(walk(), special, "a link to /dev/zero");
+
+        fs::remove_file(&manifest).unwrap();
+        let huge = folder.path().join("huge");
+        fs::File::create(&huge)
+            .unwrap()
+            .set_len((256 << 20) + 1)
+            .unwrap();
+        std::os::unix::fs::symlink(&huge, &manifest).unwrap();
+        let refused = walk().unwrap_err();
+        assert!(refused.contains("larger than"), "{refused}");
     }
 
     /// a dataset that is placed, or that no recipe reads, counts as placed data.
