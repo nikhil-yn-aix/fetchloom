@@ -828,6 +828,12 @@ class RarTests(unittest.TestCase):
             with self.subTest(case), self.assertRaisesRegex(AssertionError, said):
                 extraction(given, system)
 
+    def test_a_warning_of_another_kind_beside_the_rar_one_is_left_alone(self):
+        packed, = self.warnings(self.HELP['linux'])
+        foreign = {'kind': 'cache.foreign', 'message': 'the cache folder is outside your user profile',
+                   'help': 'keep the cache inside your profile'}
+        self.assertEqual(extraction([foreign, packed], 'linux'), extraction([packed], 'linux'))
+
 
 class InstallerCheckTests(unittest.TestCase):
     """check_installer.py against a stand-in release: the installer is real, the journey after it a

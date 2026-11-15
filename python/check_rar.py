@@ -14,10 +14,11 @@ from ci_journey import ROOT, Journey, Server, digest, require
 
 def extraction(warnings, platform=sys.platform):
     """the one command fetchloom's rar warning gives for unpacking it on ``platform``: 7-Zip's on
-    windows, unar's on macos and unrar's elsewhere."""
-    require(len(warnings) == 1 and warnings[0].get('kind') == 'archive.packed',
-            f'expected one rar warning: {warnings}')
-    commands = re.findall(r'`([^`]+)`', warnings[0]['help'])
+    windows, unar's on macos and unrar's elsewhere. other warnings, as about where the runner keeps
+    the cache, are not the rar's."""
+    packed = [warning for warning in warnings if warning.get('kind') == 'archive.packed']
+    require(len(packed) == 1, f'expected one rar warning: {warnings}')
+    commands = re.findall(r'`([^`]+)`', packed[0]['help'])
     if platform == 'win32':
         commands = [command for command in commands if command.startswith('& ') and '7z.exe' in command]
     else:
