@@ -22,7 +22,7 @@ fetchloom drop [options] <name>...
 
 ## what happens
 
-1. check that every file of each dataset can be had again: a [mirror](../guides/mirrors.md) folder holds a copy that hashes to its pin, or a web mirror or its source serves it at its pinned size, as [`status --sources`](status.md) asks. a recipe's result or a dataset added from a folder counts only on a mirror, and `--offline` only on a folder mirror. a dataset that fails stays as it was.
+1. check that every file of each dataset can be had again: a [mirror](../guides/mirrors.md) folder holds a copy that hashes to its pin, or a web or s3 mirror or its source serves it at its pinned size, as [`status --sources`](status.md) asks. a recipe's result or a dataset added from a folder, which no source gives back, counts only on a folder mirror, whose copy is hashed: a size alone is not enough for it. `--offline` asks only folder mirrors. a dataset that fails stays as it was.
 2. delete the unchanged files fetchloom placed for it in the data folder; an edited file stays and is named.
 3. note in `.fetchloom/state`, which only this machine reads, that it is dropped, then delete its files in the cache that no other dataset or project needs, and print the bytes freed.
 

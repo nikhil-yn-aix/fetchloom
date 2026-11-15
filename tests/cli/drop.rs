@@ -6,7 +6,7 @@ use std::fs;
 use serde_json::json;
 
 use crate::build::{build, with};
-use crate::mirrors::{IRIS, mirror_of};
+use crate::mirrors::{IRIS, mirror_of, web_mirror_of};
 use crate::recipes::{WRITE, object};
 use crate::support::{Result, Routes, Sandbox, Server, edit, file, json, ok, reply, text};
 
@@ -156,8 +156,10 @@ fn a_changed_file_stays_and_is_named() -> Result {
     Ok(())
 }
 
+/// a recipe's result, which no source gives back, drops only where a folder mirror holds a copy
+/// that hashes to its pin: a web mirror answering at its size is not enough.
 #[test]
-fn a_result_drops_only_where_a_mirror_holds_it() -> Result {
+fn a_result_drops_only_where_a_folder_mirror_holds_it() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(
         crate::project::PATH,
@@ -172,12 +174,20 @@ fn a_result_drops_only_where_a_mirror_holds_it() -> Result {
     let error = &json(&output)?["errors"][0];
     assert_eq!(
         error["details"],
-        json!(["clean/clean.csv · no mirror holds this file of a recipe's result"])
+        json!([
+            "clean/clean.csv · no folder mirror holds a copy of this file of a recipe's result that hashes to its pin"
+        ])
     );
     assert_eq!(
         error["help"],
-        "`fetchloom push clean` keeps a copy of each on a mirror first, then drop it"
+        "`fetchloom push clean` keeps a copy of each on a folder mirror first, then drop it"
     );
+    let web = web_mirror_of(&sandbox)?;
+    let output = sandbox
+        .command(&["--json", "drop", "clean", "--mirror"])
+        .arg(format!("{}/m", web.url))
+        .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
     assert!(result.exists());
     let root = sandbox.folder("mirror")?;
     ok(&sandbox

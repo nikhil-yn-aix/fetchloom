@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::args;
-use super::probe::{self, Ask, Found, Lack, Pinned};
+use super::probe::{self, Ask, Found, Pinned};
 use super::project::{dry_run_done, find, hold, known};
 use super::sync::Scope;
 use super::sync::disk::Survey;
@@ -133,7 +133,11 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
             free(context, &project, &manifest, &lock, &freeing, &mut report)?;
         }
     }
-    if let Some(error) = refused(&lacking, &asked, context.offline) {
+    // a result's or an import's file counts only on a folder mirror
+    let folder = named.iter().any(|named| {
+        lacking.contains_key(named.name) && named.files.iter().any(|file| file.url.is_empty())
+    });
+    if let Some(error) = refused(&lacking, &asked, context.offline, folder) {
         return Err(error.with_report(&report));
     }
     if dry_run {
@@ -210,8 +214,9 @@ fn pinned_files<'a>(
 }
 
 /// why each file of `named` is found nowhere, as lines by dataset; a dataset with none may go. a
-/// folder mirror's copy counts once it hashes to its pin, and with the network a web mirror or the
-/// source serving the file at its size, never a source for a result or an import.
+/// folder mirror's copy counts once it hashes to its pin, and with the network a web or bucket
+/// mirror or the source serving the file at its size, but for a result's or an import's file,
+/// which no source gives back: only a folder mirror's hashed copy counts for that.
 async fn unfound(
     context: &Context,
     named: &[Named<'_>],
@@ -271,44 +276,42 @@ async fn unfound(
             .or_default()
             .push(format!("{} · {why}", pinned.label()));
     };
-    let rest: Vec<Pinned<'_>> = pinned
-        .iter()
-        .zip(&found)
-        .filter(|(_, found)| !**found)
-        .map(|(pinned, _)| *pinned)
-        .collect();
-    if context.offline.enabled() {
-        for pinned in &rest {
-            lack(
-                pinned,
-                "offline, and no folder mirror holds a copy that hashes to its pin".to_owned(),
-            );
-        }
+    let mut rest: Vec<Pinned<'_>> = Vec::new();
+    for (at, pinned) in pinned.iter().enumerate().filter(|(at, _)| !found[*at]) {
+        // a web or bucket mirror answers with a size, too little for bytes no source gives back
+        let said = if locked[at].1.url.is_empty() && results.contains(pinned.dataset) {
+            "no folder mirror holds a copy of this file of a recipe's result that hashes to its pin"
+        } else if locked[at].1.url.is_empty() {
+            "it was imported from files, and no folder mirror holds a copy that hashes to its pin"
+        } else if context.offline.enabled() {
+            "offline, and no folder mirror holds a copy that hashes to its pin"
+        } else {
+            rest.push(*pinned);
+            continue;
+        };
+        lack(pinned, said.to_owned());
+    }
+    if rest.is_empty() {
         return Ok(lacking);
     }
     let answers = probe::find(context, &net, &rest, Ask::Elsewhere).await?;
     for (pinned, answer) in rest.iter().zip(answers) {
-        let Found::Nowhere(why) = answer else {
-            continue;
-        };
-        let said = match why {
-            Lack::Imported if results.contains(pinned.dataset) => {
-                "no mirror holds this file of a recipe's result".to_owned()
-            }
-            Lack::Imported => "it was imported from files, and no mirror holds it".to_owned(),
-            why => format!("{}: {}", why.outcome(), why.error(pinned.size).message),
-        };
-        lack(pinned, said);
+        if let Found::Nowhere(why) = answer {
+            let said = format!("{}: {}", why.outcome(), why.error(pinned.size).message);
+            lack(pinned, said);
+        }
     }
     Ok(lacking)
 }
 
 /// the error naming each dataset of `asked` that `lacking` keeps, with each file found nowhere,
-/// none when every one may go. `offline`, only a folder mirror was asked.
+/// none when every one may go. `offline`, only a folder mirror was asked; `folder`, a kept file
+/// counts only on a folder mirror.
 fn refused(
     lacking: &BTreeMap<String, Vec<String>>,
     asked: &[String],
     offline: crate::net::Offline,
+    folder: bool,
 ) -> Option<Error> {
     let kept: Vec<&str> = asked
         .iter()
@@ -343,8 +346,9 @@ fn refused(
             ),
         )
         .help(format!(
-            "`{}` keeps a copy of each on a mirror first, then drop {it}",
-            super::project::command(&format!("push {}", kept.join(" ")))
+            "`{}` keeps a copy of each on a {}mirror first, then drop {it}",
+            super::project::command(&format!("push {}", kept.join(" "))),
+            if folder { "folder " } else { "" }
         ))
     };
     Some(error.details_up_to(&lines, NAMED))
