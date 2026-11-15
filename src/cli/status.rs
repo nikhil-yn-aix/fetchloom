@@ -216,17 +216,7 @@ pub(super) fn run(
                 super::project::command("build --dry-run")
             ));
         }
-        match status.unbuilt.as_slice() {
-            [] => {}
-            [name] => output.hint(&format!(
-                "`{}` makes it on this machine",
-                super::project::command(&format!("build {name}"))
-            )),
-            names => output.hint(&format!(
-                "`{}` makes them on this machine",
-                super::project::command(&format!("build {}", names.join(" ")))
-            )),
-        }
+        hint_unbuilt(output, &status);
     }
     for kept in status.candidates.iter().filter(|kept| kept.stale) {
         output.hint(&super::build::again(&kept.name));
@@ -268,6 +258,42 @@ fn checked(status: &Status, sources: bool) -> Result<(), Error> {
         Some(found) => sources::ready(found),
         None if sources => ready::ready(&[ready::Unready::Unpinned(None)]),
         None => ready::ready(&ready::of_status(status)),
+    }
+}
+
+/// how to get each recipe's result data.lock pins that is not on this machine: a build, unless a
+/// build here already made other files.
+fn hint_unbuilt(output: &Output, status: &Status) {
+    // a build that made other files than the pins would make them again
+    let (differed, unbuilt): (Vec<&str>, Vec<&str>) =
+        status.unbuilt.iter().map(String::as_str).partition(|name| {
+            status
+                .candidates
+                .iter()
+                .any(|kept| kept.name == *name && !kept.stale)
+        });
+    match unbuilt.as_slice() {
+        [] => {}
+        [name] => output.hint(&format!(
+            "`{}` makes it on this machine",
+            super::project::command(&format!("build {name}"))
+        )),
+        names => output.hint(&format!(
+            "`{}` makes them on this machine",
+            super::project::command(&format!("build {}", names.join(" ")))
+        )),
+    }
+    if !differed.is_empty() {
+        let (them, rebuild) = if differed.len() == 1 {
+            ("it", "the rebuild")
+        } else {
+            ("them", "the rebuilds")
+        };
+        output.hint(&format!(
+            "a build here made other files than data.lock pins for {}: build {them} where the programs and libraries match the ones that made the pins, sync from a mirror that holds them, or pin {rebuild} with `{}`",
+            units::listed(&differed, "and"),
+            super::project::command(&format!("build --accept {}", differed.join(" ")))
+        ));
     }
 }
 

@@ -2090,10 +2090,18 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     assert_eq!(files(&sandbox.work().join("data"))?, data);
     let status = json(&there(&["--json", "status"])?)?;
     assert_eq!(kept_names(&status), ["clean"]);
-    let told = text(&there(&["status"])?.stdout)?;
+    let status = there(&["status"])?;
+    let told = text(&status.stdout)?;
     assert!(
         told.contains("       Kept clean · a rebuild that differs from data.lock; `fetchloom build --accept clean` pins it\n"),
         "{told}"
+    );
+    // another build here makes the same files again
+    let hints = text(&status.stderr)?;
+    assert!(!hints.contains("makes it on this machine"), "{hints}");
+    assert!(
+        hints.contains("hint: a build here made other files than data.lock pins for clean: build it where the programs and libraries match the ones that made the pins, sync from a mirror that holds them, or pin the rebuild with `fetchloom build --accept clean`\n"),
+        "{hints}"
     );
     let document = json(&output)?;
     let (kind, message, details, help, fix) = error(&document);
