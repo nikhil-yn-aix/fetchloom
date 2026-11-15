@@ -40,6 +40,7 @@ impl Parents {
         let name = below
             .file_name()
             .ok_or_else(|| invalid("a placement has no filename"))?;
+        plain(name)?;
         let root = if let Some(root) = self.root.get() {
             Arc::clone(root)
         } else {
@@ -321,11 +322,22 @@ fn lock_chain(path: &Path, make: bool, allow_root_link: bool) -> io::Result<Vec<
 fn parts(path: &Path) -> io::Result<Vec<&OsStr>> {
     path.components()
         .filter_map(|part| match part {
-            Component::Normal(name) => Some(Ok(name)),
+            Component::Normal(name) => Some(plain(name).map(|()| name)),
             Component::CurDir => None,
             _ => Some(Err(invalid("a placement parent must stay below its root"))),
         })
         .collect()
+}
+
+/// refuses a name with a colon: one with a drive, as `C:x`, starts a new path where it is joined,
+/// and one such as `x:s` names a stream of the file `x`, so either leads elsewhere.
+fn plain(name: &OsStr) -> io::Result<()> {
+    if name.as_encoded_bytes().contains(&b':') {
+        return Err(invalid(
+            "a placement name holds a colon, which names a drive or a stream on windows",
+        ));
+    }
+    Ok(())
 }
 
 fn invalid(message: &str) -> io::Error {

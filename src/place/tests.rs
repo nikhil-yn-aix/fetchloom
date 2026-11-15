@@ -1962,3 +1962,25 @@ fn a_placed_file_made_read_only_keeps_no_setuid_bit() {
     let mode = std::fs::metadata(&path).unwrap().permissions().mode();
     assert_eq!(mode & 0o7777, 0o555, "{mode:o}");
 }
+
+/// a name with a drive, which a path joins as a new start, or with a colon, which names a stream
+/// of another file, never leads a placement out of its folder.
+#[cfg(windows)]
+#[test]
+fn a_name_with_a_drive_or_a_stream_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let parents = super::Parents::default();
+    for below in ["C:x", "data\\C:x", "x:s", "data\\x:s", "data\\C:x\\file"] {
+        assert!(
+            parents
+                .locate(dir.path(), Path::new(below), true, true)
+                .is_err(),
+            "{below}"
+        );
+    }
+    assert!(
+        parents
+            .locate(dir.path(), Path::new("data\\x"), true, true)
+            .is_ok()
+    );
+}
