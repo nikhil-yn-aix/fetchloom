@@ -62,6 +62,8 @@ impl From<Refused> for Fault {
 #[derive(Debug)]
 pub(crate) struct Found {
     files: Vec<Taken>,
+    /// whether a file may move into the cache rather than be copied.
+    moves: bool,
     /// sorted by path.
     pub(crate) members: Vec<Member>,
     pub(crate) tree: Sha256,
@@ -74,6 +76,8 @@ pub(crate) struct Out {
     path: PathBuf,
     #[cfg(unix)]
     handle: Arc<fs::File>,
+    /// whether a file may move into the cache, the folder being on its disk, rather than be copied.
+    moves: bool,
 }
 
 impl Out {
@@ -92,20 +96,23 @@ impl Out {
             use rustix::fs::{Mode, OFlags};
             let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
             let handle = fs::File::from(rustix::fs::open(path, flags, Mode::empty())?);
-            Ok(Out::held(path.to_path_buf(), handle))
+            Ok(Out::held(path.to_path_buf(), handle, true))
         }
         #[cfg(not(unix))]
         Ok(Out {
             path: path.to_path_buf(),
+            moves: false,
         })
     }
 
-    /// the folder `handle` holds open, shown as `path`.
+    /// the folder `handle` holds open, shown as `path`, whose files may move into the cache when
+    /// `moves` says so.
     #[cfg(unix)]
-    pub(crate) fn held(path: PathBuf, handle: fs::File) -> Out {
+    pub(crate) fn held(path: PathBuf, handle: fs::File, moves: bool) -> Out {
         Out {
             path,
             handle: Arc::new(handle),
+            moves,
         }
     }
 }
@@ -189,6 +196,7 @@ fn read_with(
         tree: crate::cache::tree_hash(&members),
         members,
         files,
+        moves: out.moves,
     })
 }
 
@@ -364,7 +372,9 @@ pub(crate) fn publish(
     let flush = batch.is_none();
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let flush = true;
-    let sealed = run_all(&found.files, threads, |file| seal(cache, file, flush, stop));
+    let sealed = run_all(&found.files, threads, |file| {
+        seal(cache, file, flush, found.moves, stop)
+    });
     let sealed = sealed.into_iter().collect::<Result<Vec<_>, _>>()?;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(batch) = batch {
@@ -396,16 +406,18 @@ pub(crate) fn publish(
 }
 
 /// readies `file` to enter the cache: sealed where it is when it may move, which gives none, or
-/// copied into the cache's `tmp/` otherwise.
+/// copied into the cache's `tmp/` otherwise, on unix through the folder held open, so a folder
+/// swapped on the way since it was read never sends another file's bytes in.
 fn seal(
     cache: &Cache,
     file: &Taken,
     flush: bool,
+    moves: bool,
     stop: &Stop,
 ) -> Result<Option<crate::cache::Sealed>, Fault> {
     stop.check_io()?;
     #[cfg(unix)]
-    if file.seen.movable {
+    if moves && file.seen.movable {
         let sealed = file
             .spot
             .open()
@@ -420,13 +432,31 @@ fn seal(
             }
         }
     }
-    match cache.copy_in(
-        &file.spot.disk,
-        &file.member.sha256,
-        file.member.size,
-        flush,
-        stop,
-    )? {
+    #[cfg(unix)]
+    let copied = match file.spot.open() {
+        Ok(input) => {
+            cache.copy_opened(input, &file.member.sha256, file.member.size, flush, stop)?
+        }
+        Err(err)
+            if err.kind() == io::ErrorKind::InvalidInput
+                || err.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) =>
+        {
+            Copied::NotPlain
+        }
+        Err(err) => Copied::Unread(err),
+    };
+    #[cfg(not(unix))]
+    let copied = {
+        let _ = moves;
+        cache.copy_in(
+            &file.spot.disk,
+            &file.member.sha256,
+            file.member.size,
+            flush,
+            stop,
+        )?
+    };
+    match copied {
         Copied::Sealed(sealed) => Ok(Some(sealed)),
         Copied::OtherSize | Copied::OtherBytes | Copied::NotPlain => {
             Err(Refused::Changed(file.member.path.clone()).into())

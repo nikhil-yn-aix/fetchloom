@@ -230,6 +230,8 @@ struct Building<'a> {
     recipes: Vec<String>,
     /// the least free space a step may leave on the disk holding the cache.
     floor: u64,
+    /// the folder TMPDIR names, where a step runs when others may write the cache's tmp/.
+    scratch: PathBuf,
     report: Built,
 }
 
@@ -321,6 +323,7 @@ impl<'a> Building<'a> {
             before,
             recipes,
             floor,
+            scratch: std::env::temp_dir(),
             report: Built {
                 project: project.root.clone(),
                 selected,
@@ -805,12 +808,15 @@ impl<'a> Building<'a> {
         let name = &step.name;
         let cache = &self.work.cache;
         let threads = self.context.threads;
-        let staging = Staging::new(cache).map_err(|err| {
+        let staging = Staging::new(cache, &self.scratch).map_err(|err| {
+            let scratch = crate::build::unsafe_scratch(&err);
             let err = cache.explained(&cache.root().join("tmp"), err);
-            Error::io(
-                format_args!("could not make a folder for {name} in the cache"),
-                &err,
-            )
+            let error = Error::io(format_args!("could not make a folder for {name} to run in"), &err);
+            if scratch {
+                error.help("set TMPDIR to a folder of your own, or leave it unset to use /tmp, since others may write the cache's tmp folder")
+            } else {
+                error
+            }
         })?;
         tracing::debug!(folder = %staging.folder().display(), "{name} runs");
         for read in &step.inputs {
@@ -878,12 +884,20 @@ impl<'a> Building<'a> {
         let output = &self.context.output;
         let forward = |line: &str| output.item(line);
         let forward: Option<&dyn Fn(&str)> = output.shows_items().then_some(&forward);
-        let cache = self.work.cache.root();
-        let free = || crate::space::free(cache);
-        let floor = step::Floor {
-            bytes: self.floor,
-            free: &free,
+        // the step writes on the disk holding its folder, which is TMPDIR's when the cache is shared
+        let (watched, holding, bytes) = match staging.scratch() {
+            Some(scratch) => (
+                scratch,
+                "TMPDIR",
+                crate::space::floor(
+                    self.context.settings.build_floor.value,
+                    crate::space::total(scratch),
+                ),
+            ),
+            None => (self.work.cache.root(), "the cache", self.floor),
         };
+        let free = || crate::space::free(watched);
+        let floor = step::Floor { bytes, free: &free };
         let ran = step::run(
             &command,
             &project.root,
@@ -900,15 +914,15 @@ impl<'a> Building<'a> {
             Ended::Low { free } => Err(Error::new(
                 Kind::LocalIo,
                 format!(
-                    "stopped {name}: the disk holding the cache has less than {} free; the step had written {}",
-                    units::size(self.floor),
+                    "stopped {name}: the disk holding {holding} has less than {} free; the step had written {}",
+                    units::size(bytes),
                     units::size(staging.written())
                 ),
             )
             .detail(format!(
                 "{} is free on the disk holding {}",
                 units::size(free),
-                cache.display()
+                watched.display()
             ))
             .help(format!(
                 "free space on that disk, or {}; data.lock and {folder} are as they were",

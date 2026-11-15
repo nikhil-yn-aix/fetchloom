@@ -20,6 +20,10 @@ const SHARDS: usize = 16;
 /// its lock.
 const BUILD: &str = "build";
 
+/// how the name of a step's folder in TMPDIR starts, as no other program's there does.
+#[cfg(unix)]
+pub(crate) const SCRATCH: &str = "fetchloom-";
+
 #[cfg(test)]
 thread_local! {
     /// what a test does to a folder's name once a clear has looked at the folder and before its
@@ -81,44 +85,35 @@ impl Cache {
         Ok(Arc::new(staging))
     }
 
-    /// makes `tmp/<16 hex>.build` for one step of a build, only its owner's on unix, after clearing
-    /// those of ended builds. its lock, named once held, tells a sweep the build still runs.
+    /// makes `tmp/<16 hex>.build` for one step of a build, as [`make_build_folder`] does, after
+    /// clearing those of ended builds.
     pub(crate) fn build_folder(&self) -> io::Result<(PathBuf, Option<File>)> {
+        self.sweep_tmp();
+        make_build_folder(&self.root.join("tmp"), "")
+    }
+
+    /// clears what ended runs left in tmp/: archive staging, and build folders no build holds.
+    pub(crate) fn sweep_tmp(&self) {
         self.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
-        let folder = loop {
-            let folder = self
-                .root
-                .join("tmp")
-                .join(format!("{:016x}.{BUILD}", fastrand::u64(..)));
-            #[cfg(unix)]
-            let made = std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
-                .create(&folder);
-            #[cfg(not(unix))]
-            let made = fs::create_dir(&folder);
-            match made {
-                Ok(()) => break folder,
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(err) => return Err(err),
-            }
+    }
+
+    /// whether the disk holding the cache clones files, as a probe in an archive's staging folder,
+    /// reached through held folders, finds: a copy of a cached file then takes no room of its own
+    /// until it changes.
+    pub(crate) fn clones(&self) -> bool {
+        let Ok(staging) = self.staging() else {
+            return false;
         };
-        let opening = folder.join("lock.new");
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&opening)?;
-        match lock.try_lock() {
-            Ok(()) => {
-                fs::rename(&opening, folder.join("lock"))?;
-                Ok((folder, Some(lock)))
-            }
-            Err(TryLockError::WouldBlock) => Err(io::ErrorKind::WouldBlock.into()),
-            Err(TryLockError::Error(_)) => {
-                drop(lock);
-                fs::rename(&opening, folder.join("unlocked"))?;
-                Ok((folder, None))
-            }
-        }
+        let probe = staging.folder.join("probe");
+        staging
+            .namespace
+            .create_file(&probe, false)
+            .and_then(|mut file| io::Write::write_all(&mut file, b"probe"))
+            .is_ok()
+            && staging
+                .namespace
+                .copy_file(&probe, &staging.folder.join("clone"), false)
+                .is_ok_and(|method| method == crate::place::Method::Reflink)
     }
 
     /// reclaims unlocked staging at once. a folder without a lock, one a writer is still opening
@@ -393,6 +388,69 @@ fn all_old(folder: &Path, deeper: bool, now: SystemTime, stop: &Stop) -> bool {
                 })
         })
     })
+}
+
+/// makes `<prefix><16 hex>.build` in `parent` for one step of a build, only its owner's on unix.
+/// its lock, named once held, tells a sweep the build still runs.
+pub(crate) fn make_build_folder(
+    parent: &Path,
+    prefix: &str,
+) -> io::Result<(PathBuf, Option<File>)> {
+    let folder = loop {
+        let folder = parent.join(format!("{prefix}{:016x}.{BUILD}", fastrand::u64(..)));
+        #[cfg(unix)]
+        let made = std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
+            .create(&folder);
+        #[cfg(not(unix))]
+        let made = fs::create_dir(&folder);
+        match made {
+            Ok(()) => break folder,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+    };
+    let opening = folder.join("lock.new");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&opening)?;
+    match lock.try_lock() {
+        Ok(()) => {
+            fs::rename(&opening, folder.join("lock"))?;
+            Ok((folder, Some(lock)))
+        }
+        Err(TryLockError::WouldBlock) => Err(io::ErrorKind::WouldBlock.into()),
+        Err(TryLockError::Error(_)) => {
+            drop(lock);
+            fs::rename(&opening, folder.join("unlocked"))?;
+            Ok((folder, None))
+        }
+    }
+}
+
+/// clears what killed builds left in `scratch`, the folder TMPDIR names, which `parent` holds
+/// open: the folders [`make_build_folder`] names there that this user owns and no one else may
+/// open, once no build holds their lock, as [`sweep_build_at`] says.
+#[cfg(unix)]
+pub(crate) fn sweep_scratch(parent: &File, scratch: &Path) {
+    let Ok(entries) = fs::read_dir(scratch) else {
+        return;
+    };
+    let suffix = format!(".{BUILD}");
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let named = name
+            .to_str()
+            .is_some_and(|name| name.starts_with(SCRATCH) && name.ends_with(&suffix));
+        if !named || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let now = SystemTime::now();
+        if let Err(err) = sweep_build_at(parent, &entry.path(), now, &Stop::default(), true) {
+            tracing::debug!(%err, folder = %entry.path().display(), "could not clear a build's folder in TMPDIR");
+        }
+    }
 }
 
 /// clears the build folder at `path`, which the folder `parent` holds by its name, once no build

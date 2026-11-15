@@ -26,7 +26,7 @@ impl Building<'_> {
             .map(|step| self.needs(step, &mut fetched))
             .collect();
         // one probe a run: copies of what a step reads take no room where the disk clones
-        let clones = Staging::new(cache).is_ok_and(|staging| staging.clones());
+        let clones = Staging::new(cache, &self.scratch).is_ok_and(|staging| staging.clones(cache));
         let peak = space::peak(&needs, clones);
         let unknown: Vec<&str> = running
             .iter()

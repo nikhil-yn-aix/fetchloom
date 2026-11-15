@@ -51,7 +51,7 @@ on windows a folder takes its permissions from the folders above it, and fetchlo
 
 `CACHEDIR.TAG` lets backup tools skip the cache, and on macos the cache is also kept out of spotlight and time machine. `gc.lock` is empty; commands that use the cache share a lock on it and `cache gc` takes it alone, as [runs that use the cache](../commands/cache.md#runs-that-use-the-cache) says. `reminded` is empty; its modification time is when fetchloom last [checked for bytes no project needs](../commands/cache.md#reminder).
 
-`objects/` holds the files, read-only. a file whose modification time moved since it entered the cache was written since, and is hashed before use. `tmp/` holds work in progress: an archive's files while they unpack, each recipe step's `in/` and `out/` folders, which only you may enter on linux and macos, and records being written. a run that was killed leaves its folder there, and the next run or gc removes it.
+`objects/` holds the files, read-only. a file whose modification time moved since it entered the cache was written since, and is hashed before use. `tmp/` holds work in progress: an archive's files while they unpack, each recipe step's `in/` and `out/` folders, which only you may enter on linux and macos, and records being written. on linux and macos, when other users may write `tmp/`, a step's folders are in the folder `TMPDIR` names instead, as [recipes](recipes.md#the-step) says. a run that was killed leaves its folder there, and the next run or gc removes it.
 
 ## URL and partial records
 

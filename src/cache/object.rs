@@ -101,10 +101,27 @@ impl Cache {
         flush: bool,
         stop: &Stop,
     ) -> io::Result<Copied> {
-        let mut input = match opened(source, size) {
-            Ok(input) => input,
-            Err(copied) => return Ok(copied),
-        };
+        match opened(source, size) {
+            Ok(input) => self.copy_opened(input, digest, size, flush, stop),
+            Err(copied) => Ok(copied),
+        }
+    }
+
+    /// [`Cache::copy_in`] of `input`, a plain file open to read, which a caller opened without
+    /// following a link: its bytes must be the `size` bytes `digest` pins.
+    ///
+    /// # Errors
+    ///
+    /// a failure to write the object, and `Interrupted` when `stop` asks. failing to read
+    /// `input` is [`Copied::Unread`].
+    pub(crate) fn copy_opened(
+        &self,
+        mut input: File,
+        digest: &Sha256,
+        size: u64,
+        flush: bool,
+        stop: &Stop,
+    ) -> io::Result<Copied> {
         let most = size.saturating_add(1);
         let mut object = self.new_object()?;
         #[cfg(target_os = "linux")]
