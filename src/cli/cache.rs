@@ -60,18 +60,25 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         &context.stop,
     )?;
     let output = &context.output;
+    let held = match usage.on_disk {
+        Some(disk) => format!(
+            "{} in files, {} on disk",
+            units::size(usage.bytes),
+            units::size(disk)
+        ),
+        None => format!("{} in files", units::size(usage.bytes)),
+    };
     output.label(
         "Cache",
         &format!(
-            "{} · {} · {}",
+            "{} · {} · {held}",
             units::path(cache.root()),
             units::count(usage.objects, "file", "files"),
-            units::size(usage.bytes)
         ),
     );
     let budget = context.settings.cache_budget.value;
     if let Some(budget) = budget {
-        output.label("Budget", &budget_line(usage.bytes, budget));
+        output.label("Budget", &budget_line(usage.held(), budget));
     }
     tell_projects(output, &projects);
     let unfinished = cache.unfinished();
@@ -100,7 +107,8 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     })
 }
 
-/// what the cache's files hold of `budget`, and by how much they pass it.
+/// what the cache's files take of `budget`, on disk where the system says, and by how much they
+/// pass it.
 fn budget_line(bytes: u64, budget: u64) -> String {
     let used = format!("{} of {} used", units::size(bytes), units::size(budget));
     match bytes.checked_sub(budget).filter(|past| *past > 0) {

@@ -1299,7 +1299,11 @@ impl<'a> Loop<'a> {
         let budget = self.context.settings.cache_budget.value;
         let Some(past) = cache_budget::weigh(budget, adding, || {
             let found = self.cache.scan_objects(threads, stop).ok()?;
-            let held = found.objects.iter().map(|object| object.size);
+            // what the files take on the disk, as `fetchloom cache` holds them against the budget
+            let held = found
+                .objects
+                .iter()
+                .map(|object| object.disk.unwrap_or(object.size));
             let held = held.fold(0, u64::saturating_add);
             scan = Some(found);
             Some(held)

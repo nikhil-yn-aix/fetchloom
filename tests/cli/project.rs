@@ -2860,9 +2860,12 @@ fn a_sync_past_the_cache_budget_stops_without_yes_and_warns_with_it() -> Result 
     let document = json(&output)?;
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "unconfirmed", "{document}");
-    assert_eq!(
-        error["message"],
-        "this sync would bring the cache to 2.0 KiB, past the 1.5 KiB cache_budget"
+    // the cache holds one as its disk stores it, in whole blocks, and two adds its bytes
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("this sync would bring the cache to ")
+            && message.ends_with(", past the 1.5 KiB cache_budget"),
+        "{document}"
     );
     assert_eq!(
         error["details"],
@@ -2877,9 +2880,10 @@ fn a_sync_past_the_cache_budget_stops_without_yes_and_warns_with_it() -> Result 
     let output = run(&["--json", "sync", "--yes"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let document = json(&output)?;
-    assert_eq!(
-        crate::support::warning(&document, "cache.over_budget")["message"],
-        "this sync brings the cache to 2.0 KiB, past the 1.5 KiB cache_budget",
+    let warned = crate::support::warning(&document, "cache.over_budget")["message"].to_string();
+    assert!(
+        warned.contains("this sync brings the cache to ")
+            && warned.contains(", past the 1.5 KiB cache_budget"),
         "{document}"
     );
     assert!(fresh.join("data").join("two").exists());
@@ -2887,11 +2891,14 @@ fn a_sync_past_the_cache_budget_stops_without_yes_and_warns_with_it() -> Result 
     let info = json(&run(&["--json", "cache"])?)?;
     assert_eq!(info["result"]["budget"], 1536, "{info}");
     assert_eq!(info["result"]["bytes"], 2048, "{info}");
+    // a disk stores each file in whole blocks, so the files take at least their bytes there
+    if cfg!(unix) {
+        assert!(info["result"]["on_disk"].as_u64() >= Some(2048), "{info}");
+    }
     let told = text(&run(&["cache"])?.stderr)?;
     assert!(
-        told.contains(
-            "     Budget 2.0 KiB of 1.5 KiB used \u{b7} 512 B past it, so a sync that downloads more asks first\n"
-        ),
+        told.contains(" of 1.5 KiB used \u{b7} ")
+            && told.contains(" past it, so a sync that downloads more asks first\n"),
         "{told}"
     );
     Ok(())
@@ -2917,9 +2924,12 @@ fn an_add_past_the_cache_budget_is_named_as_an_add() -> Result {
         .output()?;
     let document = json(&output)?;
     assert_eq!(output.status.code(), Some(1), "{document}");
-    assert_eq!(
-        document["errors"][0]["message"],
-        "this add would bring the cache to 2.0 KiB, past the 1.5 KiB cache_budget",
+    let message = document["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.starts_with("this add would bring the cache to ")
+            && message.ends_with(", past the 1.5 KiB cache_budget"),
         "{document}"
     );
     // two is what the add brings, so only one is offered for removal

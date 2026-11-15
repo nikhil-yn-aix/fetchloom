@@ -249,7 +249,10 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     assert_eq!(result["inputs_only"], 0, "{report}");
     let story = text(&sandbox.run(&["cache"])?.stderr)?;
     if links.hardlinks_read_only() && !links.reflink {
-        sandbox.filters().bind(|| insta::assert_snapshot!(story));
+        // what files take on disk follows the disk's block size, and windows does not say it
+        let mut filters = sandbox.filters();
+        filters.add_filter(r", [0-9.]+ [KMGT]?i?B on disk", "");
+        filters.bind(|| insta::assert_snapshot!(story));
     }
     Ok(())
 }

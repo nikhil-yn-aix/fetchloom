@@ -2,7 +2,7 @@
 source: tests/cli/cache.rs
 expression: story
 ---
-      Cache [sandbox]/cache · 4 files · 214 B
+      Cache [sandbox]/cache · 4 files · 214 B in files
     Used by [sandbox]/work
      Needed 133 B by 1 project · 81 B of it is linked outside the cache too, so deleting it would free nothing
    Unneeded 81 B · gc frees 49 B once it is a day old; 32 B of it is linked outside the cache too, so deleting it would free nothing

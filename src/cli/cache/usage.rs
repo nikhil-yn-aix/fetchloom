@@ -23,6 +23,9 @@ use crate::threads::Threads;
 pub(crate) struct Usage {
     pub(crate) objects: u64,
     pub(crate) bytes: u64,
+    /// what the objects take on the disk in whole blocks, which small files make far more than
+    /// `bytes`; none where the system does not say, as on windows.
+    pub(crate) on_disk: Option<u64>,
     /// what the registered projects need.
     pub(crate) needed: u64,
     /// of `needed`, what has another name outside the cache too, as a project's hardlink gives
@@ -55,6 +58,12 @@ pub(crate) struct Usage {
 }
 
 impl Usage {
+    /// what the cache's files take, as `cache_budget` holds them: on the disk, where the system
+    /// says, else their bytes.
+    pub(crate) fn held(&self) -> u64 {
+        self.on_disk.unwrap_or(self.bytes)
+    }
+
     /// what `scan`'s objects hold against what `needed` keeps, as gc counts them at `now`, and the
     /// copies of them placed in `projects`, on `threads`. windows opens each object to count names.
     pub(crate) fn measure(
@@ -67,11 +76,16 @@ impl Usage {
     ) -> Result<Usage, Error> {
         let mut usage = Usage {
             inputs_only: needed.told.then_some(0),
+            on_disk: Some(0),
             ..Usage::default()
         };
         for object in &scan.objects {
             usage.objects += 1;
             usage.bytes += object.size;
+            usage.on_disk = usage
+                .on_disk
+                .zip(object.disk)
+                .map(|(sum, disk)| sum.saturating_add(disk));
             let linked = object.has_other_names();
             if needed.objects.contains(&object.digest) {
                 usage.needed += object.size;
@@ -202,6 +216,7 @@ mod tests {
             path: PathBuf::from(name),
             changed,
             names: Some(names),
+            disk: Some(size.div_ceil(4096) * 4096),
         }
     }
 
@@ -237,6 +252,8 @@ mod tests {
             Usage {
                 objects: 5,
                 bytes: 11_111,
+                // each file takes whole blocks of 4 KiB: four of one block, one of three
+                on_disk: Some(7 * 4096),
                 needed: 11_000,
                 linked: 1_000,
                 unneeded: 111,

@@ -33,6 +33,8 @@ pub(crate) struct Object {
     /// how many names its file has, more than one while a hardlink, such as a project's, shares
     /// it. none where a folder's listing does not tell, as on windows.
     pub(crate) names: Option<u64>,
+    /// the bytes its file takes on the disk, in whole blocks, where the system says.
+    pub(crate) disk: Option<u64>,
 }
 
 impl Object {
@@ -336,6 +338,7 @@ impl Cache {
                     path,
                     changed: found.changed,
                     names: found.names,
+                    disk: found.disk,
                 });
             }
             scan.unreadable.extend(fan.unreadable);
@@ -731,6 +734,7 @@ struct Found {
     size: u64,
     changed: SystemTime,
     names: Option<u64>,
+    disk: Option<u64>,
 }
 
 /// the objects in the fan folder `fan`, whose name is `prefix`.
@@ -759,12 +763,16 @@ fn scan_fan(prefix: &str, fan: &Path, stop: &Stop) -> Result<Fan, Error> {
             // the metadata unix gives counts names, so this takes no further call; what a windows
             // listing gives does not count them
             #[cfg(unix)]
-            let names = Some(std::os::unix::fs::MetadataExt::nlink(&metadata));
+            let (names, disk) = {
+                use std::os::unix::fs::MetadataExt;
+                // unix counts blocks of 512 bytes, whatever the disk's own block size
+                (Some(metadata.nlink()), metadata.blocks().checked_mul(512))
+            };
             #[cfg(not(unix))]
-            let names = None;
-            Ok((metadata.len(), changed, names))
+            let (names, disk) = (None, None);
+            Ok((metadata.len(), changed, names, disk))
         }) {
-            Ok((size, changed, names)) => {
+            Ok((size, changed, names, disk)) => {
                 if !hex
                     .iter()
                     .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
@@ -776,6 +784,7 @@ fn scan_fan(prefix: &str, fan: &Path, stop: &Stop) -> Result<Fan, Error> {
                     size,
                     changed,
                     names,
+                    disk,
                 });
             }
             Err(err) => unreadable.push(Failure::new(&entry.path(), &err)),
