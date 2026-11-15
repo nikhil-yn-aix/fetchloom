@@ -409,7 +409,12 @@ fn meant(manifest: &Manifest, (root, here): (&Path, &Path), arg: &Path) -> Optio
 
 /// `arg`, relative to `here` and maybe naming a file already deleted, as a project path with `/`
 /// between folders, read without following links. it fails as `usage` outside the data folder.
-fn in_data_folder(root: &Path, here: &Path, data_dir: &str, arg: &Path) -> Result<String, Error> {
+pub(super) fn in_data_folder(
+    root: &Path,
+    here: &Path,
+    data_dir: &str,
+    arg: &Path,
+) -> Result<String, Error> {
     let outside = || {
         Error::new(
             Kind::Usage,

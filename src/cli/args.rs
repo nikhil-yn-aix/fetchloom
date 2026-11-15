@@ -1284,7 +1284,7 @@ pub(crate) enum Format {
 /// print where a dataset or a file in it is
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Path {
-    /// a dataset's name, or a file inside it as name/path
+    /// a dataset's name, or a file inside it as name/path or by its path, as data/name/path
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) target: String,
 

@@ -54,6 +54,48 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
     Ok(())
 }
 
+/// a placed file or folder named as `ls` shows it, from the data folder on and from wherever the
+/// person stands, gets the same answer as its dataset's name with the path in it; a bare file name
+/// one dataset's folder holds gets that command.
+#[test]
+fn path_takes_a_placed_path_as_ls_shows_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let folder = sandbox.work().join("data").join("iris");
+    let below = sandbox.work().join("notebooks");
+    fs::create_dir(&below)?;
+    let work = sandbox.work();
+    for (here, target, answer) in [
+        (&work, "data/iris/iris.csv", folder.join("iris.csv")),
+        (&work, "./data/iris/iris.csv", folder.join("iris.csv")),
+        (&work, "data/iris/", folder.clone()),
+        (&below, "../data/iris/iris.csv", folder.join("iris.csv")),
+        (&folder, "iris.csv", folder.join("iris.csv")),
+    ] {
+        let output = sandbox.command_in(here, &["path", target]).output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{target}: {}",
+            text(&output.stderr)?
+        );
+        assert_eq!(
+            text(&output.stdout)?,
+            format!("{}\n", answer.display()),
+            "{target}"
+        );
+    }
+    let bare = sandbox.run(&["path", "iris.csv"])?;
+    let stderr = text(&bare.stderr)?;
+    assert_eq!(bare.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("help: did you mean `fetchloom path iris/iris.csv`?"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn path_answers_a_file_a_dataset_lacks_with_paths_it_holds() -> Result {
     let sandbox = Sandbox::new()?;

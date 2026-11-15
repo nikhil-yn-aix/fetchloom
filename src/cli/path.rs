@@ -36,13 +36,19 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     let project = find(&context.output)?;
     let before = state_stamp(&project);
     let (_, manifest) = project.manifest()?;
-    named(&manifest, &args.target)?;
-    let (name, file) = match args.target.split_once('/') {
+    let target = placed(&project, &manifest, &args.target).unwrap_or(args.target);
+    named(&manifest, &target)?;
+    let (name, file) = match target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
-        None => (args.target.as_str(), None),
+        None => (target.as_str(), None),
     };
-    let rest = &args.target[name.len()..];
-    answerable(&manifest, name, rest)?;
+    let rest = &target[name.len()..];
+    answerable(&manifest, name, rest).map_err(|error| {
+        match held_by(&project, &manifest, &target) {
+            Some(help) => error.help(help),
+            None => error,
+        }
+    })?;
     let lock = pins(&project, &manifest, name)?;
     let scope = answered(&project, &manifest, lock.as_ref(), name, args.locked)?;
     let mut cache = None;
@@ -128,6 +134,77 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         "a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache",
     );
     Ok(Report { path })
+}
+
+/// `target` as path reads it, a dataset's name and a path in it, when it is typed as a path to a
+/// dataset's folder or to something in it, as `ls` shows them: `data/iris/Iris.csv` from the
+/// project's folder, or `Iris.csv` from data/iris. none when it starts with a dataset's name or
+/// names no one dataset's folder.
+fn placed(project: &Project, manifest: &Manifest, target: &str) -> Option<String> {
+    let first = target.split(['/', '\\']).next().unwrap_or(target);
+    if manifest.datasets.contains_key(first) {
+        return None;
+    }
+    let here = std::env::current_dir().ok()?;
+    let path = super::exclude::in_data_folder(
+        &project.root,
+        &here,
+        &manifest.data_dir,
+        std::path::Path::new(target),
+    )
+    .ok()?;
+    let parts: Vec<&str> = path.split('/').collect();
+    let mut holders: Vec<(usize, &String)> = manifest
+        .datasets
+        .keys()
+        .filter_map(|dataset| {
+            let folder = plan::folder(manifest, dataset);
+            let depth = folder.split('/').count();
+            let inside = parts.len() >= depth
+                && folder
+                    .split('/')
+                    .zip(&parts)
+                    .all(|(theirs, typed)| name::fold(theirs) == name::fold(typed));
+            inside.then_some((depth, dataset))
+        })
+        .collect();
+    holders.sort_by_key(|(depth, _)| std::cmp::Reverse(*depth));
+    let (depth, dataset) = match holders.as_slice() {
+        [only] => *only,
+        [deepest, next, ..] if deepest.0 > next.0 => *deepest,
+        _ => return None,
+    };
+    Some(match parts[depth..].join("/") {
+        rest if rest.is_empty() => dataset.clone(),
+        rest => format!("{dataset}/{rest}"),
+    })
+}
+
+/// the help for `target`, which names no dataset, when the folder of one dataset alone holds a
+/// file or folder at that path, as data/iris holds `Iris.csv`: the command that names it.
+fn held_by(project: &Project, manifest: &Manifest, target: &str) -> Option<String> {
+    let typed = target.trim_matches('/');
+    let plain = typed
+        .split('/')
+        .all(|part| !part.is_empty() && part != "." && part != "..");
+    let first = typed.split('/').next().unwrap_or(typed);
+    if !plain || manifest.datasets.contains_key(first) {
+        return None;
+    }
+    let mut holding = manifest.datasets.keys().filter(|dataset| {
+        let folder = plan::folder(manifest, dataset);
+        std::fs::symlink_metadata(project.root.join(folder).join(typed)).is_ok()
+    });
+    let dataset = holding.next()?;
+    if holding.next().is_some() {
+        return None;
+    }
+    let meant = format!("{dataset}/{typed}");
+    let instead = format!("fetchloom path {}", super::shell_word(&meant));
+    Some(format!(
+        "did you mean `{}`?",
+        super::meant(&[target], &[&meant], instead)
+    ))
 }
 
 /// refuses a target that names no dataset before it is split into a name and a path in it: an
