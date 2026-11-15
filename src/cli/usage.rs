@@ -192,11 +192,62 @@ fn habit(command: &str) -> Option<&'static str> {
             "`fetchloom cache gc` frees what no project needs; `fetchloom drop <name>` frees a dataset here"
         }
         "import" => "`fetchloom add <path>` adds files on this machine to the project",
+        "settings get" | "settings show" | "settings list" => {
+            "`fetchloom settings` shows each setting, its value and where it came from"
+        }
         "show" | "info" => {
             "`fetchloom list` shows the project's datasets; `fetchloom list <name>` one"
         }
         _ => return None,
     })
+}
+
+/// `settings set jobs=4`, which gives the key and its value as one word: the line with them
+/// apart, as the help for the value it lacks.
+fn key_and_value(parent: Option<&str>, line: &[String]) -> Option<String> {
+    if parent != Some("settings set") {
+        return None;
+    }
+    let after = line.iter().position(|word| word == "set")?;
+    let joined = line[after + 1..]
+        .iter()
+        .find(|word| !word.starts_with('-') && word.contains('='))?;
+    let (key, value) = joined.split_once('=')?;
+    let shown = format!("fetchloom settings set {key} {}", super::shell_word(value));
+    let retyped = super::meant(&[joined], &[key, value], shown);
+    Some(format!(
+        "write the key and its value apart, as in `{retyped}`"
+    ))
+}
+
+/// `diff -HEAD`: a revision typed with a `-` before it, which clap reads as options. one whose
+/// first letter is no option of fetchloom's is taken as the revision meant.
+fn dashed_revision(err: &clap::Error, parent: Option<&str>, line: &[String]) -> Option<Error> {
+    if parent != Some("diff") || err.kind() != ErrorKind::UnknownArgument {
+        return None;
+    }
+    let read = typed(err, ContextKind::InvalidArg).into_iter().next()?;
+    let word = line
+        .iter()
+        .find(|word| !word.starts_with("--") && word.len() > 2 && word.starts_with(&read))?;
+    let revision = word.strip_prefix('-')?;
+    let letter = revision.chars().next()?;
+    let root = args::Args::command();
+    if root
+        .get_arguments()
+        .any(|arg| arg.get_short() == Some(letter))
+    {
+        return None;
+    }
+    let shown = format!("fetchloom diff {}", super::shell_word(revision));
+    let retyped = super::meant(&[word], &[revision], shown);
+    Some(
+        Error::new(
+            Kind::Usage,
+            format!("a revision cannot start with -, as \"{word}\" does"),
+        )
+        .help(format!("did you mean `{retyped}`?")),
+    )
 }
 
 /// what a missing argument of `command` may be, when that is a short closed list, as a help that
@@ -236,8 +287,10 @@ fn describe(
     (parent, line): (Option<&str>, &[String]),
     shell: Option<&std::ffi::OsStr>,
 ) -> Error {
-    if let Some((message, help)) = explained(err) {
-        return Error::new(Kind::Usage, message).help(help);
+    let explained =
+        explained(err).map(|(message, help)| Error::new(Kind::Usage, message).help(help));
+    if let Some(error) = explained.or_else(|| dashed_revision(err, parent, line)) {
+        return error;
     }
     let named = |kind| context_value(err, kind);
     // a missing or wrong value is easiest to fix next to the usage lines, one for each form
@@ -278,8 +331,11 @@ fn describe(
             misplaced_option(&arg, after.as_deref())
         })
         .flatten();
+    // a key and its value as one word is answered before the list of what a value may be
     let choices = (err.kind() == ErrorKind::MissingRequiredArgument)
-        .then(|| parent.and_then(|parent| choices(parent, shell)))
+        .then(|| {
+            key_and_value(parent, line).or_else(|| parent.and_then(|parent| choices(parent, shell)))
+        })
         .flatten();
     let help = if let Some(placement) = placement {
         placement
@@ -879,6 +935,35 @@ mod tests {
         Ok(())
     }
 
+    /// a key and its value written as one word, and a revision with a `-` before it, are each
+    /// answered with the line they meant.
+    #[test]
+    fn a_joined_setting_and_a_dashed_revision_get_the_line_meant()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let joined = problem(&["fetchloom", "settings", "set", "jobs=4"])?;
+        assert_eq!(joined.message, "settings set needs <key> <value>");
+        assert_eq!(
+            joined.help.as_deref(),
+            Some("write the key and its value apart, as in `fetchloom settings set jobs 4`")
+        );
+        for (revision, meant) in [("-HEAD", "HEAD"), ("-main", "main"), ("-HEAD~1", "HEAD~1")] {
+            let dashed = problem(&["fetchloom", "diff", revision])?;
+            assert_eq!(
+                dashed.message,
+                format!("a revision cannot start with -, as \"{revision}\" does")
+            );
+            assert_eq!(
+                dashed.help.as_deref(),
+                Some(format!("did you mean `fetchloom diff {meant}`?").as_str()),
+                "{revision}"
+            );
+        }
+        // a short option of fetchloom's own, as -v, is no revision
+        let option = problem(&["fetchloom", "diff", "-vx"])?;
+        assert!(!option.message.contains("revision"), "{}", option.message);
+        Ok(())
+    }
+
     #[test]
     fn init_says_no_setup_is_needed() -> Result<(), Box<dyn std::error::Error>> {
         let init = problem(&["fetchloom", "init"])?;
@@ -955,6 +1040,15 @@ mod tests {
                 format!("there is no command called \"{word}\"")
             );
             assert_eq!(error.help.as_deref(), Some(help), "{word}");
+        }
+        for word in ["get", "show", "list"] {
+            assert_eq!(
+                problem(&["fetchloom", "settings", word, "jobs"])?
+                    .help
+                    .as_deref(),
+                Some("`fetchloom settings` shows each setting, its value and where it came from"),
+                "{word}"
+            );
         }
         let status = problem(&["fetchloom", "auth", "status"])?;
         assert_eq!(status.message, "there is no command called \"status\"");
