@@ -1,7 +1,7 @@
 //! unfinished downloads: the bytes so far, a record of them, and a lock keeping each to one
 //! process. none is ever opened through a link, which anyone who can write the cache could plant.
 
-use std::fs::{self, File, Metadata, OpenOptions, TryLockError};
+use std::fs::{File, Metadata, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,10 +11,12 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use super::deferred::Finished;
+use super::folder::Folder;
 use super::{Cache, Stored, Validators};
 use crate::digest::{self, Hasher, Sha256};
-use crate::place::{FolderUse, real_folder};
-use crate::volume::{is_plain, open_unfollowed};
+use crate::volume::is_plain;
+#[cfg(test)]
+use crate::volume::open_unfollowed;
 
 mod hashing;
 
@@ -44,6 +46,9 @@ pub(crate) enum Claim {
 pub(crate) struct Partial {
     cache: Cache,
     url: String,
+    /// the folder `bytes` and `record` are in, held as it was claimed: every file of the download
+    /// is made, read and removed through it, so a link put at its name never takes one elsewhere.
+    folder: Arc<Folder>,
     bytes: PathBuf,
     record: PathBuf,
     lock: Option<Arc<Claimed>>,
@@ -54,21 +59,19 @@ pub(crate) struct Partial {
 #[derive(Debug)]
 pub(super) struct Claimed {
     file: File,
-    path: PathBuf,
-    bytes: PathBuf,
-    record: PathBuf,
+    folder: Arc<Folder>,
+    /// the names of the lock, the bytes and their record in `folder`.
+    names: [String; 3],
 }
 
 impl Drop for Claimed {
     fn drop(&mut self) {
-        let gone = |path: &Path| {
-            fs::symlink_metadata(path).is_err_and(|err| err.kind() == io::ErrorKind::NotFound)
-        };
+        let [lock, bytes, record] = &self.names;
         // a name that moved on to another run's file stays with that run
-        if gone(&self.bytes)
-            && gone(&self.record)
-            && names(&self.path, &self.file).unwrap_or(false)
-            && let Err(err) = fs::remove_file(&self.path)
+        if self.folder.lacks(bytes)
+            && self.folder.lacks(record)
+            && self.folder.names(lock, &self.file).unwrap_or(false)
+            && let Err(err) = self.folder.remove(lock)
         {
             tracing::debug!(%err, "could not remove the lock file of a finished download");
         }
@@ -111,40 +114,45 @@ impl Cache {
     pub(crate) fn claim(&self, url: &str) -> io::Result<Claim> {
         let key = digest::sha256(url.as_bytes()).hex();
         let partial = self.partial_folder(&key);
-        // the shard is checked as a real folder, and so is the folder it is made in, so a link
-        // in place of either never takes a download out of the cache
-        for folder in [self.root.join("partial"), partial.clone()] {
-            // a folder that cannot be made is refused by the one it would be made in
-            let within = folder.parent().unwrap_or(&self.root);
-            real_folder(&folder, FolderUse::Cache).map_err(|err| self.explained(within, err))?;
-        }
+        let below = partial.strip_prefix(&self.root).unwrap_or(&partial);
+        // a folder that cannot be made is refused by the one it would be made in
+        let shard = Folder::open(&self.root, below)
+            .map_err(|err| self.explained(partial.parent().unwrap_or(&self.root), err))?;
+        let shard = Arc::new(shard);
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
-        let path = partial.join(format!("{key}.lock"));
-        let opened = open_claim(&path).map_err(|err| self.explained(&partial, err))?;
-        let (folder, stem, lock) = match take_lock(&path, opened) {
-            Ok(lock) => (partial, key, Some(lock)),
+        let lock_name = format!("{key}.lock");
+        let opened = open_claim(&shard, &lock_name).map_err(|err| self.explained(&partial, err))?;
+        let taken = lock_named(
+            opened,
+            |file| shard.names(&lock_name, file),
+            || open_claim(&shard, &lock_name),
+        );
+        let (folder, stem, lock) = match taken {
+            Ok(lock) => (shard, key, Some(lock)),
             Err(TryLockError::WouldBlock) => return Ok(Claim::Busy),
             // without locks, a private file keeps processes apart, at the cost of resuming
-            Err(TryLockError::Error(_)) => (
-                self.root.join("tmp"),
-                format!("{key}.{:016x}", fastrand::u64(..)),
-                None,
-            ),
+            Err(TryLockError::Error(_)) => {
+                let tmp = Folder::open(&self.root, Path::new("tmp"))
+                    .map_err(|err| self.explained(&self.root, err))?;
+                let stem = format!("{key}.{:016x}", fastrand::u64(..));
+                (Arc::new(tmp), stem, None)
+            }
         };
-        let bytes = folder.join(format!("{stem}.part"));
-        let record = folder.join(format!("{stem}.json"));
+        let names = [lock_name, format!("{stem}.part"), format!("{stem}.json")];
+        let bytes = folder.join(&names[1]);
+        let record = folder.join(&names[2]);
         let lock = lock.map(|file| {
             Arc::new(Claimed {
                 file,
-                path,
-                bytes: bytes.clone(),
-                record: record.clone(),
+                folder: Arc::clone(&folder),
+                names,
             })
         });
         Ok(Claim::Owned(Partial {
             cache: self.clone(),
             url: url.to_owned(),
+            folder,
             bytes,
             record,
             lock,
@@ -155,22 +163,43 @@ impl Cache {
 /// locks the claim file `opened` from `path`, opening `path` again until the file locked is the
 /// one it names: gc removes lock files nobody holds, and a lock on a file with no name keeps
 /// nobody out. an error that keeps the lock from being checked counts as having no locks.
-pub(super) fn take_lock(path: &Path, mut opened: File) -> Result<File, TryLockError> {
+#[cfg(test)]
+pub(super) fn take_lock(path: &Path, opened: File) -> Result<File, TryLockError> {
+    let retries = if cfg!(windows) { 50 } else { 0 };
+    lock_named(
+        opened,
+        |file| names(path, file),
+        || {
+            retry_denied(retries, Duration::from_millis(10), || {
+                open_unfollowed(path, true)
+            })
+        },
+    )
+}
+
+/// [`take_lock`], with `names` saying whether the claim file still has its name and `reopen`
+/// opening it again.
+fn lock_named(
+    mut opened: File,
+    names: impl Fn(&File) -> io::Result<bool>,
+    reopen: impl Fn() -> io::Result<File>,
+) -> Result<File, TryLockError> {
     loop {
         opened.try_lock()?;
-        if names(path, &opened).map_err(TryLockError::Error)? {
+        if names(&opened).map_err(TryLockError::Error)? {
             return Ok(opened);
         }
-        opened = open_claim(path).map_err(TryLockError::Error)?;
+        opened = reopen().map_err(TryLockError::Error)?;
     }
 }
 
-/// opens the claim file at `path`, creating it. windows denies opening a removed file until its
-/// last handle closes, keeping its name meanwhile, so there a refusal is retried for half a second.
-fn open_claim(path: &Path) -> io::Result<File> {
+/// opens the claim file `name` in `folder`, creating it. windows denies opening a removed file
+/// until its last handle closes, keeping its name meanwhile, so there a refusal is retried for half
+/// a second.
+fn open_claim(folder: &Folder, name: &str) -> io::Result<File> {
     let retries = if cfg!(windows) { 50 } else { 0 };
     retry_denied(retries, Duration::from_millis(10), || {
-        open_unfollowed(path, true)
+        folder.open_file(name, true)
     })
 }
 
@@ -206,7 +235,7 @@ pub(crate) fn names(path: &Path, file: &File) -> io::Result<bool> {
     {
         use std::os::unix::fs::MetadataExt;
         let held = file.metadata()?;
-        match fs::symlink_metadata(path) {
+        match std::fs::symlink_metadata(path) {
             Ok(named) => Ok(named.dev() == held.dev() && named.ino() == held.ino()),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
@@ -230,7 +259,11 @@ impl Partial {
     /// then. a split download may have kept ranges past them with none at the start.
     pub(crate) fn resumable(&self) -> Option<(u64, Validators)> {
         let record = self.recorded()?;
-        let kept = fs::symlink_metadata(&self.bytes).ok()?;
+        let kept = self
+            .folder
+            .read_file(name_of(&self.bytes))
+            .and_then(|file| file.metadata())
+            .ok()?;
         let any = record.received > 0 || !record.ranges.is_empty();
         (any && continuable(&kept) && kept.len() >= record.received)
             .then_some((record.received, record.validators))
@@ -253,7 +286,7 @@ impl Partial {
         let lean = offset == 0 && !keep && length.is_some_and(|length| length <= SMALL);
         let (file, begun) = self
             .open(offset, keep, lean)
-            .map_err(|err| self.cache.explained(folder_of(&self.bytes), err))?;
+            .map_err(|err| self.cache.explained(&self.folder.path(), err))?;
         let file = Arc::new(file);
         let mut hasher = if md5 {
             Hasher::with_md5()
@@ -302,6 +335,7 @@ impl Partial {
             writeback: cfg!(target_os = "linux")
                 .then(|| Writeback::new(WRITEBACK_AFTER, WRITEBACK_EVERY)),
             saved: Instant::now(),
+            folder: Arc::clone(&self.folder),
             bytes: self.bytes.clone(),
             record_path: self.record.clone(),
             record: Record {
@@ -336,14 +370,18 @@ impl Partial {
     /// forgets the bytes so far, so the download starts again from the first byte.
     pub(crate) fn discard(&self) {
         self.cache.forget_deferred(&self.bytes);
-        let _ = fs::remove_file(&self.bytes);
-        let _ = fs::remove_file(&self.record);
+        let _ = self.folder.remove(name_of(&self.bytes));
+        let _ = self.folder.remove(name_of(&self.record));
     }
 
     /// forgets a download that kept no byte, as one refused at its question, since a later run
     /// could continue nothing. its lock goes once the claim ends.
     pub(crate) fn discard_unstarted(&self) {
-        if !fs::symlink_metadata(&self.bytes).is_ok_and(|kept| kept.len() > 0) {
+        let kept = self
+            .folder
+            .read_file(name_of(&self.bytes))
+            .and_then(|file| file.metadata());
+        if !kept.is_ok_and(|kept| kept.len() > 0) {
             self.discard();
         }
     }
@@ -352,20 +390,16 @@ impl Partial {
     /// time when this run made it. from the first byte, kept bytes it may not continue get a new
     /// file, as a read-only one may be a name of the object, which must never become writable.
     fn open(&self, offset: u64, keep: bool, lean: bool) -> io::Result<(File, Option<SystemTime>)> {
-        if lean
-            && let Ok(file) = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(&self.bytes)
-        {
+        let name = name_of(&self.bytes);
+        if lean && let Ok(file) = self.folder.create_new(name) {
             let begun = super::object::begun(&file);
             return Ok((file, begun));
         }
-        // windows reports no link count in metadata, so a second name is asked for apart
-        let kept = open_unfollowed(&self.bytes, false).ok().filter(|file| {
+        // unix counts a second name in the metadata `continuable` reads; windows reports no link
+        // count there, so it is asked for apart
+        let kept = self.folder.open_file(name, false).ok().filter(|file| {
             file.metadata().is_ok_and(|metadata| continuable(&metadata))
-                && !crate::place::has_other_names(&self.bytes)
+                && !(cfg!(windows) && crate::place::has_other_names(&self.bytes))
         });
         let (file, begun) = match kept {
             Some(file) => (file, None),
@@ -376,16 +410,13 @@ impl Partial {
                 ));
             }
             None => {
-                if let Err(err) = self.cache.volume.remove(&self.bytes)
+                let unlink = || self.folder.remove(name);
+                if let Err(err) = self.cache.volume.remove_with(&self.bytes, &unlink)
                     && err.kind() != io::ErrorKind::NotFound
                 {
                     return Err(err);
                 }
-                let file = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create_new(true)
-                    .open(&self.bytes)?;
+                let file = self.folder.create_new(name)?;
                 let begun = super::object::begun(&file);
                 (file, begun)
             }
@@ -397,7 +428,7 @@ impl Partial {
     }
 
     fn recorded(&self) -> Option<Record> {
-        let text = fs::read(&self.record).ok()?;
+        let text = self.folder.read(name_of(&self.record)).ok()?;
         let mut record: Record = serde_json::from_slice(&text).ok()?;
         if !super::recorded_url_matches(&record.url, &self.url) {
             return None;
@@ -405,6 +436,13 @@ impl Partial {
         record.url.clone_from(&self.url);
         Some(record)
     }
+}
+
+/// the name of the file at `path` in its folder.
+fn name_of(path: &Path) -> &str {
+    path.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default()
 }
 
 /// whether this process may write on into the file `metadata` describes: a writable plain file,
@@ -440,6 +478,7 @@ pub(crate) struct PartialWriter {
     /// what was written since the disk last started writing it, on linux.
     writeback: Option<Writeback>,
     saved: Instant,
+    folder: Arc<Folder>,
     bytes: PathBuf,
     record_path: PathBuf,
     record: Record,
@@ -636,7 +675,9 @@ impl PartialWriter {
             })
             .collect();
         let text = serde_json::to_vec(&self.record).map_err(io::Error::other)?;
-        self.cache.write_hint(&self.record_path, &text)?;
+        let scratch = Folder::open(self.cache.root(), Path::new("tmp"))?;
+        self.folder
+            .replace(name_of(&self.record_path), &text, &scratch)?;
         self.saved = Instant::now();
         Ok(())
     }
@@ -645,7 +686,7 @@ impl PartialWriter {
     /// before its end fails with [`io::ErrorKind::InvalidData`].
     pub(crate) fn finish(self) -> io::Result<Stored> {
         let cache = self.cache.clone();
-        let folder = folder_of(&self.bytes).to_path_buf();
+        let folder = self.folder.path();
         self.seal_and_publish()
             .map_err(|err| cache.explained(&folder, err))
     }
@@ -669,6 +710,7 @@ impl PartialWriter {
             file,
             hasher,
             prefix,
+            folder,
             bytes,
             record_path,
             record,
@@ -699,6 +741,7 @@ impl PartialWriter {
         file.set_permissions(permissions)?;
         let finished = Finished {
             url: record.url,
+            folder,
             bytes,
             record: record_path,
             digest,

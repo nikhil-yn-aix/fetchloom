@@ -6,14 +6,16 @@
 //! that fails its check, is passed over.
 
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
+#[cfg(test)]
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use super::folder::Folder;
 use super::{UrlRecord, recorded_url_matches};
 use crate::digest;
-use crate::volume::{open_unfollowed, read_unfollowed};
 
 pub(super) const SHARDS: usize = 16;
 
@@ -60,9 +62,9 @@ impl Index {
     }
 
     /// reads the entries past those read before: a first read grouped, a later one as recent.
-    fn read_on(&mut self, path: &Path) -> io::Result<()> {
+    fn read_on(&mut self, root: &Path, shard: usize) -> io::Result<()> {
         if self.file.is_none() {
-            match read_unfollowed(path) {
+            match urls(root, false).and_then(|urls| urls.read_file(&names(shard).1)) {
                 Ok(file) => self.file = Some(file),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
                 Err(err) => return Err(err),
@@ -145,11 +147,12 @@ impl Shards {
             let start = if let Some(start) = index.latest(key) {
                 start
             } else {
-                index.read_on(&paths(root, shard).1).ok()?;
+                index.read_on(root, shard).ok()?;
                 index.latest(key)?
             };
             if index.log.is_none() {
-                index.log = Some(Arc::new(read_unfollowed(&paths(root, shard).0).ok()?));
+                let urls = urls(root, false).ok()?;
+                index.log = Some(Arc::new(urls.read_file(&names(shard).0).ok()?));
             }
             (Arc::clone(index.log.as_ref()?), start)
         };
@@ -179,15 +182,17 @@ impl Shards {
     ) -> io::Result<()> {
         let (shard, key) = place(&record.url);
         let json = serde_json::to_vec(record).map_err(io::Error::other)?;
-        let (records, entries) = paths(root, shard);
+        let (records, entries) = names(shard);
         // windows locks keep other handles off what they cover and refuse one opened to append.
-        // none of these files is opened through a link, since a line holds text a server chose
-        let held = open_unfollowed(&lock_path(root, shard), true)?;
+        // none of these files is opened through a link, nor through a link put where `urls/` was,
+        // since a line holds text a server chose
+        let urls = urls(root, true)?;
+        let held = urls.open_file(&format!("{shard:x}.lock"), true)?;
         match lock(&held) {
             Err(err) if err.kind() != io::ErrorKind::Unsupported => return Err(err),
             _ => {}
         }
-        let mut log = open_unfollowed(&records, true)?;
+        let mut log = urls.open_file(&records, true)?;
         // a shard holds 4 GiB; past that its links go unrecorded until gc writes it again
         let start = u32::try_from(log.seek(SeekFrom::End(0))?).map_err(io::Error::other)?;
         let mut line = Vec::with_capacity(CHECK + json.len() + 1);
@@ -199,7 +204,7 @@ impl Shards {
         let mut entry = [0; ENTRY];
         entry[..8].copy_from_slice(&key.to_le_bytes());
         entry[8..].copy_from_slice(&start.to_le_bytes());
-        let mut index = open_unfollowed(&entries, true)?;
+        let mut index = urls.open_file(&entries, true)?;
         // an entry a dead run left unfinished is written over, so each starts on its boundary
         let whole = index.metadata()?.len() / ENTRY as u64 * ENTRY as u64;
         index.seek(SeekFrom::Start(whole))?;
@@ -223,20 +228,30 @@ impl Shards {
         shard: usize,
         keep: &dyn Fn(&UrlRecord) -> bool,
     ) -> io::Result<()> {
-        let (records, entries) = paths(root, shard);
+        let (records, entries) = names(shard);
         let Some(kept) = kept(root, shard, keep)? else {
             return Ok(());
         };
         *self.indexes[shard]
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Index::default();
+        let urls = urls(root, false)?;
         if kept.lines.is_empty() {
-            remove(&records)?;
-            remove(&entries)
+            for name in [records, entries] {
+                match urls.remove(&name) {
+                    Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                    _ => {}
+                }
+            }
+            Ok(())
         } else {
+            let below = scratch.strip_prefix(root).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "scratch outside the cache")
+            })?;
+            let scratch = Folder::existing(root, below)?;
             // the lines first: an index never names lines its file does not hold
-            replace(scratch, &records, &kept.lines)?;
-            replace(scratch, &entries, &kept.index)
+            urls.replace(&records, &kept.lines, &scratch)?;
+            urls.replace(&entries, &kept.index, &scratch)
         }
     }
 
@@ -265,8 +280,9 @@ struct Kept {
 /// what it holds already. lines without their index, or an index without its lines, name no
 /// record.
 fn kept(root: &Path, shard: usize, keep: &dyn Fn(&UrlRecord) -> bool) -> io::Result<Option<Kept>> {
-    let (records, entries) = paths(root, shard);
-    let (lines, index) = match (read_whole(&records), read_whole(&entries)) {
+    let (records, entries) = names(shard);
+    let read = |name: &str| urls(root, false).and_then(|urls| urls.read(name));
+    let (lines, index) = match (read(&records), read(&entries)) {
         (Ok(lines), Ok(index)) => (lines, index),
         (Err(err), _) | (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
             return Err(err);
@@ -344,6 +360,7 @@ fn parse(entry: &[u8; ENTRY]) -> (u64, u32) {
 }
 
 /// the empty file a shard's writers lock, so that no lock ever covers its lines or index.
+#[cfg(all(test, unix))]
 fn lock_path(root: &Path, shard: usize) -> PathBuf {
     root.join("urls").join(format!("{shard:x}.lock"))
 }
@@ -351,10 +368,23 @@ fn lock_path(root: &Path, shard: usize) -> PathBuf {
 /// a shard's file of lines and its index.
 fn paths(root: &Path, shard: usize) -> (PathBuf, PathBuf) {
     let folder = root.join("urls");
-    (
-        folder.join(format!("{shard:x}.log")),
-        folder.join(format!("{shard:x}.idx")),
-    )
+    let (records, entries) = names(shard);
+    (folder.join(records), folder.join(entries))
+}
+
+/// the names of a shard's file of lines and its index in `urls/`.
+fn names(shard: usize) -> (String, String) {
+    (format!("{shard:x}.log"), format!("{shard:x}.idx"))
+}
+
+/// the `urls/` folder below the cache's `root`, reached without following a link and made where
+/// missing when `make` says so.
+fn urls(root: &Path, make: bool) -> io::Result<Folder> {
+    if make {
+        Folder::open(root, Path::new("urls"))
+    } else {
+        Folder::existing(root, Path::new("urls"))
+    }
 }
 
 /// the line starting at `start` in `file`, without its newline; none for one cut short.
@@ -397,33 +427,6 @@ fn check(json: &[u8]) -> [u8; 16] {
 fn checked(line: &[u8]) -> Option<&[u8]> {
     let json = line.get(CHECK..)?;
     (line[CHECK - 1] == b' ' && check(json) == line[..CHECK - 1]).then_some(json)
-}
-
-/// the bytes of the plain file at `path`, never read through a link.
-fn read_whole(path: &Path) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    read_unfollowed(path)?.read_to_end(&mut bytes)?;
-    Ok(bytes)
-}
-
-/// puts `bytes` at `path` in one step, through a new file of its own in `scratch`.
-fn replace(scratch: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temporary = scratch.join(format!("{:016x}.urls", fastrand::u64(..)));
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?
-        .write_all(bytes)?;
-    fs::rename(&temporary, path).inspect_err(|_| {
-        let _ = fs::remove_file(&temporary);
-    })
-}
-
-fn remove(path: &Path) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
-        _ => Ok(()),
-    }
 }
 
 /// files the latest line of `url` again under the key of `other`, as copying a record from one
@@ -523,6 +526,24 @@ mod tests {
         }
     }
 
+    /// `urls/` someone swapped for a link, as to a shell's folder of startup files, is never
+    /// written through: the save fails and nothing appears there.
+    #[cfg(unix)]
+    #[test]
+    fn a_save_never_writes_through_urls_swapped_for_a_link() {
+        let folder = store();
+        let root = folder.path();
+        let outside = root.join("bashrc.d");
+        fs::create_dir(&outside).unwrap();
+        fs::remove_dir(root.join("urls")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("urls")).unwrap();
+
+        let saved = Shards::default().save(root, &record("https://example.org/a", 1));
+
+        assert!(saved.is_err());
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    }
+
     /// a rewrite's new file takes a name no file had, so one planted at it is never written.
     #[cfg(unix)]
     #[test]
@@ -532,13 +553,18 @@ mod tests {
         let outside = root.join("bashrc");
         fs::write(&outside, b"keep these bytes").unwrap();
         fastrand::seed(7);
-        let planted = root.join(format!("{:016x}.urls", fastrand::u64(..)));
+        let planted = root.join(format!("{:016x}.tmp", fastrand::u64(..)));
         std::os::unix::fs::symlink(&outside, &planted).unwrap();
         fastrand::seed(7);
 
-        assert!(replace(root, &root.join("urls/0.log"), b"a line\n").is_err());
+        let scratch = Folder::existing(root, Path::new("")).unwrap();
+        let replaced = urls(root, false)
+            .unwrap()
+            .replace("0.log", b"a line\n", &scratch);
 
+        replaced.unwrap();
         assert_eq!(fs::read(&outside).unwrap(), b"keep these bytes");
+        assert_eq!(fs::read(root.join("urls/0.log")).unwrap(), b"a line\n");
     }
 
     /// the latest record of a link is the one found, by this run and by the next.

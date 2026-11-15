@@ -3,6 +3,7 @@
 mod changed;
 mod deferred;
 mod failure;
+mod folder;
 mod held;
 mod imported;
 mod object;

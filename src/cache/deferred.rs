@@ -24,6 +24,8 @@ const PUBLISH_WITHIN: Duration = Duration::from_secs(1);
 #[derive(Debug)]
 pub(crate) struct Finished {
     pub(super) url: String,
+    /// the folder `bytes` and `record` are in, held since the download was claimed.
+    pub(super) folder: Arc<super::folder::Folder>,
     pub(super) bytes: PathBuf,
     pub(super) record: PathBuf,
     pub(super) digest: Sha256,
@@ -87,10 +89,15 @@ impl Publishing {
 }
 
 impl Finished {
-    /// puts the download in place under its hash, then lets other processes claim its link.
+    /// puts the download in place under its hash, then lets other processes claim its link. its
+    /// folder must still be the one it was written in, or a file someone put there in its place
+    /// would take the hash.
     pub(super) fn publish(self, cache: &Cache) -> io::Result<Stored> {
+        self.folder.check()?;
         let stored = cache.link_object(&self.bytes, self.digest, self.size, self.md5)?;
-        let _ = fs::remove_file(&self.record);
+        if let Some(record) = self.record.file_name().and_then(std::ffi::OsStr::to_str) {
+            let _ = self.folder.remove(record);
+        }
         drop(self.lock);
         Ok(stored)
     }

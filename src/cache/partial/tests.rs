@@ -2,6 +2,7 @@
 
 use super::super::tests::{cache, fat, hardlinks, seal, store};
 use super::*;
+use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom};
 
 fn owned(cache: &Cache, url: &str) -> Partial {
@@ -701,6 +702,38 @@ fn partial_records_require_length_and_ranges() {
         fs::write(&partial.record, serde_json::to_vec(&missing).unwrap()).unwrap();
         assert!(partial.recorded().is_none(), "missing {field}");
     }
+}
+
+/// a shard someone with write access to the cache swaps for a link after the claim leads nowhere:
+/// the download's files stay in the folder claimed, the download fails before it takes its name,
+/// and nothing appears where the link points, as a shell's folder of startup files.
+#[cfg(unix)]
+#[test]
+fn a_shard_swapped_for_a_link_after_the_claim_takes_no_file_out_of_the_cache() {
+    let (dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/swapped");
+    let shard = partial.bytes.parent().unwrap().to_path_buf();
+    let outside = dir.path().join("bashrc.d");
+    fs::create_dir(&outside).unwrap();
+    fs::rename(&shard, dir.path().join("moved")).unwrap();
+    std::os::unix::fs::symlink(&outside, &shard).unwrap();
+
+    let mut writer = partial
+        .writer(0, None, Validators::default(), false, false)
+        .unwrap();
+    writer.write_all(b"from a server").unwrap();
+    writer.save().unwrap();
+    let finished = writer.finish();
+
+    let error = finished.unwrap_err();
+    assert!(error.to_string().contains("is a link"), "{error}");
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    assert!(
+        dir.path()
+            .join("moved")
+            .join(partial.bytes.file_name().unwrap())
+            .is_file()
+    );
 }
 
 /// a claim file another run removed but still holds keeps its name on windows, and opening it

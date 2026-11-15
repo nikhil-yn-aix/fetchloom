@@ -245,7 +245,8 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | file | owns | start at | other items |
 |---|---|---|---|
 | `src/cache.rs` | the root layout and object lookup: one read-only file per object named by its SHA-256, plus URL and MD5 records and files imported from a person's folder | `Cache`, `Cache::find` | `Stored`, `Imported`, `Validators`, `UrlRecord`, `verify`, `write_hint`, `import_file`, `link_object` |
-| `src/cache/partial.rs` | unfinished downloads: the bytes so far, their record and a lock keeping each to one process; never opened through a link | `Cache::claim`, `PartialWriter` | `Claim`, `Partial`, `read_unfollowed`, `open_unfollowed` |
+| `src/cache/partial.rs` | unfinished downloads: the bytes so far, their record and a lock keeping each to one process; never opened through a link, made and removed through a handle on their folder | `Cache::claim`, `PartialWriter` | `Claim`, `Partial`, `Folder` |
+| `src/cache/folder.rs` | a cache folder held open from the cache's root without following a link, and the files made, read, renamed and removed through it; by path on windows | `Folder` | `open`, `existing`, `check`, `replace` |
 | `src/cache/partial/hashing.rs` | ordered prefix hashing, inline or on another thread behind a bounded queue, so disk writes go on while earlier bytes are hashed | `HashPipe` | `update`, `range`, `sha256_so_far`, `finish` |
 | `src/cache/partial/hashing/lanes.rs` | the optional MD5 lane, which shares a batch's bytes | `Lane` |  |
 | `src/cache/deferred.rs` | finished downloads that take their names only after a flush covers them, one flush per group on linux | `Cache::defer_downloads`, `Finished` | `Cache::publish_downloads`, `Cache::publish_due`, `Cache::publish_download_of` |
