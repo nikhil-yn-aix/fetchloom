@@ -13,7 +13,7 @@ use crate::glob::Glob;
 use crate::project::lock::archives::{self, Pinned};
 use crate::project::lock::derived::{Code, Derived, Input};
 use crate::project::lock::{Lock, Locked};
-use crate::project::manifest::recipes::order;
+use crate::project::manifest::recipes::{Template, order};
 use crate::project::manifest::{Entry, Manifest, Members, Origin};
 
 /// how a key is made. a change to what enters a key, or how, takes a new name, so no result made
@@ -238,14 +238,24 @@ impl Step {
             .map(|input| (input.name.as_str(), input.content))
             .collect();
         let read: BTreeSet<&str> = now.keys().chain(was.keys()).copied().collect();
+        let renames = self.renames(pinned);
         for name in read {
             match (now.get(name), was.get(name)) {
                 (Some(now), Some(was)) if now == was => {}
                 (None, Some(_)) if self.inputs.iter().any(|read| read.name == name) => {}
-                _ => changes.push(Change::Input(name.to_owned())),
+                _ => match renames
+                    .iter()
+                    .find(|(old, new)| name == *old || name == *new)
+                {
+                    Some((old, new)) if name == *old => {
+                        changes.push(Change::Renamed((*old).to_owned(), (*new).to_owned()));
+                    }
+                    Some(_) => {}
+                    None => changes.push(Change::Input(name.to_owned())),
+                },
             }
         }
-        if self.run != pinned.run {
+        if self.run != pinned.run && !only_renamed(&pinned.run, &self.run, &renames) {
             changes.push(Change::Run);
         }
         let paths: BTreeSet<&str> = self
@@ -271,6 +281,50 @@ impl Step {
         }
         changes
     }
+
+    /// each dataset `pinned` was made from that this step no longer reads, paired with the one it
+    /// reads in its place with the same content, as renaming a dataset in data.toml leaves them.
+    fn renames<'a>(&'a self, pinned: &'a Derived) -> Vec<(&'a str, &'a str)> {
+        let left: Vec<(&str, Sha256)> = pinned
+            .from
+            .iter()
+            .filter(|input| !self.inputs.iter().any(|read| read.name == input.name))
+            .map(|input| (input.name.as_str(), input.content))
+            .collect();
+        let came: Vec<(&str, Sha256)> = self
+            .inputs
+            .iter()
+            .filter(|read| !pinned.from.iter().any(|input| input.name == read.name))
+            .filter_map(|read| Some((read.name.as_str(), read.content?)))
+            .collect();
+        let alike = |names: &[(&'a str, Sha256)], content: Sha256| -> Vec<&'a str> {
+            names
+                .iter()
+                .filter(|(_, other)| *other == content)
+                .map(|(name, _)| *name)
+                .collect()
+        };
+        // two of the same content leave which name became which unknown
+        left.iter()
+            .filter_map(|(old, content)| {
+                match (&alike(&left, *content)[..], &alike(&came, *content)[..]) {
+                    ([_], [new]) => Some((*old, *new)),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+}
+
+/// whether the command `now` is `was` with each input `renames` pairs, old name then new, written
+/// by its new name.
+fn only_renamed(was: &[String], now: &[String], renames: &[(&str, &str)]) -> bool {
+    !renames.is_empty()
+        && was.len() == now.len()
+        && was
+            .iter()
+            .zip(now)
+            .all(|(was, now)| Template::parse(was).is_ok_and(|word| word.renamed(renames) == *now))
 }
 
 /// what data.lock pins of the dataset `name` that a recipe reads: a fetched dataset's content, or
@@ -307,6 +361,8 @@ pub(crate) enum Change {
     Unmade(String),
     /// a dataset it reads holds other content, or it reads another set of datasets.
     Input(String),
+    /// a dataset it reads has another name and the same content: the old name, then the new.
+    Renamed(String, String),
     Run,
     /// a file or folder of its code changed, or code names another set of them.
     Code(String),
@@ -324,6 +380,7 @@ impl fmt::Display for Change {
             Change::Unpinned(input) => write!(f, "{input} is not pinned yet"),
             Change::Unmade(input) => write!(f, "{input} is not built yet"),
             Change::Input(input) => write!(f, "{input} changed"),
+            Change::Renamed(old, new) => write!(f, "{old} was renamed to {new}"),
             Change::Run => f.write_str("run changed"),
             Change::Code(path) => write!(f, "{path} changed"),
             Change::Gone(path) => write!(f, "{path} is missing"),
@@ -663,6 +720,24 @@ mod tests {
         let mut rekeyed = built.clone();
         rekeyed.key = digest::sha256(b"another scheme");
         assert_eq!(step.changes(Some(&rekeyed)), [Change::Key]);
+        // raw renamed rows in data.toml, run with it, keeps its content
+        let mut rows = step.clone();
+        rows.inputs[0].name = "rows".to_owned();
+        rows.run[2] = "{rows}".to_owned();
+        let renamed = Change::Renamed("raw".to_owned(), "rows".to_owned());
+        assert_eq!(rows.changes(Some(&built)), std::slice::from_ref(&renamed));
+        assert_eq!(renamed.to_string(), "raw was renamed to rows");
+        rows.run[1] = "tidy.py".to_owned();
+        assert_eq!(rows.changes(Some(&built)), [renamed, Change::Run]);
+        rows.inputs[0].content = Some(digest::sha256(b"other rows"));
+        assert_eq!(
+            rows.changes(Some(&built)),
+            [
+                Change::Input("raw".to_owned()),
+                Change::Input("rows".to_owned()),
+                Change::Run
+            ]
+        );
         std::fs::remove_file(root.path().join("clean.py")).unwrap();
         let unpinned = Lock::default();
         let gone = Step::read(root.path(), &manifest, &unpinned, "clean")

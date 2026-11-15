@@ -406,7 +406,7 @@ fn waiting(
 ) -> String {
     let named = |name: &str| {
         moved.iter().any(|change| {
-            matches!(change, Change::Input(input) | Change::Unmade(input) if input == name)
+            matches!(change, Change::Input(input) | Change::Unmade(input) | Change::Renamed(_, input) if input == name)
         })
     };
     let results: Vec<&str> = waits

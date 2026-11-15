@@ -85,6 +85,27 @@ impl Template {
         &self.text
     }
 
+    /// the word as data.toml writes it once each input `renames` pairs, old name then new, goes
+    /// by its new name.
+    pub(crate) fn renamed(&self, renames: &[(&str, &str)]) -> String {
+        let mut text = String::new();
+        for piece in &self.pieces {
+            match piece {
+                Piece::Text(plain) => text.push_str(&plain.replace('{', "{{").replace('}', "}}")),
+                Piece::Folder(name) => {
+                    let name = renames
+                        .iter()
+                        .find(|(old, _)| old == name)
+                        .map_or(name.as_str(), |(_, new)| new);
+                    text.push('{');
+                    text.push_str(name);
+                    text.push('}');
+                }
+            }
+        }
+        text
+    }
+
     /// the folders the word names, in order.
     pub(crate) fn slots(&self) -> impl Iterator<Item = Slot<'_>> {
         self.pieces.iter().filter_map(|piece| match piece {
@@ -194,6 +215,11 @@ mod tests {
             "a folder with spaces stays inside its one argument"
         );
         assert_eq!(Template::parse("plain").unwrap().expand(&folder), "plain");
+        assert_eq!(
+            template.renamed(&[("pets", "animals")]),
+            "--images={animals}/{{a}}:{out}"
+        );
+        assert_eq!(template.renamed(&[]), template.text());
         for (text, reason) in [
             ("{pets", "has a { with no } after it"),
             ("{a{b}", "has a { with no } after it"),
