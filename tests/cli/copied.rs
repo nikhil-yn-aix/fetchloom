@@ -368,6 +368,35 @@ fn status_of_a_zip_the_cache_never_held_says_its_files_are_not_checked() -> Resu
     Ok(())
 }
 
+/// a clone whose cache never held the zip downloads it first, so status counts it among what a
+/// sync would download, as the dry run does.
+#[test]
+fn status_counts_a_zip_this_cache_lacks_among_the_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _server = zipped(&sandbox, 1)?;
+    let fresh = crate::project::clone(&sandbox, "fresh")?;
+    let cache = sandbox.folder("fresh cache")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&fresh, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let status = json(&run(&["--json", "status"])?)?;
+    let dry = json(&run(&["--json", "sync", "--dry-run"])?)?;
+    let (counted, planned) = (
+        &status["result"]["to_download"],
+        &dry["result"]["changes"]["to_download"],
+    );
+    assert_eq!(counted["files"], 1, "{status}");
+    assert_eq!(
+        (&counted["files"], &counted["bytes"]),
+        (&planned["files"], &planned["bytes"]),
+        "{status}\n{dry}"
+    );
+    Ok(())
+}
+
 /// the zip's files go to the mirror with their list, so a fresh clone syncs from it alone, and no
 /// file or pin of the copy changes.
 #[test]

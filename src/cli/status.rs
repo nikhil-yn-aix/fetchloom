@@ -671,7 +671,8 @@ fn dropped_here(status: &mut Status, manifest: &Manifest, survey: &Survey) -> Ma
 }
 
 /// the files a sync of `status` would download, once each, by the link it starts at: one neither
-/// the cache nor the data folder holds, or the archive holding it when the cache lacks that too.
+/// the cache nor the data folder holds, or the archive holding it when the cache lacks that too,
+/// and each archive never unpacked here that the cache lacks, which a sync downloads first.
 fn downloads(
     status: &Status,
     planned: &plan::Plan<'_>,
@@ -694,6 +695,7 @@ fn downloads(
         .filter(|target| placing.contains(target.path.as_str()))
         .filter(|target| lacks(&target.sha256, target.size))
         .filter_map(plan::Target::file)
+        .chain(planned.unknown.iter().map(|(_, archive)| *archive))
         .filter(|file| !file.url.is_empty() && seen.insert(file.sha256))
         .filter(|file| lacks(&file.sha256, file.size))
         .filter_map(|file| Some((url::Url::parse(&file.url).ok()?, Some(file.size))))
