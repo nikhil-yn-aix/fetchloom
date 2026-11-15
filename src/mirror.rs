@@ -244,7 +244,12 @@ mod tests {
             ),
             (
                 "https://ada:secret@x$(id).example/m",
-                "write the address without it, and sign in with `fetchloom auth login 'x$(id).example'`",
+                // windows marks the host for a placeholder, since cmd would run what it holds
+                if cfg!(windows) {
+                    "write the address without it, and sign in with `fetchloom auth login \u{f8e0}nx$(id).example\u{f8e1}`"
+                } else {
+                    "write the address without it, and sign in with `fetchloom auth login 'x$(id).example'`"
+                },
             ),
             (
                 "https://lab.example/m?token=abc",
