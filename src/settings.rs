@@ -404,11 +404,12 @@ pub(crate) struct Settings {
     /// the google drive folders and files a request to drive's api may carry a token of this
     /// machine's google credentials for, after drive refused them without one.
     pub(crate) drive_folders: Set<Vec<DriveId>>,
-    /// the folders and web servers asked for pinned files before their sources, in order.
+    /// the folders, web servers and S3 buckets asked for pinned files before their sources, in
+    /// order.
     pub(crate) mirrors: Set<Vec<Location>>,
     /// whether requests may go to the mirrors alone, never to a source.
     pub(crate) mirrors_only: Set<bool>,
-    /// the folder mirror `fetchloom push` writes to when `--to` names none.
+    /// the folder or S3 bucket `fetchloom push` writes to when `--to` names none.
     pub(crate) push_to: Set<Option<Location>>,
     /// the least free space a recipe's step may leave on the disk holding the cache, or none for
     /// the larger of 1 GiB and 1% of that disk.
@@ -989,8 +990,8 @@ fn drive_folders(given: &Given<'_>, key: &str) -> Result<Set<Vec<DriveId>>, Erro
     Ok(Set { value: ids, origin })
 }
 
-/// the mirrors `key` lists, in order: folders, and http or https addresses. a relative folder in
-/// the settings file is taken from its folder, one in a variable from the working folder.
+/// the mirrors `key` lists, in order: folders, http or https addresses and S3 buckets. a relative
+/// folder in the settings file is taken from its folder, one in a variable from the working folder.
 fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
     let Some((entries, origin, named)) = given.list(key) else {
         return Ok(Set::default(Vec::new()));
