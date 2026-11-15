@@ -546,6 +546,14 @@ impl Cache {
     /// opens the cache at `root`, creating its folders. a cache folder it makes is this user's
     /// alone on unix, as gated datasets land in it; one that exists, as a team's, keeps its own.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
+        Cache::open_tagging(root, write_over)
+    }
+
+    /// [`Cache::open`], writing a new cache's tag with `write`.
+    fn open_tagging(
+        root: PathBuf,
+        write: impl FnOnce(&Path, &[u8]) -> io::Result<()>,
+    ) -> io::Result<Cache> {
         let _span = tracing::debug_span!("open_cache").entered();
         #[cfg(unix)]
         if !root.exists() {
@@ -562,7 +570,7 @@ impl Cache {
         #[cfg(not(unix))]
         fs::create_dir_all(&root)?;
         adoptable(&root)?;
-        tag(&root, write_over)?;
+        tag(&root, write)?;
         for folder in FOLDERS {
             real_folder(&root.join(folder), FolderUse::Cache)?;
         }
@@ -1843,6 +1851,22 @@ pub(crate) mod tests {
                 TAG
             );
         }
+    }
+
+    /// a new cache gets its tag before any of its folders, so a first run stopped while writing
+    /// the tag leaves only the tag's start, which the next run still takes for its cache.
+    #[test]
+    fn a_new_cache_is_tagged_before_any_folder_is_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cache");
+        let stopped = Cache::open_tagging(root.clone(), |path, bytes| {
+            fs::write(path, &bytes[..20])?;
+            Err(io::ErrorKind::Interrupted.into())
+        });
+        assert!(stopped.is_err());
+        assert_eq!(entries(&root), [PathBuf::from("CACHEDIR.TAG")]);
+        Cache::open(root.clone()).unwrap();
+        assert_eq!(fs::read_to_string(root.join("CACHEDIR.TAG")).unwrap(), TAG);
     }
 
     /// a team's cache may be another member's folder or one their group writes; only the owner
