@@ -811,7 +811,7 @@ impl<'a> Building<'a> {
         let name = &step.name;
         let cache = &self.work.cache;
         let threads = self.context.threads;
-        let staging = Staging::new(cache, &self.scratch).map_err(|err| {
+        let mut staging = Staging::new(cache, &self.scratch).map_err(|err| {
             let scratch = crate::build::unsafe_scratch(&err);
             let err = cache.explained(&cache.root().join("tmp"), err);
             let error = Error::io(format_args!("could not make a folder for {name} to run in"), &err);
@@ -835,6 +835,9 @@ impl<'a> Building<'a> {
                 unless_stopped(&err, || format!("could not copy {} for {name}", read.name))
             })?;
         }
+        staging
+            .hold_inputs()
+            .map_err(|err| Error::io(format_args!("could not ready what {name} reads"), &err))?;
         let ran = self.run(step, &staging)?;
         self.same_code(step)?;
         let most = self.context.settings.most_files.value;

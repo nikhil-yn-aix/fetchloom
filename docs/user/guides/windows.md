@@ -69,6 +69,8 @@ a step's program is found as cmd.exe finds it: in the folders of `PATH`, in orde
 
 a `.bat` or `.cmd` program runs through cmd.exe, which reads its arguments again. fetchloom leaves the quoting to rust, which quotes each argument so the program gets it as written, `%` and `&` included, and refuses one it cannot pass safely, such as an argument with a line break; that step does not start.
 
+a step reaches `{out}` and the copies of what it reads by path, so while it runs fetchloom holds those folders, and the ones above them, open: no one, the step included, can rename or delete one of them, so another account cannot put a junction to another folder in its place when the cache is outside your profile. a step writes into `{out}` as it is; one that deletes `{out}` to make it again fails. a folder the step makes inside `{out}` is not held until fetchloom takes the result in, so on a machine other accounts share, keep the cache inside your profile, as [cache folder](../reference/cache-folder.md) says.
+
 ## company proxies
 
 fetchloom uses the proxy that `HTTPS_PROXY` names, or the system's proxy settings when that is unset. a proxy that asks for your windows sign-in needs a local relay that signs in for you, as [company proxies](../troubleshooting/README.md#company-proxies) shows.

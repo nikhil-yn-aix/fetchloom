@@ -1343,6 +1343,33 @@ pub(crate) fn hold_below(root: &Path, path: &Path) -> io::Result<impl Sized + us
     Parents::default().locate(root, below, false, false)
 }
 
+/// `root` and every folder below it, each held with those above it until the result is dropped,
+/// so none can be renamed or replaced meanwhile. `root` must be a real folder, and a link below it
+/// is refused, never entered.
+#[cfg(windows)]
+pub(crate) fn hold_tree(root: &Path) -> io::Result<impl Sized + use<>> {
+    let parents = Parents::default();
+    let mut held = Vec::new();
+    let mut folders = vec![PathBuf::new()];
+    while let Some(below) = folders.pop() {
+        held.push(parents.locate(root, &below.join("member"), true, false)?);
+        for entry in fs::read_dir(root.join(&below))? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is a link", entry.path().display()),
+                ));
+            }
+            if kind.is_dir() {
+                folders.push(below.join(entry.file_name()));
+            }
+        }
+    }
+    Ok(held)
+}
+
 /// refuses links and files where a caller needs a real folder.
 pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
     let found = match usage {

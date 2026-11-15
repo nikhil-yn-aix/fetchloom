@@ -25,11 +25,12 @@ pub(crate) struct Staging {
     /// the cache's folder, which the step's folder is below.
     #[cfg(not(unix))]
     root: PathBuf,
-    /// on windows, the folders from the cache's root down to the step's folder, held while it
+    /// on windows, the folders from the cache's root down to the step's folder, its `in` and
+    /// `out`, and once they are made, the folders of what the step reads, each held while it
     /// lives, so no one renames one of them or puts a junction in its place while the step and
-    /// taking in its result reach it by path.
+    /// taking in its result reach them by path.
     #[cfg(windows)]
-    holding: Option<Box<dyn std::any::Any + Send + Sync>>,
+    holding: Vec<Box<dyn std::any::Any + Send + Sync>>,
     /// the folder TMPDIR names, when the step's folder is there.
     scratch: Option<PathBuf>,
     /// whether the step's folder is on another disk than the cache.
@@ -89,20 +90,24 @@ impl Staging {
         {
             let _ = scratch;
             let (folder, lock) = cache.build_folder()?;
-            #[cfg(windows)]
-            let holding: Box<dyn std::any::Any + Send + Sync> =
-                Box::new(crate::place::hold_below(cache.root(), &folder.join("in"))?);
-            let staging = Staging {
+            // dropped on a failure from here, it clears the folder
+            let mut staging = Staging {
                 folder,
                 lock,
                 root: cache.root().to_path_buf(),
                 #[cfg(windows)]
-                holding: Some(holding),
+                holding: Vec::new(),
                 scratch: None,
                 elsewhere: false,
             };
-            std::fs::create_dir(staging.folder.join("in"))?;
-            std::fs::create_dir(staging.out())?;
+            #[cfg(windows)]
+            staging.hold(&staging.folder.join("in"))?;
+            for name in ["in", "out"] {
+                let made = staging.folder.join(name);
+                std::fs::create_dir(&made)?;
+                #[cfg(windows)]
+                staging.hold(&made.join("member"))?;
+            }
             Ok(staging)
         }
     }
@@ -125,6 +130,33 @@ impl Staging {
         }
         #[cfg(not(unix))]
         Ok(capture::Out::below(self.root.clone(), self.out()))
+    }
+
+    /// holds every folder of what the step reads, once [`inputs::make`] made them, until the
+    /// step's result is taken in: on windows, where a step reaches them by path, so no one
+    /// renames one and puts a junction in its place. unix reaches the step's folder through a
+    /// handle, in a folder no one else may change, so there is nothing to hold.
+    #[cfg_attr(
+        not(windows),
+        expect(
+            clippy::unused_self,
+            clippy::unnecessary_wraps,
+            reason = "only windows holds folders by path"
+        )
+    )]
+    pub(crate) fn hold_inputs(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        self.holding
+            .push(Box::new(crate::place::hold_tree(&self.folder.join("in"))?));
+        Ok(())
+    }
+
+    /// holds the folders from the cache's root down to the one `path` is in.
+    #[cfg(windows)]
+    fn hold(&mut self, path: &Path) -> io::Result<()> {
+        let held = crate::place::hold_below(&self.root, path)?;
+        self.holding.push(Box::new(held));
+        Ok(())
     }
 
     /// the folder TMPDIR names, when the step's folder is there rather than in the cache.
@@ -177,7 +209,7 @@ impl Drop for Staging {
         drop(self.lock.take());
         // a folder held without delete sharing cannot go, even for this process
         #[cfg(windows)]
-        drop(self.holding.take());
+        self.holding.clear();
         #[cfg(unix)]
         let cleared = self.held.clear();
         #[cfg(not(unix))]
@@ -520,6 +552,36 @@ mod tests {
             0,
             "the step's own folder is cleared where it went"
         );
+    }
+
+    /// on windows, where a step reaches its folders by path, another user of a cache outside the
+    /// user's profile cannot rename `out`, `in`, or a folder of what the step reads and put a
+    /// junction in its place, as to the user's own startup folder, while the step runs: each is
+    /// held from when it is made until the result is taken in.
+    #[cfg(windows)]
+    #[test]
+    fn the_folders_a_step_reaches_cannot_be_swapped_while_it_runs() {
+        let (dir, cache) = crate::cache::tests::cache();
+        let mut staging = Staging::new(&cache, dir.path()).unwrap();
+        let read = staging.input("raw").join("part");
+        std::fs::create_dir_all(&read).unwrap();
+        std::fs::write(read.join("x.csv"), b"x").unwrap();
+
+        staging.hold_inputs().unwrap();
+
+        let aside = dir.path().join("aside");
+        for folder in [
+            staging.out(),
+            read,
+            staging.input("raw"),
+            staging.folder().join("in"),
+        ] {
+            let renamed = std::fs::rename(&folder, &aside);
+            assert!(renamed.is_err(), "{} was renamed", folder.display());
+        }
+        let folder = staging.folder().to_path_buf();
+        drop(staging);
+        assert!(!folder.exists());
     }
 
     /// on windows, a folder of a step's result swapped for a junction once the result is walked,
