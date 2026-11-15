@@ -536,11 +536,15 @@ fn a_damaged_copy_and_a_gone_source_ask_for_a_push_that_verifies() -> Result {
         .output()?;
     assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
     let error = &json(&output)?["errors"][0];
+    let mirror = if cfg!(windows) {
+        format!("\"{}\"", root.display())
+    } else {
+        root.display().to_string()
+    };
     assert_eq!(
         error["help"],
         format!(
-            "to keep the pinned bytes, someone who has them runs `fetchloom push --verify --to {}`, which replaces the damaged copy there, then you run this command again. if the file moved, put its new link as ref in data.toml",
-            root.display()
+            "to keep the pinned bytes, someone who has them runs `fetchloom push --verify --to {mirror}`, which replaces the damaged copy there, then you run this command again. if the file moved, put its new link as ref in data.toml"
         ),
         "{error}"
     );
