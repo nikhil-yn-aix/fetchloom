@@ -58,6 +58,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/cache/usage.rs` | where the cache's space goes, for `fetchloom cache` and the weekly reminder alike | `Usage::measure` | `Usage` |
 | `src/cli/auth.rs` | `auth`: signed-in accounts, signing in and out, and the offer to sign in after a refused download | `run`, `offer` | `Report` |
 | `src/cli/auth/site.rs` | `auth login <host>` with a website's own token, header or cookies from a file or a browser, its line in `auth` and its `auth logout` | `sign_in`, `listed`, `sign_out` | `keep`, `agrees`, `from_file`, `from_browser`, `tell` |
+| `src/cli/diff.rs` | `diff`: what changed in data.lock, its lists included, between two git commits or a commit and the project folder, read through `project::git` within the limits of any lock read | `run`, `Report` | `compared`, `summary`, `line` |
 | `src/cli/settings.rs` | `settings`: each value a run would use and where it came from, the `-v` line of what a run spends, and warnings for misnamed or unread variables; `settings set` and `unset`, taken before the settings file is read | `run`, `change` | `Report`, `Edited`, `tell_spending`, `warn_misnamed`, `warn_unread` |
 | `src/cli/completions.rs` | shell completion scripts, and the hidden `completions <shell> --names=<word> -- <words before it>`, which completes dataset names from data.toml alone | `print`, `script` | `names`, `with_names` |
 | `src/cli/fetch.rs` | many downloads at once, a bounded number in flight, with bars or plain lines; the first failure stops the rest and keeps what arrived | `all`, `Job` | `apart`, `listed_job` |
@@ -99,7 +100,7 @@ data.toml holds what a person asked for, data.lock what it resolved to, and `.fe
 | `src/project/lock/merge.rs` | data.toml and data.lock merged a dataset at a time after a git merge, with the choices a person made | `merge` | `Merged`, `Summary`, `Side`, `Choices`, `decide`, `decide_removals`, `kept`, `reads` |
 | `src/project/lock/merge/markers.rs` | each side, and the base, read back from git's conflict lines without the tables a conflict cuts, beside the sides whole from git | `split` | `Sides`, `first` |
 | `src/project/state.rs` | `.fetchloom/state`, one JSON document with an index of its records: each placed file's size and time (`Look`), the last sync's inputs (`Synced`), and each rebuild of a recipe that differs from its pin (`State.candidates`) | `State`, `Placed` | `nanos`, `render`, `read_within`, `read_whole` |
-| `src/project/git.rs` | git found and run as a bounded reader with no shell: each side of an unfinished merge whole, with the base, from its index or the commits being merged, and the files git tracks | `stages`, `known` | `find`, `Stages`, `committed`, `tracked`, `Known` |
+| `src/project/git.rs` | git found and run as a bounded reader with no shell: each side of an unfinished merge whole, with the base, from its index or the commits being merged, the files git tracks, and a commit named by a revision that is never an option, with the plain files it holds | `stages`, `known`, `resolve`, `blobs` | `find`, `Stages`, `committed`, `tracked`, `Known`, `blob`, `Unnamed` |
 
 ## recipe and build
 

@@ -1,8 +1,9 @@
 //! git, run as a reader of a project's repository: each side of an unfinished merge of data.toml
-//! and data.lock whole, and which files git has. it runs from an absolute path outside the
-//! project with no shell, input or transport, within bounds, and any failure means no answer.
+//! and data.lock whole, which files git has, and the files a commit holds. it runs from an
+//! absolute path outside the project with no shell, input or transport, within bounds, and any
+//! failure means no answer.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -186,6 +187,90 @@ pub(crate) fn commit(git: &Path, root: &Path, commit: &str) -> Option<String> {
 
 fn text(bytes: Vec<u8>) -> Option<String> {
     String::from_utf8(bytes).ok()
+}
+
+/// why [`resolve`] found no commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unnamed {
+    /// git does not read a repository at the folder: there is none, or git does not trust it.
+    NoRepository,
+    /// the repository has no commit by that name.
+    NoCommit,
+}
+
+/// the full name of the commit `revision` names in the repository holding `root`. `revision` is
+/// read as a revision alone, never as an option, whatever it starts with.
+pub(crate) fn resolve(git: &Path, root: &Path, revision: &str) -> Result<String, Unnamed> {
+    if run(git, root, &["rev-parse", "--git-dir"]).is_err() {
+        return Err(Unnamed::NoRepository);
+    }
+    let asked = format!("{revision}^{{commit}}");
+    let named = run(
+        git,
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            &asked,
+        ],
+    )
+    .map_err(|_| Unnamed::NoCommit)?;
+    text(named)
+        .map(|named| named.trim().to_owned())
+        .filter(|named| is_object(named))
+        .ok_or(Unnamed::NoCommit)
+}
+
+/// the plain files `commit` holds at `paths` and below them, each by its path from `root` with
+/// `/` between folders, with the name of its blob. a link, a submodule or a folder is left out.
+/// none when git cannot list them.
+pub(crate) fn blobs(
+    git: &Path,
+    root: &Path,
+    commit: &str,
+    paths: &[&str],
+) -> Option<BTreeMap<String, String>> {
+    let specs: Vec<String> = paths.iter().map(|path| format!("./{path}")).collect();
+    let mut arguments = vec![
+        "--literal-pathspecs",
+        "ls-tree",
+        "-r",
+        "-z",
+        "--end-of-options",
+        commit,
+        "--",
+    ];
+    arguments.extend(specs.iter().map(String::as_str));
+    let listed = run(git, root, &arguments).ok()?;
+    let mut found = BTreeMap::new();
+    // each entry is `<mode> <type> <object>\t<path>`
+    for entry in listed
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let (head, path) = std::str::from_utf8(entry).ok()?.split_once('\t')?;
+        let mut fields = head.split(' ');
+        let (Some(mode), Some(kind), Some(object)) = (fields.next(), fields.next(), fields.next())
+        else {
+            return None;
+        };
+        if kind == "blob" && ["100644", "100755"].contains(&mode) && is_object(object) {
+            found.insert(path.to_owned(), object.to_owned());
+        }
+    }
+    Some(found)
+}
+
+/// the bytes of the blob `object`, from this repository alone.
+pub(crate) fn blob(git: &Path, root: &Path, object: &str) -> Option<Vec<u8>> {
+    read_objects(git, root, &["cat-file", "blob", "--end-of-options", object])
+}
+
+/// whether `name` is an object's full name: 40 hex digits, or 64 in a SHA-256 repository.
+fn is_object(name: &str) -> bool {
+    [40, 64].contains(&name.len()) && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// the files git has, tracked or staged, below `folder` in the work tree at `root`, by their paths

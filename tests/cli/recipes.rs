@@ -572,8 +572,8 @@ fn gc_keeps_what_builds_read_and_frees_records_no_project_pins() -> Result {
 const SIMULATION: &str = "[datasets.sim]\nrun = [\"recipe-step\", \"seeded\", \"draws.csv\", \"{out}\"]\nenv = { SEED = \"7\" }\n";
 
 /// the draws `recipe-step seeded` writes for the seeds 7 and 8, worked out in python.
-const DRAWS_7: &[u8] = b"278\n231\n753\n673\n545\n";
-const DRAWS_8: &[u8] = b"244\n312\n12\n307\n454\n";
+pub(crate) const DRAWS_7: &[u8] = b"278\n231\n753\n673\n545\n";
+pub(crate) const DRAWS_8: &[u8] = b"244\n312\n12\n307\n454\n";
 
 /// a project in the work folder whose data.toml holds [`SIMULATION`] alone.
 fn simulation(sandbox: &Sandbox) -> Result {

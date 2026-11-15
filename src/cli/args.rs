@@ -68,6 +68,14 @@ on disk: runs each step that needs it in a folder of its own in the cache, write
 
 on disk: nothing. it reads data.toml, data.lock and data/. --sources also asks each mirror and source over the network, one small request a file";
 
+    pub(super) const DIFF: &str = "examples:
+  fetchloom diff    # data.lock now against HEAD's, file lists too
+  fetchloom diff main    # this branch and its uncommitted work against main
+  fetchloom diff HEAD~1 HEAD --json    # what the last commit changed
+  fetchloom diff -q origin/main    # a line for each dataset alone
+
+on disk: nothing. it reads data.lock and data.lock.d from git's objects, and from the project folder when no second commit is named";
+
     pub(super) const LIST: &str = "examples:
   fetchloom list
   fetchloom list iris
@@ -571,6 +579,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
     Status(Status),
 
+    /// show what data.lock and its file lists changed between commits
+    #[command(override_usage = "fetchloom diff [options] [from] [to]", help_template = TEMPLATE, after_help = examples::DIFF)]
+    Diff(Diff),
+
     /// list the project's datasets: source, size and folder
     #[command(override_usage = "fetchloom list [options] [name]", help_template = TEMPLATE, after_help = examples::LIST)]
     List(List),
@@ -626,6 +638,7 @@ impl Command {
             Command::Lock(_) => "lock",
             Command::Build(_) => "build",
             Command::Status(_) => "status",
+            Command::Diff(_) => "diff",
             Command::List(_) => "list",
             Command::Export(_) => "export",
             Command::Push(_) => "push",
@@ -690,6 +703,7 @@ impl Command {
         match self {
             Command::Add(add) => !add.web_page || add.dry.dry_run,
             Command::Status(_)
+            | Command::Diff(_)
             | Command::List(_)
             | Command::Path(_)
             | Command::Push(_)
@@ -1121,6 +1135,20 @@ pub(crate) struct UnsetSetting {
     /// the setting, as `fetchloom settings` names it, such as `jobs` or `push_to`
     #[arg(value_name = "key", help_heading = "arguments")]
     pub(crate) key: String,
+}
+
+/// show what data.lock and its file lists changed between commits
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Diff {
+    /// the commit to compare from, as git names it, such as HEAD~1, main or a tag; HEAD when
+    /// none is named
+    #[arg(value_name = "from", help_heading = "arguments")]
+    pub(crate) from: Option<String>,
+
+    /// the commit to compare with; the project folder as it is now, uncommitted changes and
+    /// all, when none is named
+    #[arg(value_name = "to", help_heading = "arguments")]
+    pub(crate) to: Option<String>,
 }
 
 /// list the project's datasets, or the files of one

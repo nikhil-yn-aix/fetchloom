@@ -569,6 +569,16 @@ impl Lock {
         resolve(parse(text)?, Some(root))
     }
 
+    /// [`Lock::read`] of a lock kept elsewhere, as in a git commit, within the same limits: `part`
+    /// gives a part of a list by its path below the project, once the path is one fetchloom
+    /// writes for the list data.lock names.
+    pub(crate) fn read_with(
+        text: &str,
+        part: &dyn Fn(&str) -> Result<Vec<u8>, Error>,
+    ) -> Result<Lock, Error> {
+        resolve_from(parse(text)?, Some(lists::Parts::Given(part)))
+    }
+
     /// [`Lock::read`] of only the datasets `keep` accepts by name: the others are left out, and
     /// their lists beside data.lock are not read.
     pub(crate) fn read_only(
@@ -968,9 +978,14 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
     Ok(parsed)
 }
 
-/// the lock `parsed` gives, with each list it keeps below `root` read and checked. every reader's
-/// datasets pass through here, so the links they give are checked here once.
+/// the lock `parsed` gives, with each list it keeps below `root` read and checked.
 fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
+    resolve_from(parsed, root.map(lists::Parts::Folder))
+}
+
+/// the lock `parsed` gives, with each list it keeps read from `parts` and checked. every reader's
+/// datasets pass through here, so the links they give are checked here once.
+fn resolve_from(parsed: Vec<Parsed>, parts: Option<lists::Parts<'_>>) -> Result<Lock, Error> {
     fits(&parsed, ROOM.get().copied().unwrap_or(u64::MAX))?;
     let mut lock = Lock::default();
     for entry in parsed {
@@ -979,8 +994,8 @@ fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
                 check_resolved(&dataset)?;
                 let is_listed = listed.is_some();
                 if let Some(listed) = listed {
-                    let root = project(root, &dataset.name)?;
-                    dataset.files = lists::read(root, &dataset.name, &listed)?;
+                    let parts = project(parts, &dataset.name)?;
+                    dataset.files = lists::read(parts, &dataset.name, &listed)?;
                     check_paths(&dataset.name, dataset.files.iter().map(|file| &file.path))?;
                 }
                 let links = dataset.files.iter().map(|file| (&file.path, &file.url));
@@ -988,8 +1003,8 @@ fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
                 lock.datasets.push(dataset);
             }
             Parsed::Derived(mut derived, listed) => {
-                let root = project(root, &derived.name)?;
-                derived.files = lists::read(root, &derived.name, &listed)?;
+                let parts = project(parts, &derived.name)?;
+                derived.files = lists::read(parts, &derived.name, &listed)?;
                 derived::check_files(&derived)?;
                 lock.derived.push(derived);
             }
@@ -1019,9 +1034,9 @@ fn check_stated_count(stated: &Stated, most: usize) -> Result<(), Error> {
     )))
 }
 
-/// the project folder whose [`lists::FOLDER`] holds the files of `name`.
-fn project<'a>(root: Option<&'a Path>, name: &str) -> Result<&'a Path, Error> {
-    root.ok_or_else(|| {
+/// where the list of the files of `name` is.
+fn project<'a>(parts: Option<lists::Parts<'a>>, name: &str) -> Result<lists::Parts<'a>, Error> {
+    parts.ok_or_else(|| {
         broken(format!(
             "data.lock keeps the files of {name} in {}, which only a project can read",
             lists::FOLDER
@@ -1709,6 +1724,37 @@ mod tests {
         }
         let text = lock.render();
         (root, text)
+    }
+
+    /// data.lock as a git commit holds it is text anyone may have written: a part it names that
+    /// fetchloom would not write is refused before anything is read for it.
+    #[test]
+    fn a_lock_read_elsewhere_reads_only_the_parts_fetchloom_writes() {
+        let lock = Lock {
+            derived: vec![clean()],
+            ..Lock::default()
+        };
+        let text = lock.render();
+        let parts = lock.lists();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let given = |path: &str| -> Result<Vec<u8>, Error> {
+            asked.borrow_mut().push(path.to_owned());
+            let (_, part) = parts.iter().find(|(part, _)| part == path).unwrap();
+            Ok(lists::compress(part).unwrap())
+        };
+        assert_eq!(Lock::read_with(&text, &given).unwrap(), lock);
+        assert_eq!(*asked.borrow(), [parts[0].0.clone()]);
+        asked.borrow_mut().clear();
+        for elsewhere in ["data.toml", "data.lock.d/../../secret.tsv.zst"] {
+            let error = Lock::read_with(&text.replace(&parts[0].0, elsewhere), &given).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{elsewhere}");
+            assert!(
+                error.message.ends_with("in files fetchloom does not write"),
+                "{}",
+                error.message
+            );
+        }
+        assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
     }
 
     /// the datasets left out have their file lines passed over unread where no string among them

@@ -271,10 +271,19 @@ pub(crate) fn folder(root: &Path) -> Result<PathBuf, Error> {
     Ok(folder)
 }
 
-/// the rows of `name`'s list from the parts `listed` names below `root`, checked against what
-/// data.lock records; refused unread when it holds more files than a run may list, or when
-/// [`FOLDER`] is no real folder.
-pub(crate) fn read<R: Row>(root: &Path, name: &str, listed: &Listed) -> Result<Vec<R>, Error> {
+/// where the parts of a lock's lists come from.
+#[derive(Clone, Copy)]
+pub(crate) enum Parts<'a> {
+    /// [`FOLDER`] below the project at this folder.
+    Folder(&'a Path),
+    /// the bytes this gives for a part by its path below the project, as a git commit holds it.
+    Given(&'a dyn Fn(&str) -> Result<Vec<u8>, Error>),
+}
+
+/// the rows of `name`'s list from the parts `listed` names in `parts`, checked against what
+/// data.lock records; refused unread when a part's path is not one fetchloom writes for `name`,
+/// when the list holds more files than a run may list, or when [`FOLDER`] is no real folder.
+pub(crate) fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Result<Vec<R>, Error> {
     if !named_as_written(name, listed) {
         return Err(broken(format!(
             "data.lock names the file list of {name} in files fetchloom does not write"
@@ -293,13 +302,20 @@ pub(crate) fn read<R: Row>(root: &Path, name: &str, listed: &Listed) -> Result<V
         )
         .help("raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"));
     }
-    folder(root)?;
+    if let Parts::Folder(root) = parts {
+        folder(root)?;
+    }
     let mut rows: Vec<R> = Vec::with_capacity(count.min(1 << 20));
     let mut hasher = Hasher::default();
     let mut bytes: u64 = 0;
     for part in &listed.parts {
-        let path = root.join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
-        let file = fs::File::open(&path).map_err(|err| unreadable(part, &err))?;
+        let file: Box<dyn Read> = match parts {
+            Parts::Folder(root) => {
+                let path = root.join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
+                Box::new(fs::File::open(&path).map_err(|err| unreadable(part, &err))?)
+            }
+            Parts::Given(given) => Box::new(std::io::Cursor::new(given(part)?)),
+        };
         let mut decoder =
             zstd::stream::read::Decoder::new(file).map_err(|err| unreadable(part, &err))?;
         decoder
@@ -465,7 +481,7 @@ mod tests {
         assert!(listed.parts[0].ends_with(".1.tsv.zst"));
         assert_eq!(listed.count, (PART + 7) as u64);
         assert_eq!(
-            read::<LockedFile>(root.path(), "big", &listed).unwrap(),
+            read::<LockedFile>(Parts::Folder(root.path()), "big", &listed).unwrap(),
             written
         );
         for part in &listed.parts {
@@ -486,7 +502,7 @@ mod tests {
         let listed = write(outside.path(), "set", &files(2));
         let filed = tempfile::tempdir().unwrap();
         fs::write(filed.path().join(FOLDER), "").unwrap();
-        let file = read::<LockedFile>(filed.path(), "set", &listed).unwrap_err();
+        let file = read::<LockedFile>(Parts::Folder(filed.path()), "set", &listed).unwrap_err();
         assert_eq!(file.kind, Kind::ProjectInvalid);
         assert!(file.message.contains("is a file"), "{}", file.message);
         let root = tempfile::tempdir().unwrap();
@@ -499,7 +515,7 @@ mod tests {
         if !made {
             return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
         }
-        let linked = read::<LockedFile>(root.path(), "set", &listed).unwrap_err();
+        let linked = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
         assert_eq!(linked.kind, Kind::ProjectInvalid);
         assert!(linked.message.contains("is a link"), "{}", linked.message);
     }
@@ -519,7 +535,7 @@ mod tests {
             )]
         );
         assert_eq!(
-            read::<LockedFile>(root.path(), "odd", &listed).unwrap(),
+            read::<LockedFile>(Parts::Folder(root.path()), "odd", &listed).unwrap(),
             odd
         );
     }
@@ -530,7 +546,7 @@ mod tests {
         let written = files(2);
         let listed = write(root.path(), "set", &written);
         assert_eq!(
-            read::<LockedFile>(root.path(), "set", &listed).unwrap(),
+            read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap(),
             written
         );
         let mut changed = written.clone();
@@ -573,7 +589,8 @@ mod tests {
         ] {
             let text = texts(&rows).remove(0);
             fs::write(root.path().join(&listed.parts[0]), compress(&text).unwrap()).unwrap();
-            let error = read::<LockedFile>(root.path(), "set", &summary).expect_err(reason);
+            let error =
+                read::<LockedFile>(Parts::Folder(root.path()), "set", &summary).expect_err(reason);
             assert_eq!(error.kind, Kind::ProjectInvalid, "{reason}");
             assert!(
                 error.message.contains(message),
@@ -588,7 +605,7 @@ mod tests {
             ..listed.clone()
         };
         assert!(
-            read::<LockedFile>(root.path(), "set", &elsewhere)
+            read::<LockedFile>(Parts::Folder(root.path()), "set", &elsewhere)
                 .unwrap_err()
                 .message
                 .contains("does not write")
@@ -596,7 +613,7 @@ mod tests {
         // a part that is gone, as in a clone of a commit that left data.lock.d out: the help
         // gets the list, and never leads with deleting data.lock, which drops recipes' pins
         fs::remove_file(root.path().join(&listed.parts[0])).unwrap();
-        let gone = read::<LockedFile>(root.path(), "set", &listed).unwrap_err();
+        let gone = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
         assert!(
             gone.message.ends_with("which is not there"),
             "{}",
@@ -632,7 +649,7 @@ mod tests {
                 compress(&damaged).unwrap(),
             )
             .unwrap();
-            let error = read::<LockedFile>(root.path(), "set", &listed).unwrap_err();
+            let error = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
             assert!(
                 error.message.contains("damaged at line"),
                 "{}",
@@ -649,7 +666,8 @@ mod tests {
             bytes: 0,
             sha256: digest::sha256(b"x"),
         };
-        let error = read::<LockedFile>(Path::new("/nowhere"), "huge", &listed).unwrap_err();
+        let error =
+            read::<LockedFile>(Parts::Folder(Path::new("/nowhere")), "huge", &listed).unwrap_err();
         assert!(error.help.unwrap().contains("FETCHLOOM_MOST_FILES"));
     }
 
@@ -681,19 +699,22 @@ mod tests {
         let listed = write(root.path(), "result", &written);
         assert_eq!(listed.parts.len(), 2);
         assert_eq!(
-            read::<Member>(root.path(), "result", &listed).unwrap(),
+            read::<Member>(Parts::Folder(root.path()), "result", &listed).unwrap(),
             written
         );
         let empty = write(root.path(), "nothing", &members(0));
         assert_eq!(texts(&members(0)), ["path\tsize\tsha256\n"]);
-        assert_eq!(read::<Member>(root.path(), "nothing", &empty).unwrap(), []);
+        assert_eq!(
+            read::<Member>(Parts::Folder(root.path()), "nothing", &empty).unwrap(),
+            []
+        );
     }
 
     #[test]
     fn a_tree_part_cannot_stand_for_a_source_list() {
         let root = tempfile::tempdir().unwrap();
         let tree = write(root.path(), "set", &members(3));
-        let error = read::<LockedFile>(root.path(), "set", &tree).unwrap_err();
+        let error = read::<LockedFile>(Parts::Folder(root.path()), "set", &tree).unwrap_err();
         assert_eq!(error.kind, Kind::ProjectInvalid);
         assert_eq!(
             error.message,
@@ -704,7 +725,7 @@ mod tests {
         );
         assert_eq!(error.help.as_deref(), Some(BROKEN));
         let source = write(root.path(), "other", &files(3));
-        let error = read::<Member>(root.path(), "other", &source).unwrap_err();
+        let error = read::<Member>(Parts::Folder(root.path()), "other", &source).unwrap_err();
         assert!(
             error.message.ends_with(
                 "holds the files of a source, where data.lock names the files of a recipe's result"

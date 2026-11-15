@@ -101,6 +101,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 | stop using datasets | `fetchloom remove <name>... --dry-run --json`, then without `--dry-run` |
 | newer versions | `fetchloom lock --upgrade <name> --dry-run --json` shows them; only the user decides to pin them |
 | a git merge left `<<<<<<<` lines | `fetchloom lock --json` merges both sides. on `unconfirmed`, `result.merge.conflicts` names the datasets to choose for: ask the user, then `fetchloom lock --ours <name>` or `--theirs <name>`. in a rebase, ours is the branch rebased onto |
+| what a commit or a branch changes in the pins | `fetchloom diff <from> <to> --json`, from HEAD and to the project folder as it is now when none are named: `result.datasets` names each dataset added, removed or changed, its `fields` and each of its `files` with `before` and `after` |
 | what the project uses | `fetchloom list --json`: each dataset's `ref`, `files`, `bytes`, `folder`, `placed`, `access` (`public`, `login`, `terms` or `unknown`) and `locked_files` |
 | restore from a mirror | `fetchloom sync --locked --mirror <folder or url> --json`; files the mirror lacks come from their sources, and a folder mirror works offline |
 | fill a folder mirror for others | `fetchloom push --to <folder> --dry-run --json`, then without `--dry-run`; `fetchloom push <recipe> --inputs --to <folder>` adds what the recipe is made from. data whose source wanted an account or terms, or did not say, exits 1 with `unconfirmed`, listed in `result.asks` |

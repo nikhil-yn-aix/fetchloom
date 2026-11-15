@@ -6,6 +6,7 @@ mod auth;
 mod build;
 mod cache;
 mod completions;
+mod diff;
 mod exclude;
 mod export;
 mod fetch;
@@ -934,6 +935,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             });
             finish(context, name, outcome, started)
         }
+        args::Command::Diff(args) => finish(context, name, diff::run(context, args), started),
         args::Command::Export(args) => {
             // with -o, export writes a file, and with --force moves the one there aside first
             let effect = if args.output.is_some() {
@@ -962,8 +964,6 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = cache::verify(context);
             finish(context, name, outcome, started)
         }
-        // `run` takes `settings set` and `unset` before reading the settings file, so only the
-        // report comes here
         args::Command::Settings(_) => {
             let outcome = Ok(settings::run(context));
             finish(context, name, outcome, started)
