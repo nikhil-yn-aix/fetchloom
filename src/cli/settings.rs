@@ -185,6 +185,25 @@ fn tell_changed(
     let key = &changed.key;
     let file = units::path(&changed.path);
     let said = |value: Option<&toml_edit::Value>| value.map_or_else(|| "not set".to_owned(), shown);
+    for folder in &changed.missing {
+        let shown = units::path(folder);
+        if key == "push_to" {
+            output.warn_with(
+                Warning::SettingsMissingFolder,
+                &format!("the folder {shown} does not exist yet, so the first push makes it"),
+                "check its name before you push",
+            );
+        } else {
+            output.warn_with(
+                Warning::SettingsMissingFolder,
+                &format!("the mirror folder {shown} does not exist, so runs skip it until it does"),
+                &format!(
+                    "check its name, or fill it with `fetchloom push --to {}`",
+                    crate::suggested::shell_word(&folder.to_string_lossy())
+                ),
+            );
+        }
+    }
     if let Some(broken) = &changed.broken {
         let said = format!("{}, so every run still stops there", broken.message);
         match &broken.help {

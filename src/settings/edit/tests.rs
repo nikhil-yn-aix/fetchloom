@@ -166,6 +166,57 @@ fn a_list_takes_several_values_and_replaces_the_list() {
     assert_eq!(error.message, "jobs takes one value, and 2 were given");
 }
 
+/// a leading ~ is the home folder, as a shell takes it outside quotes, never a folder named ~
+/// here, and ~ with a name after it is refused; a mirror or push folder that is not there is
+/// named, so the change can say so.
+#[test]
+fn a_tilde_is_the_home_folder_and_a_missing_folder_is_named() {
+    let (folder, path, _) = settings("settings.toml", None);
+    let home = folder.path().join("home");
+    fs::create_dir_all(home.join("lab")).unwrap();
+    let (named, at) = (path.clone().into_os_string(), home.clone().into_os_string());
+    let var = move |name: &str| match name {
+        "FETCHLOOM_SETTINGS" => Some(named.clone()),
+        "HOME" | "USERPROFILE" => Some(at.clone()),
+        _ => None,
+    };
+    let here = folder.path().join("work");
+    let changed = set(
+        &var,
+        "mirrors",
+        &values(&["~/lab", "~/gone"]),
+        Some(&here),
+        &fine,
+    )
+    .unwrap();
+    assert_eq!(changed.missing, [home.join("gone")]);
+    set(&var, "cache", &values(&["~"]), Some(&here), &fine).unwrap();
+    let changed = set(&var, "push_to", &values(&["~/out"]), Some(&here), &fine).unwrap();
+    assert_eq!(changed.missing, [home.join("out")]);
+    let shown = |path: PathBuf| Value::Text(path.display().to_string());
+    assert_eq!(
+        read(&path),
+        [
+            ("cache".to_owned(), shown(home.clone())),
+            (
+                "mirrors".to_owned(),
+                Value::List(vec![
+                    home.join("lab").display().to_string(),
+                    home.join("gone").display().to_string()
+                ])
+            ),
+            ("push_to".to_owned(), shown(home.join("out"))),
+        ]
+    );
+    let error = set(&var, "push_to", &values(&["~ada/lab"]), Some(&here), &fine).unwrap_err();
+    assert_eq!(
+        error.message,
+        "push_to cannot take the folder ~ada/lab: fetchloom takes ~ for your own home folder alone, not another's"
+    );
+    let changed = set(&var, "cache", &values(&["./gone"]), Some(&here), &fine).unwrap();
+    assert!(changed.missing.is_empty(), "a run makes its cache");
+}
+
 /// a whole number is written as a number, a switch as true or false, and a folder or a level as
 /// text even when it is all digits.
 #[test]
@@ -177,10 +228,12 @@ fn each_value_is_written_as_toml_reads_it() {
         ("mirrors_only", "1"),
         ("resources", "lean"),
         ("push_to", "2024"),
+        ("jobs", "+5"),
     ] {
         set(&var, key, &values(&[value]), Some(folder.path()), &fine).unwrap();
     }
     let text = fs::read_to_string(&path).unwrap();
+    assert!(text.ends_with("\njobs = 5\n"), "{text}");
     assert!(
         text.starts_with(
             "ask_above = 1000000\nmemory = \"512M\"\nmirrors_only = true\nresources = \"lean\"\npush_to = "
@@ -235,6 +288,7 @@ fn an_unknown_key_names_the_nearest_setting() {
     let (_folder, path, var) = settings("settings.toml", None);
     for (key, message, help) in [
         ("jbos", "jbos is not a setting", "did you mean `jobs`?"),
+        ("JOBS", "JOBS is not a setting", "did you mean `jobs`?"),
         (
             "FETCHLOOM_PUSH_TO",
             "FETCHLOOM_PUSH_TO is not a setting",

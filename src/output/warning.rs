@@ -105,6 +105,8 @@ pub(crate) enum Warning {
     SettingsBroken,
     /// `FETCHLOOM_COLORS` holds entries fetchloom cannot read.
     SettingsColorsUnread,
+    /// `settings set` saved a mirror or push folder that does not exist.
+    SettingsMissingFolder,
     /// a variable set here holds a setting the settings file just changed, so runs where it is
     /// set keep the variable's value.
     SettingsOverridden,
@@ -175,6 +177,7 @@ impl Warning {
             Warning::SearchPartial => "search.partial",
             Warning::SettingsBroken => "settings.broken",
             Warning::SettingsColorsUnread => "settings.colors_unread",
+            Warning::SettingsMissingFolder => "settings.missing_folder",
             Warning::SettingsOverridden => "settings.overridden",
             Warning::SettingsSwitchUnread => "settings.switch_unread",
             Warning::SettingsUnknownVariable => "settings.unknown_variable",
@@ -257,6 +260,7 @@ mod tests {
             SearchPartial,
             SettingsBroken,
             SettingsColorsUnread,
+            SettingsMissingFolder,
             SettingsOverridden,
             SettingsSwitchUnread,
             SettingsUnknownVariable,

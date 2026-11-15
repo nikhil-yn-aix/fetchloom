@@ -37,6 +37,8 @@ pub(crate) struct Changed {
     pub(crate) created: bool,
     /// what still stops every run reading the file, which was there before the change.
     pub(crate) broken: Option<Error>,
+    /// the mirror or push folders the new value names that are not there.
+    pub(crate) missing: Vec<PathBuf>,
 }
 
 /// sets `name` to `values` in the settings file `var` locates: for a list, every value, each split
@@ -51,7 +53,12 @@ pub(crate) fn set(
     usable: Usable<'_>,
 ) -> Result<Changed, Error> {
     let key = known(name)?;
-    let value = given(key, values, here)?;
+    let home = crate::machine::home(var);
+    let places = Places {
+        here,
+        home: home.as_deref(),
+    };
+    let value = given(key, values, places)?;
     let after = written_as(key, &value);
     let Opened {
         path,
@@ -70,6 +77,7 @@ pub(crate) fn set(
         written: false,
         created: !found,
         broken: None,
+        missing: missing(key, &value),
     };
     if before.is_some() && before.as_ref().and_then(read_as) == read_as(&after) {
         changed.broken = whole(&changed.path, &text, &text, usable)?;
@@ -115,6 +123,7 @@ pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Chan
         written: false,
         created: false,
         broken: None,
+        missing: Vec::new(),
     };
     if !removed(&mut document, name) {
         changed.broken = whole(&changed.path, &text, &text, usable)?;
@@ -178,10 +187,10 @@ fn known(name: &str) -> Result<&'static str, Error> {
         )));
     }
     let error = Error::new(Kind::Usage, format!("{name} is not a setting"));
-    // a variable's name, as FETCHLOOM_JOBS, means its key
+    // a variable's name, as FETCHLOOM_JOBS, or the key in capitals, means the key
     let meant = KEYS
         .iter()
-        .find(|(_, variable)| variable.eq_ignore_ascii_case(name))
+        .find(|(key, variable)| variable.eq_ignore_ascii_case(name) || key.eq_ignore_ascii_case(name))
         .map(|(key, _)| *key)
         .or_else(|| crate::name::closest(name, KEYS.map(|(key, _)| key)));
     Err(match meant {
@@ -194,12 +203,12 @@ fn known(name: &str) -> Result<&'static str, Error> {
 }
 
 /// what the command line gives `key`, as the settings file would hold it.
-fn given(key: &str, values: &[String], here: Option<&Path>) -> Result<Value, Error> {
+fn given(key: &str, values: &[String], places: Places<'_>) -> Result<Value, Error> {
     if LISTS.contains(&key) {
         let items = values
             .iter()
             .flat_map(|value| split(value))
-            .map(|item| from(key, item, here))
+            .map(|item| from(key, item, places))
             .collect::<Result<_, _>>()?;
         return Ok(Value::List(items));
     }
@@ -218,13 +227,42 @@ fn given(key: &str, values: &[String], here: Option<&Path>) -> Result<Value, Err
             )),
         );
     }
-    Ok(Value::Text(from(key, value.to_owned(), here)?))
+    Ok(Value::Text(from(key, value.to_owned(), places)?))
 }
 
-/// `text` from the command line, a relative folder for `key` taken from `here`, the current
-/// folder, since the settings file takes one from its own folder instead. a web address or a
-/// bucket stays as it is, told apart as a mirror is.
-fn from(key: &str, text: String, here: Option<&Path>) -> Result<String, Error> {
+/// the folders `value` names for `key` that are not there: a mirror's, which runs skip until it
+/// is, or the push folder, which the first push makes. a run makes the cache folder itself.
+fn missing(key: &str, value: &Value) -> Vec<PathBuf> {
+    if !matches!(key, "mirrors" | "push_to") {
+        return Vec::new();
+    }
+    let items = match value {
+        Value::Text(text) => std::slice::from_ref(text),
+        Value::List(items) => items.as_slice(),
+    };
+    items
+        .iter()
+        .filter_map(|item| match crate::mirror::Location::parse(item, None) {
+            Ok(crate::mirror::Location::Folder(folder)) if !folder.exists() => Some(folder),
+            _ => None,
+        })
+        .collect()
+}
+
+/// the folders a folder given on the command line may lead from.
+#[derive(Clone, Copy)]
+struct Places<'a> {
+    /// the current folder, which a relative folder is taken from.
+    here: Option<&'a Path>,
+    /// the home folder, which a leading `~` names.
+    home: Option<&'a Path>,
+}
+
+/// `text` from the command line, a relative folder for `key` taken from the current folder,
+/// since the settings file takes one from its own folder instead, and a leading `~` as the home
+/// folder, as a shell takes it outside quotes. a web address or a bucket stays as it is, told
+/// apart as a mirror is.
+fn from(key: &str, text: String, places: Places<'_>) -> Result<String, Error> {
     let names_folder = match key {
         "cache" => true,
         "push_to" | "mirrors" => matches!(
@@ -243,7 +281,37 @@ fn from(key: &str, text: String, here: Option<&Path>) -> Result<String, Error> {
         )
         .help("give the folder from the top, as /mnt/lab/fetchloom")
     };
-    let Some(here) = here else {
+    let as_text = |folder: PathBuf, from: &Path| {
+        folder.into_os_string().into_string().map_err(|_| {
+            refused(format!(
+                "{} holds a name that is not text, which the settings file cannot hold",
+                from.display()
+            ))
+        })
+    };
+    if let Some(rest) = text.strip_prefix('~') {
+        let rest = match rest.chars().next() {
+            None => "",
+            Some(first) if std::path::is_separator(first) => &rest[first.len_utf8()..],
+            Some(_) => {
+                return Err(refused(
+                    "fetchloom takes ~ for your own home folder alone, not another's".to_owned(),
+                ));
+            }
+        };
+        let Some(home) = places.home else {
+            return Err(refused(
+                "~ stands for the home folder, and no home folder is set".to_owned(),
+            ));
+        };
+        let folder = if rest.is_empty() {
+            home.to_path_buf()
+        } else {
+            home.join(rest)
+        };
+        return as_text(folder, home);
+    }
+    let Some(here) = places.here else {
         return Err(refused(
             "the current folder, which it is relative to, could not be read".to_owned(),
         ));
@@ -260,12 +328,7 @@ fn from(key: &str, text: String, here: Option<&Path>) -> Result<String, Error> {
         }
     }
     folder.extend(parts);
-    folder.into_os_string().into_string().map_err(|_| {
-        refused(format!(
-            "{} holds a name that is not text, which the settings file cannot hold",
-            here.display()
-        ))
-    })
+    as_text(folder, here)
 }
 
 /// the settings file as a change finds it.
@@ -403,12 +466,10 @@ fn written_as(key: &str, value: &Value) -> toml_edit::Value {
                 _ => text.as_str().into(),
             }
         }
-        Value::Text(text)
-            if !WORDS.contains(&key) && text.bytes().all(|byte| byte.is_ascii_digit()) =>
-        {
-            text.parse::<i64>()
-                .map_or_else(|_| text.as_str().into(), Into::into)
-        }
+        // as a run reads it, so `+5` is saved as 5
+        Value::Text(text) if !WORDS.contains(&key) && text.parse::<u64>().is_ok() => text
+            .parse::<i64>()
+            .map_or_else(|_| text.as_str().into(), Into::into),
         Value::Text(text) => text.as_str().into(),
     }
 }
