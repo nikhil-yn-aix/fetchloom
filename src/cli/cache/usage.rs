@@ -49,7 +49,7 @@ pub(crate) struct Usage {
     /// of `copies`, the clones, which share their blocks with the cache's copy until either
     /// changes, so `copies - cloned` is what takes room twice.
     pub(crate) cloned: u64,
-    /// how many projects hold copies.
+    /// how many projects add to `copies`.
     #[serde(skip)]
     pub(crate) copied_projects: u64,
     /// of `needed`, what only builds read: files of datasets with `place = false` that every

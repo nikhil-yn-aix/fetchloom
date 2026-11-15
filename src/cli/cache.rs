@@ -1577,7 +1577,8 @@ mod tests {
         );
     }
 
-    /// data.toml that cannot be read keeps both the member and its archive.
+    /// a member data.toml excludes is not needed, and once it is gone the archive is not needed
+    /// either; with no data.toml read, the archive is kept.
     #[test]
     fn an_excluded_member_neither_counts_as_needed_nor_holds_back_its_archive() {
         let folder = tempfile::tempdir().unwrap();

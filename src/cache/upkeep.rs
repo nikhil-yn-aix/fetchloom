@@ -106,7 +106,7 @@ pub(crate) enum Supply {
     Source,
     /// a build of the recipe that made it.
     Derived,
-    /// nowhere but a mirror: a file imported from a folder on some machine.
+    /// nowhere but a folder mirror: a file imported from a folder on some machine.
     Imported,
 }
 
