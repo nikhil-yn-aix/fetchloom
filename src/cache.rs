@@ -43,7 +43,7 @@ pub(crate) use staging::clear_build;
 pub(crate) use staging::{
     SCRATCH, clear_folder, enter_at, is_private, make_build_folder, names_at, sweep_scratch,
 };
-pub(crate) use unpacked::{Member, parts_key, tree, tree_hash};
+pub(crate) use unpacked::{Member, members_of, parts_key, tree, tree_hash};
 #[cfg(test)]
 pub(crate) use upkeep::Object;
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Supply, Use};

@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::build::{build, with};
 use crate::mirrors::{IRIS, mirror_of, web_mirror_of};
 use crate::recipes::{WRITE, object};
-use crate::support::{Result, Routes, Sandbox, Server, edit, file, json, ok, reply, text};
+use crate::support::{Result, Routes, Sandbox, Server, edit, file, json, ok, reply, text, zip_of};
 
 /// a project in the sandbox's work folder whose dataset iris is iris.csv from the source it
 /// returns, synced, so the data folder and the cache hold it.
@@ -426,6 +426,31 @@ fn a_drop_cut_short_is_told_as_one() -> Result {
         told.contains("`fetchloom drop iris` frees what the cache still holds of it"),
         "{told}"
     );
+    Ok(())
+}
+
+/// an archive's dataset drops through the folder mirror a push filled: push keeps what the archive
+/// unpacks to, its list of files and each file, which a sync then brings back without the archive.
+#[test]
+fn an_archive_drops_through_the_folder_mirror_a_push_filled() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = zip_of(&[("rows/a.csv", b"a\n"), ("rows/b.csv", b"b\n")])?;
+    let source = Routes::start(vec![("/files/rows.zip".to_owned(), file(&zip, "\"z\""))])?;
+    sandbox.allow(&source.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/rows.zip", source.url)])?)?;
+    let root = sandbox.folder("mirror")?;
+    ok(&sandbox
+        .command(&["--yes", "push", "rows", "--to"])
+        .arg(&root)
+        .output()?)?;
+    let mirrored = |args: &[&str]| sandbox.command(args).arg("--mirror").arg(&root).output();
+    let output = mirrored(&["--json", "drop", "rows"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["result"]["dropped"], json!(["rows"]));
+    let placed = sandbox.work().join("data/rows/a.csv");
+    assert!(!placed.exists());
+    ok(&mirrored(&["--offline", "sync", "rows"])?)?;
+    assert_eq!(fs::read(&placed)?, b"a\n");
     Ok(())
 }
 

@@ -37,6 +37,15 @@ pub(crate) fn tree_hash(members: &[Member]) -> Sha256 {
     digest::sha256(tree(members).as_bytes())
 }
 
+/// the members `bytes` list, a tree from elsewhere such as a mirror, when they hash to `tree` and
+/// every path stays in its folder.
+pub(crate) fn members_of(tree: &Sha256, bytes: &[u8]) -> Option<Vec<Member>> {
+    if digest::sha256(bytes) != *tree {
+        return None;
+    }
+    parse(std::str::from_utf8(bytes).ok()?)
+}
+
 /// the key a split archive's record goes by: the SHA-256 of a `fetchloom parts` line, then a line
 /// per part of its hex SHA-256, a space and its size. never the first part's own hash, or a
 /// changed later part would find the files its old bytes unpacked to.
@@ -68,8 +77,7 @@ impl Cache {
         tree: &Sha256,
         bytes: &[u8],
     ) -> io::Result<bool> {
-        let fits = digest::sha256(bytes) == *tree
-            && std::str::from_utf8(bytes).ok().and_then(parse).is_some();
+        let fits = members_of(tree, bytes).is_some();
         if fits {
             self.write_atomically(&self.unpacked_path(archive), bytes)?;
         }

@@ -464,16 +464,7 @@ async fn on_folders(
         let held = tokio::task::block_in_place(|| {
             folder::check_all(root, &wanted, context.threads, &|_| {}, &context.stop)
         })
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::Interrupted {
-                crate::stop::Stop::stopped()
-            } else {
-                Error::io(
-                    format_args!("could not read the mirror {}", root.display()),
-                    &err,
-                )
-            }
-        })?;
+        .map_err(|err| unread(root, &err))?;
         for (at, held) in asked.into_iter().zip(held) {
             let digest = locked[at].1.sha256;
             // the cache's own file, reached through a link, is no second copy
@@ -486,10 +477,77 @@ async fn on_folders(
                 context
                     .mirrors
                     .hashed(index, digest, seen, pinned[at].label());
+                continue;
+            }
+            // a push keeps an archive as what it unpacks to, which a sync places from
+            let Some(tree) = locked[at].1.unpacks_to else {
+                continue;
+            };
+            let unpacked = tokio::task::block_in_place(|| {
+                unpacked_on(root, &tree, &cache, pinned[at].dataset, context)
+            })
+            .map_err(|err| unread(root, &err))?;
+            if let Some(copies) = unpacked {
+                found[at] = true;
+                let folders = checked.folders.entry(pinned[at].dataset.to_owned());
+                folders.or_default().insert(root.display().to_string());
+                for (digest, seen, label) in copies {
+                    context.mirrors.hashed(index, digest, seen, label);
+                }
             }
         }
     }
     Ok(found)
+}
+
+/// the error for a read of the folder mirror at `root` that failed, or a stop.
+fn unread(root: &Path, err: &std::io::Error) -> Error {
+    if err.kind() == std::io::ErrorKind::Interrupted {
+        crate::stop::Stop::stopped()
+    } else {
+        Error::io(
+            format_args!("could not read the mirror {}", root.display()),
+            err,
+        )
+    }
+}
+
+/// the copies on the folder mirror at `root` of every file of `dataset` that the archive whose
+/// tree is `tree` unpacks to, each with how it looked when it hashed to its pin and its name, as a
+/// push keeps an archive: none unless the mirror holds that tree and each file, none of them the
+/// cache's own. fails at a stop.
+fn unpacked_on(
+    root: &Path,
+    tree: &Sha256,
+    cache: &Cache,
+    dataset: &str,
+    context: &Context,
+) -> std::io::Result<Option<Vec<(Sha256, folder::Seen, String)>>> {
+    let folder::Tree::Bytes(bytes) = folder::read_tree(root, tree, &context.stop)? else {
+        return Ok(None);
+    };
+    let Some(members) = crate::cache::members_of(tree, &bytes) else {
+        return Ok(None);
+    };
+    let wanted: Vec<Wanted> = members
+        .iter()
+        .map(|member| Wanted {
+            digest: member.sha256,
+            size: member.size,
+            label: format!("{dataset}/{}", member.path),
+        })
+        .collect();
+    let held = folder::check_all(root, &wanted, context.threads, &|_| {}, &context.stop)?;
+    let mut copies = Vec::with_capacity(wanted.len());
+    for (want, held) in wanted.into_iter().zip(held) {
+        match held {
+            Held::Verified(seen) if !folder::is_cache_copy(&seen, &want.digest, cache) => {
+                copies.push((want.digest, seen, want.label));
+            }
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some(copies))
 }
 
 /// the error naming each dataset of `asked` that `checked` keeps, none when every one may go:
