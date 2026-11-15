@@ -596,6 +596,23 @@ fn a_version_taken_out_stays_locked_until_an_upgrade() -> Result {
         "{said}"
     );
     assert!(pinned("jq-1.8.3")?, "{}", fs::read_to_string(&lock)?);
+
+    // data.toml naming an older version moves the pin back there, which is no upgrade
+    let newest = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        newest.replace("github:jqlang/jq\"", "github:jqlang/jq@jq-1.8.2\""),
+    )?;
+    let moved = run(&["lock", "--upgrade", "jq"])?;
+    ok(&moved)?;
+    let said = text(&moved.stderr)?;
+    assert!(
+        said.contains(
+            "Moved jq · github:jqlang/jq@jq-1.8.3 → github:jqlang/jq@jq-1.8.2 · 1 file changed"
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("Upgraded"), "{said}");
     Ok(())
 }
 

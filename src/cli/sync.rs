@@ -2383,13 +2383,15 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
     }
 }
 
-/// prints each dataset that moved to another version since `before` with `verb`, such as
-/// `Upgraded`, and returns their names; files `guessed` by a dry run never count as changed.
+/// prints each dataset that moved to another version since `before`, and returns their names:
+/// `Upgraded` where its ref is the one it was pinned for, so its source moved on, and `Moved`
+/// where data.toml names another version, which may be older; `Would` ones for a `dry_run`. files
+/// `guessed` by a dry run never count as changed.
 pub(super) fn tell_upgrades(
     output: &Output,
     before: &Before,
     new: &Lock,
-    verb: &str,
+    dry_run: bool,
     guessed: &HashSet<String>,
 ) -> Vec<String> {
     let mut moved = Vec::new();
@@ -2437,6 +2439,12 @@ pub(super) fn tell_upgrades(
                 facts.push(units::count(n as u64, one, many));
             }
         }
+        let verb = match (before.reference == dataset.reference, dry_run) {
+            (true, false) => "Upgraded",
+            (true, true) => "Would upgrade",
+            (false, false) => "Moved",
+            (false, true) => "Would move",
+        };
         output.step(verb, &format!("{} · {}", dataset.name, facts.join(" · ")));
         moved.push(dataset.name.clone());
     }
@@ -3010,7 +3018,7 @@ mod tests {
                 &context.output,
                 &Before::whole(Some(old.clone())),
                 &new,
-                "Upgraded",
+                false,
                 &HashSet::new()
             ),
             ["changed", "revision"]
@@ -3020,7 +3028,7 @@ mod tests {
                 &context.output,
                 &Before::whole(Some(old.clone())),
                 &old,
-                "Upgraded",
+                false,
                 &HashSet::new()
             ),
             Vec::<String>::new()
@@ -3135,7 +3143,7 @@ mod tests {
                 &context.output,
                 &Before::whole(Some(old)),
                 &new,
-                "Would upgrade",
+                true,
                 &guessed
             ),
             ["moved"],

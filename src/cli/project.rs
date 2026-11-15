@@ -941,7 +941,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         &context.output,
         &before,
         &lock,
-        "Upgraded",
+        false,
         &std::collections::HashSet::new(),
     );
     work.tell_versions_kept(&manifest, &before, &lock, &upgrade);
@@ -1020,13 +1020,7 @@ async fn preview_lock(
             &engine::sizeless(&dry.jobs),
         );
     }
-    engine::tell_upgrades(
-        output,
-        &dry.before,
-        &dry.lock,
-        "Would upgrade",
-        &dry.guessed,
-    );
+    engine::tell_upgrades(output, &dry.before, &dry.lock, true, &dry.guessed);
     let download: Vec<Download> = dry
         .jobs
         .iter()
