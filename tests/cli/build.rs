@@ -3183,7 +3183,8 @@ fn a_kept_rebuild_goes_with_its_recipe() -> Result {
     Ok(())
 }
 
-/// with the result in no cache, sync names the build, unless its own downloads bring the bytes.
+/// with the result in no cache, sync names a mirror that holds it and then the build, unless
+/// its own downloads bring the bytes.
 #[test]
 fn sync_places_a_result_and_never_builds_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -3208,7 +3209,10 @@ fn sync_places_a_result_and_never_builds_it() -> Result {
         message,
         "the pinned result of clean is not on this machine or a mirror"
     );
-    assert_eq!(help, "run `fetchloom build clean` to make it here");
+    assert_eq!(
+        help,
+        "a mirror that holds it brings it back: `fetchloom sync clean --mirror <folder>`, or keep that mirror in the mirrors setting; whoever built it fills one with `fetchloom push clean --to <folder>`. else `fetchloom build clean` makes it here, though a rebuild gives the pinned bytes only when its step makes the same bytes every run"
+    );
     assert_eq!(fix, &Value::Null, "building runs the project's code");
     // the step copies iris, so the download of iris brings the result's bytes too
     crate::support::delete(&sandbox.work().join("data").join("iris").join("iris.csv"))?;
@@ -3259,7 +3263,7 @@ fn a_plain_sync_leaves_out_a_result_found_nowhere() -> Result {
         document["result"]["placement"]["unbuilt"],
         serde_json::json!(["clean"])
     );
-    let warned = "the pinned result of clean is not on this machine or a mirror, so it is left out; run `fetchloom build clean` to make it here, or whoever built it can share it with `fetchloom push`";
+    let warned = "the pinned result of clean is not on this machine or a mirror, so it is left out; a mirror that holds it brings it back: `fetchloom sync clean --mirror <folder>`, or keep that mirror in the mirrors setting; whoever built it fills one with `fetchloom push clean --to <folder>`. else `fetchloom build clean` makes it here, though a rebuild gives the pinned bytes only when its step makes the same bytes every run";
     assert!(
         crate::support::warned(&document)
             .iter()

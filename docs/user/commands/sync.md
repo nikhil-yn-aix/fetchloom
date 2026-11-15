@@ -159,17 +159,17 @@ if registering with the cache fails, sync still succeeds, with a warning that `c
 
 ## recipe results
 
-sync places a [recipe](../guides/recipes.md)'s pinned result from the cache, the data folder or a [mirror](../guides/mirrors.md), like any dataset, and never runs its step. where none holds it, as in a fresh clone, a sync of every dataset, or an `add`, places the rest and leaves the result out with a warning naming the build that makes it. files an older pin of the result placed are removed, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`. stderr in a fresh clone, from a real run:
+sync places a [recipe](../guides/recipes.md)'s pinned result from the cache, the data folder or a [mirror](../guides/mirrors.md), like any dataset, and never runs its step. where none holds it, as in a fresh clone, a sync of every dataset, or an `add`, places the rest and leaves the result out with a warning that names a mirror that holds it first, filled with `push` by whoever built it, then the build that makes it, which gives the pinned bytes only when its step makes the same bytes every run. files an older pin of the result placed are removed, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`. stderr in a fresh clone, from a real run, the download lines left out:
 
 ```text
-warning: clean's pinned result is not on this machine or a mirror, so it is left out
-  help: run `fetchloom build clean` to make it here
+warning: the pinned result of clean is not on this machine or a mirror, so it is left out
+  help: a mirror that holds it brings it back: `fetchloom sync clean --mirror <folder>`, or keep that mirror in the mirrors setting; whoever built it fills one with `fetchloom push clean --to <folder>`. else `fetchloom build clean` makes it here, though a rebuild gives the pinned bytes only when its step makes the same bytes every run
      Synced 1 dataset into data · 1 result left out until built
 ```
 
 when that leaves nothing to place, as in a clone whose only other dataset has `place = false`, the last line is `Ok nothing to place in data until clean is built`.
 
-`sync clean`, which names the recipe, stops instead with `build.needed`, exit 60, before anything is placed. `sync --locked` places every other file first, then stops with `build.needed`, exit 60, and its JSON `result` keeps what it placed. a recipe data.lock pins no result of yet has nothing to place: a sync of every dataset warns `clean is not built yet` and exits 0, while `sync clean` stops with `build.needed`, exit 60.
+`sync clean`, which names the recipe, stops instead with `build.needed`, exit 60, before anything is placed, with the same help. `sync --locked` places every other file first, then stops with `build.needed`, exit 60, and its JSON `result` keeps what it placed. a recipe data.lock pins no result of yet has nothing to place: a sync of every dataset warns `clean is not built yet` and exits 0, while `sync clean` stops with `build.needed`, exit 60.
 
 a recipe that changed since its build, as when its code, `run`, `env` or a dataset it reads changed, keeps the result data.lock pins until `fetchloom build` makes another. sync places that result as it stands and says what changed on every run. stderr after clean.py changed:
 

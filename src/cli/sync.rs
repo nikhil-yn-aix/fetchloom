@@ -456,15 +456,9 @@ impl<'a> Loop<'a> {
             ),
         };
         // a clone gets results only from a mirror, which whoever built them fills
-        self.context.output.warn_with(
-            Warning::BuildLeftOut,
-            &said,
-            &format!(
-                "run `{}` to make {them} here, or whoever built {them} can share {them} with `{}`",
-                super::project::command(&format!("build {}", unbuilt.join(" "))),
-                super::project::command("push")
-            ),
-        );
+        self.context
+            .output
+            .warn_with(Warning::BuildLeftOut, &said, &result_route(&unbuilt, them));
         placing.leave_out(&unbuilt);
         Ok(())
     }
@@ -1967,10 +1961,25 @@ pub(super) fn unbuilt_here(names: &[String]) -> Error {
             "them",
         ),
     };
-    Error::new(Kind::BuildNeeded, message).help(format!(
-        "run `{}` to make {them} here",
-        super::project::command(&format!("build {}", names.join(" ")))
-    ))
+    Error::new(Kind::BuildNeeded, message).help(result_route(names, them))
+}
+
+/// how the results data.lock pins of recipes `names` come back where neither the cache nor a
+/// mirror holds them: first from a mirror that does, then by a build, which runs the project's
+/// code and may make other bytes, as a step drawing unseeded random numbers does.
+fn result_route(names: &[String], them: &str) -> String {
+    let joined = names.join(" ");
+    let step = if names.len() == 1 {
+        "its step makes"
+    } else {
+        "each step makes"
+    };
+    format!(
+        "a mirror that holds {them} brings {them} back: `{}`, or keep that mirror in the mirrors setting; whoever built {them} fills one with `{}`. else `{}` makes {them} here, though a rebuild gives the pinned bytes only when {step} the same bytes every run",
+        super::project::command(&format!("sync {joined} --mirror <folder>")),
+        super::project::command(&format!("push {joined} --to <folder>")),
+        super::project::command(&format!("build {joined}"))
+    )
 }
 
 /// refuses `asks`, the datasets a relock would resolve again, when one is an import: it names no
