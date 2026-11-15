@@ -191,43 +191,53 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
 }
 
 /// a try that cannot go on from the bytes an earlier try of the run brought starts over, and says
-/// why: a server that sends the whole file again, or a file that changed on the server.
+/// why: a server that sent the whole file again, as a whole answer or as a part from its first
+/// byte, whatever its `Accept-Ranges` says, or a file that changed on the server.
 #[test]
 fn a_try_that_starts_over_says_why() -> Result {
     let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
     let changed: Vec<u8> = body.iter().map(|byte| byte ^ 0xff).collect();
     let cut = 150_000;
     let length = body.len().to_string();
-    for (second, version, expected, why) in [
+    let whole = |version: &str, ranges: &str, bytes: &[u8]| {
+        let mut headers = vec![("Content-Length", length.as_str()), ("ETag", version)];
+        if !ranges.is_empty() {
+            headers.push(("Accept-Ranges", ranges));
+        }
+        reply("200 OK", &headers, bytes)
+    };
+    let all = format!("bytes 0-{}/{length}", body.len() - 1);
+    let from_the_start = || {
+        let headers = [
+            ("Content-Length", length.as_str()),
+            ("Content-Range", all.as_str()),
+            ("ETag", "\"v1\""),
+        ];
+        reply("206 Partial Content", &headers, &body)
+    };
+    let again = "since the server sent the whole file again instead of the rest";
+    for (answers, expected, why) in [
+        (vec![whole("\"v1\"", "", &body)], &body, again),
+        (vec![whole("\"v1\"", "bytes", &body)], &body, again),
         (
+            vec![from_the_start(), whole("\"v1\"", "bytes", &body)],
             &body,
-            "\"v1\"",
-            &body,
-            "since the server sends the whole file instead of the rest",
+            again,
         ),
         (
-            &changed,
-            "\"v2\"",
+            vec![whole("\"v2\"", "", &changed)],
             &changed,
             "since the file changed on the server",
         ),
     ] {
         let sandbox = Sandbox::new()?;
-        let server = Server::start(
-            "/big.bin",
-            vec![
-                reply(
-                    "200 OK",
-                    &[("Content-Length", &length), ("ETag", "\"v1\"")],
-                    &body[..cut],
-                ),
-                reply(
-                    "200 OK",
-                    &[("Content-Length", &length), ("ETag", version)],
-                    second,
-                ),
-            ],
-        )?;
+        let mut responses = vec![reply(
+            "200 OK",
+            &[("Content-Length", &length), ("ETag", "\"v1\"")],
+            &body[..cut],
+        )];
+        responses.extend(answers);
+        let server = Server::start("/big.bin", responses)?;
         let output = sandbox.run(&["get", &server.url, "-o", "big.bin"])?;
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(0), "{stderr}");

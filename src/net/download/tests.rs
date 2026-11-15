@@ -1202,6 +1202,7 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
     let mut split = Transfer {
         split: false,
         permits: None,
+        sent_whole: false,
     };
     let result = block_on(net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split));
     assert!(matches!(result, Err(Failure::Transient { .. })));
@@ -1255,6 +1256,7 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
     let mut split = Transfer {
         split: false,
         permits: None,
+        sent_whole: false,
     };
     let result = block_on(net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split));
     assert!(matches!(result, Err(Failure::Transient { .. })));

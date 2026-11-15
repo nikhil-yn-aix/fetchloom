@@ -385,6 +385,9 @@ enum Instead {
 struct Transfer {
     split: bool,
     permits: Option<super::Permits>,
+    /// a request for the rest got a part of the same file from its first byte, the whole file
+    /// again, so the try that starts over tells it as an answer that sends no parts.
+    sent_whole: bool,
 }
 
 /// where a response starts, its total size and the server's version proof.
@@ -758,6 +761,7 @@ impl Net {
                 Some(_) => None,
                 None => Some(self.permit(&fetch.from).await?),
             },
+            sent_whole: false,
         };
         let began = Instant::now();
         let mut retry = Retry::new(self, &fetch.url).telling(on);
@@ -994,6 +998,11 @@ impl Net {
         let Some(offset) =
             self.starting_offset(from, status, &head, asked.as_ref(), &validators)?
         else {
+            state.sent_whole = status == StatusCode::PARTIAL_CONTENT
+                && headers::range_start(&head) == Some(0)
+                && earlier
+                    .as_ref()
+                    .is_some_and(|(_, kept)| !headers::changed(kept, &validators));
             return Ok(Answer::StartOver);
         };
         let total = headers::total_length(&head, status);
@@ -1027,12 +1036,16 @@ impl Net {
             return Ok(Answer::StartOver);
         };
         let kept = writer.kept();
-        let resumable = Resumable::answered(
-            status,
-            &head,
-            proven,
-            earlier.as_ref().map(|(_, kept)| kept),
-        );
+        let resumable = if std::mem::take(&mut state.sent_whole) {
+            Resumable::No
+        } else {
+            Resumable::answered(
+                status,
+                &head,
+                proven,
+                earlier.as_ref().map(|(_, kept)| kept),
+            )
+        };
         self.started(on, total, offset + kept, resumable)?;
         // ranges kept past the prefix leave gaps that only the split path fills, which adds no
         // stream to an answer that may not split

@@ -593,7 +593,7 @@ impl<'a> Watch<'a> {
         } else {
             let why = match (self.held.resumable(), resumable) {
                 (Resumable::No, _) => "the server cannot continue from them",
-                (_, Resumable::No) => "the server sends the whole file instead of the rest",
+                (_, Resumable::No) => "the server sent the whole file again instead of the rest",
                 _ => "the file changed on the server",
             };
             format!(
