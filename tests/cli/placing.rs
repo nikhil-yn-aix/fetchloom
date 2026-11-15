@@ -22,6 +22,38 @@ fn names_alias(sandbox: &Sandbox, original: &str, other: &str) -> Result<bool> {
     Ok(aliases)
 }
 
+/// asserts that the file at `path` is read-only where a file made read-only stays so, as on every
+/// disk but exfat on macos.
+fn assert_read_only(sandbox: &Sandbox, path: &Path, context: &str) -> Result {
+    let folder = sandbox.folder(".modes")?;
+    let probe = folder.join("probe");
+    fs::write(&probe, b"modes")?;
+    let mut permissions = fs::metadata(&probe)?.permissions();
+    permissions.set_readonly(true);
+    let kept = fs::set_permissions(&probe, permissions).is_ok()
+        && fs::metadata(&probe)?.permissions().readonly();
+    delete(&probe)?;
+    fs::remove_dir(folder)?;
+    if !kept {
+        return skipped("permissions", "this disk keeps no file read-only");
+    }
+    assert!(fs::metadata(path)?.permissions().readonly(), "{context}");
+    Ok(())
+}
+
+/// whether a folder no one may write to refuses a new file here, as on every disk but exfat on
+/// macos.
+#[cfg(unix)]
+fn folders_refuse_files(sandbox: &Sandbox) -> Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = sandbox.folder(".refusing")?;
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o555))?;
+    let made = fs::write(folder.join("probe"), b"refused").is_ok();
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o755))?;
+    fs::remove_dir_all(folder)?;
+    Ok(!made)
+}
+
 fn copy_iris(sandbox: &Sandbox, server: &Server) -> Result {
     sandbox.allow(&server.url);
     fs::write(
@@ -1344,7 +1376,7 @@ fn a_read_only_file_becomes_writable_when_the_dataset_asks_for_copies() -> Resul
         .output()?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
-    assert!(fs::metadata(&placed)?.permissions().readonly());
+    assert_read_only(&sandbox, &placed, "")?;
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
@@ -1412,7 +1444,7 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
-    assert!(fs::metadata(&placed)?.permissions().readonly());
+    assert_read_only(&sandbox, &placed, "")?;
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
@@ -1480,10 +1512,7 @@ fn copies_no_dataset_asks_for_go_back_to_read_only_files() -> Result {
     let synced = sandbox.run(&["sync"])?;
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
-    assert!(
-        fs::metadata(&untouched)?.permissions().readonly(),
-        "{stderr}"
-    );
+    assert_read_only(&sandbox, &untouched, &stderr)?;
     assert_eq!(fs::read(&untouched)?, V1);
     if sandbox.links()?.hardlinks_read_only() {
         let hex = crate::support::sha256_hex(V1);
@@ -2352,6 +2381,9 @@ fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
         return skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
+    if !folders_refuse_files(&sandbox)? {
+        return skipped("permissions", "this disk keeps no folder from new files");
+    }
     let bytes = zip_of(&[("a.csv", b"first"), ("sub/b.csv", b"other")])?;
     let server = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
     // a folder the dataset needs that refuses new files, so its second file cannot be placed
@@ -2391,6 +2423,9 @@ fn a_rolled_back_list_takes_the_files_it_placed_with_it() -> Result {
         return skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
+    if !folders_refuse_files(&sandbox)? {
+        return skipped("permissions", "this disk keeps no folder from new files");
+    }
     let bytes = zip_of(&[("a.csv", b"first"), ("sub/b.csv", b"other")])?;
     let archive = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
     let plain = Server::start("/files/c.csv", vec![file(b"c\n", "\"c1\"")])?;

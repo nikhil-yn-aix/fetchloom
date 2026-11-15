@@ -25,6 +25,7 @@ a test that needs what a machine may lack returns early and says `skipped: <reas
 | `distinct-names` | a disk that keeps `Data` and `data` apart |
 | `raw-names` | a disk that keeps a name that is not text as written (apfs refuses one and hfs+ escapes it) |
 | `unprivileged` | a run that is not root, since root writes into a read-only folder |
+| `permissions` | a disk that keeps the permissions set on a file or folder, so a file made read-only stays so and a folder no one may write to refuses new files; exfat on macos keeps neither |
 | `symlinks` | a disk and a run that make symbolic links, and junctions for folders on windows |
 | `birth-time` | a disk that records when each file was made |
 | `freed-names` | a disk that frees a removed file's name at once, where fat and exfat on windows keep it while the file is open |
@@ -38,11 +39,11 @@ a test that needs what a machine may lack returns early and says `skipped: <reas
 
 | runner | `FETCHLOOM_TEST_REQUIRE` |
 |---|---|
-| ubuntu-24.04 | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish,secret-service,azurite`; CI installs fish, gnome keyring, libsecret's tools and azurite first |
-| ubuntu-24.04-arm | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash` |
-| macos-15 | `script,git,hardlinks,reflinks,unprivileged,pwsh,zsh` |
-| windows-2025 | `git,hardlinks,pwsh` |
-| windows-11-arm | `git,hardlinks` |
+| ubuntu-24.04 | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,permissions,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish,secret-service,azurite`; CI installs fish, gnome keyring, libsecret's tools and azurite first |
+| ubuntu-24.04-arm | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,permissions,symlinks,birth-time,freed-names,sparse-files,file-locks,bash` |
+| macos-15 | `script,git,hardlinks,reflinks,unprivileged,permissions,pwsh,zsh` |
+| windows-2025 | `git,hardlinks,permissions,pwsh` |
+| windows-11-arm | `git,hardlinks,permissions` |
 
 the btrfs and xfs passes require `reflinks`, the casefold pass requires `aliases`, and the FAT32, exFAT, ReFS and HFS+ passes require none.
 

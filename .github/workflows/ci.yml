@@ -172,13 +172,13 @@ jobs:
         # what each runner has, so a test that lacks one fails rather than skips
         include:
           - os: ubuntu-24.04
-            require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish,secret-service,azurite
+            require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,permissions,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish,secret-service,azurite
           - os: ubuntu-24.04-arm
-            require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash
+            require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,permissions,symlinks,birth-time,freed-names,sparse-files,file-locks,bash
           - os: windows-11-arm
-            require: git,hardlinks
+            require: git,hardlinks,permissions
           - os: macos-15
-            require: script,git,hardlinks,reflinks,unprivileged,pwsh,zsh
+            require: script,git,hardlinks,reflinks,unprivileged,permissions,pwsh,zsh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -320,7 +320,7 @@ jobs:
         run: python python/ci_tests.py record
       - name: nextest
         env:
-          FETCHLOOM_TEST_REQUIRE: git,hardlinks,pwsh
+          FETCHLOOM_TEST_REQUIRE: git,hardlinks,permissions,pwsh
         run: python python/ci_tests.py run native
       - run: python -m unittest discover -s python
       - name: keep test reports
