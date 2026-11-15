@@ -817,6 +817,8 @@ impl Net {
         let bucket = self.signing.locate(url);
         let stored = self.google.locate(url);
         let container = self.azure.locate(url);
+        // judged on the link as written too, before a test server stands in for it
+        let in_the_clear = (!self.carries(url)).then(|| s3::in_the_clear(url));
         #[cfg(debug_assertions)]
         let local = api::stand_in(url).inspect(|local| self.typed(local));
         #[cfg(debug_assertions)]
@@ -836,11 +838,7 @@ impl Net {
             first_origin &= hop.origin() == url.origin();
             // a signature goes with the first request alone, never after a redirect
             let located = bucket.as_ref().filter(|_| redirects == 0);
-            let signer = self
-                .signing
-                .signer(located, SystemTime::now(), &self.stop)
-                .await
-                .map_err(Failure::Final)?;
+            let signer = self.signer_for(located, in_the_clear.as_ref()).await?;
             let tokened = self.google_bearer(stored.as_ref(), redirects).await?;
             let blobbed = self.azure_hop(container.as_ref(), redirects).await?;
             let ticket = self
@@ -913,6 +911,24 @@ impl Net {
                 return Ok(response);
             };
             sent_by = Some(std::mem::replace(&mut hop, next));
+        }
+    }
+
+    /// the keys and region that sign `located`'s request, when any do, refused when the request
+    /// would carry them in the clear, as `in_the_clear` says.
+    async fn signer_for(
+        &self,
+        located: Option<&s3::Located>,
+        in_the_clear: Option<&Error>,
+    ) -> Result<Option<s3::Signer>, Failure> {
+        let signer = self
+            .signing
+            .signer(located, SystemTime::now(), &self.stop)
+            .await
+            .map_err(Failure::Final)?;
+        match (signer, in_the_clear) {
+            (Some(_), Some(error)) => Err(Failure::Final(error.clone())),
+            (signer, _) => Ok(signer),
         }
     }
 

@@ -781,6 +781,9 @@ impl Pusher {
                 .await?;
             let mut url = joined(&self.top.link(region.as_deref()), parts);
             url.set_query(query);
+            if signer.is_some() && !self.net.carries(&url) {
+                return Err(crate::net::s3::in_the_clear(&url));
+            }
             let sending = Sending {
                 method: &method,
                 body: &body,

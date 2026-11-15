@@ -332,6 +332,42 @@ fn an_endpoint_in_the_aws_settings_takes_s3_buckets_there() -> Result {
     Ok(())
 }
 
+/// a push signs nothing over plain http to a host nobody vouched for, where anyone on the way
+/// could read the signature: it stops before its first request, and says how to go on.
+#[test]
+fn a_push_sends_no_key_over_plain_http() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let s3 = S3::start(SECRET)?;
+    let output = keyed(
+        &sandbox,
+        &s3,
+        "AKIALABPUSHWXYZ",
+        &[
+            "--json",
+            "--yes",
+            "push",
+            "--to",
+            "s3:http://minio.lab.example:9000/lab-data/m",
+        ],
+    )
+    .env("AWS_ENDPOINT_URL_S3", "http://minio.lab.example:9000")
+    .output()?;
+    assert_ne!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.refused", "{error}");
+    assert_eq!(
+        error["message"],
+        "fetchloom sends no AWS key over plain http to http://minio.lab.example:9000, where anyone on the way, a proxy too, could read and reuse it"
+    );
+    assert_eq!(
+        error["help"],
+        "give the service's https address, or list http://minio.lab.example:9000 in allowed_origins if it is on a network you trust and no proxy carries it"
+    );
+    assert!(s3.asked().is_empty(), "{:?}", s3.asked());
+    Ok(())
+}
+
 /// a login typed into a bucket's address is refused, and never repeated.
 #[test]
 fn a_login_in_a_bucket_address_is_refused_unshown() -> Result {

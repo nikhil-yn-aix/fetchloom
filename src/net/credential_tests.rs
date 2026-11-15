@@ -712,6 +712,38 @@ fn only_a_listed_buckets_requests_are_signed_and_never_a_presigned_link() {
     }
 }
 
+/// a key never signs a request that travels in the clear, plain http to a host nobody vouched
+/// for: the unsigned request goes, and the signed one is refused before it is sent.
+#[test]
+fn no_key_signs_a_request_over_plain_http() {
+    let net = signing_net(
+        &["s3:http://minio.lab.example/scans"],
+        aws_keys(vec![(
+            "AWS_ENDPOINT_URL_S3",
+            "http://minio.lab.example".to_owned(),
+        )]),
+    );
+    let (local, asked) = serve(vec![
+        reply("403 Forbidden", &[], b""),
+        reply("200 OK", &[], b""),
+    ]);
+    let client = transport();
+    let start = Url::parse("http://minio.lab.example/scans/a.csv").unwrap();
+    let Err(failure) = block_on(net.send(&start, |request| {
+        let request = request.build().unwrap();
+        client.get(local.clone()).headers(request.headers().clone())
+    })) else {
+        panic!("a signed request went over plain http");
+    };
+    let error = failure.into_error(Kind::NetworkStatus);
+    assert_eq!(error.kind, Kind::NetworkRefused);
+    assert_eq!(
+        error.message,
+        "fetchloom sends no AWS key over plain http to http://minio.lab.example, where anyone on the way, a proxy too, could read and reuse it"
+    );
+    assert_eq!(sent(&asked, "authorization"), [None]);
+}
+
 #[test]
 fn a_signature_never_follows_a_redirect() {
     let net = signing_net(

@@ -550,6 +550,22 @@ impl fmt::Display for Bucket {
     }
 }
 
+/// the error for a request to `url` that an AWS key would sign where it travels in the clear: plain
+/// http to a host nobody vouched for, or through a proxy, which reads plain http whole. a
+/// signature taken on the way works again for a quarter of an hour.
+pub(crate) fn in_the_clear(url: &Url) -> Error {
+    let origin = url.origin().ascii_serialization();
+    Error::new(
+        Kind::NetworkRefused,
+        format!(
+            "fetchloom sends no AWS key over plain http to {origin}, where anyone on the way, a proxy too, could read and reuse it"
+        ),
+    )
+    .help(format!(
+        "give the service's https address, or list {origin} in allowed_origins if it is on a network you trust and no proxy carries it"
+    ))
+}
+
 /// `url` pinned to the S3 object version `version`.
 pub(crate) fn with_version(url: &Url, version: &str) -> Url {
     let mut pinned = url.clone();

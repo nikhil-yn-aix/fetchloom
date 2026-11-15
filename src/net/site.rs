@@ -528,7 +528,7 @@ impl Net {
     }
 
     /// whether a saved credential may go with a request for `url`, as [`carried`] judges.
-    pub(super) fn carries(&self, url: &Url) -> bool {
+    pub(crate) fn carries(&self, url: &Url) -> bool {
         url.scheme() == "https"
             || self
                 .wire()
