@@ -577,9 +577,9 @@ impl Project {
         Ok(written)
     }
 
-    /// removes the parts of file lists `lock` no longer names, and their folder once it is
-    /// empty. other files there stay. a part that cannot be removed is left for the next write,
-    /// and a data.lock.d that is a link or a file is left alone.
+    /// removes the parts of file lists `lock` no longer names, and any a run left half written,
+    /// and their folder once it is empty. other files there stay. a part that cannot be removed
+    /// is left for the next write, and a data.lock.d that is a link or a file is left alone.
     pub(crate) fn sweep_lists(&self, lock: &Lock) {
         let Ok(folder) = lock::lists::folder(&self.root) else {
             return;
@@ -591,8 +591,9 @@ impl Project {
             lock.lists().into_iter().map(|(part, _)| part).collect();
         for entry in entries.flatten() {
             let file = entry.file_name().to_string_lossy().into_owned();
-            if lock::lists::is_part(&file)
-                && !named.contains(&format!("{}/{file}", lock::lists::FOLDER))
+            let unnamed = lock::lists::is_part(&file)
+                && !named.contains(&format!("{}/{file}", lock::lists::FOLDER));
+            if (unnamed || lock::lists::is_unfinished(&file))
                 && let Err(err) = fs::remove_file(entry.path())
             {
                 tracing::debug!(%err, file, "could not remove a file list data.lock no longer names");
@@ -1131,7 +1132,13 @@ fn write_atomically_with(
     write: impl FnOnce(File) -> io::Result<()>,
 ) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let own = parent.join(FOLDER);
+    // a list's part stages in the project's folder too: half written in data.lock.d, as a kill
+    // leaves it, `git add data.lock.d` would take it
+    let beside = match parent.file_name() {
+        Some(name) if name == lock::lists::FOLDER => parent.parent().unwrap_or(parent),
+        _ => parent,
+    };
+    let own = beside.join(FOLDER);
     // a link there, as a clone can hold, would stage the file wherever it points
     let folder = if fs::symlink_metadata(&own).is_ok_and(|found| found.is_dir()) {
         own.as_path()
@@ -1966,6 +1973,39 @@ mod tests {
         assert_eq!(fs::read(path).unwrap(), b"old");
         assert!(!staged_in(&own));
         assert!(!staged_in(&project.root));
+    }
+
+    /// a part is staged in fetchloom's own folder, not in data.lock.d, where a run killed while
+    /// writing it would leave a half-written file that `git add data.lock.d` takes; one an older
+    /// run left there goes with the next sweep.
+    #[test]
+    fn a_part_is_never_staged_in_the_lists_folder() {
+        let (_dir, project) = project(&[]);
+        let own = project.inner().unwrap();
+        let lists = project.root.join(lock::lists::FOLDER);
+        fs::create_dir(&lists).unwrap();
+        let staged_in = |folder: &Path| {
+            fs::read_dir(folder)
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(".first."))
+        };
+        let part = lists.join("first.0123456789ab.tsv.zst");
+        let failure = write_atomically_with(&part, |mut file| {
+            file.write_all(b"partial")?;
+            assert!(staged_in(&own));
+            assert!(!staged_in(&lists));
+            Err(io::ErrorKind::Interrupted.into())
+        });
+        assert_eq!(failure.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert!(!staged_in(&own));
+        let left = lists.join(".first.0123456789ab.tsv.zst.0badf00d.tmp");
+        fs::write(&left, b"partial").unwrap();
+        let theirs = lists.join(".notes.tmp");
+        fs::write(&theirs, b"a person's file").unwrap();
+        project.sweep_lists(&Lock::default());
+        assert!(!left.exists());
+        assert!(theirs.exists());
     }
 
     #[test]

@@ -239,6 +239,19 @@ pub(crate) fn is_part(file: &str) -> bool {
     short(last) || (last.bytes().all(|byte| byte.is_ascii_digit()) && short(middle))
 }
 
+/// whether `file`, a name in [`FOLDER`], is a part an older run began to write there and never
+/// finished, as a kill while writing one left it.
+pub(crate) fn is_unfinished(file: &str) -> bool {
+    file.strip_prefix('.')
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+        .and_then(|rest| rest.rsplit_once('.'))
+        .is_some_and(|(part, random)| {
+            random.len() == 8
+                && random.bytes().all(|byte| byte.is_ascii_hexdigit())
+                && is_part(part)
+        })
+}
+
 /// the bytes a part is kept in.
 pub(crate) fn compress(text: &str) -> std::io::Result<Vec<u8>> {
     zstd::encode_all(text.as_bytes(), LEVEL)
