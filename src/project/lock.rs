@@ -86,6 +86,21 @@ fn fits<'a>(parsed: impl IntoIterator<Item = &'a Parsed>, room: u64) -> Result<(
     ))
 }
 
+/// refuses, before it is parsed, the text of a lock, or of `what` as messages name it, which is
+/// `bytes` long: the text and what it parses into take twice its size at least, so a text too big
+/// for `room` says so before parsing it fills the container.
+fn fits_text(what: &str, bytes: u64, room: u64) -> Result<(), Error> {
+    let need = bytes.saturating_mul(2);
+    if need <= room {
+        return Ok(());
+    }
+    // naming one dataset reads the whole text all the same
+    Err(too_big(what, need, room).help(format!(
+        "raise the container's memory limit by {} or more",
+        crate::units::size(need - room)
+    )))
+}
+
 /// the error for reading `what` of the project, which takes about `need` bytes of memory, more
 /// than the `room` its container leaves.
 fn too_big(what: &str, need: u64, room: u64) -> Error {
@@ -624,9 +639,12 @@ impl Lock {
         has: &dyn Fn(&str) -> bool,
         taken: u64,
     ) -> Result<(Lock, Vec<String>), Error> {
-        let parsed = parse(text)?;
-        let room = ROOM.get().copied().unwrap_or(u64::MAX);
-        fits(&parsed, room.saturating_sub(taken)).map_err(|error| {
+        let room = ROOM
+            .get()
+            .copied()
+            .unwrap_or(u64::MAX)
+            .saturating_sub(taken);
+        let beside = |error: Error| {
             if taken == 0 {
                 return error;
             }
@@ -634,7 +652,16 @@ impl Lock {
                 "the other data.lock, read already, takes about {} of it",
                 crate::units::size(taken)
             ))
-        })?;
+        };
+        let bytes = text.len() as u64;
+        fits_text(
+            &format!("data.lock, which is {},", crate::units::size(bytes)),
+            bytes,
+            room,
+        )
+        .map_err(beside)?;
+        let parsed = parse_only(text, &|_| true)?;
+        fits(&parsed, room).map_err(beside)?;
         // a part fetchloom would not write is refused as a read refuses it, never passed over
         let (listed, unlisted): (Vec<Parsed>, Vec<Parsed>) =
             parsed.into_iter().partition(|entry| {
@@ -687,7 +714,18 @@ impl Lock {
         root: &Path,
         keep: &dyn Fn(&str) -> bool,
     ) -> Result<Lock, Error> {
-        let mut parsed = parse_only(text, keep)?;
+        Lock::read_only_within(text, root, keep, ROOM.get().copied().unwrap_or(u64::MAX))
+    }
+
+    /// [`Lock::read_only`] with its text held to `memory`, the room a container leaves, as a whole
+    /// read's is.
+    fn read_only_within(
+        text: &str,
+        root: &Path,
+        keep: &dyn Fn(&str) -> bool,
+        memory: u64,
+    ) -> Result<Lock, Error> {
+        let mut parsed = parse_within(text, keep, memory)?;
         parsed.retain(|entry| keep(entry.name()));
         resolve(parsed, Some(root))
     }
@@ -985,23 +1023,19 @@ fn sorted(files: &[LockedFile]) -> Vec<LockedFile> {
 
 /// the datasets a lock's text gives in name order, by the narrow reader when it is the writer's.
 fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
-    parse_within(text, ROOM.get().copied().unwrap_or(u64::MAX))
+    parse_within(text, &|_| true, ROOM.get().copied().unwrap_or(u64::MAX))
 }
 
-/// [`parse`] within `room`: the text and what it parses into take twice its size at least, so a
-/// text too big for the room is refused before it is parsed, and [`fits`] weighs the rest once
-/// it is. a read of some datasets may parse less, so only a whole read is held to this.
-fn parse_within(text: &str, room: u64) -> Result<Vec<Parsed>, Error> {
+/// [`parse_only`] within `room`: a text too big for it is refused before it is parsed, as
+/// [`fits_text`] says, and [`fits`] weighs the files once it is.
+fn parse_within(text: &str, keep: &dyn Fn(&str) -> bool, room: u64) -> Result<Vec<Parsed>, Error> {
     let bytes = text.len() as u64;
-    let need = bytes.saturating_mul(2);
-    if need > room {
-        return Err(too_big(
-            &format!("data.lock, which is {},", crate::units::size(bytes)),
-            need,
-            room,
-        ));
-    }
-    parse_only(text, &|_| true)
+    fits_text(
+        &format!("data.lock, which is {},", crate::units::size(bytes)),
+        bytes,
+        room,
+    )?;
+    parse_only(text, keep)
 }
 
 /// [`parse`], where the files of a source `keep` refuses by name may be left unread.
@@ -2270,9 +2304,10 @@ mod tests {
     fn a_lock_text_too_big_for_its_room_is_refused_before_it_is_parsed() {
         let text = sample_sorted().render_with(1);
         let need = 2 * text.len() as u64;
-        assert!(parse_within(&text, need).is_ok());
+        let all = |_: &str| true;
+        assert!(parse_within(&text, &all, need).is_ok());
         let garbage = "x".repeat(text.len());
-        let error = parse_within(&garbage, need - 1).unwrap_err();
+        let error = parse_within(&garbage, &all, need - 1).unwrap_err();
         assert_eq!(error.kind, Kind::LocalIo);
         assert!(
             error
@@ -2282,8 +2317,35 @@ mod tests {
             error.message
         );
         assert_eq!(
-            parse_within(&garbage, need).unwrap_err().kind,
+            parse_within(&garbage, &all, need).unwrap_err().kind,
             Kind::ProjectInvalid
+        );
+    }
+
+    /// a read of a lock beside one read already holds its text to the room the other leaves, and
+    /// a read of some datasets holds it to the room as a whole read does, both before parsing.
+    #[test]
+    fn a_lock_text_fits_beside_a_lock_read_already_and_in_a_named_read() {
+        let root = tempfile::tempdir().unwrap();
+        let garbage = "x".repeat(1000);
+        let none = |_: &str| -> Result<Vec<u8>, Error> { Err(broken("no part".to_owned())) };
+        let error = Lock::read_with(&garbage, &none, &|_| true, u64::MAX - 1999).unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo, "{error:?}");
+        assert!(
+            error.details[0].starts_with("the other data.lock, read already, takes about "),
+            "{error:?}"
+        );
+        assert_eq!(
+            Lock::read_with(&garbage, &none, &|_| true, u64::MAX - 2000)
+                .unwrap_err()
+                .kind,
+            Kind::ProjectInvalid
+        );
+        let error = Lock::read_only_within(&garbage, root.path(), &|_| true, 1999).unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo, "{error:?}");
+        assert_eq!(
+            error.help.as_deref(),
+            Some("raise the container's memory limit by 1 B or more")
         );
     }
 

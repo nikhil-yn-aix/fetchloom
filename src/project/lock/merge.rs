@@ -631,8 +631,9 @@ impl Locks {
 }
 
 /// data.lock's sides: whole as git holds them when it gave them, so no pin mixes the lines of
-/// both, else as the conflict lines give them. the merge holds all three at once, so their files
-/// together must fit `room`, the memory a container leaves, before any list is read.
+/// both, else as the conflict lines give them. the merge holds all three at once, so their texts
+/// together must fit `room`, the memory a container leaves, before any is parsed, and their files
+/// together before any list is read.
 fn read_locks(sides: &Sides, room: u64) -> Result<Locks, Error> {
     let side =
         |text: &str, side: Side| parse(text).map_err(|error| unreadable(super::FILE, side, &error));
@@ -642,6 +643,22 @@ fn read_locks(sides: &Sides, room: u64) -> Result<Locks, Error> {
         .map_or([&sides.ours, &sides.theirs], |[ours, theirs]| {
             [ours, theirs]
         });
+    let bytes = [
+        ours.len(),
+        theirs.len(),
+        sides.base.as_ref().map_or(0, String::len),
+    ]
+    .into_iter()
+    .map(|len| len as u64)
+    .fold(0, u64::saturating_add);
+    super::fits_text(
+        &format!(
+            "data.lock's sides, which are {} together,",
+            crate::units::size(bytes)
+        ),
+        bytes,
+        room,
+    )?;
     let locks = Locks {
         ours: side(ours, Side::Ours)?,
         theirs: side(theirs, Side::Theirs)?,

@@ -903,6 +903,25 @@ fn a_needed_choice_shows_no_unchecked_part_or_secret() {
     }
 }
 
+/// the texts of all three locks are held to the room together before any is parsed, so three
+/// that fit only one at a time are refused before parsing fills the container.
+#[test]
+fn three_lock_texts_must_fit_together_before_any_is_parsed() {
+    let garbage = "x".repeat(1024);
+    let three = sides(garbage.clone(), garbage.clone(), Some(garbage));
+    let error = read_locks(&three, 4096).err().unwrap();
+    assert_eq!(error.kind, Kind::LocalIo, "{error:?}");
+    assert_eq!(
+        error.message,
+        "reading this project's data.lock's sides, which are 3.0 KiB together, takes about 6.0 KiB of memory, more than the 4.0 KiB this container leaves fetchloom"
+    );
+    assert_eq!(
+        read_locks(&three, 6144).err().unwrap().kind,
+        Kind::ProjectInvalid
+    );
+    assert_eq!(read_locks(&three, 6143).err().unwrap().kind, Kind::LocalIo);
+}
+
 /// three locks are held at once in a merge, so their files together must fit the memory a
 /// container leaves, as one lock's must before its lists are read.
 #[test]
