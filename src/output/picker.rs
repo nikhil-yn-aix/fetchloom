@@ -13,7 +13,7 @@ pub(super) fn choose(
     style: Style,
 ) -> Result<Option<usize>, Error> {
     if options.is_empty() {
-        return Err(cancelled());
+        return Err(nothing_chosen(Kind::Usage));
     }
     let terminal = Term::stderr();
     // too few rows for the question, one option and the footer: a list drawn once never stacks
@@ -57,7 +57,7 @@ pub(super) fn numbered(
     style: Style,
 ) -> Result<Option<usize>, Error> {
     if options.is_empty() {
-        return Err(cancelled());
+        return Err(nothing_chosen(Kind::Usage));
     }
     let terminal = Term::stderr();
     let width = terminal
@@ -88,11 +88,11 @@ pub(super) fn numbered(
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
                 return Err(Error::new(Kind::Interrupted, "stopped").cancelled("the choice"));
             }
-            Err(_) => return Err(cancelled()),
+            Err(_) => return Err(nothing_chosen(Kind::Usage)),
         };
         match picked(&line, count) {
             Picked::One(index) => return Ok(Some(index)),
-            Picked::Cancel => return Err(cancelled().cancelled("the choice")),
+            Picked::Cancel => return Err(cancelled()),
             Picked::Again => {}
         }
     }
@@ -310,11 +310,11 @@ fn selection_key(
     let key = match key {
         Ok(key) => key,
         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => Key::CtrlC,
-        Err(_) => return Err(cancelled()),
+        Err(_) => return Err(nothing_chosen(Kind::Usage)),
     };
     match key {
         Key::CtrlC => return Err(Error::new(Kind::Interrupted, "stopped").cancelled("the choice")),
-        Key::Escape | Key::Char('q' | 'n') => return Err(cancelled().cancelled("the choice")),
+        Key::Escape | Key::Char('q' | 'n') => return Err(cancelled()),
         Key::ArrowUp | Key::Char('k') => *cursor = cursor.saturating_sub(1),
         Key::ArrowDown | Key::Char('j') => *cursor = (*cursor + 1).min(count.saturating_sub(1)),
         Key::Enter if *cursor < count => return Ok(Some(*cursor)),
@@ -327,8 +327,13 @@ fn selection_key(
     Ok(None)
 }
 
+/// the person's own cancel, which exits as a no to a question does.
 fn cancelled() -> Error {
-    Error::new(Kind::Usage, "nothing was chosen")
+    nothing_chosen(Kind::Unconfirmed).cancelled("the choice")
+}
+
+fn nothing_chosen(kind: Kind) -> Error {
+    Error::new(kind, "nothing was chosen")
         .help("run it again to choose, or give a link or an id instead")
 }
 
@@ -470,7 +475,12 @@ mod tests {
             (Err(std::io::ErrorKind::UnexpectedEof.into()), false),
         ] {
             let error = selection_key(key, &mut 0, 3).unwrap_err();
-            assert_eq!(error.kind, Kind::Usage);
+            let kind = if chosen {
+                Kind::Unconfirmed
+            } else {
+                Kind::Usage
+            };
+            assert_eq!(error.kind, kind);
             assert_eq!(error.message, "nothing was chosen");
             assert!(error.help.unwrap().contains("give a link or an id instead"));
             assert_eq!(error.cancelled.is_some(), chosen);

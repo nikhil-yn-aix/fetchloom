@@ -120,7 +120,8 @@ fn a_list_taller_than_the_terminal_scrolls_in_place() -> Result {
     else {
         return Ok(());
     };
-    assert_eq!(code, Some(2), "{screen}");
+    // q cancels the choice, which exits as a no does
+    assert_eq!(code, Some(1), "{screen}");
     let climbs: Vec<usize> = screen
         .split("\x1b[")
         .filter_map(|escape| {
@@ -158,7 +159,7 @@ fn a_list_taller_than_the_terminal_scrolls_in_place() -> Result {
     else {
         return Ok(());
     };
-    assert_eq!(code, Some(2), "{screen}");
+    assert_eq!(code, Some(1), "{screen}");
     assert_eq!(screen.matches("zenodo:4135078").count(), 1, "{screen}");
     Ok(())
 }

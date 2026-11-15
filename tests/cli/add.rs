@@ -1007,14 +1007,15 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
 }
 
 /// q or ctrl-c at the search list, and no or ctrl-c at the home folder question, each say what
-/// was cancelled and that nothing changed, exiting 2 for q, 1 for no and 130 for ctrl-c.
+/// was cancelled and that nothing changed, exiting 1 for q or no, as a cancel, and 130 for
+/// ctrl-c.
 #[cfg(all(target_os = "linux", debug_assertions))]
 #[test]
 fn a_cancel_at_a_question_is_no_error() -> Result {
     let sandbox = Sandbox::new()?;
     let mut command = sandbox.command(&["add", "iris"]);
     let _catalogs = searched(&mut command, 2)?;
-    for (keys, code) in [("q", 2), ("\u{3}", 130)] {
+    for (keys, code) in [("q", 1), ("\u{3}", 130)] {
         // -isig lets ctrl-c reach the list as the key it reads, whenever it is typed
         let Some((exit, screen)) =
             crate::support::typed(&sandbox.work(), &command, "-isig", "which one?", keys)?
@@ -1111,7 +1112,7 @@ fn an_accessible_terminal_picks_a_dataset_by_its_number() -> Result {
     else {
         return Ok(());
     };
-    assert_eq!(code, Some(2), "{screen}");
+    assert_eq!(code, Some(1), "{screen}");
     assert!(
         screen.contains("  Cancelled the choice of a dataset, so nothing changed\n"),
         "{screen}"
