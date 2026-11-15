@@ -463,10 +463,20 @@ fn a_build_folder_reached_through_a_swapped_tmp_keeps_its_files() {
     fs::rename(&folder, cache.root.join("old-tmp")).unwrap();
     crate::test_links::link_folder(&outside, &folder).unwrap();
 
-    cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
+    let freed = cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
 
     assert_eq!(fs::read(&payload).unwrap(), b"keep these bytes");
     assert!(build.join("lock").exists());
+    // what a sweep could not remove is told as such, never also counted as removed
+    assert_eq!(freed.removed_leftovers, 0);
+    assert!(
+        freed
+            .not_removed
+            .iter()
+            .any(|failure| failure.path.ends_with("0123456789abcdef.build")),
+        "{:?}",
+        freed.not_removed
+    );
 }
 
 /// a sweep clears a build folder through handles that never follow a link, so a folder in it

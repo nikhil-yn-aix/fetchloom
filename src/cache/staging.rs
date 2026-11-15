@@ -147,10 +147,7 @@ impl Cache {
                 // a pretending sweep only counts, since a build's folder is never a cache file
                 match self.sweep_build(&folder, now, stop, !self.volume.is_pretending()) {
                     Ok(swept) => removed += u64::from(swept),
-                    Err(error) => {
-                        not_removed.push(Failure::new(&folder, &error));
-                        removed += 1;
-                    }
+                    Err(error) => not_removed.push(Failure::new(&folder, &error)),
                 }
                 continue;
             }
