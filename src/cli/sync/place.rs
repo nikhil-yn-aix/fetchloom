@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use self::put::put_all;
 use self::tell::tell;
-pub(crate) use self::tell::{emptied, holding, tell_preview};
+pub(crate) use self::tell::{emptied, holding, restored_aside, tell_preview};
 use super::Scope;
 use super::disk::{Blocker, Entry, Freeing, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
@@ -87,6 +87,10 @@ pub(crate) struct Placement {
     /// files `--force` moved aside to replace them, kept until what replaces them is in place.
     #[serde(skip)]
     set_aside: Vec<SetAside>,
+    /// the hidden name each file `--force` moves aside takes, by the path it has, both paths in
+    /// the project, written to the state before settling moves any.
+    #[serde(skip)]
+    aside_names: HashMap<String, String>,
     /// folders no dataset uses now that still hold files fetchloom did not place, so they stay.
     #[serde(skip)]
     pub(crate) retired: Vec<Retired>,
@@ -1045,6 +1049,9 @@ impl<'a> Placing<'a> {
         placement.notice(
             manifest, &targets, &actions, &survey, &scope, &unknown, &unlisted,
         );
+        // the state written ahead must not vouch for the size and time an edit kept
+        survey.smudge_edited();
+        write_ahead(project, &mut survey, (&targets, &actions), &mut placement)?;
         // a settling that fails ends as a failed placing does, recording the files it removed
         let (todo, adopted, unsettled) = match settle(
             project,
@@ -1451,6 +1458,105 @@ fn track_aside(root: &Path, state: &mut State, stays: Vec<(String, String)>) -> 
     (recorded, state.aside.len() != before)
 }
 
+/// gives each file `--force` moved aside its name back where a run cut off at once left it
+/// hidden and nothing took the name since, in any dataset, and returns those names; with `dry`,
+/// only the survey sees them back. a record whose hidden file is gone is forgotten, and one whose
+/// name is taken stays, for sync and status to say where the file is.
+pub(crate) fn restore_aside(
+    project: &Project,
+    data_dir: &str,
+    survey: &mut Survey,
+    dry: bool,
+) -> Vec<String> {
+    if survey.state.aside.is_empty() {
+        return Vec::new();
+    }
+    let placer = Placer::new(&native(&project.root, data_dir));
+    let aside: Vec<(String, String)> = survey
+        .state
+        .aside
+        .iter()
+        .map(|(hidden, path)| (hidden.clone(), path.clone()))
+        .collect();
+    let mut restored = Vec::new();
+    for (hidden, path) in aside {
+        let Some(look) = survey.disk.get(&hidden).copied() else {
+            survey.state.aside.remove(&hidden);
+            survey.needs_writing = true;
+            continue;
+        };
+        if !survey.is_free(&path) {
+            continue;
+        }
+        if !dry {
+            let back = placer.move_back(
+                &native(&project.root, &hidden),
+                &native(&project.root, &path),
+            );
+            if let Err(err) = back {
+                tracing::debug!(%path, %err, "could not give a file --force moved aside its name back");
+                continue;
+            }
+            survey.state.aside.remove(&hidden);
+            survey.needs_writing = true;
+        }
+        survey.disk.remove(&hidden);
+        survey.disk.insert(path.clone(), look);
+        if survey.writable.remove(&hidden) {
+            survey.writable.insert(path.clone());
+        }
+        restored.push(path);
+    }
+    restored
+}
+
+/// the hidden name written down for the file at `path`, which `--force` moves out of the way,
+/// before settling began. a file with none is never moved.
+fn planned_aside(
+    project: &Project,
+    placement: &Placement,
+    path: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    placement
+        .aside_names
+        .get(path)
+        .map(|hidden| native(&project.root, hidden))
+        .ok_or_else(|| std::io::Error::other("no hidden name was written down for it first"))
+}
+
+/// writes to the state, before settling moves anything, the hidden name each file `--force` moves
+/// out of the way takes, so a run cut off at once leaves each moved file findable by the name it
+/// had. writes nothing when settling moves nothing.
+fn write_ahead(
+    project: &Project,
+    survey: &mut Survey,
+    (targets, actions): (&[Target], &[Action]),
+    placement: &mut Placement,
+) -> Result<(), Error> {
+    for (target, action) in targets.iter().zip(actions) {
+        let moved = match action {
+            Action::Overwrite(_) => &target.path,
+            Action::Unblock(blocker) if blocker.found == Entry::File => &blocker.path,
+            _ => continue,
+        };
+        if !placement.aside_names.contains_key(moved) {
+            let hidden = match moved.rsplit_once('/') {
+                Some((folder, _)) => format!("{folder}/{}", place::aside_name()),
+                None => place::aside_name(),
+            };
+            placement.aside_names.insert(moved.clone(), hidden);
+        }
+    }
+    if placement.aside_names.is_empty() {
+        return Ok(());
+    }
+    let state = &mut survey.state;
+    for (path, hidden) in &placement.aside_names {
+        state.aside.insert(hidden.clone(), path.clone());
+    }
+    project.write_state(state)
+}
+
 /// carries out every decision short of placing: counts what stays, records files found holding the
 /// locked bytes, and removes files about to be replaced unless changed since the scan, moving those
 /// `--force` replaces aside. returns the targets to place and whether the state changed.
@@ -1694,14 +1800,17 @@ fn make_way(
     }
     let destination = native(&project.root, path);
     if forced {
-        let aside = placer
-            .move_aside(&destination)
+        let aside = planned_aside(project, placement, path)
+            .and_then(|aside| placer.move_aside_to(&destination, &aside).map(|()| aside))
             .map_err(|err| local(&destination, &err))?;
         placement.set_aside.push(SetAside {
             path: path.to_owned(),
             aside,
             stead: vec![(path.to_owned(), target.sha256)],
         });
+        // so a CLI test can cut the run off with a person's file under its hidden name
+        #[cfg(debug_assertions)]
+        crate::stop::hold("FETCHLOOM_TEST_HOLD_ASIDE");
         return Ok(());
     }
     placer
@@ -1796,12 +1905,14 @@ fn clear(
         return Ok(false);
     }
     if blocker.found == Entry::File {
-        let aside = placer.move_aside(&path).map_err(|err| {
-            Error::io(
-                format_args!("could not move {}, which is in the way", path.display()),
-                &err,
-            )
-        })?;
+        let aside = planned_aside(project, placement, &blocker.path)
+            .and_then(|aside| placer.move_aside_to(&path, &aside).map(|()| aside))
+            .map_err(|err| {
+                Error::io(
+                    format_args!("could not move {}, which is in the way", path.display()),
+                    &err,
+                )
+            })?;
         placement.set_aside.push(SetAside {
             path: blocker.path.clone(),
             aside,

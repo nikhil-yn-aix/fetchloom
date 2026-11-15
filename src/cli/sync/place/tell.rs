@@ -717,6 +717,28 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
     }
 }
 
+/// a line for the files a `sync --force` cut off at once had moved out of the way, given their
+/// names back, or that a sync would give back. `-v` names each one.
+pub(crate) fn restored_aside(output: &Output, restored: &[String], dry: bool) {
+    let verb = if dry { "Would move back" } else { "Moved back" };
+    let said = match restored {
+        [] => return,
+        [path] => {
+            format!("{path} · a `sync --force` cut off before its end had moved it out of the way")
+        }
+        [first, ..] => format!(
+            "{} files, such as {first} · a `sync --force` cut off before its end had moved them out of the way",
+            units::grouped(restored.len() as u64)
+        ),
+    };
+    output.step(verb, &said);
+    if restored.len() > 1 {
+        for path in restored {
+            output.detail(path);
+        }
+    }
+}
+
 /// a warning for each person's file `sync --force` moved out of the way that could not go back,
 /// by the hidden name it is kept under, told by every sync while it stays there.
 pub(super) fn set_aside(output: &Output, manifest: &Manifest, aside: &BTreeMap<String, String>) {

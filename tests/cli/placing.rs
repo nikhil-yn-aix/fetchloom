@@ -2427,6 +2427,108 @@ fn a_file_force_could_not_put_back_is_named_until_it_is_moved() -> Result {
     Ok(())
 }
 
+/// `command` run until the hold `variable` names stops it, then killed, as a second ctrl-c, a
+/// kill or a crash ends a run at once.
+fn cut_off_at(sandbox: &Sandbox, args: &[&str], variable: &str, what: &str) -> Result {
+    use crate::support::{Running, wait_until};
+    let release = sandbox.folder("hold")?.join("release");
+    let held = sandbox.folder("hold")?.join("release.held");
+    let mut command = sandbox.command(args);
+    command.env(variable, &release);
+    let mut running = Running::start(&mut command)?;
+    wait_until(what, || Ok(held.exists()))?;
+    running.kill()?;
+    running.wait()?;
+    fs::remove_file(held)?;
+    Ok(())
+}
+
+/// a `sync --force` cut off at once after it moved a person's edit aside leaves the edit's name on
+/// record: status names it, and the next sync puts it back and blames no one.
+#[test]
+fn a_force_cut_off_at_once_loses_no_name_it_moved_aside() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    edit(&placed, b"my own notes\n")?;
+    cut_off_at(
+        &sandbox,
+        &["sync", "--force", "--offline"],
+        "FETCHLOOM_TEST_HOLD_ASIDE",
+        "the edit to be moved aside",
+    )?;
+    assert!(!placed.exists(), "the edit is under a hidden name");
+
+    let status = text(&sandbox.run(&["status"])?.stdout)?;
+    assert!(
+        status.contains(
+            ".old · data/iris/iris.csv, which a `sync --force` cut off before its end moved out of the way: `fetchloom sync` moves it back"
+        ),
+        "{status}"
+    );
+    let synced = sandbox.run(&["sync", "--offline"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, b"my own notes\n", "{stderr}");
+    assert!(
+        stderr.contains("Moved back data/iris/iris.csv · a `sync --force` cut off"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("deleted or moved"), "{stderr}");
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["extra"], serde_json::json!([]), "{status}");
+    assert_eq!(
+        status["result"]["edited"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{status}"
+    );
+    Ok(())
+}
+
+/// an edit that kept its file's size and time, found by hashing it, stays an edit when a
+/// `sync --force` that moved it aside is cut off at once: the state written before the move does
+/// not vouch for the size and time the edit kept.
+#[test]
+fn a_force_cut_off_at_once_keeps_an_edit_that_kept_its_look() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let time = fs::metadata(&placed)?.modified()?;
+    let edited = b"sepal_length,species\n5.1,SETOSA\n";
+    assert_eq!(edited.len(), V1.len());
+    fs::write(&placed, edited)?;
+    fs::File::options()
+        .write(true)
+        .open(&placed)?
+        .set_modified(time)?;
+    // a state as new as the file, as on a clock as coarse as fat's, cannot vouch for its look
+    fs::File::options()
+        .write(true)
+        .open(sandbox.work().join(".fetchloom").join("state"))?
+        .set_modified(time)?;
+    cut_off_at(
+        &sandbox,
+        &["sync", "--force", "--offline"],
+        "FETCHLOOM_TEST_HOLD_ASIDE",
+        "the edit to be moved aside",
+    )?;
+    assert!(!placed.exists(), "the edit is under a hidden name");
+
+    let synced = sandbox.run(&["sync", "--offline"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, edited, "{stderr}");
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        status["result"]["edited"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{status}"
+    );
+    Ok(())
+}
+
 #[test]
 fn status_names_a_file_in_a_folders_way_once() -> Result {
     let sandbox = Sandbox::new()?;

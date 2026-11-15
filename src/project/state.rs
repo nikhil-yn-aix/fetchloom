@@ -56,8 +56,9 @@ pub(crate) struct State {
     /// the project folder the state was written for, which a clone or a copy is not.
     #[serde(default)]
     pub(crate) folder: Option<Folder>,
-    /// files `sync --force` moved out of the way that could not go back, by the hidden name each
-    /// is kept under, with the path it had, so each sync and status names them while they stay.
+    /// files `sync --force` moves or moved out of the way, by the hidden name each is kept under,
+    /// with the path it had: written before any is moved, so a run cut off at once leaves each
+    /// findable, and kept while one cannot go back, so each sync and status names it.
     #[serde(default)]
     pub(crate) aside: BTreeMap<String, String>,
 }

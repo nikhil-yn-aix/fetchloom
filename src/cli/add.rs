@@ -19,7 +19,7 @@ use super::project::{
     register,
 };
 use super::sync::disk::{self, Survey};
-use super::sync::place::Placement;
+use super::sync::place::{self, Placement};
 use super::sync::{self as engine, Given, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
 use crate::digest::{self, Sha256};
@@ -1231,6 +1231,8 @@ pub(super) async fn sync_add(
     let mut pinning = imported.then(|| pinning_line(work, names)).flatten();
     let stop = &work.context.stop;
     let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads, stop)?;
+    let restored = place::restore_aside(project, &manifest.data_dir, &mut survey, false);
+    place::restored_aside(&work.context.output, &restored, false);
     survey.check_doubted(&project.root, &work.cache)?;
     disk::audit(project, &survey, &work.cache)?;
     // a dataset dropped here that the add names comes back, as `sync <name>` brings it back

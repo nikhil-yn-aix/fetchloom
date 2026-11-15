@@ -638,6 +638,13 @@ impl Survey {
         })
     }
 
+    /// whether nothing stands at `path` or on its way, so a file can take that name.
+    pub(crate) fn is_free(&self, path: &str) -> bool {
+        !self.disk.contains_key(path)
+            && !self.entries.contains_key(path)
+            && self.blocker(path).is_none()
+    }
+
     /// what removing the files in `going`, with the folders that leaves empty, takes out of the
     /// way, worked out once for every blocker a run asks about.
     pub(crate) fn freeing<'s>(&'s self, going: &'s HashSet<String>) -> Freeing<'s> {

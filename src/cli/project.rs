@@ -1487,6 +1487,8 @@ fn surveyed(work: &Loop<'_>, data_dir: &str, verify: bool) -> Result<Survey, Err
         &work.context.stop,
     )?;
     drop(reading);
+    let restored = place::restore_aside(work.project, data_dir, &mut survey, false);
+    place::restored_aside(&work.context.output, &restored, false);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
         survey.verify(&work.project.root, &work.scope, Some(&work.context.output))?;
@@ -1666,6 +1668,8 @@ pub(super) async fn preview_all(
         &work.context.stop,
     )?;
     drop(reading);
+    let restored = place::restore_aside(work.project, &manifest.data_dir, &mut survey, true);
+    place::restored_aside(&work.context.output, &restored, true);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
         survey.verify(&work.project.root, &work.scope, Some(&work.context.output))?;

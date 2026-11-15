@@ -698,13 +698,21 @@ impl Placer {
         let (path, parent) = self.within(path)?;
         let from = self.location(&path, false)?;
         loop {
-            let aside = parent.join(format!(".fetchloom-{:016x}.old", fastrand::u64(..)));
+            let aside = parent.join(aside_name());
             match from.rename_new_to(&self.location(&aside, false)?) {
                 Ok(()) => return Ok(aside),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    /// moves the file at `path` to `aside`, a name beside it from [`aside_name`] that was written
+    /// down before the move, never replacing anything there.
+    pub(crate) fn move_aside_to(&self, path: &Path, aside: &Path) -> io::Result<()> {
+        self.stop.check_io()?;
+        self.location(path, false)?
+            .rename_new_to(&self.location(aside, false)?)
     }
 
     /// gives a file [`Placer::move_aside`] moved to `aside` its name, `path`, back, never
@@ -1529,6 +1537,11 @@ pub(crate) fn is_copy_temporary(name: &str) -> bool {
         .is_some_and(|random| {
             random.len() == 16 && random.bytes().all(|byte| byte.is_ascii_hexdigit())
         })
+}
+
+/// a new name for a file moved out of the way in its own folder, `.fetchloom-<16 hex>.old`.
+pub(crate) fn aside_name() -> String {
+    format!(".fetchloom-{:016x}.old", fastrand::u64(..))
 }
 
 /// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so

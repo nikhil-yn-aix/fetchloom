@@ -59,10 +59,10 @@ pub(super) struct Status {
     /// file.
     #[serde(skip)]
     kept_copies: HashMap<String, String>,
-    /// the files of `extra` that are a person's file `sync --force` moved out of the way and could
-    /// not put back, with the path it had.
+    /// the files of `extra` that are a person's file `sync --force` moved out of the way, with the
+    /// path it had and whether that path is free, so a sync gives it back.
     #[serde(skip)]
-    set_aside: HashMap<String, String>,
+    set_aside: HashMap<String, (String, bool)>,
     /// unchanged files fetchloom placed that no dataset needs now, which the next `sync` removes.
     unneeded: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
@@ -1085,20 +1085,31 @@ fn unrecorded_folders(
         .collect()
 }
 
-/// the files of `extra` the state records as a person's file `sync --force` moved out of the way
-/// and could not put back, each with the path it had.
-fn set_aside(extra: &[String], survey: &Survey) -> HashMap<String, String> {
+/// the files of `extra` the state records as a person's file `sync --force` moved out of the way,
+/// each with the path it had and whether nothing stands there, so a sync gives it back.
+fn set_aside(extra: &[String], survey: &Survey) -> HashMap<String, (String, bool)> {
     extra
         .iter()
-        .filter_map(|path| Some((path.clone(), survey.state.aside.get(path)?.clone())))
+        .filter_map(|path| {
+            let file = survey.state.aside.get(path)?;
+            Some((path.clone(), (file.clone(), survey.is_free(file))))
+        })
         .collect()
 }
 
-/// the line for `path`, the hidden name `sync --force` kept a person's file `file` under.
-fn set_aside_row(path: &str, file: &str) -> String {
-    format!(
-        "{path} · {file}, which `sync --force` moved out of the way and could not put back: move it or give it another name to keep it"
-    )
+/// the line for `path`, the hidden name `sync --force` kept a person's file `file` under: one a run
+/// cut off at once left, which sync moves back while `free`, or one that could not go back.
+fn set_aside_row(path: &str, (file, free): &(String, bool)) -> String {
+    if *free {
+        format!(
+            "{path} · {file}, which a `sync --force` cut off before its end moved out of the way: `{}` moves it back",
+            super::project::command("sync")
+        )
+    } else {
+        format!(
+            "{path} · {file}, which `sync --force` moved out of the way and could not put back: move it or give it another name to keep it"
+        )
+    }
 }
 
 /// the files of `extra` named as sync names the changed copy it keeps of a file of `wanted` it put
