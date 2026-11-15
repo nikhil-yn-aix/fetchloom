@@ -60,6 +60,7 @@ pub(super) fn tell(
         });
         let sum = &mut folders[at].1;
         sum.files += tally.files;
+        sum.clones += tally.clones;
         sum.links += tally.links;
         sum.copied += tally.copied;
     }
@@ -514,6 +515,7 @@ fn tell_placed(output: &Output, placement: &Placement, folders: &[(String, Tally
         let mut sum = Tally::default();
         for (_, tally) in folders {
             sum.files += tally.files;
+            sum.clones += tally.clones;
             sum.links += tally.links;
             sum.copied += tally.copied;
         }
@@ -537,14 +539,11 @@ fn tell_placed(output: &Output, placement: &Placement, folders: &[(String, Tally
     }
 }
 
-/// how many files `tally` placed, and how: `3 files linked to the cache` or `2 files copied,
-/// 1.2 KiB`.
+/// how many files `tally` placed, and how: `3 files linked to the cache`, `1 file cloned from the
+/// cache` or `2 files copied, 1.2 KiB`, as [`crate::place::placed_how`] says it.
 fn placed(tally: &Tally) -> String {
-    let how = match (tally.links, tally.files - tally.links) {
-        (_, 0) => "linked to the cache".to_owned(),
-        (0, _) => format!("copied, {}", units::size(tally.copied)),
-        (_, _) => format!("partly copied, {}", units::size(tally.copied)),
-    };
+    let copies = tally.files - tally.clones - tally.links;
+    let how = crate::place::placed_how(tally.clones, tally.links, copies, tally.copied);
     format!("{} {how}", units::count(tally.files, "file", "files"))
 }
 
@@ -951,6 +950,28 @@ fn entry_name(found: Entry) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a clone shares blocks with the cached copy only until either is written, so a person who
+    /// reads "linked" would expect an edit to reach the cache, which it never does.
+    #[test]
+    fn a_placed_line_calls_clones_cloned_and_hardlinks_linked() {
+        for (clones, links, copied, said) in [
+            (2, 0, 0, "2 files cloned from the cache"),
+            (0, 2, 0, "2 files linked to the cache"),
+            (0, 0, 2, "2 files copied, 6 B"),
+            (1, 0, 1, "2 files cloned and copied, 3 B"),
+            (1, 1, 0, "2 files cloned and linked from the cache"),
+        ] {
+            let tally = Tally {
+                files: clones + links + copied,
+                clones,
+                links,
+                copied: copied * 3,
+                ..Tally::default()
+            };
+            assert_eq!(placed(&tally), said);
+        }
+    }
     use crate::output::{Level, Style};
 
     #[test]

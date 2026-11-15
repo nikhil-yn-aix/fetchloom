@@ -391,26 +391,20 @@ fn top_level<'a>(files: impl IntoIterator<Item = (&'a str, u64)>) -> Vec<String>
 }
 
 fn placement_summary(files: impl Iterator<Item = (Outcome, u64)>) -> (u64, u64, String) {
-    let (mut changed, mut copies, mut bytes) = (0, 0, 0);
+    let (mut clones, mut links, mut copies, mut bytes) = (0, 0, 0, 0);
     for (outcome, size) in files {
-        if matches!(outcome, Outcome::AlreadyThere) {
-            continue;
-        }
-        changed += 1;
-        if matches!(
-            outcome,
-            Outcome::Placed(Method::Copy) | Outcome::Replaced(Method::Copy)
-        ) {
-            copies += 1;
-            bytes += size;
+        match outcome {
+            Outcome::AlreadyThere => {}
+            Outcome::Placed(Method::Copy) | Outcome::Replaced(Method::Copy) => {
+                copies += 1;
+                bytes += size;
+            }
+            Outcome::Placed(Method::Reflink) | Outcome::Replaced(Method::Reflink) => clones += 1,
+            Outcome::Placed(Method::Hardlink) | Outcome::Replaced(Method::Hardlink) => links += 1,
         }
     }
-    let how = match (changed - copies, copies) {
-        (_, 0) => "linked to the cache".to_owned(),
-        (0, _) => format!("copied, {}", units::size(bytes)),
-        (_, _) => format!("partly copied, {}", units::size(bytes)),
-    };
-    (changed, copies, how)
+    let how = crate::place::placed_how(clones, links, copies, bytes);
+    (clones + links + copies, copies, how)
 }
 
 fn local(path: &Path, err: &io::Error) -> Error {
@@ -483,7 +477,7 @@ mod tests {
             (
                 &[(Placed(Method::Copy), 0), (Placed(Method::Hardlink), 5)][..],
                 (2, 1),
-                "partly copied, 0 B",
+                "linked and copied, 0 B",
             ),
             (
                 &[
@@ -492,7 +486,7 @@ mod tests {
                     (AlreadyThere, 9),
                 ],
                 (2, 1),
-                "partly copied, 5 B",
+                "cloned and copied, 5 B",
             ),
             (
                 &[(Placed(Method::Copy), 0), (AlreadyThere, 7)],
@@ -510,6 +504,16 @@ mod tests {
                     (Replaced(Method::Reflink), 5),
                 ],
                 (2, 0),
+                "cloned and linked from the cache",
+            ),
+            (
+                &[(Placed(Method::Reflink), 4), (AlreadyThere, 9)],
+                (1, 0),
+                "cloned from the cache",
+            ),
+            (
+                &[(Placed(Method::Hardlink), 4)],
+                (1, 0),
                 "linked to the cache",
             ),
         ] {

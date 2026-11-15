@@ -17,6 +17,8 @@ use crate::work::Work;
 #[derive(Default)]
 pub(super) struct Tally {
     pub(super) files: u64,
+    pub(super) clones: u64,
+    /// hardlinks, never clones.
     pub(super) links: u64,
     pub(super) copied: u64,
     /// copies of files that could have been links, unlike those `copy = true` asks for.
@@ -71,11 +73,13 @@ pub(super) fn put_all<'t>(
         }
         let tally = tallies.entry(target.dataset).or_default();
         tally.files += 1;
-        if method == Method::Copy {
-            tally.copied += target.size;
-            tally.unlinked += u64::from(!target.copy);
-        } else {
-            tally.links += 1;
+        match method {
+            Method::Copy => {
+                tally.copied += target.size;
+                tally.unlinked += u64::from(!target.copy);
+            }
+            Method::Reflink => tally.clones += 1,
+            Method::Hardlink => tally.links += 1,
         }
     }
     (tallies, failure)

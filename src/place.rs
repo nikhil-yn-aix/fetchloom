@@ -1144,6 +1144,34 @@ pub(crate) enum FolderUse {
     Place { make: bool },
 }
 
+/// how files were placed, by `clones`, hardlinks `links` and `copies`, which hold `bytes`:
+/// `cloned from the cache`, `linked to the cache`, `copied, 1.2 KiB`, or each way used, as in
+/// `cloned and copied, 1.2 KiB`. a clone shares the cached copy's blocks until either is written,
+/// so it is never called linked.
+pub(crate) fn placed_how(clones: u64, links: u64, copies: u64, bytes: u64) -> String {
+    let ways: Vec<&str> = [(clones, "cloned"), (links, "linked"), (copies, "copied")]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(_, way)| way)
+        .collect();
+    match ways.as_slice() {
+        [] | ["linked"] => "linked to the cache".to_owned(),
+        ["cloned"] => "cloned from the cache".to_owned(),
+        [before @ .., last] => {
+            let listed = if before.is_empty() {
+                (*last).to_owned()
+            } else {
+                format!("{} and {last}", before.join(", "))
+            };
+            if copies > 0 {
+                format!("{listed}, {}", crate::units::size(bytes))
+            } else {
+                format!("{listed} from the cache")
+            }
+        }
+    }
+}
+
 /// removes the file at `path` below `root` through a handle on its folder, opened from `root`
 /// without following a link, though `root` itself may be one, as a cache folder someone named.
 #[cfg(unix)]

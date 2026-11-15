@@ -144,11 +144,15 @@ impl Sandbox {
         Ok(links)
     }
 
-    /// [`Sandbox::filters`] for `story`, which tells how files were placed: where the drive links
-    /// nothing, its copy wording, which must be there, reads as linking, so a snapshot holds both.
+    /// [`Sandbox::filters`] for `story`, which tells how files were placed: where the drive clones
+    /// its clone wording, and where it links nothing its copy wording, which must be there, reads
+    /// as linking, so one snapshot holds all three.
     pub(crate) fn placed_filters(&self, story: &str) -> Result<insta::Settings> {
         let mut settings = self.filters();
         let links = self.links()?;
+        if links.reflinks_read_only() {
+            settings.add_filter(" cloned from the cache", " linked to the cache");
+        }
         if !links.reflink && !links.hardlink {
             if !story.contains("cannot link files") {
                 return Err(

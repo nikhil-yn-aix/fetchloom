@@ -1074,13 +1074,18 @@ fn linked_files_are_said_to_be_linked_to_the_cache() -> Result {
         ],
     )?;
     sandbox.allow(&server.url);
+    let how = if sandbox.links()?.reflinks_read_only() {
+        "cloned from the cache"
+    } else {
+        "linked to the cache"
+    };
     let fetched = text(
         &sandbox
             .run(&["get", &server.url, "--dir", "fetched"])?
             .stderr,
     )?;
     assert!(
-        fetched.contains("Fetched iris.csv into fetched · linked to the cache\n"),
+        fetched.contains(&format!("Fetched iris.csv into fetched · {how}\n")),
         "{fetched}"
     );
     std::fs::write(
@@ -1089,7 +1094,7 @@ fn linked_files_are_said_to_be_linked_to_the_cache() -> Result {
     )?;
     let synced = text(&sandbox.run(&["sync"])?.stderr)?;
     assert!(
-        synced.contains("Placed data/iris · 1 file linked to the cache\n"),
+        synced.contains(&format!("Placed data/iris · 1 file {how}\n")),
         "{synced}"
     );
     Ok(())
