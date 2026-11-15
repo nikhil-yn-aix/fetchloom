@@ -168,7 +168,7 @@ fn the_next_step_is_told_only_at_a_terminal() -> Result {
             let origin = server.url.trim_end_matches(PATH);
             assert!(
                 screen.contains(&format!(
-                    "\n  next: commit data.toml and data.lock; anyone who clones adds `allowed_origins = [\"{origin}\"]` to their settings file, then runs `fetchloom sync`\n"
+                    "\n  next: commit data.toml and data.lock; anyone who clones runs `fetchloom settings set allowed_origins {origin}`, with any origins they list already, then `fetchloom sync`\n"
                 )),
                 "{screen}"
             );
@@ -3750,7 +3750,7 @@ fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {
     let origin = server.url.trim_end_matches(PATH);
     assert!(
         screen.contains(&format!(
-            "\n  next: commit data.toml, data.lock and .gitignore; anyone who clones adds `allowed_origins = [\"{origin}\"]` to their settings file, then runs `fetchloom sync`\n"
+            "\n  next: commit data.toml, data.lock and .gitignore; anyone who clones runs `fetchloom settings set allowed_origins {origin}`, with any origins they list already, then `fetchloom sync`\n"
         )),
         "{screen}"
     );

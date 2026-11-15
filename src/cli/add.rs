@@ -1369,13 +1369,13 @@ fn close(work: &Loop<'_>, private: &[url::Origin]) {
         ));
         return;
     }
-    let quoted: Vec<String> = private
+    let words: Vec<String> = private
         .iter()
-        .map(|origin| format!("\"{}\"", origin.ascii_serialization()))
+        .map(|origin| crate::suggested::shell_word(&origin.ascii_serialization()).into_owned())
         .collect();
     context.output.next(&format!(
-        "commit {committed}; anyone who clones adds `allowed_origins = [{}]` to their settings file, then runs `fetchloom sync`",
-        quoted.join(", ")
+        "commit {committed}; anyone who clones runs `fetchloom settings set allowed_origins {}`, with any origins they list already, then `fetchloom sync`",
+        words.join(" ")
     ));
 }
 
