@@ -802,9 +802,12 @@ fn a_result_file_changed_through_its_link_is_named_and_one_build_repairs_it() ->
         placed(&sandbox, "clean", "a.txt"),
         placed(&sandbox, "clean", "b.txt"),
     );
-    // FAT and exFAT place copies, which no edit reaches the cache through
+    // a copy, as on FAT and exFAT, or a clone, as on APFS, keeps an edit from the cache's file
     if !same_file::is_same_file(&changed, object(&sandbox, b"b.txt made\n"))? {
-        return crate::support::skipped("hardlinks", "this disk makes no hardlinks");
+        return crate::support::skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
     }
     let mut writable = fs::metadata(&intact)?.permissions();
     #[expect(
