@@ -1370,10 +1370,12 @@ async fn run_each(
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
     let held: Arc<[Held]> = std::iter::repeat_with(Held::default).take(count).collect();
+    let mut labels = vec![String::new(); count];
     loop {
         while tasks.len() < in_flight
             && let Some((index, job)) = queue.next()
         {
+            labels[index].clone_from(&job.label);
             let (net, cache, output, overall, approval, listings, held) = (
                 net.clone(),
                 cache.clone(),
@@ -1442,16 +1444,9 @@ async fn run_each(
             Ok((index, Err(err))) if apart && err.kind != Kind::Interrupted => {
                 results[index] = Some(Err(kept(err, std::slice::from_ref(&held[index]))));
             }
-            Ok((_, Err(err))) => {
-                if err.kind == Kind::Interrupted {
-                    // a ctrl-c read as a key at a question reaches no signal handler, so the stop
-                    // is asked here, and each download winds down keeping what this count promised
-                    context.stop.ask();
-                    wind_down(&mut tasks, &held).await;
-                } else {
-                    tasks.abort_all();
-                }
-                return Err(kept(err, &held));
+            Ok((index, Err(err))) => {
+                let failed = (index, err);
+                return Err(ended(context, &mut tasks, &held, &labels, &mut results, failed).await);
             }
             Err(err) => {
                 tasks.abort_all();
@@ -1463,6 +1458,49 @@ async fn run_each(
         }
     }
     Ok(results.into_iter().flatten().collect())
+}
+
+/// ends every download still running for `failed`, a job's failure no other job goes on after: a
+/// stop winds them down, keeping what each holds for the next run, and any other failure aborts
+/// them and is joined with those of `results` that failed on their own before it.
+async fn ended(
+    context: &Context,
+    tasks: &mut JoinSet<(usize, Result<Fetched, Error>)>,
+    held: &[Held],
+    labels: &[String],
+    results: &mut [Option<Result<Fetched, Error>>],
+    (index, failed): (usize, Error),
+) -> Error {
+    if failed.kind == Kind::Interrupted {
+        // a ctrl-c read as a key at a question reaches no signal handler, so the stop is asked
+        // here, and each download winds down keeping what this count promised
+        context.stop.ask();
+        wind_down(tasks, held).await;
+        return kept(failed, held);
+    }
+    tasks.abort_all();
+    kept(stopped(labels, results, index, failed), held)
+}
+
+/// the error for `stopping`, the failure of the job at `index` that stops every download, joined
+/// with those of `results` that failed on their own before it, so each keeps its line and the
+/// first failure in the jobs' order gives the kind and exit code.
+fn stopped(
+    labels: &[String],
+    results: &mut [Option<Result<Fetched, Error>>],
+    index: usize,
+    stopping: Error,
+) -> Error {
+    let mut failed: Vec<(usize, Error)> = results
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(at, result)| match result.take() {
+            Some(Err(error)) => Some((at, error)),
+            _ => None,
+        })
+        .collect();
+    failed.push((index, stopping));
+    together(labels, failed).unwrap_or_else(|| Error::new(Kind::LocalIo, "the downloads stopped"))
 }
 
 /// `approval`, bounding downloads of no stated size by what the `cache_budget` setting leaves
@@ -2992,5 +3030,35 @@ mod tests {
         let error = together(&labels, (0..1200).map(missing).collect()).unwrap();
         assert_eq!(error.message, "1,200 files could not be downloaded");
         assert_eq!(error.details.last().unwrap(), "and 1,190 more");
+    }
+
+    /// a server that stops answering ends every download, yet a file gone from its source before
+    /// it keeps its line, and being first in the files' order, gives the kind and exit code.
+    #[test]
+    fn a_failure_that_stops_the_downloads_keeps_the_ones_before_it() {
+        let labels: Vec<String> = ["able", "dead", "down", "late"]
+            .map(|name| format!("{name}/{name}.csv"))
+            .into();
+        let gone = Error::new(
+            Kind::ReferenceUnresolved,
+            "the server has nothing at dead.csv",
+        );
+        let mut results = vec![None, Some(Err(gone)), None, None];
+        let silent = Error::new(Kind::NetworkUnreachable, "the server did not answer");
+        let error = stopped(&labels, &mut results, 2, silent);
+        assert_eq!(error.kind, Kind::ReferenceUnresolved);
+        let failed: Vec<&str> = error
+            .failures
+            .iter()
+            .map(|failure| failure.file.as_str())
+            .collect();
+        assert_eq!(failed, ["dead/dead.csv", "down/down.csv"]);
+        assert_eq!(
+            error.details,
+            [
+                "dead/dead.csv: the server has nothing at dead.csv",
+                "down/down.csv: the server did not answer",
+            ]
+        );
     }
 }

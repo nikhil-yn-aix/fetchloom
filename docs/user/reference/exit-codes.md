@@ -52,7 +52,7 @@ a cached archive that cannot be read because the filesystem failed uses `local.i
 
 `cache verify` returns 30 when it finds changed bytes, or 50 for unreadable paths when no bytes changed. `cache gc` returns 50 if any cleanup fails. both retain their partial results in [JSON output](json-output.md#command-results).
 
-batch download failures use the first failed file in job order for the overall kind and exit code. each failure remains in `errors[0].failures`. interruption or another whole-batch failure returns immediately.
+batch download failures use the first failed file in job order for the overall kind and exit code. each failure remains in `errors[0].failures`. interruption returns immediately. a failure that stops the whole batch, as a server that stops answering does, ends the downloads still running, and the files that failed on their own before it stay in `errors[0].failures`, the first failed file in job order still giving the kind and exit code.
 
 `get` with several links works the same way with links in place of files: the first failed link in command line and list order decides the kind and exit code, and each failed link remains in `errors[0].failures` and in `result.items`. a `--sha256` mismatch is `integrity.mismatch`, exit 30.
 

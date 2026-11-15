@@ -30,7 +30,7 @@ a result JSON cannot represent, such as a path that is not UTF-8, returns a comp
 | `errors[].failures` | present for file download failures and for `get` runs of several links: every failed file or link, in job or command line order, with `file`, `kind`, `message`, `details` and `help` |
 | `work` | counters below, present on success and failure |
 
-batch download errors keep every file in `failures`, even though the human summary names at most ten. each file keeps its own kind, message, details and help. the overall kind and exit code come from the first failed file in job order, not completion order or severity. interruption and other failures that stop the whole batch return immediately instead.
+batch download errors keep every file in `failures`, even though the human summary names at most ten. each file keeps its own kind, message, details and help. the overall kind and exit code come from the first failed file in job order, not completion order or severity. an interruption returns immediately instead. a failure that stops the whole batch, as a server that stops answering does, ends the downloads still running and keeps the files that failed before it in `failures`.
 
 error details give each SHA-256 whole with `--json`. a person reads two hashes compared in one detail whole, one under the other, and any other hash cut to its first 12 hex digits, or to just past the first digit where it differs from another on the line. parse `kind` and result fields rather than human messages.
 
