@@ -825,7 +825,7 @@ fn a_result_file_changed_through_its_link_is_named_and_one_build_repairs_it() ->
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert_eq!(
         fs::read(&intact).ok().as_deref(),
-        Some(&b"a.txt made\n"[..]),
+        Some(&b"a.txt\n"[..]),
         "{stderr}"
     );
     assert!(
@@ -845,7 +845,67 @@ fn a_result_file_changed_through_its_link_is_named_and_one_build_repairs_it() ->
         "{}",
         text(&repaired.stderr)?
     );
-    assert_eq!(fs::read(&intact)?, b"a.txt made\n");
+    assert_eq!(fs::read(&intact)?, b"a.txt\n");
+    Ok(())
+}
+
+/// a pull pins a result this machine lacks that shares a.txt with the result in place: the result
+/// is left out whole, so data/clean holds none of either pin's files rather than a mix.
+#[test]
+fn a_result_left_out_after_a_pull_leaves_none_of_its_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["notes", "made"]))?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let other = sandbox.folder("other")?;
+    let work = sandbox.work();
+    fs::create_dir_all(other.join("data.lock.d"))?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), other.join(name))?;
+    }
+    for entry in fs::read_dir(work.join("data.lock.d"))? {
+        let entry = entry?;
+        fs::copy(
+            entry.path(),
+            other.join("data.lock.d").join(entry.file_name()),
+        )?;
+    }
+    let manifest = other.join("data.toml");
+    fs::write(
+        &manifest,
+        fs::read_to_string(&manifest)?.replace("\"made\"", "\"other\""),
+    )?;
+    let rebuilt = building_in(&sandbox, &other, &["build"])?.output()?;
+    assert_eq!(rebuilt.status.code(), Some(0), "{}", text(&rebuilt.stderr)?);
+    crate::support::delete(&object(&sandbox, b"b.txt other\n"))?;
+    // the pull: data.toml, data.lock and the lists as the other clone committed them
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(other.join(name), work.join(name))?;
+    }
+    for entry in fs::read_dir(other.join("data.lock.d"))? {
+        let entry = entry?;
+        fs::copy(
+            entry.path(),
+            work.join("data.lock.d").join(entry.file_name()),
+        )?;
+    }
+
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "clean's pinned result is not on this machine or a mirror, so it is left out"
+        ),
+        "{stderr}"
+    );
+    for name in ["a.txt", "b.txt"] {
+        assert!(
+            !placed(&sandbox, "clean", name).exists(),
+            "{name}: {stderr}"
+        );
+    }
     Ok(())
 }
 

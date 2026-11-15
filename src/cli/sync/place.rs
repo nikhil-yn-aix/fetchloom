@@ -661,14 +661,14 @@ impl<'a> Placing<'a> {
     }
 
     /// leaves out the results of `names`, which [`Placing::unbuilt`] found nowhere, so the run is
-    /// incomplete: files in place stay, and an older pin's file where one goes is unneeded now.
+    /// incomplete. a result is placed whole or not at all, so every file of one left out is
+    /// unneeded now, even one in place that the new pin lists too.
     pub(crate) fn leave_out(&mut self, names: &[String]) {
         let (targets, actions) = std::mem::take(&mut self.targets)
             .into_iter()
             .zip(std::mem::take(&mut self.actions))
-            .filter(|(target, action)| {
+            .filter(|(target, _)| {
                 !(target.holder == plan::Holder::Result
-                    && needs_bytes(action)
                     && names.iter().any(|name| name == target.dataset))
             })
             .unzip();
