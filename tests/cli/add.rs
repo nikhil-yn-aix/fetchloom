@@ -2118,9 +2118,25 @@ fn a_hugging_face_gitattributes_is_left_out_until_selected() -> Result {
         names.sort();
         Ok(names)
     };
-    ok(&run(&["add", "hf:datasets/lab/rows"])?)?;
+    let added = run(&["add", "hf:datasets/lab/rows"])?;
+    ok(&added)?;
     assert_eq!(names("data/rows")?, ["README.md", "rows.csv"]);
     assert!(!fs::read_to_string(sandbox.work().join("data.lock"))?.contains(".gitattributes"));
+    // a sync that resolves it again counts the files it keeps, as the add did
+    let counted = " \u{b7} 2 of 3 files \u{b7} ";
+    assert!(
+        text(&added.stderr)?.contains(counted),
+        "{}",
+        text(&added.stderr)?
+    );
+    fs::remove_file(sandbox.work().join("data.lock"))?;
+    let synced = run(&["sync"])?;
+    ok(&synced)?;
+    assert!(
+        text(&synced.stderr)?.contains(counted),
+        "{}",
+        text(&synced.stderr)?
+    );
     ok(&run(&["get", "hf:datasets/lab/rows", "--dir", "whole"])?)?;
     assert_eq!(names("whole")?, ["README.md", "rows.csv"]);
     let asked = |name: &str| files.targets().iter().any(|target| target.ends_with(name));

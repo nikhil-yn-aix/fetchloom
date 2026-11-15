@@ -1171,7 +1171,15 @@ impl<'a> Loop<'a> {
                 )
             })?;
             let listing = listing?;
-            tell_resolved(&self.context.output, &listing);
+            // the files the dataset keeps, counted as an add counts them
+            let entry = &manifest.datasets[&name];
+            match entry
+                .source()
+                .map(|source| filter(&name, entry, source, &listing))
+            {
+                Some(Ok(kept)) => tell_kept(&self.context.output, &listing, &kept),
+                _ => tell_resolved(&self.context.output, &listing),
+            }
             listings.push((name, listing));
         }
         listings.sort_by(|a, b| a.0.cmp(&b.0));
