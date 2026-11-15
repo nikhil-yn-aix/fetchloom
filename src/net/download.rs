@@ -1016,7 +1016,11 @@ impl Net {
             total,
             validators: validators.clone(),
             md5: fetch.expect.needs_md5(),
-            keep: splits && status == StatusCode::PARTIAL_CONTENT && earlier.is_some(),
+            // ranges a split kept past the prefix stay whether or not this answer splits
+            keep: proven
+                && status == StatusCode::PARTIAL_CONTENT
+                && earlier.is_some()
+                && total.is_some(),
             hashing: self.hashing.clone(),
         };
         let Some(writer) = open(partial, body).await? else {
@@ -1030,9 +1034,10 @@ impl Net {
             earlier.as_ref().map(|(_, kept)| kept),
         );
         self.started(on, total, offset + kept, resumable)?;
-        // ranges kept past the prefix leave gaps that only the split path fills
+        // ranges kept past the prefix leave gaps that only the split path fills, which adds no
+        // stream to an answer that may not split
         let at_once = self.split.when == Splitting::Always || kept > 0;
-        let watch = total.filter(|_| splits);
+        let watch = total.filter(|_| splits || kept > 0);
         // a stream held back by FETCHLOOM_RATE looks slow, and more streams share the same cap
         let monitor = watch.filter(|_| self.rate.is_none());
         let capped = bounded(fetch, offset, on);
@@ -1071,6 +1076,7 @@ impl Net {
             validators: &validators,
             pinned: fetch.expect.pins(),
             mirror: fetch.mirror,
+            grow: splits,
             total,
             on,
             measured,

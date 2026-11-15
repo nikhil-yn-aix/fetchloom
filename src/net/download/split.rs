@@ -72,6 +72,8 @@ pub(super) struct Job<'a> {
     pub(super) pinned: bool,
     /// the parts are a mirror's, which mirror-only mode lets a request ask for.
     pub(super) mirror: bool,
+    /// streams may be added. without, one stream fetches the gaps a resume left, in order.
+    pub(super) grow: bool,
     pub(super) total: u64,
     pub(super) on: Listener<'a>,
     /// the stream's measured rate before handover, in bytes a second.
@@ -710,7 +712,7 @@ impl Net {
         shared: &Streams<'_>,
     ) -> Option<(usize, (OwnedSemaphorePermit, OwnedSemaphorePermit))> {
         let mut board = shared.board();
-        if board.stopped {
+        if board.stopped || !shared.job.grow {
             return None;
         }
         let permits = self.try_permit(shared.job.key)?;

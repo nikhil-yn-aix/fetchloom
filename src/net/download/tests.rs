@@ -779,6 +779,92 @@ fn a_download_that_keeps_moving_keeps_going() {
     assert_eq!(asked.load(Ordering::SeqCst), 52);
 }
 
+/// the `Range` of every request [`ranged`] took: `bytes=500-` as `(500, None)`, `bytes=500-999`
+/// as `(500, Some(999))`.
+type Ranges = Arc<Mutex<Vec<(u64, Option<u64>)>>>;
+
+/// serves the file of `total` bytes [`pattern`] makes, any range of it as asked, and keeps the
+/// `Range` of every request.
+fn ranged(total: u64) -> (Url, Ranges) {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = Url::parse(&format!(
+        "http://{}/big.bin",
+        listener.local_addr().unwrap()
+    ))
+    .unwrap();
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let seen = asked.clone();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+            let range = head
+                .lines()
+                .find_map(|line| line.strip_prefix("range: bytes="))
+                .and_then(|range| range.trim().split_once('-'))
+                .map(|(start, end)| (start.parse().unwrap(), end.parse().ok()));
+            let (start, last) = range.map_or((0, total - 1), |(start, end)| {
+                (start, end.unwrap_or(total - 1))
+            });
+            let status = if range.is_some() {
+                format!("206 Partial Content\r\nContent-Range: bytes {start}-{last}/{total}")
+            } else {
+                "200 OK".to_owned()
+            };
+            seen.lock().unwrap().push(range.unwrap_or((0, None)));
+            let sent = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n",
+                last + 1 - start
+            );
+            let _ = stream.write_all(sent.as_bytes());
+            let _ = stream.write_all(&pattern(start, last + 1 - start));
+        }
+    });
+    (url, asked)
+}
+
+/// a resume goes on past the ranges an earlier split kept, asking only for the gaps between them,
+/// in order, when this run does not split, here with splitting off as `FETCHLOOM_SPLIT=false`
+/// turns it.
+#[test]
+fn a_resume_that_does_not_split_fetches_only_the_gaps() {
+    let total = 3000;
+    let (prefix, kept) = (1000, (1500, 2200));
+    let (url, asked) = ranged(total);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let validators = Validators {
+        etag: Some("\"v1\"".to_owned()),
+        ..Validators::default()
+    };
+    let mut writer = partial
+        .writer(0, Some(total), validators, false, true)
+        .unwrap();
+    writer.write_at(0, &pattern(0, prefix)).unwrap();
+    writer
+        .write_at(kept.0, &pattern(kept.0, kept.1 - kept.0))
+        .unwrap();
+    writer.save().unwrap();
+    drop((writer, partial));
+    let mut net = net(&url);
+    net.split.when = Splitting::Never;
+    let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [(prefix, None), (kept.1, Some(total - 1))]
+    );
+    assert_eq!(fetched.moved, (kept.0 - prefix) + (total - kept.1));
+}
+
 /// a laptop whose wifi drops fails every lookup at once, more times than a request has tries;
 /// the download waits for the network instead of spending them, and goes on once it is back.
 #[test]

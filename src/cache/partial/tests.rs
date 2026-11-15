@@ -390,7 +390,7 @@ fn a_kept_range_whose_bytes_changed_is_fetched_again() {
 }
 
 #[test]
-fn a_resume_that_does_not_split_forgets_kept_ranges() {
+fn a_writer_that_keeps_no_ranges_cuts_them() {
     let (_dir, cache) = cache();
     let partial = owned(&cache, "https://example.org/single");
     two_parts(&partial);
