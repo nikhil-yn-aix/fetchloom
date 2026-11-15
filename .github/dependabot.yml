@@ -19,3 +19,24 @@ updates:
       cargo-minor-and-patch:
         patterns: ["*"]
         update-types: [minor, patch]
+  # the azure emulator the azure signing tests run against
+  - package-ecosystem: npm
+    directory: /.github/azurite
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      azurite:
+        patterns: ["*"]
+  # the docs site's toolchain; bench/uv.lock is left alone, since its pins are the tools the
+  # benchmark measures
+  - package-ecosystem: uv
+    directory: /docs-site
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      docs-site:
+        patterns: ["*"]

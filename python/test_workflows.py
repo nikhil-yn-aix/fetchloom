@@ -2,6 +2,7 @@
 on named images."""
 
 import itertools
+import os
 from pathlib import Path
 import re
 import tomllib
@@ -126,6 +127,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("if: github.event_name == 'schedule' ||", audit)
         self.assertIn("GH_TOKEN: ${{ github.token }}", audit)
         self.assertRegex(audit, r"\n        run: zizmor --strict-collection \.github\n")
+
+
+    def test_dependabot_updates_every_lockfile_a_week_after_each_release(self):
+        """bench/uv.lock is left out: its pins are the tools the benchmark measures."""
+        lockfiles = {"Cargo.lock": "cargo", "package-lock.json": "npm", "uv.lock": "uv"}
+        expected = {("github-actions", "/")}
+        for folder, children, files in os.walk(ROOT):
+            children[:] = [child for child in children
+                           if child not in ("target", "node_modules", "site") and child[:1] != "." or child == ".github"]
+            relative = Path(folder).relative_to(ROOT).as_posix()
+            place = "/" if relative == "." else "/" + relative
+            if place != "/bench":
+                expected |= {(lockfiles[name], place) for name in set(files) & set(lockfiles)}
+        entries = re.split(r"(?m)^  - ", (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"))[1:]
+        updated = {(re.search(r"^package-ecosystem: (\S+)", entry, re.MULTILINE)[1],
+                    re.search(r"^    directory: (\S+)", entry, re.MULTILINE)[1]) for entry in entries}
+        self.assertEqual(updated, expected)
+        for entry in entries:
+            with self.subTest(entry=entry.split("\n", 1)[0]):
+                self.assertRegex(entry, r"\n    cooldown:\n      default-days: 7\n")
 
 
 if __name__ == "__main__":
