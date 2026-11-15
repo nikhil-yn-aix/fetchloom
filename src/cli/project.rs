@@ -1635,14 +1635,34 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let project = Project::find(&here).ok_or_else(|| match Project::repository(&here) {
-        Some(repository) => Error::new(
-            Kind::ProjectInvalid,
-            format!(
-                "there is no data.toml in this folder or any folder above it inside the git repository at {}",
-                repository.display()
-            ),
-        )
-        .help("run `fetchloom add <link>` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`"),
+        Some(repository) => {
+            let error = Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "there is no data.toml in this folder or any folder above it inside the git repository at {}",
+                    repository.display()
+                ),
+            );
+            let below = projects_below(&here);
+            let Some(first) = below.first() else {
+                return error.help("run `fetchloom add <link>` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`");
+            };
+            // after -C, the folder below it is named whole, as the run's own folder is
+            let run = super::typed::in_folder(first).unwrap_or_else(|| {
+                let folder = here.join(first);
+                format!(
+                    "fetchloom -C {} <command>",
+                    super::shell_word(&folder.to_string_lossy())
+                )
+            });
+            let folders: Vec<String> = below.iter().map(|folder| format!("{folder}/")).collect();
+            if let [one] = folders.as_slice() {
+                error.help(format!("there is one in {one}: run `{run}`"))
+            } else {
+                let listed = units::listed(&folders, "and");
+                error.help(format!("there is one in each of {listed}: give -C its folder, as in `{run}`"))
+            }
+        }
         None => Error::new(
             Kind::ProjectInvalid,
             "there is no data.toml in this folder or any folder above it",
@@ -1657,6 +1677,53 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
         ));
     }
     Ok(project)
+}
+
+/// the folders below `here` that hold a data.toml, as paths from it with `/` between folders:
+/// those at the nearest depth that has any, up to three folders down. hidden folders and links
+/// are passed by, and a large tree is read only in part.
+fn projects_below(here: &Path) -> Vec<String> {
+    const DEPTH: usize = 3;
+    const MOST_FOLDERS: usize = 2_000;
+    let mut level = vec![(here.to_path_buf(), String::new())];
+    let mut read = 0;
+    for _ in 0..DEPTH {
+        let mut found = Vec::new();
+        let mut next = Vec::new();
+        for (folder, shown) in level {
+            read += 1;
+            if read > MOST_FOLDERS {
+                break;
+            }
+            let Ok(entries) = std::fs::read_dir(&folder) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                if name.starts_with('.') || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                let inner = if shown.is_empty() {
+                    name
+                } else {
+                    format!("{shown}/{name}")
+                };
+                if entry.path().join(manifest::FILE).is_file() {
+                    found.push(inner);
+                } else {
+                    next.push((entry.path(), inner));
+                }
+            }
+        }
+        if !found.is_empty() || next.is_empty() {
+            found.sort();
+            return found;
+        }
+        level = next;
+    }
+    Vec::new()
 }
 
 pub(super) enum Waited<T> {

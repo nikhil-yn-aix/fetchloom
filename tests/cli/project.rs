@@ -1419,6 +1419,33 @@ fn a_git_repository_inside_a_project_starts_its_own() -> Result {
     Ok(())
 }
 
+/// at the root of a repository whose project is in a folder below, the help names that folder
+/// and the command to run there, rather than starting a second project.
+#[test]
+fn a_project_below_the_repository_root_is_named() -> Result {
+    let sandbox = Sandbox::new()?;
+    let root = sandbox.work().join("mono");
+    fs::create_dir_all(root.join(".git"))?;
+    fs::create_dir_all(root.join("analysis"))?;
+    fs::write(root.join("analysis").join("data.toml"), "")?;
+    fs::create_dir_all(root.join(".hidden"))?;
+    fs::write(root.join(".hidden").join("data.toml"), "")?;
+    let refused = sandbox.command_in(&root, &["--json", "status"]).output()?;
+    assert_eq!(refused.status.code(), Some(50));
+    assert_eq!(
+        json(&refused)?["errors"][0]["help"],
+        "there is one in analysis/: run `fetchloom -C analysis --json status`"
+    );
+    fs::create_dir_all(root.join("paper").join("draft"))?;
+    fs::write(root.join("paper").join("data.toml"), "")?;
+    let refused = sandbox.command_in(&root, &["--json", "status"]).output()?;
+    assert_eq!(
+        json(&refused)?["errors"][0]["help"],
+        "there is one in each of analysis/ and paper/: give -C its folder, as in `fetchloom -C analysis --json status`"
+    );
+    Ok(())
+}
+
 /// the search for data.toml stops at the root of the git repository and says so.
 #[test]
 fn a_project_outside_the_git_repository_needs_its_folder_named() -> Result {

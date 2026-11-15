@@ -130,6 +130,22 @@ pub(in crate::cli) fn one_folder_down() -> Option<String> {
     command_line(words.into_iter())
 }
 
+/// this run's command line, run on the project in `folder` below the current one, as in
+/// `fetchloom -C analysis diff`. none when it cannot be repeated or gave `-C`, which moves it.
+pub(in crate::cli) fn in_folder(folder: &str) -> Option<String> {
+    let line = TYPED.get()?;
+    let moved = line.iter().any(|word| {
+        word.to_str().is_some_and(|text| {
+            text.starts_with('-') && !text.starts_with("--") && text.contains('C')
+        })
+    });
+    if moved {
+        return None;
+    }
+    let words = [std::ffi::OsString::from("-C"), folder.into()];
+    command_line(words.into_iter().chain(line.iter().cloned()))
+}
+
 /// `word` as seen from a folder inside the one it was typed in: a relative path, as
 /// [`crate::source::local::is_path`] reads one or as a `relative` list's name, one folder up.
 fn up_one(word: &str, relative: bool) -> String {
