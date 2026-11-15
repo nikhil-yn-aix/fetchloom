@@ -157,7 +157,7 @@ jobs:
           - os: windows-11-arm
             require: git,hardlinks
           - os: macos-15
-            require: script,git,hardlinks,unprivileged,pwsh,zsh
+            require: script,git,hardlinks,reflinks,unprivileged,pwsh,zsh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -222,7 +222,7 @@ jobs:
             sudo chown "$(id -u):$(id -g)" "/mnt/fetchloom-$fs"
             test "$(findmnt -no FSTYPE "/mnt/fetchloom-$fs")" = "$fs"
             echo "$fs: run the selected filesystem tests"
-            TMPDIR="/mnt/fetchloom-$fs" python3 python/ci_tests.py run "$fs" --disk || failed="$failed $fs"
+            TMPDIR="/mnt/fetchloom-$fs" FETCHLOOM_TEST_REQUIRE=reflinks python3 python/ci_tests.py run "$fs" --disk || failed="$failed $fs"
             echo "$fs: detach the test image"
             sudo umount "/mnt/fetchloom-$fs"
             rm "$image"

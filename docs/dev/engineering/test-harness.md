@@ -19,6 +19,7 @@ a test that needs what a machine may lack returns early and says `skipped: <reas
 | `script` | the `script` program, which gives the terminal scenarios a terminal |
 | `git` | git on `PATH`, for merges and git's reads in `project/git.rs` |
 | `hardlinks` | a disk that makes hardlinks |
+| `reflinks` | a disk that clones files, as btrfs, xfs and apfs do |
 | `placed-hardlinks` | a disk where fetchloom places a read-only file as a hardlink rather than a reflink |
 | `aliases` | a disk that takes another case or unicode form of a name for the same file |
 | `distinct-names` | a disk that keeps `Data` and `data` apart |
@@ -39,11 +40,11 @@ a test that needs what a machine may lack returns early and says `skipped: <reas
 |---|---|
 | ubuntu-24.04 | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish,secret-service,azurite`; CI installs fish, gnome keyring, libsecret's tools and azurite first |
 | ubuntu-24.04-arm | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash` |
-| macos-15 | `script,git,hardlinks,unprivileged,pwsh,zsh` |
+| macos-15 | `script,git,hardlinks,reflinks,unprivileged,pwsh,zsh` |
 | windows-2025 | `git,hardlinks,pwsh` |
 | windows-11-arm | `git,hardlinks` |
 
-the FAT32, exFAT, ReFS, btrfs, xfs and HFS+ passes require none, and the casefold pass requires `aliases`.
+the btrfs and xfs passes require `reflinks`, the casefold pass requires `aliases`, and the FAT32, exFAT, ReFS and HFS+ passes require none.
 
 the recipe tests in `tests/cli/build.rs` run `examples/recipe_step.rs`, a step program with the standard library alone whose first argument picks what it does: copy, write, fail, hold until a file appears, and the like. `cargo test` builds it beside the fetchloom binary, and a run of the CLI tests alone refreshes it once with the `cargo` that runs them; CI prebuilds and archives it, so each nextest process reuses it without invoking cargo; each test copies it into the sandbox's `bin` folder as `recipe-step` and puts that folder first on `PATH`, so a recipe names it as any program. every run appends its mode to `runs` in the folder the step runs in, so a test counts runs without sleeping.
 
