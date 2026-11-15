@@ -118,9 +118,9 @@ pub(super) struct Edited {
     overridden_by: Option<&'static str>,
 }
 
-/// `settings set` or `settings unset`, which `no_config`, `--no-config`, or `FETCHLOOM_NO_CONFIG`
-/// refuses, since the settings file is to be left alone then. it reads the settings file itself,
-/// so a file with a mistake in it can be fixed this way.
+/// `settings set` or `settings unset`, which `--no-config`, given as `no_config`, or
+/// `FETCHLOOM_NO_CONFIG` refuses, since the settings file is to be left alone then. it reads the
+/// settings file itself, so a file with a mistake in it can be fixed this way.
 pub(super) fn change(
     context: &Context,
     action: &args::SettingsAction,
