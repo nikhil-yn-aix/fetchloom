@@ -587,6 +587,13 @@ fn simulation(sandbox: &Sandbox) -> Result {
 fn a_recipe_that_reads_no_dataset_builds_once_and_checks_again() -> Result {
     let sandbox = Sandbox::new()?;
     simulation(&sandbox)?;
+    // with no source to pin, status names the build alone
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(!status.contains("pin what the sources serve"), "{status}");
+    assert!(
+        status.contains("`fetchloom build --dry-run` shows the commands"),
+        "{status}"
+    );
     let dry = text(&build(&sandbox, &["build", "--dry-run"])?.stderr)?;
     assert!(dry.contains("  Would run sim · not built yet\n"), "{dry}");
     assert!(

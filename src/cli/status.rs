@@ -196,8 +196,13 @@ pub(super) fn run(
     if sum_up(output, &status) {
         let total = &status.to_download;
         super::fetch::tell_would(output, &units::count(total.files, "file", "files"), total);
-        // a sync would pin what the sources serve now, which a clone may not want
-        if status.lockless {
+        // a sync would pin what the sources serve now, which a clone may not want; a project of
+        // recipes alone has no source, and the build hint below is its way on
+        let fetched = manifest
+            .datasets
+            .values()
+            .any(|entry| entry.recipe().is_none());
+        if status.lockless && fetched {
             output.hint(&format!(
                 "nothing pins the files' bytes yet: {}",
                 super::project::unpinned()
