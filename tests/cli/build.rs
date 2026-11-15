@@ -2012,6 +2012,43 @@ fn a_result_recorded_under_a_group_umask_is_reused() -> Result {
     Ok(())
 }
 
+/// in a cache the group may write, the step runs in the folder TMPDIR names, which must be one
+/// no one else can change: a TMPDIR the group may write, as `mkdir` makes one under `umask 002`,
+/// stops the build before the step runs, naming the folder and what to set TMPDIR to.
+#[cfg(unix)]
+#[test]
+fn a_shared_cache_runs_no_step_in_a_tmpdir_others_may_write() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    fs::set_permissions(sandbox.cache(), fs::Permissions::from_mode(0o770))?;
+    let scratch = sandbox.folder("scratch")?;
+    fs::set_permissions(&scratch, fs::Permissions::from_mode(0o775))?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+
+    let mut command = building_in(&sandbox, &sandbox.work(), &["--json", "build"])?;
+    command.env("TMPDIR", &scratch);
+    let output = with_umask(&command, "002").output()?;
+
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, help, _) = error(&document);
+    assert_eq!(kind, "local.io");
+    assert_eq!(
+        message,
+        format!(
+            "could not make a folder for clean to run in: {}, the folder TMPDIR names, lets others write in it and is not sticky, as /tmp is, so they could swap the step's folder there for a link",
+            scratch.display()
+        )
+    );
+    assert!(help.contains("`mkdir -m 700 ~/tmp`"), "{help}");
+    assert_eq!(runs(&sandbox.work())?, 0, "the step never ran");
+    assert_eq!(fs::read_dir(&scratch)?.count(), 0);
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    Ok(())
+}
+
 /// `command`, run by `sh` with the file mode creation mask `mask`.
 #[cfg(unix)]
 fn with_umask(command: &Fetchloom, mask: &str) -> Fetchloom {

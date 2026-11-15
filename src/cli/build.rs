@@ -816,7 +816,7 @@ impl<'a> Building<'a> {
             let err = cache.explained(&cache.root().join("tmp"), err);
             let error = Error::io(format_args!("could not make a folder for {name} to run in"), &err);
             if scratch {
-                error.help("set TMPDIR to a folder of your own, or leave it unset to use /tmp, since others may write the cache's tmp folder")
+                error.help("others may write the cache's tmp folder, so the step runs in the folder TMPDIR names: set TMPDIR to a folder that no one else may write, in folders only you or root may change, such as one made with `mkdir -m 700 ~/tmp`, or leave it unset to use /tmp")
             } else {
                 error
             }

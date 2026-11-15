@@ -57,13 +57,12 @@ impl Staging {
         {
             let (folder, lock, held, scratch) = if others_write_tmp(cache.root())? {
                 cache.sweep_tmp();
-                let parent = open_scratch(scratch)?;
-                crate::cache::sweep_scratch(&parent, scratch);
-                let (folder, lock) =
-                    crate::cache::make_build_folder(scratch, crate::cache::SCRATCH)
-                        .map_err(|err| in_scratch(scratch, err))?;
+                let (real, parent) = open_scratch(scratch)?;
+                crate::cache::sweep_scratch(&parent, &real);
+                let (folder, lock) = crate::cache::make_build_folder(&real, crate::cache::SCRATCH)
+                    .map_err(|err| in_scratch(scratch, err))?;
                 let held = hold_in(parent, &folder, lock.as_ref())?;
-                (folder, lock, held, Some(scratch.to_path_buf()))
+                (folder, lock, held, Some(real))
             } else {
                 let (folder, lock) = cache.build_folder()?;
                 let held = hold(cache.root(), &folder, lock.as_ref())?;
@@ -210,28 +209,113 @@ fn others_write_tmp(root: &Path) -> io::Result<bool> {
     }
 }
 
-/// opens `scratch`, the folder TMPDIR names, to hold a step's folder, refusing one where another
-/// user could swap that folder: it must be sticky, as /tmp is, or this user's own.
+/// opens `scratch`, the folder TMPDIR names, to hold a step's folder, and gives where it leads,
+/// links followed, which names the step's folder, so no link stands on the way. it refuses a folder
+/// where another user could swap the step's folder: each folder from the root of the disk down to
+/// it must be this user's or root's, and none others may write unless it is sticky, as /tmp is,
+/// where only an entry's owner may rename it.
 #[cfg(unix)]
-fn open_scratch(scratch: &Path) -> io::Result<File> {
-    // macos's /tmp is a link
-    let opened = File::open(scratch).map_err(|err| in_scratch(scratch, err))?;
-    let found = rustix::fs::fstat(&opened)?;
-    let folder = rustix::fs::FileType::from_raw_mode(found.st_mode).is_dir();
-    let sticky = found.st_mode & 0o1000 != 0;
-    if folder && (sticky || found.st_uid == rustix::process::geteuid().as_raw()) {
-        return Ok(opened);
+fn open_scratch(scratch: &Path) -> io::Result<(PathBuf, File)> {
+    use std::os::unix::fs::MetadataExt;
+    let real = std::fs::canonicalize(scratch).map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound => unfit(scratch, None, io::ErrorKind::NotFound, "does not exist"),
+        _ => in_scratch(scratch, err),
+    })?;
+    let user = rustix::process::geteuid().as_raw();
+    let mut at = PathBuf::new();
+    let mut found = None;
+    for part in real.components() {
+        at.push(part);
+        let metadata = std::fs::symlink_metadata(&at).map_err(|err| in_scratch(scratch, err))?;
+        if !metadata.is_dir() {
+            let what = if metadata.is_file() {
+                "is a file, not a folder"
+            } else {
+                "is not a folder"
+            };
+            return Err(unfit(scratch, None, io::ErrorKind::NotADirectory, what));
+        }
+        if let Some(change) = changeable(metadata.uid(), metadata.mode(), user) {
+            let above = (at != real).then_some(at.as_path());
+            return Err(unfit(
+                scratch,
+                above,
+                io::ErrorKind::PermissionDenied,
+                change.said(),
+            ));
+        }
+        found = Some((metadata.dev(), metadata.ino()));
     }
-    Err(io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        Unsafe(format!(
-            "{}, the folder TMPDIR names, is neither sticky, as /tmp is, nor yours, so another user could swap the step's folder there",
-            scratch.display()
-        )),
-    ))
+    let flags = rustix::fs::OFlags::RDONLY
+        | rustix::fs::OFlags::DIRECTORY
+        | rustix::fs::OFlags::NOFOLLOW
+        | rustix::fs::OFlags::CLOEXEC;
+    let opened = File::from(
+        rustix::fs::open(&real, flags, rustix::fs::Mode::empty())
+            .map_err(|err| in_scratch(scratch, err.into()))?,
+    );
+    let held = opened.metadata()?;
+    if found != Some((held.dev(), held.ino())) {
+        let said = "changed while fetchloom looked at it";
+        return Err(unfit(scratch, None, io::ErrorKind::Other, said));
+    }
+    Ok((real, opened))
 }
 
-/// the refusal of a folder TMPDIR names where another user could swap a step's folder.
+/// how another user could change what a folder holds.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Change {
+    /// it is theirs, so they may give themselves any access to it.
+    Owner,
+    /// they may write it, and it is not sticky, so they may rename what it holds.
+    Write,
+}
+
+#[cfg(unix)]
+impl Change {
+    fn said(self) -> &'static str {
+        match self {
+            Change::Owner => {
+                "belongs to another user, who could swap the step's folder there for a link"
+            }
+            Change::Write => {
+                "lets others write in it and is not sticky, as /tmp is, so they could swap the step's folder there for a link"
+            }
+        }
+    }
+}
+
+/// how someone other than `user` could rename what a folder of `owner` with `mode` holds: as its
+/// owner, unless that is root, or by writing it, unless it is sticky.
+#[cfg(unix)]
+fn changeable(owner: u32, mode: u32, user: u32) -> Option<Change> {
+    if owner != user && owner != 0 {
+        Some(Change::Owner)
+    } else if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+        Some(Change::Write)
+    } else {
+        None
+    }
+}
+
+/// the refusal of `scratch`, the folder TMPDIR names, as a place for a step, as `said` of it or
+/// of `above`, a folder on the way to it.
+#[cfg(unix)]
+fn unfit(scratch: &Path, above: Option<&Path>, kind: io::ErrorKind, said: &str) -> io::Error {
+    let named = match above {
+        Some(above) => format!(
+            "{}, which holds {}, the folder TMPDIR names,",
+            above.display(),
+            scratch.display()
+        ),
+        None => format!("{}, the folder TMPDIR names,", scratch.display()),
+    };
+    io::Error::new(kind, Unsafe(format!("{named} {said}")))
+}
+
+/// the refusal of the folder TMPDIR names as a place for a step: there is none, or another user
+/// could swap the step's folder there.
 #[cfg(unix)]
 #[derive(Debug)]
 struct Unsafe(String);
@@ -246,7 +330,8 @@ impl std::fmt::Display for Unsafe {
 #[cfg(unix)]
 impl std::error::Error for Unsafe {}
 
-/// whether [`Staging::new`] failed because the folder TMPDIR names is no safe place for a step.
+/// whether [`Staging::new`] failed because the folder TMPDIR names is no place for a step, which
+/// another TMPDIR answers.
 pub(crate) fn unsafe_scratch(err: &io::Error) -> bool {
     #[cfg(unix)]
     {
@@ -560,22 +645,108 @@ mod tests {
         assert!(!folder.exists());
     }
 
-    /// a folder other users may change, neither sticky as /tmp is nor this user's, is no place for
-    /// a shared cache's step, and the refusal names TMPDIR, which chose it.
+    /// a folder on the way to the one TMPDIR names, or that one, holds no step when another user
+    /// could rename what it holds: one of another user's, though sticky as a lab's shared scratch
+    /// may be, or one others may write that is not sticky, as /tmp is.
     #[cfg(unix)]
     #[test]
-    fn a_shared_cache_refuses_a_scratch_folder_others_may_change() {
-        use std::os::unix::fs::PermissionsExt;
-        if rustix::process::geteuid().is_root() {
-            return crate::test_skips::skip("unprivileged", "root owns the folder this test names");
+    fn a_folder_another_user_could_change_holds_no_step() {
+        let user = 1000;
+        for (owner, mode, refused) in [
+            (user, 0o40_700, None),
+            (user, 0o40_755, None),
+            (user, 0o41_777, None),
+            (0, 0o40_755, None),
+            (0, 0o41_777, None),
+            (12345, 0o41_777, Some(Change::Owner)),
+            (12345, 0o40_700, Some(Change::Owner)),
+            (user, 0o40_775, Some(Change::Write)),
+            (user, 0o42_770, Some(Change::Write)),
+            (user, 0o40_757, Some(Change::Write)),
+            (0, 0o40_775, Some(Change::Write)),
+        ] {
+            assert_eq!(changeable(owner, mode, user), refused, "{owner} {mode:o}");
         }
-        let (_dir, cache) = crate::cache::tests::cache();
+    }
+
+    /// a shared cache's step never runs where a co-user could swap its folder: a TMPDIR of this
+    /// user's that the group may write, as `mkdir` makes one under `umask 002`, or one in such a
+    /// folder, is refused before any folder is made there, naming the folder and TMPDIR.
+    #[cfg(unix)]
+    #[test]
+    fn a_shared_cache_refuses_a_scratch_folder_others_may_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, cache) = crate::cache::tests::cache();
         std::fs::set_permissions(cache.root(), std::fs::Permissions::from_mode(0o770)).unwrap();
+        let group = dir.path().join("group");
+        let above = dir.path().join("above");
+        std::fs::create_dir_all(&group).unwrap();
+        std::fs::create_dir_all(above.join("tmp")).unwrap();
+        for folder in [&group, &above] {
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o775)).unwrap();
+        }
+        std::fs::set_permissions(above.join("tmp"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
 
-        let refused = Staging::new(&cache, Path::new("/")).err().unwrap();
+        for (scratch, named) in [
+            (group.clone(), group.clone()),
+            (above.join("tmp"), std::fs::canonicalize(&above).unwrap()),
+        ] {
+            let refused = Staging::new(&cache, &scratch).err().unwrap();
 
-        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
-        assert!(refused.to_string().contains("TMPDIR"), "{refused}");
+            assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+            assert!(unsafe_scratch(&refused), "{refused}");
+            let said = refused.to_string();
+            assert!(said.contains("TMPDIR"), "{said}");
+            assert!(said.contains(&format!("{},", named.display())), "{said}");
+            assert_eq!(std::fs::read_dir(&scratch).unwrap().count(), 0);
+        }
+    }
+
+    /// the step's folders are named from where TMPDIR leads, so a link on the way, which someone
+    /// else may be able to change, never stands between the step and its folders.
+    #[cfg(unix)]
+    #[test]
+    fn a_step_in_scratch_reaches_its_folders_without_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, cache) = crate::cache::tests::cache();
+        std::fs::set_permissions(cache.root(), std::fs::Permissions::from_mode(0o770)).unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let staging = Staging::new(&cache, &link).unwrap();
+
+        let real = std::fs::canonicalize(&real).unwrap();
+        assert!(
+            staging.folder().starts_with(&real),
+            "{}",
+            staging.folder().display()
+        );
+        assert_eq!(staging.scratch(), Some(real.as_path()));
+    }
+
+    /// a file where TMPDIR names a folder, or nothing there, is said to be so, with TMPDIR named.
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_folder_that_is_no_folder_is_named() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, cache) = crate::cache::tests::cache();
+        std::fs::set_permissions(cache.root(), std::fs::Permissions::from_mode(0o770)).unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+
+        for (scratch, said) in [
+            (file, "is a file, not a folder"),
+            (dir.path().join("missing"), "does not exist"),
+        ] {
+            let refused = Staging::new(&cache, &scratch).err().unwrap();
+
+            assert!(unsafe_scratch(&refused), "{refused}");
+            let expected = format!("{}, the folder TMPDIR names, {said}", scratch.display());
+            assert_eq!(refused.to_string(), expected);
+        }
     }
 
     /// a private folder a killed build left in TMPDIR goes at the next build once its lock is
