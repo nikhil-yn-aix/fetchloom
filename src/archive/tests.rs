@@ -604,12 +604,29 @@ fn a_next_step_runs_as_typed_where_fetchloom_ran() {
         |system| super::unpack_elsewhere(system, "../data/my data/it's.RAR", "../", "--no-extract");
     assert_eq!(
         step(System::Linux),
-        r"unpack it with unrar from your package manager: `unrar x '../data/my data/it'\''s.RAR' '../it'\''s-unpacked/'`. --no-extract stops this warning"
+        r#"unpack it with unrar from your package manager: `unrar x "../data/my data/it's.RAR" "../it's-unpacked/"`. --no-extract stops this warning"#
     );
     assert_eq!(
         step(System::Windows),
-        r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x '..\data\my data\it''s.RAR' '-o..\it''s-unpacked'`. --no-extract stops this warning"#
+        r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x "..\data\my data\it's.RAR" "-o..\it's-unpacked"`. --no-extract stops this warning"#
     );
+}
+
+/// each word a shell would split or expand reads back whole from a next step, in powershell too,
+/// which ends a quoted string at a curly quote as at a straight one.
+#[test]
+fn a_next_steps_words_keep_shell_characters_literal() {
+    for (word, _, _) in crate::suggested::tests::QUOTED {
+        for system in [System::Linux, System::Macos, System::Windows] {
+            let windows = system == System::Windows;
+            let line = format!("unrar x {}", system.word(word));
+            assert_eq!(
+                crate::suggested::command_words(&line, windows),
+                Some(vec!["unrar".to_owned(), "x".to_owned(), word.to_owned()]),
+                "{line}"
+            );
+        }
+    }
 }
 
 #[test]

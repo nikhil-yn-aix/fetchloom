@@ -18,6 +18,7 @@ use std::path::Path;
 use crate::cache::{Cache, Member, parts_key, tree_hash};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
+use crate::suggested::shell_word_for;
 
 pub(crate) use detect::Format;
 pub(crate) use detect::{Detected, detect};
@@ -118,29 +119,24 @@ impl System {
         System::Linux
     };
 
-    /// `text` as one word for this system's usual shell, a unix shell or powershell: `\` between
-    /// folders on windows, and single-quoted when either shell would split or expand it.
+    /// `text` as one word for this system's usual shell, a unix shell or powershell, quoted as
+    /// [`shell_word_for`] quotes it, with `\` between folders on windows, where a word of letters,
+    /// digits, `\` and `-_.:+=` stays bare.
     fn word(self, text: &str) -> String {
-        let text = match self {
-            System::Windows => text.replace('/', "\\"),
-            System::Linux | System::Macos => text.to_owned(),
-        };
-        let plain = match self {
-            System::Windows => "-_.:+=\\",
-            System::Linux | System::Macos => "-_.:+=/@%,",
-        };
-        if !text.is_empty()
-            && text
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || plain.contains(c))
-        {
-            return text;
+        match self {
+            System::Windows => {
+                let text = text.replace('/', "\\");
+                if !text.is_empty()
+                    && text
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "-_.:+=\\".contains(c))
+                {
+                    return text;
+                }
+                shell_word_for(&text, true).into_owned()
+            }
+            System::Linux | System::Macos => shell_word_for(text, false).into_owned(),
         }
-        let quote = match self {
-            System::Windows => "''",
-            System::Linux | System::Macos => r"'\''",
-        };
-        format!("'{}'", text.replace('\'', quote))
     }
 }
 

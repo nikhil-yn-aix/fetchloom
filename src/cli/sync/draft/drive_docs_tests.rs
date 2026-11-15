@@ -230,7 +230,7 @@ fn exclusion_hints_quote_shell_characters() {
     let expected = if cfg!(windows) {
         "--exclude 'gdown''s $notes`extra'"
     } else {
-        "--exclude 'gdown'\"'\"'s $notes`extra'"
+        r"--exclude 'gdown'\''s $notes`extra'"
     };
     assert!(error.help.unwrap().contains(expected));
     // bash and zsh expand `!` from the history even inside double quotes

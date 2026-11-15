@@ -1,7 +1,10 @@
 //! glob patterns for `select` and `exclude`, matching a whole path inside a dataset: `*` and `?`
 //! stay in one folder, `**` spans any number of folders, and `[...]` matches one of a set.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+
+use crate::suggested::shell_word_for;
 
 /// a checked pattern, split into its folder parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -304,18 +307,17 @@ fn literal(tokens: &[Token]) -> Option<String> {
 
 /// `--exclude` with the pattern that leaves out exactly `path`, quoted for this system's shell.
 pub(crate) fn exclusion_flag(path: &str) -> String {
+    exclusion_flag_for(path, cfg!(windows))
+}
+
+/// [`exclusion_flag`] for powershell when `windows`, else for a unix shell, quoted as
+/// [`shell_word_for`] quotes a word, and in double quotes where it needs none, as data.toml
+/// shows a pattern.
+fn exclusion_flag_for(path: &str, windows: bool) -> String {
     let pattern = escape(path);
-    // inside double quotes, bash and zsh still expand `!` from the history
-    let single =
-        pattern.contains(['\'', '"', '$', '\u{60}']) || (!cfg!(windows) && pattern.contains('!'));
-    let quoted = if single {
-        if cfg!(windows) {
-            format!("'{}'", pattern.replace('\'', "''"))
-        } else {
-            format!("'{}'", pattern.replace('\'', "'\"'\"'"))
-        }
-    } else {
-        format!("\"{pattern}\"")
+    let quoted = match shell_word_for(&pattern, windows) {
+        Cow::Borrowed(plain) => format!("\"{plain}\""),
+        Cow::Owned(quoted) => quoted,
     };
     format!("--exclude {quoted}")
 }
@@ -431,6 +433,22 @@ mod tests {
 
     fn matches(pattern: &str, path: &str) -> bool {
         Glob::new(pattern).unwrap().matches(path)
+    }
+
+    /// each word a shell would split or expand reads back whole from the flag, in powershell too,
+    /// which ends a quoted string at a curly quote as at a straight one.
+    #[test]
+    fn an_exclusion_flag_keeps_shell_characters_literal() {
+        for (word, _, _) in crate::suggested::tests::QUOTED {
+            for windows in [false, true] {
+                let flag = exclusion_flag_for(word, windows);
+                assert_eq!(
+                    crate::suggested::command_words(&flag, windows),
+                    Some(vec!["--exclude".to_owned(), escape(word)]),
+                    "{flag}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -92,7 +92,7 @@ pub(crate) fn shell_word(word: &str) -> Cow<'_, str> {
 /// quote, elsewhere `!` (history) or a backslash; then it is single-quoted, each single quote
 /// doubled on windows, curly ones too, and elsewhere a single quote or backslash escaped outside
 /// the quotes, since fish reads a backslash inside them as an escape.
-fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
+pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
     if !word.is_empty()
         && !word.starts_with(['~', '=', '@'])
         && word
