@@ -1701,6 +1701,27 @@ fn data_file_links_that_answer_with_html_are_refused() -> Result {
             "{path}: {stderr}"
         );
     }
+    // a server that labels every file text/html is wrong, not a sign-in page: the bytes decide
+    for (path, body) in [
+        ("/a.csv", &b"a,b\n1,2\n3,4\n"[..]),
+        ("/a.json", br#"{"rows": [1, 2]}"#),
+        (
+            "/a.xml",
+            b"<?xml version=\"1.0\"?><rows><row>1</row></rows>",
+        ),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let mislabelled = reply(
+            "200 OK",
+            &[("Content-Type", "text/html; charset=utf-8")],
+            body,
+        );
+        let server = Server::start(path, vec![mislabelled])?;
+        let output = sandbox.run(&["get", &server.url, "-o", "got"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{path}: {stderr}");
+        assert_eq!(fs::read(sandbox.work().join("got"))?, body, "{path}");
+    }
     // a refused add wrote no data.toml entry, with --as or without, so the flag is the way in
     for named in [&[][..], &["--as", "fpx"][..]] {
         let sandbox = Sandbox::new()?;

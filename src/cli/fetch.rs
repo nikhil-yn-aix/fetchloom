@@ -35,6 +35,17 @@ pub(super) struct Job {
     pub(super) again: Option<Again>,
 }
 
+/// the first bytes of a file that came as a web page, which tell a page from data.
+const HEAD: usize = 1024;
+
+/// whether `head`, a file's first bytes, is html: it starts, past a byte order mark and white
+/// space, with `<!doctype html`, or holds `<html`, in any case.
+fn reads_as_html(head: &[u8]) -> bool {
+    let head = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
+    let head = head.trim_ascii_start().to_ascii_lowercase();
+    head.starts_with(b"<!doctype html") || head.windows(5).any(|window| window == b"<html")
+}
+
 /// how a refusal of a web page says to ask for the page itself, for a download data.toml's entry
 /// `dataset` asks for.
 pub(in crate::cli) fn page_entry(dataset: &str) -> String {
@@ -439,6 +450,9 @@ struct Watch<'a> {
     /// what the progress line calls the file once its server named it, for a file that takes
     /// that name.
     named: Mutex<Option<String>>,
+    /// whether a web page came where the link's name promised a data file, as a sign-in page
+    /// does, which the file's first bytes decide once in, since some servers call every file one.
+    page: AtomicBool,
 }
 
 impl<'a> Watch<'a> {
@@ -477,6 +491,7 @@ impl<'a> Watch<'a> {
             arrived: AtomicBool::new(false),
             asked: AtomicU64::new(0),
             named: Mutex::new(None),
+            page: AtomicBool::new(false),
         }
     }
 
@@ -540,6 +555,27 @@ impl<'a> Watch<'a> {
     fn answered(&self, mut fetched: Fetched) -> Fetched {
         fetched.asked = std::time::Duration::from_nanos(self.asked.load(Ordering::Relaxed));
         fetched
+    }
+
+    /// `fetched` as [`Watch::answered`] tells it, unless it came as a web page where the link's
+    /// name promised a data file and its first bytes in `cache` read as one: a server that calls a
+    /// csv a web page sends the csv.
+    fn checked(&self, cache: &Cache, fetched: Fetched) -> Result<Fetched, Error> {
+        let fetched = self.answered(fetched);
+        if !self.page.load(Ordering::Relaxed) {
+            return Ok(fetched);
+        }
+        let mut head = Vec::with_capacity(HEAD);
+        if let Some(path) = cache.find(&fetched.digest, Some(fetched.size))
+            && let Ok(file) = std::fs::File::open(path)
+        {
+            let _ =
+                std::io::Read::read_to_end(&mut std::io::Read::take(file, HEAD as u64), &mut head);
+        }
+        if reads_as_html(&head) {
+            return Err(self.page_refused(true));
+        }
+        Ok(fetched)
     }
 
     /// says once that the download starts over from `resumed`, losing bytes an earlier run or try
@@ -849,9 +885,11 @@ impl<'a> Watch<'a> {
                 // a page that names no file is a sign-in page, a folder listing or a site's page
                 // rather than data, unless the link names a page or hashes prove the bytes
                 if given.is_none() && !names_a_page && !self.job.fetch.expect.proves() {
-                    return Err(self.page_refused(extension.is_some()));
-                }
-                if extension.is_some() && !names_a_page {
+                    if extension.is_none() {
+                        return Err(self.page_refused(false));
+                    }
+                    self.page.store(true, Ordering::Relaxed);
+                } else if extension.is_some() && !names_a_page {
                     self.output.warn_with(Warning::DownloadWebPage, &format!("{named} came back as a web page, not a data file. the link may open a page instead of downloading"), "look for a download or raw link");
                 }
             }
@@ -1361,7 +1399,7 @@ async fn run_each(
                     fetched => fetched,
                 };
                 watch.ended();
-                let fetched = fetched.map(|found| watch.answered(found));
+                let fetched = fetched.and_then(|found| watch.checked(&cache, found));
                 if let Ok(found) = &fetched
                     && found
                         .name
@@ -2621,14 +2659,8 @@ mod tests {
         );
     }
 
-    /// what a job for `link`, shown as `label` and pinned to `sha256` when given, makes of a web
-    /// page answering it that names the file `name`.
-    fn on_page(
-        link: &str,
-        label: &str,
-        name: Option<&str>,
-        sha256: Option<crate::digest::Sha256>,
-    ) -> Result<(), Error> {
+    /// output that tells nothing, for tests of what a download decides.
+    fn quiet() -> Output {
         let style = Style {
             color: false,
             unicode: false,
@@ -2637,7 +2669,18 @@ mod tests {
             links: false,
             accessible: false,
         };
-        let output = Output::new(style, Level::Quiet, false, false);
+        Output::new(style, Level::Quiet, false, false)
+    }
+
+    /// what a job for `link`, shown as `label` and pinned to `sha256` when given, makes of a web
+    /// page answering it that names the file `name`.
+    fn on_page(
+        link: &str,
+        label: &str,
+        name: Option<&str>,
+        sha256: Option<crate::digest::Sha256>,
+    ) -> Result<(), Error> {
+        let output = quiet();
         let overall = overall();
         let approval = Approval::new(crate::settings::ASK_ABOVE);
         let held = Held::default();
@@ -2659,96 +2702,130 @@ mod tests {
         })
     }
 
+    /// a web page where the link's name promised a data file is refused once its first bytes read
+    /// as html, as a sign-in page's do; a csv a server called a web page is kept.
+    #[test]
+    fn a_page_named_as_data_is_judged_by_its_bytes() {
+        let output = quiet();
+        let (overall, held) = (overall(), Held::default());
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let job = Job {
+            fetch: Fetch::new(Url::parse("http://lab.example/data.csv").unwrap()),
+            label: "data.csv".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        for (bytes, refused) in [
+            (
+                &b"\xef\xbb\xbf\n  <!DOCTYPE html><title>Sign in</title>"[..],
+                true,
+            ),
+            (b"<!-- saved --><HTML><form>login</form></HTML>", true),
+            (b"a,b\n1,2\n", false),
+            (b"<?xml version=\"1.0\"?><rows/>", false),
+        ] {
+            let stored = crate::cache::tests::store(&cache, bytes);
+            let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
+            watch.on(&Event::WebPage { name: None }).unwrap();
+            let fetched = Fetched {
+                digest: stored.digest,
+                size: stored.size,
+                moved: stored.size,
+                name: None,
+                origin: crate::net::Origin::Network,
+                version: None,
+                began: None,
+                arrived: None,
+                asked: std::time::Duration::ZERO,
+            };
+            match watch.checked(&cache, fetched) {
+                Err(error) => {
+                    assert!(refused, "{bytes:?}");
+                    assert_eq!(
+                        error.message,
+                        "http://lab.example/data.csv answered with a web page, such as a sign-in page, not a data file"
+                    );
+                    let advice = error.help.unwrap_or_default();
+                    assert!(
+                        advice.contains("`fetchloom auth login lab.example`"),
+                        "{advice}"
+                    );
+                }
+                Ok(_) => assert!(!refused, "{bytes:?}"),
+            }
+        }
+    }
+
     /// a host that would mean more to a shell, which a link's parser lets through, is quoted in
     /// the sign-in a refusal suggests, so pasting it runs nothing.
     #[test]
     fn the_sign_in_a_page_refusal_suggests_quotes_its_host() {
-        let error = on_page("http://x$(id).example/data.csv", "data.csv", None, None).unwrap_err();
-        let advice = error.help.unwrap_or_default();
+        let output = quiet();
+        let (overall, held) = (overall(), Held::default());
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let job = Job {
+            fetch: Fetch::new(Url::parse("http://x$(id).example/data.csv").unwrap()),
+            label: "data.csv".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
+        let advice = watch.page_refused(true).help.unwrap_or_default();
         assert!(
             advice.contains("`fetchloom auth login 'x$(id).example'`"),
             "{advice}"
         );
     }
 
+    /// a page that names no file, at a link that names none either, is a folder listing or a
+    /// site's page, refused before its bytes; a link that names a page, a file the server names,
+    /// pinned bytes, and a link named as data, whose first bytes decide, are not.
     #[test]
     fn a_web_page_that_names_no_file_is_refused_before_its_bytes() {
         let pinned = Some(crate::digest::sha256(b"a pinned listing"));
-        let listing = "answered with a web page, such as a folder listing, not a file";
-        let sign_in = "answered with a web page, such as a sign-in page, not a data file";
-        for (link, label, name, sha256, refused) in [
-            (
-                "http://lab.example/shards/",
-                "shards",
-                None,
-                None,
-                Some(listing),
-            ),
-            ("http://lab.example/", "download", None, None, Some(listing)),
-            (
-                "http://lab.example/data.csv",
-                "data.csv",
-                None,
-                None,
-                Some(sign_in),
-            ),
-            (
-                "http://lab.example/x.ZIP",
-                "x.ZIP",
-                None,
-                None,
-                Some(sign_in),
-            ),
+        let refused = [
+            ("http://lab.example/shards/", "shards"),
+            ("http://lab.example/", "download"),
+        ];
+        for (link, label) in refused {
+            let error = on_page(link, label, None, None).unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert_eq!(
+                error.message,
+                format!("{link} answered with a web page, such as a folder listing, not a file")
+            );
+            let advice = error.help.unwrap_or_default();
+            assert!(
+                advice.ends_with("if the page itself is the data, add --web-page"),
+                "{advice}"
+            );
+        }
+        for (link, label, name, sha256) in [
             (
                 "http://lab.example/shards/",
                 "shards",
                 Some("index.html"),
                 None,
-                None,
             ),
-            ("http://lab.example/shards/", "shards", None, pinned, None),
-            (
-                "http://lab.example/data.csv",
-                "data.csv",
-                None,
-                pinned,
-                None,
-            ),
+            ("http://lab.example/shards/", "shards", None, pinned),
+            ("http://lab.example/data.csv", "data.csv", None, None),
+            ("http://lab.example/x.ZIP", "x.ZIP", None, None),
+            ("http://lab.example/data.csv", "data.csv", None, pinned),
             (
                 "http://lab.example/export",
                 "export",
                 Some("data.csv"),
                 None,
-                None,
             ),
-            (
-                "http://lab.example/page.html",
-                "page.html",
-                None,
-                None,
-                None,
-            ),
-            ("http://lab.example/page.HTM", "page.HTM", None, None, None),
+            ("http://lab.example/page.html", "page.html", None, None),
+            ("http://lab.example/page.HTM", "page.HTM", None, None),
         ] {
-            match (on_page(link, label, name, sha256), refused) {
-                (Err(error), Some(said)) => {
-                    assert_eq!(error.kind, Kind::SourceInvalid);
-                    assert_eq!(error.message, format!("{link} {said}"));
-                    let advice = error.help.unwrap_or_default();
-                    assert!(
-                        advice.ends_with("if the page itself is the data, add --web-page"),
-                        "{advice}"
-                    );
-                    assert_eq!(
-                        advice.contains("`fetchloom auth login lab.example`"),
-                        said == sign_in,
-                        "{advice}"
-                    );
-                }
-                (result, refused) => {
-                    assert_eq!(result.is_err(), refused.is_some(), "{link} as {label}");
-                }
-            }
+            assert!(
+                on_page(link, label, name, sha256).is_ok(),
+                "{link} as {label}"
+            );
         }
     }
 
