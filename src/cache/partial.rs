@@ -199,7 +199,7 @@ fn lock_named(
 fn open_claim(folder: &Folder, name: &str) -> io::Result<File> {
     let retries = if cfg!(windows) { 50 } else { 0 };
     retry_denied(retries, Duration::from_millis(10), || {
-        folder.open_file(name, true)
+        folder.open_or_make(name)
     })
 }
 
@@ -397,7 +397,7 @@ impl Partial {
         }
         // unix counts a second name in the metadata `continuable` reads; windows reports no link
         // count there, so it is asked for apart
-        let kept = self.folder.open_file(name, false).ok().filter(|file| {
+        let kept = self.folder.open_file(name).ok().filter(|file| {
             file.metadata().is_ok_and(|metadata| continuable(&metadata))
                 && !(cfg!(windows) && crate::place::has_other_names(&self.bytes))
         });

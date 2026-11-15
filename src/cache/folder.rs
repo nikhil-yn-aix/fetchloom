@@ -89,21 +89,20 @@ impl Folder {
             .open(self.join(name))
     }
 
-    /// opens the plain file `name` to read and write, never through a link; `create` makes a
-    /// missing one.
-    pub(super) fn open_file(&self, name: &str, create: bool) -> io::Result<File> {
+    /// opens the plain file `name` to read and write, never through a link.
+    pub(super) fn open_file(&self, name: &str) -> io::Result<File> {
         #[cfg(unix)]
         {
-            use rustix::fs::OFlags;
-            let create = if create {
-                OFlags::CREATE
-            } else {
-                OFlags::empty()
-            };
-            self.open_plain(name, OFlags::RDWR | create)
+            self.open_plain(name, rustix::fs::OFlags::RDWR)
         }
         #[cfg(not(unix))]
-        crate::volume::open_unfollowed(&self.join(name), create)
+        crate::volume::open_unfollowed(&self.join(name), false)
+    }
+
+    /// [`Folder::open_file`] of `name`, making it where it is missing, in two steps that writers
+    /// making the name at once cannot trip over, as [`open_or_make`] says.
+    pub(super) fn open_or_make(&self, name: &str) -> io::Result<File> {
+        open_or_make(|| self.open_file(name), || self.create_new(name))
     }
 
     /// opens the plain file `name` to read, never through a link.
@@ -215,6 +214,34 @@ impl Folder {
     }
 }
 
+/// opens a file with `open`, or where it is missing makes it with `make`, which must refuse a
+/// taken name: a writer whose make is refused, as another writer made the file in between, opens
+/// that file. two saves into one url shard at once failed as not found on macos while each opened
+/// the shard's lock file with one call that creates it. each step is tried a few times at most.
+fn open_or_make(
+    open: impl Fn() -> io::Result<File>,
+    make: impl Fn() -> io::Result<File>,
+) -> io::Result<File> {
+    let mut tries = 0;
+    loop {
+        match open() {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            opened => return opened,
+        }
+        match make() {
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound
+                ) && tries < 8 =>
+            {
+                tries += 1;
+            }
+            answer => return answer,
+        }
+    }
+}
+
 #[cfg(unix)]
 fn refused(path: &Path) -> io::Error {
     io::Error::new(
@@ -285,4 +312,67 @@ fn checked(root: &Path, below: &Path, make: bool) -> io::Result<PathBuf> {
         }
     }
     Ok(below.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::io::{Seek, SeekFrom};
+
+    use super::*;
+
+    /// a writer that finds the file missing, and is refused making it because another writer made
+    /// it in between, opens that writer's file, so what both write lands in one file.
+    #[test]
+    fn a_file_another_writer_makes_between_the_look_and_the_make_is_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let urls = Folder::open(dir.path(), Path::new("urls")).unwrap();
+        let theirs = RefCell::new(None);
+
+        let mine = open_or_make(
+            || urls.open_file("0.log"),
+            || {
+                theirs
+                    .borrow_mut()
+                    .get_or_insert_with(|| urls.create_new("0.log").unwrap());
+                urls.create_new("0.log")
+            },
+        );
+
+        let mut mine = mine.unwrap();
+        let mut theirs = theirs.into_inner().unwrap();
+        theirs.write_all(b"theirs\n").unwrap();
+        mine.seek(SeekFrom::End(0)).unwrap();
+        mine.write_all(b"mine\n").unwrap();
+        let written = std::fs::read(dir.path().join("urls").join("0.log")).unwrap();
+        assert_eq!(written, b"theirs\nmine\n");
+    }
+
+    /// a make refused as not found is tried again, a few times at most.
+    #[test]
+    fn a_make_that_finds_nothing_is_tried_again_a_few_times() {
+        let dir = tempfile::tempdir().unwrap();
+        let urls = Folder::open(dir.path(), Path::new("urls")).unwrap();
+        let refusals = Cell::new(1);
+        let made = open_or_make(
+            || urls.open_file("0.lock"),
+            || {
+                if refusals.replace(0) > 0 {
+                    return Err(io::ErrorKind::NotFound.into());
+                }
+                urls.create_new("0.lock")
+            },
+        );
+        made.unwrap();
+        assert!(dir.path().join("urls").join("0.lock").is_file());
+
+        let makes = Cell::new(0);
+        let missing = || Err(io::ErrorKind::NotFound.into());
+        let made = open_or_make(missing, || {
+            makes.set(makes.get() + 1);
+            missing()
+        });
+        assert_eq!(made.unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(makes.get(), 9);
+    }
 }

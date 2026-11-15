@@ -187,12 +187,12 @@ impl Shards {
         // none of these files is opened through a link, nor through a link put where `urls/` was,
         // since a line holds text a server chose
         let urls = urls(root, true)?;
-        let held = urls.open_file(&format!("{shard:x}.lock"), true)?;
+        let held = urls.open_or_make(&format!("{shard:x}.lock"))?;
         match lock(&held) {
             Err(err) if err.kind() != io::ErrorKind::Unsupported => return Err(err),
             _ => {}
         }
-        let mut log = urls.open_file(&records, true)?;
+        let mut log = urls.open_or_make(&records)?;
         // a shard holds 4 GiB; past that its links go unrecorded until gc writes it again
         let start = u32::try_from(log.seek(SeekFrom::End(0))?).map_err(io::Error::other)?;
         let mut line = Vec::with_capacity(CHECK + json.len() + 1);
@@ -204,7 +204,7 @@ impl Shards {
         let mut entry = [0; ENTRY];
         entry[..8].copy_from_slice(&key.to_le_bytes());
         entry[8..].copy_from_slice(&start.to_le_bytes());
-        let mut index = urls.open_file(&entries, true)?;
+        let mut index = urls.open_or_make(&entries)?;
         // an entry a dead run left unfinished is written over, so each starts on its boundary
         let whole = index.metadata()?.len() / ENTRY as u64 * ENTRY as u64;
         index.seek(SeekFrom::Start(whole))?;
