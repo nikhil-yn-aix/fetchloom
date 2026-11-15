@@ -130,15 +130,20 @@ pub(crate) fn copy_all(
     Ok(gave)
 }
 
-/// the tree whose bytes hash to `tree` on the folder mirror at `root`, read a block at a time and
-/// never past [`LARGEST_TREE`]. it fails on a read or a stop.
+/// the tree whose bytes hash to `tree` on the folder mirror at `root`, opened through the mirror's
+/// real folders as [`check_all`] opens a copy, read a block at a time and never past
+/// [`LARGEST_TREE`]. it fails on a read or a stop.
 pub(crate) fn read_tree(root: &Path, tree: &Sha256, stop: &Stop) -> io::Result<Tree> {
     let path = place(root, "trees", tree);
-    let mut file = match read_unfollowed(&path) {
+    let mut file = match Placer::in_named_folder(root).open_read(&path) {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Tree::Absent),
-        Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(Tree::Damaged),
-        Err(err) => return Err(err),
+        Err(err) => {
+            return match err.kind() {
+                io::ErrorKind::NotFound => Ok(Tree::Absent),
+                io::ErrorKind::InvalidInput | io::ErrorKind::NotADirectory => Ok(Tree::Damaged),
+                _ => Err(err),
+            };
+        }
     };
     let mut bytes = Vec::new();
     let mut block = vec![0; 1 << 20];
@@ -2286,5 +2291,24 @@ pub(crate) mod tests {
             .set_len(LARGEST_TREE + 1)
             .unwrap();
         assert!(matches!(read(), Tree::Absent));
+    }
+
+    /// a tree's fan folder a co-user swapped for a link is read as no tree of the mirror's, as a
+    /// copy below one is.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_below_a_linked_folder_is_damaged() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        mirror(&root, &[]);
+        let tree = crate::digest::sha256(b"tree");
+        let path = place(&root, "trees", &tree);
+        let outside = folder.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join(path.file_name().unwrap()), b"a.csv\t1\tff\n").unwrap();
+        fs::create_dir_all(root.join("trees")).unwrap();
+        std::os::unix::fs::symlink(&outside, path.parent().unwrap()).unwrap();
+        let read = read_tree(&root, &tree, &Stop::default()).unwrap();
+        assert!(matches!(read, Tree::Damaged));
     }
 }
