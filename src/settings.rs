@@ -1351,8 +1351,8 @@ fn boolean(given: &Given<'_>, key: &str, default: bool) -> Result<Set<bool>, Err
     })
 }
 
-/// the whole seconds `key` holds, as a number of seconds or with a unit, as `30s`, `2min` or
-/// `1h`, as `fetchloom settings` prints them, within `range`, or `default`.
+/// the whole seconds `key` holds, as a number of seconds or with a unit, as `30s`, `2min`, `1h`
+/// or `1.5min`, as `fetchloom settings` prints them, within `range`, or `default`.
 fn seconds(
     given: &Given<'_>,
     key: &str,
@@ -1363,39 +1363,75 @@ fn seconds(
         return Ok(default);
     };
     let (low, high) = (range.start(), range.end());
-    seconds_in(&text)
-        .filter(|seconds| range.contains(seconds))
-        .map(|seconds| Set {
-            value: Duration::from_secs(seconds),
-            origin,
-        })
-        .ok_or_else(|| {
-            Error::new(
-                Kind::Usage,
-                format!("{named} is \"{text}\", which is not a time from {low} s to {high} s, as 30s or 2min"),
-            )
-            .help(format!(
-                "{} to use the default of {} s, or set it to a time such as 30s, 2min or 1h",
-                undo(origin, key),
-                default.value.as_secs()
-            ))
-        })
+    let message = match seconds_in(&text) {
+        Ok(seconds) if range.contains(&seconds) => {
+            return Ok(Set {
+                value: Duration::from_secs(seconds),
+                origin,
+            });
+        }
+        Err(Untimed::Fraction) => {
+            format!("{named} is \"{text}\", which is not a whole number of seconds")
+        }
+        _ => format!(
+            "{named} is \"{text}\", which is not a time from {low} s to {high} s, as 30s or 2min"
+        ),
+    };
+    Err(Error::new(Kind::Usage, message).help(format!(
+        "{} to use the default of {} s, or set it to a time such as 30s, 2min or 1h",
+        undo(origin, key),
+        default.value.as_secs()
+    )))
 }
 
-/// the seconds `text` gives: a whole number, then maybe `s`, `min` or `h`, after a space or not.
-fn seconds_in(text: &str) -> Option<u64> {
+/// why a time could not be read.
+enum Untimed {
+    /// it is no number of seconds, minutes or hours.
+    Unread,
+    /// it comes to part of a second, as 1.5s does.
+    Fraction,
+}
+
+/// the seconds `text` gives: a whole or decimal number, then maybe `s`, `min` or `h`, after a
+/// space or not. a decimal must come to whole seconds, as 1.5min does.
+fn seconds_in(text: &str) -> Result<u64, Untimed> {
     let text = text.trim();
     let end = text
-        .find(|c: char| !c.is_ascii_digit())
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
         .unwrap_or(text.len());
     let (number, unit) = (&text[..end], text[end..].trim_start());
-    let per = match unit.to_ascii_lowercase().as_str() {
+    let per: u64 = match unit.to_ascii_lowercase().as_str() {
         "" | "s" => 1,
         "min" => 60,
         "h" => 3600,
-        _ => return None,
+        _ => return Err(Untimed::Unread),
     };
-    number.parse::<u64>().ok()?.checked_mul(per)
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if !digits(whole) || (number.contains('.') && !digits(fraction)) {
+        return Err(Untimed::Unread);
+    }
+    let unread = |_| Untimed::Unread;
+    let whole = whole.parse::<u64>().map_err(unread)?;
+    // the fraction as digits over a power of ten: 1.5min is 15 over 10 of a minute, 90 s
+    let (numerator, scale) = match fraction {
+        "" => (0, 1),
+        _ => (
+            fraction.parse::<u64>().map_err(unread)?,
+            u32::try_from(fraction.len())
+                .ok()
+                .and_then(|places| 10_u64.checked_pow(places))
+                .ok_or(Untimed::Unread)?,
+        ),
+    };
+    let part = numerator.checked_mul(per).ok_or(Untimed::Unread)?;
+    if part % scale != 0 {
+        return Err(Untimed::Fraction);
+    }
+    whole
+        .checked_mul(per)
+        .and_then(|seconds| seconds.checked_add(part / scale))
+        .ok_or(Untimed::Unread)
 }
 
 #[cfg(test)]

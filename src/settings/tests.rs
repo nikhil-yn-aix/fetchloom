@@ -516,6 +516,8 @@ fn a_time_reads_with_its_unit() {
         ("30 s", 30),
         ("2min", 120),
         ("1h", 3600),
+        ("1.5min", 90),
+        ("0.5 h", 1800),
     ] {
         let settings = read(&[("FETCHLOOM_TIMEOUT", text)], None).unwrap();
         assert_eq!(
@@ -557,6 +559,12 @@ fn a_bad_value_is_a_usage_error_naming_the_variable_and_what_it_takes() {
             "FETCHLOOM_TIMEOUT",
             "2h",
             "FETCHLOOM_TIMEOUT is \"2h\", which is not a time from 1 s to 3600 s, as 30s or 2min",
+            "unset FETCHLOOM_TIMEOUT to use the default of 30 s, or set it to a time such as 30s, 2min or 1h",
+        ),
+        (
+            "FETCHLOOM_TIMEOUT",
+            "1.5s",
+            "FETCHLOOM_TIMEOUT is \"1.5s\", which is not a whole number of seconds",
             "unset FETCHLOOM_TIMEOUT to use the default of 30 s, or set it to a time such as 30s, 2min or 1h",
         ),
         (
