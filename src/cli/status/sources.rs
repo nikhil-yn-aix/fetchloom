@@ -20,9 +20,6 @@ const NAMED: usize = 20;
 /// the most hints of distinct refusals and failures told after the lines.
 const HINTS: usize = 3;
 
-/// what to do when files could not be checked and none gave a hint of its own.
-const AGAIN: &str = "ask again later: a source that gave no answer may be busy or down";
-
 /// what `--sources` found, as `--json` gives it.
 #[derive(Debug, Default, Serialize)]
 pub(super) struct Sources {
@@ -313,7 +310,7 @@ pub(super) fn tell(output: &Output, sources: &Sources) {
     if unserved > 0 {
         output.hint(&next(sources));
     } else if helps.is_empty() {
-        output.hint(AGAIN);
+        output.hint(probe::AGAIN);
     }
 }
 
@@ -423,15 +420,10 @@ pub(super) fn ready(sources: &Sources) -> Result<(), Error> {
         .details_up_to(&lines, NAMED)
         .help(next(sources)));
     }
-    let Some(first) = sources.unchecked().min_by_key(|file| match file.kind {
-        Kind::AuthRequired => 0,
-        Kind::NetworkUnreachable
-        | Kind::NetworkStatus
-        | Kind::NetworkRateLimited
-        | Kind::NetworkRefused
-        | Kind::OfflineMissing => 2,
-        _ => 1,
-    }) else {
+    let Some(first) = sources
+        .unchecked()
+        .min_by_key(|file| probe::urgency(file.kind))
+    else {
         return Ok(());
     };
     let lines: Vec<String> = sources.unchecked().map(Unserved::said).collect();
@@ -443,7 +435,7 @@ pub(super) fn ready(sources: &Sources) -> Result<(), Error> {
         ),
     )
     .details_up_to(&lines, NAMED)
-    .help(first.help.as_deref().unwrap_or(AGAIN)))
+    .help(first.help.as_deref().unwrap_or(probe::AGAIN)))
 }
 
 #[cfg(test)]
@@ -531,7 +523,7 @@ mod tests {
         let error = ready(&sources).unwrap_err();
         assert_eq!(
             (error.kind, error.help.as_deref()),
-            (Kind::NetworkStatus, Some(AGAIN))
+            (Kind::NetworkStatus, Some(probe::AGAIN))
         );
     }
 }

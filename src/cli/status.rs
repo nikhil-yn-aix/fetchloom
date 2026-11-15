@@ -69,6 +69,10 @@ pub(super) struct Status {
     unplaced: Vec<String>,
     /// datasets `fetchloom drop` freed on this machine, which a plain sync leaves out.
     dropped: Vec<String>,
+    /// those of `dropped` no source gives back, recipes' results and imports, with whether each
+    /// is a result, which a build makes again.
+    #[serde(skip)]
+    dropped_owned: HashMap<String, bool>,
     /// entries in the way of files data.lock places, by path, at a file's path or where a folder on
     /// its way belongs; `sync --force` replaces them, except a folder that holds anything.
     #[serde(serialize_with = "blocker_paths")]
@@ -652,6 +656,17 @@ fn dropped_here(status: &mut Status, manifest: &Manifest, survey: &Survey) -> Ma
         .filter(|name| survey.state.dropped.contains(*name))
         .cloned()
         .collect();
+    status.dropped_owned = status
+        .dropped
+        .iter()
+        .filter_map(|name| {
+            let entry = &manifest.datasets[name];
+            let imported = entry
+                .source()
+                .is_some_and(|source| source.reference == "local");
+            (entry.recipe().is_some() || imported).then(|| (name.clone(), entry.recipe().is_some()))
+        })
+        .collect();
     super::drop::placed_by(manifest, &Scope::All, &survey.state.dropped).into_owned()
 }
 
@@ -1101,12 +1116,28 @@ impl Status {
 /// a faint line on stderr for each dataset dropped on this machine.
 fn tell_dropped(output: &Output, status: &Status) {
     for name in &status.dropped {
-        output.faint_step(
-            "Dropped",
-            &format!(
-                "{name} · freed on this machine; `{}` brings it back",
+        let back = match status.dropped_owned.get(name) {
+            None => format!(
+                "`{}` brings it back",
                 super::project::command(&format!("sync {name}"))
             ),
+            // no source gives back its files, so only the folder mirror drop found them on can
+            Some(result) => format!(
+                "`{}` brings it back from a folder mirror that holds it{}",
+                super::project::command(&format!("sync {name} --mirror <folder>")),
+                if *result {
+                    format!(
+                        ", or `{}` makes it again",
+                        super::project::command(&format!("build {name}"))
+                    )
+                } else {
+                    String::new()
+                }
+            ),
+        };
+        output.faint_step(
+            "Dropped",
+            &format!("{name} · freed on this machine; {back}"),
         );
     }
 }

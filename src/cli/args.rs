@@ -1002,9 +1002,9 @@ pub(crate) struct Exclude {
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Drop {
     /// the datasets' names in data.toml. each is freed only once every one of its files is
-    /// found elsewhere: on a folder mirror whose copy still hashes right, or at a web or s3
-    /// mirror or its source at its size; a recipe's result, or a dataset added from a folder,
-    /// only on a folder mirror
+    /// found elsewhere: on a folder mirror whose copy still hashes right, or with --yes at a web
+    /// or s3 mirror or its source at its size; a recipe's result, or a dataset added from a
+    /// folder, only on a folder mirror
     #[arg(value_name = "name", required = true, help_heading = "arguments")]
     pub(crate) names: Vec<String>,
 

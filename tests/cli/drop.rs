@@ -25,7 +25,21 @@ fn a_dropped_dataset_is_left_out_until_a_sync_names_it() -> Result {
     let source = iris(&sandbox)?;
     let placed = sandbox.work().join("data/iris/iris.csv");
     let cached = object(&sandbox.cache(), IRIS);
-    let output = sandbox.run(&["--json", "drop", "iris", "--dry-run"])?;
+    // its source answers at the pinned size, which alone does not show the bytes are the same
+    let output = sandbox.run(&["--json", "drop", "iris"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed");
+    assert_eq!(
+        error["message"],
+        "iris stays on this machine, since 1 of its files was checked elsewhere by size alone, which does not show the bytes are the same"
+    );
+    assert_eq!(
+        error["help"],
+        "`fetchloom push iris --to <folder>` keeps a copy on a folder mirror, then `fetchloom drop iris --mirror <folder>` frees it; or `fetchloom drop iris --yes` frees it on the sizes alone"
+    );
+    assert!(placed.exists() && cached.exists());
+    let output = sandbox.run(&["--json", "--yes", "drop", "iris", "--dry-run"])?;
     ok(&output)?;
     let result = &json(&output)?["result"];
     assert_eq!(
@@ -36,7 +50,7 @@ fn a_dropped_dataset_is_left_out_until_a_sync_names_it() -> Result {
         placed.exists() && cached.exists(),
         "a dry run frees nothing"
     );
-    let output = sandbox.run(&["--json", "drop", "iris"])?;
+    let output = sandbox.run(&["--json", "--yes", "drop", "iris"])?;
     ok(&output)?;
     let result = &json(&output)?["result"];
     assert_eq!(result["dropped"], json!(["iris"]));
@@ -93,9 +107,9 @@ fn a_dataset_no_mirror_or_source_has_stays_and_a_mirror_brings_one_back() -> Res
     )]);
     let placed = sandbox.work().join("data/iris/iris.csv");
     let output = sandbox.run(&["--json", "drop", "iris"])?;
-    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
     let error = &json(&output)?["errors"][0];
-    assert_eq!(error["kind"], "reference.unresolved");
+    assert_eq!(error["kind"], "data.not_ready");
     assert!(
         error["details"][0]
             .as_str()
@@ -144,14 +158,18 @@ fn a_changed_file_stays_and_is_named() -> Result {
     let _source = iris(&sandbox)?;
     let placed = sandbox.work().join("data/iris/iris.csv");
     edit(&placed, b"my notes\n")?;
-    let output = sandbox.run(&["--json", "drop", "iris"])?;
+    let output = sandbox.run(&["--yes", "drop", "iris"])?;
     ok(&output)?;
-    let result = &json(&output)?["result"];
-    assert_eq!(result["dropped"], json!(["iris"]));
-    assert_eq!(
-        result["placement"]["kept"][0]["path"], "data/iris/iris.csv",
-        "{result}"
+    let told = text(&output.stderr)?;
+    assert!(
+        told.contains(
+            "warning: data/iris/iris.csv has changed since fetchloom placed it, so drop keeps it\n"
+        ),
+        "{told}"
     );
+    // the dropped dataset's own files are counted once, in its line, as nothing else needs them
+    assert!(!told.contains("no dataset needs"), "{told}");
+    assert!(told.contains("Dropped iris · freed "), "{told}");
     assert_eq!(fs::read(&placed)?, b"my notes\n");
     Ok(())
 }
@@ -170,7 +188,7 @@ fn a_result_drops_only_where_a_folder_mirror_holds_it() -> Result {
     assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
     let result = sandbox.work().join("data/clean/clean.csv");
     let output = sandbox.run(&["--json", "drop", "clean"])?;
-    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(
         error["details"],
@@ -178,16 +196,17 @@ fn a_result_drops_only_where_a_folder_mirror_holds_it() -> Result {
             "clean/clean.csv · no folder mirror holds a copy of this file of a recipe's result that hashes to its pin"
         ])
     );
+    assert_eq!(error["kind"], "data.not_ready");
     assert_eq!(
         error["help"],
-        "`fetchloom push clean` keeps a copy of each on a folder mirror first, then drop it"
+        "`fetchloom push clean --to <folder>` keeps a copy on a folder mirror, then `fetchloom drop clean --mirror <folder>` frees it"
     );
     let web = web_mirror_of(&sandbox)?;
     let output = sandbox
         .command(&["--json", "drop", "clean", "--mirror"])
         .arg(format!("{}/m", web.url))
         .output()?;
-    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
     assert!(result.exists());
     let root = sandbox.folder("mirror")?;
     ok(&sandbox
@@ -199,6 +218,14 @@ fn a_result_drops_only_where_a_folder_mirror_holds_it() -> Result {
         .arg(&root)
         .output()?)?;
     assert!(!result.exists());
+    // no source gives a result back, so status names the folder mirror, or a build
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        told.contains(
+            "Dropped clean · freed on this machine; `fetchloom sync clean --mirror <folder>` brings it back from a folder mirror that holds it, or `fetchloom build clean` makes it again\n"
+        ),
+        "{told}"
+    );
     Ok(())
 }
 
@@ -206,7 +233,7 @@ fn a_result_drops_only_where_a_folder_mirror_holds_it() -> Result {
 fn gc_frees_what_only_a_dropped_dataset_pins() -> Result {
     let sandbox = Sandbox::new()?;
     let _source = iris(&sandbox)?;
-    ok(&sandbox.run(&["drop", "iris"])?)?;
+    ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
     // its bytes back in the cache, as a build that reads it brings them, are needed no more
     let cached = object(&sandbox.cache(), IRIS);
     fs::create_dir_all(cached.parent().ok_or("an object in no folder")?)?;
@@ -214,6 +241,69 @@ fn gc_frees_what_only_a_dropped_dataset_pins() -> Result {
     let output = sandbox.run(&["--json", "cache", "gc", "--now"])?;
     ok(&output)?;
     assert_eq!(json(&output)?["result"]["removed_objects"], 1);
+    assert!(!cached.exists());
+    Ok(())
+}
+
+/// a source that gives no answer leaves a file not checked: the dataset stays, with the exit a
+/// download would give, not as if the file were lost.
+#[test]
+fn a_source_that_gives_no_answer_keeps_the_dataset_as_not_checked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = iris(&sandbox)?;
+    drop(source);
+    let output = sandbox
+        .command(&["--json", "--yes", "drop", "iris"])
+        .env("FETCHLOOM_RETRIES", "0")
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "iris stays on this machine, since 1 of its files could not be checked elsewhere"
+    );
+    assert!(sandbox.work().join("data/iris/iris.csv").exists());
+    Ok(())
+}
+
+/// a dataset of which nothing is on this machine has nothing to drop, which is no failure.
+#[test]
+fn a_dataset_with_nothing_here_has_nothing_to_drop() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        crate::project::PATH,
+        vec![file(crate::project::IRIS, "\"v1\"")],
+    )?;
+    with(&sandbox, &server, WRITE)?;
+    let output = sandbox.run(&["--json", "drop", "clean"])?;
+    ok(&output)?;
+    assert_eq!(json(&output)?["result"]["absent"], json!(["clean"]));
+    let told = text(&sandbox.run(&["drop", "clean"])?.stderr)?;
+    assert!(
+        told.contains("Skipped clean · not built yet, so there is nothing to drop\n"),
+        "{told}"
+    );
+    Ok(())
+}
+
+/// a dataset dropped before whose bytes came back into the cache, as a build or a push brings
+/// them, is freed again rather than called dropped already.
+#[test]
+fn a_dropped_dataset_whose_bytes_came_back_is_freed_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = iris(&sandbox)?;
+    ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
+    let cached = object(&sandbox.cache(), IRIS);
+    assert!(!cached.exists());
+    if let Some(fan) = cached.parent() {
+        fs::create_dir_all(fan)?;
+    }
+    fs::write(&cached, IRIS)?;
+    let output = sandbox.run(&["--json", "--yes", "drop", "iris"])?;
+    ok(&output)?;
+    let result = &json(&output)?["result"];
+    assert_eq!(result["dropped"], json!(["iris"]), "{result}");
+    assert_eq!(result["objects"], 1, "{result}");
     assert!(!cached.exists());
     Ok(())
 }

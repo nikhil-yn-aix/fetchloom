@@ -1040,6 +1040,16 @@ impl<'a> Placing<'a> {
 
     /// removes only what no dataset needs, and places nothing, so `remove` never downloads.
     pub(crate) fn remove_only(self, output: &Output) -> Result<Placement, Error> {
+        self.remove(output, true)
+    }
+
+    /// as [`Placing::remove_only`], telling only the folders that stay, for a caller that tells in
+    /// its own words what went and what it kept.
+    pub(crate) fn remove_quietly(self, output: &Output) -> Result<Placement, Error> {
+        self.remove(output, false)
+    }
+
+    fn remove(self, output: &Output, told: bool) -> Result<Placement, Error> {
         let _span = tracing::debug_span!("remove").entered();
         let Placing {
             project,
@@ -1071,15 +1081,17 @@ impl<'a> Placing<'a> {
         if removed || forgot || dropped || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
-        tell(
-            output,
-            manifest,
-            &placer,
-            &BTreeMap::new(),
-            &placement,
-            None,
-            &scope,
-        );
+        if told {
+            tell(
+                output,
+                manifest,
+                &placer,
+                &BTreeMap::new(),
+                &placement,
+                None,
+                &scope,
+            );
+        }
         Ok(placement)
     }
 }

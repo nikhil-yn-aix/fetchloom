@@ -21,6 +21,24 @@ use crate::project::lock::{LockedFile, StatedFile};
 /// copies looked at on one folder mirror at once, as sync copies from one.
 const LOOKS: usize = 8;
 
+/// what to do when files could not be checked and none gave a hint of its own.
+pub(in crate::cli) const AGAIN: &str =
+    "ask again later: a source that gave no answer may be busy or down";
+
+/// how soon the trouble of `kind` that kept a file from being checked should be named: a refusal
+/// first, since asking again later does not end it, and no answer last.
+pub(in crate::cli) fn urgency(kind: Kind) -> u8 {
+    match kind {
+        Kind::AuthRequired => 0,
+        Kind::NetworkUnreachable
+        | Kind::NetworkStatus
+        | Kind::NetworkRateLimited
+        | Kind::NetworkRefused
+        | Kind::OfflineMissing => 2,
+        _ => 1,
+    }
+}
+
 /// a file data.lock pins, to look for.
 #[derive(Clone, Copy)]
 pub(in crate::cli) struct Pinned<'a> {

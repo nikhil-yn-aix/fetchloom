@@ -1,11 +1,11 @@
 //! `fetchloom drop`: frees this machine's copy of pinned datasets once each of their files is
-//! found elsewhere, on a folder mirror whose copy hashes to its pin or at a web mirror or source
-//! serving it at its size. their unchanged files leave the data folder and the cache copies nothing
-//! else needs leave the cache. data.toml and data.lock keep them, and the state marks them dropped
-//! here until `sync <name>` or `path <name>` brings one back.
+//! found elsewhere, on a folder mirror whose copy hashes to its pin, or with `--yes` at a web or
+//! bucket mirror or source serving it at its size. their unchanged files leave the data folder and
+//! the cache copies nothing else needs leave the cache. data.toml and data.lock keep them, and the
+//! state marks them dropped here until `sync <name>` or `path <name>` brings one back.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -22,10 +22,12 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Held};
 use crate::mirror::{Location, Wanted};
+use crate::output::Warning;
 use crate::place::Method;
 use crate::project::lock::archives::{self, Pinned as Packed};
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
+use crate::project::state::State;
 use crate::units;
 
 /// the most files a refusal names; `-v` and `--json` name them all.
@@ -39,6 +41,9 @@ pub(super) struct Report {
     dropped: Vec<String>,
     /// the datasets named that were dropped already, which nothing changed.
     already: Vec<String>,
+    /// the datasets named of which nothing is on this machine, which nothing changed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    absent: Vec<String>,
     /// the files removed from the data folder, and the cache files freed.
     files: u64,
     objects: u64,
@@ -63,6 +68,48 @@ struct Named<'a> {
     result: bool,
 }
 
+impl Named<'_> {
+    /// whether no source gives its files back: a recipe's result, or files imported from a folder.
+    fn owned(&self) -> bool {
+        self.result || self.files.iter().any(|file| file.url.is_empty())
+    }
+}
+
+/// what the check found of the files of the datasets named to drop.
+#[derive(Default)]
+struct Checked {
+    /// by dataset, the files that do not count as found elsewhere.
+    lacks: BTreeMap<String, Lacks>,
+    /// by dataset, the folder mirrors whose copies hashed to their pins.
+    folders: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// the files of one dataset that do not count as found elsewhere, by why.
+#[derive(Default)]
+struct Lacks {
+    /// those no mirror or source has, as lines.
+    lost: Vec<String>,
+    /// those no clear answer came for, as lines, each with the error a download of it would meet.
+    unchecked: Vec<(String, Error)>,
+    /// how many a web or bucket mirror or source serves at their size alone, which does not show
+    /// their bytes.
+    sized: u64,
+}
+
+impl Checked {
+    /// whether `name` stays: a file of it is lost or could not be checked, or, without `yes`, one
+    /// was checked by its size alone.
+    fn keeps(&self, name: &str, yes: bool) -> bool {
+        self.lacks.get(name).is_some_and(|lacks| {
+            !lacks.lost.is_empty() || !lacks.unchecked.is_empty() || (!yes && lacks.sized > 0)
+        })
+    }
+
+    fn lacks(&mut self, name: &str) -> &mut Lacks {
+        self.lacks.entry(name.to_owned()).or_default()
+    }
+}
+
 pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, Error> {
     let mut given: Vec<String> = Vec::with_capacity(args.names.len());
     for name in args.names {
@@ -83,19 +130,35 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
     }
     let lock = project.lock()?.unwrap_or_default();
     let marked = project.dropped();
-    let (already, asked): (Vec<String>, Vec<String>) =
-        given.into_iter().partition(|name| marked.contains(name));
-    for name in &already {
-        context.output.faint_step(
-            "Dropped",
-            &format!("{name} · dropped on this machine already"),
-        );
+    let (state, _) = project.state();
+    let cache = peek_cache().ok();
+    let (mut asked, mut already, mut absent) = (Vec::new(), Vec::new(), Vec::new());
+    for name in given {
+        // a dataset dropped before whose bytes came back, as a build or push brings them, goes again
+        if here(&project.root, &state, cache.as_ref(), &lock, &name) {
+            asked.push(name);
+        } else if marked.contains(&name) {
+            context.output.faint_step(
+                "Dropped",
+                &format!("{name} · dropped on this machine already"),
+            );
+            already.push(name);
+        } else {
+            context.output.faint_step(
+                "Skipped",
+                &format!(
+                    "{name} · {}, so there is nothing to drop",
+                    away(&manifest, &lock, &name)
+                ),
+            );
+            absent.push(name);
+        }
     }
     let named = asked
         .iter()
         .map(|name| pinned_files(&manifest, &lock, name))
         .collect::<Result<Vec<_>, _>>()?;
-    let lacking = {
+    let checked = {
         let what = units::count(
             named.iter().map(|named| named.files.len() as u64).sum(),
             "file",
@@ -103,12 +166,12 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
         );
         let _waiting = context
             .output
-            .wait("Checking", format!("{what} are found elsewhere"));
+            .wait("Checking", format!("where {what} are found"));
         unfound(context, &named).await?
     };
     let freeing: BTreeSet<String> = asked
         .iter()
-        .filter(|name| !lacking.contains_key(*name))
+        .filter(|name| !checked.keeps(name, context.yes))
         .cloned()
         .collect();
     let mut report = Report {
@@ -119,6 +182,7 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
             .cloned()
             .collect(),
         already,
+        absent,
         files: 0,
         objects: 0,
         bytes: 0,
@@ -133,27 +197,84 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
             free(context, &project, &manifest, &lock, &freeing, &mut report)?;
         }
     }
-    // a result's or an import's file counts only on a folder mirror
-    let folder = named.iter().any(|named| {
-        lacking.contains_key(named.name) && named.files.iter().any(|file| file.url.is_empty())
-    });
-    if let Some(error) = refused(&lacking, &asked, context.offline, folder) {
+    if let Some(error) = refused(&checked, &asked, context.yes) {
         return Err(error.with_report(&report));
     }
     if dry_run {
         dry_run_done(&context.output, None);
-    } else if !report.dropped.is_empty() {
-        let them = if report.dropped.len() == 1 {
-            "it"
-        } else {
-            "them"
-        };
-        context.output.next(&format!(
-            "`{}` brings {them} back",
-            super::project::command(&format!("sync {}", report.dropped.join(" ")))
-        ));
+    } else {
+        tell_back(&context.output, &named, &checked, &report.dropped);
     }
     Ok(report)
+}
+
+/// whether this machine holds any file of `name`: one fetchloom placed for it in the data folder
+/// under `root`, as `state` records, or one of its files in `cache`.
+fn here(root: &Path, state: &State, cache: Option<&Cache>, lock: &Lock, name: &str) -> bool {
+    let placed = state
+        .files
+        .iter()
+        .any(|(path, placed)| placed.dataset == name && root.join(path).exists());
+    placed
+        || cache.is_some_and(|cache| {
+            let named = BTreeSet::from([name.to_owned()]);
+            held(cache, lock, &named)
+                .sizes
+                .keys()
+                .any(|digest| cache.find(digest, None).is_some())
+        })
+}
+
+/// why nothing of `name` is on this machine, as drop tells it.
+fn away(manifest: &Manifest, lock: &Lock, name: &str) -> &'static str {
+    let recipe = manifest.datasets[name].recipe().is_some();
+    if recipe && lock.result(name).is_none() {
+        "not built yet"
+    } else if lock.stated(name).is_some() {
+        "not downloaded yet"
+    } else if !recipe && lock.get(name).is_none() {
+        "not pinned yet"
+    } else {
+        "not on this machine"
+    }
+}
+
+/// a line saying how each of `dropped` comes back: a sync from its source, or a result's or an
+/// import's from the folder mirror whose copy stood in for it.
+fn tell_back(
+    output: &crate::output::Output,
+    named: &[Named<'_>],
+    checked: &Checked,
+    dropped: &[String],
+) {
+    let mut sourced: Vec<&str> = Vec::new();
+    for named in named
+        .iter()
+        .filter(|named| dropped.iter().any(|name| name == named.name))
+    {
+        let folder = checked
+            .folders
+            .get(named.name)
+            .and_then(|folders| folders.first());
+        match folder.filter(|_| named.owned()) {
+            Some(folder) => output.next(&format!(
+                "`{}` brings it back from the folder mirror that holds it",
+                super::project::command(&format!(
+                    "sync {} --mirror {}",
+                    named.name,
+                    crate::suggested::shell_word(folder)
+                ))
+            )),
+            None => sourced.push(named.name),
+        }
+    }
+    if !sourced.is_empty() {
+        let them = if sourced.len() == 1 { "it" } else { "them" };
+        output.next(&format!(
+            "`{}` brings {them} back",
+            super::project::command(&format!("sync {}", sourced.join(" ")))
+        ));
+    }
 }
 
 /// the files of `name` to find elsewhere before it is dropped: those data.lock pins for it, an
@@ -213,14 +334,11 @@ fn pinned_files<'a>(
     })
 }
 
-/// why each file of `named` is found nowhere, as lines by dataset; a dataset with none may go. a
-/// folder mirror's copy counts once it hashes to its pin, and with the network a web or bucket
-/// mirror or the source serving the file at its size, but for a result's or an import's file,
-/// which no source gives back: only a folder mirror's hashed copy counts for that.
-async fn unfound(
-    context: &Context,
-    named: &[Named<'_>],
-) -> Result<BTreeMap<String, Vec<String>>, Error> {
+/// where each file of `named` is found elsewhere. a folder mirror's copy counts once it hashes to
+/// its pin; with the network, a web or bucket mirror or the source serving the file at its size
+/// counts by its size alone, but never for a result's or an import's file, which no source gives
+/// back.
+async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Error> {
     let locked: Vec<(&Named<'_>, &LockedFile)> = named
         .iter()
         .flat_map(|named| named.files.iter().map(move |file| (named, file)))
@@ -229,15 +347,76 @@ async fn unfound(
         .iter()
         .map(|(named, file)| Pinned::locked(named.name, file, named.page))
         .collect();
-    let results: BTreeSet<&str> = named
-        .iter()
-        .filter(|named| named.result)
-        .map(|named| named.name)
-        .collect();
     let net = Arc::new(context.net());
+    let mut checked = Checked::default();
+    let found = on_folders(context, &net, &locked, &pinned, &mut checked).await?;
+    let mut rest: Vec<Pinned<'_>> = Vec::new();
+    for (at, pinned) in pinned.iter().enumerate().filter(|(at, _)| !found[*at]) {
+        let lacks = checked.lacks(pinned.dataset);
+        // a size from a web or bucket mirror is too little for bytes no source gives back
+        if locked[at].0.result {
+            lacks.lost.push(format!(
+                "{} · no folder mirror holds a copy of this file of a recipe's result that hashes to its pin",
+                pinned.label()
+            ));
+        } else if locked[at].1.url.is_empty() {
+            lacks.lost.push(format!(
+                "{} · it was imported from files, and no folder mirror holds a copy that hashes to its pin",
+                pinned.label()
+            ));
+        } else if context.offline.enabled() {
+            let error = Error::new(
+                Kind::OfflineMissing,
+                "offline, and no folder mirror holds a copy that hashes to its pin",
+            )
+            .help(format!(
+                "{} to ask the web mirrors and sources too",
+                context.offline.retry()
+            ));
+            lacks
+                .unchecked
+                .push((format!("{} · {}", pinned.label(), error.message), error));
+        } else {
+            rest.push(*pinned);
+        }
+    }
+    if rest.is_empty() {
+        return Ok(checked);
+    }
+    let answers = probe::find(context, &net, &rest, Ask::Elsewhere).await?;
+    for (pinned, answer) in rest.iter().zip(answers) {
+        let lacks = checked.lacks(pinned.dataset);
+        let why = match answer {
+            Found::Mirror { .. } | Found::Source => {
+                lacks.sized += 1;
+                continue;
+            }
+            Found::Nowhere(why) => why,
+        };
+        let (lost, outcome) = (why.lost(), why.outcome());
+        let error = why.error(pinned.size);
+        let said = format!("{} · {outcome}: {}", pinned.label(), error.message);
+        if lost {
+            lacks.lost.push(said);
+        } else {
+            lacks.unchecked.push((said, error));
+        }
+    }
+    Ok(checked)
+}
+
+/// which of `pinned` a folder mirror holds a copy of that hashes to its pin, noting in `checked`
+/// the folders that do. fails at a stop.
+async fn on_folders(
+    context: &Context,
+    net: &crate::net::Net,
+    locked: &[(&Named<'_>, &LockedFile)],
+    pinned: &[Pinned<'_>],
+    checked: &mut Checked,
+) -> Result<Vec<bool>, Error> {
     let cache = peek_cache()?;
     let mut found = vec![false; pinned.len()];
-    for index in context.mirrors.up(context, &net).await? {
+    for index in context.mirrors.up(context, net).await? {
         let Location::Folder(root) = &context.mirrors.mirrors.list[index] else {
             continue;
         };
@@ -268,93 +447,89 @@ async fn unfound(
         })?;
         for (at, held) in asked.into_iter().zip(held) {
             // the cache's own file, reached through a link, is no second copy
-            found[at] |= matches!(held, Held::Verified(_))
-                && !folder::is_cache_copy(root, &locked[at].1.sha256, &cache);
+            if matches!(held, Held::Verified(_))
+                && !folder::is_cache_copy(root, &locked[at].1.sha256, &cache)
+            {
+                found[at] = true;
+                let folders = checked.folders.entry(pinned[at].dataset.to_owned());
+                folders.or_default().insert(root.display().to_string());
+            }
         }
     }
-    let mut lacking: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut lack = |pinned: &Pinned<'_>, why: String| {
-        lacking
-            .entry(pinned.dataset.to_owned())
-            .or_default()
-            .push(format!("{} · {why}", pinned.label()));
-    };
-    let mut rest: Vec<Pinned<'_>> = Vec::new();
-    for (at, pinned) in pinned.iter().enumerate().filter(|(at, _)| !found[*at]) {
-        // a web or bucket mirror answers with a size, too little for bytes no source gives back
-        let said = if locked[at].1.url.is_empty() && results.contains(pinned.dataset) {
-            "no folder mirror holds a copy of this file of a recipe's result that hashes to its pin"
-        } else if locked[at].1.url.is_empty() {
-            "it was imported from files, and no folder mirror holds a copy that hashes to its pin"
-        } else if context.offline.enabled() {
-            "offline, and no folder mirror holds a copy that hashes to its pin"
-        } else {
-            rest.push(*pinned);
-            continue;
-        };
-        lack(pinned, said.to_owned());
-    }
-    if rest.is_empty() {
-        return Ok(lacking);
-    }
-    let answers = probe::find(context, &net, &rest, Ask::Elsewhere).await?;
-    for (pinned, answer) in rest.iter().zip(answers) {
-        if let Found::Nowhere(why) = answer {
-            let said = format!("{}: {}", why.outcome(), why.error(pinned.size).message);
-            lack(pinned, said);
-        }
-    }
-    Ok(lacking)
+    Ok(found)
 }
 
-/// the error naming each dataset of `asked` that `lacking` keeps, with each file found nowhere,
-/// none when every one may go. `offline`, only a folder mirror was asked; `folder`, a kept file
-/// counts only on a folder mirror.
-fn refused(
-    lacking: &BTreeMap<String, Vec<String>>,
-    asked: &[String],
-    offline: crate::net::Offline,
-    folder: bool,
-) -> Option<Error> {
+/// the error naming each dataset of `asked` that `checked` keeps, none when every one may go:
+/// `data.not_ready` for a file no mirror or source has; else, for files that could not be checked,
+/// the error a download of one would meet, a refusal's first; else `unconfirmed` for files checked
+/// by their size alone, which `yes` lets go.
+fn refused(checked: &Checked, asked: &[String], yes: bool) -> Option<Error> {
     let kept: Vec<&str> = asked
         .iter()
         .map(String::as_str)
-        .filter(|name| lacking.contains_key(*name))
+        .filter(|name| checked.keeps(name, yes))
         .collect();
     let first = kept.first()?;
-    let lines: Vec<&String> = kept.iter().flat_map(|name| &lacking[*name]).collect();
+    let lacks: Vec<&Lacks> = kept.iter().map(|name| &checked.lacks[*name]).collect();
     let (said, them) = match kept.as_slice() {
         [_] => (format!("{first} stays"), "its"),
         many => (format!("{} stay", units::listed(many, "and")), "their"),
     };
     let it = if kept.len() == 1 { "it" } else { "them" };
-    let error = if offline.enabled() {
+    let names = kept.join(" ");
+    let push = format!(
+        "`{}` keeps a copy on a folder mirror, then `{}` frees {it}",
+        super::project::command(&format!("push {names} --to <folder>")),
+        super::project::command(&format!("drop {names} --mirror <folder>"))
+    );
+    let lost: Vec<&String> = lacks.iter().flat_map(|lacks| &lacks.lost).collect();
+    if !lost.is_empty() {
+        return Some(
+            Error::new(
+                Kind::NotReady,
+                format!(
+                    "{said} on this machine, since no mirror or source has {} of {them} files",
+                    units::grouped(lost.len() as u64)
+                ),
+            )
+            .details_up_to(&lost, NAMED)
+            .help(push),
+        );
+    }
+    let unchecked: Vec<&(String, Error)> =
+        lacks.iter().flat_map(|lacks| &lacks.unchecked).collect();
+    if let Some((_, error)) = unchecked
+        .iter()
+        .min_by_key(|(_, error)| probe::urgency(error.kind))
+    {
+        let lines: Vec<&String> = unchecked.iter().map(|(line, _)| line).collect();
+        return Some(
+            Error::new(
+                error.kind,
+                format!(
+                    "{said} on this machine, since {} of {them} files could not be checked elsewhere",
+                    units::grouped(lines.len() as u64)
+                ),
+            )
+            .details_up_to(&lines, NAMED)
+            .help(error.help.as_deref().unwrap_or(probe::AGAIN)),
+        );
+    }
+    let sized: u64 = lacks.iter().map(|lacks| lacks.sized).sum();
+    Some(
         Error::new(
-            Kind::OfflineMissing,
+            Kind::Unconfirmed,
             format!(
-                "{said} on this machine, since offline only a folder mirror is asked, and none has {} of {them} files",
-                units::grouped(lines.len() as u64)
+                "{said} on this machine, since {} of {them} files {} checked elsewhere by size alone, which does not show the bytes are the same",
+                units::grouped(sized),
+                if sized == 1 { "was" } else { "were" }
             ),
         )
         .help(format!(
-            "{} to ask the web mirrors and sources too",
-            offline.retry()
-        ))
-    } else {
-        Error::new(
-            Kind::ReferenceUnresolved,
-            format!(
-                "{said} on this machine, since no mirror or source has {} of {them} files",
-                units::grouped(lines.len() as u64)
-            ),
-        )
-        .help(format!(
-            "`{}` keeps a copy of each on a {}mirror first, then drop {it}",
-            super::project::command(&format!("push {}", kept.join(" "))),
-            if folder { "folder " } else { "" }
-        ))
-    };
-    Some(error.details_up_to(&lines, NAMED))
+            "{push}; or `{}` frees {it} on the sizes alone",
+            super::project::command(&format!("drop {names} --yes"))
+        )),
+    )
 }
 
 /// `manifest` as a sync of every dataset reads it while `dropped` are dropped here: each with
@@ -397,12 +572,38 @@ pub(super) fn brought_back(survey: &mut Survey, scope: &Scope) {
     let Scope::Only(names) = scope else {
         return;
     };
-    let before = survey.state.dropped.len();
-    survey.state.dropped.retain(|name| !names.contains(name));
-    if survey.state.dropped.len() != before {
-        survey.state.synced = None;
-        survey.needs_writing = true;
+    let back: BTreeSet<String> = survey
+        .state
+        .dropped
+        .iter()
+        .filter(|name| names.contains(*name))
+        .cloned()
+        .collect();
+    if back.is_empty() {
+        return;
     }
+    survey.state.dropped.retain(|name| !back.contains(name));
+    let disk = &survey.disk;
+    forget_gone(
+        &mut survey.state.files,
+        |placed| placed.dataset.as_str(),
+        &back,
+        |path| disk.contains_key(path),
+    );
+    survey.state.synced = None;
+    survey.needs_writing = true;
+}
+
+/// forgets the records in `files` of the datasets `back` whose files are gone from disk, as
+/// `there` says: a drop cut short took them, so placing them again puts back nothing a person
+/// deleted.
+fn forget_gone<V>(
+    files: &mut BTreeMap<String, V>,
+    dataset: impl Fn(&V) -> &str,
+    back: &BTreeSet<String>,
+    there: impl Fn(&str) -> bool,
+) {
+    files.retain(|path, placed| !back.contains(dataset(placed)) || there(path));
 }
 
 /// `lock` without the datasets `dropped` here, as the cache's needs read this project.
@@ -496,9 +697,29 @@ fn preview(
             units::count(report.objects, "file", "files")
         ),
     );
-    place::tell_preview(&context.output, &without, &scope, &preview);
+    tell_kept(&context.output, &preview.placement, "would keep");
     report.placement = Some(preview.placement);
     Ok(())
+}
+
+/// a warning for each changed file a drop keeps, or with `verb` "would keep", would keep.
+fn tell_kept(output: &crate::output::Output, placement: &Placement, verb: &str) {
+    for kept in &placement.kept {
+        output.warn(
+            Warning::PlaceKept,
+            &format!(
+                "{} has changed since fetchloom placed it, so drop {verb} it",
+                kept.path
+            ),
+        );
+    }
+}
+
+/// notes `freeing` as dropped here in the state.
+fn mark(project: &crate::project::Project, freeing: &BTreeSet<String>) -> Result<(), Error> {
+    let (mut state, _) = project.state();
+    state.dropped.extend(freeing.iter().cloned());
+    project.write_state(&state)
 }
 
 /// drops `freeing`: removes their unchanged files from the data folder, marks them dropped in the
@@ -520,12 +741,13 @@ fn free(
     // the last look for a stop: once files go, the drop runs to its end
     context.stop.check()?;
     context.stop.finish();
-    let placement = placing.remove_only(&context.output)?;
-    // noted once its files are gone, before any cache file goes, so a drop cut short between
-    // the two leaves what a later gc frees
-    let (mut state, _) = project.state();
-    state.dropped.extend(freeing.iter().cloned());
-    project.write_state(&state)?;
+    // noted before any file goes, so a drop cut short leaves them dropped: a plain sync leaves
+    // them out and one naming a dataset places it again, and a later gc frees their cache files
+    mark(project, freeing)?;
+    let placement = placing.remove_quietly(&context.output)?;
+    // placing forgets the notes of datasets its manifest lacks, as these are there
+    mark(project, freeing)?;
+    tell_kept(&context.output, &placement, "keeps");
     let removed: u64 = copies
         .iter()
         .filter(|(path, _)| !project.root.join(path).exists())
@@ -632,4 +854,31 @@ fn held(cache: &Cache, lock: &Lock, freeing: &BTreeSet<String>) -> Objects {
         }
     }
     held
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// a dataset brought back loses the records of its files a drop cut short took, and keeps
+    /// those still on disk; another dataset's records stay as they are.
+    #[test]
+    fn a_drop_cut_short_leaves_no_file_a_person_deleted() {
+        let mut files: BTreeMap<String, String> = [
+            ("data/many/a.csv", "many"),
+            ("data/many/b.csv", "many"),
+            ("data/iris/iris.csv", "iris"),
+        ]
+        .into_iter()
+        .map(|(path, dataset)| (path.to_owned(), dataset.to_owned()))
+        .collect();
+        let back = BTreeSet::from(["many".to_owned()]);
+        forget_gone(&mut files, String::as_str, &back, |path| {
+            path == "data/many/b.csv"
+        });
+        assert_eq!(
+            files.keys().collect::<Vec<_>>(),
+            ["data/iris/iris.csv", "data/many/b.csv"]
+        );
+    }
 }
