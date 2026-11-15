@@ -147,8 +147,8 @@ def sync(
     ``sync --strict`` does, when the data is not ready to use afterwards: a file it kept, a
     recipe's result not on this machine, or a dataset data.lock does not pin as data.toml
     asks, each named in ``details`` with what makes it ready. ``yes=True`` approves a
-    download above 1 GiB, or the size ``FETCHLOOM_ASK_ABOVE`` sets, which otherwise raises kind
-    ``unconfirmed``. ``offline=True`` prevents network requests. ``locked=True`` raises kind
+    download above 10 GiB, or the size the ``ask_above`` setting gives, which otherwise raises
+    kind ``unconfirmed``. ``offline=True`` prevents network requests. ``locked=True`` raises kind
     ``lock.outdated`` instead of updating a missing or out-of-date data.lock, for the named
     datasets alone when ``names`` names some, and kind ``build.needed`` for a recipe data.lock
     does not pin as building it now would make, which only ``fetchloom build`` changes.
