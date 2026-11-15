@@ -1039,7 +1039,18 @@ fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, V
             &err,
         )
     })?;
-    target.sweep(SystemTime::now());
+    let (removed, bytes) = target.sweep(SystemTime::now());
+    if removed > 0 {
+        context.output.step(
+            "Removed",
+            &format!(
+                "{} \u{b7} {} that a stopped push left in {}",
+                units::count(removed, "unfinished file", "unfinished files"),
+                units::size(bytes),
+                root.join("tmp").display()
+            ),
+        );
+    }
     let (files, lists): (Vec<_>, Vec<_>) = copy
         .into_iter()
         .partition(|(needed, _)| !matches!(needed.source, Source::List(_)));

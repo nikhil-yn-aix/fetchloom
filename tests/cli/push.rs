@@ -789,3 +789,36 @@ fn verify_replaces_a_damaged_copy_of_the_right_size() -> Result {
     );
     Ok(())
 }
+
+/// the unfinished files of a push that was killed go with the next push, which says so.
+#[test]
+fn a_push_removes_what_a_killed_push_left_and_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    let push = || {
+        sandbox
+            .command(&["--yes", "push", "--to"])
+            .arg(&root)
+            .output()
+    };
+    ok(&push()?)?;
+    // what a push killed while it wrote leaves: its lock, held by nobody now, and a part
+    let tmp = root.join("tmp");
+    fs::write(tmp.join(".0123456789abcdef.lock"), b"")?;
+    let part = tmp.join(".0123456789abcdef-00000000000000aa.part");
+    fs::write(&part, b"0123456789")?;
+    let again = push()?;
+    ok(&again)?;
+    let stderr = text(&again.stderr)?;
+    assert!(
+        stderr.contains(&format!(
+            "Removed 1 unfinished file \u{b7} 10 B that a stopped push left in {}",
+            tmp.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!part.exists());
+    assert_eq!(fs::read_dir(&tmp)?.count(), 0);
+    Ok(())
+}

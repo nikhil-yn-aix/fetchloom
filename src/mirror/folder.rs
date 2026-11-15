@@ -292,8 +292,11 @@ const TMP: &str = "tmp";
 /// meanwhile; fewer files pay more for making the folders than they save.
 const SHARD_FROM: usize = 500;
 
-/// how long a killed push's unfinished file stays in `tmp/` before a later push removes it.
+/// how long an unfinished file no lock accounts for stays in `tmp/` before a later push removes
+/// it, as one an older fetchloom left.
 const STALE: Duration = Duration::from_hours(24);
+/// the end of the name of the lock a push holds in `tmp/` while it writes.
+const LOCK: &str = ".lock";
 
 /// a file a push writes: a pinned file under [`OBJECTS`](super::OBJECTS) or an archive's file list
 /// under [`TREES`](super::TREES), named by the SHA-256 its bytes must have.
@@ -529,6 +532,10 @@ pub(crate) struct Target {
     shard_from: usize,
     /// whether this push writes them there, as [`Target::prepare`] decided.
     sharded: bool,
+    /// the 16 hex digits this push's unfinished files are named with, and the lock it holds in
+    /// `tmp/` under them while it writes, which tells a later push whether it stopped.
+    id: String,
+    held: Option<(PathBuf, File)>,
 }
 
 impl Target {
@@ -542,6 +549,8 @@ impl Target {
             stop,
             shard_from: SHARD_FROM,
             sharded: false,
+            id: format!("{:016x}", fastrand::u64(..)),
+            held: None,
         };
         if state == State::Mirror {
             return Ok((target, false));
@@ -611,6 +620,20 @@ impl Target {
                 return Err(no_folder(&self.root, &name, err));
             }
         }
+        self.hold()
+    }
+
+    /// locks a file in `tmp/` named for this push, for as long as it writes, so a later push can
+    /// tell its unfinished files from those of a push that stopped.
+    fn hold(&mut self) -> io::Result<()> {
+        if self.held.is_some() {
+            return Ok(());
+        }
+        let lock = self.root.join(TMP).join(format!(".{}{LOCK}", self.id));
+        let file = self.placer.create_file(&lock, false)?;
+        // a push that sweeps may hold it a moment to see whether it is free
+        file.lock()?;
+        self.held = Some((lock, file));
         Ok(())
     }
 
@@ -773,34 +796,65 @@ impl Target {
         self.publish(&mut written.temp, &item, written.there)
     }
 
-    /// removes unfinished push files in `tmp/` and the folders below it a day older than `now`,
-    /// and nothing else there; a link in place of such a folder is never followed.
-    pub(crate) fn sweep(&self, now: SystemTime) {
+    /// removes the unfinished files pushes left in `tmp/` and the folders below it: at once those
+    /// of a push whose lock nobody holds now, which stopped, and any other a day older than `now`.
+    /// a link in place of such a folder is never followed. says how many went, and their bytes.
+    pub(crate) fn sweep(&self, now: SystemTime) -> (u64, u64) {
         let Ok(entries) = fs::read_dir(self.root.join(TMP)) else {
-            return;
+            return (0, 0);
         };
-        for entry in entries.flatten() {
+        let entries: Vec<fs::DirEntry> = entries.flatten().collect();
+        let stopped: Vec<(String, PathBuf)> = entries
+            .iter()
+            .filter_map(|entry| {
+                let name = entry.file_name();
+                let id = name.to_str()?.strip_prefix('.')?.strip_suffix(LOCK)?;
+                let free = is_id(id) && id != self.id && unlocked(&entry.path());
+                free.then(|| (id.to_owned(), entry.path()))
+            })
+            .collect();
+        let ids: Vec<&str> = stopped.iter().map(|(id, _)| id.as_str()).collect();
+        let mut swept = (0, 0);
+        for entry in &entries {
             let shard = entry.file_name().to_str().is_some_and(is_shard)
                 && entry.file_type().is_ok_and(|kind| kind.is_dir());
             if !shard {
-                self.sweep_one(&entry, now);
+                self.sweep_one(entry, now, &ids, &mut swept);
             } else if let Ok(inner) = fs::read_dir(entry.path()) {
                 for entry in inner.flatten() {
-                    self.sweep_one(&entry, now);
+                    self.sweep_one(&entry, now, &ids, &mut swept);
                 }
             }
         }
+        for (_, lock) in stopped {
+            let _ = self.placer.delete_file(&lock);
+        }
+        swept
     }
 
-    /// removes `entry` when it is an unfinished push file a day older than `now`.
-    fn sweep_one(&self, entry: &fs::DirEntry, now: SystemTime) {
-        let unfinished = entry.file_name().to_str().is_some_and(is_unfinished);
-        let old = entry
-            .metadata()
-            .and_then(|found| found.modified())
+    /// removes `entry` when it is an unfinished file of a push among `stopped`, or a day older
+    /// than `now`, adding it to `swept`.
+    fn sweep_one(
+        &self,
+        entry: &fs::DirEntry,
+        now: SystemTime,
+        stopped: &[&str],
+        swept: &mut (u64, u64),
+    ) {
+        let name = entry.file_name();
+        let Some(name) = name.to_str().filter(|name| is_unfinished(name)) else {
+            return;
+        };
+        let Ok(found) = entry.metadata() else {
+            return;
+        };
+        let old = found
+            .modified()
             .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age > STALE));
-        if unfinished && old {
-            let _ = self.placer.delete_file(&entry.path());
+        let orphan = writer(name).is_some_and(|id| stopped.contains(&id));
+        if (old || orphan) && self.placer.delete_file(&entry.path()).is_ok() {
+            swept.0 += 1;
+            swept.1 += found.len();
         }
     }
 
@@ -825,7 +879,7 @@ impl Target {
         let folder = self.root.join(TMP);
         let folder = shard.map_or_else(|| folder.clone(), |shard| folder.join(shard));
         loop {
-            let path = folder.join(format!(".{:016x}.part", fastrand::u64(..)));
+            let path = folder.join(format!(".{}-{:016x}.part", self.id, fastrand::u64(..)));
             match self.placer.create_file(&path, true) {
                 Ok(file) => {
                     return Ok(Temporary {
@@ -863,6 +917,15 @@ impl Temporary<'_> {
     }
 }
 
+impl Drop for Target {
+    fn drop(&mut self) {
+        if let Some((lock, file)) = self.held.take() {
+            drop(file);
+            let _ = self.placer.delete_file(&lock);
+        }
+    }
+}
+
 impl Drop for Temporary<'_> {
     fn drop(&mut self) {
         if !self.named {
@@ -878,12 +941,30 @@ fn is_shard(name: &str) -> bool {
     matches!(name.as_bytes(), [b'0'..=b'9' | b'a'..=b'f'])
 }
 
+/// whether `name` is a push's unfinished file: `.<16 hex>.part`, or `.<id>-<16 hex>.part` with
+/// the id of the push that writes it.
 fn is_unfinished(name: &str) -> bool {
     name.strip_prefix('.')
         .and_then(|name| name.strip_suffix(".part"))
-        .is_some_and(|random| {
-            random.len() == 16 && random.bytes().all(|byte| byte.is_ascii_hexdigit())
+        .is_some_and(|rest| match rest.split_once('-') {
+            Some((id, random)) => is_id(id) && is_id(random),
+            None => is_id(rest),
         })
+}
+
+/// the id of the push that writes the unfinished file `name`, when its name carries one.
+fn writer(name: &str) -> Option<&str> {
+    let (id, _) = name.strip_prefix('.')?.split_once('-')?;
+    is_id(id).then_some(id)
+}
+
+fn is_id(text: &str) -> bool {
+    text.len() == 16 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// whether nobody holds the lock at `path`, so the push that took it stopped without removing it.
+fn unlocked(path: &Path) -> bool {
+    read_unfollowed(path).is_ok_and(|file| file.try_lock().is_ok())
 }
 
 /// whether `name` is a plain file of `size` bytes, which a mirror's reader takes for its bytes
@@ -1173,6 +1254,11 @@ pub(crate) mod tests {
         let paths: Vec<PathBuf> = fs::read_dir(root.join(TMP))
             .unwrap()
             .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_unfinished)
+            })
             .collect();
         for path in paths {
             let mut bytes = fs::read(&path).unwrap();
@@ -1400,6 +1486,8 @@ pub(crate) mod tests {
                 found.push(path);
             }
         }
+        // the lock a push holds while it writes is no unfinished file
+        found.retain(|path| !path.to_string_lossy().ends_with(LOCK));
         found
     }
 
@@ -1609,6 +1697,48 @@ pub(crate) mod tests {
             assert!(!place(&target.root, OBJECTS, &crate::digest::sha256(bytes)).exists());
         }
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
+    }
+
+    /// the unfinished files of a push whose lock nobody holds go at once, with its lock, and are
+    /// counted; a running push's, and a fresh one no lock accounts for, stay.
+    #[test]
+    fn a_stopped_pushs_unfinished_files_go_at_once() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        let (mut target, _) = Target::open(&root, std::sync::Arc::default()).unwrap();
+        target.prepare(&[]).unwrap();
+        let tmp = root.join(TMP);
+        let (stopped, running) = ("0123456789abcdef", "fedcba9876543210");
+        fs::write(tmp.join(format!(".{stopped}{LOCK}")), b"").unwrap();
+        fs::write(
+            tmp.join(format!(".{stopped}-00000000000000aa.part")),
+            b"0123456789",
+        )
+        .unwrap();
+        let held = File::create(tmp.join(format!(".{running}{LOCK}"))).unwrap();
+        held.try_lock().unwrap();
+        fs::write(
+            tmp.join(format!(".{running}-00000000000000bb.part")),
+            b"live",
+        )
+        .unwrap();
+        fs::write(tmp.join(".00000000000000cc.part"), b"older fetchloom").unwrap();
+        assert_eq!(target.sweep(SystemTime::now()), (1, 10));
+        let mut left: Vec<String> = fs::read_dir(&tmp)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.starts_with(&format!(".{}", target.id)))
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                ".00000000000000cc.part",
+                ".fedcba9876543210-00000000000000bb.part",
+                ".fedcba9876543210.lock",
+            ]
+        );
+        drop(held);
     }
 
     /// each file stays under its temporary name, which no reader asks for and a later push sweeps.
