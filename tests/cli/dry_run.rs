@@ -365,10 +365,100 @@ fn cache_gc_dry_run_tells_its_lines_as_the_real_gc_does() -> Result {
     Ok(())
 }
 
+/// a dry add asks a plain link for its first byte where the add downloads the file: it names the
+/// dataset and its file as the server does, as the add then does, and fails where the add would.
+#[test]
+fn an_add_dry_run_asks_the_link_as_the_add_would() -> Result {
+    use crate::support::reply;
+    let sandbox = Sandbox::new()?;
+    let named = || {
+        reply(
+            "200 OK",
+            &[
+                ("Content-Length", "32"),
+                ("ETag", "\"r1\""),
+                (
+                    "Content-Disposition",
+                    "attachment; filename=\"report-2024.csv\"",
+                ),
+            ],
+            IRIS,
+        )
+    };
+    let server = Server::start(
+        "/disp/flowers.csv",
+        vec![named(), named(), named(), named()],
+    )?;
+    let before = tree(&sandbox.work())?;
+    let output = sandbox.run(&["add", &server.url, "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Would fetch report-2024/report-2024.csv · 32 B\n"),
+        "{stderr}"
+    );
+    let document = json(&sandbox.run(&["--json", "add", &server.url, "-n"])?)?;
+    assert_eq!(
+        document["result"]["datasets"],
+        serde_json::json!(["report-2024"]),
+        "{document}"
+    );
+    let renamed = text(
+        &sandbox
+            .run(&["add", &server.url, "--as", "rep", "-n"])?
+            .stderr,
+    )?;
+    assert!(
+        renamed.contains("Would fetch rep/report-2024.csv · 32 B\n"),
+        "{renamed}"
+    );
+    let asked = server.requests();
+    assert_eq!(asked.len(), 3);
+    assert!(
+        asked
+            .iter()
+            .all(|head| head.to_ascii_lowercase().contains("range: bytes=0-0")),
+        "{asked:?}"
+    );
+    assert_eq!(tree(&sandbox.work())?, before);
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert!(
+        sandbox
+            .work()
+            .join("data/report-2024/report-2024.csv")
+            .is_file()
+    );
+    // nothing at the link, or no answer at all: the dry run fails as the add does
+    let gone = || reply("404 Not Found", &[("Content-Length", "0")], b"");
+    let missing = Server::start(PATH, vec![gone(), gone()])?;
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    for link in [missing.url.clone(), format!("http://{closed}{PATH}")] {
+        let run = |args: &[&str]| sandbox.command(args).env("FETCHLOOM_RETRIES", "0").output();
+        let dry = run(&["--json", "add", &link, "--dry-run"])?;
+        let real = run(&["--json", "add", &link])?;
+        assert_ne!(real.status.code(), Some(0), "{link}");
+        assert_eq!(
+            dry.status.code(),
+            real.status.code(),
+            "{link}: {}",
+            text(&dry.stdout)?
+        );
+        assert_eq!(
+            json(&dry)?["errors"][0]["kind"],
+            json(&real)?["errors"][0]["kind"],
+            "{link}"
+        );
+    }
+    Ok(())
+}
+
+/// a dry add asks the link for its first byte only, and writes nothing.
 #[test]
 fn add_dry_run_writes_nothing_and_downloads_nothing() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let iris = || file(IRIS, "\"v1\"");
+    let server = Server::start(PATH, vec![iris(), iris(), iris()])?;
     fs::create_dir(sandbox.work().join(".git"))?;
     let project = tree(&sandbox.work())?;
     let output = sandbox.run(&["add", &server.url, "--dry-run"])?;
@@ -389,7 +479,7 @@ fn add_dry_run_writes_nothing_and_downloads_nothing() -> Result {
     );
     assert_eq!(
         result["changes"]["download"],
-        serde_json::json!([{ "path": "iris/iris.csv", "size": null }])
+        serde_json::json!([{ "path": "iris/iris.csv", "size": 32 }])
     );
     assert_eq!(
         tree(&sandbox.work())?,
@@ -397,7 +487,14 @@ fn add_dry_run_writes_nothing_and_downloads_nothing() -> Result {
         "no data.toml, lock or data/"
     );
     assert!(!sandbox.cache().exists(), "no cache");
-    assert_eq!(server.requests().len(), 0);
+    let asked = server.requests();
+    assert_eq!(asked.len(), 2);
+    assert!(
+        asked
+            .iter()
+            .all(|head| head.to_ascii_lowercase().contains("range: bytes=0-0")),
+        "{asked:?}"
+    );
 
     added(&sandbox, &server)?;
     let project = tree(&sandbox.work())?;
@@ -440,7 +537,11 @@ fn a_dry_run_leaves_an_empty_cache_folder_empty() -> Result {
         );
     }
     assert_eq!(tree(&sandbox.work())?, project);
-    assert_eq!(other.requests().len(), 0);
+    assert_eq!(
+        other.requests().len(),
+        1,
+        "the dry add asks for the first byte"
+    );
     Ok(())
 }
 
@@ -612,7 +713,7 @@ fn a_dry_run_audits_damaged_read_only_hardlinks() -> Result {
 #[test]
 fn a_file_already_in_place_is_not_called_different_before_the_download() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     fs::create_dir_all(placed.parent().ok_or("a placed file has a folder")?)?;
     fs::write(&placed, IRIS)?;
@@ -638,11 +739,11 @@ fn a_file_already_in_place_is_not_called_different_before_the_download() -> Resu
     assert_eq!(changes["replace"], serde_json::json!([]), "{document}");
     assert_eq!(
         changes["download"],
-        serde_json::json!([{ "path": "iris/iris.csv", "size": null }]),
+        serde_json::json!([{ "path": "iris/iris.csv", "size": 32 }]),
         "{document}"
     );
     assert_eq!(tree(&sandbox.work())?, project);
-    assert_eq!(server.requests().len(), 0);
+    assert_eq!(server.requests().len(), 2, "a first byte for each dry run");
     Ok(())
 }
 

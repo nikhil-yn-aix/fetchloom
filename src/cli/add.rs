@@ -663,10 +663,22 @@ async fn add_held(
         }
         return again(&work, adding, old, &present, dry_run, here).await;
     }
-    // a dry run downloads nothing, so it names the dataset from the link alone. patterns were
-    // written against the link's own name, which the server's name would replace before they apply
+    // a dry run asks for each lone file's first byte where the add downloads it, so it names the
+    // dataset as the add does and fails where the add would. patterns were written against the
+    // link's own name, which the server's name would replace before they apply
     let patterns = !args.filter.select.is_empty() || !args.filter.exclude.is_empty();
-    if args.name.is_none() && !dry_run && !patterns && !args.no_sync {
+    if dry_run && !args.no_sync {
+        foresee_names(
+            context,
+            &net,
+            &cache,
+            vec![&mut addition.listing],
+            (!args.no_extract, args.web_page),
+            !patterns,
+        )
+        .await
+        .map_err(|error| typed(error, false))?;
+    } else if args.name.is_none() && !dry_run && !patterns && !args.no_sync {
         learn_names(
             context,
             &net,
@@ -1812,6 +1824,74 @@ async fn learn_names(
     context
         .output
         .step("Downloaded", &format!("{what} · {moved}"));
+    Ok(())
+}
+
+/// asks the server of each lone file whose name only its server knows for the file's first byte,
+/// where an add downloads it to learn that name: a dry run then names the dataset and its file as
+/// the add would, with the size the server states, and fails where the add would. offline, the
+/// last download of the link the cache keeps answers instead, as it does for the add. with
+/// `rename` false, as patterns written against the link's own name ask, the file keeps that name.
+async fn foresee_names(
+    context: &Context,
+    net: &Net,
+    cache: &crate::cache::Cache,
+    listings: Vec<&mut Listing>,
+    (extract, page): (bool, bool),
+    rename: bool,
+) -> Result<(), Error> {
+    use crate::net::Probed;
+    for listing in listings {
+        let [remote] = listing.files.as_mut_slice() else {
+            continue;
+        };
+        if !remote.named_by_server {
+            continue;
+        }
+        let mut job = fetch::listed_job(remote, &remote.path, extract);
+        job.fetch.page = page;
+        if context.offline.enabled() {
+            // offline, the add takes the link's last download the cache keeps, or stops
+            let Some(record) = job.fetch.remembered(cache) else {
+                return Err(crate::net::offline_missing(
+                    &remote.url,
+                    context.offline,
+                    false,
+                ));
+            };
+            if rename {
+                if let Some(given) = record.name.as_deref().and_then(name::sanitize) {
+                    remote.path = given;
+                }
+                remote.named_by_server = false;
+            }
+            remote.sha256 = Some(record.sha256);
+            remote.size = Some(record.size);
+            continue;
+        }
+        let asked = {
+            let _asking = context.output.wait(
+                "Asking",
+                format!(
+                    "{} for the file's name and size",
+                    crate::net::host(&remote.url)
+                ),
+            );
+            net.probe(&job.fetch).await?
+        };
+        match asked {
+            Probed::File { total, name, .. } => {
+                if rename {
+                    if let Some(given) = name.as_deref().and_then(name::sanitize) {
+                        remote.path = given;
+                    }
+                    remote.named_by_server = false;
+                }
+                remote.size = remote.size.or(total);
+            }
+            Probed::Answered { error, .. } | Probed::Unanswered(error) => return Err(error),
+        }
+    }
     Ok(())
 }
 

@@ -192,11 +192,11 @@ a first add that ends without adding anything, because it failed, was stopped or
 
 ## dry run
 
-`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. it still resolves the link, so a source may be asked what the link holds, as [kaggle](../sources/kaggle.md) is for a competition. stderr from a git repository with no manifest yet, from a test snapshot, where `[port]` stands for the test server's port:
+`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. it still resolves the link, so a source may be asked what the link holds, as [kaggle](../sources/kaggle.md) is for a competition, and a link whose file only its server names is asked for that file's first byte. stderr from a git repository with no manifest yet, from a test snapshot, where `[port]` stands for the test server's port:
 
 ```text
-      Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · size unknown
-      Would fetch iris/iris.csv · size unknown
+      Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · 32 B
+      Would fetch iris/iris.csv · 32 B
       Would place data/iris · 1 file
       Would add data/ to .gitignore, since its files come from data.lock
       Would add iris to data.toml, its files in data/iris
@@ -205,7 +205,7 @@ a first add that ends without adding anything, because it failed, was stopped or
 
 `add <path> --dry-run` reads no file's bytes: it names the files it would import, their count and size, and the dataset it would add, and lists their places in `changes.place`. it cannot tell yet whether the same files are in data.toml already.
 
-the plan covers the datasets the add adds, as the real addition does. a file whose hash only a download can tell counts as one to place, or as one to check, under `Would check`, when a file already stands where it goes. an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link; pass `--as` to fix the name. a plain link is asked nothing, so what only the real add finds shows then, as [URLs and DOIs](../sources/urls-and-dois.md#dry-runs) shows. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+the plan covers the datasets the add adds, as the real addition does. a file whose hash only a download can tell counts as one to place, or as one to check, under `Would check`, when a file already stands where it goes. an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives, as a plain link's, is asked for the file's first byte, so the dry run names the dataset and its file as the add will, with the size the server states, and fails where the add would, as when nothing is at the link; with `--select` or `--exclude`, whose patterns match the link's own name, it keeps naming the file after the link. what only the download tells, such as a web page in place of a file, shows in the real add, as [URLs and DOIs](../sources/urls-and-dois.md#dry-runs) shows. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## generated names
 

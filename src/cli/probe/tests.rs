@@ -31,7 +31,11 @@ fn answered(status: u16, kind: Kind) -> Probed {
 /// what it says of the file. a page is the file only where one may be.
 #[test]
 fn an_answer_is_served_only_at_the_pinned_size() {
-    let file = |total, page| Probed::File { total, page };
+    let file = |total, page| Probed::File {
+        total,
+        page,
+        name: None,
+    };
     let cases = [
         (file(Some(10), false), false, ("served", None)),
         (file(Some(12), false), false, ("changed", Some(12))),

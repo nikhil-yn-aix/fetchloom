@@ -73,7 +73,8 @@ async fn the_files_of_one_host_share_a_few_connections() {
                 probed,
                 Probed::File {
                     total: Some(10),
-                    page: false
+                    page: false,
+                    ..
                 }
             ),
             "{probed:?}"

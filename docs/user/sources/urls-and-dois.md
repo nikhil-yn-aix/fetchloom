@@ -71,13 +71,14 @@ the rule holds for a page fetchloom kept before, too: a later run without `--web
 
 ## dry runs
 
-`add --dry-run` with a link asks its server nothing, so it says `size unknown`, and what only an answer tells waits for the real add: a web page in place of a file, a host at a private address that `allowed_origins` does not name, where a redirect leads, and what an archive holds. so a dry run can end `Ok dry run` for a link the add then refuses, as the folder link above is refused. from a real run against a server on this machine, where `--json` counted 0 requests:
+`add --dry-run` with a link asks its server for the file's first byte, where the add downloads the file, and reads no more. so it names the dataset and its file as the server names them, as the add then does, says the size the server states, and fails as the add would where the host does not answer, nothing is at the link, the server refuses it, or it is at a private address that `allowed_origins` does not name. offline, the link's last download the cache keeps answers, as it does for the add, or the dry run stops as the add does. what only the download tells waits for the real add: a web page in place of a file, and what an archive holds. so a dry run can end `Ok dry run` for a link the add then refuses, as the folder link above is refused. from a real run against a server on this machine, where `--json` counted 1 request:
 
 ```sh
-$ fetchloom add --dry-run http://127.0.0.1:19354/many/
-      Would pin many, new in data.lock: http://127.0.0.1:19354/many/ · 1 file · size unknown
-      Would fetch many/many · size unknown
+$ fetchloom add --dry-run http://127.0.0.1:8791/many/
+      Would pin many, new in data.lock: http://127.0.0.1:8791/many/ · 1 file · 232 B
+      Would fetch many/many · 232 B
       Would place data/many · 1 file
+      Would add data/ to .gitignore, since its files come from data.lock
       Would add many to data.toml, its files in data/many
          Ok dry run, nothing was changed
 ```

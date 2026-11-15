@@ -16,9 +16,14 @@ use crate::work::Work;
 /// what a link answered to a request for a file's first byte.
 #[derive(Debug)]
 pub(crate) enum Probed {
-    /// the file or its first byte: the whole file's size when the answer states it, and whether
-    /// the answer is a web page that names no file.
-    File { total: Option<u64>, page: bool },
+    /// the file or its first byte: the whole file's size when the answer states it, whether the
+    /// answer is a web page that names no file, and the name the server gives the file, which a
+    /// download of the link takes.
+    File {
+        total: Option<u64>,
+        page: bool,
+        name: Option<String>,
+    },
     /// an answer that is no file, with the error a download would end with: a refusal with its
     /// sign-in hint, nothing at the link, or another status.
     Answered { status: u16, error: Error },
@@ -164,18 +169,29 @@ impl Net {
         let empty = (status == StatusCode::RANGE_NOT_SATISFIABLE)
             .then(|| headers::total_length(&head, StatusCode::PARTIAL_CONTENT))
             .flatten();
+        let served = |response: &reqwest::Response| super::served_name(response, &fetch.url);
         match status {
             StatusCode::OK | StatusCode::PARTIAL_CONTENT => {
                 let total = headers::total_length(&head, status);
                 let page = headers::is_html(&head) && headers::file_name(&head).is_none();
+                let name = match served(&response) {
+                    Ok(name) => name,
+                    Err(error) => {
+                        return Ok(Step::Probed(Probed::Answered {
+                            status: status.as_u16(),
+                            error,
+                        }));
+                    }
+                };
                 if status == StatusCode::PARTIAL_CONTENT {
                     self.read_byte(from, response).await?;
                 }
-                Ok(Step::Probed(Probed::File { total, page }))
+                Ok(Step::Probed(Probed::File { total, page, name }))
             }
             _ if empty.is_some() => Ok(Step::Probed(Probed::File {
                 total: empty,
                 page: false,
+                name: served(&response).ok().flatten(),
             })),
             status => match self.status_refusal(from, status, &head) {
                 Failure::Final(error) => Ok(Step::Probed(Probed::Answered {

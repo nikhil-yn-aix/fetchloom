@@ -61,7 +61,18 @@ pub(super) async fn add_list_held(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut lines = FromLine::each(&list);
-    if !dry_run {
+    if dry_run {
+        super::foresee_names(
+            context,
+            &net,
+            &cache,
+            listings.iter_mut().collect(),
+            (extract, args.web_page),
+            true,
+        )
+        .await
+        .map_err(|error| on_lines(error, list.name.as_deref(), &lines))?;
+    } else {
         learn_names(
             context,
             &net,

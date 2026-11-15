@@ -1570,6 +1570,23 @@ fn describe_response(
     url: &Url,
     on: Listener<'_>,
 ) -> Result<Option<String>, Failure> {
+    let name = served_name(response, url).map_err(Failure::Final)?;
+    if headers::is_html(response.headers()) {
+        on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
+    }
+    if let Some(given) = &name {
+        on(Event::Named(given.clone())).map_err(Failure::Final)?;
+    }
+    if let Some(encoding) = headers::encoding(response.headers()) {
+        on(Event::Encoded(encoding)).map_err(Failure::Final)?;
+    }
+    Ok(name)
+}
+
+/// the name the server gives the file it answers the link `url` with: the one its answer states,
+/// else, where the link names no file, the one a redirect gave. a name holding a bidi control
+/// character is refused.
+fn served_name(response: &reqwest::Response, url: &Url) -> Result<Option<String>, Error> {
     let name = headers::file_name(response.headers()).or_else(|| {
         let path = crate::name::from_url(url).unwrap_or_default();
         if std::path::Path::new(&path).extension().is_some() {
@@ -1583,25 +1600,14 @@ fn describe_response(
     if let Some(given) = name.as_deref()
         && given.contains(crate::name::is_bidi_control)
     {
-        return Err(Failure::Final(
-            Error::new(
-                Kind::SourceInvalid,
-                format!(
-                    "the server supplied a file name with a bidi control character: \"{}\"",
-                    given.escape_debug()
-                ),
-            )
-            .help("ask the file's publisher to remove the control character from its name"),
-        ));
-    }
-    if headers::is_html(response.headers()) {
-        on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
-    }
-    if let Some(given) = &name {
-        on(Event::Named(given.clone())).map_err(Failure::Final)?;
-    }
-    if let Some(encoding) = headers::encoding(response.headers()) {
-        on(Event::Encoded(encoding)).map_err(Failure::Final)?;
+        return Err(Error::new(
+            Kind::SourceInvalid,
+            format!(
+                "the server supplied a file name with a bidi control character: \"{}\"",
+                given.escape_debug()
+            ),
+        )
+        .help("ask the file's publisher to remove the control character from its name"));
     }
     Ok(name)
 }

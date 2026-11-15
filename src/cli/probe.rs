@@ -397,7 +397,7 @@ async fn held_on(
                 .iter()
                 .zip(probed)
                 .map(|(at, probed)| {
-                    matches!(probed, Some(Probed::File { total: Some(total), page: false })
+                    matches!(probed, Some(Probed::File { total: Some(total), page: false, .. })
                         if total == files[*at].size)
                 })
                 .collect();
