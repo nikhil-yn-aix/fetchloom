@@ -1388,7 +1388,7 @@ fn reflink(
 ) -> io::Result<io::Result<Metadata>> {
     use std::os::unix::fs::PermissionsExt;
     let source = read_unfollowed(object)?;
-    let mode = writable_as(source.metadata()?.permissions(), writable).mode() & 0o7777;
+    let mode = clone_mode(source.metadata()?.permissions(), writable);
     let metadata = publish_new(location, mode, |file| {
         if file.metadata()?.permissions().mode() & 0o7777 != mode {
             file.set_permissions(Permissions::from_mode(mode))?;
@@ -1396,6 +1396,14 @@ fn reflink(
         rustix::fs::ioctl_ficlone(file, &source).map_err(io::Error::from)
     })?;
     Ok(Ok(metadata))
+}
+
+/// the mode a clone of a file of `permissions` gets: its read and run bits, writable as asked,
+/// never the setuid, setgid or sticky bit, which would let others run a placed file as its owner.
+#[cfg(target_os = "linux")]
+fn clone_mode(permissions: Permissions, writable: bool) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    writable_as(permissions, writable).mode() & 0o777
 }
 
 #[cfg(target_os = "macos")]
