@@ -84,7 +84,7 @@ pub(super) fn run(context: &Context) -> Report {
         Some(path) => output.label("Settings", &format!("{} (no file yet)", units::path(path))),
         None => output.label("Settings", "no folder for a settings file"),
     }
-    output.hint("a FETCHLOOM_* variable changes a setting where it is set; the settings file keeps it for every run");
+    output.hint("`fetchloom settings set <key> <value>` saves a setting for every run, and `fetchloom settings unset <key>` takes it out; a FETCHLOOM_* variable wins where it is set");
     Report {
         settings: shown,
         machine: Machine {

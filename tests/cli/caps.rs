@@ -92,6 +92,12 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
             && row.ends_with("FETCHLOOM_HOST_JOBS"),
         "{row}"
     );
+    // the screen a person opens to change a setting says how
+    assert!(
+        text(&table.stderr)?.contains("`fetchloom settings set <key> <value>` saves a setting"),
+        "{}",
+        text(&table.stderr)?
+    );
     Ok(())
 }
 

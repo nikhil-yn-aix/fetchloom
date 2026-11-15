@@ -162,6 +162,15 @@ fn a_list_takes_several_values_and_replaces_the_list() {
     );
     let error = set(&var, "jobs", &values(&["8", "16"]), Some(&here), FINE).unwrap_err();
     assert_eq!(error.message, "jobs takes one value, and 2 were given");
+    let pairs = values(&["4", "host_jobs", "2"]);
+    let error = set(&var, "jobs", &pairs, Some(&here), FINE).unwrap_err();
+    assert_eq!(error.message, "jobs takes one value, and 3 were given");
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "settings set saves one key at a time, so run `fetchloom settings set jobs 4`, then set the next"
+        )
+    );
 }
 
 /// a leading ~ is the home folder, as a shell takes it outside quotes, never a folder named ~
@@ -277,6 +286,15 @@ fn unset_takes_the_key_out_and_keeps_the_comments() {
         fs::read_to_string(&path).unwrap(),
         "# the lab's settings\nmirrors = [\"/mnt/lab\"]\n# a typo\n"
     );
+    // a table the file holds is told as what it held, not as a key that was never set
+    fs::write(&path, "jobs = 2\n\n[mystuff]\nx = 1\n").unwrap();
+    let table = unset(&var, "mystuff", FINE).unwrap();
+    assert!(table.written, "{table:?}");
+    let held = table
+        .before
+        .map(|value| value.decorated("", "").to_string());
+    assert_eq!(held.as_deref(), Some("{ x = 1 }"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "jobs = 2\n");
 }
 
 /// an unknown key is refused with the nearest setting, or the variable that sets it when only a
@@ -292,11 +310,6 @@ fn an_unknown_key_names_the_nearest_setting() {
             "FETCHLOOM_PUSH_TO is not a setting",
             "did you mean `push_to`?",
         ),
-        (
-            "rate",
-            "rate is set by FETCHLOOM_RATE, not the settings file",
-            "set FETCHLOOM_RATE where fetchloom runs, as in your shell's profile",
-        ),
     ] {
         for error in [
             set(&var, key, &values(&["1"]), None, FINE).unwrap_err(),
@@ -306,6 +319,21 @@ fn an_unknown_key_names_the_nearest_setting() {
             assert_eq!(error.message, message, "{key}");
             assert_eq!(error.help.as_deref(), Some(help), "{key}");
         }
+    }
+    // a key only a variable sets is set, or unset, where that variable is
+    let message = "rate is set by FETCHLOOM_RATE, not the settings file";
+    for (error, help) in [
+        (
+            set(&var, "rate", &values(&["1M"]), None, FINE).unwrap_err(),
+            "set FETCHLOOM_RATE where fetchloom runs, as in your shell's profile",
+        ),
+        (
+            unset(&var, "rate", FINE).unwrap_err(),
+            "unset FETCHLOOM_RATE where it is set, as in your shell's profile",
+        ),
+    ] {
+        assert_eq!(error.message, message);
+        assert_eq!(error.help.as_deref(), Some(help));
     }
     assert!(!path.exists());
 }

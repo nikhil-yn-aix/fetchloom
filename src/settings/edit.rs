@@ -52,7 +52,7 @@ pub(crate) fn set(
     here: Option<&Path>,
     usable: Usable<'_>,
 ) -> Result<Changed, Error> {
-    let key = known(name)?;
+    let key = known(name, "set")?;
     let home = crate::machine::home(var);
     let places = Places {
         here,
@@ -112,9 +112,12 @@ pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Chan
     } = open(var, false)?;
     let mut document = document(&path, &text)?;
     if !document.contains_key(name) {
-        known(name)?;
+        known(name, "unset")?;
     }
-    let before = document.get(name).and_then(Item::as_value).cloned();
+    // a table, as a `[mystuff]` the file holds, shows as the inline table it would be
+    let before = document
+        .get(name)
+        .and_then(|item| item.clone().into_value().ok());
     let mut changed = Changed {
         key: name.to_owned(),
         path,
@@ -176,20 +179,23 @@ pub(crate) fn overridden(var: Var<'_>, key: &str) -> Option<&'static str> {
 }
 
 /// `name` as a key the settings file takes, or a usage error naming the nearest one, or the
-/// variable that sets it when only a variable does.
-fn known(name: &str) -> Result<&'static str, Error> {
+/// variable that sets it when only a variable does, which `doing`, `set` or `unset`, then names.
+fn known(name: &str, doing: &str) -> Result<&'static str, Error> {
     if let Some((key, _)) = KEYS.iter().find(|(key, _)| *key == name) {
         return Ok(key);
     }
     let variable = format!("FETCHLOOM_{}", name.to_ascii_uppercase());
     if OTHERS.contains(&variable.as_str()) {
+        let help = if doing == "unset" {
+            format!("unset {variable} where it is set, as in your shell's profile")
+        } else {
+            format!("set {variable} where fetchloom runs, as in your shell's profile")
+        };
         return Err(Error::new(
             Kind::Usage,
             format!("{name} is set by {variable}, not the settings file"),
         )
-        .help(format!(
-            "set {variable} where fetchloom runs, as in your shell's profile"
-        )));
+        .help(help));
     }
     let error = Error::new(Kind::Usage, format!("{name} is not a setting"));
     // a variable's name, as FETCHLOOM_JOBS, or the key in capitals, means the key
@@ -220,11 +226,25 @@ fn given(key: &str, values: &[String], places: Places<'_>) -> Result<Value, Erro
         return Ok(Value::List(items));
     }
     let [value] = values else {
-        return Err(Error::new(
+        let error = Error::new(
             Kind::Usage,
             format!("{key} takes one value, and {} were given", values.len()),
-        )
-        .help("put quotes around a value with spaces in it, as \"my folder\""));
+        );
+        // `settings set jobs 4 host_jobs 2` gives a second key where the one value goes
+        let another = values
+            .iter()
+            .skip(1)
+            .any(|value| KEYS.iter().any(|(known, _)| known == value));
+        return Err(match values.first().filter(|_| another) {
+            Some(first) => error.help(format!(
+                "settings set saves one key at a time, so run `{}`, then set the next",
+                crate::suggested::command(&format!(
+                    "settings set {key} {}",
+                    crate::suggested::shell_word(first)
+                ))
+            )),
+            None => error.help("put quotes around a value with spaces in it, as \"my folder\""),
+        });
     };
     let value = value.trim();
     if value.is_empty() {
