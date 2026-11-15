@@ -9,7 +9,8 @@ use std::path::{Component, Path, PathBuf};
 use toml_edit::{DocumentMut, Item};
 
 use super::{
-    BOOLEANS, CLEARED, File, KEYS, LISTS, OTHERS, Settings, Value, located, parse, split, table,
+    BOOLEANS, CLEARED, File, KEYS, LISTS, OTHERS, Origin, Settings, Value, located, parse, split,
+    table, undo,
 };
 use crate::error::{Error, Kind};
 use crate::machine::{Machine, Var};
@@ -264,7 +265,8 @@ fn document(path: &Path, text: &str) -> Result<DocumentMut, Error> {
 }
 
 /// refuses `value` for `key` as a run reading it from the settings file at `path` would: the
-/// reader takes the line that would be written and reads the setting from it.
+/// reader takes the line that would be written and reads the setting from it. where its help says
+/// to remove the key from the file, which a refused set leaves as it was, this one says to unset it.
 fn check(key: &str, value: &toml_edit::Value, path: &Path) -> Result<(), Error> {
     let mut line = DocumentMut::new();
     line.insert(key, Item::Value(value.clone()));
@@ -276,7 +278,20 @@ fn check(key: &str, value: &toml_edit::Value, path: &Path) -> Result<(), Error> 
     };
     Settings::read(&|_| None, file, Machine::default())
         .map(drop)
-        .map_err(|error| error.detail("the settings file is as it was"))
+        .map_err(|error| {
+            let help = error.help.as_deref().map(|help| {
+                help.replacen(
+                    &undo(Origin::File, key),
+                    &format!("run `fetchloom settings unset {key}`"),
+                    1,
+                )
+            });
+            let error = error.detail("the settings file is as it was");
+            match help {
+                Some(help) => error.help(help),
+                None => error,
+            }
+        })
 }
 
 /// `value` for `key` as TOML writes it: a list as an array of text, a switch as true or false, a

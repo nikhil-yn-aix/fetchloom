@@ -66,7 +66,8 @@ fn a_set_keeps_comments_and_the_other_keys() {
     );
 }
 
-/// a run would refuse each value, so `set` refuses it with the reader's message and writes nothing.
+/// a run would refuse each value, so `set` refuses it with the reader's message and writes nothing,
+/// and its help says to unset the key, not to remove it from a file the set left as it was.
 #[test]
 fn a_value_runs_refuse_is_refused_with_the_readers_message() {
     let text = "jobs = 8\n";
@@ -120,6 +121,12 @@ fn a_value_runs_refuse_is_refused_with_the_readers_message() {
         assert_eq!(error.kind, Kind::Usage, "{key}");
         assert_eq!(error.message, message, "{key}");
         assert_eq!(error.details, ["the settings file is as it was"], "{key}");
+        let help = error.help.as_deref().unwrap_or_default();
+        assert!(
+            help.contains(&format!("run `fetchloom settings unset {key}`")),
+            "{help}"
+        );
+        assert!(!help.contains("from the settings file"), "{help}");
         assert_eq!(fs::read_to_string(&path).unwrap(), text, "{key}");
     }
 }
