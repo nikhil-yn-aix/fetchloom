@@ -1480,3 +1480,17 @@ fn a_withheld_name_on_a_plain_line_is_named_under_it() {
         "<name> is a&b.example, which no command here can hold safely"
     );
 }
+
+/// marks a file's own name holds are no withheld word: the line names the file as it is, the
+/// marks written out, with no placeholder and no line under it.
+#[test]
+fn marks_a_name_holds_are_written_out_on_a_line() {
+    let output = telling(false);
+    output.step("Put", "back data/z/c\u{f8e0}d\u{f8e1} z.csv");
+    let said = output.said();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].ends_with(r"Put back data/z/c\u{f8e0}d\u{f8e1} z.csv"),
+        "{said:?}"
+    );
+}

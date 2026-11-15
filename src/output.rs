@@ -1316,6 +1316,7 @@ impl Output {
     fn line(&self, text: &str) {
         // a name withheld from a command that reached a line no help went through is named under it
         let (text, named) = crate::suggested::withheld(text);
+        let text = crate::suggested::marks_written_out(&text);
         let lines: Vec<String> = std::iter::once(self.prepared(&text))
             .chain(
                 named

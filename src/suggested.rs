@@ -134,20 +134,57 @@ pub(crate) fn shell_word(word: &str) -> Cow<'_, str> {
 
 /// [`shell_word`] for a folder, which a withheld word stands for as `<folder>`.
 pub(crate) fn shell_folder(word: &str) -> Cow<'_, str> {
-    if cfg!(windows) && !safe_on_windows(word) {
-        return Cow::Owned(format!("{OPEN}{FOLDER}{}{CLOSE}", without_marks(word)));
+    if word.contains([OPEN, CLOSE]) || (cfg!(windows) && !safe_on_windows(word)) {
+        return Cow::Owned(withhold(FOLDER, word));
     }
     shell_word(word)
 }
 
-/// `word` with [`OPEN`] and [`CLOSE`] given as U+FFFD: a name from data.lock or an archive may
-/// hold them, and one inside a word would end its marks early, leaving the rest unquoted.
-fn without_marks(word: &str) -> Cow<'_, str> {
-    if word.contains([OPEN, CLOSE]) {
-        Cow::Owned(word.replace([OPEN, CLOSE], "\u{fffd}"))
-    } else {
-        Cow::Borrowed(word)
+/// every word withheld so far, between its marks, as [`withhold`] wrote it: marks a name in a
+/// listing or a project file holds outside a command are text, which [`withheld`] leaves be.
+static SPANS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// `word` between the marks of a word withheld from a command, as a `kind` of word, kept so
+/// [`withheld`] knows the marks for its own. marks the word holds are written out, as `\u{f8e0}`,
+/// so none ends its marks early.
+fn withhold(kind: char, word: &str) -> String {
+    let word = word
+        .replace(OPEN, &OPEN.escape_default().to_string())
+        .replace(CLOSE, &CLOSE.escape_default().to_string());
+    let span = format!("{OPEN}{kind}{word}{CLOSE}");
+    SPANS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(span.clone());
+    span
+}
+
+/// the first word withheld from a command that `text` starts with, between its marks.
+fn span_at(text: &str) -> Option<&str> {
+    let end = text.strip_prefix(OPEN)?.find(CLOSE)? + OPEN.len_utf8() + CLOSE.len_utf8();
+    let span = &text[..end];
+    SPANS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(span)
+        .then_some(span)
+}
+
+/// `text` with the marks of a withheld word that no command here wrote around it written out, as
+/// `\u{f8e0}`, so a line shows a name holding them as it is.
+pub(crate) fn marks_written_out(text: &str) -> Cow<'_, str> {
+    if !text.contains([OPEN, CLOSE]) {
+        return Cow::Borrowed(text);
     }
+    let mut shown = String::with_capacity(text.len() + 16);
+    for c in text.chars() {
+        if matches!(c, OPEN | CLOSE) {
+            shown.extend(c.escape_default());
+        } else {
+            shown.push(c);
+        }
+    }
+    Cow::Owned(shown)
 }
 
 /// the marks around a word withheld from a command on windows, which [`withheld`] turns into a
@@ -171,7 +208,7 @@ pub(crate) fn safe_on_windows(word: &str) -> bool {
 
 /// `text` with each word [`shell_word`] withheld named by a placeholder, `<file>`, `<folder>` or
 /// `<name>`, which no shell runs and `--json`'s fix never offers, and a line for each saying which
-/// name it stands for.
+/// name it stands for. marks a name holds outside a command stay as they are.
 pub(crate) fn withheld(text: &str) -> (Cow<'_, str>, Vec<String>) {
     if !text.contains(OPEN) {
         return (Cow::Borrowed(text), Vec::new());
@@ -182,11 +219,13 @@ pub(crate) fn withheld(text: &str) -> (Cow<'_, str>, Vec<String>) {
     let mut rest = text;
     while let Some(start) = rest.find(OPEN) {
         shown.push_str(&rest[..start]);
-        let after = &rest[start + OPEN.len_utf8()..];
-        let Some(end) = after.find(CLOSE) else {
-            rest = after;
-            break;
+        let Some(span) = span_at(&rest[start..]) else {
+            shown.push(OPEN);
+            rest = &rest[start + OPEN.len_utf8()..];
+            continue;
         };
+        let after = &rest[start + OPEN.len_utf8()..];
+        let end = span.len() - OPEN.len_utf8() - CLOSE.len_utf8();
         let mut marked = after[..end].chars();
         let base = match marked.next() {
             Some(FILE) => "file",
@@ -232,16 +271,20 @@ pub(crate) fn unmarked(text: &str) -> Cow<'_, str> {
         return Cow::Borrowed(text);
     }
     let mut shown = String::with_capacity(text.len());
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            OPEN => {
-                chars.next();
-            }
-            CLOSE => {}
-            c => shown.push(c),
+    let mut rest = text;
+    while let Some(start) = rest.find(OPEN) {
+        shown.push_str(&rest[..start]);
+        if let Some(span) = span_at(&rest[start..]) {
+            let mut word = span[OPEN.len_utf8()..span.len() - CLOSE.len_utf8()].chars();
+            word.next();
+            shown.push_str(word.as_str());
+            rest = &rest[start + span.len()..];
+        } else {
+            shown.push(OPEN);
+            rest = &rest[start + OPEN.len_utf8()..];
         }
     }
+    shown.push_str(rest);
     Cow::Owned(shown)
 }
 
@@ -257,16 +300,14 @@ pub(crate) fn unmarked(text: &str) -> Cow<'_, str> {
 /// backslash; then it is single-quoted, a single quote or backslash escaped outside the quotes,
 /// since fish reads a backslash inside them as an escape.
 pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
-    if let Cow::Owned(word) = without_marks(word) {
-        return Cow::Owned(shell_word_for(&word, windows).into_owned());
-    }
-    if windows && !safe_on_windows(word) {
+    // a word holding the marks is withheld everywhere: held raw, the marks would be read as a
+    // withheld word's, and any other character in their place names another file
+    if word.contains([OPEN, CLOSE]) || (windows && !safe_on_windows(word)) {
         // a path to a file, not a host or a link, which only look like one
         let file = word.contains(['/', '\\'])
             && !word.contains("://")
             && std::path::Path::new(word).extension().is_some();
-        let kind = if file { FILE } else { NAME };
-        return Cow::Owned(format!("{OPEN}{kind}{word}{CLOSE}"));
+        return Cow::Owned(withhold(if file { FILE } else { NAME }, word));
     }
     let assigned_home = word
         .split_once('=')
@@ -502,9 +543,9 @@ pub(crate) mod tests {
         let folder = r"C:\Users\ada\p$ & mkdir PWNED-cmd7 & q";
         let help = format!(
             "run `fetchloom -C {} exclude {}`, then `fetchloom -C {} sync`; or `fetchloom get {}`",
-            format_args!("{OPEN}{FOLDER}{folder}{CLOSE}"),
+            withhold(FOLDER, folder),
             shell_word_for(file, true),
-            format_args!("{OPEN}{FOLDER}{folder}{CLOSE}"),
+            withhold(FOLDER, folder),
             shell_word_for("100%done", true),
         );
         let (shown, lines) = withheld(&help);
@@ -539,36 +580,70 @@ pub(crate) mod tests {
     }
 
     /// a name holding the marks fetchloom puts around a withheld word, as a crafted data.lock
-    /// path or archive member can, never ends them early: nothing of it follows the placeholder.
+    /// path or archive member can, is withheld on every system: held raw, its marks would be read
+    /// as a withheld word's, and with others in their place it names another file. nothing of it
+    /// follows the placeholder, and its line writes the marks out.
     #[test]
-    fn a_name_holding_the_marks_stays_within_its_placeholder() {
+    fn a_name_holding_the_marks_is_withheld_whole() {
         let crafted = format!("data/a{CLOSE} & mkdir PWNED & {OPEN}fb.csv");
-        let shown = "data/a\u{fffd} & mkdir PWNED & \u{fffd}fb.csv";
-        let command = format!("run `fetchloom exclude {}`", shell_word_for(&crafted, true));
+        let written = r"data/a\u{f8e1} & mkdir PWNED & \u{f8e0}fb.csv";
+        for windows in [false, true] {
+            let command = format!(
+                "run `fetchloom exclude {}`",
+                shell_word_for(&crafted, windows)
+            );
+            assert_eq!(
+                withheld(&command),
+                (
+                    Cow::Owned("run `fetchloom exclude <file>`".to_owned()),
+                    vec![format!(
+                        "<file> is {written}, which no command here can hold safely"
+                    )]
+                ),
+                "{windows}"
+            );
+        }
         assert_eq!(
-            withheld(&command),
+            withheld(&format!("in {}", shell_folder(&format!("a{OPEN}b")))),
             (
-                Cow::Owned("run `fetchloom exclude <file>`".to_owned()),
-                vec![format!(
-                    "<file> is {shown}, which no command here can hold safely"
-                )]
-            )
-        );
-        let elsewhere = format!(
-            "run `fetchloom exclude {}`",
-            shell_word_for(&crafted, false)
-        );
-        assert_eq!(
-            withheld(&elsewhere),
-            (
-                Cow::Owned(format!("run `fetchloom exclude \"{shown}\"`")),
-                vec![]
+                Cow::Owned("in <folder>".to_owned()),
+                vec![r"<folder> is a\u{f8e0}b, which no command here can hold safely".to_owned()]
             )
         );
     }
 
+    /// marks a name holds where no command quotes it, as a warning's message does, are text: the
+    /// line names the file as it is, with no placeholder, and an opening mark there never takes in
+    /// the command quoted after it.
+    #[test]
+    fn marks_outside_a_command_stay_text() {
+        let message = format!("put back data/z/c{OPEN}d{CLOSE} z.csv, which was deleted or moved");
+        assert_eq!(
+            withheld(&message),
+            (Cow::Borrowed(message.as_str()), Vec::new())
+        );
+        assert_eq!(unmarked(&message), message);
+        let help = format!(
+            "bring data/a{OPEN}b back: run `fetchloom exclude {}`",
+            shell_word_for("x&y.csv", true)
+        );
+        assert_eq!(
+            withheld(&help),
+            (
+                Cow::Owned(format!(
+                    "bring data/a{OPEN}b back: run `fetchloom exclude <name>`"
+                )),
+                vec!["<name> is x&y.csv, which no command here can hold safely".to_owned()]
+            )
+        );
+        assert_eq!(
+            marks_written_out(&message),
+            r"put back data/z/c\u{f8e0}d\u{f8e1} z.csv, which was deleted or moved"
+        );
+    }
+
     /// two names in one command, one holding the opening mark and the other the closing one, as
-    /// tracked data.lock.d parts can, are never joined across their quotes: each reads back whole.
+    /// tracked data.lock.d parts can, are never joined across their quotes: each is named apart.
     #[test]
     fn marks_in_two_names_never_join_their_quotes() {
         let names = [
@@ -580,21 +655,16 @@ pub(crate) mod tests {
             .map(|name| shell_word_for(name, false))
             .collect();
         let help = format!("run `git rm {} {}`, then commit", words[0], words[1]);
-        let (shown, lines) = withheld(&help);
-        assert!(lines.is_empty(), "{lines:?}");
-        let command = shown
-            .strip_prefix("run `")
-            .and_then(|rest| rest.strip_suffix("`, then commit"))
-            .unwrap_or_default();
-        let expected: Vec<String> = ["git".to_owned(), "rm".to_owned()]
-            .into_iter()
-            .chain(
-                names
-                    .iter()
-                    .map(|name| name.replace([OPEN, CLOSE], "\u{fffd}")),
+        assert_eq!(
+            withheld(&help),
+            (
+                Cow::Owned("run `git rm <file> <file 2>`, then commit".to_owned()),
+                vec![
+                    r"<file> is data.lock.d/a\u{f8e0}b.aaaaaaaaaaaa.tsv.zst, which no command here can hold safely".to_owned(),
+                    r#"<file 2> is data.lock.d/c\u{f8e1}$(mkdir PWNED)"'.bbbbbbbbbbbb.tsv.zst, which no command here can hold safely"#.to_owned(),
+                ]
             )
-            .collect();
-        assert_eq!(command_words(command, false), Some(expected), "{shown}");
+        );
     }
 
     /// each word's command as fetchloom prints it on windows, pasted into powershell and into cmd,
