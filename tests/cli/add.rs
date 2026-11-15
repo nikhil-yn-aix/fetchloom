@@ -966,7 +966,8 @@ fn a_home_folder_refusal_repeats_the_command_for_the_new_folder() -> Result {
     Ok(())
 }
 
-/// a reference whose prefix is one typo from one fetchloom reads gets the line with it fixed.
+/// a reference whose prefix is one typo from one fetchloom reads, or that comes inside <> or
+/// quotes, gets the line with it fixed.
 #[test]
 fn a_mistyped_prefix_names_the_one_meant() -> Result {
     let sandbox = Sandbox::new()?;
@@ -978,6 +979,24 @@ fn a_mistyped_prefix_names_the_one_meant() -> Result {
         (
             &["--json", "get", "kagle:uciml/iris", "--offline"],
             "fetchloom --json get kaggle:uciml/iris --offline",
+        ),
+        // a link pasted from an email or markdown keeps its marks
+        (
+            &[
+                "--json",
+                "add",
+                "<https://zenodo.org/records/3608990>",
+                "--offline",
+            ],
+            "fetchloom --json add https://zenodo.org/records/3608990 --offline",
+        ),
+        (
+            &["--json", "get", "\"kaggle:uciml/iris\"", "--offline"],
+            "fetchloom --json get kaggle:uciml/iris --offline",
+        ),
+        (
+            &["--json", "add", "“zenodoo:3608990”", "--offline"],
+            "fetchloom --json add zenodo:3608990 --offline",
         ),
     ] {
         let output = sandbox.run(args)?;

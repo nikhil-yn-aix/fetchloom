@@ -249,7 +249,8 @@ fn may_hold_secret(arg: &str) -> bool {
 }
 
 /// `error`, for a reference `command` could not read, with the line retyped where `typed`'s prefix
-/// is one typo from one fetchloom reads, as `zenodoo:` is; a link that may hold a secret gets none.
+/// is one typo from one fetchloom reads, as `zenodoo:` is, or where `typed` comes inside the marks
+/// an email, markdown or a quote put around a link; a link that may hold a secret gets none.
 pub(in crate::cli) fn scheme_meant(
     error: crate::error::Error,
     typed: &str,
@@ -258,23 +259,47 @@ pub(in crate::cli) fn scheme_meant(
     if error.kind != crate::error::Kind::ReferenceInvalid || may_hold_secret(typed) {
         return error;
     }
-    let Some((scheme, rest)) = typed.trim().split_once(':') else {
-        return error;
+    let inner = unwrapped(typed.trim());
+    let fixed = match inner {
+        Some(inner) if crate::source::Reference::parse(inner).is_ok() => inner.to_owned(),
+        _ => {
+            let Some((scheme, rest)) = inner.unwrap_or(typed).trim().split_once(':') else {
+                return error;
+            };
+            let lowered = scheme.to_ascii_lowercase();
+            if crate::source::SCHEMES.contains(&lowered.as_str()) {
+                return error;
+            }
+            let Some(guess) = crate::name::sole_closest(&lowered, crate::source::SCHEMES) else {
+                return error;
+            };
+            format!("{guess}:{rest}")
+        }
     };
-    let lowered = scheme.to_ascii_lowercase();
-    if crate::source::SCHEMES.contains(&lowered.as_str()) {
-        return error;
-    }
-    let Some(guess) = crate::name::sole_closest(&lowered, crate::source::SCHEMES) else {
-        return error;
-    };
-    let fixed = format!("{guess}:{rest}");
     let line = meant(
         &[typed],
         &[&fixed],
         format!("fetchloom {command} {}", shell_word(&fixed)),
     );
     error.help(format!("did you mean `{line}`?"))
+}
+
+/// the text inside one pair of the marks an email, markdown or a quote put around a link, as in
+/// `<https://zenodo.org/records/3608990>`.
+fn unwrapped(text: &str) -> Option<&str> {
+    const PAIRS: [(char, char); 6] = [
+        ('<', '>'),
+        ('"', '"'),
+        ('\'', '\''),
+        ('`', '`'),
+        ('“', '”'),
+        ('‘', '’'),
+    ];
+    PAIRS
+        .iter()
+        .find_map(|&(open, close)| text.strip_prefix(open)?.strip_suffix(close))
+        .map(str::trim)
+        .filter(|inner| !inner.is_empty())
 }
 
 /// the command line as typed with the words `typed` changed to `meant`, so a flag such as
