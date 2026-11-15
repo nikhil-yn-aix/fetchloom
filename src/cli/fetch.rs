@@ -352,31 +352,38 @@ enum Bound {
 }
 
 /// the error, or for a person who can answer the question, of a download of no stated size that
-/// took `room`, all that `bound` leaves it on the disk holding `cache`.
+/// took `room`, all that `bound` leaves it on the disk holding `cache`, and what to do: the budget's
+/// help names the variable that set it, when one did.
 fn unbounded(
     label: &str,
     (room, bound): (u64, Bound),
     cache: &std::path::Path,
-) -> (String, &'static str) {
-    let took = match bound {
-        Bound::Disk => format!(
-            "downloading {label} took the {} the disk holding the cache at {} had free",
-            units::size(room),
-            units::path(cache)
+    by_variable: bool,
+) -> (String, String) {
+    let (took, help) = match bound {
+        Bound::Disk => (
+            format!(
+                "downloading {label} took the {} the disk holding the cache at {} had free",
+                units::size(room),
+                units::path(cache)
+            ),
+            "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again".to_owned(),
         ),
-        Bound::Budget(budget) => format!(
-            "downloading {label} took the {} the {} cache_budget leaves the cache",
-            units::size(room),
-            units::size(budget)
+        Bound::Budget(budget) if room >= budget => (
+            format!(
+                "downloading {label} took all of the {} cache_budget",
+                units::size(budget)
+            ),
+            cache_budget::refused_help(by_variable),
         ),
-    };
-    let help = match bound {
-        Bound::Disk => {
-            "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again"
-        }
-        Bound::Budget(_) => {
-            "free room with `fetchloom cache gc`, or raise cache_budget with `fetchloom settings set cache_budget <size>`, then run the same command again"
-        }
+        Bound::Budget(budget) => (
+            format!(
+                "downloading {label} took the {} the {} cache_budget leaves the cache",
+                units::size(room),
+                units::size(budget)
+            ),
+            cache_budget::refused_help(by_variable),
+        ),
     };
     (format!("{took}, and its server never said its size"), help)
 }
@@ -557,8 +564,9 @@ impl<'a> Watch<'a> {
 
     /// stops a download of no stated size once `received` passes the room it may take, before
     /// writing the bytes that just arrived, so the disk is left near full and the budget kept. a
-    /// person at a terminal may let it go on; with --yes, or with no one to ask, nothing else
-    /// would end a body that never ends, so it stops.
+    /// person at a terminal may let it go on. --yes goes on past the budget, as a yes there does,
+    /// and the disk's room still bounds it; at the disk, with --yes or with no one to ask, nothing
+    /// else would end a body that never ends, so it stops.
     fn room(&self, received: u64) -> Result<(), Error> {
         let room = self.free.load(Ordering::Relaxed);
         let arrived = received.saturating_sub(self.free_from.load(Ordering::Relaxed));
@@ -569,8 +577,29 @@ impl<'a> Watch<'a> {
             return Ok(());
         }
         let bound = *self.bound.lock().unwrap_or_else(PoisonError::into_inner);
-        let (took, help) = unbounded(&self.job.label, (room, bound), cache);
-        let stop = || Err(Error::new(Kind::LocalIo, took.clone()).help(help));
+        let budgeted = matches!(bound, Bound::Budget(_));
+        let (took, help) = unbounded(
+            &self.job.label,
+            (room, bound),
+            cache,
+            self.approval.by_variable,
+        );
+        if budgeted && self.yes {
+            self.output.warn_with(
+                Warning::CacheOverBudget,
+                &format!("{took}; --yes goes on while the disk has room"),
+                &help,
+            );
+            self.on_the_disk(arrived, cache);
+            return Ok(());
+        }
+        // the budget is a question no one answered, as when the size is known; the disk is full
+        let kind = if budgeted {
+            Kind::Unconfirmed
+        } else {
+            Kind::LocalIo
+        };
+        let stop = || Err(Error::new(kind, took.clone()).help(help.clone()));
         if self.yes || !self.output.can_ask() {
             return stop();
         }
@@ -591,8 +620,23 @@ impl<'a> Watch<'a> {
                 None => stop(),
             }
         })?;
-        self.free.store(u64::MAX, Ordering::Relaxed);
+        if budgeted {
+            self.on_the_disk(arrived, cache);
+        } else {
+            self.free.store(u64::MAX, Ordering::Relaxed);
+        }
         Ok(())
+    }
+
+    /// once a download of no stated size may go past the budget, the room the disk holding
+    /// `cache` has free now bounds it, past the `arrived` bytes it took so far.
+    fn on_the_disk(&self, arrived: u64, cache: &std::path::Path) {
+        let free = (self.approval.free)(cache);
+        *self.bound.lock().unwrap_or_else(PoisonError::into_inner) = Bound::Disk;
+        self.free.store(
+            free.map_or(u64::MAX, |free| arrived.saturating_add(free)),
+            Ordering::Relaxed,
+        );
     }
 
     fn waited(&self) -> std::sync::MutexGuard<'_, Option<Ticker>> {
@@ -2015,11 +2059,13 @@ mod tests {
             resumed: 0,
             resumable: Resumable::No,
         };
-        for (budget, yes, room, message, help) in [
+        let budget_help = crate::cli::sync::cache_budget::refused_help(false);
+        for (budget, yes, room, kind, message, help) in [
             (
                 None,
                 true,
                 1000,
+                Kind::LocalIo,
                 "downloading big.bin took the 1000 B the disk holding the cache at /cache had free, and its server never said its size",
                 "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again",
             ),
@@ -2027,8 +2073,9 @@ mod tests {
                 Some((9000, 8500)),
                 false,
                 500,
+                Kind::Unconfirmed,
                 "downloading big.bin took the 500 B the 8.8 KiB cache_budget leaves the cache, and its server never said its size",
-                "free room with `fetchloom cache gc`, or raise cache_budget with `fetchloom settings set cache_budget <size>`, then run the same command again",
+                budget_help.as_str(),
             ),
         ] {
             let mut approval = Approval::new(crate::settings::ASK_ABOVE).with_room(cache);
@@ -2040,13 +2087,50 @@ mod tests {
             watch.on(&started(None)).unwrap();
             watch.on(&Event::Bytes(room)).unwrap();
             let stopped = watch.on(&Event::Bytes(1)).unwrap_err();
-            assert_eq!(stopped.kind, Kind::LocalIo);
+            assert_eq!(stopped.kind, kind);
             assert_eq!(stopped.message, message);
             assert_eq!(stopped.help.as_deref(), Some(help));
             let sized = Watch::new(&job, &output, &overall, &approval, yes, &held);
             sized.on(&started(Some(10))).unwrap();
             sized.on(&Event::Bytes(2000)).unwrap();
         }
+        // --yes goes past the budget as a yes at a terminal does, and the 1,000 bytes the disk
+        // had free when it did still end the download
+        let mut approval = Approval::new(crate::settings::ASK_ABOVE)
+            .with_room(cache)
+            .with_budget(9000, 8500);
+        approval.free = |_| Some(1000);
+        let watch = Watch::new(&job, &output, &overall, &approval, true, &held);
+        watch.on(&started(None)).unwrap();
+        watch.on(&Event::Bytes(501)).unwrap();
+        watch.on(&Event::Bytes(1000)).unwrap();
+        let stopped = watch.on(&Event::Bytes(1)).unwrap_err();
+        assert_eq!(stopped.kind, Kind::LocalIo);
+        assert_eq!(
+            stopped.message,
+            "downloading big.bin took the 1.5 KiB the disk holding the cache at /cache had free, and its server never said its size"
+        );
+    }
+
+    /// a budget an empty cache leaves whole is named once, and the help raises the budget where it
+    /// is set: the variable, which wins over the settings file, and `cache gc --now`.
+    #[test]
+    fn a_stop_at_the_whole_budget_names_it_once() {
+        let (said, help) = unbounded(
+            "big.bin",
+            (9000, Bound::Budget(9000)),
+            std::path::Path::new("/cache"),
+            true,
+        );
+        assert_eq!(
+            said,
+            "downloading big.bin took all of the 8.8 KiB cache_budget, and its server never said its size"
+        );
+        assert!(help.contains("`fetchloom cache gc --now`"), "{help}");
+        assert!(
+            help.contains(", or raise FETCHLOOM_CACHE_BUDGET, then"),
+            "{help}"
+        );
     }
 
     /// a size only the server states is held against `cache_budget` before any byte is written,

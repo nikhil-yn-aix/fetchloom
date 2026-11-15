@@ -84,16 +84,21 @@ pub(in crate::cli) struct Over<'a> {
     pub(in crate::cli) by_variable: bool,
 }
 
-impl Over<'_> {
-    /// how to raise the budget: the variable that sets it, or `settings set`.
-    fn raising(&self) -> &'static str {
-        if self.by_variable {
-            "raise FETCHLOOM_CACHE_BUDGET"
-        } else {
-            "raise the budget with `fetchloom settings set cache_budget <size>`"
-        }
-    }
+/// what a run stopped at the budget may do next: free room, or raise the budget where it is set,
+/// `FETCHLOOM_CACHE_BUDGET` when that variable sets it, since it wins over the settings file.
+pub(in crate::cli) fn refused_help(by_variable: bool) -> String {
+    let raising = if by_variable {
+        "raise FETCHLOOM_CACHE_BUDGET"
+    } else {
+        "raise the budget with `fetchloom settings set cache_budget <size>`"
+    };
+    format!(
+        "{}, or {raising}, then run the same command again. add --yes to go on anyway",
+        Over::freeing()
+    )
+}
 
+impl Over<'_> {
     /// what the downloads do to the cache, as `would bring` or, once they go on, `brings`.
     fn said(&self, bring: &str) -> String {
         format!(
@@ -180,11 +185,7 @@ pub(in crate::cli) fn ask(output: &Output, yes: bool, over: &Over<'_>) -> Result
         None => Err(room
             .into_iter()
             .fold(Error::new(Kind::Unconfirmed, said), Error::detail)
-            .help(format!(
-                "{}, or {}, then run the same command again. add --yes to go on anyway",
-                Over::freeing(),
-                over.raising()
-            ))),
+            .help(refused_help(over.by_variable))),
     }
 }
 
