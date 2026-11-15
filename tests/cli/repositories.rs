@@ -1743,7 +1743,11 @@ fn path_downloads_a_pin_not_downloaded_yet_and_answers() -> Result {
     assert_eq!(json(&locked)?["errors"][0]["kind"], "lock.outdated");
     let output = command(&sandbox, &routes, &["path", "archiving/rows.csv"]).output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    let placed = sandbox.work().join("data/archiving/rows.csv");
+    let placed = sandbox
+        .work()
+        .join("data")
+        .join("archiving")
+        .join("rows.csv");
     assert_eq!(
         text(&output.stdout)?.trim_end(),
         placed.display().to_string()
