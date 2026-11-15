@@ -498,6 +498,32 @@ fn a_resume_answered_from_another_version_starts_over() {
     }
 }
 
+/// a server that ignores `If-Range` and names no version on its part answers a resume with the
+/// rest of whatever it holds now. a part of a file of another length than the one kept came from
+/// another version, so it is never appended to them.
+#[test]
+fn a_part_of_a_file_of_another_length_never_joins_the_bytes_kept() {
+    // the first answer promises 8 bytes and breaks after 4
+    let cut =
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nETag: \"v1\"\r\n\r\naaaa";
+    let (url, asked) = serve(vec![
+        cut.as_bytes().to_vec(),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 4-9/10")],
+            b"BBBBBB",
+        ),
+        reply("200 OK", &[("ETag", "\"v2\"")], b"BBBBBBBBBB"),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = Fetch::new(url.clone());
+    let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    let stored = fs::read(cache.object_path(&fetched.digest)).unwrap();
+    assert_eq!(String::from_utf8(stored).unwrap(), "BBBBBBBBBB");
+    assert_eq!(lines(&asked).len(), 3);
+}
+
 /// a resume the server cannot serve from the kept bytes, answered 416, starts the file over from
 /// its first byte rather than failing.
 #[test]
@@ -784,8 +810,8 @@ fn a_download_that_keeps_moving_keeps_going() {
 type Ranges = Arc<Mutex<Vec<(u64, Option<u64>)>>>;
 
 /// serves the file of `total` bytes [`pattern`] makes, any range of it as asked, and keeps the
-/// `Range` of every request.
-fn ranged(total: u64) -> (Url, Ranges) {
+/// `Range` of every request. its parts name the version as its whole answer does when `tagged`.
+fn ranged(total: u64, tagged: bool) -> (Url, Ranges) {
     use std::io::Read;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = Url::parse(&format!(
@@ -817,8 +843,13 @@ fn ranged(total: u64) -> (Url, Ranges) {
                 "200 OK".to_owned()
             };
             seen.lock().unwrap().push(range.unwrap_or((0, None)));
+            let tag = if tagged || range.is_none() {
+                "ETag: \"v1\"\r\n"
+            } else {
+                ""
+            };
             let sent = format!(
-                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{tag}Connection: close\r\n\r\n",
                 last + 1 - start
             );
             let _ = stream.write_all(sent.as_bytes());
@@ -835,9 +866,24 @@ fn ranged(total: u64) -> (Url, Ranges) {
 fn a_resume_that_does_not_split_fetches_only_the_gaps() {
     let total = 3000;
     let (prefix, kept) = (1000, (1500, 2200));
-    let (url, asked) = ranged(total);
+    let (url, asked) = ranged(total, true);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
+    kept_split(&cache, &url, total, prefix, kept);
+    let mut net = net(&url);
+    net.split.when = Splitting::Never;
+    let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [(prefix, None), (kept.1, Some(total - 1))]
+    );
+    assert_eq!(fetched.moved, (kept.0 - prefix) + (total - kept.1));
+}
+
+/// leaves what a split download of the file [`pattern`] makes, `total` bytes long under the
+/// `ETag` "v1", leaves when stopped: its first `prefix` bytes and the range `kept` past them.
+fn kept_split(cache: &Cache, url: &Url, total: u64, prefix: u64, kept: (u64, u64)) {
     let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
         panic!("nothing else holds the download");
     };
@@ -853,15 +899,23 @@ fn a_resume_that_does_not_split_fetches_only_the_gaps() {
         .write_at(kept.0, &pattern(kept.0, kept.1 - kept.0))
         .unwrap();
     writer.save().unwrap();
-    drop((writer, partial));
+}
+
+/// a part answering an `If-Range` that leaves off the `ETag` its whole answer sent continues the
+/// version the request named, as `starting_offset` takes it, so the range a split kept past the
+/// prefix is kept too and only the gaps come: one answer, one verdict.
+#[test]
+fn a_part_that_names_no_version_keeps_the_ranges_a_split_kept() {
+    let total = 3000;
+    let (prefix, kept) = (1000, (1500, 2200));
+    let (url, _) = ranged(total, false);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    kept_split(&cache, &url, total, prefix, kept);
     let mut net = net(&url);
     net.split.when = Splitting::Never;
     let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
     assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));
-    assert_eq!(
-        *asked.lock().unwrap(),
-        [(prefix, None), (kept.1, Some(total - 1))]
-    );
     assert_eq!(fetched.moved, (kept.0 - prefix) + (total - kept.1));
 }
 

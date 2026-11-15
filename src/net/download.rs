@@ -1003,7 +1003,7 @@ impl Net {
                 .await;
         }
         let Some(offset) =
-            self.starting_offset(from, status, &head, asked.as_ref(), &validators)?
+            self.starting_offset(from, status, &head, asked.as_ref(), length, &validators)?
         else {
             state.sent_whole = status == StatusCode::PARTIAL_CONTENT
                 && headers::range_start(&head) == Some(0)
@@ -1666,21 +1666,28 @@ fn confirmed(
 }
 
 impl Net {
-    /// accepts a full body or a range that continues the same representation at the saved offset.
+    /// accepts a full body or a range that continues the same representation at the saved offset,
+    /// of a file `length` long when the kept bytes' answer stated that.
     fn starting_offset(
         &self,
         from: &Url,
         status: StatusCode,
         head: &header::HeaderMap,
         earlier: Option<&(u64, Validators)>,
+        length: Option<u64>,
         validators: &Validators,
     ) -> Result<Option<u64>, Failure> {
         match status {
             StatusCode::OK => Ok(Some(0)),
-            // a server that ignores If-Range sends the rest of whatever version it holds now
+            // a server that ignores If-Range sends the rest of whatever version it holds now, and
+            // one that names no version on its part can still show another by its length
             StatusCode::PARTIAL_CONTENT => match (earlier, headers::range_start(head)) {
                 (Some((received, recorded)), Some(start))
-                    if start == *received && !headers::changed(recorded, validators) =>
+                    if start == *received
+                        && !headers::changed(recorded, validators)
+                        && length.is_none_or(|length| {
+                            headers::total_length(head, status) == Some(length)
+                        }) =>
                 {
                     Ok(Some(*received))
                 }
