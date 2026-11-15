@@ -306,7 +306,23 @@ pub(super) fn gc(
     inputs: bool,
     dry_run: bool,
 ) -> Result<Collected, Error> {
-    super::refuse_absent_cache("to free")?;
+    if let Some(root) = super::absent_cache("to free")? {
+        let inputs = inputs.then(inputs::Inputs::default);
+        let nothing = format!(
+            "there is no cache at {} yet, so there is nothing to free",
+            units::path(&root)
+        );
+        if dry_run {
+            super::project::dry_run_done(&context.output, Some(&nothing));
+            return Ok(Collected {
+                dry_run: true,
+                changes: Some(Removals { remove: Vec::new() }),
+                ..collected(Swept::default(), inputs)
+            });
+        }
+        context.output.done("Ok", &nothing);
+        return Ok(collected(Swept::default(), inputs));
+    }
     if inputs {
         return inputs::gc(context, now, dry_run);
     }
@@ -636,7 +652,16 @@ fn tell_dry_gc(
 }
 
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
-    super::refuse_absent_cache("to check")?;
+    if let Some(root) = super::absent_cache("to check")? {
+        context.output.done(
+            "Ok",
+            &format!(
+                "there is no cache at {} yet, so there is nothing to check",
+                units::path(&root)
+            ),
+        );
+        return Ok(Checked::default());
+    }
     let cache = open_cache()?;
     let scan = cache.scan_objects(context.threads, &context.stop)?;
     let total: u64 = scan.objects.iter().map(|object| object.size).sum();

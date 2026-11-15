@@ -495,13 +495,24 @@ fn the_cache_report_creates_nothing() -> Result {
     Ok(())
 }
 
-/// gc and verify work on a cache that is there: a folder holding none, as a mistyped
-/// FETCHLOOM_CACHE names, is refused and left as it was, with the help naming where it was set.
+/// gc and verify work on a cache that is there: a folder FETCHLOOM_CACHE or the cache setting
+/// names that holds none, as a mistyped one, is refused and left as it was, with the help naming
+/// where it was set. the default folder before any command made a cache there has nothing to
+/// free or check yet, and gets no cache either.
 #[test]
 fn gc_and_verify_refuse_a_folder_holding_no_cache() -> Result {
     let sandbox = Sandbox::new()?;
     let missing = sandbox.folder("place")?.join("no-cache-yet");
     let empty = sandbox.folder("empty")?;
+    // a first run stopped while it wrote the tag leaves its start, which is no cache yet
+    let begun = sandbox.folder("begun")?;
+    fs::write(
+        begun.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    )?;
+    let settings = sandbox.folder("settings")?.join("settings.toml");
+    fs::write(&settings, format!("cache = '{}'\n", missing.display()))?;
+    let home = sandbox.folder("home")?;
     for (args, nothing) in [
         (&["--json", "cache", "gc"][..], "to free"),
         (&["--json", "cache", "gc", "--now"], "to free"),
@@ -510,34 +521,63 @@ fn gc_and_verify_refuse_a_folder_holding_no_cache() -> Result {
         (&["--json", "cache", "gc", "--inputs"], "to free"),
         (&["--json", "cache", "verify"], "to check"),
     ] {
-        for folder in [&missing, &empty] {
-            let output = sandbox
-                .command(args)
-                .env("FETCHLOOM_CACHE", folder)
-                .output()?;
+        let variable = "FETCHLOOM_CACHE names that folder: check it for a typo";
+        let setting = "the cache setting names that folder: check it for a typo, or change it with `fetchloom settings set cache <folder>`";
+        for (folder, set, help) in [
+            (&missing, "FETCHLOOM_CACHE", variable),
+            (&empty, "FETCHLOOM_CACHE", variable),
+            (&begun, "FETCHLOOM_CACHE", variable),
+            (&missing, "FETCHLOOM_SETTINGS", setting),
+        ] {
+            let mut command = sandbox.command(args);
+            if set == "FETCHLOOM_CACHE" {
+                command.env(set, folder);
+            } else {
+                command.env_remove("FETCHLOOM_CACHE").env(set, &settings);
+            }
+            let output = command.output()?;
             assert_eq!(
                 output.status.code(),
                 Some(50),
-                "{args:?}: {}",
+                "{args:?} {set}: {}",
                 text(&output.stdout)?
             );
             let error = &json(&output)?["errors"][0];
-            assert_eq!(error["kind"], "local.io", "{args:?}");
+            assert_eq!(error["kind"], "local.io", "{args:?} {set}");
             assert_eq!(
                 error["message"],
                 format!(
                     "there is no cache at {}, so there is nothing {nothing}",
                     folder.display()
                 ),
-                "{args:?}"
+                "{args:?} {set}"
             );
-            assert_eq!(
-                error["help"], "FETCHLOOM_CACHE names that folder: check it for a typo",
-                "{args:?}"
-            );
+            assert_eq!(error["help"], help, "{args:?} {set}");
         }
         assert!(!missing.exists(), "{args:?}");
         assert_eq!(fs::read_dir(&empty)?.count(), 0, "{args:?}");
+        assert_eq!(fs::read_dir(&begun)?.count(), 1, "{args:?}");
+        let default = sandbox
+            .command(args)
+            .env_remove("FETCHLOOM_CACHE")
+            .output()?;
+        assert_eq!(
+            default.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&default.stdout)?
+        );
+        assert_eq!(json(&default)?["status"], "ok", "{args:?}");
+        assert_eq!(fs::read_dir(&home)?.count(), 0, "{args:?} made a cache");
+        let told = sandbox
+            .command(&args[1..])
+            .env_remove("FETCHLOOM_CACHE")
+            .output()?;
+        let stderr = text(&told.stderr)?;
+        assert!(
+            stderr.contains(" yet, so there is nothing ") && stderr.contains(nothing),
+            "{args:?}: {stderr}"
+        );
     }
     Ok(())
 }

@@ -643,13 +643,15 @@ fn peek_cache() -> Result<Cache, Error> {
     })
 }
 
-/// refuses a command that only frees or checks a cache, as gc and verify do, when the cache
-/// folder holds none, so a mistyped folder never becomes an empty cache that answers Ok. the help
-/// names where the folder was set, which is where a typo would be.
-fn refuse_absent_cache(nothing: &str) -> Result<(), Error> {
+/// for a command that only frees or checks a cache, as gc and verify do: the default cache folder
+/// when it holds no cache yet, which the first command that needs one makes there, or none when a
+/// cache is there. a folder FETCHLOOM_CACHE or the cache setting names that holds none is refused,
+/// so a mistyped one never becomes an empty cache that answers Ok, and the help names where it was
+/// set, which is where a typo would be.
+fn absent_cache(nothing: &str) -> Result<Option<std::path::PathBuf>, Error> {
     let root = cache_root()?;
     if !crate::cache::absent(&root) {
-        return Ok(());
+        return Ok(None);
     }
     let chosen = std::env::var_os("FETCHLOOM_CACHE").is_some_and(|value| !value.is_empty());
     let help = if chosen {
@@ -657,7 +659,7 @@ fn refuse_absent_cache(nothing: &str) -> Result<(), Error> {
     } else if SETTINGS_FILE.get().and_then(File::cache).is_some() {
         "the cache setting names that folder: check it for a typo, or change it with `fetchloom settings set cache <folder>`"
     } else {
-        "fetchloom makes the cache there the first time a command needs it, as `fetchloom sync` does"
+        return Ok(Some(root));
     };
     Err(Error::new(
         Kind::LocalIo,
