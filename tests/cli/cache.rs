@@ -712,7 +712,7 @@ fn sync_warns_when_gc_registration_fails() -> Result {
     }
     for json in [false, true] {
         let sandbox = Sandbox::new()?;
-        first_use(&sandbox)?;
+        sandbox.make_cache(&sandbox.cache())?;
         fs::write(sandbox.work().join("data.toml"), "")?;
         let registrations = sandbox.cache().join("projects");
         let before = fs::metadata(&registrations)?.permissions();
@@ -1159,7 +1159,7 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
     }
     let sandbox = Sandbox::new()?;
     let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
-    first_use(&sandbox)?;
+    sandbox.make_cache(&sandbox.cache())?;
     let mut folders = vec![sandbox.cache()];
     for entry in fs::read_dir(sandbox.cache())? {
         let path = entry?.path();
@@ -1307,7 +1307,7 @@ fn gc_names_each_project_it_forgets() -> Result {
 #[test]
 fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     let sandbox = Sandbox::new()?;
-    first_use(&sandbox)?;
+    sandbox.make_cache(&sandbox.cache())?;
     // each download sits in one of the folders under partial/, named by its key's first digit
     let partial = sandbox.cache().join("partial");
     let at =
@@ -1348,17 +1348,6 @@ fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
         report["result"]["removed_leftover_bytes"], freed,
         "{report}"
     );
-    Ok(())
-}
-
-/// makes the sandbox's cache through its first use, a sync of an empty project of its own, as a
-/// report, gc or verify never does.
-fn first_use(sandbox: &Sandbox) -> Result {
-    let project = sandbox.folder("first-use")?;
-    fs::write(project.join("data.toml"), "")?;
-    let output = sandbox.command_in(&project, &["sync"]).output()?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    assert!(sandbox.cache().join("projects").is_dir());
     Ok(())
 }
 
