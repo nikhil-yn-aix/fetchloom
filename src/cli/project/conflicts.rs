@@ -48,19 +48,19 @@ pub(super) fn merge(
     let Some(conflicted) = read(project)? else {
         return Ok(None);
     };
+    let program = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &project.root));
     if conflicted.manifest_sides.is_none() && conflicted.lock_sides.is_none() {
         if choices.is_empty() {
             return Ok(None);
         }
-        return Err(Error::new(
-            Kind::Usage,
-            "--ours and --theirs choose a side in a merge, and neither data.toml nor data.lock holds git's conflict lines",
-        )
-        .help("run `fetchloom lock` without them"));
+        return Err(nothing_to_choose(
+            &conflicted,
+            program.as_deref(),
+            &project.root,
+        ));
     }
     let (manifest, lock) = sides(project, &conflicted);
     let told = |line: &str| context.output.detail(line);
-    let program = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &project.root));
     let committed = |side: Side, part: &str| {
         git::in_commit(
             program.as_deref()?,
@@ -114,6 +114,36 @@ pub(super) fn merge(
         changes: args.dry.dry_run.then(Changes::default),
         merge: Some(merged.summary),
     }))
+}
+
+/// the refusal of `--ours` or `--theirs` where neither file holds git's conflict lines, as after a
+/// side was chosen: while git is still in the merge, `git checkout -m` brings the lines back.
+fn nothing_to_choose(conflicted: &Conflicted, git: Option<&Path>, root: &Path) -> Error {
+    let error = Error::new(
+        Kind::Usage,
+        "--ours and --theirs choose a side in a merge, and neither data.toml nor data.lock holds git's conflict lines",
+    );
+    let Some(operation) = git.and_then(|git| git::operation(git, root)) else {
+        return error.help("run `fetchloom lock` without them");
+    };
+    let operation = match operation {
+        Operation::Merge => "merge",
+        Operation::Rebase => "rebase",
+        Operation::CherryPick => "cherry-pick",
+        Operation::Revert => "revert",
+    };
+    let files = if conflicted.lock.is_some() {
+        "data.toml data.lock"
+    } else {
+        "data.toml"
+    };
+    error
+        .detail(format!(
+            "the git {operation} is still under way, so a side chosen before can be chosen again"
+        ))
+        .help(format!(
+            "bring back git's conflict lines with `git checkout -m {files}`, then run the same command again"
+        ))
 }
 
 fn choices(args: &args::Lock) -> Result<Choices, Error> {

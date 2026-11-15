@@ -1032,3 +1032,48 @@ fn a_needed_choice_shows_what_each_side_holds_and_whose_it_is() -> Result {
     }
     Ok(())
 }
+
+/// after a wrong choice, data.toml and data.lock hold no conflict lines, so a second choice is
+/// refused with how to bring them back while the rebase is under way; outside one, plain lock.
+#[test]
+fn a_side_chosen_wrong_is_chosen_again_after_git_checkout_m() -> Result {
+    let sandbox = Sandbox::new()?;
+    if placed_apart(&sandbox)?.is_none() {
+        return Ok(());
+    }
+    stopped(&sandbox, &["rebase", "-q", "tom"])?;
+    succeeded(&run(&sandbox, &["lock", "--ours", "kappa"])?)?;
+    let again = run(&sandbox, &["--json", "lock", "--theirs", "kappa"])?;
+    assert_eq!(again.status.code(), Some(2), "{}", text(&again.stderr)?);
+    let error = &json(&again)?["errors"][0];
+    assert_eq!(
+        error["details"],
+        serde_json::json!([
+            "the git rebase is still under way, so a side chosen before can be chosen again"
+        ]),
+        "{error}"
+    );
+    assert_eq!(
+        error["help"],
+        "bring back git's conflict lines with `git checkout -m data.toml data.lock`, then run `fetchloom --json lock --theirs kappa` again",
+        "{error}"
+    );
+    assert_eq!(error["fix"], serde_json::Value::Null, "git goes first");
+    ok(&sandbox, &["checkout", "-m", "data.toml", "data.lock"])?;
+    succeeded(&run(&sandbox, &["lock", "--theirs", "kappa"])?)?;
+    let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    assert!(
+        manifest.ends_with("path = \"tables-priya\"\n"),
+        "{manifest}"
+    );
+    abandon(&sandbox)?;
+
+    let outside = run(&sandbox, &["lock", "--theirs", "kappa"])?;
+    assert_eq!(outside.status.code(), Some(2), "{}", text(&outside.stderr)?);
+    assert!(
+        text(&outside.stderr)?.contains("help: run `fetchloom lock` without them"),
+        "{}",
+        text(&outside.stderr)?
+    );
+    Ok(())
+}
