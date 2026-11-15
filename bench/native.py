@@ -112,7 +112,7 @@ def serve(www):
 def run(argv, cwd, env):
     """runs a command; returns its wall seconds, or raises RuntimeError with its stderr when it fails."""
     start = time.perf_counter()
-    done = subprocess.run(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    done = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True)
     seconds = time.perf_counter() - start
     if done.returncode != 0:
         raise RuntimeError(f"{' '.join(map(str, argv))} in {cwd} exited {done.returncode}: {done.stderr.strip()}")

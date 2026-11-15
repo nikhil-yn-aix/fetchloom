@@ -34,3 +34,11 @@ bindings = "bin"
 python-source = "python"
 # maturin refuses console scripts beside an executable, so the release adds fl to each built
 # wheel with python/wheel_scripts.py
+
+# ruff checks the python of python/ and bench/ for mistakes, not style, as ci's quality job runs
+# it; requires-python above makes it read them as python 3.10
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+# a closure here runs within its own turn of the loop, and a zip's lists match in length by how
+# they are made
+ignore = ["B023", "B905"]

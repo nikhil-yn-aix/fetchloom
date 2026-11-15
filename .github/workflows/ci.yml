@@ -27,6 +27,8 @@ env:
   PIN_PSSCRIPTANALYZER: 1.25.0
   PIN_LYCHEE: 0.24.2
   PIN_LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+  PIN_RUFF: 0.17.4
+  PIN_RUFF_SHA256: 3ab2b34aeacdbc1ea5c529cdbda3e05792633d587228123fd09f3b5a0facb27a
   PIN_UV: 0.13.7
   PIN_UV_SHA256: c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
 
@@ -81,6 +83,17 @@ jobs:
         run: |
           cargo machete --with-metadata
           git diff --exit-code -- Cargo.lock
+      # install-action has no ruff, so its release archive is checked against the pinned hash;
+      # pyproject.toml says which rules it holds python/ and bench/ to
+      - name: ruff
+        if: always()
+        run: |
+          archive="$RUNNER_TEMP/ruff.tar.gz"
+          curl --proto =https --tlsv1.2 -fsSL --retry 3 -o "$archive" \
+            "https://github.com/astral-sh/ruff/releases/download/$PIN_RUFF/ruff-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$PIN_RUFF_SHA256  $archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/ruff-x86_64-unknown-linux-gnu/ruff" check --no-cache
       - name: typos
         if: always()
         run: typos

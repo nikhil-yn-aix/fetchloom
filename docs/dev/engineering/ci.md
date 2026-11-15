@@ -57,6 +57,7 @@ one linux job has separately named checks. each check runs even after an earlier
 | workflow security and malformed workflow input | zizmor 1.32.0, offline with strict collection |
 | unused dependencies | cargo-machete 0.9.2 with metadata, followed by a Cargo.lock cleanliness check |
 | spelling | typos 1.52.0, excluding raw fixtures, snapshots, the benchmark cards' font and lockfiles |
+| python mistakes | ruff 0.17.4, from its release archive checked against `PIN_RUFF_SHA256`, with the rules `pyproject.toml` selects for `python/` and `bench/`: pyflakes, pycodestyle's errors, bugbear and pyupgrade for python 3.10 |
 | shell installer | ShellCheck 0.11.0 with `-s dash` |
 | PowerShell installer | PSScriptAnalyzer 1.25.0, warnings/errors except Write-Host progress on supported PowerShell 5.1+ |
 | benchmark harness logic | `python3 -m unittest discover -s bench`, using only the standard library |

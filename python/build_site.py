@@ -385,7 +385,7 @@ def runs(recorded):
     for path in sorted(recorded.glob("*.txt")):
         typed, _, said = path.read_text(encoding="utf-8").partition("\n")
         kept = [line for line in said.rstrip("\n").split("\n")
-                if not (transcript.verb_line(line) or ("",))[0] in transcript.WORK]
+                if (transcript.verb_line(line) or ("",))[0] not in transcript.WORK]
         found[typed] = "\n".join([typed, *kept])
     return found
 

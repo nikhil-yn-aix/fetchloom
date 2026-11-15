@@ -386,9 +386,10 @@ class PackageContentTests(unittest.TestCase):
             write_tar(path, entries, program=0o644)
             with self.assertRaisesRegex(AssertionError, 'archive lost executable permissions'):
                 unpack(path, target, VERSION, Path(directory) / 'unpacked')
-            for suffix, write, target in [('.tar.gz', write_tar, target), ('.zip', write_zip, 'x86_64-pc-windows-msvc')]:
+            for suffix, write, target in [('.tar.gz', write_tar, 'x86_64-unknown-linux-musl'),
+                                          ('.zip', write_zip, 'x86_64-pc-windows-msvc')]:
                 with self.subTest(suffix=suffix):
-                    folder, entries = release(target)
+                    _, entries = release(target)
                     path = Path(directory) / f'large{suffix}'
                     write(path, entries)
                     # the program's 64 or 136 bytes are past this cap, as a 256 MiB file is past the real one
