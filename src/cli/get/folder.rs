@@ -427,7 +427,10 @@ pub(super) fn within(folder: &Path, path: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::tests::store;
+    use crate::output::{Level, Output, Style};
     use crate::plan::Holder;
+    use crate::project::lock::LockedFile;
 
     #[test]
     fn a_filled_folder_lists_its_top_level_largest_first() {
@@ -537,10 +540,6 @@ mod tests {
 
     #[test]
     fn every_file_is_placed_whole_and_told_in_order() {
-        use crate::cache::tests::store;
-        use crate::output::{Level, Output, Style};
-        use crate::project::lock::LockedFile;
-
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let folder = dir.path().join("got");
@@ -615,9 +614,6 @@ mod tests {
 
     #[test]
     fn preflight_preserves_old_files_when_a_later_object_is_missing() {
-        use crate::cache::tests::store;
-        use crate::output::{Level, Output, Style};
-        use crate::project::lock::LockedFile;
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         store(&cache, b"old");
@@ -680,10 +676,6 @@ mod tests {
 
     #[test]
     fn a_stop_asked_before_placement_places_no_files() {
-        use crate::cache::tests::store;
-        use crate::output::{Level, Output, Style};
-        use crate::project::lock::LockedFile;
-
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let stored = store(&cache, b"pinned");
@@ -733,8 +725,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn generated_roots_cannot_follow_a_link_at_placement_time() {
-        use crate::output::{Level, Output, Style};
-        use crate::project::lock::LockedFile;
         for named in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let cache = Cache::open(dir.path().join("cache")).unwrap();
