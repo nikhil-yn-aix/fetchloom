@@ -312,15 +312,15 @@ pub(crate) fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Res
         let file: Box<dyn Read> = match parts {
             Parts::Folder(root) => {
                 let path = root.join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
-                Box::new(fs::File::open(&path).map_err(|err| unreadable(part, &err))?)
+                Box::new(fs::File::open(&path).map_err(|err| unreadable(name, part, &err))?)
             }
             Parts::Given(given) => Box::new(std::io::Cursor::new(given(part)?)),
         };
         let mut decoder =
-            zstd::stream::read::Decoder::new(file).map_err(|err| unreadable(part, &err))?;
+            zstd::stream::read::Decoder::new(file).map_err(|err| unreadable(name, part, &err))?;
         decoder
             .window_log_max(WINDOW_LOG)
-            .map_err(|err| unreadable(part, &err))?;
+            .map_err(|err| unreadable(name, part, &err))?;
         let mut reader = BufReader::new(decoder);
         let mut line = Vec::new();
         let mut number = 0;
@@ -329,7 +329,7 @@ pub(crate) fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Res
             let read = (&mut reader)
                 .take(LONGEST)
                 .read_until(b'\n', &mut line)
-                .map_err(|err| unreadable(part, &err))?;
+                .map_err(|err| unreadable(name, part, &err))?;
             if read == 0 {
                 break;
             }
@@ -417,19 +417,20 @@ fn broken(message: String) -> Error {
     Error::new(Kind::ProjectInvalid, message).help(BROKEN)
 }
 
-fn unreadable(part: &str, err: &std::io::Error) -> Error {
+/// the error for `part` of `name`'s list, which did not read as `err` says.
+fn unreadable(name: &str, part: &str, err: &std::io::Error) -> Error {
     if err.kind() == std::io::ErrorKind::NotFound {
         // the usual cause is a commit of data.lock without the new list, which a fresh pin of
         // every dataset would not mend: it drops every recipe's pin
         return Error::new(
             Kind::ProjectInvalid,
-            format!("data.lock names {part}, which is not there"),
+            format!("data.lock names {part}, the file list of {name}, which is not there"),
         )
         .detail(format!(
             "{FOLDER} was probably not committed with data.lock: `git commit -a` leaves new files out"
         ))
         .help(format!(
-            "ask whoever shares the project for the commit that adds {FOLDER}, made with `git add {FOLDER}`, then pull it. a part deleted here comes back with `git checkout -- {FOLDER}`"
+            "where {name} was pinned, run `git add {FOLDER}` and commit, then pull that commit here. a part deleted here comes back with `git checkout -- {FOLDER}`"
         ));
     }
     broken(format!("could not read {part}: {err}"))
@@ -614,10 +615,12 @@ mod tests {
         // gets the list, and never leads with deleting data.lock, which drops recipes' pins
         fs::remove_file(root.path().join(&listed.parts[0])).unwrap();
         let gone = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
-        assert!(
-            gone.message.ends_with("which is not there"),
-            "{}",
-            gone.message
+        assert_eq!(
+            gone.message,
+            format!(
+                "data.lock names {}, the file list of set, which is not there",
+                listed.parts[0]
+            )
         );
         assert_eq!(
             gone.details,
@@ -625,12 +628,12 @@ mod tests {
                 "data.lock.d was probably not committed with data.lock: `git commit -a` leaves new files out"
             ]
         );
-        let help = gone.help.as_deref().unwrap_or_default();
-        assert!(
-            help.starts_with("ask whoever shares the project for the commit that adds data.lock.d"),
-            "{help}"
+        assert_eq!(
+            gone.help.as_deref(),
+            Some(
+                "where set was pinned, run `git add data.lock.d` and commit, then pull that commit here. a part deleted here comes back with `git checkout -- data.lock.d`"
+            )
         );
-        assert!(!help.contains("delete data.lock"), "{help}");
     }
 
     #[test]
