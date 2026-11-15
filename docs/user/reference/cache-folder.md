@@ -20,6 +20,8 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 
 fetchloom makes its cache only in a new or empty folder, and knows it from then on by its `CACHEDIR.TAG`. a folder that holds other files and no such tag is refused with `local.io`, exit 50, and left as it is, even one whose folders have the names below, so a folder of your own never becomes the cache.
 
+fetchloom makes its cache only in an empty folder or a new one, and opens a folder that is a cache already. a folder holding other files, such as a home folder or the top of a usb drive, is refused, so a run stops with `local.io` (exit 50) and `settings set cache` saves nothing; a new folder inside it, such as `<folder>/fetchloom-cache`, works. fetchloom moves no cache: after `settings set cache` or `settings unset cache` moves it, the old one stays, and the command says what it holds and what deleting it frees, since a file placed in data/ as a link to a cached file keeps those bytes on the disk.
+
 on windows a folder takes its permissions from the folders above it, and fetchloom changes none. inside your user profile, as the default in `%LOCALAPPDATA%` is, they keep the cache yours. a cache folder outside the profile, such as `C:\fetchloom-cache` or `D:\cache`, may let other users of the machine change the files your projects place from it, so each run that opens it warns with `cache.foreign` once. a cache on a FAT or exFAT drive, which keeps no permissions, is never warned about. a team that shares a cache on purpose can leave the warning.
 
 ```text

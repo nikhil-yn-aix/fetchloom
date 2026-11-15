@@ -570,6 +570,7 @@ fn hold_cache(
                 &err,
             ),
             &err,
+            &root,
         )
     })
 }
@@ -578,9 +579,10 @@ fn hold_cache(
 /// [`Context`].
 static SETTINGS_FILE: std::sync::OnceLock<File> = std::sync::OnceLock::new();
 
-/// the help for a cache folder that could not be used. the folder fetchloom chose may be one the
-/// user does not own, as in a container whose user has a home of `/`, so it names the variable too.
-fn moved_by_variable(error: Error, err: &std::io::Error) -> Error {
+/// the help for the cache folder `root` that could not be used. the folder fetchloom chose may be
+/// one the user does not own, as in a container whose user has a home of `/`, so it names the
+/// variable too; a folder of other files gets an empty or a new folder, as one inside it.
+fn moved_by_variable(error: Error, err: &std::io::Error, root: &std::path::Path) -> Error {
     // a folder where fetchloom keeps a file comes with its own fix, which a move would only hide
     if err.kind() == std::io::ErrorKind::IsADirectory {
         return error;
@@ -590,6 +592,18 @@ fn moved_by_variable(error: Error, err: &std::io::Error) -> Error {
         .get()
         .filter(|file| !chosen && file.cache().is_some())
         .is_some_and(|file| file.path.is_some());
+    if crate::cache::is_foreign(err) {
+        let inside = root.join("fetchloom-cache");
+        let inside = inside.to_string_lossy();
+        return error.or_help(if filed {
+            format!(
+                "choose an empty folder or a new one, as in `fetchloom settings set cache {}`, or set FETCHLOOM_CACHE to one",
+                crate::suggested::shell_folder(&inside)
+            )
+        } else {
+            format!("set FETCHLOOM_CACHE to an empty folder or a new one, such as {inside}")
+        });
+    }
     if filed {
         error.or_help(
             "choose a folder fetchloom may write to with `fetchloom settings set cache <folder>`, or set FETCHLOOM_CACHE to one",
@@ -601,19 +615,25 @@ fn moved_by_variable(error: Error, err: &std::io::Error) -> Error {
     }
 }
 
+/// refuses the cache at `root` when a file stands where it or a folder on the way to it must be.
+fn blocked(root: &std::path::Path) -> Result<(), Error> {
+    match crate::cache::in_the_way(root) {
+        Some(why) => Err(moved_by_variable(
+            Error::new(
+                Kind::LocalIo,
+                format!("could not open the cache at {}: {why}", root.display()),
+            ),
+            &std::io::Error::from(std::io::ErrorKind::NotADirectory),
+            root,
+        )),
+        None => Ok(()),
+    }
+}
+
 /// the cache this machine uses, created on first use, without the cache-wide lock.
 fn open_unheld() -> Result<Cache, Error> {
     let root = cache_root()?;
-    if root.exists() && !root.is_dir() {
-        return Err(Error::new(
-            Kind::LocalIo,
-            format!(
-                "could not open the cache at {}: it is a file, not a folder",
-                root.display()
-            ),
-        )
-        .help("set FETCHLOOM_CACHE to a folder fetchloom may write to"));
-    }
+    blocked(&root)?;
     let existed = root.is_dir();
     Cache::open(root.clone()).map_err(|err| {
         let error = Error::io(
@@ -625,7 +645,7 @@ fn open_unheld() -> Result<Cache, Error> {
         if existed && crate::cache::read_only(&err) {
             return error.help(crate::cache::READ_ONLY);
         }
-        moved_by_variable(error, &err)
+        moved_by_variable(error, &err, &root)
     })
 }
 
@@ -633,6 +653,7 @@ fn open_unheld() -> Result<Cache, Error> {
 /// a missing cache or cache folder stands for an empty one.
 fn peek_cache() -> Result<Cache, Error> {
     let root = cache_root()?;
+    blocked(&root)?;
     Cache::unopened(root.clone()).map_err(|err| {
         moved_by_variable(
             Error::io(
@@ -640,6 +661,7 @@ fn peek_cache() -> Result<Cache, Error> {
                 &err,
             ),
             &err,
+            &root,
         )
     })
 }

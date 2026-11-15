@@ -492,6 +492,31 @@ fn the_cache_report_creates_nothing() -> Result {
         .collect::<Result<_>>()?;
     names.sort();
     assert_eq!(names, ["notes.txt"]);
+    // what fixes it is an empty or a new folder, not one fetchloom may write to
+    let document = json(&report)?;
+    assert_eq!(
+        document["errors"][0]["help"],
+        format!(
+            "set FETCHLOOM_CACHE to an empty folder or a new one, such as {}",
+            documents.join("fetchloom-cache").display()
+        )
+    );
+    // a file on the way to the cache is named, not the cache folder that is not there
+    let blocker = sandbox.folder("place")?.join("blocker");
+    fs::write(&blocker, b"a file\n")?;
+    let report = sandbox
+        .command(&["--json", "cache"])
+        .env("FETCHLOOM_CACHE", blocker.join("cache"))
+        .output()?;
+    assert_eq!(report.status.code(), Some(50), "{}", text(&report.stdout)?);
+    assert_eq!(
+        json(&report)?["errors"][0]["message"],
+        format!(
+            "could not open the cache at {}: {} is a file, not a folder",
+            blocker.join("cache").display(),
+            blocker.display()
+        )
+    );
     Ok(())
 }
 

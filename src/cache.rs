@@ -79,7 +79,7 @@ const SYSTEM_NAMES: [&str; 7] = [
 /// skip the whole folder, which a folder of a person's own files must not get, as a home named by
 /// mistake, or a scratch folder whose folders have a cache's names.
 fn adoptable(root: &Path) -> io::Result<()> {
-    if tagged(root) {
+    if is_cache(root) {
         return Ok(());
     }
     let entries = match fs::read_dir(root) {
@@ -89,14 +89,58 @@ fn adoptable(root: &Path) -> io::Result<()> {
     };
     for entry in entries {
         if !left_before_tag(root, &entry?.file_name()) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "it holds other files and is not a fetchloom cache, and fetchloom makes its cache \
-                 only in an empty folder or a new one",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, Foreign));
         }
     }
     Ok(())
+}
+
+/// the refusal of a folder of other files as the cache, which an empty or a new folder avoids.
+#[derive(Debug)]
+struct Foreign;
+
+impl std::fmt::Display for Foreign {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "it holds other files and is not a fetchloom cache, and fetchloom makes its cache only \
+             in an empty folder or a new one",
+        )
+    }
+}
+
+impl std::error::Error for Foreign {}
+
+/// whether `err` refuses a folder of other files as the cache.
+pub(crate) fn is_foreign(err: &io::Error) -> bool {
+    err.get_ref().is_some_and(|inner| inner.is::<Foreign>())
+}
+
+/// whether `root` is a fetchloom cache: it holds fetchloom's tag, never only a cache's folder names.
+pub(crate) fn is_cache(root: &Path) -> bool {
+    tagged(root)
+}
+
+/// the file on the way to `root`, or `root` itself, where a folder of the cache's path must be,
+/// which no run can make the cache through, said as a reason.
+pub(crate) fn in_the_way(root: &Path) -> Option<String> {
+    let file = root
+        .ancestors()
+        .find(|path| fs::metadata(path).is_ok_and(|found| !found.is_dir()))?;
+    Some(if file == root {
+        "it is a file, not a folder".to_owned()
+    } else {
+        format!("{} is a file, not a folder", file.display())
+    })
+}
+
+/// why a run would refuse `root` as the cache, read as it is with nothing created: none for a
+/// cache, an empty folder or one not there yet.
+pub(crate) fn refused(root: &Path) -> Option<String> {
+    in_the_way(root).or_else(|| {
+        Cache::unopened(root.to_path_buf())
+            .err()
+            .map(|err| crate::error::said(&err))
+    })
 }
 
 /// whether `name` in `root` is what a system keeps in a folder, or what a first run stopped

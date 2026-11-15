@@ -157,7 +157,7 @@ pub(super) fn change(
     let overridden_by = crate::settings::edit::overridden(var, &changed.key);
     tell_changed(&context.output, &changed, overridden_by);
     if changed.key == "cache" && changed.written && overridden_by.is_none() {
-        tell_old_cache(&context.output, &changed);
+        tell_old_cache(context, &changed);
     }
     Ok(Edited {
         file: changed.path.display().to_string(),
@@ -170,9 +170,28 @@ pub(super) fn change(
     })
 }
 
-/// what every run checks of its settings once each is read: that `mirrors_only` has a mirror to
-/// ask, where no `--mirror` gives one. a change that `sets_it` is told to keep a mirror first.
+/// what every run checks of its settings once each is read: that the cache folder the settings
+/// file names is one a run can open, and that `mirrors_only` has a mirror to ask, where no
+/// `--mirror` gives one. a change that `sets_it` is told to keep a mirror first.
 fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Result<(), Error> {
+    if let Some(folder) = settings.file.cache()
+        && let Some(why) = crate::cache::refused(&folder)
+    {
+        let error = Error::new(
+            Kind::Usage,
+            format!("cache cannot take the folder {}: {why}", folder.display()),
+        );
+        return Err(
+            if folder.is_dir() && crate::cache::in_the_way(&folder).is_none() {
+                error.help(format!(
+                    "choose an empty folder or a new one, such as {}",
+                    folder.join("fetchloom-cache").display()
+                ))
+            } else {
+                error.help("choose an empty folder or a new one")
+            },
+        );
+    }
     let help = if sets_it {
         "keep a mirror in `mirrors` first, as `fetchloom settings set mirrors /mnt/lab/fetchloom` saves one"
     } else {
@@ -257,24 +276,74 @@ fn tell_changed(
 }
 
 /// after the cache moved, that the one before keeps what it cached, since fetchloom moves no
-/// cache, and that deleting it frees that room: data/ holds its own links or copies.
-fn tell_old_cache(output: &Output, changed: &crate::settings::edit::Changed) {
+/// cache, and what deleting it frees: data/ holds its own links or copies, and a link there keeps
+/// its bytes. a folder that is no cache, as a person's own a setting named by mistake, is not told.
+fn tell_old_cache(context: &Context, changed: &crate::settings::edit::Changed) {
     let folder = |value: Option<&toml_edit::Value>| {
         value
             .and_then(toml_edit::Value::as_str)
-            .map(std::path::PathBuf::from)
+            .map(|folder| {
+                let folder = std::path::PathBuf::from(folder);
+                match changed.path.parent() {
+                    Some(parent) if folder.is_relative() => parent.join(folder),
+                    _ => folder,
+                }
+            })
             .or_else(|| crate::cache::Cache::locate(&|name| std::env::var_os(name), None))
     };
-    let Some(before) = folder(changed.before.as_ref()).filter(|before| before.is_dir()) else {
+    let Some(before) =
+        folder(changed.before.as_ref()).filter(|before| crate::cache::is_cache(before))
+    else {
         return;
     };
     if folder(changed.after.as_ref()).as_deref() == Some(before.as_path()) {
         return;
     }
-    output.hint(&format!(
-        "{} keeps what it cached, since fetchloom moves no cache; the data/ folders placed from it keep working without it, so delete it to free that room",
-        units::path(&before)
-    ));
+    let held = crate::cache::Cache::unopened(before.clone())
+        .ok()
+        .and_then(|cache| cache.scan_objects(context.threads, &context.stop).ok())
+        .filter(|scan| scan.unreadable.is_empty())
+        .map(|scan| {
+            scan.objects.iter().fold((0, 0), |(bytes, linked), object| {
+                let shared = if object.has_other_names() {
+                    object.size
+                } else {
+                    0
+                };
+                (bytes + object.size, linked + shared)
+            })
+        });
+    if let Some(hint) = old_cache(&units::path(&before), held) {
+        context.output.hint(&hint);
+    }
+}
+
+/// what the cache `shown` a move left keeps and what deleting it frees, from `held`: the bytes of
+/// its files and of those a name outside the cache shares, as a project's hardlink does, when
+/// they could be counted. a clone in data/ shares blocks no name counts, so it frees up to that.
+fn old_cache(shown: &str, held: Option<(u64, u64)>) -> Option<String> {
+    let kept = "since fetchloom moves no cache";
+    let working = "the data/ folders placed from it keep working without it";
+    Some(match held {
+        None => format!(
+            "{shown} keeps what it cached, {kept}; {working}, though a file there linked to it keeps its bytes when it is deleted"
+        ),
+        Some((0, _)) => return None,
+        Some((bytes, 0)) => format!(
+            "{shown} keeps the {} it cached, {kept}; {working}, so deleting it frees up to that",
+            units::size(bytes)
+        ),
+        Some((bytes, linked)) if linked >= bytes => format!(
+            "{shown} keeps the {} it cached, {kept}; all of it is linked outside the cache too, so deleting it would free nothing",
+            units::size(bytes)
+        ),
+        Some((bytes, linked)) => format!(
+            "{shown} keeps the {} it cached, {kept}; {} of it is linked outside the cache too, so deleting it frees up to {}, and {working}",
+            units::size(bytes),
+            units::size(linked),
+            units::size(bytes - linked)
+        ),
+    })
 }
 
 /// a value of the settings file as a person reads it: text as it is, a list's items separated by
@@ -881,6 +950,26 @@ mod tests {
         assert_eq!(files.said, "10,000,000");
         assert_eq!(files.value, json!(10_000_000));
         assert_eq!(count("jobs", 8_usize, Origin::Default).said, "8");
+    }
+
+    /// deleting a moved cache whose files data/ folders link to frees nothing, and one that holds
+    /// no files is not told about.
+    #[test]
+    fn the_old_cache_says_what_deleting_it_frees() {
+        let old = "~/.cache/fetchloom";
+        assert_eq!(
+            old_cache(old, Some((17_613, 17_613))).as_deref(),
+            Some(
+                "~/.cache/fetchloom keeps the 17.2 KiB it cached, since fetchloom moves no cache; all of it is linked outside the cache too, so deleting it would free nothing"
+            )
+        );
+        assert_eq!(
+            old_cache(old, Some((17_613, 0))).as_deref(),
+            Some(
+                "~/.cache/fetchloom keeps the 17.2 KiB it cached, since fetchloom moves no cache; the data/ folders placed from it keep working without it, so deleting it frees up to that"
+            )
+        );
+        assert_eq!(old_cache(old, Some((0, 0))), None);
     }
 
     /// a run given `flagged` with `--mirror`, whose mirrors setting lists `listed` from `origin`.

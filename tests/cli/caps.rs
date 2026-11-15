@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::support::{Part, Result, Sandbox, Server, file, json, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, file, json, reply, sha256_hex, text};
 
 /// where fetchloom looks for its settings file in `sandbox`, which gives it `home` as the home
 /// and application data folder.
@@ -101,27 +101,105 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
     Ok(())
 }
 
-/// moving the cache says the one before keeps what it cached, and how to free that room.
+/// moving the cache says the one before keeps what it cached and what deleting it frees, which a
+/// project's link to a cached file keeps; a folder of a person's own files, which the setting
+/// named by mistake, was never a cache and gets no such word.
 #[test]
-fn a_moved_cache_says_the_old_one_keeps_its_files() -> Result {
+fn a_moved_cache_says_what_deleting_the_old_one_frees() -> Result {
     let sandbox = Sandbox::new()?;
     let path = settings_file(&sandbox)?;
     let old = sandbox.folder("old-cache")?;
-    std::fs::write(&path, format!("cache = '{}'\n", old.display()))?;
+    for (bytes, linked) in [(&b"kept in data/"[..], true), (&b"only cached"[..], false)] {
+        let hex = sha256_hex(bytes);
+        let object = old.join("objects").join(&hex[..2]).join(&hex[2..]);
+        std::fs::create_dir_all(object.parent().ok_or("no fan folder")?)?;
+        std::fs::write(&object, bytes)?;
+        if linked {
+            std::fs::hard_link(&object, sandbox.work().join("linked.csv"))?;
+        }
+    }
+    std::fs::create_dir_all(old.join("partial"))?;
+    std::fs::write(
+        old.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n",
+    )?;
+    let documents = sandbox.folder("documents")?;
+    std::fs::write(documents.join("thesis.tex"), b"mine\n")?;
     let new = sandbox.folder("place")?.join("new-cache");
-    let moved = sandbox
-        .command(&["settings", "set", "cache", &new.display().to_string()])
+    for (before, told) in [
+        (
+            &old,
+            Some(format!(
+                "hint: {} keeps the 24 B it cached, since fetchloom moves no cache; 13 B of it is linked outside the cache too, so deleting it frees up to 11 B, and the data/ folders placed from it keep working without it\n",
+                old.display()
+            )),
+        ),
+        (&documents, None),
+    ] {
+        std::fs::write(&path, format!("cache = '{}'\n", before.display()))?;
+        let moved = sandbox
+            .command(&["settings", "set", "cache", &new.display().to_string()])
+            .env_remove("FETCHLOOM_CACHE")
+            .output()?;
+        let stderr = text(&moved.stderr)?;
+        assert_eq!(moved.status.code(), Some(0), "{stderr}");
+        match told {
+            Some(told) => assert!(stderr.contains(&told), "{stderr}"),
+            None => assert!(!stderr.contains("keeps"), "{stderr}"),
+        }
+    }
+    Ok(())
+}
+
+/// `settings set cache` refuses a folder every run would refuse, as a home of a person's own
+/// files or a folder under a file, and saves nothing; an empty folder is taken.
+#[test]
+fn a_cache_folder_runs_refuse_is_not_saved() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    let documents = sandbox.folder("documents")?;
+    std::fs::write(documents.join("thesis.tex"), b"mine\n")?;
+    let blocker = sandbox.folder("place")?.join("blocker");
+    std::fs::write(&blocker, b"a file\n")?;
+    let other = "it holds other files and is not a fetchloom cache";
+    for (given, why, help) in [
+        (
+            "~".to_owned(),
+            other.to_owned(),
+            "choose an empty folder or a new one, such as".to_owned(),
+        ),
+        (
+            documents.display().to_string(),
+            other.to_owned(),
+            format!(
+                "choose an empty folder or a new one, such as {}",
+                documents.join("fetchloom-cache").display()
+            ),
+        ),
+        (
+            blocker.join("cache").display().to_string(),
+            format!("{} is a file, not a folder", blocker.display()),
+            "choose an empty folder or a new one\n".to_owned(),
+        ),
+    ] {
+        let set = sandbox
+            .command(&["settings", "set", "cache", &given])
+            .env_remove("FETCHLOOM_CACHE")
+            .output()?;
+        let stderr = text(&set.stderr)?;
+        assert_eq!(set.status.code(), Some(2), "{stderr}");
+        assert!(
+            stderr.contains(&why) && stderr.contains("nothing was saved") && stderr.contains(&help),
+            "{stderr}"
+        );
+        assert!(!path.exists(), "{stderr}");
+    }
+    let empty = sandbox.folder("empty")?;
+    let set = sandbox
+        .command(&["settings", "set", "cache", &empty.display().to_string()])
         .env_remove("FETCHLOOM_CACHE")
         .output()?;
-    let stderr = text(&moved.stderr)?;
-    assert_eq!(moved.status.code(), Some(0), "{stderr}");
-    assert!(
-        stderr.contains(&format!(
-            "{} keeps what it cached, since fetchloom moves no cache;",
-            old.display()
-        )),
-        "{stderr}"
-    );
+    assert_eq!(set.status.code(), Some(0), "{}", text(&set.stderr)?);
     Ok(())
 }
 
