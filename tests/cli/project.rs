@@ -2305,6 +2305,26 @@ fn a_renamed_project_folder_keeps_its_state() -> Result {
     Ok(())
 }
 
+/// each machine numbers a network disk its own way, so a state that records another device for
+/// the same folder is still this folder's: remove deletes the file fetchloom placed.
+#[cfg(unix)]
+#[test]
+fn a_state_that_records_another_device_is_still_used() -> Result {
+    use std::os::unix::fs::MetadataExt as _;
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let path = sandbox.work().join(".fetchloom").join("state");
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+    let device = fs::metadata(sandbox.work())?.dev();
+    state["folder"]["device"] = serde_json::json!(device.wrapping_add(1));
+    fs::write(&path, serde_json::to_vec(&state)?)?;
+    let removed = sandbox.run(&["--offline", "remove", "iris"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert!(!sandbox.work().join("data/iris/iris.csv").exists());
+    Ok(())
+}
+
 /// an owner file far larger than any fetchloom writes stands in for a damaged one.
 #[test]
 fn a_project_that_cannot_be_locked_is_named_plainly() -> Result {

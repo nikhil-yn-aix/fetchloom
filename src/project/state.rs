@@ -58,13 +58,12 @@ pub(crate) struct State {
     pub(crate) folder: Option<Folder>,
 }
 
-/// which folder a state was written for: on unix its device and inode, which a rename keeps; on
-/// windows its creation time and its path. a clone or a copy of a project is another folder, so
-/// the records of a state that came with it, which anyone could have written, are not used.
+/// which folder a state was written for: on unix its inode, which a rename keeps, without the
+/// device, which network disks number apart on each machine; on windows its creation time and its
+/// path. a clone or a copy of a project is another folder, so the records of a state that came
+/// with it, which anyone could have written, are not used.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Folder {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    device: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     inode: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,7 +80,6 @@ impl Folder {
         {
             use std::os::unix::fs::MetadataExt;
             Some(Folder {
-                device: Some(metadata.dev()),
                 inode: Some(metadata.ino()),
                 ..Folder::default()
             })
