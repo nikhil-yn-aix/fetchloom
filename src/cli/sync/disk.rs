@@ -84,8 +84,12 @@ pub(crate) struct LeftBehind {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Retired {
     pub(crate) folder: String,
-    /// the files, links and special files in it that fetchloom did not place, sorted.
+    /// the files, links and special files in it that fetchloom did not place, sorted, but for
+    /// those of `system`.
     pub(crate) unplaced: Vec<String>,
+    /// the files in it an operating system made, sorted, which go with the folder when nothing
+    /// else keeps it.
+    pub(crate) system: Vec<String>,
 }
 
 /// what stands at a path in the data folder.
@@ -335,18 +339,25 @@ impl Survey {
     }
 
     /// what `folder` holds that no record says fetchloom placed, besides copies a placement
-    /// staged: files, links and special files, sorted. links are neither followed nor read.
+    /// staged and files an operating system made: files, links and special files, sorted. links
+    /// are neither followed nor read.
     fn not_placed(&self, root: &Path, folder: &str) -> Vec<String> {
         let mut entries = HashMap::new();
         let mut others = Vec::new();
         let start = vec![(root.join(folder), folder.to_owned())];
+        let made_by_system = |path: &str| {
+            path.strip_prefix(folder)
+                .unwrap_or(path)
+                .split('/')
+                .any(name::made_by_system)
+        };
         // one folder outside the data folder, listed while placing, which looks at the stop itself
         visit_files(
             start,
             &mut entries,
             || false,
             |_, path, temporary, _| {
-                if !temporary && !self.state.files.contains_key(&path) {
+                if !temporary && !self.state.files.contains_key(&path) && !made_by_system(&path) {
                     others.push(path);
                 }
             },
@@ -394,7 +405,7 @@ impl Survey {
         if folders.is_empty() {
             return Vec::new();
         }
-        let mut retired: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        let mut retired: BTreeMap<&str, Retired> = BTreeMap::new();
         let unplaced = self
             .disk
             .keys()
@@ -412,19 +423,39 @@ impl Survey {
                 .map(|(end, _)| &path[..end])
                 .find(|folder| folders.contains(*folder));
             if let Some(folder) = folder {
-                retired.entry(folder).or_default().push(path.clone());
+                let found = retired.entry(folder).or_insert_with(|| Retired {
+                    folder: folder.to_owned(),
+                    unplaced: Vec::new(),
+                    system: Vec::new(),
+                });
+                if self.made_by_system(path) {
+                    found.system.push(path.clone());
+                } else {
+                    found.unplaced.push(path.clone());
+                }
             }
         }
         retired
-            .into_iter()
-            .map(|(folder, mut unplaced)| {
-                unplaced.sort();
-                Retired {
-                    folder: folder.to_owned(),
-                    unplaced,
-                }
+            .into_values()
+            .map(|mut found| {
+                found.unplaced.sort();
+                found.system.sort();
+                found
             })
             .collect()
+    }
+
+    /// whether the file at `path` is one an operating system made rather than fetchloom or a
+    /// person: unplaced, with a name [`name::made_by_system`] knows, its own or a folder's below
+    /// the data folder, as `.DS_Store` or `__MACOSX/._a.csv`. none is a difference.
+    pub(crate) fn made_by_system(&self, path: &str) -> bool {
+        let below = path
+            .strip_prefix(self.data_dir.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .unwrap_or(path);
+        self.disk.contains_key(path)
+            && !self.state.files.contains_key(path)
+            && below.split('/').any(name::made_by_system)
     }
 
     /// windows listings keep a hardlink's size, time and read-only flag as this name last saw

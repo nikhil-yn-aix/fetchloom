@@ -742,7 +742,12 @@ fn gone(
     survey: &Survey,
     planned: &plan::Plan<'_>,
 ) -> HashMap<String, String> {
-    let holding = place::holding(survey.disk.keys());
+    let holding = place::holding(
+        survey
+            .disk
+            .keys()
+            .filter(|path| !survey.made_by_system(path)),
+    );
     let missing: HashSet<&str> = missing.iter().map(String::as_str).collect();
     planned
         .targets
@@ -1105,13 +1110,14 @@ fn kept_copies(extra: &[String], wanted: &HashSet<&str>) -> HashMap<String, Stri
 }
 
 /// the files in the data folder that no dataset places, sorted, but for the staging leftovers of an
-/// interrupted placement, which the next sync deletes.
+/// interrupted placement, which the next sync deletes, and the files an operating system made.
 fn extra(survey: &Survey, wanted: &HashSet<&str>) -> Vec<String> {
     let leftovers: HashSet<&String> = survey.leftovers().collect();
     let mut extra: Vec<String> = survey
         .disk
         .keys()
         .filter(|path| !wanted.contains(path.as_str()) && !leftovers.contains(path))
+        .filter(|path| !survey.made_by_system(path))
         .cloned()
         .collect();
     extra.sort();

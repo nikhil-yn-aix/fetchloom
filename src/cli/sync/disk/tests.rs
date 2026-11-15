@@ -1281,8 +1281,8 @@ fn scanning_skips_links_even_when_their_targets_are_files_or_folders() {
     );
 }
 
-/// a retired folder lists links and a person's files but no staged copy, and `pets-extra` is
-/// no part of `pets`.
+/// a retired folder lists links and a person's files but no staged copy, the files an operating
+/// system made apart, and `pets-extra` is no part of `pets`.
 #[cfg(unix)]
 #[test]
 fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
@@ -1305,6 +1305,9 @@ fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
         "data/a/b/own.txt",
         "data/a/b/.fetchloom-0123456789abcdef.copy",
         "data/old/mine.txt",
+        "data/pets/._pets.csv",
+        "data/gone/.DS_Store",
+        "data/gone/__MACOSX/._only.csv",
     ];
     for path in placed.iter().chain(&own) {
         let file = project.root.join(path);
@@ -1331,10 +1334,20 @@ fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
             Retired {
                 folder: "data/a/b".to_owned(),
                 unplaced: vec!["data/a/b/own.txt".to_owned()],
+                system: Vec::new(),
+            },
+            Retired {
+                folder: "data/gone".to_owned(),
+                unplaced: Vec::new(),
+                system: vec![
+                    "data/gone/.DS_Store".to_owned(),
+                    "data/gone/__MACOSX/._only.csv".to_owned(),
+                ],
             },
             Retired {
                 folder: "data/old".to_owned(),
                 unplaced: vec!["data/old/mine.txt".to_owned()],
+                system: Vec::new(),
             },
             Retired {
                 folder: "data/pets".to_owned(),
@@ -1343,6 +1356,7 @@ fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
                     "data/pets/notes.txt".to_owned(),
                     "data/pets/sub/x.txt".to_owned(),
                 ],
+                system: vec!["data/pets/._pets.csv".to_owned()],
             },
         ]
     );

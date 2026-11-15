@@ -46,6 +46,8 @@ warning: data/pets still holds 2 files fetchloom did not place, such as data/pet
   help: `fetchloom status` lists them as extra; delete them when you no longer need them
 ```
 
+files a system writes into a folder by itself, such as finder's `.DS_Store` or windows' `Thumbs.db`, keep no folder: one left holding only them goes, and they go with it.
+
 removing a table also removes its comments; other entries stay. commit `data.toml` and `data.lock` afterwards.
 
 if deleting files fails after `data.toml` and `data.lock` were written, as for permissions or a file another program holds open, fix the reported error and run `fetchloom sync` to finish. the bytes stay in the shared cache, which other projects may use, until [cache gc](cache.md#gc) frees them.

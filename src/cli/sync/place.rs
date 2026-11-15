@@ -153,7 +153,12 @@ impl Placement {
             .map(|(target, _)| target.dataset.to_owned())
             .collect();
         let back: HashSet<&str> = self.put_back.iter().map(String::as_str).collect();
-        let holding = tell::holding(survey.disk.keys());
+        let holding = tell::holding(
+            survey
+                .disk
+                .keys()
+                .filter(|path| !survey.made_by_system(path)),
+        );
         for target in targets
             .iter()
             .filter(|target| back.contains(target.path.as_str()))
@@ -1929,7 +1934,30 @@ fn remove_unwanted(
             Unwanted::Keep => placement.kept.push(Kept::new(path, Reason::Unneeded)),
         }
     }
+    clear_system_made(project, placer, &placement.retired, &placement.kept);
     Ok(changed)
+}
+
+/// deletes the files an operating system made in each folder of `retired` that holds nothing else
+/// and no file of `kept`, so that folder goes with them, as it would have gone empty.
+fn clear_system_made(project: &Project, placer: &mut Placer, retired: &[Retired], kept: &[Kept]) {
+    for folder in retired.iter().filter(|folder| folder.unplaced.is_empty()) {
+        if kept
+            .iter()
+            .any(|kept| super::disk::is_inside(&kept.path, &folder.folder))
+        {
+            continue;
+        }
+        for path in &folder.system {
+            if placer.stop().is_asked() {
+                return;
+            }
+            let file = project.root.join(path);
+            if let Err(err) = placer.remove(&file, true, None) {
+                tracing::debug!(%path, %err, "could not delete a file the system made");
+            }
+        }
+    }
 }
 
 /// whether `placed` is a file of a dataset with `place = false`.

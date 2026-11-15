@@ -162,6 +162,7 @@ fn unrecorded(
                 .filter(|path| {
                     !crate::place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path))
                 })
+                .filter(|path| !survey.made_by_system(path))
                 .cloned()
                 .collect();
             files.sort_unstable();

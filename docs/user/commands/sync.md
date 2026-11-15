@@ -94,7 +94,7 @@ warning: put back data/squares/table.csv, which was deleted or moved, since data
 
 ## folders left behind
 
-sync deletes only unchanged files it placed, and only inside the data folder. when a dataset goes from `data.toml`, or its `path` changes, its old folder goes with the last such file. a folder that still holds anything else, such as work of yours or a `.changed` copy, stays, and sync names it (stderr):
+sync deletes only unchanged files it placed, and only inside the data folder. when a dataset goes from `data.toml`, or its `path` changes, its old folder goes with the last such file, along with files a system wrote there by itself, such as finder's `.DS_Store`. a folder that still holds anything else, such as work of yours or a `.changed` copy, stays, and sync names it (stderr):
 
 ```text
 warning: data/pets still holds data/pets/own.txt, a file fetchloom did not place, so the folder stays
