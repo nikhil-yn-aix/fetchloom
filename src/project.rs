@@ -911,7 +911,12 @@ fn write_atomically_with(
 ) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let own = parent.join(FOLDER);
-    let folder = if own.is_dir() { own.as_path() } else { parent };
+    // a link there, as a clone can hold, would stage the file wherever it points
+    let folder = if fs::symlink_metadata(&own).is_ok_and(|found| found.is_dir()) {
+        own.as_path()
+    } else {
+        parent
+    };
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let (temporary, file) = loop {
         let temporary = folder.join(format!(".{name}.{:08x}.tmp", fastrand::u32(..)));
@@ -2044,6 +2049,25 @@ mod tests {
             assert_eq!(DIRECTORY_SYNCS.with_borrow_mut(std::mem::take), expected);
             assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"after");
         }
+    }
+
+    /// a `.fetchloom` link beside a file, as in a cloned data.lock.d, is never a folder to stage the
+    /// new file in: it is staged beside its name, and nothing is made or flushed through the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_metadata_folder_is_never_staged_in() {
+        let (dir, _) = project(&[("data.lock.d/old.tsv.zst", "")]);
+        let outside = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("data.lock.d");
+        std::os::unix::fs::symlink(outside.path(), folder.join(FOLDER)).unwrap();
+        DIRECTORY_SYNCS.with_borrow_mut(Vec::clear);
+        write_atomically(&folder.join("new.tsv.zst"), b"rows").unwrap();
+        assert_eq!(
+            DIRECTORY_SYNCS.with_borrow_mut(std::mem::take),
+            std::slice::from_ref(&folder)
+        );
+        assert_eq!(fs::read(folder.join("new.tsv.zst")).unwrap(), b"rows");
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
     }
 
     #[cfg(unix)]
