@@ -117,6 +117,8 @@ pub(super) struct Loop<'a> {
     roomy: AtomicBool,
     /// whether this run found its downloads take the cache past `cache_budget`, which it tells once.
     past_budget: AtomicBool,
+    /// the run as its questions and warnings name it, as `this sync`.
+    run: &'static str,
     /// the command [`Loop::ready`] readies files for, which its help says to run again.
     readying: &'static str,
     /// whether placing follows relocking, so the first downloads tell what placing adds.
@@ -163,6 +165,7 @@ impl<'a> Loop<'a> {
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
             past_budget: AtomicBool::new(false),
+            run: "this sync",
             readying: "build",
             places: AtomicBool::new(false),
             fills: false,
@@ -184,6 +187,12 @@ impl<'a> Loop<'a> {
     /// [`Loop::ready`] readies files for `command`, as `push`, rather than a build.
     pub(super) fn readying(mut self, command: &'static str) -> Self {
         self.readying = command;
+        self
+    }
+
+    /// names the run `run` in its questions and warnings, as `this add`.
+    pub(super) fn running(mut self, run: &'static str) -> Self {
+        self.run = run;
         self
     }
 
@@ -1114,15 +1123,15 @@ impl<'a> Loop<'a> {
                 .filter_map(|job| Some((job.label.as_str(), job.fetch.expect.size?))),
         )
         .map_err(|error| self.as_left(error))?;
-        let (size, room) = budget(lacking.iter().copied());
         let told = || lacking.iter().copied().chain(&ahead);
+        let (size, room) = budget(told());
         let planned = fetch::planned(
             self.context,
             told().map(|job| (fetch::host_of(job), job.fetch.expect.size)),
         );
         let called = fetch::called(told().map(|job| job.label.as_str()), planned.files);
-        fetch::tell_planned(&self.context.output, &called, &planned);
-        let what = units::count(jobs.len() as u64, "file", "files");
+        // the question covers the files the line after it tells, placing's later ones too
+        let what = units::count(planned.files, "file", "files");
         self.ask_budget(&format!("downloading {what}"), room, None)?;
         let roomy = super::confirm(
             &self.context.output,
@@ -1134,6 +1143,7 @@ impl<'a> Loop<'a> {
         )
         .map_err(|error| self.as_left(error))?;
         self.roomy.fetch_or(roomy, Ordering::Relaxed);
+        fetch::tell_planned(&self.context.output, &called, &planned);
         let started = Instant::now();
         let fetched = fetch::all(self.context, &self.net, &self.cache, jobs)
             .await
@@ -1186,7 +1196,7 @@ impl<'a> Loop<'a> {
         } else {
             self.download_room(lock, placing)?
         };
-        self.ask_budget("this sync", needed, Some(lock))?;
+        self.ask_budget(self.run, needed, Some(lock))?;
         let free = crate::space::free(self.cache.root());
         if crate::space::short(needed, free).is_none() {
             return self.ask_room_to_place(placing, needed);
@@ -1194,7 +1204,7 @@ impl<'a> Loop<'a> {
         if self.context.yes {
             super::warn_short(
                 &self.context.output,
-                "this sync",
+                self.run,
                 (needed, free.unwrap_or_default()),
                 &format!("the cache at {}", units::path(self.cache.root())),
             );
@@ -1202,7 +1212,7 @@ impl<'a> Loop<'a> {
         }
         super::ask_room(
             &self.context.output,
-            "this sync",
+            self.run,
             needed,
             free.unwrap_or_default(),
             self.cache.root(),
@@ -1239,10 +1249,13 @@ impl<'a> Loop<'a> {
             Some(_) => None,
             None => self.project.lock().ok().flatten(),
         };
-        let largest = lock
+        // a dataset this add brings is no candidate for removal
+        let mut largest = lock
             .or(pinned.as_ref())
-            .map(|lock| cache_budget::largest(lock, cache_budget::LARGEST))
+            .map(|lock| cache_budget::largest(lock, usize::MAX))
             .unwrap_or_default();
+        largest.retain(|(name, _)| !self.told.contains(name));
+        largest.truncate(cache_budget::LARGEST);
         let over = cache_budget::Over {
             doing,
             past,
@@ -1251,6 +1264,37 @@ impl<'a> Loop<'a> {
         };
         cache_budget::ask(&self.context.output, self.context.yes, &over)
             .map_err(|error| self.as_left(error))
+    }
+
+    /// asks before placing downloads `untold`, the files relocking did not ask about and tell
+    /// ahead, when their size or the `room` all its downloads take needs it; then tells them.
+    fn ask_then_tell(&self, untold: &[&fetch::Description], room: u64) -> Result<(), Error> {
+        let size = untold
+            .iter()
+            .filter_map(|description| description.size)
+            .fold(0, u64::saturating_add);
+        let planned = fetch::planned(
+            self.context,
+            untold
+                .iter()
+                .map(|description| (description.host.clone(), description.size)),
+        );
+        let roomy = super::confirm(
+            &self.context.output,
+            self.yes(),
+            self.context.settings.ask_above.value,
+            &units::count(planned.files, "file", "files"),
+            size,
+            Some((self.cache.root(), room)),
+        )
+        .map_err(|error| self.as_left(error))?;
+        self.roomy.fetch_or(roomy, Ordering::Relaxed);
+        let called = fetch::called(
+            untold.iter().map(|description| description.label.as_str()),
+            planned.files,
+        );
+        fetch::tell_planned(&self.context.output, &called, &planned);
+        Ok(())
     }
 
     /// what downloading for placing takes on the cache's disk; an archive of unknown files counts
@@ -1313,12 +1357,12 @@ impl<'a> Loop<'a> {
         let place = format!("the data folder at {}", units::path(&copies.folder));
         if self.context.yes {
             let room = (needed, free.unwrap_or_default());
-            super::warn_short(&self.context.output, "this sync", room, &place);
+            super::warn_short(&self.context.output, self.run, room, &place);
             return Ok(());
         }
         super::ask_room_on(
             &self.context.output,
-            "this sync",
+            self.run,
             (needed, free.unwrap_or_default()),
             &place,
             "free space on that disk, then run the same command again. add --yes to go on anyway, as on a disk that compresses what it stores",
@@ -1404,17 +1448,8 @@ impl<'a> Loop<'a> {
             .filter(|(_, available)| !**available)
             .filter_map(|(description, _)| description.size)
             .fold(0, u64::saturating_add);
-        self.tell_untold(&descriptions, files, available, told.as_ref());
-        let roomy = super::confirm(
-            &self.context.output,
-            self.yes(),
-            self.context.settings.ask_above.value,
-            &units::count(files.len() as u64, "file", "files"),
-            size,
-            Some((self.cache.root(), size)),
-        )
-        .map_err(|error| self.as_left(error))?;
-        self.roomy.fetch_or(roomy, Ordering::Relaxed);
+        let untold = untold(&descriptions, files, available, told.as_ref());
+        self.ask_then_tell(&untold, size)?;
         let started = Instant::now();
         let fetched = fetch::prepared(
             self.context,
@@ -1434,36 +1469,6 @@ impl<'a> Loop<'a> {
             None => self.tell_downloaded(&fetched, started),
         }
         Ok(fetched)
-    }
-
-    /// says what placing downloads before it starts: the `files` `available` says the cache
-    /// lacks, described by `descriptions`, but for those relocking `told` ahead.
-    fn tell_untold(
-        &self,
-        descriptions: &[fetch::Description],
-        files: &[(String, &LockedFile)],
-        available: &[bool],
-        told: Option<&Ahead>,
-    ) {
-        let untold = || {
-            descriptions
-                .iter()
-                .zip(files)
-                .zip(available)
-                .filter(|((_, (_, file)), available)| {
-                    !**available && told.is_none_or(|told| !told.digests.contains(&file.sha256))
-                })
-                .map(|((description, _), _)| description)
-        };
-        let planned = fetch::planned(
-            self.context,
-            untold().map(|description| (description.host.clone(), description.size)),
-        );
-        let called = fetch::called(
-            untold().map(|description| description.label.as_str()),
-            planned.files,
-        );
-        fetch::tell_planned(&self.context.output, &called, &planned);
     }
 
     fn tell_downloaded<'f>(
@@ -2229,6 +2234,25 @@ fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {
     in_cache_where(cache, fetch, |_| true)
 }
 
+/// what placing downloads: the `files` `available` says the cache lacks, described by
+/// `descriptions`, but for those relocking `told` ahead.
+fn untold<'d>(
+    descriptions: &'d [fetch::Description],
+    files: &[(String, &LockedFile)],
+    available: &[bool],
+    told: Option<&Ahead>,
+) -> Vec<&'d fetch::Description> {
+    descriptions
+        .iter()
+        .zip(files)
+        .zip(available)
+        .filter(|((_, (_, file)), available)| {
+            !**available && told.is_none_or(|told| !told.digests.contains(&file.sha256))
+        })
+        .map(|((description, _), _)| description)
+        .collect()
+}
+
 /// the bytes `jobs` of known size transfer, and the room they need on the cache's disk, twice the
 /// size of an archive whose files nobody listed: a lower bound, as it may unpack to much more.
 fn budget<'j>(jobs: impl Iterator<Item = &'j Job>) -> (u64, u64) {
@@ -2335,7 +2359,7 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
     let listed = units::count(listing.files.len() as u64, "file", "files");
     let narrowed = kept.len() < listing.files.len();
     let files = if narrowed {
-        format!("{} of {listed}", kept.len())
+        format!("{} of {listed}", units::grouped(kept.len() as u64))
     } else {
         listed
     };
@@ -3183,6 +3207,47 @@ mod tests {
             output.said(),
             ["   Resolved zenodo:3608990 · Movie reviews · 0 files · 0 B · license unknown"]
         );
+    }
+
+    /// the files kept and those listed are counted alike, with their thousands apart.
+    #[test]
+    fn the_resolved_line_counts_kept_files_as_it_counts_listed_ones() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: true,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        );
+        let remote = |index: usize| Remote {
+            path: format!("{index}.csv"),
+            size: Some(1),
+            sha256: None,
+            md5: None,
+            url: Url::parse(&format!("https://example.org/{index}.csv")).unwrap(),
+            named_by_server: false,
+            etag: None,
+        };
+        let listing = Listing {
+            within: Vec::new(),
+            access: source::Access::Unknown,
+            resolved: Reference::parse("zenodo:3608990").unwrap().reference,
+            title: None,
+            license: None,
+            doi: None,
+            files: (0..1001).map(remote).collect(),
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+        };
+        tell_kept(&output, &listing, &listing.files[..1000]);
+        let said = output.said().join("\n");
+        assert!(said.contains("1,000 of 1,001 files"), "{said}");
     }
 
     #[test]

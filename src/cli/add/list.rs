@@ -90,11 +90,10 @@ pub(super) async fn add_list_held(
         (extract, args.web_page),
     )?;
     // each dataset added gets one last line, so what it pinned and placed is told only with -v
-    let work = names
-        .iter()
-        .fold(Loop::new(context, project, net, cache), |work, name| {
-            work.telling(name)
-        });
+    let work = names.iter().fold(
+        Loop::new(context, project, net, cache).running("this add"),
+        |work, name| work.telling(name),
+    );
     if dry_run {
         let nothing = list.nothing_new();
         return preview_add(&work, &manifest, old, (names, given), here, Some(&nothing)).await;

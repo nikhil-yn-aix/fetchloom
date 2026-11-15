@@ -576,6 +576,16 @@ fn near_help(link: &str, near: &crate::source::search::Near) -> String {
     }
 }
 
+/// the loop of an add, which its questions and warnings name as one.
+fn adding_loop<'a>(
+    context: &'a Context,
+    project: &'a Project,
+    net: Arc<Net>,
+    cache: crate::cache::Cache,
+) -> Loop<'a> {
+    Loop::new(context, project, net, cache).running("this add")
+}
+
 async fn add_held(
     context: &Context,
     adding: &mut AddProject,
@@ -606,7 +616,7 @@ async fn add_held(
         None => Sources::new(manifest, old.as_ref()).present(&addition.entry, &addition.listing),
     };
     if let Some(name) = present {
-        let work = Loop::new(context, project, net, cache);
+        let work = adding_loop(context, project, net, cache);
         let present = Present {
             name: &name,
             entry: &addition.entry,
@@ -634,7 +644,7 @@ async fn add_held(
     let name = new_name(context, &mut args, &addition, &parsed, manifest)?;
     let text = adding.text.as_deref().unwrap_or_default();
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
-    let work = Loop::new(context, project, net, cache).telling(&name);
+    let work = adding_loop(context, project, net, cache).telling(&name);
     if args.no_sync {
         let shown = parsed.reference.shown();
         let pinned = stated::pinned(&name, &addition.entry, &addition.listing, (&shown, link))?;

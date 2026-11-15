@@ -2835,6 +2835,79 @@ fn a_sync_past_the_cache_budget_stops_without_yes_and_warns_with_it() -> Result 
     Ok(())
 }
 
+/// the budget's question names the command that would pass it.
+#[test]
+fn an_add_past_the_cache_budget_is_named_as_an_add() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (one, two) = (vec![b'x'; 1024], vec![b'y'; 1024]);
+    let first = Server::start("/one.bin", vec![file(&one, "\"a\""), file(&one, "\"a\"")])?;
+    let second = Server::start("/two.bin", vec![file(&two, "\"b\""), file(&two, "\"b\"")])?;
+    sandbox.allow(&first.url);
+    sandbox.allow(&second.url);
+    let output = sandbox.run(&["add", &first.url])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let fresh = clone(&sandbox, "fresh")?;
+    let empty = sandbox.folder("empty-cache")?;
+    let output = sandbox
+        .command_in(&fresh, &["--json", "add", &second.url])
+        .env("FETCHLOOM_CACHE", &empty)
+        .env("FETCHLOOM_CACHE_BUDGET", "1.5K")
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(1), "{document}");
+    assert_eq!(
+        document["errors"][0]["message"],
+        "this add would bring the cache to 2.0 KiB, past the 1.5 KiB cache_budget",
+        "{document}"
+    );
+    // two is what the add brings, so only one is offered for removal
+    assert_eq!(
+        document["errors"][0]["details"][1], "this project's largest dataset is one (1.0 KiB)",
+        "{document}"
+    );
+    Ok(())
+}
+
+/// a sync that must ask first says what it would download in the question alone: no line says
+/// the files are downloading before anyone said yes, and the line after a yes counts the same.
+#[test]
+fn a_download_that_needs_a_yes_is_told_only_once_it_starts() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (one, two) = (vec![b'x'; 1024], vec![b'y'; 1024]);
+    let first = Server::start("/one.bin", vec![file(&one, "\"a\""), file(&one, "\"a\"")])?;
+    let second = Server::start("/two.bin", vec![file(&two, "\"b\""), file(&two, "\"b\"")])?;
+    for server in [&first, &second] {
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let fresh = clone(&sandbox, "fresh")?;
+    let empty = sandbox.folder("empty-cache")?;
+    let sync = |args: &[&str]| {
+        sandbox
+            .command_in(&fresh, args)
+            .env("FETCHLOOM_CACHE", &empty)
+            .env("FETCHLOOM_ASK_ABOVE", "1K")
+            .output()
+    };
+    let refused = sync(&["sync"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("Downloading"), "{stderr}");
+    assert!(
+        stderr.contains("downloading 2 files needs 2.0 KiB, and fetchloom cannot ask you here"),
+        "{stderr}"
+    );
+    let agreed = sync(&["sync", "--yes"])?;
+    let stderr = text(&agreed.stderr)?;
+    assert_eq!(agreed.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Downloading 2 files \u{b7} 2.0 KiB"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// freeing space cannot help, so the refusal comes before the question about room.
 #[test]
 fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Result {
