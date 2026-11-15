@@ -729,12 +729,23 @@ impl Net {
             continuable: AtomicBool::new(true),
             done: false,
         };
+        let continuable =
+            |resumable: &Resumable| !matches!(resumable, Resumable::No | Resumable::Unproven);
         let heard = |event: Event| {
-            if let Event::Kept { resumable, .. } | Event::Started { resumable, .. } = &event {
-                let continuable = !matches!(resumable, Resumable::No | Resumable::Unproven);
-                unfinished.continuable.store(continuable, Ordering::Relaxed);
+            if let Event::Kept { resumable, .. } = &event {
+                let kept = continuable(resumable);
+                unfinished.continuable.store(kept, Ordering::Relaxed);
             }
-            on(event)
+            let started = match &event {
+                Event::Started { resumable, .. } => Some(continuable(resumable)),
+                _ => None,
+            };
+            on(event)?;
+            // a start refused at its question cut no byte, so the verdict before it still holds
+            if let Some(started) = started {
+                unfinished.continuable.store(started, Ordering::Relaxed);
+            }
+            Ok(())
         };
         let done = self.transfer(fetch, cache, &partial, known, &heard).await;
         unfinished.done = done.is_ok();
@@ -1039,10 +1050,6 @@ impl Net {
                 && total.is_some(),
             hashing: self.hashing.clone(),
         };
-        let Some(writer) = open(partial, body).await? else {
-            return Ok(Answer::StartOver);
-        };
-        let kept = writer.kept();
         let resumable = if std::mem::take(&mut state.sent_whole) {
             Resumable::No
         } else {
@@ -1053,7 +1060,18 @@ impl Net {
                 earlier.as_ref().map(|(_, kept)| kept),
             )
         };
-        self.started(on, total, offset + kept, resumable)?;
+        // a start from the first byte may ask a question first, which must find the bytes an
+        // earlier run or try kept as they were: they are cut only once it goes on
+        if offset == 0 {
+            self.started(on, total, 0, resumable)?;
+        }
+        let Some(writer) = open(partial, body).await? else {
+            return Ok(Answer::StartOver);
+        };
+        let kept = writer.kept();
+        if offset > 0 {
+            self.started(on, total, offset + kept, resumable)?;
+        }
         // ranges kept past the prefix leave gaps that only the split path fills, which adds no
         // stream to an answer that may not split
         let at_once = self.split.when == Splitting::Always || kept > 0;

@@ -1333,6 +1333,74 @@ fn a_part_that_names_no_version_continues_the_one_kept() {
     assert_eq!(fetched.unwrap().digest, crate::digest::sha256(b"aaaabbcc"));
 }
 
+/// leaves what a run stopped after `received` bytes of `body` from `url` leaves: the bytes and a
+/// record of them, under the `ETag` "v1", of a file `body` long.
+fn kept_part(cache: &Cache, url: &Url, body: &[u8], received: usize) {
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let validators = Validators {
+        etag: Some("\"v1\"".to_owned()),
+        ..Validators::default()
+    };
+    let length = Some(body.len() as u64);
+    let mut writer = partial.writer(0, length, validators, false, false).unwrap();
+    writer.write_all(&body[..received]).unwrap();
+    writer.save().unwrap();
+}
+
+/// a server that ignores the range answers a resume with the whole file, and starting over may
+/// ask a question first, of its size or of room. a no, a stop at it or no one to ask leaves the
+/// bytes an earlier run kept as they were, as "nothing changed" says, so the next run whose
+/// server sends the rest goes on from them.
+#[test]
+fn a_start_over_refused_at_its_question_keeps_the_bytes_kept() {
+    let body = pattern(0, 64 << 10);
+    let received = body.len() / 4;
+    let rest = format!("bytes {received}-{}/{}", body.len() - 1, body.len());
+    let (url, asked) = serve(vec![
+        reply("200 OK", &[("ETag", "\"v1\"")], &body),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", &rest), ("ETag", "\"v1\"")],
+            &body[received..],
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    kept_part(&cache, &url, &body, received);
+    let net = net(&url);
+    let fetch = Fetch::new(url.clone());
+    let refuse = |event: Event| match event {
+        Event::Started { .. } => Err(Error::new(
+            Kind::Unconfirmed,
+            "did not finish downloading big.bin",
+        )),
+        _ => Ok(()),
+    };
+    let refused = block_on(net.download(&fetch, &cache, &refuse)).unwrap_err();
+    assert_eq!(refused.kind, Kind::Unconfirmed);
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    assert_eq!(
+        partial.resumable().map(|(kept, _)| kept),
+        Some(received as u64),
+        "the start refused at its question deleted the bytes kept"
+    );
+    drop(partial);
+    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(&body));
+    assert_eq!(fetched.moved, (body.len() - received) as u64);
+    let asked = asked.lock().unwrap().clone();
+    assert!(
+        asked[1]
+            .to_ascii_lowercase()
+            .contains(&format!("range: bytes={received}-")),
+        "{asked:?}"
+    );
+}
+
 /// a stop while the download waits for a slot or an answer still counts the kept bytes. their
 /// `ETag` proves they may be continued, and once the server sends the rest, they can.
 #[test]
