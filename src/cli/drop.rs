@@ -371,7 +371,7 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
                 "offline, and no folder mirror holds a copy that hashes to its pin",
             )
             .help(format!(
-                "{} to ask the web mirrors and sources too",
+                "{} to ask the web and S3 mirrors and the sources too",
                 context.offline.retry()
             ));
             lacks
