@@ -358,7 +358,7 @@ fn a_put_back_file_names_what_leaves_it_out() -> Result {
     for (path, help) in [
         (
             "data/clean/clean.csv",
-            "clean makes data/clean/clean.csv, so to leave it out for good, choose the files inside clean's step",
+            "clean makes data/clean/clean.csv, so to leave it out for good, choose the files inside the step of clean",
         ),
         (
             "data/iris/iris.csv",

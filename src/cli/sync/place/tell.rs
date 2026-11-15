@@ -224,7 +224,7 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
         }
         match why {
             Unexcludable::Made(recipe) if told.insert(recipe) => leave.push(format!(
-                "{recipe} makes {path}, so to leave it out for good, choose the files inside {recipe}'s step"
+                "{recipe} makes {path}, so to leave it out for good, choose the files inside the step of {recipe}"
             )),
             Unexcludable::Only(dataset) if told.insert(dataset) => leave.push(format!(
                 "{path} is the only file of {dataset}, so to leave it out for good, run `{}`",
@@ -801,7 +801,7 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
                 let dataset = kept.dataset.as_deref().unwrap_or_default();
                 (
                     format!(
-                        "{} is linked to the cache's copy, which was changed, and only a build makes {dataset}'s pinned bytes again",
+                        "{} is linked to the cache's copy, which was changed, and only a build makes the pinned bytes of {dataset} again",
                         kept.path
                     ),
                     format!(
@@ -1263,16 +1263,16 @@ mod tests {
                     "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`; {own}"
                 ),
                 format!(
-                    "put back 2 files that were deleted or moved, since data.lock pins them: data/thumbs/a.png, data/pets/b.png; to leave a file out for good, run `fetchloom exclude data/pets/b.png`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
+                    "put back 2 files that were deleted or moved, since data.lock pins them: data/thumbs/a.png, data/pets/b.png; to leave a file out for good, run `fetchloom exclude data/pets/b.png`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside the step of thumbs; {own}"
                 ),
                 format!(
-                    "put back data/thumbs/a.png, which was deleted or moved, since data.lock pins it; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
+                    "put back data/thumbs/a.png, which was deleted or moved, since data.lock pins it; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside the step of thumbs; {own}"
                 ),
                 format!(
                     "put back data/m/m.csv, which was deleted or moved, since data.lock pins it; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; {own}"
                 ),
                 format!(
-                    "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/thumbs/a.png; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
+                    "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/thumbs/a.png; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside the step of thumbs; {own}"
                 ),
                 format!(
                     "put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more; to leave a file out for good, run `fetchloom exclude data/pets/0.png`; {own}; to keep the data folder somewhere else than data/, set data_dir in data.toml"

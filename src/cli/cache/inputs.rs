@@ -688,7 +688,7 @@ fn tell(output: &Output, plan: &Plan, told: Told) {
 
 fn costs(plan: &Plan, group: &Group, mirrors: &[String], bytes: u64) -> String {
     let source = if group.used == Use::Input(Supply::Source) && !plan.only_mirrors {
-        format!(" or {}'s source", group.name)
+        format!(" or the source of {}", group.name)
     } else {
         String::new()
     };

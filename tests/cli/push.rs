@@ -648,7 +648,10 @@ fn inputs_push_what_a_recipe_is_made_from() -> Result {
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "offline.missing");
     assert_eq!(error["details"], serde_json::json!(["clean/clean.csv"]));
-    assert_eq!(error["help"], "`fetchloom build clean` makes clean's files");
+    assert_eq!(
+        error["help"],
+        "`fetchloom build clean` makes the files of clean"
+    );
     assert_eq!(error["fix"], Value::Null);
     assert!(!root.exists());
     // the result as a build would leave it in the cache
@@ -693,7 +696,10 @@ fn inputs_push_what_a_recipe_is_made_from() -> Result {
         "this machine's cache lacks files the push needs, which only a build makes"
     );
     assert_eq!(error["details"], serde_json::json!(["clean/clean.csv"]));
-    assert_eq!(error["help"], "`fetchloom build clean` makes clean's files");
+    assert_eq!(
+        error["help"],
+        "`fetchloom build clean` makes the files of clean"
+    );
     assert_eq!(error["fix"], Value::Null);
     assert_eq!(document["work"]["requests"], 0);
     Ok(())

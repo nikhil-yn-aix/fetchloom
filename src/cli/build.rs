@@ -389,7 +389,7 @@ impl<'a> Building<'a> {
                 output.mark(
                     "Skipped",
                     &format!(
-                        "{name} · it reads {}'s result as data.lock pins it, which is not on this machine or a mirror",
+                        "{name} · it reads the result of {} as data.lock pins it, which is not on this machine or a mirror",
                         read.name
                     ),
                 );
@@ -1004,7 +1004,7 @@ fn closing(built: &[&str], repinned: &[String]) -> String {
     let recipes = |names: &[&str]| units::count(names.len() as u64, "recipe", "recipes");
     let pinned = match pinned.as_slice() {
         [] => None,
-        [name] => Some(format!("pinned {name}'s result in data.lock")),
+        [name] => Some(format!("pinned the result of {name} in data.lock")),
         many => Some(format!(
             "pinned the results of {} in data.lock",
             recipes(many)
@@ -1012,7 +1012,7 @@ fn closing(built: &[&str], repinned: &[String]) -> String {
     };
     let matched = match matched.as_slice() {
         [] => None,
-        [name] => Some(format!("{name}'s result matches data.lock")),
+        [name] => Some(format!("the result of {name} matches data.lock")),
         many => Some(format!("the results of {} match data.lock", recipes(many))),
     };
     match (pinned, matched) {
@@ -1380,7 +1380,7 @@ fn taken(name: &str, fault: Fault) -> Error {
             "pack small files into archives in the step, or raise most_files in the settings file or FETCHLOOM_MOST_FILES",
         ),
         Refused::Changed(path) => (
-            format!("{name}'s {path} changed while fetchloom read it"),
+            format!("{name} wrote {path}, which changed while fetchloom read it"),
             "make sure nothing the step started still writes into {out} once it ends",
         ),
     };
@@ -1500,8 +1500,8 @@ mod tests {
         let repinned = ["clean".to_owned(), "tidy".to_owned()];
         for (built, said) in [
             (&[][..], "every recipe is built as data.lock pins it"),
-            (&["clean"], "pinned clean's result in data.lock"),
-            (&["raw"], "raw's result matches data.lock"),
+            (&["clean"], "pinned the result of clean in data.lock"),
+            (&["raw"], "the result of raw matches data.lock"),
             (
                 &["clean", "tidy"],
                 "pinned the results of 2 recipes in data.lock",
@@ -1512,7 +1512,7 @@ mod tests {
             ),
             (
                 &["raw", "clean"],
-                "pinned clean's result in data.lock; raw's result matches data.lock",
+                "pinned the result of clean in data.lock; the result of raw matches data.lock",
             ),
         ] {
             assert_eq!(closing(built, &repinned), said, "{built:?}");

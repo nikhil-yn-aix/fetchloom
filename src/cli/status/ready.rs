@@ -71,7 +71,7 @@ impl Unready {
                 command("sync")
             ),
             Unready::Unbuilt(name) => format!(
-                "{name}'s pinned result is not on this machine or a mirror: `{}` makes it",
+                "the pinned result of {name} is not on this machine or a mirror: `{}` makes it",
                 command(&format!("build {name}"))
             ),
             Unready::Stale { name, moved } => format!(

@@ -1069,7 +1069,9 @@ impl Reader<'_> {
                 format!(
                     "run in datasets.{name} never names {{{input}}}, so the step cannot find {input}"
                 ),
-                format!("put {{{input}}} where the step takes the folder holding {input}'s files"),
+                format!(
+                    "put {{{input}}} where the step takes the folder holding the files of {input}"
+                ),
             ));
         }
         Ok(run)

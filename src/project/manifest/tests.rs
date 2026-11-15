@@ -908,7 +908,7 @@ fn templates_name_inputs_and_out() {
         (
             "[\"python3\", \"clean.py\", \"{out}\"]",
             "run in datasets.clean never names {raw}, so the step cannot find raw",
-            "put {raw} where the step takes the folder holding raw's files",
+            "put {raw} where the step takes the folder holding the files of raw",
         ),
         (
             "[\"python3\", \"{rwa}\", \"{raw}\", \"{out}\"]",

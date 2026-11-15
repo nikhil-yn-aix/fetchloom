@@ -751,7 +751,7 @@ fn unbuilt(lacked: &[&Needed]) -> Option<Error> {
         .iter()
         .map(|name| {
             format!(
-                "`{}` makes {name}'s files",
+                "`{}` makes the files of {name}",
                 super::project::command(&format!("build {name}"))
             )
         })
@@ -911,7 +911,7 @@ fn reasons(asks: &[Asking]) -> String {
     }
     match alike(Access::Unknown).as_slice() {
         [] => {}
-        [one] => reasons.push(format!("{one}'s source did not say who may read it")),
+        [one] => reasons.push(format!("the source of {one} did not say who may read it")),
         many => reasons.push(format!(
             "the sources of {} did not say who may read them",
             named(many)
@@ -1710,7 +1710,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         let error = unbuilt(&lacked).unwrap();
         assert_eq!(
             error.help.as_deref(),
-            Some("`fetchloom build clean` makes clean's files")
+            Some("`fetchloom build clean` makes the files of clean")
         );
     }
 
@@ -1831,7 +1831,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         );
         assert_eq!(
             reasons(&[asks("iris", Access::Unknown, &[])]),
-            "iris's source did not say who may read it"
+            "the source of iris did not say who may read it"
         );
         let six = ["a", "b", "c", "d", "e", "f"];
         assert_eq!(named(&six), "a, b, c, d, e and f");

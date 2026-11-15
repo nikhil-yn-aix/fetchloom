@@ -432,7 +432,7 @@ fn waiting(
     match (changes.is_empty(), found) {
         (true, Some(Found::Here(_))) if !results.is_empty() => {
             return match results.as_slice() {
-                [one] => format!("runs again if {one}'s result changes"),
+                [one] => format!("runs again if the result of {one} changes"),
                 many => format!(
                     "runs again if the results of {} change",
                     units::listed(many, "and")
@@ -707,7 +707,7 @@ mod tests {
         let changed = Manifest::parse(&TOML.replace("[\"t\", \"{raw}\"", "[\"u\", \"{raw}\""));
         let moved = Manifest::parse(&TOML.replace("zenodo:1", "zenodo:2"));
         let (changed, moved) = (changed.unwrap(), moved.unwrap());
-        let again = "runs again if clean's result changes";
+        let again = "runs again if the result of clean changes";
         let nowhere = format!("{NOWHERE}; it reads clean, which runs first");
         for (manifest, tidied, clean, said) in [
             (&changed, true, (Action::WouldRun, "run changed"), again),

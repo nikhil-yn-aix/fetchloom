@@ -290,7 +290,7 @@ impl<'a> Loop<'a> {
         let (said, them) = match unbuilt.as_slice() {
             [name] => (
                 format!(
-                    "{name}'s pinned result is not on this machine or a mirror, so it is left out"
+                    "the pinned result of {name} is not on this machine or a mirror, so it is left out"
                 ),
                 "it",
             ),
@@ -1718,7 +1718,7 @@ pub(super) fn tell_stale(
 pub(super) fn unbuilt_here(names: &[String]) -> Error {
     let (message, them) = match names {
         [name] => (
-            format!("{name}'s pinned result is not on this machine or a mirror"),
+            format!("the pinned result of {name} is not on this machine or a mirror"),
             "it",
         ),
         many => (

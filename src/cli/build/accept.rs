@@ -185,7 +185,10 @@ fn take(
 fn tell(context: &Context, project: &Project, manifest: &Manifest, accepted: &[String]) {
     let output = &context.output;
     match accepted {
-        [name] => output.done("Ok", &format!("pinned {name}'s kept rebuild in data.lock")),
+        [name] => output.done(
+            "Ok",
+            &format!("pinned the kept rebuild of {name} in data.lock"),
+        ),
         many => output.done(
             "Ok",
             &format!(

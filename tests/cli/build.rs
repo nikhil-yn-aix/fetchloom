@@ -133,7 +133,7 @@ fn lock_check_and_sync_locked_report_recipe_drift() -> Result {
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     assert!(
         text(&synced.stderr)?.contains(
-            "clean's pinned result is not on this machine or a mirror, so it is left out"
+            "the pinned result of clean is not on this machine or a mirror, so it is left out"
         ),
         "{}",
         text(&synced.stderr)?
@@ -839,7 +839,7 @@ fn a_result_file_changed_through_its_link_is_named_and_one_build_repairs_it() ->
         "{stderr}"
     );
     assert!(
-        stderr.contains("warning: data/clean/b.txt is linked to the cache's copy, which was changed, and only a build makes clean's pinned bytes again\n  help: run `fetchloom build clean` to make them and put the file back\n"),
+        stderr.contains("warning: data/clean/b.txt is linked to the cache's copy, which was changed, and only a build makes the pinned bytes of clean again\n  help: run `fetchloom build clean` to make them and put the file back\n"),
         "{stderr}"
     );
     let repaired = build(&sandbox, &["build", "clean"])?;
@@ -906,7 +906,7 @@ fn a_result_left_out_after_a_pull_leaves_none_of_its_files() -> Result {
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert!(
         stderr.contains(
-            "clean's pinned result is not on this machine or a mirror, so it is left out"
+            "the pinned result of clean is not on this machine or a mirror, so it is left out"
         ),
         "{stderr}"
     );
@@ -1041,7 +1041,7 @@ fn a_rebuild_that_makes_the_pinned_files_says_it_matches() -> Result {
     assert_eq!(runs(&sandbox.work())?, 2, "the step ran again");
     assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
     assert!(
-        told.contains("         Ok clean's result matches data.lock\n"),
+        told.contains("         Ok the result of clean matches data.lock\n"),
         "{told}"
     );
     assert!(!told.contains("pinned"), "{told}");
@@ -1809,7 +1809,7 @@ fn a_term_after_the_build_marks_its_work_lets_it_finish() -> Result {
     );
     assert!(!stderr.contains("Stopping"), "{stderr}");
     assert!(
-        stderr.contains("         Ok pinned clean's result in data.lock\n"),
+        stderr.contains("         Ok pinned the result of clean in data.lock\n"),
         "{stderr}"
     );
     assert_eq!(fs::read(sandbox.work().join("data/clean/iris.csv"))?, IRIS);
@@ -1869,7 +1869,7 @@ fn a_term_after_accept_marks_its_work_lets_it_finish() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains("Stopping"), "{stderr}");
     assert!(
-        stderr.contains("         Ok pinned clean's kept rebuild in data.lock\n"),
+        stderr.contains("         Ok pinned the kept rebuild of clean in data.lock\n"),
         "{stderr}"
     );
     assert_ne!(pins(&sandbox.work())?, pinned);
@@ -2748,7 +2748,7 @@ fn sync_places_a_result_and_never_builds_it() -> Result {
     assert_eq!(kind, "build.needed");
     assert_eq!(
         message,
-        "clean's pinned result is not on this machine or a mirror"
+        "the pinned result of clean is not on this machine or a mirror"
     );
     assert_eq!(help, "run `fetchloom build clean` to make it here");
     assert_eq!(fix, &Value::Null, "building runs the project's code");
@@ -2801,7 +2801,7 @@ fn a_plain_sync_leaves_out_a_result_found_nowhere() -> Result {
         document["result"]["placement"]["unbuilt"],
         serde_json::json!(["clean"])
     );
-    let warned = "clean's pinned result is not on this machine or a mirror, so it is left out; run `fetchloom build clean` to make it here, or whoever built it can share it with `fetchloom push`";
+    let warned = "the pinned result of clean is not on this machine or a mirror, so it is left out; run `fetchloom build clean` to make it here, or whoever built it can share it with `fetchloom push`";
     assert!(
         crate::support::warned(&document)
             .iter()
