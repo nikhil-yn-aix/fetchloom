@@ -1067,7 +1067,8 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
 }
 
 /// a server that sent all of the same version when asked for the rest, as python's http.server
-/// does, sends no parts, while one that never said whether it does may.
+/// does, sends no parts, even one that says it does: the next run asks it the same and gets the
+/// whole file again. one that never said whether it does may.
 #[test]
 fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
     let head = |pairs: &[(&'static str, &'static str)]| {
@@ -1139,7 +1140,7 @@ fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
             &[("etag", "\"v1\""), ("accept-ranges", "bytes")][..],
             true,
             Some(&tagged),
-            Resumable::Yes,
+            Resumable::No,
         ),
         (
             StatusCode::PARTIAL_CONTENT,

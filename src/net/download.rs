@@ -221,7 +221,8 @@ pub(crate) enum Resumable {
 impl Resumable {
     /// what an answer of `status` with `head` allows, for bytes `proven` to be one file. asked for
     /// the rest of kept bytes with validators `asked`, a whole answer of that version means the
-    /// server sends no parts; one of another version is a restart that says nothing about parts.
+    /// server sends no parts, whatever its `Accept-Ranges` says, since the next run asks it the
+    /// same; one of another version is a restart that says nothing about parts.
     fn answered(
         status: StatusCode,
         head: &header::HeaderMap,
@@ -233,9 +234,11 @@ impl Resumable {
         }
         let ignored = status == StatusCode::OK
             && asked.is_some_and(|kept| headers::same_version(kept, &headers::validators(head)));
-        if status == StatusCode::PARTIAL_CONTENT || headers::accepts_ranges(head) {
+        if ignored {
+            Resumable::No
+        } else if status == StatusCode::PARTIAL_CONTENT || headers::accepts_ranges(head) {
             Resumable::Yes
-        } else if ignored || head.contains_key(header::ACCEPT_RANGES) {
+        } else if head.contains_key(header::ACCEPT_RANGES) {
             Resumable::No
         } else {
             Resumable::Maybe
