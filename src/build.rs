@@ -61,26 +61,29 @@ impl Staging {
                 crate::cache::sweep_scratch(&parent, &real);
                 let (folder, lock) = crate::cache::make_build_folder(&real, crate::cache::SCRATCH)
                     .map_err(|err| in_scratch(scratch, err))?;
-                let held = hold_in(parent, &folder, lock.as_ref())?;
+                let held = hold_in(parent, &folder, lock.as_ref(), Some(scratch))?;
                 (folder, lock, held, Some(real))
             } else {
                 let (folder, lock) = cache.build_folder()?;
                 let held = hold(cache.root(), &folder, lock.as_ref())?;
                 (folder, lock, held, None)
             };
-            let elsewhere = scratch.is_some()
-                && rustix::fs::fstat(&*held.folder)?.st_dev
-                    != rustix::fs::stat(cache.root())?.st_dev;
-            for name in ["in", "out"] {
-                rustix::fs::mkdirat(&*held.folder, name, rustix::fs::Mode::from_raw_mode(0o700))?;
-            }
-            Ok(Staging {
+            // dropped on a failure from here, it clears the folder
+            let mut staging = Staging {
                 folder,
                 lock,
                 held,
                 scratch,
-                elsewhere,
-            })
+                elsewhere: false,
+            };
+            staging.elsewhere = staging.scratch.is_some()
+                && rustix::fs::fstat(&*staging.held.folder)?.st_dev
+                    != rustix::fs::stat(cache.root())?.st_dev;
+            for name in ["in", "out"] {
+                let mode = rustix::fs::Mode::from_raw_mode(0o700);
+                rustix::fs::mkdirat(&*staging.held.folder, name, mode)?;
+            }
+            Ok(staging)
         }
         #[cfg(not(unix))]
         {
@@ -361,8 +364,10 @@ fn in_scratch(scratch: &Path, err: io::Error) -> io::Error {
 }
 
 /// opens `folder`, a step's folder in the cache at `root`, from `root` without following a link,
-/// and refuses it unless it is this user's, open to its owner alone, as made, and the one this run
-/// made: it holds `lock`, the lock file this run holds, where the disk takes locks.
+/// and refuses it unless it is this user's, no one else may write it, and it is the one this run
+/// made: it holds `lock`, the lock file this run holds, where the disk takes locks. it is called
+/// only when no one else may write the cache's tmp/, so a disk that keeps no folder modes, which
+/// shows it as other than the 0700 it was made with, is no refusal.
 #[cfg(unix)]
 fn hold(root: &Path, folder: &Path, lock: Option<&File>) -> io::Result<Held> {
     use rustix::fs::{Mode, OFlags};
@@ -370,12 +375,19 @@ fn hold(root: &Path, folder: &Path, lock: Option<&File>) -> io::Result<Held> {
     // a cache folder someone named may itself be a link
     let root = File::open(root)?;
     let tmp = File::from(rustix::fs::openat(&root, "tmp", flags, Mode::empty())?);
-    hold_in(tmp, folder, lock)
+    hold_in(tmp, folder, lock, None)
 }
 
-/// [`hold`] for `folder` in the folder `parent` holds open.
+/// [`hold`] for `folder` in the folder `parent` holds open: in `scratch`, the folder TMPDIR names,
+/// when it is there, where it must be open to this user alone, as made, since a shared cache's
+/// copies are made in it. a refused folder this run made goes; another stays as it is.
 #[cfg(unix)]
-fn hold_in(parent: File, folder: &Path, lock: Option<&File>) -> io::Result<Held> {
+fn hold_in(
+    parent: File,
+    folder: &Path,
+    lock: Option<&File>,
+    scratch: Option<&Path>,
+) -> io::Result<Held> {
     use rustix::fs::{AtFlags, Mode, OFlags};
     let name = folder
         .file_name()
@@ -391,17 +403,26 @@ fn hold_in(parent: File, folder: &Path, lock: Option<&File>) -> io::Result<Held>
         }
         None => false,
     };
-    if !crate::cache::is_private(&rustix::fs::fstat(&opened)?) || another {
-        return Err(io::Error::new(
+    let found = rustix::fs::fstat(&opened)?;
+    let refused = if another || !crate::cache::is_own(&found) {
+        io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!("{} is not this user's alone", folder.display()),
-        ));
+        )
+    } else if let Some(scratch) = scratch.filter(|_| !crate::cache::is_private(&found)) {
+        let said = "is on a disk that keeps no folder permissions, so others could enter the step's folder there";
+        unfit(scratch, None, io::ErrorKind::PermissionDenied, said)
+    } else {
+        return Ok(Held {
+            parent,
+            folder: Arc::new(opened),
+            name,
+        });
+    };
+    if !another && found.st_uid == rustix::process::geteuid().as_raw() {
+        let _ = crate::cache::clear_folder(&parent, &name, &opened);
     }
-    Ok(Held {
-        parent,
-        folder: Arc::new(opened),
-        name,
-    })
+    Err(refused)
 }
 
 #[cfg(unix)]
@@ -548,12 +569,15 @@ mod tests {
     }
 
     /// a folder put in place of the new one before it is held, even one of this user's own, is
-    /// refused: it lacks the lock this run made.
+    /// refused: it lacks the lock this run made. it is not this run's, so it stays as it was.
     #[cfg(unix)]
     #[test]
     fn a_folder_put_in_place_before_it_is_held_is_refused() {
         let (dir, cache) = crate::cache::tests::cache();
         let (folder, lock) = cache.build_folder().unwrap();
+        if lock.is_none() {
+            return crate::test_skips::skip("file-locks", "this disk takes no file locks");
+        }
         std::fs::rename(&folder, dir.path().join("away")).unwrap();
         std::fs::create_dir(&folder).unwrap();
         std::fs::write(folder.join("lock"), b"").unwrap();
@@ -561,13 +585,61 @@ mod tests {
         let refused = hold(cache.root(), &folder, lock.as_ref()).err().unwrap();
 
         assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert!(folder.join("lock").exists());
     }
 
-    /// the step's own folder, its lock in place, is refused once others may open it, as a folder
+    /// a disk that keeps no folder modes, as vfat or exfat mounted for one user, shows the 0700
+    /// a build makes its folder with as 0755: in a cache no one else may write, that folder is the
+    /// step's all the same.
+    #[cfg(unix)]
+    #[test]
+    fn a_step_folder_on_a_disk_that_keeps_no_folder_modes_is_held() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, cache) = crate::cache::tests::cache();
+        let (folder, lock) = cache.build_folder().unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let held = hold(cache.root(), &folder, lock.as_ref());
+
+        assert!(held.is_ok(), "{:?}", held.err());
+    }
+
+    /// in the folder TMPDIR names, a step's folder must be open to this user alone, since a
+    /// shared cache's copies are made there: on a disk that shows the 0700 it was made with as
+    /// 0755, it is refused with TMPDIR named, and it is not left behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_folder_others_could_enter_is_refused_and_cleared() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = dir.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        let (folder, lock) =
+            crate::cache::make_build_folder(&scratch, crate::cache::SCRATCH).unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let parent = File::open(&scratch).unwrap();
+
+        let refused = hold_in(parent, &folder, lock.as_ref(), Some(&scratch))
+            .err()
+            .unwrap();
+
+        assert!(unsafe_scratch(&refused), "{refused}");
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "{}, the folder TMPDIR names, is on a disk that keeps no folder permissions, so others could enter the step's folder there",
+                scratch.display()
+            )
+        );
+        drop(lock);
+        assert!(!folder.exists());
+    }
+
+    /// the step's own folder, its lock in place, is refused once others may write it, as a folder
     /// a co-user could have swapped in through would be.
     #[cfg(unix)]
     #[test]
-    fn a_folder_others_can_open_is_refused_though_it_holds_the_lock() {
+    fn a_folder_others_can_write_is_refused_though_it_holds_the_lock() {
         use std::os::unix::fs::PermissionsExt;
         let (_dir, cache) = crate::cache::tests::cache();
         let (folder, lock) = cache.build_folder().unwrap();

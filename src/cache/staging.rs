@@ -503,13 +503,13 @@ pub(crate) fn sweep_build_at(
 }
 
 /// the folder `name` in the folder `parent` holds, opened without following a link, when this
-/// user owns it and no one else may open it, as [`is_private`] says; none for any other folder.
+/// user owns it and no one else may write it, as [`is_own`] says; none for any other folder.
 #[cfg(unix)]
 pub(crate) fn private_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<Option<File>> {
     use rustix::fs::{Mode, OFlags};
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let folder = File::from(rustix::fs::openat(parent, name, flags, Mode::empty())?);
-    Ok(is_private(&rustix::fs::fstat(&folder)?).then_some(folder))
+    Ok(is_own(&rustix::fs::fstat(&folder)?).then_some(folder))
 }
 
 /// whether a folder is this user's and open to no one else: 0700, as a build's folder is made,
@@ -517,6 +517,15 @@ pub(crate) fn private_at(parent: &File, name: &std::ffi::OsStr) -> io::Result<Op
 #[cfg(unix)]
 pub(crate) fn is_private(found: &rustix::fs::Stat) -> bool {
     found.st_uid == rustix::process::geteuid().as_raw() && found.st_mode & 0o777 == 0o700
+}
+
+/// whether a folder is this user's and no one else may write in it, as a build's folder is,
+/// whatever else its mode says: a disk that keeps no folder modes, as vfat or exfat mounted for
+/// one user, shows the 0700 a build makes as 0755. another user can move only a folder they may
+/// write into tmp/ under a build's name, since a moved folder's `..` changes.
+#[cfg(unix)]
+pub(crate) fn is_own(found: &rustix::fs::Stat) -> bool {
+    found.st_uid == rustix::process::geteuid().as_raw() && found.st_mode & 0o022 == 0
 }
 
 /// clears what the folder `folder` holds open holds, then takes its name from the folder `parent`
@@ -976,6 +985,24 @@ mod tests {
 
         assert_eq!(fs::read(folder.join("kept")).unwrap(), b"the step's work");
         drop(lock);
+    }
+
+    /// a build folder a killed build left on a disk that keeps no folder modes, which shows the
+    /// 0700 it was made with as 0755, is swept as any other once no build holds its lock.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_left_on_a_disk_that_keeps_no_folder_modes_is_swept() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, cache) = cache();
+        let folder = cache.root().join("tmp").join("0123456789abcdef.build");
+        fs::create_dir_all(folder.join("out")).unwrap();
+        fs::write(folder.join("lock"), b"").unwrap();
+        fs::write(folder.join("out").join("x.csv"), b"x").unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+
+        cache.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
+
+        assert!(!folder.exists());
     }
 
     /// a folder of this user's that others can write, as `builds/<key>` in a group's cache, put in

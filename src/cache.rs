@@ -41,7 +41,7 @@ pub(crate) use staging::Staging;
 pub(crate) use staging::clear_build;
 #[cfg(unix)]
 pub(crate) use staging::{
-    SCRATCH, clear_folder, enter_at, is_private, make_build_folder, names_at, sweep_scratch,
+    SCRATCH, clear_folder, enter_at, is_own, is_private, make_build_folder, names_at, sweep_scratch,
 };
 pub(crate) use unpacked::{Member, members_of, parts_key, tree, tree_hash};
 #[cfg(test)]
