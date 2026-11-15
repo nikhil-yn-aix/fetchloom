@@ -546,6 +546,8 @@ pub(crate) enum Command {
     Lock(Lock),
 
     /// run the recipes and record their results in data.lock
+    ///
+    /// `fetchloom build` and recipes are experimental: later versions may change them.
     #[command(override_usage = "fetchloom build [options] [name]...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(BUILD_DRY_RUN)), after_help = examples::BUILD)]
     Build(Build),
 

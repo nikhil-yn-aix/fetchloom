@@ -219,6 +219,8 @@ more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/exit-codes/";
 /// docs page has the details; a test reads the example as data.toml.
 const RECIPES: &str = "fetchloom recipes
 
+`fetchloom build` and recipes are experimental: later versions may change them.
+
 a recipe makes a dataset from others with a command of yours, such as a
 script that cleans a raw table. write it in data.toml with from and run in
 place of ref:
@@ -737,6 +739,22 @@ mod tests {
             "\"uv\", \"run\", \"python\"",
         ] {
             assert!(RECIPES.contains(named), "{named}");
+        }
+    }
+
+    /// build may still change, which its help, short or long, and the recipes topic say in one
+    /// line, rather than a warning on every run.
+    #[test]
+    fn build_and_recipes_are_labelled_experimental() {
+        let line =
+            "`fetchloom build` and recipes are experimental: later versions may change them.";
+        let short = super::short(&["build".to_owned()]).unwrap_or_default();
+        for (asked, text) in [
+            ("build --help", full_help("build")),
+            ("build -h", short),
+            ("help recipes", RECIPES.to_owned()),
+        ] {
+            assert_eq!(text.matches(line).count(), 1, "{asked}: {text}");
         }
     }
 
