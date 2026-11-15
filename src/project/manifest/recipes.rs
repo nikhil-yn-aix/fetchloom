@@ -30,12 +30,15 @@ pub(crate) enum Slot<'a> {
     Out,
 }
 
+/// why [`Template::parse`] refuses a word holding a tab, a line break or an escape code.
+pub(crate) const CONTROL: &str = "holds a control character";
+
 impl Template {
     /// reads one word of `run`, or says why it is refused: a brace that is not part of `{name}`,
     /// `{{` or `}}`, or a control character, which no program reads as meant.
     pub(crate) fn parse(text: &str) -> Result<Template, &'static str> {
         if text.contains(crate::name::is_control) {
-            return Err("holds a control character");
+            return Err(CONTROL);
         }
         let mut pieces = Vec::new();
         let mut plain = String::new();

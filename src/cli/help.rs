@@ -242,8 +242,9 @@ place of ref:
 
 from names the datasets it reads. run is the program and its words, which no
 shell reads: {iris} stands for a folder holding a copy of iris's files, and
-{out} for the folder the step writes its result in. code lists the files of
-the project the result depends on, such as the script, and
+{out} for the folder the step writes its result in. a brace a word holds for
+itself, as python code may, is written twice: {{ or }}. code lists the files
+of the project the result depends on, such as the script, and
 env = { NAME = \"value\" } sets variables for the step alone.
 
 a recipe can also read no dataset, as a seeded simulation does: leave from
@@ -772,6 +773,12 @@ mod tests {
         ] {
             assert!(RECIPES.contains(named), "{named}");
         }
+    }
+
+    /// the brace error's help asks for {{ and }}, which the topic says how to write.
+    #[test]
+    fn the_recipes_topic_says_how_to_write_a_brace() {
+        assert!(RECIPES.contains("is written twice: {{ or }}"), "{RECIPES}");
     }
 
     /// build may still change, which the command list, its help, short or long, and the recipes

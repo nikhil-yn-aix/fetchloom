@@ -994,7 +994,7 @@ fn templates_name_inputs_and_out() {
         (
             "[\"python3\\n\", \"{raw}\", \"{out}\"]",
             "a word of run in datasets.clean holds a control character",
-            "write {{ and }} for a brace of its own, and {name} for the folder of a dataset it reads",
+            "take the control character, such as a tab, a line break or an escape code, out of that word",
         ),
     ] {
         let error = fails(&recipe(run));

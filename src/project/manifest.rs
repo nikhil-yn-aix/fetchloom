@@ -1004,11 +1004,16 @@ impl Reader<'_> {
         let mut run = Vec::with_capacity(words.len());
         for word in &words {
             let template = Template::parse(word).map_err(|reason| {
+                let help = if reason == recipes::CONTROL {
+                    "take the control character, such as a tab, a line break or an escape code, out of that word"
+                } else {
+                    "write {{ and }} for a brace of its own, and {name} for the folder of a dataset it reads"
+                };
                 self.error(
                     item.span(),
                     format!("a word of run in datasets.{name} {reason}"),
                 )
-                .help("write {{ and }} for a brace of its own, and {name} for the folder of a dataset it reads")
+                .help(help)
             })?;
             run.push(template);
         }
