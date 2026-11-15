@@ -618,8 +618,9 @@ impl Cache {
                 continue;
             };
             let bytes = folder.join(format!("{key}.part"));
-            let left = match fs::metadata(&bytes) {
-                Ok(metadata) => metadata.modified().is_ok_and(abandoned),
+            // aged as an object is: a seal dates a download back to its start
+            let left = match fs::symlink_metadata(&bytes) {
+                Ok(metadata) => last_changed(&metadata).is_ok_and(abandoned),
                 Err(err) => err.kind() == io::ErrorKind::NotFound,
             };
             if !left {
@@ -826,9 +827,7 @@ fn scan_fan(prefix: &str, fan: &Path, stop: &Stop) -> Result<Fan, Error> {
             continue;
         };
         match entry.metadata().and_then(|metadata| {
-            let modified = metadata.modified()?;
-            let changed =
-                super::object::changed(&metadata).map_or(modified, |changed| changed.max(modified));
+            let changed = last_changed(&metadata)?;
             // the metadata unix gives counts names, so this takes no further call; what a windows
             // listing gives does not count them
             #[cfg(unix)]
@@ -864,6 +863,14 @@ fn scan_fan(prefix: &str, fan: &Path, stop: &Stop) -> Result<Fan, Error> {
         paths,
         unreadable,
     })
+}
+
+/// when the file `metadata` describes last changed, which gc ages it from: its modification time,
+/// or on unix its ctime when later, which a seal, publishing or a link moves, as a seal dates the
+/// modification time back to when the download began.
+fn last_changed(metadata: &fs::Metadata) -> io::Result<SystemTime> {
+    let modified = metadata.modified()?;
+    Ok(super::object::changed(metadata).map_or(modified, |changed| changed.max(modified)))
 }
 
 pub(super) fn removed(path: &Path, result: io::Result<()>, not_removed: &mut Vec<Failure>) -> bool {
@@ -1406,6 +1413,44 @@ mod tests {
         let freed = cache.sweep(&Needed::default(), SystemTime::now());
         assert_eq!(freed.removed_objects, 0);
         assert!(object.exists());
+    }
+
+    /// a download whose last byte came long after its first is sealed with its time dated back
+    /// to its start, and one a run died before publishing waits for the next run to publish it,
+    /// so a sweep ages it by its ctime, which the seal moved, as it ages an object.
+    #[cfg(unix)]
+    #[test]
+    fn a_sealed_download_dated_back_to_its_start_still_gets_a_day() {
+        let (_dir, cache) = cache();
+        let url = "https://example.org/resumed";
+        let claim = || match cache.claim(url).unwrap() {
+            crate::cache::Claim::Owned(partial) => partial,
+            crate::cache::Claim::Busy => panic!("nothing else holds {url}"),
+        };
+        let partial = claim();
+        let mut writer = partial
+            .writer(0, None, crate::cache::Validators::default(), false, false)
+            .unwrap();
+        writer.write_all(b"abc").unwrap();
+        writer.save().unwrap();
+        drop((writer, partial));
+        // as the seal leaves the part of a download begun two days ago
+        let key = digest::sha256(url.as_bytes()).hex();
+        let part = cache.partial_folder(&key).join(format!("{key}.part"));
+        let began = SystemTime::now() - GRACE - Duration::from_hours(24);
+        fs::File::options()
+            .write(true)
+            .open(&part)
+            .unwrap()
+            .set_modified(began)
+            .unwrap();
+        seal(&part);
+
+        let freed = cache.sweep(&Needed::default(), SystemTime::now());
+
+        assert_eq!(freed.removed_leftovers, 0, "{:?}", freed.not_removed);
+        let resumed = claim().resumable().map(|(kept, _)| kept);
+        assert_eq!(resumed, Some(3), "the next run publishes it");
     }
 
     #[test]
