@@ -940,7 +940,8 @@ impl<'a> Placing<'a> {
                     }
                     restore(&self.survey, &target.path, placement);
                     if !matches!(action, Action::Unblock(_))
-                        && self.survey.elsewhere.contains(&target.path)
+                        && (self.survey.elsewhere.contains(&target.path)
+                            || self.survey.damaged.contains(&target.path))
                         && let Some(kept_as) = aside_names(&target.path, &taken).find(|name| {
                             fs::symlink_metadata(native(&self.project.root, name)).is_err()
                         })
@@ -1924,6 +1925,15 @@ fn make_way(
         crate::stop::hold("FETCHLOOM_TEST_HOLD_KEPT");
         return Ok(());
     }
+    // what changed under its size and time may be someone's edit, so it moves aside, kept
+    if survey.damaged.contains(path) {
+        let kept_as = keep_moved(project, placer, taken, path)?;
+        placement.changed_copies.push(ChangedCopy {
+            path: path.to_owned(),
+            kept_as,
+        });
+        return Ok(());
+    }
     let destination = native(&project.root, path);
     if forced {
         let aside = planned_aside(project, placement, path)
@@ -1962,10 +1972,10 @@ fn aside_names<'n>(path: &'n str, taken: &'n HashSet<&str>) -> impl Iterator<Ite
         .filter(move |name| !taken.contains(name.as_str()))
 }
 
-/// the paths of `targets` when a file of the survey was changed through another of its links,
-/// which [`aside_names`] passes over, and none otherwise.
+/// the paths of `targets` when a file of the survey was changed through another of its links or
+/// under its size and time, which [`aside_names`] passes over, and none otherwise.
 fn taken_paths<'t>(survey: &Survey, targets: &'t [Target<'_>]) -> HashSet<&'t str> {
-    if survey.elsewhere.is_empty() {
+    if survey.elsewhere.is_empty() && survey.damaged.is_empty() {
         return HashSet::new();
     }
     targets.iter().map(|target| target.path.as_str()).collect()
@@ -1999,6 +2009,29 @@ fn keep_aside(
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(local(&aside, &err)),
+        }
+    }
+    let full = std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("{MOST_KEPT} changed copies are already kept beside it"),
+    );
+    Err(local(&from, &full))
+}
+
+/// moves the changed file at `path`, which has no other name, to the first free name of
+/// [`aside_names`], never replacing one, and returns that name.
+fn keep_moved(
+    project: &Project,
+    placer: &mut Placer,
+    taken: &HashSet<&str>,
+    path: &str,
+) -> Result<String, Error> {
+    let from = native(&project.root, path);
+    for name in aside_names(path, taken) {
+        match placer.move_aside_to(&from, &native(&project.root, &name)) {
+            Ok(()) => return Ok(name),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(local(&from, &err)),
         }
     }
     let full = std::io::Error::new(

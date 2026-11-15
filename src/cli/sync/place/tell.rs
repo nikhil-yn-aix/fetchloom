@@ -87,11 +87,28 @@ pub(super) fn tell(
     warn_retired(output, placement);
     warn_put_back(output, manifest, placement, "put back");
     warn_unreached(output, &placement.unreached);
+    warn_restored(output, placement);
+}
+
+/// a warning for each file put back though no edit of this project's showed, saying where its
+/// changed bytes were kept.
+fn warn_restored(output: &Output, placement: &Placement) {
     for path in &placement.restored {
         if placement.repaired.contains(path) {
-            output.warn(Warning::PlaceRestored, &format!(
+            let said = format!(
                 "{path} was put back as pinned: its bytes had changed though its size and time had not"
-            ));
+            );
+            match changed_copy(placement, path) {
+                Some(copy) => output.warn_with(
+                    Warning::PlaceRestored,
+                    &format!("{said}. the changed copy is kept as {}", copy.kept_as),
+                    &format!(
+                        "if no one meant to change the file, delete {}",
+                        copy.kept_as
+                    ),
+                ),
+                None => output.warn(Warning::PlaceRestored, &said),
+            }
         } else {
             let edits = "to edit a dataset's files, set copy = true for it in data.toml";
             let (said, help) = match changed_copy(placement, path) {
@@ -119,7 +136,7 @@ pub(super) fn tell(
     }
 }
 
-/// where the cache's changed copy linked at `path` was kept, if sync kept it.
+/// where the changed copy of `path` was kept, if sync kept it.
 fn changed_copy<'p>(placement: &'p Placement, path: &str) -> Option<&'p ChangedCopy> {
     placement
         .changed_copies
@@ -482,9 +499,18 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     warn_unreached(output, &placement.unreached);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
-            output.warn(Warning::PlaceRestored, &format!(
+            let said = format!(
                 "{path} would be put back as pinned: its bytes changed though its size and time did not"
-            ));
+            );
+            output.warn(
+                Warning::PlaceRestored,
+                &match changed_copy(placement, path) {
+                    Some(copy) => {
+                        format!("{said}. the changed copy would be kept as {}", copy.kept_as)
+                    }
+                    None => said,
+                },
+            );
         } else {
             output.warn(Warning::PlaceRestored, &match changed_copy(placement, path) {
                 Some(copy) => format!(

@@ -3002,6 +3002,15 @@ fn verify_finds_and_puts_back_a_change_that_kept_its_size_and_time() -> Result {
         ),
         "{stderr}"
     );
+    let kept = sandbox.run(&["status", "--verify"])?;
+    let rows = text(&kept.stdout)?;
+    assert!(
+        rows.contains(
+            "Extra data/iris/iris.csv.changed · a changed copy sync kept of data/iris/iris.csv"
+        ),
+        "{rows}"
+    );
+    delete(&placed.with_file_name("iris.csv.changed"))?;
     let after = sandbox.run(&["status", "--verify"])?;
     assert_eq!(
         text(&after.stderr)?,
@@ -3112,6 +3121,35 @@ fn verify_checks_the_cached_bytes_a_fresh_clone_places() -> Result {
         server.requests().len(),
         2,
         "the changed copy is fetched again"
+    );
+    Ok(())
+}
+
+/// the bytes of a copy `sync --verify` puts back may be someone's edit that kept its size and
+/// time, so they stay beside it, as a changed link's do.
+#[test]
+fn verify_keeps_the_changed_bytes_of_a_copy_it_puts_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let placed = quietly_changed_copy(&sandbox, &server)?;
+    let changed = fs::read(&placed)?;
+    let planned = sandbox.run(&["sync", "--verify", "--dry-run"])?;
+    let stderr = text(&planned.stderr)?;
+    assert!(
+        stderr.contains("the changed copy would be kept as data/iris/iris.csv.changed"),
+        "{stderr}"
+    );
+
+    let repaired = sandbox.run(&["sync", "--verify"])?;
+
+    let stderr = text(&repaired.stderr)?;
+    assert_eq!(repaired.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
+    let kept = placed.with_file_name("iris.csv.changed");
+    assert_eq!(fs::read(&kept)?, changed, "{stderr}");
+    assert!(
+        stderr.contains("the changed copy is kept as data/iris/iris.csv.changed"),
+        "{stderr}"
     );
     Ok(())
 }
