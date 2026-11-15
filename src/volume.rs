@@ -566,7 +566,8 @@ pub(crate) enum Lacking {
 
 /// renames `from` in `from_parent` to `to` in `to_parent` without replacing anything: by the
 /// rename linux and macos have that refuses a taken name, else by a link to the new name and the
-/// old name's removal.
+/// old name's removal, else, on a disk with neither, by [`rename_over_reserved`], which promises
+/// less.
 #[cfg(unix)]
 pub(crate) fn rename_new_at<P: rustix::path::Arg + Copy, Q: rustix::path::Arg + Copy>(
     from_parent: std::os::fd::BorrowedFd<'_>,
