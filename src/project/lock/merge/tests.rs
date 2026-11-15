@@ -838,6 +838,90 @@ fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
     assert_eq!(gone.summary.removed, ["beta"]);
 }
 
+/// what a refusal shows of the other side holds only what fetchloom writes: list parts by the
+/// names it gives them, and no `ref` query or `env` value, which may carry a secret.
+#[test]
+fn a_needed_choice_shows_no_unchecked_part_or_secret() {
+    let mut photos = pin("photos", "zenodo:7", b"one");
+    photos.files.push(LockedFile {
+        path: "photos2.csv".to_owned(),
+        ..photos.files[0].clone()
+    });
+    let listed = Lock {
+        datasets: vec![photos],
+        ..Lock::default()
+    };
+    let [(part, _)] = &listed.lists_with(1)[..] else {
+        panic!("photos has one list part");
+    };
+    let theirs = listed
+        .render_with(1)
+        .replace(part.as_str(), "data.lock.d/../../planted.tsv.zst");
+    let text = toml(&[("photos", "zenodo:7")]);
+    let ours = lock(vec![pin("photos", "zenodo:7", b"two")]);
+    let error = merged(
+        &sides(text.clone(), text, None),
+        &sides(ours, theirs, None),
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        error.details.contains(
+            &"photos on theirs: 2 files \u{b7} 6 B, listed in files fetchloom does not write"
+                .to_owned()
+        ),
+        "{:?}",
+        error.details
+    );
+
+    let entry = |token: &str, seed: &str| {
+        format!(
+            "[datasets.raw]\nref = \"https://example.org/raw.csv?token={token}\"\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{{raw}}\", \"{{out}}\"]\nenv = {{ SEED = \"{seed}\" }}\n"
+        )
+    };
+    let manifest = sides(
+        entry("ours1", "4"),
+        entry("theirs1", "5"),
+        Some(entry("base1", "3")),
+    );
+    let none = lock(Vec::new());
+    let error = merged(
+        &manifest,
+        &sides(none.clone(), none.clone(), Some(none)),
+        &[],
+    )
+    .unwrap_err();
+    let said = error.details.join("\n");
+    for secret in ["ours1", "theirs1", "base1", "\"4\"", "\"5\""] {
+        assert!(!said.contains(secret), "{said}");
+    }
+    for line in [
+        "clean on ours: env = { SEED = *** }",
+        "raw on theirs: ref = \"https://example.org/raw.csv?token=***\"",
+    ] {
+        assert!(error.details.iter().any(|detail| detail == line), "{said}");
+    }
+}
+
+/// three locks are held at once in a merge, so their files together must fit the memory a
+/// container leaves, as one lock's must before its lists are read.
+#[test]
+fn three_locks_must_fit_together() {
+    let one = lock(vec![pin("a", "zenodo:1", b"a")]);
+    let three = sides(one.clone(), one.clone(), Some(one));
+    assert!(read_locks(&three, u64::MAX).is_ok());
+    let room = super::super::BASE + 2 * super::super::PER_FILE;
+    let error = read_locks(&three, room).err().unwrap();
+    assert_eq!(error.kind, Kind::LocalIo);
+    assert!(
+        error
+            .message
+            .starts_with("reading this project's 3 files takes about"),
+        "{}",
+        error.message
+    );
+}
+
 /// the other side of a merge wrote data.lock, names of list parts too: a part that climbs out of
 /// data.lock.d is refused before anything is read or written for it, whatever git gives.
 #[test]

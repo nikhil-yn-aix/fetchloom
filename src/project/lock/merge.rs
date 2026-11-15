@@ -282,7 +282,8 @@ pub(crate) fn merge(
     let text = merged_text(&manifests, frame, &decided.entries)?;
     let merged = read_merged(&text)?;
     check_merged(&manifests, &merged, &decided.entries)?;
-    let locks = lock.map(read_locks).transpose()?;
+    let memory = super::ROOM.get().copied().unwrap_or(u64::MAX);
+    let locks = lock.map(|lock| read_locks(lock, memory)).transpose()?;
     let mut records = match &locks {
         Some(locks) => {
             let records = pick_records(locks, &merged, choices, &mut decided);
@@ -630,8 +631,9 @@ impl Locks {
 }
 
 /// data.lock's sides: whole as git holds them when it gave them, so no pin mixes the lines of
-/// both, else as the conflict lines give them.
-fn read_locks(sides: &Sides) -> Result<Locks, Error> {
+/// both, else as the conflict lines give them. the merge holds all three at once, so their files
+/// together must fit `room`, the memory a container leaves, before any list is read.
+fn read_locks(sides: &Sides, room: u64) -> Result<Locks, Error> {
     let side =
         |text: &str, side: Side| parse(text).map_err(|error| unreadable(super::FILE, side, &error));
     let [ours, theirs] = sides
@@ -640,12 +642,21 @@ fn read_locks(sides: &Sides) -> Result<Locks, Error> {
         .map_or([&sides.ours, &sides.theirs], |[ours, theirs]| {
             [ours, theirs]
         });
-    Ok(Locks {
+    let locks = Locks {
         ours: side(ours, Side::Ours)?,
         theirs: side(theirs, Side::Theirs)?,
         base: sides.base.as_deref().and_then(|base| parse(base).ok()),
         whole: sides.whole.is_some(),
-    })
+    };
+    super::fits(
+        locks
+            .ours
+            .iter()
+            .chain(&locks.theirs)
+            .chain(locks.base.iter().flatten()),
+        room,
+    )?;
+    Ok(locks)
 }
 
 /// the data.lock entries kept for `merged`, sorted by name: a fetched dataset's answers its spec,
@@ -1096,10 +1107,27 @@ fn differing(entry: &toml::Table, other: &toml::Table) -> Vec<String> {
         .into_iter()
         .filter(|key| entry.get(*key) != other.get(*key))
         .map(|key| match entry.get(key) {
-            Some(value) => format!("{} = {}", written_key(key), written(value)),
+            Some(value) => format!("{} = {}", written_key(key), masked(key, value)),
             None => format!("no {}", written_key(key)),
         })
         .collect()
+}
+
+/// `value` of `key` as [`written`] writes it, with what may hold a secret masked as data.toml's
+/// citations leave it out: a `ref`'s login and query values, and each value of `env`.
+fn masked(key: &str, value: &toml::Value) -> String {
+    match (key, value) {
+        ("ref", toml::Value::String(text)) => super::quoted(&crate::shown::mask_query(text)),
+        ("env", toml::Value::Table(table)) if !table.is_empty() => {
+            let names: Vec<String> = table
+                .keys()
+                .map(|name| format!("{} = ***", written_key(name)))
+                .collect();
+            format!("{{ {} }}", names.join(", "))
+        }
+        ("env", _) => "***".to_owned(),
+        _ => written(value),
+    }
 }
 
 /// `value` on one line, as data.toml writes it.
@@ -1195,8 +1223,13 @@ fn pinned(locks: &Locks, name: &str, side: Side) -> Vec<String> {
         units::count(count, "file", "files"),
         units::size(bytes)
     );
-    if let Some(listed) = listed {
-        let _ = write!(head, ", listed in {}", listed.parts.join(", "));
+    // the other side wrote these names, so only fetchloom's own are shown
+    match listed {
+        Some(listed) if super::lists::named_as_written(name, listed) => {
+            let _ = write!(head, ", listed in {}", listed.parts.join(", "));
+        }
+        Some(_) => head.push_str(", listed in files fetchloom does not write"),
+        None => {}
     }
     let mut lines = vec![head];
     let others: &[LockedFile] = match other {

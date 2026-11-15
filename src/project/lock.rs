@@ -73,8 +73,8 @@ pub(crate) fn set_room(room: Option<u64>) {
 
 /// refuses, before any list is read, a lock whose files take more memory than `room`, so a run
 /// too big for its container says so instead of being killed partway.
-fn fits(parsed: &[Parsed], room: u64) -> Result<(), Error> {
-    let files: u64 = parsed.iter().map(Parsed::files).sum();
+fn fits<'a>(parsed: impl IntoIterator<Item = &'a Parsed>, room: u64) -> Result<(), Error> {
+    let files: u64 = parsed.into_iter().map(Parsed::files).sum();
     let need = BASE.saturating_add(files.saturating_mul(PER_FILE));
     if need <= room {
         return Ok(());
