@@ -852,5 +852,6 @@ fn read_exact_at(file: &File, mut at: u64, mut buffer: &mut [u8]) -> io::Result<
     }
     Ok(())
 }
+
 #[cfg(test)]
 mod tests;

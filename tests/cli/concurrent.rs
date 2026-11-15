@@ -225,10 +225,12 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
 fn processes_needing_the_same_files_download_each_once() -> Result {
     shared_cache_syncs(false, false)
 }
+
 #[test]
 fn processes_sharing_some_files_download_each_once() -> Result {
     shared_cache_syncs(true, false)
 }
+
 #[test]
 fn processes_place_from_a_full_cache_without_downloading() -> Result {
     shared_cache_syncs(false, true)

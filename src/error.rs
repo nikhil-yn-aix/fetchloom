@@ -619,11 +619,6 @@ mod tests {
             );
         }
     }
-}
-
-#[cfg(test)]
-mod io_cause_tests {
-    use super::*;
 
     #[test]
     fn native_io_causes_survive_decoder_wrappers() {

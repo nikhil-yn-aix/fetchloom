@@ -1466,6 +1466,7 @@ fn dropping_a_server_task_closes_the_listener_its_worker_owns() -> Result {
     );
     Ok(())
 }
+
 /// a connection to a `Refusing` address is refused at once on every system, not left to time out.
 #[test]
 fn a_refusing_address_refuses_each_connection() -> Result {
