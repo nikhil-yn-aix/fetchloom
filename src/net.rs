@@ -677,27 +677,15 @@ impl Net {
     }
 
     /// [`Net::send_on`] for a file body, which a `mirror` may be asked for in mirror-only mode.
-    #[cfg(test)]
     async fn send_body(
         &self,
         url: &Url,
         mirror: bool,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, Failure> {
-        let response = self.send_on(Lane::Apart, url, mirror, shape, None).await?;
-        tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
-        Ok(response)
-    }
-
-    async fn send_body_holding(
-        &self,
-        url: &Url,
-        mirror: bool,
-        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-        holding: Holding<'_>,
+        holding: Option<Holding<'_>>,
     ) -> Result<reqwest::Response, Failure> {
         let response = self
-            .send_on(Lane::Apart, url, mirror, shape, Some(holding))
+            .send_on(Lane::Apart, url, mirror, shape, holding)
             .await?;
         tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
         Ok(response)
@@ -1480,7 +1468,7 @@ mod tests {
         let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
         net.typed(&url);
         assert!(block_on(net.send(&url, |request| request)).is_ok());
-        assert!(block_on(net.send_body(&url, false, |request| request)).is_ok());
+        assert!(block_on(net.send_body(&url, false, |request| request, None)).is_ok());
         let heads = asked.lock().unwrap();
         assert!(
             heads[1]

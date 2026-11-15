@@ -843,7 +843,7 @@ impl Net {
         let shape = conditions(earlier.as_ref(), known);
         let holding = super::Holding::new(&fetch.from, &mut state.permits);
         let response = self
-            .send_body_holding(from, fetch.mirror, shape, holding)
+            .send_body(from, fetch.mirror, shape, Some(holding))
             .await?;
         let answer_at = Instant::now();
         let host = self.paced(&fetch.from);
