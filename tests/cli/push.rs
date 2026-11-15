@@ -822,3 +822,53 @@ fn a_push_removes_what_a_killed_push_left_and_says_so() -> Result {
     assert_eq!(fs::read_dir(&tmp)?.count(), 0);
     Ok(())
 }
+
+/// data.lock comes with a clone, so its word that a dataset is public never skips the question
+/// when this machine signs in where the files come from, here through a `.netrc` line.
+#[test]
+fn a_public_claim_still_asks_when_this_machine_signs_in_there() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    access(&sandbox, &[("iris", "public"), ("dataset", "public")])?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    let push = || {
+        sandbox
+            .command(&["--json", "push", "--to"])
+            .arg(&root)
+            .output()
+    };
+    let unasked = push()?;
+    ok(&unasked)?;
+    assert_eq!(json(&unasked)?["result"]["asks"], serde_json::json!([]));
+    let netrc = sandbox.folder("keys")?.join("netrc");
+    let host = source
+        .url
+        .trim_start_matches("http://")
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    fs::write(
+        &netrc,
+        format!("machine {host} login lab password lab-secret\n"),
+    )?;
+    #[cfg(unix)]
+    fs::set_permissions(&netrc, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    let fresh = sandbox.folder("lab")?.join("second");
+    let output = sandbox
+        .command(&["--json", "push", "--to"])
+        .arg(&fresh)
+        .env("NETRC", &netrc)
+        .output()?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("this machine signs in where")),
+        "{error}"
+    );
+    assert!(!fresh.join("objects").exists());
+    Ok(())
+}

@@ -136,6 +136,75 @@ struct Asking {
     dataset: String,
     access: Access,
     from: Vec<String>,
+    /// data.lock calls it public, but this machine keeps a key for where its files come from.
+    keyed: bool,
+}
+
+/// where this machine keeps a key: hosts with a saved login or token, a `.netrc` line or a site
+/// sign-in, and the buckets its settings list for signing. a file from one of them may have needed
+/// the key, so a push asks about it whatever data.lock, which a clone brings, says.
+#[derive(Default)]
+struct Keys {
+    hosts: HashSet<String>,
+    s3: Vec<crate::net::s3::Bucket>,
+    gcs: bool,
+    azure: bool,
+    drive: bool,
+}
+
+impl Keys {
+    fn read(context: &Context) -> Keys {
+        let var = &crate::machine::env;
+        let host = |named: &str| {
+            let named = named.to_ascii_lowercase();
+            named
+                .rsplit_once(':')
+                .filter(|(_, port)| port.bytes().all(|byte| byte.is_ascii_digit()))
+                .map_or_else(|| named.clone(), |(host, _)| host.to_owned())
+        };
+        let mut hosts: HashSet<String> = crate::auth::credentials(var)
+            .iter()
+            .map(|key| host(&key.host))
+            .collect();
+        hosts.extend(
+            crate::auth::site::sites(var)
+                .iter()
+                .map(|(site, _)| host(site)),
+        );
+        let settings = &context.settings;
+        Keys {
+            hosts,
+            s3: settings.s3_buckets.value.clone(),
+            gcs: !settings.gcs_buckets.value.is_empty(),
+            azure: !settings.azure_containers.value.is_empty(),
+            drive: !settings.drive_folders.value.is_empty(),
+        }
+    }
+
+    /// whether the file at `link` may have come with one of these keys.
+    fn open(&self, link: &str) -> bool {
+        let Ok(url) = url::Url::parse(link) else {
+            return false;
+        };
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        self.hosts.contains(&host)
+            || crate::net::s3::Bucket::holding(&url).is_some_and(|bucket| self.s3.contains(&bucket))
+            || (self.gcs && host.ends_with("storage.googleapis.com"))
+            || (self.azure && host.ends_with(".blob.core.windows.net"))
+            || (self.drive && (host.ends_with("google.com") || host == "www.googleapis.com"))
+    }
+
+    /// what `locked` asks before a push, and whether a key of this machine made it ask: data.lock's
+    /// access, or an account's for a dataset it calls public whose files may have needed a key.
+    fn access(&self, locked: &crate::project::lock::Locked) -> (Access, bool) {
+        let keyed =
+            locked.access == Access::Public && locked.files.iter().any(|file| self.open(&file.url));
+        if keyed {
+            (Access::Login, true)
+        } else {
+            (locked.access, false)
+        }
+    }
 }
 
 /// where a push writes: a folder, or a prefix in an S3 bucket.
@@ -462,7 +531,7 @@ fn plan(
         .map(|(needed, _)| needed.dataset.as_str())
         .chain(unknown.iter().map(|(dataset, _)| dataset.as_str()))
         .collect();
-    let asks = asking(manifest, lock, &datasets)
+    let asks = asking(manifest, lock, &datasets, &Keys::read(context))
         .into_iter()
         .filter(|ask| copying.contains(ask.dataset.as_str()))
         .collect();
@@ -868,21 +937,23 @@ fn missing(lacked: &[&Needed], unknown: &[(String, Fetch)]) -> Error {
 
 /// the datasets that ask before they are pushed: one whose source wanted an account or accepted
 /// terms or did not say, and a result made from one. `access` is a hint, never a licence check.
-fn asking(manifest: &Manifest, lock: &Lock, datasets: &[String]) -> Vec<Asking> {
+fn asking(manifest: &Manifest, lock: &Lock, datasets: &[String], keys: &Keys) -> Vec<Asking> {
     datasets
         .iter()
         .filter_map(|name| {
             if let Some(locked) = lock.get(name) {
-                return (locked.access != Access::Public).then(|| Asking {
+                let (access, keyed) = keys.access(locked);
+                return (access != Access::Public).then(|| Asking {
                     dataset: name.clone(),
-                    access: locked.access,
+                    access,
                     from: Vec::new(),
+                    keyed,
                 });
             }
             // anyone who reads a result reads what it was made from
             let from: Vec<(&str, Access)> = recipe::closure(&manifest.datasets, &[name.as_str()])
                 .into_iter()
-                .filter_map(|input| lock.get(input).map(|locked| (input, locked.access)))
+                .filter_map(|input| lock.get(input).map(|locked| (input, keys.access(locked).0)))
                 .filter(|(_, access)| *access != Access::Public)
                 .collect();
             let access = from
@@ -896,6 +967,7 @@ fn asking(manifest: &Manifest, lock: &Lock, datasets: &[String]) -> Vec<Asking> 
                     .into_iter()
                     .map(|(input, _)| input.to_owned())
                     .collect(),
+                keyed: false,
             })
         })
         .collect()
@@ -978,7 +1050,7 @@ fn ask_again(context: &Context, planned: &mut Planned, asked: &[String]) -> Resu
 fn reasons(asks: &[Asking]) -> String {
     let alike = |access: Access| -> Vec<&str> {
         asks.iter()
-            .filter(|ask| ask.access == access && ask.from.is_empty())
+            .filter(|ask| ask.access == access && ask.from.is_empty() && !ask.keyed)
             .map(|ask| ask.dataset.as_str())
             .collect()
     };
@@ -994,6 +1066,21 @@ fn reasons(asks: &[Asking]) -> String {
     let terms = alike(Access::Terms);
     if !terms.is_empty() {
         reasons.push(needs(&terms, "accepted terms"));
+    }
+    let keyed: Vec<&str> = asks
+        .iter()
+        .filter(|ask| ask.keyed)
+        .map(|ask| ask.dataset.as_str())
+        .collect();
+    match keyed.as_slice() {
+        [] => {}
+        [one] => reasons.push(format!(
+            "this machine signs in where {one}'s files come from, though data.lock calls it public"
+        )),
+        many => reasons.push(format!(
+            "this machine signs in where the files of {} come from, though data.lock calls them public",
+            named(many)
+        )),
     }
     match alike(Access::Unknown).as_slice() {
         [] => {}
@@ -1859,7 +1946,12 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             derived: Vec::new(),
             stated: Vec::new(),
         };
-        let asks = asking(&manifest, &lock, &["report".to_owned(), "other".to_owned()]);
+        let asks = asking(
+            &manifest,
+            &lock,
+            &["report".to_owned(), "other".to_owned()],
+            &Keys::default(),
+        );
         assert_eq!(asks.len(), 1);
         assert_eq!(asks[0].dataset, "report");
         assert_eq!(asks[0].access, Access::Login);
@@ -1872,7 +1964,45 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             derived: Vec::new(),
             stated: Vec::new(),
         };
-        assert!(asking(&manifest, &public, &["report".to_owned()]).is_empty());
+        assert!(asking(&manifest, &public, &["report".to_owned()], &Keys::default()).is_empty());
+    }
+
+    /// a dataset data.lock calls public is asked about when this machine keeps a key for where its
+    /// files come from, since a clone's data.lock cannot vouch for that; so is a result made from it.
+    #[test]
+    fn a_key_for_a_files_host_asks_whatever_data_lock_says() {
+        let manifest = manifest();
+        let mut raw = locked("raw", Access::Public);
+        raw.files = vec![LockedFile {
+            path: "a.csv".to_owned(),
+            size: 1,
+            sha256: crate::digest::sha256(b"a"),
+            md5: None,
+            url: "https://data.lab.example/raw/a.csv".to_owned(),
+            unpacks_to: None,
+        }];
+        let lock = Lock {
+            datasets: vec![raw, locked("vault", Access::Public)],
+            derived: Vec::new(),
+            stated: Vec::new(),
+        };
+        let names = ["raw".to_owned(), "clean".to_owned(), "vault".to_owned()];
+        assert!(asking(&manifest, &lock, &names, &Keys::default()).is_empty());
+        let keys = Keys {
+            hosts: HashSet::from(["data.lab.example".to_owned()]),
+            ..Keys::default()
+        };
+        let asks = asking(&manifest, &lock, &names, &keys);
+        let asked: Vec<(&str, bool)> = asks
+            .iter()
+            .map(|ask| (ask.dataset.as_str(), ask.keyed))
+            .collect();
+        assert_eq!(asked, [("raw", true), ("clean", false)]);
+        assert_eq!(asks[1].from, ["raw"]);
+        assert_eq!(
+            reasons(&asks),
+            "this machine signs in where raw's files come from, though data.lock calls it public; clean is made from raw"
+        );
     }
 
     /// losing a list after the push planned is no disk failure, since the next push fetches it.
@@ -1946,6 +2076,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             dataset: dataset.to_owned(),
             access,
             from: from.iter().map(|name| (*name).to_owned()).collect(),
+            keyed: false,
         }
     }
 
