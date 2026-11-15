@@ -72,7 +72,9 @@ const ENVIRONMENT: &str = "fetchloom environment
                        4 by default
   FETCHLOOM_RATE       a cap on download speed in bytes a second, as 2.5M
   FETCHLOOM_RETRIES    how many more times a failed request is tried, 0 to 20;
-                       4 by default. raise it if the network drops for minutes
+                       4 by default. raise it if the network drops for minutes.
+                       with no network a run first waits for it, up to 5 min
+                       at a terminal and 30 s elsewhere; 0 fails at once
   FETCHLOOM_TIMEOUT    seconds a site may send nothing before a try fails,
                        1 to 3600; 30 by default
   FETCHLOOM_ASK_ABOVE  a download bigger than this needs a yes, as 20G;

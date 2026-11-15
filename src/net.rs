@@ -267,6 +267,8 @@ pub(crate) struct Net {
     paces: pace::Paces,
     /// what the run heard from any host, which tells a lost network from one host down.
     outage: failure::Outage,
+    /// how long requests wait for a lost network before their tries count again.
+    outage_wait: Duration,
     rate: Option<Arc<Rate>>,
     split: Split,
     /// how long a request waits for an answer, after its connection opens, and how long an
@@ -488,6 +490,7 @@ impl Net {
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
             outage: failure::Outage::default(),
+            outage_wait: failure::LONGEST_OUTAGE,
             rate: None,
             idle: TIMEOUT,
             connect: CONNECT,

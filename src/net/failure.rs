@@ -171,7 +171,8 @@ impl<'a> Retry<'a> {
             return self.wait(reason, None, has_copy).await;
         }
         let lost = self.net.outage.lost(heard, tokio::time::Instant::now());
-        if lost.gone >= LONGEST_OUTAGE {
+        // no retries asks for no waiting either
+        if self.net.retries == 0 || lost.gone >= self.net.outage_wait {
             return self.wait(reason, None, has_copy).await;
         }
         self.moving = false;
@@ -181,7 +182,7 @@ impl<'a> Retry<'a> {
         Work::add(&self.net.work.retries, 1);
         if lost.tell {
             (self.net.notify)(Notice::NetworkGone {
-                longest: LONGEST_OUTAGE,
+                longest: self.net.outage_wait,
             });
         }
         self.tell(wait, None);
@@ -243,7 +244,13 @@ impl<'a> Retry<'a> {
                 .wire()
                 .ok()
                 .and_then(|wire| wire.proxies.carrier(self.url));
-            let error = gave_up(self.url, self.tries, &reason, has_copy, through.as_ref());
+            let error = gave_up(
+                self.url,
+                (self.tries, self.net.retries),
+                &reason,
+                has_copy,
+                through.as_ref(),
+            );
             if self.limited == 0 {
                 return Err(error);
             }
@@ -329,6 +336,18 @@ impl Net {
     /// how many requests go to one host at once, as `FETCHLOOM_HOST_JOBS` sets it.
     pub(crate) fn with_host_jobs(mut self, host_jobs: usize) -> Net {
         self.host_jobs = host_jobs.max(1);
+        self
+    }
+
+    /// how long requests wait for a lost network before their tries count again: minutes when a
+    /// person `watched`, at a laptop joining wifi, and moments in a script or CI, which nobody
+    /// watches wait.
+    pub(crate) fn with_watched(mut self, watched: bool) -> Net {
+        self.outage_wait = if watched {
+            LONGEST_OUTAGE
+        } else {
+            UNWATCHED_OUTAGE
+        };
         self
     }
 
@@ -849,10 +868,11 @@ pub(super) fn interrupted(url: &Url) -> Error {
     )
 }
 
-/// the error once the tries for `url` ran out, `through` the proxy that carries it, if one does.
+/// the error once the `tries` for `url` ran out, of the `retries` it may get, `through` the
+/// proxy that carries it, if one does.
 fn gave_up(
     url: &Url,
-    tries: u32,
+    (tries, retries): (u32, u32),
     reason: &str,
     has_copy: bool,
     through: Option<&address::Carrier>,
@@ -893,11 +913,15 @@ fn gave_up(
         Some(None) => "check the connection and the system's proxy settings".to_owned(),
         None => "check the connection".to_owned(),
     };
+    let more = if retries < 10 { 10 } else { MOST_RETRIES };
     let help = if has_copy {
         format!("{check}, or add --offline to use the copy downloaded earlier")
+    } else if retries >= MOST_RETRIES {
+        format!("{check} and run the same command again")
     } else {
         format!(
-            "{check} and run the same command again, with FETCHLOOM_RETRIES=10 to keep trying for about 2 minutes"
+            "{check} and run the same command again, with FETCHLOOM_RETRIES={more} to keep trying for {}",
+            units::about(keeps_trying(more))
         )
     };
     match through {
@@ -918,6 +942,19 @@ fn rate_limited(url: &Url, asked: Duration) -> Error {
         ),
     )
     .help("run the same command again later")
+}
+
+/// how long `retries` keep a request trying, as the waits between them take on average: half
+/// of each ceiling [`backoff`] draws from.
+fn keeps_trying(retries: u32) -> Duration {
+    (1..=retries)
+        .map(|attempt| {
+            FIRST_WAIT
+                .saturating_mul(1 << attempt.saturating_sub(1).min(6))
+                .min(LONGEST_WAIT)
+                / 2
+        })
+        .sum()
 }
 
 /// how long to wait before the next try: a random share of a ceiling that doubles each try from
@@ -948,10 +985,14 @@ fn retry_after_with(headers: &HeaderMap, now: impl FnOnce() -> SystemTime) -> Op
     Some(when.duration_since(now()).unwrap_or_default())
 }
 
-/// how long requests wait for a lost network before their tries count again. a laptop rejoins
-/// its wifi within seconds of waking and a vpn reconnects within a minute, while a home router
-/// takes one to three minutes to restart; past five, a person is better told than kept waiting.
-const LONGEST_OUTAGE: Duration = Duration::from_mins(5);
+/// how long requests wait for a lost network before their tries count again, while a person
+/// watches. a laptop rejoins its wifi within seconds of waking and a vpn reconnects within a
+/// minute, while a home router takes one to three minutes to restart; past five, a person is
+/// better told than kept waiting.
+pub(super) const LONGEST_OUTAGE: Duration = Duration::from_mins(5);
+/// the same where nobody watches, as in a script or CI: long enough for a blip, short enough
+/// that a job without a network fails soon.
+const UNWATCHED_OUTAGE: Duration = Duration::from_secs(30);
 /// the most one wait for the network takes before the request tries again, so a download goes
 /// on within seconds of the network coming back even when nothing else is asking.
 const LONGEST_OUTAGE_WAIT: Duration = Duration::from_secs(15);
@@ -1320,7 +1361,7 @@ mod tests {
             panic!("a refusal is tried again")
         };
         assert_eq!(reason, format!("127.0.0.1:{port} refused the connection"));
-        let error = gave_up(&url, 5, &reason, false, None);
+        let error = gave_up(&url, (5, RETRIES), &reason, false, None);
         assert_eq!(
             error.help.as_deref(),
             Some(
@@ -1359,7 +1400,13 @@ mod tests {
     fn exhausting_retries_offers_the_copy_or_more_tries() {
         let url = Url::parse("https://example.org/list").unwrap();
         for has_copy in [false, true] {
-            let error = gave_up(&url, RETRIES + 1, "connection broke", has_copy, None);
+            let error = gave_up(
+                &url,
+                (RETRIES + 1, RETRIES),
+                "connection broke",
+                has_copy,
+                None,
+            );
             assert_eq!(error.kind, Kind::NetworkUnreachable);
             assert!(error.message.contains("5 tries"));
             assert!(error.message.contains("connection broke"));
@@ -1506,9 +1553,15 @@ mod tests {
         });
         let carrier = system.carrier(&url);
         let help = |through| {
-            gave_up(&url, RETRIES + 1, "connection broke", false, through)
-                .help
-                .unwrap_or_default()
+            gave_up(
+                &url,
+                (RETRIES + 1, RETRIES),
+                "connection broke",
+                false,
+                through,
+            )
+            .help
+            .unwrap_or_default()
         };
         let proxied = help(carrier.as_ref());
         assert!(
@@ -1563,10 +1616,22 @@ mod tests {
     #[test]
     fn running_out_of_tries_says_whose_side_the_trouble_is_on() {
         let url = Url::parse("https://example.org/list").unwrap();
-        let limited = gave_up(&url, RETRIES + 1, "example.org answered 429", false, None);
+        let limited = gave_up(
+            &url,
+            (RETRIES + 1, RETRIES),
+            "example.org answered 429",
+            false,
+            None,
+        );
         assert_eq!(limited.kind, Kind::NetworkRateLimited);
         assert!(limited.help.unwrap().contains("limiting requests"));
-        let down = gave_up(&url, RETRIES + 1, "example.org answered 503", true, None);
+        let down = gave_up(
+            &url,
+            (RETRIES + 1, RETRIES),
+            "example.org answered 503",
+            true,
+            None,
+        );
         assert_eq!(down.kind, Kind::NetworkStatus);
         let help = down.help.unwrap();
         assert!(
@@ -1821,10 +1886,7 @@ mod tests {
         let kept = heard.clone();
         let net = telling(Arc::new(move |notice| {
             let said = match notice {
-                Notice::NetworkGone { longest } => {
-                    assert_eq!(longest, LONGEST_OUTAGE);
-                    "gone"
-                }
+                Notice::NetworkGone { .. } => "gone",
                 Notice::Retrying { .. } => "retry",
                 Notice::Waiting { .. } => "waiting",
             };
@@ -1890,6 +1952,79 @@ mod tests {
         let heard = heard.lock().unwrap();
         assert_eq!(heard.iter().filter(|said| **said == "gone").count(), 1);
         assert_eq!(heard.first(), Some(&"gone"));
+    }
+
+    /// with no retries a lost network is not waited for either, and where nobody watches the
+    /// wait for it is short: the request gives up once it has passed, after its tries.
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_network_waits_only_as_long_as_retries_and_watching_allow() {
+        let url = Url::parse("https://example.org/file").unwrap();
+        for (retries, watched, longest) in [
+            (0, true, Duration::ZERO),
+            (RETRIES, false, UNWATCHED_OUTAGE),
+        ] {
+            let (net, heard) = told();
+            let net = net.with_retries(retries).with_watched(watched);
+            let mut retry = Retry::new(&net, &url);
+            let began = tokio::time::Instant::now();
+            let error = loop {
+                let tried =
+                    retry.unreachable("could not connect to example.org:443".to_owned(), false);
+                if let Err(error) = tried.await {
+                    break error;
+                }
+            };
+            let waited = began.elapsed();
+            assert!(waited >= longest, "{retries}: {waited:?}");
+            assert!(
+                waited < longest + Duration::from_mins(2),
+                "{retries}: {waited:?}"
+            );
+            assert!(
+                error.message.contains(&format!(
+                    "after {}",
+                    units::count(u64::from(retries) + 1, "try", "tries")
+                )),
+                "{}",
+                error.message
+            );
+            assert_eq!(
+                heard.lock().unwrap().contains(&"gone"),
+                retries > 0,
+                "{retries}"
+            );
+        }
+    }
+
+    /// the hint's promise of more tries is what the waits between them take on average.
+    #[test]
+    fn running_out_of_tries_offers_more_for_as_long_as_they_take() {
+        let url = Url::parse("https://example.org/list").unwrap();
+        let help = |retries| {
+            gave_up(
+                &url,
+                (retries + 1, retries),
+                "connection broke",
+                false,
+                None,
+            )
+            .help
+            .unwrap_or_default()
+            .to_string()
+        };
+        assert_eq!(keeps_trying(10), Duration::from_millis(151_500));
+        assert_eq!(
+            help(RETRIES),
+            "check the connection and run the same command again, with FETCHLOOM_RETRIES=10 to keep trying for about 3 min"
+        );
+        assert_eq!(
+            help(10),
+            "check the connection and run the same command again, with FETCHLOOM_RETRIES=20 to keep trying for about 8 min"
+        );
+        assert_eq!(
+            help(MOST_RETRIES),
+            "check the connection and run the same command again"
+        );
     }
 
     /// a try that fails before another host first answers tells nobody of a lost network, since

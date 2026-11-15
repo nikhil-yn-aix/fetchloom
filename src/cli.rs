@@ -251,6 +251,7 @@ impl Context {
             .with_azure(azure)
             .with_hashing(self.hashing.clone())
             .with_retries(self.settings.retries.value)
+            .with_watched(self.output.can_ask())
             .with_host_jobs(self.settings.host_jobs.value)
             .with_timeout(self.settings.timeout.value);
         let net = if self.mirrors.mirrors.only {
