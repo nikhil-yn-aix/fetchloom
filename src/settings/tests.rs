@@ -230,6 +230,46 @@ fn a_settings_file_that_cannot_be_read_is_an_error_not_a_missing_file() {
     }
 }
 
+/// a settings file is read only when it is a plain file of a few lines' size, since a device or a
+/// pipe there, as /dev/zero, would never end.
+#[test]
+fn only_a_plain_settings_file_of_a_sensible_size_is_read() {
+    let folder = tempfile::tempdir().unwrap();
+    let large = folder.path().join("settings.toml");
+    std::fs::write(&large, "#".repeat(MOST_BYTES as usize + 1)).unwrap();
+    let mut odd = vec![(
+        large.to_str().unwrap().to_owned(),
+        "it holds more than 1.0 MiB, far more than any settings take",
+    )];
+    if cfg!(unix) {
+        odd.push((
+            "/dev/null".to_owned(),
+            "it is a device or a pipe, not a plain file",
+        ));
+    }
+    for (named, said) in odd {
+        let Err(error) = File::read(&env(&[("FETCHLOOM_SETTINGS", &named)])) else {
+            panic!("{named} was read as the settings file");
+        };
+        assert_eq!(
+            error.message,
+            format!("could not read the settings file {named}: {said}")
+        );
+        let Err(error) = edit::set(
+            &env(&[("FETCHLOOM_SETTINGS", &named)]),
+            "jobs",
+            &["4".to_owned()],
+            None,
+        ) else {
+            panic!("{named} was changed as the settings file");
+        };
+        assert_eq!(
+            error.message,
+            format!("could not read the settings file {named}: {said}")
+        );
+    }
+}
+
 /// the error never shows the text where reading stopped, which may hold a login.
 #[test]
 fn a_settings_file_that_is_not_toml_names_where_reading_stopped() {

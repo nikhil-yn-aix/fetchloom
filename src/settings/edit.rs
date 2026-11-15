@@ -10,7 +10,7 @@ use toml_edit::{DocumentMut, Item};
 
 use super::{
     BOOLEANS, CLEARED, File, KEYS, LISTS, OTHERS, Origin, Settings, Value, located, parse, split,
-    table, undo,
+    table, text_at, undo,
 };
 use crate::error::{Error, Kind};
 use crate::machine::{Machine, Var};
@@ -238,7 +238,7 @@ fn open(var: Var<'_>) -> Result<(PathBuf, String, bool), Error> {
         })?,
         _ => path,
     };
-    match fs::read_to_string(&path) {
+    match text_at(&path) {
         Ok(text) => Ok((path, text, true)),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((path, String::new(), false)),
         Err(err) => Err(Error::io(

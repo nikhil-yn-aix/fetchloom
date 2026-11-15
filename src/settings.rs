@@ -3,6 +3,7 @@
 
 use std::ffi::OsString;
 use std::fmt;
+use std::io::{self, Read as _};
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -32,6 +33,8 @@ const MOST_MEMORY: u64 = 4 << 30;
 
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
+/// the most a settings file may hold: its few lines need far less, and a run reads it whole.
+const MOST_BYTES: u64 = 1 << 20;
 /// the keys the settings file takes, each with the variable that overrides it.
 const KEYS: [(&str, &str); 22] = [
     ("cache", "FETCHLOOM_CACHE"),
@@ -185,7 +188,7 @@ impl File {
         let Some(path) = path else {
             return Ok(File::default());
         };
-        let text = match std::fs::read_to_string(&path) {
+        let text = match text_at(&path) {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound && !named => {
                 return Ok(File {
@@ -206,6 +209,8 @@ impl File {
             Err(err) => {
                 let help = if named {
                     "unset FETCHLOOM_SETTINGS, or set it to a settings file fetchloom may read"
+                } else if err.kind() == io::ErrorKind::InvalidData {
+                    "move it away, or set FETCHLOOM_SETTINGS to a settings file fetchloom may read"
                 } else {
                     "check its permissions, or set FETCHLOOM_SETTINGS to a settings file fetchloom may read"
                 };
@@ -256,6 +261,33 @@ impl File {
             _ => folder,
         })
     }
+}
+
+/// the text of the settings file at `path`, past a link to it: only a plain file's, since reading
+/// a device or a pipe there would never end, and only up to MOST_BYTES. `InvalidData`, saying
+/// what is there, for anything else.
+fn text_at(path: &Path) -> io::Result<String> {
+    let refused = |what: String| io::Error::new(io::ErrorKind::InvalidData, what);
+    let meta = std::fs::metadata(path)?;
+    if meta.is_dir() {
+        return Err(refused("it is a folder, not a file".to_owned()));
+    }
+    if !meta.is_file() {
+        return Err(refused(
+            "it is a device or a pipe, not a plain file".to_owned(),
+        ));
+    }
+    let mut text = String::new();
+    std::fs::File::open(path)?
+        .take(MOST_BYTES + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > MOST_BYTES {
+        return Err(refused(format!(
+            "it holds more than {}, far more than any settings take",
+            units::size(MOST_BYTES)
+        )));
+    }
+    Ok(text)
 }
 
 /// where the settings file is: the one `FETCHLOOM_SETTINGS` names, which must then be there, else
