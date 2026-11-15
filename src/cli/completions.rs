@@ -49,10 +49,11 @@ fn names_told(current: &str, before: &[String]) -> ExitCode {
 }
 
 /// the dataset names of the project `-C` names, else the current folder's, when `current`, after
-/// `before`, stands where a dataset's name goes, as after `path` or `lock --upgrade`. it reads
-/// data.toml alone and asks nothing of the network.
+/// `before`, stands where a dataset's name goes, as after `path` or `lock --upgrade`; after
+/// `path <name>/`, what the dataset's folder holds. it reads data.toml and the data folder alone
+/// and asks nothing of the network.
 fn names(current: &str, before: &[String]) -> Option<Vec<String>> {
-    if current.starts_with('-') || current.contains('/') {
+    if current.starts_with('-') {
         return None;
     }
     let root = args::Args::command();
@@ -99,7 +100,59 @@ fn names(current: &str, before: &[String]) -> Option<Vec<String>> {
     let project = crate::project::Project::find(&start)?;
     // a fifo there would hold the tab until something wrote to it
     let text = project.manifest_text().ok()?;
-    dataset_names(&text)
+    match current.split_once('/') {
+        None => dataset_names(&text),
+        Some((name, rest)) if pending.is_none() && command.get_name() == "path" => {
+            placed(&project, &text, name, rest)
+        }
+        Some(_) => None,
+    }
+}
+
+/// what `path` names below dataset `name`'s folder after `rest`, as in `path iris/images/`: the
+/// files and folders in the folder `rest` ends in, a folder with `/` after it. a name a shell
+/// could read as more than one word, or a hidden one, is never offered.
+fn placed(
+    project: &crate::project::Project,
+    text: &str,
+    name: &str,
+    rest: &str,
+) -> Option<Vec<String>> {
+    let manifest = crate::project::Project::parse_manifest(text).ok()?;
+    if !manifest.datasets.contains_key(name) || !crate::name::is_dataset_name(name) {
+        return None;
+    }
+    let inner = rest.rsplit_once('/').map_or("", |(inner, _)| inner);
+    let mut folder = project.root.join(crate::plan::folder(&manifest, name));
+    for part in inner.split('/').filter(|part| !part.is_empty()) {
+        if matches!(part, "." | "..") {
+            return None;
+        }
+        folder.push(part);
+    }
+    let before = if inner.is_empty() {
+        format!("{name}/")
+    } else {
+        format!("{name}/{inner}/")
+    };
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&folder).ok()?.flatten() {
+        let Ok(file) = entry.file_name().into_string() else {
+            continue;
+        };
+        let plain = file
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-+,@=".contains(c));
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if plain && !file.starts_with('.') {
+            let slash = if kind.is_dir() { "/" } else { "" };
+            found.push(format!("{before}{file}{slash}"));
+        }
+    }
+    found.sort();
+    Some(found)
 }
 
 /// the names of the datasets data.toml's `text` has. a data.toml fetchloom wrote names each in a
@@ -341,6 +394,10 @@ const BASH_NAMES: &str = r#"_fetchloom() {
                             COMPREPLY+=("$quoted")
                         fi
                     done
+                    # a folder alone is completed further, as a file name would be
+                    if [[ ${#COMPREPLY[@]} -eq 1 && ${COMPREPLY[0]} == */ ]]; then
+                        compopt -o nospace
+                    fi
                     return 0
                 fi
                 break
@@ -358,7 +415,10 @@ const ZSH_NAMES: &str = r#"_fetchloom() {
         case $word in
             (COMMANDS)
                 if names=$("${words[1]}" completions zsh --names="${(Q)PREFIX}" -- "${(@Q)words[2,CURRENT-1]}" 2>/dev/null); then
-                    compadd -- ${(f)names}
+                    local -a all=(${(f)names})
+                    # a folder takes no space after it, so its files complete next
+                    compadd -S '' -- ${(M)all:#*/}
+                    compadd -- ${all:#*/}
                     return
                 fi
                 break

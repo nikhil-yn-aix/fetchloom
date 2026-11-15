@@ -780,8 +780,7 @@ fn split(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// every key the settings file takes.
-#[cfg(test)]
+/// every key the settings file takes, as `settings set` and `unset` name them.
 pub(crate) fn keys() -> impl Iterator<Item = &'static str> {
     KEYS.iter().map(|(key, _)| *key)
 }

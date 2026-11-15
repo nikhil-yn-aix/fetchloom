@@ -1150,7 +1150,7 @@ pub(crate) enum SettingsAction {
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct SetSetting {
     /// the setting, as `fetchloom settings` names it, such as `jobs` or `push_to`
-    #[arg(value_name = "key", help_heading = "arguments")]
+    #[arg(value_name = "key", value_parser = SettingKey, hide_possible_values = true, help_heading = "arguments")]
     pub(crate) key: String,
 
     /// its value. a list, such as mirrors, takes several, separated by spaces or commas, and
@@ -1163,8 +1163,34 @@ pub(crate) struct SetSetting {
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct UnsetSetting {
     /// the setting, as `fetchloom settings` names it, such as `jobs` or `push_to`
-    #[arg(value_name = "key", help_heading = "arguments")]
+    #[arg(value_name = "key", value_parser = SettingKey, hide_possible_values = true, help_heading = "arguments")]
     pub(crate) key: String,
+}
+
+/// a setting's key, read as any text, since `settings set` and `unset` answer a wrong one
+/// themselves; its possible values are the keys the completion scripts offer.
+#[derive(Clone)]
+struct SettingKey;
+
+impl clap::builder::TypedValueParser for SettingKey {
+    type Value = String;
+
+    fn parse_ref(
+        &self,
+        command: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<String, clap::Error> {
+        clap::builder::StringValueParser::new().parse_ref(command, arg, value)
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = clap::builder::PossibleValue> + '_>> {
+        Some(Box::new(
+            crate::settings::keys().map(clap::builder::PossibleValue::new),
+        ))
+    }
 }
 
 /// show what data.lock and its file lists changed between commits

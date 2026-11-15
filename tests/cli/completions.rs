@@ -246,6 +246,31 @@ fn bash_completes_the_dataset_names_data_toml_has() -> Result {
     assert_eq!(offered(&work, "fetchloom ca")?, ["cache"]);
     assert_eq!(offered(&work, "fetchloom sync --lo")?, ["--locked"]);
     assert_eq!(
+        offered(&work, "fetchloom settings set ca")?,
+        ["cache", "cache_budget"]
+    );
+    assert_eq!(offered(&work, "fetchloom settings unset jo")?, ["jobs"]);
+    // after `path <name>/`, what the dataset's folder holds, one folder at a time
+    let iris = work.join("data").join("iris");
+    std::fs::create_dir_all(iris.join("extra"))?;
+    for file in [
+        "Iris.csv",
+        "extra/a.csv",
+        ".hidden",
+        "ir$(echo RAN >&2)x.csv",
+    ] {
+        std::fs::write(iris.join(file), "x")?;
+    }
+    assert_eq!(
+        offered(&work, "fetchloom path iris/")?,
+        ["iris/Iris.csv", "iris/extra/"]
+    );
+    assert_eq!(offered(&work, "fetchloom path iris/ex")?, ["iris/extra/"]);
+    assert_eq!(
+        offered(&work, "fetchloom path iris/extra/")?,
+        ["iris/extra/a.csv"]
+    );
+    assert_eq!(
         offered(&elsewhere, "fetchloom path ir")?,
         Vec::<String>::new()
     );
