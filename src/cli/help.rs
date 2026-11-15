@@ -133,7 +133,10 @@ const ENVIRONMENT: &str = "fetchloom environment
   HTTPS_PROXY, HTTP_PROXY, ALL_PROXY
                        the proxy for https links, for http links, or for both
                        when those two are unset, as http://proxy.lab:8080;
-                       lowercase names work too
+                       lowercase names work too. a name this machine cannot
+                       look up goes to the proxy, unless it looks like a
+                       private network's, as one word or metadata.internal
+                       does: list such a server in allowed_origins
   NO_PROXY             hosts reached without the proxy, separated by commas
 
   NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them

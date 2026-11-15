@@ -121,11 +121,6 @@ impl Typed {
         self.hosts().refused(reason, &key(host))
     }
 
-    /// whether a person gave `host`, by a trusted origin on it.
-    fn trusts_host(&self, host: &str) -> bool {
-        self.hosts().trusts_on(&key(host))
-    }
-
     /// whether the origin of `url` is trusted.
     pub(crate) fn trusts(&self, url: &Url) -> bool {
         self.hosts().origins.contains(&url.origin())
@@ -483,8 +478,9 @@ impl Proxies {
 
     /// checks `url` before a proxy carries it: the proxy resolves names itself, so an untrusted
     /// host is looked up here first and refused when any address is private. a name this machine
-    /// cannot look up is refused too, unless a person gave the host, by a link or
-    /// `allowed_origins`, since only the proxy knows where it leads.
+    /// cannot look up goes to the proxy, as where only the proxy resolves names, unless it looks
+    /// like a host of a private network; then only its exact origin, typed or in
+    /// `allowed_origins`, goes.
     pub(crate) async fn check(&self, url: &Url, typed: &Typed) -> Result<(), Refused> {
         let Some(proxy) = url
             .as_str()
@@ -514,14 +510,13 @@ impl Proxies {
             looked
         };
         match looked {
-            Looked::Public => Ok(()),
-            Looked::Unknown if typed.trusts_host(&name) => Ok(()),
-            Looked::Unknown => Err(typed.refused(
+            Looked::Unknown if looks_internal(&name) => Err(typed.refused(
                 format!(
-                    "this machine cannot look up {name}, so only the proxy knows where it leads, which may be a server on its own network"
+                    "this machine cannot look up {name}, a name of a private network, so only the proxy knows where it leads"
                 ),
                 &name,
             )),
+            Looked::Public | Looked::Unknown => Ok(()),
             Looked::Private(reason) => Err(typed.refused(reason, &name)),
         }
     }
@@ -587,6 +582,33 @@ enum Looked {
     /// no address: a split dns, or a name such as metadata.google.internal, leads where only the
     /// proxy knows.
     Unknown,
+}
+
+/// the endings of names no public dns serves: kept for local or special use, or used inside
+/// private networks.
+const INTERNAL: [&str; 11] = [
+    "internal",
+    "local",
+    "localhost",
+    "lan",
+    "home.arpa",
+    "corp",
+    "intranet",
+    "private",
+    "localdomain",
+    "test",
+    "invalid",
+];
+
+/// whether `name` looks like a host of a private network: one label, as a bare `intranet` is, or
+/// an ending in [`INTERNAL`], as metadata.google.internal has.
+fn looks_internal(name: &str) -> bool {
+    let name = name.trim_end_matches('.');
+    !name.contains('.')
+        || INTERNAL.iter().any(|ending| {
+            name.strip_suffix(ending)
+                .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
+        })
 }
 
 /// what this machine's lookup of `name` at `port` finds.

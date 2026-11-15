@@ -37,12 +37,11 @@ fn proxy_verdicts_are_cached_and_typed_origins_skip_preflight() {
     }
 }
 
-/// a name this machine cannot look up, or that has no address, goes through a proxy no more
-/// than a private address does: only the proxy knows where it leads, which may be a server on
-/// its own network, as metadata.google.internal is on a cloud machine. a host a person gave, on
-/// another of its origins, still goes, as a typed http link that moves to https does.
+/// a name this machine cannot look up goes to the proxy, as where only the proxy resolves names,
+/// a cdn's included, unless it looks like a host of a private network, as
+/// metadata.google.internal does; then only the exact origin a person gave goes.
 #[test]
-fn a_name_only_the_proxy_can_look_up_goes_only_for_a_host_a_person_gave() {
+fn a_name_only_the_proxy_can_look_up_goes_unless_it_looks_internal() {
     let unknown = || std::io::Error::new(std::io::ErrorKind::NotFound, "Name or service not known");
     let address = |text: &str| -> SocketAddr { text.parse().unwrap() };
     let name = "metadata.google.internal";
@@ -61,16 +60,48 @@ fn a_name_only_the_proxy_can_look_up_goes_only_for_a_host_a_person_gave() {
         assert_eq!(looked(name, found), expected);
     }
     let proxies = Proxies::with_lookup("http://127.0.0.1:9", |_, _| Box::pin(async { None }));
-    proxies.lock().insert(name.to_owned(), Looked::Unknown);
+    for unseen in [name, "objects.githubusercontent.example"] {
+        proxies.lock().insert(unseen.to_owned(), Looked::Unknown);
+    }
     let typed = Typed::default();
-    let url = Url::parse("https://metadata.google.internal/computeMetadata/v1/").unwrap();
-    let refused = block_on(proxies.check(&url, &typed)).unwrap_err();
+    let check = |link: &str| block_on(proxies.check(&Url::parse(link).unwrap(), &typed));
+    assert!(check("https://objects.githubusercontent.example/release.csv").is_ok());
+    let refused = check("https://metadata.google.internal/computeMetadata/v1/").unwrap_err();
     assert_eq!(
         refused.to_string(),
-        "this machine cannot look up metadata.google.internal, so only the proxy knows where it leads, which may be a server on its own network"
+        "this machine cannot look up metadata.google.internal, a name of a private network, so only the proxy knows where it leads"
     );
     typed.add(&Url::parse("http://metadata.google.internal/").unwrap());
-    assert!(block_on(proxies.check(&url, &typed)).is_ok());
+    assert!(check("http://metadata.google.internal/computeMetadata/v1/").is_ok());
+    assert!(
+        check("https://metadata.google.internal/computeMetadata/v1/").is_err(),
+        "another scheme of a typed origin is not that origin"
+    );
+}
+
+/// one label, or an ending kept for local or special use, looks internal; a public name's
+/// last label is not mistaken for one when it only ends with the same letters.
+#[test]
+fn a_name_looks_internal_by_its_ending_or_its_one_label() {
+    for (name, internal) in [
+        ("intranet", true),
+        ("metadata", true),
+        ("metadata.google.internal", true),
+        ("printer.local", true),
+        ("router.home.arpa", true),
+        ("files.lab.corp", true),
+        ("nas.localdomain", true),
+        ("zenodo-mirror.invalid", true),
+        ("data.example.test.", true),
+        ("zenodo.org", false),
+        ("objects.githubusercontent.com", false),
+        ("myinternal", true),
+        ("data.notinternal", false),
+        ("files.data.lab", false),
+        ("cdn.localization.example", false),
+    ] {
+        assert_eq!(looks_internal(name), internal, "{name}");
+    }
 }
 
 #[test]

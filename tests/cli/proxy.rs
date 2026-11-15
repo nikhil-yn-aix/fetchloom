@@ -92,15 +92,16 @@ fn a_proxy_on_this_machine_carries_a_host_that_was_typed() -> Result {
 }
 
 /// most sites send http on to https, an origin nobody trusted and so free to reach any public
-/// address. a scripted proxy stands in for the site and answers the tunnel with 502.
+/// address, a public name this machine cannot look up included, which only the proxy resolves.
+/// a scripted proxy stands in for the site and answers the tunnel with 502.
 #[test]
 fn a_typed_http_link_follows_its_site_to_https() -> Result {
     let sandbox = Sandbox::new()?;
-    let link = "http://data.example.invalid/iris.csv";
+    let link = "http://data.lab.example/iris.csv";
     let upgrade = reply(
         "301 Moved Permanently",
         &[
-            ("Location", "https://data.example.invalid/iris.csv"),
+            ("Location", "https://data.lab.example/iris.csv"),
             ("Content-Length", "0"),
         ],
         b"",
@@ -129,7 +130,7 @@ fn a_typed_http_link_follows_its_site_to_https() -> Result {
         asked,
         [
             format!("get {link} http/1.1"),
-            "connect data.example.invalid:443 http/1.1".to_owned()
+            "connect data.lab.example:443 http/1.1".to_owned()
         ],
         "{}",
         text(&output.stdout)?
