@@ -26,6 +26,7 @@ fn cache_folders_cannot_be_links_to_another_folder() {
     }
     for name in [
         "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
+        "imported", "builds",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("cache");
@@ -172,6 +173,51 @@ fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
     cache.forget_changed(&std::collections::HashSet::new());
 
     assert_eq!(fs::read(kept).unwrap(), b"keep these bytes");
+}
+
+/// gc reads every list of imports and removes each that names no object it holds, so a link
+/// swapped in for `imported/` must not lead it to read or delete someone's files.
+#[test]
+fn an_imported_folder_swapped_for_a_link_keeps_what_it_points_at() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let kept = outside.join("notes.txt");
+    fs::write(&kept, b"keep these bytes").unwrap();
+    let folder = cache.root.join("imported");
+    fs::create_dir_all(&folder).unwrap();
+    fs::rename(&folder, cache.root.join("old-imported")).unwrap();
+    crate::test_links::link_folder(&outside, &folder).unwrap();
+
+    assert_eq!(cache.imported(), std::collections::HashMap::new());
+    cache.forget_imported();
+
+    assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
+}
+
+/// a removal inside the cache goes through a handle on its folder, so a folder swapped for a link
+/// after gc checked it, as by someone sharing the cache, sends it nowhere else.
+#[cfg(unix)]
+#[test]
+fn a_removal_inside_the_cache_never_follows_a_linked_folder() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let kept = outside.join("notes.txt");
+    fs::write(&kept, b"keep these bytes").unwrap();
+    let folder = cache.root.join("imported");
+    fs::rename(&folder, cache.root.join("old-imported")).unwrap();
+    crate::test_links::link_folder(&outside, &folder).unwrap();
+
+    assert!(crate::place::remove_below(&cache.root, &folder.join("notes.txt")).is_err());
+
+    assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
 }
 
 #[test]

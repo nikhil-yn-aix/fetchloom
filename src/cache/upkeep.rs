@@ -247,7 +247,11 @@ impl Cache {
     /// link or a file since the cache opened, so a sweep never deletes outside the cache.
     pub(super) fn remove_inside(&self, path: &Path) -> io::Result<()> {
         self.check_inside(path)?;
-        self.volume.remove(path)
+        #[cfg(unix)]
+        let unlink = || crate::place::remove_below(&self.root, path);
+        #[cfg(not(unix))]
+        let unlink = || fs::remove_file(path);
+        self.volume.remove_with(path, &unlink)
     }
 
     /// refuses `path` when a folder between it and the cache root is not a real folder.

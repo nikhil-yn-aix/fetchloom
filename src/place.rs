@@ -1144,6 +1144,21 @@ pub(crate) enum FolderUse {
     Place { make: bool },
 }
 
+/// removes the file at `path` below `root` through a handle on its folder, opened from `root`
+/// without following a link, though `root` itself may be one, as a cache folder someone named.
+#[cfg(unix)]
+pub(crate) fn remove_below(root: &Path, path: &Path) -> io::Result<()> {
+    let below = path.strip_prefix(root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not inside {}", path.display(), root.display()),
+        )
+    })?;
+    Parents::default()
+        .locate(root, below, false, false)?
+        .remove_file()
+}
+
 /// refuses links and files where a caller needs a real folder.
 pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
     let found = match usage {

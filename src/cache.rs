@@ -46,8 +46,9 @@ use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::{Volume, is_plain, read_unfollowed, refuses_links};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
-const FOLDERS: [&str; 8] = [
-    "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
+const FOLDERS: [&str; 10] = [
+    "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed", "imported",
+    "builds",
 ];
 
 #[derive(Clone, Debug)]

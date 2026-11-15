@@ -21,10 +21,16 @@ pub(crate) struct Volume {
     /// a rename that never replaces a file already at the new name.
     rename_new: fn(&Path, &Path) -> io::Result<()>,
     remove_file: fn(&Path) -> io::Result<()>,
+    /// removes the file at a path with the removal a caller gives, as through a handle on its
+    /// folder, or as `remove_file` does where a test makes removals fail.
+    remove_with: RemoveWith,
     links: OnceLock<bool>,
     /// for a volume that only pretends, every existing path a removal named.
     pretended: Option<Mutex<Pretended>>,
 }
+
+/// removes the file at a path, given the removal its caller would make.
+type RemoveWith = fn(&Volume, &Path, &dyn Fn() -> io::Result<()>) -> io::Result<()>;
 
 /// the paths a pretending volume would have removed, in order, and as a set a sweep can ask.
 #[derive(Debug, Default)]
@@ -41,6 +47,7 @@ impl Volume {
             rename: |from, to| fs::rename(from, to),
             rename_new: |from, to| rename_new(from, to),
             remove_file: |path| fs::remove_file(path),
+            remove_with: |_, _, unlink| unlink(),
             links: OnceLock::new(),
             pretended: None,
         }
@@ -49,6 +56,7 @@ impl Volume {
     #[cfg(test)]
     pub(crate) fn with_removal(mut self, remove: fn(&Path) -> io::Result<()>) -> Volume {
         self.remove_file = remove;
+        self.remove_with = |volume, path, _| (volume.remove_file)(path);
         self
     }
 
@@ -67,6 +75,7 @@ impl Volume {
             rename: |_, _| Err(io::Error::other("a dry run renames nothing")),
             rename_new: |_, _| Err(io::Error::other("a dry run renames nothing")),
             remove_file: |path| fs::symlink_metadata(path).map(|_| ()),
+            remove_with: |volume, path, _| (volume.remove_file)(path),
             links: OnceLock::new(),
             pretended: Some(Mutex::default()),
         }
@@ -207,6 +216,24 @@ impl Volume {
             return self.pretend_removal(path);
         }
         match (self.remove_file)(path) {
+            Err(refused) if refused.kind() == io::ErrorKind::PermissionDenied => {
+                self.remove_read_only(path).unwrap_or(Err(refused))
+            }
+            removed => removed,
+        }
+    }
+
+    /// removes the file at `path` as [`Volume::remove`] does, with `unlink`, as through a handle
+    /// on its folder that a folder swapped for a link meanwhile cannot redirect.
+    pub(crate) fn remove_with(
+        &self,
+        path: &Path,
+        unlink: &dyn Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        if self.pretended.is_some() {
+            return self.pretend_removal(path);
+        }
+        match (self.remove_with)(self, path, unlink) {
             Err(refused) if refused.kind() == io::ErrorKind::PermissionDenied => {
                 self.remove_read_only(path).unwrap_or(Err(refused))
             }
@@ -645,6 +672,7 @@ impl Volume {
                 }
                 fs::remove_file(path)
             },
+            remove_with: |volume, path, _| (volume.remove_file)(path),
             links: OnceLock::new(),
             pretended: None,
         }

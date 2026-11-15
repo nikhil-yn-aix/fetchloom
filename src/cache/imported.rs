@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::PathBuf;
 
 use super::Cache;
@@ -57,22 +57,38 @@ impl Cache {
                 .lines()
                 .filter_map(Sha256::from_hex)
                 .any(|digest| fs::symlink_metadata(self.object_path(&digest)).is_ok());
-            if !held && let Err(err) = self.volume.remove(&path) {
+            if !held && let Err(err) = self.remove_inside(&path) {
                 tracing::debug!(%err, path = %path.display(), "could not forget a list of imports");
             }
         }
     }
 
-    /// each list of imported objects, with its text. one that cannot be read names none.
+    /// each list of imported objects, with its text. one that cannot be read names none, and a
+    /// link in place of the folder lists none, since gc removes the lists it reads.
     fn imported_lists(&self) -> Vec<(PathBuf, String)> {
-        let Ok(entries) = fs::read_dir(self.imported_folder()) else {
+        let folder = self.imported_folder();
+        if !fs::symlink_metadata(&folder).is_ok_and(|found| found.is_dir()) {
+            return Vec::new();
+        }
+        let Ok(entries) = fs::read_dir(folder) else {
             return Vec::new();
         };
         entries
             .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_file())
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .and_then(Sha256::from_hex)
+                        .is_some()
+            })
             .filter_map(|entry| {
-                let text = fs::read_to_string(entry.path()).ok()?;
+                let mut text = String::new();
+                crate::volume::read_unfollowed(&entry.path())
+                    .ok()?
+                    .read_to_string(&mut text)
+                    .ok()?;
                 Some((entry.path(), text))
             })
             .collect()
