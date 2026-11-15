@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use super::{BUILD, Course, course, pin, pinned_as_asked, selected, shown, sized};
+use super::{BUILD, Course, course, pin, selected, shown, sized};
 use crate::cache::{Cache, Member};
 use crate::cli::fetch::data_folder::DataFolder;
 use crate::cli::sync::Scope;
@@ -122,7 +122,13 @@ pub(super) fn preview(
     let closure = recipe::closure(&manifest.datasets, &roots);
     if let Some(instead) = current {
         let scope = Scope::Only(closure.iter().map(|name| (*name).to_owned()).collect());
-        pinned_as_asked(project, manifest, read.as_ref(), instead, &scope)?;
+        crate::cli::project::locked(
+            project,
+            manifest,
+            read.as_ref().map(|(lock, _)| lock),
+            instead,
+            &scope,
+        )?;
     }
     if let Some((lock, _)) = &read {
         lock.refuse_stated(closure.iter().copied())?;

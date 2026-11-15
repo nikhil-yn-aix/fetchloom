@@ -2440,25 +2440,55 @@ fn a_check_refuses_drift_before_running() -> Result {
     with(&sandbox, &server, COPY_CODE)?;
     fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
     let output = build(&sandbox, &["--json", "build", "--check"])?;
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
     let document = json(&output)?;
     let (kind, message, _, _, _) = error(&document);
-    assert_eq!(kind, "lock.outdated");
+    assert_eq!(kind, "build.needed");
     assert_eq!(message, "data.lock is out of date: clean is not built yet");
     assert_eq!(runs(&sandbox.work())?, 0);
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
     fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
     let output = build(&sandbox, &["--json", "build", "--check"])?;
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
     let document = json(&output)?;
     let (kind, message, details, _, _) = error(&document);
-    assert_eq!(kind, "lock.outdated");
+    assert_eq!(kind, "build.needed");
     assert_eq!(
         message,
         "data.lock is out of date: clean changed since it was built"
     );
     assert_eq!(details, ["clean: clean.py changed"]);
     assert_eq!(runs(&sandbox.work())?, 1);
+    Ok(())
+}
+
+/// one stale recipe gets one answer, build.needed and exit 60, from every command told to leave
+/// data.lock as it is, so a job can act on the code alone.
+#[test]
+fn a_stale_recipe_needs_a_build_for_every_locked_command() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY_CODE)?;
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
+    for args in [
+        &["--json", "build", "--locked"][..],
+        &["--json", "build", "--check"],
+        &["--json", "sync", "--locked"],
+        &["--json", "lock", "--check"],
+        &["--json", "path", "clean", "--locked"],
+    ] {
+        let output = build(&sandbox, args)?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(60), "{args:?}: {document}");
+        let (kind, message, _, _, _) = error(&document);
+        assert_eq!(kind, "build.needed", "{args:?}");
+        assert_eq!(
+            message, "data.lock is out of date: clean changed since it was built",
+            "{args:?}"
+        );
+    }
     Ok(())
 }
 
@@ -2470,30 +2500,47 @@ fn locked_build_never_writes_data_lock() -> Result {
     let extra = "\n[datasets.extra]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n";
     with(&sandbox, &server, &format!("{COPY_CODE}{extra}"))?;
     fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
-    let refused = |args: &[&str], said: &str| -> Result {
+    // a recipe not built as it is now needs a build, which --locked may not run
+    let refused = |args: &[&str], said: &str, needs_build: bool| -> Result {
         let lock = fs::read(sandbox.work().join("data.lock"))?;
         let runs_before = runs(&sandbox.work())?;
         let output = build(&sandbox, args)?;
-        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+        let (code, expected) = if needs_build {
+            (60, "build.needed")
+        } else {
+            (1, "lock.outdated")
+        };
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            text(&output.stdout)?
+        );
         let document = json(&output)?;
         let (kind, message, _, _, _) = error(&document);
-        assert_eq!(kind, "lock.outdated");
+        assert_eq!(kind, expected, "{args:?}");
         assert_eq!(message, said);
         assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
         assert_eq!(runs(&sandbox.work())?, runs_before, "{args:?} ran a step");
         Ok(())
     };
     let locked = ["--json", "build", "--locked", "clean"];
-    refused(&locked, "data.lock is out of date: clean is not built yet")?;
+    refused(
+        &locked,
+        "data.lock is out of date: clean is not built yet",
+        true,
+    )?;
     refused(
         &["--json", "build", "--locked", "--dry-run"],
         "data.lock is out of date: clean and extra need building",
+        true,
     )?;
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
     fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
     refused(
         &locked,
         "data.lock is out of date: clean changed since it was built",
+        true,
     )?;
     fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
     let manifest = sandbox.work().join("data.toml");
@@ -2502,6 +2549,7 @@ fn locked_build_never_writes_data_lock() -> Result {
     refused(
         &locked,
         "data.lock is out of date: building would change what it pins of extra",
+        false,
     )?;
     fs::write(&manifest, &text_now)?;
     let requests = server.requests().len();
@@ -2513,7 +2561,7 @@ fn locked_build_never_writes_data_lock() -> Result {
             1,
         ),
     )?;
-    refused(&locked, "data.lock is out of date with data.toml")?;
+    refused(&locked, "data.lock is out of date with data.toml", false)?;
     assert_eq!(server.requests().len(), requests, "nothing was fetched");
     fs::write(&manifest, &text_now)?;
     let lock = fs::read(sandbox.work().join("data.lock"))?;

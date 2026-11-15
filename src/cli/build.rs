@@ -265,7 +265,14 @@ impl<'a> Building<'a> {
             .collect();
         let scope = Scope::Only(closure.into_iter().collect());
         if let Some(instead) = current {
-            pinned_as_asked(project, &manifest, read.as_ref(), instead, &scope)?;
+            // a stale recipe is build.needed here too, as for `sync --locked` and `lock --check`
+            locked(
+                project,
+                &manifest,
+                read.as_ref().map(|(lock, _)| lock),
+                instead,
+                &scope,
+            )?;
         }
         if let (Some((lock, _)), Scope::Only(names)) = (&read, &scope) {
             lock.refuse_stated(names.iter().map(String::as_str))?;
@@ -1064,32 +1071,6 @@ fn forget(project: &Project, names: &[String]) -> Result<(), Error> {
         return Ok(());
     }
     project.write_state(&state)
-}
-
-/// fails with `lock.outdated` unless `read` pins every dataset of `scope` as data.toml asks, each
-/// recipe as building it now would make; `instead` is the help's other way out.
-fn pinned_as_asked(
-    project: &Project,
-    manifest: &Manifest,
-    read: Option<&(Lock, String)>,
-    instead: &str,
-    scope: &Scope,
-) -> Result<(), Error> {
-    locked(
-        project,
-        manifest,
-        read.map(|(lock, _)| lock),
-        instead,
-        scope,
-    )
-    .map_err(|error| match error.kind {
-        // a build's own check compares with data.lock, so a recipe it does not pin is drift
-        Kind::BuildNeeded => Error {
-            kind: Kind::Outdated,
-            ..error
-        },
-        _ => error,
-    })
 }
 
 /// the key of `step`, once data.lock pins every dataset it reads and all its code is there.

@@ -44,9 +44,8 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     let rest = &args.target[name.len()..];
     answerable(&manifest, name, rest)?;
     let lock = pins(&project, &manifest, name)?;
-    unbuilt(&manifest, lock.as_ref(), name)?;
+    let scope = answered(&project, &manifest, lock.as_ref(), name, args.locked)?;
     let mut cache = None;
-    let scope = Scope::Only(BTreeSet::from([name.to_owned()]));
     let tell_stale = |manifest: &Manifest, lock: Option<&Lock>| {
         if let Some(lock) = lock {
             sync::tell_stale(&context.output, &project.root, manifest, lock, &scope);
@@ -220,6 +219,23 @@ fn tell_stale_again(
         sync::tell_stale(&context.output, &project.root, &manifest, &lock, scope);
     }
     Ok(())
+}
+
+/// the scope of a path to `name`, once nothing keeps it from an answer: a recipe data.lock pins
+/// no result of, or with `locked` a stale recipe, which stops it as `sync --locked` stops.
+fn answered(
+    project: &Project,
+    manifest: &Manifest,
+    lock: Option<&Lock>,
+    name: &str,
+    is_locked: bool,
+) -> Result<Scope, Error> {
+    unbuilt(manifest, lock, name)?;
+    let scope = Scope::Only(BTreeSet::from([name.to_owned()]));
+    if is_locked {
+        locked(project, manifest, lock, "run path without --locked", &scope)?;
+    }
+    Ok(scope)
 }
 
 /// refuses a recipe data.lock pins no result of: only `fetchloom build` makes one, so it has no
