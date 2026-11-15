@@ -64,25 +64,49 @@ pub(crate) struct Found {
     files: Vec<Taken>,
     /// whether a file may move into the cache rather than be copied.
     moves: bool,
+    _holds: Holds,
     /// sorted by path.
     pub(crate) members: Vec<Member>,
     pub(crate) tree: Sha256,
 }
 
+/// on windows, the folders a result's walk held, each with those from the cache's root down to it,
+/// so none is renamed or swapped for a junction until the result is in the cache.
+#[derive(Default)]
+struct Holds(#[cfg(windows)] Vec<Box<dyn std::any::Any + Send + Sync>>);
+
+impl std::fmt::Debug for Holds {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Holds")
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// what a test does once a result is walked and before its files are read, as someone who
+    /// shares the cache swapping one of its folders for a link meanwhile would, once.
+    pub(crate) static WALKED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// a step's `out` folder to take a result from. on unix it is held open, and every file in it is
 /// reached from it without following a link, so a folder put in place of the step's own on the
-/// way there is never read.
+/// way there is never read. on windows each folder is held from the cache's root down while the
+/// result is taken in, which keeps it from being replaced.
 pub(crate) struct Out {
     path: PathBuf,
     #[cfg(unix)]
     handle: Arc<fs::File>,
+    /// on windows, the cache's folder, from which the walk holds the folders down to each it lists.
+    #[cfg(not(unix))]
+    root: Option<PathBuf>,
     /// whether a file may move into the cache, the folder being on its disk, rather than be copied.
     moves: bool,
 }
 
 impl Out {
     /// the folder at `path`, opened without following a link where it ends.
-    #[cfg(any(test, not(unix)))]
+    #[cfg(test)]
     #[cfg_attr(
         not(unix),
         expect(
@@ -101,8 +125,20 @@ impl Out {
         #[cfg(not(unix))]
         Ok(Out {
             path: path.to_path_buf(),
+            root: None,
             moves: false,
         })
+    }
+
+    /// the folder at `path`, below the cache's folder `root`, from which the walk holds each
+    /// folder it lists.
+    #[cfg(not(unix))]
+    pub(crate) fn below(root: PathBuf, path: PathBuf) -> Out {
+        Out {
+            path,
+            root: Some(root),
+            moves: false,
+        }
     }
 
     /// the folder `handle` holds open, shown as `path`, whose files may move into the cache when
@@ -180,12 +216,16 @@ fn read_with(
     read_once: &(dyn Fn(&Path) + Sync),
 ) -> Result<Found, Fault> {
     let span = tracing::debug_span!("capture", files = tracing::field::Empty).entered();
-    let paths = walk(out, most, stop)?;
+    let (paths, holds) = walk(out, most, stop)?;
     span.record("files", paths.len());
     if paths.is_empty() {
         return Err(Refused::Nothing.into());
     }
     let named = names(&paths)?;
+    #[cfg(test)]
+    if let Some(swap) = WALKED.take() {
+        swap();
+    }
     let taken = run_all(&named, threads, |(spot, path)| {
         take(spot, path, stop, read_once)
     });
@@ -197,13 +237,14 @@ fn read_with(
         members,
         files,
         moves: out.moves,
+        _holds: holds,
     })
 }
 
 /// every file under `out` with its path as the disk spells it, found without following a link. a
 /// folder the step took its owner's access from gets it back, so its files can be read and moved.
 #[cfg(unix)]
-fn walk(out: &Out, most: usize, stop: &Stop) -> Result<Vec<(Spot, String)>, Fault> {
+fn walk(out: &Out, most: usize, stop: &Stop) -> Result<(Vec<(Spot, String)>, Holds), Fault> {
     use rustix::fs::{AtFlags, FileType};
     let mut files = Vec::new();
     let mut folders = vec![(Arc::clone(&out.handle), out.path.clone(), String::new())];
@@ -238,15 +279,22 @@ fn walk(out: &Out, most: usize, stop: &Stop) -> Result<Vec<(Spot, String)>, Faul
             }
         }
     }
-    Ok(files)
+    Ok((files, Holds::default()))
 }
 
 #[cfg(not(unix))]
-fn walk(out: &Out, most: usize, stop: &Stop) -> Result<Vec<(Spot, String)>, Fault> {
+fn walk(out: &Out, most: usize, stop: &Stop) -> Result<(Vec<(Spot, String)>, Holds), Fault> {
     let mut files = Vec::new();
+    let mut holds = Holds::default();
     let mut folders = vec![(out.path.clone(), String::new())];
     while let Some((folder, inside)) = folders.pop() {
         stop.check_io()?;
+        // held before it is listed, a folder is never one swapped in once listed
+        #[cfg(windows)]
+        if let Some(root) = &out.root {
+            let held = crate::place::hold_below(root, &folder.join("member"))?;
+            holds.0.push(Box::new(held));
+        }
         for entry in fs::read_dir(&folder)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -271,7 +319,7 @@ fn walk(out: &Out, most: usize, stop: &Stop) -> Result<Vec<(Spot, String)>, Faul
             }
         }
     }
-    Ok(files)
+    Ok((files, holds))
 }
 
 /// each file's path in NFC, as data.lock records it, once every name passed: none leaves the

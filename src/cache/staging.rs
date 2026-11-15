@@ -538,15 +538,56 @@ pub(crate) fn clear_folder(parent: &File, name: &std::ffi::OsStr, folder: &File)
     Ok(())
 }
 
-/// [`clear_tree`] for `folder`, with the folders from `root` down to it held so none is a link or
-/// becomes one meanwhile, running `meanwhile` once they are. windows says no owner of a build
-/// folder safely, so the tree is removed through handles that never follow a reparse point, as
-/// std's `remove_dir_all` does there.
+/// removes `folder`, below the cache's `root`, and all it holds: on windows with the folders from
+/// `root` down to it held so none is a link or becomes one meanwhile, as [`clear_held`] says.
+#[cfg(not(unix))]
+pub(crate) fn clear_build(root: &Path, folder: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        clear_held(root, folder, || {})
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        fs::remove_dir_all(folder)
+    }
+}
+
+/// removes `folder` and all it holds with the folders from `root` down to it held, running
+/// `meanwhile` once they are. windows says no owner of a build folder safely, so the tree is removed
+/// through handles that never follow a reparse point, as std's `remove_dir_all` does there. a disk
+/// without posix deletes, such as fat or exfat, deletes no read-only file, so when that removal
+/// fails, the read-only files left are made writable and it is tried once more.
 #[cfg(windows)]
 pub(super) fn clear_held(root: &Path, folder: &Path, meanwhile: impl FnOnce()) -> io::Result<()> {
     let _held = crate::place::hold_below(root, folder)?;
     meanwhile();
+    if fs::remove_dir_all(folder).is_ok() {
+        return Ok(());
+    }
+    writable_below(root, folder)?;
     fs::remove_dir_all(folder)
+}
+
+/// makes each read-only file in `folder`, below the cache's `root`, writable, with every folder
+/// from `root` down to the one it is in held, so none is swapped for a junction meanwhile.
+#[cfg(windows)]
+fn writable_below(root: &Path, folder: &Path) -> io::Result<()> {
+    let mut held = Vec::new();
+    let mut folders = vec![folder.to_path_buf()];
+    while let Some(current) = folders.pop() {
+        held.push(crate::place::hold_below(root, &current.join("member"))?);
+        for entry in fs::read_dir(&current)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                folders.push(entry.path());
+            } else if kind.is_file() && entry.metadata()?.permissions().readonly() {
+                crate::volume::set_read_only(&entry.path(), false)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// removes `name`, in the folder `parent` holds open, and all it holds, a link as itself, never
@@ -654,64 +695,6 @@ pub(crate) fn names_at(folder: &File) -> io::Result<Vec<std::ffi::CString>> {
         }
     }
     Ok(names)
-}
-
-/// removes the folder at `root` and everything in it, a link as itself, making a read-only file
-/// writable first, as windows removes none. it goes on past a failure and returns the first.
-#[cfg(not(unix))]
-pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
-    let mut first = None;
-    let mut todo = vec![(root.to_path_buf(), false)];
-    while let Some((path, emptied)) = todo.pop() {
-        let done = if emptied {
-            fs::remove_dir(&path)
-        } else {
-            match fs::symlink_metadata(&path) {
-                Ok(found) if found.is_dir() && !found.file_type().is_symlink() => {
-                    todo.push((path.clone(), true));
-                    fs::read_dir(&path).and_then(|entries| {
-                        for entry in entries {
-                            todo.push((entry?.path(), false));
-                        }
-                        Ok(())
-                    })
-                }
-                Ok(found) => remove_entry(&path, &found),
-                Err(err) => Err(err),
-            }
-        };
-        match done {
-            Err(err) if err.kind() != io::ErrorKind::NotFound => {
-                first.get_or_insert(err);
-            }
-            _ => {}
-        }
-    }
-    first.map_or(Ok(()), Err)
-}
-
-/// removes the file or link at `path`, which `found` describes, as itself.
-#[cfg(not(unix))]
-fn remove_entry(path: &Path, found: &fs::Metadata) -> io::Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::FileTypeExt;
-        if found.file_type().is_symlink_dir() {
-            return fs::remove_dir(path);
-        }
-        match fs::remove_file(path) {
-            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-                crate::volume::set_read_only(path, false)?;
-                fs::remove_file(path)
-            }
-            removed => removed,
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = found;
-        fs::remove_file(path)
-    }
 }
 
 impl Staging {

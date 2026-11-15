@@ -38,7 +38,7 @@ pub(crate) use results::seal_captured;
 pub(crate) use results::{Built, Seen};
 pub(crate) use staging::Staging;
 #[cfg(not(unix))]
-pub(crate) use staging::clear_tree;
+pub(crate) use staging::clear_build;
 #[cfg(unix)]
 pub(crate) use staging::{
     SCRATCH, clear_folder, enter_at, is_private, make_build_folder, names_at, sweep_scratch,

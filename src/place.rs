@@ -1246,7 +1246,7 @@ pub(crate) fn remove_below(root: &Path, path: &Path) -> io::Result<()> {
 /// the folders between `root` and `path`, held until the result is dropped so none can be
 /// replaced meanwhile, though `root` itself may be a link; a link among them is refused.
 #[cfg(windows)]
-pub(crate) fn hold_below(root: &Path, path: &Path) -> io::Result<impl Sized> {
+pub(crate) fn hold_below(root: &Path, path: &Path) -> io::Result<impl Sized + use<>> {
     let below = path.strip_prefix(root).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,

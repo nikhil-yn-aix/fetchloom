@@ -22,6 +22,14 @@ pub(crate) struct Staging {
     lock: Option<File>,
     #[cfg(unix)]
     held: Held,
+    /// the cache's folder, which the step's folder is below.
+    #[cfg(not(unix))]
+    root: PathBuf,
+    /// on windows, the folders from the cache's root down to the step's folder, held while it
+    /// lives, so no one renames one of them or puts a junction in its place while the step and
+    /// taking in its result reach it by path.
+    #[cfg(windows)]
+    holding: Option<Box<dyn std::any::Any + Send + Sync>>,
     /// the folder TMPDIR names, when the step's folder is there.
     scratch: Option<PathBuf>,
     /// whether the step's folder is on another disk than the cache.
@@ -79,9 +87,15 @@ impl Staging {
         {
             let _ = scratch;
             let (folder, lock) = cache.build_folder()?;
+            #[cfg(windows)]
+            let holding: Box<dyn std::any::Any + Send + Sync> =
+                Box::new(crate::place::hold_below(cache.root(), &folder.join("in"))?);
             let staging = Staging {
                 folder,
                 lock,
+                root: cache.root().to_path_buf(),
+                #[cfg(windows)]
+                holding: Some(holding),
                 scratch: None,
                 elsewhere: false,
             };
@@ -94,6 +108,13 @@ impl Staging {
     /// the step's `out` folder to take its result from: on unix opened through the folder held
     /// since the step began. a file in a folder of the step's own in TMPDIR is copied into the
     /// cache, never moved, since the cache may be on another disk.
+    #[cfg_attr(
+        not(unix),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "unix opens the folder, which windows only names"
+        )
+    )]
     pub(crate) fn out_folder(&self) -> io::Result<capture::Out> {
         #[cfg(unix)]
         {
@@ -101,7 +122,7 @@ impl Staging {
             Ok(capture::Out::held(self.out(), out, self.scratch.is_none()))
         }
         #[cfg(not(unix))]
-        capture::Out::open(&self.out())
+        Ok(capture::Out::below(self.root.clone(), self.out()))
     }
 
     /// the folder TMPDIR names, when the step's folder is there rather than in the cache.
@@ -152,10 +173,13 @@ impl Drop for Staging {
         // windows keeps an open file's name on disks without posix deletes, such as fat and exfat,
         // so the folder could not go while its lock is open
         drop(self.lock.take());
+        // a folder held without delete sharing cannot go, even for this process
+        #[cfg(windows)]
+        drop(self.holding.take());
         #[cfg(unix)]
         let cleared = self.held.clear();
         #[cfg(not(unix))]
-        let cleared = crate::cache::clear_tree(&self.folder);
+        let cleared = crate::cache::clear_build(&self.root, &self.folder);
         if let Err(err) = cleared {
             tracing::debug!(%err, folder = %self.folder.display(), "could not clear a build's folder, which the next build sweeps");
         }
@@ -333,6 +357,9 @@ mod tests {
             std::os::unix::fs::symlink(&outside, staging.out().join("link")).unwrap();
             std::fs::set_permissions(&deep, std::fs::Permissions::from_mode(0o500)).unwrap();
         }
+        // fat and exfat make no junctions, and there the read-only file is the case
+        #[cfg(windows)]
+        let _ = crate::test_links::link_folder(&outside, &staging.out().join("link"));
         drop(staging);
         assert!(!folder.exists());
         assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"mine");
@@ -387,6 +414,48 @@ mod tests {
             0,
             "the step's own folder is cleared where it went"
         );
+    }
+
+    /// on windows, a folder of a step's result swapped for a junction once the result is walked,
+    /// as by another user of a cache outside the user's profile, is never read through: the
+    /// folders on the way stay held, so the swap fails and only the step's own bytes are taken.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_swapped_in_mid_capture_is_never_read() {
+        use std::sync::Arc;
+
+        use crate::stop::Stop;
+        use crate::threads::Threads;
+        let (dir, cache) = crate::cache::tests::cache();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("bait.csv"), b"someone's own bytes").unwrap();
+        let staging = Staging::new(&cache, dir.path()).unwrap();
+        let inner = staging.out().join("zzz");
+        std::fs::create_dir(&inner).unwrap();
+        std::fs::write(inner.join("bait.csv"), b"what the step made").unwrap();
+        let (swapped, moved, target) = (inner.clone(), dir.path().join("moved"), outside.clone());
+        capture::WALKED.set(Some(Box::new(move || {
+            // the held folders refuse the rename, which nothing refused before
+            if std::fs::rename(&swapped, &moved).is_ok() {
+                crate::test_links::link_folder(&target, &swapped).unwrap();
+            }
+        })));
+
+        let out = staging.out_folder().unwrap();
+        let found = capture::read(&out, 100, Threads::default(), &Stop::default());
+        if let Ok(found) = &found {
+            let work = crate::work::Work::default();
+            capture::publish(&cache, found, Threads::default(), &Arc::default(), &work).unwrap();
+        }
+
+        let theirs = crate::digest::sha256(b"someone's own bytes");
+        assert!(cache.find(&theirs, None).is_none(), "{found:?}");
+        assert_eq!(
+            std::fs::read(outside.join("bait.csv")).unwrap(),
+            b"someone's own bytes"
+        );
+        assert!(capture::WALKED.take().is_none(), "the result was walked");
     }
 
     /// a folder put in place of the new one before it is held, even one of this user's own, is
