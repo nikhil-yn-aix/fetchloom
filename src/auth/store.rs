@@ -2,7 +2,7 @@
 //! person agreed to. an index of what went where means the store is asked only for keys it holds.
 
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Write as _};
 use std::path::Path;
 
@@ -125,6 +125,54 @@ pub(crate) fn read(var: Var<'_>, id: &str, place: Place) -> Option<String> {
     }
 }
 
+/// the file every change to the saved keys locks, in fetchloom's settings folder.
+const LOCK: &str = "accounts.lock";
+
+/// the saved keys, and the `.netrc` fetchloom writes, held for one change until this is dropped.
+pub(crate) struct Held {
+    _lock: Option<File>,
+}
+
+/// holds the saved keys and the `.netrc` for one change, waiting while another run changes them:
+/// a change reads a whole file and writes it back, so two at once would lose one of the keys.
+/// with no settings folder, or on a filesystem without locks, the change goes on unheld.
+pub(crate) fn hold(var: Var<'_>) -> io::Result<Held> {
+    match crate::machine::settings_folder(var) {
+        Some(folder) => hold_in(&folder),
+        None => Ok(Held { _lock: None }),
+    }
+}
+
+/// [`hold`], with `folder` the settings folder.
+fn hold_in(folder: &Path) -> io::Result<Held> {
+    let opened = fs::create_dir_all(folder)
+        .and_then(|()| crate::volume::open_unfollowed(&folder.join(LOCK), true));
+    let file = match opened {
+        Ok(file) => file,
+        // a settings folder that cannot be written holds no key to lose, while a `.netrc`
+        // elsewhere may still change
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+            ) =>
+        {
+            return Ok(Held { _lock: None });
+        }
+        Err(err) => return Err(err),
+    };
+    loop {
+        match file.lock() {
+            Ok(()) => return Ok(Held { _lock: Some(file) }),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => {
+                tracing::debug!(%err, "this filesystem has no file locks");
+                return Ok(Held { _lock: None });
+            }
+        }
+    }
+}
+
 /// saves `secret` for `id` in `place`, replacing what was saved for it before. the new key is
 /// stored before the old one goes, so a store that refuses it leaves the old key working.
 pub(crate) fn save(var: Var<'_>, id: &str, secret: &str, place: Place) -> io::Result<()> {
@@ -141,6 +189,7 @@ fn save_with(
 ) -> io::Result<()> {
     let folder = crate::machine::settings_folder(var)
         .ok_or_else(|| io::Error::other("no folder for fetchloom's settings"))?;
+    let _held = hold_in(&folder)?;
     let index_path = folder.join("accounts.json");
     let mut index: BTreeMap<String, Place> = load(&index_path)?;
     let before = index.get(id).copied();
@@ -174,6 +223,7 @@ pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
     let Some(folder) = crate::machine::settings_folder(var) else {
         return Ok(false);
     };
+    let _held = hold_in(&folder)?;
     let mut index: BTreeMap<String, Place> = load(&folder.join("accounts.json"))?;
     let Some(place) = index.remove(id) else {
         return Ok(false);
@@ -482,6 +532,72 @@ mod tests {
         )
         .unwrap();
         assert!(keys.contains("d-key"));
+    }
+
+    /// sign-ins and sign-outs at once, as parallel `auth login` and `logout` runs make them, each
+    /// keep their change: every key saved is there, and the index lists exactly the keys the file
+    /// holds.
+    #[test]
+    fn keys_saved_and_forgotten_at_once_all_stay_as_left() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().as_os_str().to_owned();
+        let var = |name: &str| -> Option<OsString> {
+            match name {
+                "HOME" | "USERPROFILE" | "APPDATA" | "XDG_CONFIG_HOME" => Some(root.clone()),
+                _ => None,
+            }
+        };
+        let ids: Vec<String> = (0..8).map(|n| format!("site:{n}.example")).collect();
+        let at_once = |change: &(dyn Fn(usize, &str) + Sync)| {
+            let start = std::sync::Barrier::new(ids.len());
+            std::thread::scope(|scope| {
+                for (n, id) in ids.iter().enumerate() {
+                    let start = &start;
+                    scope.spawn(move || {
+                        start.wait();
+                        change(n, id);
+                    });
+                }
+            });
+        };
+        let kept = || {
+            let index: Vec<(String, Place)> = saved(&var).into_iter().collect();
+            let keys: Vec<(String, String)> = file(&var).into_iter().collect();
+            (index, keys)
+        };
+        for round in 0..3 {
+            at_once(&|_, id| save(&var, id, &format!("{id} {round}"), Place::File).unwrap());
+            let all = ids.iter().map(|id| (id.clone(), format!("{id} {round}")));
+            assert_eq!(
+                kept(),
+                (
+                    ids.iter().map(|id| (id.clone(), Place::File)).collect(),
+                    all.collect()
+                ),
+                "round {round}, every key saved"
+            );
+            at_once(&|n, id| {
+                if n % 2 == 0 {
+                    assert!(forget(&var, id).unwrap());
+                } else {
+                    save(&var, id, "again", Place::File).unwrap();
+                }
+            });
+            let odd: Vec<&String> = ids.iter().skip(1).step_by(2).collect();
+            assert_eq!(
+                kept(),
+                (
+                    odd.iter().map(|&id| (id.clone(), Place::File)).collect(),
+                    odd.iter()
+                        .map(|&id| (id.clone(), "again".to_owned()))
+                        .collect()
+                ),
+                "round {round}, half forgotten"
+            );
+            for id in odd {
+                assert!(forget(&var, id).unwrap());
+            }
+        }
     }
 
     /// a key file or index that does not read leaves every key in it unfound, so it is named, by

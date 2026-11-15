@@ -176,7 +176,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | file | owns | start at | other items |
 |---|---|---|---|
 | `src/auth.rs` | accounts at the sources: which key each takes, where it is kept, how to check it and how to get one, and how a message names a key, by where it comes from | `Account`, `credentials` | `Origin::named` |
-| `src/auth/store.rs` | keys for sources whose tools keep no file: the system's credential store, or a private file the person agreed to | `read`, `save` |  |
+| `src/auth/store.rs` | keys for sources whose tools keep no file: the system's credential store, or a private file the person agreed to, and the lock every change to them or the `.netrc` holds | `read`, `save`, `hold` |  |
 | `src/auth/netrc.rs` | `.netrc`, which curl, wget and python's requests also read | `read`, `save` |  |
 | `src/auth/cookies.rs` | cookies a person signed in with, from a cookies.txt file or a browser's profile, and which a host takes: its domain's, unexpired and sendable, the rest named with why | `netscape`, `pick`, `Browser` | `Picked`, `Left`, `Why`, `Read`, `covers` |
 | `src/auth/cookies/sqlite.rs` | a read-only reader of the SQLite files browsers keep cookies in: one table's rows, from the file and the committed pages of its write-ahead log, with no lock and no SQL | `Database` | `Value`, `Broken`, `columns` |

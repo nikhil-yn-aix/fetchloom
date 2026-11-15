@@ -545,7 +545,7 @@ fn a_netrc_others_can_open_is_told_apart() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join(".netrc");
     assert!(!netrc::too_open(&path), "a missing file is no risk");
-    netrc::save(&path, "a.example", "ada", "pw").unwrap();
+    netrc::save(&machine(home.path(), &[]), &path, "a.example", "ada", "pw").unwrap();
     assert!(!netrc::too_open(&path), "saved for its owner only");
     #[cfg(unix)]
     {

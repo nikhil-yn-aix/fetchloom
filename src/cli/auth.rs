@@ -752,7 +752,8 @@ fn save(
             let Account::Login(host) = account else {
                 return Ok(None);
             };
-            auth::netrc::save(&path, host, login.unwrap_or_default(), secret).map_err(failed)?;
+            auth::netrc::save(var, &path, host, login.unwrap_or_default(), secret)
+                .map_err(failed)?;
             warn_if_shared(output, &path, PROFILE_OR_PERMISSIONS);
             Ok(Some(path.display().to_string()))
         }
@@ -1060,7 +1061,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             }
             match &account {
                 Account::Login(host) => {
-                    auth::netrc::remove(path, host).map_err(failed)?;
+                    auth::netrc::remove(var, path, host).map_err(failed)?;
                 }
                 _ if store::saved(var).contains_key(&account.id()) => {
                     asking_store(output, || store::forget(var, &account.id())).map_err(failed)?;

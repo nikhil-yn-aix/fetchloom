@@ -193,7 +193,14 @@ fn macro_end(text: &str, at: usize) -> usize {
 
 /// writes `login` and `password` for `host`, replacing an entry the file already has for it and
 /// keeping everything else as it was. the file is readable by its owner only.
-pub(crate) fn save(path: &Path, host: &str, login: &str, password: &str) -> io::Result<()> {
+pub(crate) fn save(
+    var: Var<'_>,
+    path: &Path,
+    host: &str,
+    login: &str,
+    password: &str,
+) -> io::Result<()> {
+    let _held = super::store::hold(var)?;
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
@@ -213,7 +220,8 @@ pub(crate) fn save(path: &Path, host: &str, login: &str, password: &str) -> io::
 }
 
 /// removes the entry for `host`. returns whether there was one.
-pub(crate) fn remove(path: &Path, host: &str) -> io::Result<bool> {
+pub(crate) fn remove(var: Var<'_>, path: &Path, host: &str) -> io::Result<bool> {
+    let _held = super::store::hold(var)?;
     let Ok(text) = fs::read_to_string(path) else {
         return Ok(false);
     };
@@ -243,7 +251,19 @@ fn quoted(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use super::*;
+
+    /// the environment of a person whose home folder is `folder`.
+    fn home(folder: &tempfile::TempDir) -> impl Fn(&str) -> Option<OsString> + Sync + '_ {
+        move |name| match name {
+            "HOME" | "USERPROFILE" | "APPDATA" | "XDG_CONFIG_HOME" => {
+                Some(folder.path().as_os_str().to_owned())
+            }
+            _ => None,
+        }
+    }
 
     #[test]
     fn entries_are_read_the_way_curl_reads_them() {
@@ -285,10 +305,11 @@ mod tests {
     #[test]
     fn a_saved_password_starting_with_a_hash_reads_back_for_its_own_host() {
         let folder = tempfile::tempdir().unwrap();
+        let var = home(&folder);
         let path = folder.path().join(".netrc");
         fs::write(&path, "machine b.example login bob password pw\n").unwrap();
-        save(&path, "a.example", "ada", "#Secr3t").unwrap();
-        save(&path, "c.example", "cy", "pw2").unwrap();
+        save(&var, &path, "a.example", "ada", "#Secr3t").unwrap();
+        save(&var, &path, "c.example", "cy", "pw2").unwrap();
         let entries: Vec<_> = parse(&fs::read_to_string(&path).unwrap())
             .into_iter()
             .map(|e| (e.host, e.login, e.password))
@@ -306,21 +327,22 @@ mod tests {
     #[test]
     fn saving_replaces_one_entry_and_keeps_the_rest() {
         let folder = tempfile::tempdir().unwrap();
+        let var = home(&folder);
         let path = folder.path().join(".netrc");
         fs::write(
             &path,
             "# mine\nmachine a.example login x password y\nmachine b.example login p password q\n",
         )
         .unwrap();
-        save(&path, "a.example", "ada", "new pass").unwrap();
-        save(&path, "c.example", "c", "d").unwrap();
+        save(&var, &path, "a.example", "ada", "new pass").unwrap();
+        save(&var, &path, "c.example", "c", "d").unwrap();
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "# mine\nmachine a.example login ada password \"new pass\"\n\
              machine b.example login p password q\nmachine c.example login c password d\n"
         );
-        assert!(remove(&path, "b.example").unwrap());
-        assert!(!remove(&path, "b.example").unwrap());
+        assert!(remove(&var, &path, "b.example").unwrap());
+        assert!(!remove(&var, &path, "b.example").unwrap());
         let hosts: Vec<_> = parse(&fs::read_to_string(&path).unwrap())
             .into_iter()
             .map(|e| e.host)
@@ -331,6 +353,62 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    /// logins saved and removed at once, as parallel `auth login` and `logout` runs make them,
+    /// each keep their change.
+    #[test]
+    fn logins_saved_and_removed_at_once_all_stay_as_left() {
+        let folder = tempfile::tempdir().unwrap();
+        let var = home(&folder);
+        let path = folder.path().join(".netrc");
+        let hosts: Vec<String> = (0..8).map(|n| format!("{n}.example")).collect();
+        let at_once = |change: &(dyn Fn(usize, &str) + Sync)| {
+            let start = std::sync::Barrier::new(hosts.len());
+            std::thread::scope(|scope| {
+                for (n, host) in hosts.iter().enumerate() {
+                    let start = &start;
+                    scope.spawn(move || {
+                        start.wait();
+                        change(n, host);
+                    });
+                }
+            });
+        };
+        let kept = || -> Vec<(String, String)> {
+            let mut kept: Vec<_> = parse(&fs::read_to_string(&path).unwrap_or_default())
+                .into_iter()
+                .map(|entry| (entry.host, entry.password))
+                .collect();
+            kept.sort();
+            kept
+        };
+        for round in 0..3 {
+            at_once(&|_, host| save(&var, &path, host, "ada", &format!("pw{round}")).unwrap());
+            let all = hosts
+                .iter()
+                .map(|host| (host.clone(), format!("pw{round}")));
+            assert_eq!(
+                kept(),
+                all.collect::<Vec<_>>(),
+                "round {round}, every login saved"
+            );
+            at_once(&|n, host| {
+                if n % 2 == 0 {
+                    assert!(remove(&var, &path, host).unwrap());
+                } else {
+                    save(&var, &path, host, "ada", "again").unwrap();
+                }
+            });
+            let odd = hosts.iter().skip(1).step_by(2);
+            assert_eq!(
+                kept(),
+                odd.map(|host| (host.clone(), "again".to_owned()))
+                    .collect::<Vec<_>>(),
+                "round {round}, half removed"
+            );
+            fs::remove_file(&path).unwrap();
         }
     }
 }
