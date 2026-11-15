@@ -38,7 +38,7 @@ fetchloom get [options] <link>...
 
 without `-o`:
 
-1. resolve the reference and filter its files. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../reference/archives.md#webdataset-shards) get a hint before anything downloads.
+1. resolve the reference and filter its files. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists, or a hugging face repository's `.gitattributes` [stays out](../sources/hugging-face.md#references-and-pins). [webdataset shards](../reference/archives.md#webdataset-shards) get a hint before anything downloads.
 2. reuse cached bytes or download the rest. a plain link is checked with `ETag` or `Last-Modified`.
 3. unpack archives unless `--no-extract` says not to, then place the files in the output folder.
 4. print the absolute output folder on stdout. no project file is written.

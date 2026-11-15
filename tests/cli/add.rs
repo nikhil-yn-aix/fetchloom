@@ -2031,6 +2031,78 @@ fn a_run_that_learns_hashes_tells_one_total_with_what_it_places() -> Result {
     Ok(())
 }
 
+/// a hugging face repository's .gitattributes tells git how to store its files, so add and get
+/// leave it out without asking for it, until a select pattern keeps it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_hugging_face_gitattributes_is_left_out_until_selected() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (git, card, rows) = (
+        b"*.parquet filter=lfs\n".as_slice(),
+        b"# rows\n".as_slice(),
+        b"a,b\n1,2\n".as_slice(),
+    );
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let answer = |body: serde_json::Value| {
+        reply(
+            "200 OK",
+            &[("Content-Type", "application/json")],
+            body.to_string().as_bytes(),
+        )
+    };
+    let hub = Routes::start(vec![
+        (
+            "/api/datasets/lab/rows/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData".to_owned(),
+            answer(serde_json::json!({"id": "lab/rows", "sha": commit, "tags": []})),
+        ),
+        (
+            format!("/api/datasets/lab/rows/tree/{commit}?recursive=true"),
+            answer(serde_json::json!([
+                {"type": "file", "oid": "1", "size": git.len(), "path": ".gitattributes"},
+                {"type": "file", "oid": "2", "size": card.len(), "path": "README.md"},
+                {"type": "file", "oid": "3", "size": rows.len(), "path": "rows.csv"},
+            ])),
+        ),
+    ])?;
+    let resolve = format!("/huggingface.co/datasets/lab/rows/resolve/{commit}");
+    let files = Routes::start(vec![
+        (format!("{resolve}/.gitattributes"), file(git, "\"g\"")),
+        (format!("{resolve}/README.md"), file(card, "\"c\"")),
+        (format!("{resolve}/rows.csv"), file(rows, "\"r\"")),
+    ])?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_HOSTS", &files.url)
+            .output()
+    };
+    let names = |folder: &str| -> Result<Vec<String>> {
+        let mut names: Vec<String> = fs::read_dir(sandbox.work().join(folder))?
+            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+            .collect::<std::io::Result<_>>()?;
+        names.sort();
+        Ok(names)
+    };
+    ok(&run(&["add", "hf:datasets/lab/rows"])?)?;
+    assert_eq!(names("data/rows")?, ["README.md", "rows.csv"]);
+    assert!(!fs::read_to_string(sandbox.work().join("data.lock"))?.contains(".gitattributes"));
+    ok(&run(&["get", "hf:datasets/lab/rows", "--dir", "whole"])?)?;
+    assert_eq!(names("whole")?, ["README.md", "rows.csv"]);
+    let asked = |name: &str| files.targets().iter().any(|target| target.ends_with(name));
+    assert!(!asked("/.gitattributes"), "{:?}", files.targets());
+    ok(&run(&[
+        "get",
+        "hf:datasets/lab/rows",
+        "--select",
+        ".gitattributes",
+        "--dir",
+        "chosen",
+    ])?)?;
+    assert_eq!(fs::read(sandbox.work().join("chosen/.gitattributes"))?, git);
+    Ok(())
+}
+
 /// a dry run of links data.toml has already says so, naming the list they came from, if any.
 #[test]
 fn a_dry_run_add_of_links_already_there_says_so() -> Result {

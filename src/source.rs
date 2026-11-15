@@ -286,6 +286,14 @@ impl Listing {
         }
     }
 
+    /// whether the file at `path` stays out of a dataset unless a select pattern keeps it: a
+    /// hugging face repository's `.gitattributes`, which tells git how to store the files and
+    /// holds no data.
+    pub(crate) fn kept_only_if_selected(&self, path: &str) -> bool {
+        matches!(self.resolved, Reference::HuggingFace(_))
+            && path.rsplit('/').next() == Some(".gitattributes")
+    }
+
     /// the paths select and exclude can match, including entries without downloadable bytes.
     pub(crate) fn paths(&self) -> impl Iterator<Item = &str> {
         self.files

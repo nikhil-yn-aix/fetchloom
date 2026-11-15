@@ -14,6 +14,8 @@ a link without `/datasets/` or `/spaces/`, such as `https://huggingface.co/sciki
 
 a pasted link to a file, such as `https://huggingface.co/datasets/org/name/blob/main/data.csv`, selects that file. a link to a folder, such as `https://huggingface.co/datasets/HuggingFaceFW/fineweb/tree/main/sample/10BT`, selects everything below it, as `--select "sample/10BT/**"` would. `add` writes that pattern to `data.toml`, and an explicit `--select` replaces it. a file or folder link written by hand as a `ref` in `data.toml`, without `select`, narrows the dataset the same way.
 
+a repository's `.gitattributes`, at any depth, tells git how to store its files and holds no data, so a dataset leaves it out, and `Resolved` counts it as listed but not kept, as in `3 of 4 files` for `hf:datasets/scikit-learn/iris`. a select pattern that matches it keeps it, as `--select .gitattributes` or `select = [".gitattributes", "*.csv"]` does. `README.md` stays like any other file. a repository that holds nothing but `.gitattributes` stops with `source.invalid`, exit 10, and its help gives that select.
+
 `resolved` records the repository kind, name and full commit. download URLs use the repository's `/resolve/` route with that commit and file path. stated LFS SHA-256 is checked, and the lock records each selected file's SHA-256 and size. a dataset's title is the `pretty_name` its card gives, when that is one line of at most 100 characters; its license comes from the card's license tags. a generated dataset name still comes from the repository id, such as `multi_nli`, not from the title.
 
 a reference that names a commit keeps it under `lock --upgrade`.

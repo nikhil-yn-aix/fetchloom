@@ -33,8 +33,7 @@ a dataset without a lock entry says it is not locked yet. a [recipe](../guides/r
 with a name, `list` prints those files on stdout, one per line: the path inside the dataset folder, then its size, the sizes lined up on the right. at a terminal, a line on stderr comes first that names the dataset with its reference, or what a recipe makes it from, its title, how many files and bytes it holds, and its license and DOI when the lock has them:
 
 ```text
-  iris · hf:datasets/scikit-learn/iris · 4 files · 18.1 KiB · license cc0-1.0
-.gitattributes    1.5 KiB
+  iris · hf:datasets/scikit-learn/iris · 3 files · 16.6 KiB · license cc0-1.0
 Iris.csv          5.0 KiB
 README.md         1.6 KiB
 database.sqlite  10.0 KiB

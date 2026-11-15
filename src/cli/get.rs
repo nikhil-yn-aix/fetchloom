@@ -1428,7 +1428,13 @@ fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote
         return Err(missing_file(parsed, listing, file));
     }
     let select = wanted_patterns(args, parsed);
-    if select.is_empty() && args.filter.exclude.is_empty() && listing.unavailable.is_empty() {
+    if select.is_empty()
+        && args.filter.exclude.is_empty()
+        && listing.unavailable.is_empty()
+        && !listing
+            .paths()
+            .any(|path| listing.kept_only_if_selected(path))
+    {
         return Ok(listing.files.clone());
     }
     let alone = Manifest::parse(&manifest::with_dataset(

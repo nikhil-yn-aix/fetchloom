@@ -34,7 +34,7 @@ a ready dataset prints no closing summary, and the check costs what the dataset 
 
 ```text
 error: iris has no file or folder called not-a-file.csv
-  iris holds 4 files, such as Iris.csv, .gitattributes and README.md
+  iris holds Iris.csv, README.md and database.sqlite
   help: name a path it holds, such as `fetchloom path iris/Iris.csv`
 ```
 

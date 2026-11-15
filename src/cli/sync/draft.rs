@@ -833,8 +833,9 @@ pub(super) fn unlisted(source: &Source, listing: &Listing) -> Vec<String> {
         .collect()
 }
 
-/// the files `select` keeps and `exclude` leaves. a select pattern that matches nothing is a
-/// mistake worth stopping for, with real paths to compare against.
+/// the files `select` keeps and `exclude` leaves; with no select, every file but those the
+/// listing keeps only if selected. a select pattern that matches nothing is a mistake worth
+/// stopping for, with real paths to compare against.
 pub(in crate::cli) fn filter(
     name: &str,
     entry: &Entry,
@@ -850,8 +851,14 @@ pub(in crate::cli) fn filter(
         glob::Set::new(source.select.clone()),
         glob::Set::new(source.exclude.clone()),
     );
-    let selected =
-        |path: &str| (source.select.is_empty() || select.matches(path)) && !exclude.matches(path);
+    let selected = |path: &str| {
+        let chosen = if source.select.is_empty() {
+            !listing.kept_only_if_selected(path)
+        } else {
+            select.matches(path)
+        };
+        chosen && !exclude.matches(path)
+    };
     let unavailable: Vec<_> = listing
         .unavailable
         .iter()
@@ -873,6 +880,15 @@ pub(in crate::cli) fn filter(
         .cloned()
         .collect();
     if kept.is_empty() {
+        let unselected: Vec<&str> = listing
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .filter(|path| listing.kept_only_if_selected(path) && !exclude.matches(path))
+            .collect();
+        if source.select.is_empty() && !unselected.is_empty() {
+            return Err(only_unselected(name, written(entry), &unselected));
+        }
         let mut error = Error::new(
             kind(entry),
             format!("select and exclude leave no file of {name}"),
@@ -886,6 +902,29 @@ pub(in crate::cli) fn filter(
         }));
     }
     Ok(kept)
+}
+
+/// the error for a dataset left no file because its every file not excluded, `unselected`, stays
+/// out unless selected, as in a hugging face repository that holds only `.gitattributes`.
+fn only_unselected(name: &str, patterns: Patterns, unselected: &[&str]) -> Error {
+    let first = unselected[0];
+    let pattern = glob::escape(first);
+    let keep = match patterns {
+        Patterns::OnCommandLine => format!("--select {}", crate::cli::shell_word(&pattern)),
+        Patterns::InDataToml => format!(
+            "select = [{}] to datasets.{name} in data.toml",
+            toml_edit::Value::from(pattern.as_str())
+        ),
+    };
+    Error::new(
+        Kind::SourceInvalid,
+        format!(
+            "{name} holds no file but git's own {}",
+            units::listed(unselected, "and")
+        ),
+    )
+    .detail("fetchloom leaves out .gitattributes unless a select pattern keeps it: it tells git how to store files and holds no data")
+    .help(format!("to keep {first} anyway, add {keep}"))
 }
 
 fn unavailable_selection(
@@ -2082,6 +2121,105 @@ mod tests {
             .unwrap();
             assert_eq!(draft.jobs(&cache).len(), usize::from(page), "page: {page}");
         }
+    }
+
+    /// what [`filter`] keeps of `paths`, listed by `reference`, for a dataset of that reference
+    /// with `select` written in data.toml, or on the command line when `cli`.
+    fn kept_of(
+        reference: &str,
+        paths: &[&str],
+        select: &[&str],
+        cli: bool,
+    ) -> Result<Vec<String>, Error> {
+        let select: Vec<String> = select.iter().map(|pattern| (*pattern).to_owned()).collect();
+        let text =
+            crate::project::manifest::with_dataset("", "rows", reference, &select, &[], true)?;
+        let manifest = Manifest::parse(&text)?;
+        let mut entry = manifest.datasets["rows"].clone();
+        if cli {
+            entry.lines.clear();
+        }
+        let listing = Listing {
+            within: Vec::new(),
+            access: Access::Public,
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+            resolved: Reference::parse(reference)?.reference,
+            title: None,
+            license: None,
+            doi: None,
+            files: paths
+                .iter()
+                .map(|path| Remote {
+                    path: (*path).to_owned(),
+                    size: Some(1),
+                    sha256: None,
+                    md5: None,
+                    url: Url::parse(&format!("https://example.org/{path}")).unwrap(),
+                    named_by_server: false,
+                    etag: None,
+                })
+                .collect(),
+        };
+        let kept = filter("rows", &entry, entry.source().unwrap(), &listing)?;
+        Ok(kept.into_iter().map(|file| file.path).collect())
+    }
+
+    /// a hugging face repository's `.gitattributes`, at any depth, tells git how to store its
+    /// files, so it stays out until a select pattern keeps it; another source's is data.
+    #[test]
+    fn a_hugging_face_gitattributes_stays_out_unless_selected() {
+        let paths = [
+            ".gitattributes",
+            "README.md",
+            "data/.gitattributes",
+            "data/train.csv",
+        ];
+        let hf = "hf:datasets/lab/rows";
+        assert_eq!(
+            kept_of(hf, &paths, &[], false).unwrap(),
+            ["README.md", "data/train.csv"]
+        );
+        assert_eq!(
+            kept_of(hf, &paths, &[".gitattributes", "data/*.csv"], true).unwrap(),
+            [".gitattributes", "data/train.csv"]
+        );
+        assert_eq!(kept_of("zenodo:1", &paths, &[], false).unwrap(), paths);
+    }
+
+    /// a repository of git's files alone has no data to pin, and the help gives the select that
+    /// keeps them where the patterns were written.
+    #[test]
+    fn a_repository_of_only_gitattributes_names_the_select_that_keeps_it() {
+        let hf = "hf:datasets/lab/empty";
+        for (cli, help) in [
+            (
+                true,
+                "to keep .gitattributes anyway, add --select .gitattributes",
+            ),
+            (
+                false,
+                "to keep .gitattributes anyway, add select = [\".gitattributes\"] to datasets.rows in data.toml",
+            ),
+        ] {
+            let error = kept_of(hf, &[".gitattributes"], &[], cli).unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert_eq!(
+                error.message,
+                "rows holds no file but git's own .gitattributes"
+            );
+            assert_eq!(
+                error.details,
+                [
+                    "fetchloom leaves out .gitattributes unless a select pattern keeps it: it tells git how to store files and holds no data"
+                ]
+            );
+            assert_eq!(error.help.as_deref(), Some(help));
+        }
+        assert_eq!(
+            kept_of(hf, &[".gitattributes"], &["*"], false).unwrap(),
+            [".gitattributes"]
+        );
     }
 }
 
