@@ -34,7 +34,7 @@ fn a_dandiset_of_more_files_than_allowed_is_refused() {
     assert_eq!(
         error.help.as_deref(),
         Some(
-            "select the folders you need with --select, as https://dandiarchive.org/dandiset/001512/0.250624.1820 shows them, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+            "select the folders you need with --select, as https://dandiarchive.org/dandiset/001512/0.250624.1820 shows them, or raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"
         )
     );
 }

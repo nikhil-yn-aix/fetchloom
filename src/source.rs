@@ -126,7 +126,7 @@ pub(crate) fn too_many(subject: impl fmt::Display, most: usize, instead: &str) -
         ),
     )
     .help(format!(
-        "{instead}, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+        "{instead}, or raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"
     ))
 }
 

@@ -1509,7 +1509,7 @@ fn a_listing_past_the_most_files_names_the_setting() -> Result {
     );
     assert_eq!(
         document["errors"][0]["help"],
-        "name a narrower prefix, ending in /, for the folder you need, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+        "name a narrower prefix, ending in /, for the folder you need, or raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"
     );
     Ok(())
 }

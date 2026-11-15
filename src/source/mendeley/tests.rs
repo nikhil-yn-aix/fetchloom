@@ -71,7 +71,7 @@ fn a_dataset_of_more_files_than_allowed_is_refused() {
     assert_eq!(
         error.help.as_deref(),
         Some(
-            "download the files you need from https://data.mendeley.com/datasets/rscbjbr9sj/2, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+            "download the files you need from https://data.mendeley.com/datasets/rscbjbr9sj/2, or raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"
         )
     );
 }

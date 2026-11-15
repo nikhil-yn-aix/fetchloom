@@ -59,7 +59,7 @@ fn a_snapshot_of_more_files_than_allowed_is_refused() {
     assert_eq!(
         error.help.as_deref(),
         Some(
-            "download the folders you need from https://openneuro.org/datasets/ds000001/versions/1.0.0, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+            "download the folders you need from https://openneuro.org/datasets/ds000001/versions/1.0.0, or raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"
         )
     );
 }
