@@ -462,17 +462,33 @@ const PAST_BIRTH: Duration = Duration::from_nanos(1);
 /// dates a sealed object by its birth: its modification time becomes just past the time the file
 /// was made, or past `begun`, its [`begun`] time, as an nfs 4.2 server keeps only times newer than
 /// those at a write delegation's start. a filesystem that keeps no birth time leaves it undated.
+/// windows keeps no ctime for gc to age an object by, so there the birth moves up to the seal
+/// instead, since a download a later run finished was born with its first run, maybe days ago.
 pub(super) fn date_by_birth(file: &File, begun: Option<SystemTime>) -> io::Result<()> {
-    let found = file.metadata()?;
-    let born = found.created().ok();
-    #[cfg(target_os = "linux")]
-    let born = born.or_else(|| statx_birth(file, "", rustix::fs::AtFlags::EMPTY_PATH));
-    match born {
-        Some(born) => {
-            let start = begun.map_or(born, |begun| begun.max(born));
-            file.set_times(FileTimes::new().set_modified(start + PAST_BIRTH))
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTimesExt;
+        let _ = begun;
+        let now = SystemTime::now();
+        file.set_times(
+            FileTimes::new()
+                .set_created(now)
+                .set_modified(now + PAST_BIRTH),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let found = file.metadata()?;
+        let born = found.created().ok();
+        #[cfg(target_os = "linux")]
+        let born = born.or_else(|| statx_birth(file, "", rustix::fs::AtFlags::EMPTY_PATH));
+        match born {
+            Some(born) => {
+                let start = begun.map_or(born, |begun| begun.max(born));
+                file.set_times(FileTimes::new().set_modified(start + PAST_BIRTH))
+            }
+            None => Ok(()),
         }
-        None => Ok(()),
     }
 }
 
@@ -615,6 +631,28 @@ mod tests {
         if fine {
             assert!(modified > born, "{modified:?} is not past {born:?}");
         }
+        assert!(!rewritten(&path, &fs::metadata(&path).unwrap()));
+    }
+
+    /// windows keeps no ctime for gc to age an object by, so a seal moves the birth of one born
+    /// days before, as a download a later run finished was, up to the seal, and gc gives it a day.
+    #[cfg(windows)]
+    #[test]
+    fn an_object_born_days_ago_still_gets_a_day_on_windows() {
+        use std::os::windows::fs::FileTimesExt;
+        let (_dir, cache) = cache();
+        let mut object = cache.new_object().unwrap();
+        object.write_all(b"resumed").unwrap();
+        let first_run = SystemTime::now() - super::super::GRACE * 2;
+        object
+            .file
+            .set_times(FileTimes::new().set_created(first_run))
+            .unwrap();
+        let stored = object.seal(true).unwrap().publish(&cache).unwrap();
+        let path = cache.object_path(&stored.digest);
+        let freed = cache.sweep(&super::super::Needed::default(), SystemTime::now());
+        assert_eq!(freed.removed_objects, 0);
+        assert!(path.exists());
         assert!(!rewritten(&path, &fs::metadata(&path).unwrap()));
     }
 

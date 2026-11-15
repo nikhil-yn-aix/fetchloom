@@ -28,7 +28,8 @@ pub(crate) struct Object {
     pub(crate) path: PathBuf,
     /// when the object last changed, which gc ages it from: its modification time, or on unix its
     /// ctime when later, which a seal, publishing or a link moves, as a seal dates the modification
-    /// time back to when the download began.
+    /// time back to when the download began. windows keeps no ctime, so there a seal moves the
+    /// birth up to the seal instead.
     pub(crate) changed: SystemTime,
     /// how many names its file has, more than one while a hardlink, such as a project's, shares
     /// it. none where a folder's listing does not tell, as on windows.
