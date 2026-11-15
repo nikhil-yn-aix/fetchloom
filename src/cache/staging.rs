@@ -463,9 +463,8 @@ pub(crate) fn names_at(folder: &File) -> io::Result<Vec<std::ffi::CString>> {
     Ok(names)
 }
 
-/// removes the folder at `root` and everything in it, a link as itself, first giving back the
-/// write access a step may have taken from a folder, or for windows from a read-only file. it goes
-/// on past a failure and returns the first.
+/// removes the folder at `root` and everything in it, a link as itself, making a read-only file
+/// writable first, as windows removes none. it goes on past a failure and returns the first.
 #[cfg(not(unix))]
 pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
     let mut first = None;
@@ -476,9 +475,9 @@ pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
         } else {
             match fs::symlink_metadata(&path) {
                 Ok(found) if found.is_dir() && !found.file_type().is_symlink() => {
-                    enterable(&path, &found).and_then(|()| {
-                        todo.push((path.clone(), true));
-                        for entry in fs::read_dir(&path)? {
+                    todo.push((path.clone(), true));
+                    fs::read_dir(&path).and_then(|entries| {
+                        for entry in entries {
                             todo.push((entry?.path(), false));
                         }
                         Ok(())
@@ -496,30 +495,6 @@ pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
         }
     }
     first.map_or(Ok(()), Err)
-}
-
-/// gives the folder at `path`, which `found` describes, back its owner's access, which a step
-/// may have taken.
-#[cfg(not(unix))]
-#[cfg_attr(
-    not(unix),
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "only a unix folder can lose its owner's access"
-    )
-)]
-pub(crate) fn enterable(path: &Path, found: &fs::Metadata) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = found.permissions().mode();
-        if mode & 0o700 != 0o700 {
-            fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700))?;
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = (path, found);
-    Ok(())
 }
 
 /// removes the file or link at `path`, which `found` describes, as itself.

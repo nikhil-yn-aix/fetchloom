@@ -239,7 +239,6 @@ fn walk(out: &Out, most: usize, stop: &Stop) -> Result<Vec<(Spot, String)>, Faul
     let mut folders = vec![(out.path.clone(), String::new())];
     while let Some((folder, inside)) = folders.pop() {
         stop.check_io()?;
-        crate::cache::enterable(&folder, &fs::symlink_metadata(&folder)?)?;
         for entry in fs::read_dir(&folder)? {
             let entry = entry?;
             let name = entry.file_name();

@@ -37,10 +37,10 @@ pub(crate) use partial::{Claim, Hashing, Partial, PartialWriter, names};
 pub(crate) use results::seal_captured;
 pub(crate) use results::{Built, Seen};
 pub(crate) use staging::Staging;
+#[cfg(not(unix))]
+pub(crate) use staging::clear_tree;
 #[cfg(unix)]
 pub(crate) use staging::{clear_at, enter_at, names_at};
-#[cfg(not(unix))]
-pub(crate) use staging::{clear_tree, enterable};
 pub(crate) use unpacked::{Member, parts_key, tree, tree_hash};
 #[cfg(test)]
 pub(crate) use upkeep::Object;
