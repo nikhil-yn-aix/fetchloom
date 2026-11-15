@@ -323,6 +323,9 @@ impl<'a> Building<'a> {
             before,
             recipes,
             floor,
+            #[cfg(unix)]
+            scratch: scratch(std::env::var_os("TMPDIR")),
+            #[cfg(not(unix))]
             scratch: std::env::temp_dir(),
             report: Built {
                 project: project.root.clone(),
@@ -1285,6 +1288,17 @@ fn input_files(
         .collect())
 }
 
+/// the folder a step runs in when others may write the cache's tmp/: the one `tmpdir`, the value
+/// of TMPDIR, names, or /tmp when it names none. the step runs in the project folder, so a relative
+/// one would name another folder there than here, and other programs take an empty one as unset.
+#[cfg(unix)]
+fn scratch(tmpdir: Option<OsString>) -> PathBuf {
+    tmpdir
+        .map(PathBuf::from)
+        .filter(|folder| folder.is_absolute())
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
 /// the log of the recipe `name`'s step, in `.fetchloom/builds`, with its folders made.
 fn log_path(project: &Project, name: &str) -> Result<PathBuf, Error> {
     let folder = project.own_folder().join("builds");
@@ -1518,6 +1532,27 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a step runs in the project folder, so a relative TMPDIR, which fetchloom would take from its
+    /// own working folder, would name another folder there, and an empty one names none: both count
+    /// as unset, as other programs take them.
+    #[cfg(unix)]
+    #[test]
+    fn an_empty_or_relative_tmpdir_counts_as_unset() {
+        for (tmpdir, folder) in [
+            (None, "/tmp"),
+            (Some(""), "/tmp"),
+            (Some("rtmp"), "/tmp"),
+            (Some("./rtmp"), "/tmp"),
+            (Some("/scratch/me/tmp"), "/scratch/me/tmp"),
+        ] {
+            assert_eq!(
+                scratch(tmpdir.map(OsString::from)),
+                Path::new(folder),
+                "{tmpdir:?}"
+            );
+        }
+    }
 
     #[test]
     fn words_with_spaces_or_quotes_are_quoted() {
