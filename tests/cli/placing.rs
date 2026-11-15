@@ -2922,6 +2922,48 @@ fn verify_finds_and_puts_back_a_change_that_kept_its_size_and_time() -> Result {
     Ok(())
 }
 
+/// a sync stopped once it kept a changed link's copy beside its file says where the copy is,
+/// though a run that ends early tells no placement.
+#[cfg(unix)]
+#[test]
+fn a_stopped_sync_says_where_it_kept_a_changed_copy() -> Result {
+    use crate::support::{Running, wait_until};
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(_) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    let release = sandbox.folder("hold")?.join("release");
+    let held = sandbox.folder("hold")?.join("release.held");
+    let mut command = sandbox.command(&["sync"]);
+    command.env("FETCHLOOM_TEST_HOLD_KEPT", &release);
+    let running = Running::start(&mut command)?;
+    wait_until("the changed copy to be kept", || Ok(held.exists()))?;
+    running.interrupt()?;
+    running.wait_for("Stopping")?;
+    fs::write(&release, b"")?;
+    let output = running.finish()?;
+
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    let kept = sandbox
+        .work()
+        .join("data")
+        .join("iris")
+        .join("iris.csv.changed");
+    assert!(kept.exists(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "the changed copy of data/iris/iris.csv is kept as data/iris/iris.csv.changed"
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a fresh clone's `sync --locked --verify` checks the cached bytes it places: an object changed
 /// under its size and time, as a cache restored from elsewhere can hold, is fetched again, never
 /// placed.

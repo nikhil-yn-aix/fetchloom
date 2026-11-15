@@ -1186,7 +1186,9 @@ impl<'a> Placing<'a> {
         let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding
                 .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
-        flushed?;
+        // a run that ends early tells no placement, so its error says where each changed copy went
+        let ended = |error: Error| kept_copies(error, &placement.changed_copies);
+        flushed.map_err(ended)?;
         // a run of named datasets vouches for the others only as its caller says, else the next
         // sync looks at all
         let whole = vouched && unknown.is_empty() && placement.unbuilt.is_empty();
@@ -1194,12 +1196,12 @@ impl<'a> Placing<'a> {
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let recorded = removed || adopted || undone || kept_aside || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
-        record(project, state, synced, recorded, needs_writing || dropped)?;
+        record(project, state, synced, recorded, needs_writing || dropped).map_err(ended)?;
         if stopped {
-            return Err(Stop::stopped());
+            return Err(ended(Stop::stopped()));
         }
         if let Some(error) = failure {
-            return Err(error);
+            return Err(ended(error));
         }
         tell(
             output, manifest, &placer, &tallies, &placement, told, &scope,
@@ -1264,6 +1266,17 @@ impl<'a> Placing<'a> {
         }
         Ok(placement)
     }
+}
+
+/// `error` with a line for each changed copy of a cache link the run kept beside its file, which a
+/// run that ends in an error tells nowhere else.
+fn kept_copies(error: Error, copies: &[ChangedCopy]) -> Error {
+    copies.iter().fold(error, |error, copy| {
+        error.detail(format!(
+            "the changed copy of {} is kept as {}",
+            copy.path, copy.kept_as
+        ))
+    })
 }
 
 /// writes `synced` and what a run did to the state. what it placed, removed or took as placed,
@@ -1906,6 +1919,9 @@ fn make_way(
             path: path.to_owned(),
             kept_as,
         });
+        // so a CLI test can stop the run with a changed copy kept beside its file
+        #[cfg(debug_assertions)]
+        crate::stop::hold("FETCHLOOM_TEST_HOLD_KEPT");
         return Ok(());
     }
     let destination = native(&project.root, path);
