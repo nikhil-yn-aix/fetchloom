@@ -53,7 +53,7 @@ one linux job has separately named checks. each check runs even after an earlier
 | check | tool |
 |---|---|
 | rust formatting | the pinned rustfmt |
-| advisories, licenses, duplicate crates and sources | cargo-deny 0.20.2 with deny.toml |
+| advisories, licenses, duplicate crates and sources | cargo-deny 0.20.2 with `.config/deny.toml` |
 | workflow security and malformed workflow input | zizmor 1.32.0, offline with strict collection |
 | unused dependencies | cargo-machete 0.9.2 with metadata, followed by a Cargo.lock cleanliness check |
 | spelling | typos 1.52.0, excluding raw fixtures, snapshots, the benchmark cards' font and lockfiles |

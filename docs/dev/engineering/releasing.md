@@ -77,11 +77,11 @@ the archives are packed so the same files give the same bytes. the build job exp
 | `install.sh`, `install.ps1` | release installers |
 | `SHA256SUMS` | SHA-256 of every archive, package, wheel, sbom and installer |
 
-THIRD-PARTY-LICENSES holds the license texts of the crates the six release binaries are built from, which most of those licenses ask to travel with every copy. each build job writes it with cargo-about 0.9.3, from `about.toml`, which accepts the licenses deny.toml allows, and the [about.hbs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.hbs) template. it reads only the crates `cargo fetch --locked` downloaded, so every job writes the same bytes, and it fails on a crate whose license it cannot read or that deny.toml does not allow. the archives and the debian packages carry it, and each wheel lists it among its license files; a wheel built from a checkout, which has no such file, leaves it out. to write it locally:
+THIRD-PARTY-LICENSES holds the license texts of the crates the six release binaries are built from, which most of those licenses ask to travel with every copy. each build job writes it with cargo-about 0.9.3, from `.config/about.toml`, which accepts the licenses `.config/deny.toml` allows, and the [about.hbs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.config/about.hbs) template. it reads only the crates `cargo fetch --locked` downloaded, so every job writes the same bytes, and it fails on a crate whose license it cannot read or that deny.toml does not allow. the archives and the debian packages carry it, and each wheel lists it among its license files; a wheel built from a checkout, which has no such file, leaves it out. to write it locally:
 
 ```sh
 cargo fetch --locked
-cargo about generate --frozen --fail about.hbs -o THIRD-PARTY-LICENSES
+cargo about generate --frozen --fail --config .config/about.toml .config/about.hbs -o THIRD-PARTY-LICENSES
 ```
 
 the manual page is [docs/man/fetchloom.1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/man/fetchloom.1): the top command's synopsis, description and options, then each command with its one-line summary. a unit test renders it from the command line's definition with clap_mangen, a dev-dependency, and fails when the committed page differs, so the release copies a page that matches its help; [building and testing](building-and-testing.md#update-snapshots) says how to write it again. the debian packages keep it compressed in `/usr/share/man/man1`.

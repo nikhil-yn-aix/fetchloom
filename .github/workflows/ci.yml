@@ -72,7 +72,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: cargo-deny
         if: always()
-        run: cargo deny --locked check advisories licenses bans sources
+        run: cargo deny --locked --config .config/deny.toml check advisories licenses bans sources
       - name: zizmor
         if: always()
         run: zizmor --offline --strict-collection .github

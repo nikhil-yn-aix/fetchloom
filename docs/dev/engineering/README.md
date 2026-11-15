@@ -43,7 +43,7 @@ CI runs the same checks, the tests through nextest, as [CI](ci.md) describes. a 
 | `cargo clippy --all-targets --locked -- -D warnings` | warnings and configured rust/clippy lints |
 | `cargo clippy --release --locked -- -D warnings` | release-only code and dead-code checks |
 | `cargo test --locked` | full rust gate, including short fuzz runs |
-| `cargo deny --locked check advisories licenses bans sources` | dependency changes and the CI dependency policy |
+| `cargo deny --locked --config .config/deny.toml check advisories licenses bans sources` | dependency changes and the CI dependency policy |
 | `python3 -m unittest discover -s python` | python wrapper arguments and report handling; use `py -3` on windows |
 | `python3 -m unittest discover -s bench` | benchmark runner, checks and report rendering |
 | `uv run --locked --project docs-site python python/build_site.py` | build the documentation site; [the documentation site](building-and-testing.md#the-documentation-site) has the rest |

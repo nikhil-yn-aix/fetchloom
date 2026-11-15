@@ -149,8 +149,8 @@ class ThirdPartyLicenses(unittest.TestCase):
     def test_the_notices_accept_exactly_the_licenses_deny_allows(self):
         import tomllib
 
-        allowed = tomllib.loads((ROOT / "deny.toml").read_text(encoding="utf-8"))["licenses"]["allow"]
-        accepted = tomllib.loads((ROOT / "about.toml").read_text(encoding="utf-8"))["accepted"]
+        allowed = tomllib.loads((ROOT / ".config/deny.toml").read_text(encoding="utf-8"))["licenses"]["allow"]
+        accepted = tomllib.loads((ROOT / ".config/about.toml").read_text(encoding="utf-8"))["accepted"]
         self.assertEqual(sorted(accepted), sorted(allowed))
 
 

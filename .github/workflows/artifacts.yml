@@ -233,7 +233,7 @@ jobs:
         name: write the third-party licenses
         run: |
           cargo fetch --locked
-          cargo about generate --frozen --fail about.hbs -o THIRD-PARTY-LICENSES
+          cargo about generate --frozen --fail --config .config/about.toml .config/about.hbs -o THIRD-PARTY-LICENSES
       # the same files pack into the same bytes: entries in a fixed order, every time set to the
       # commit's, owners as numbers and, for gzip, a header that holds no name or time
       - &package

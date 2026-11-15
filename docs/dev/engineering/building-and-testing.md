@@ -115,7 +115,7 @@ the home page shows a real run, kept in `docs-site/home`: `add.txt`, the stderr 
 
 unsafe code is forbidden. configured warnings include missing public documentation, unreachable public items, clippy pedantic checks, unwraps, expects, panics, debug prints and unfinished-code macros. lint exceptions need reasons; clippy treats all warnings as errors. there is no enforced file-length or function-length limit.
 
-run the [full gate](README.md#the-fast-loop) before merging. after dependency changes also run `cargo deny --locked check advisories licenses bans sources`; install `cargo-deny` with `cargo install --locked cargo-deny` only if it is missing.
+run the [full gate](README.md#the-fast-loop) before merging. after dependency changes also run `cargo deny --locked --config .config/deny.toml check advisories licenses bans sources`; install `cargo-deny` with `cargo install --locked cargo-deny` only if it is missing.
 
 ## adding coverage
 
