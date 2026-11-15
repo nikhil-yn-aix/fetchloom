@@ -201,7 +201,8 @@ pub(super) fn run(
     status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
     warn_git(output, &project, &manifest, lock.as_deref());
-    super::project::tell_waiting(output, &project, &super::sync::Scope::All);
+    let waiting: Vec<Waiting> = status.waiting.values().cloned().collect();
+    super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
     list(output, &status);
     if sum_up(output, &status) {
         let total = &status.to_download;
@@ -527,20 +528,20 @@ fn not_downloaded(
 }
 
 /// each stale recipe, with what moved since it was built. one that waits for its file list is
-/// not stale: [`waiting`] names it.
+/// not stale: [`waiting`] names it, and so is none whose only change is a dataset it reads that
+/// waits.
 fn unbuilt(
     project: &Project,
     manifest: &Manifest,
     lock: &Lock,
 ) -> Result<BTreeMap<String, Vec<recipe::Change>>, Error> {
-    let waiting = project.waiting();
     let mut building = BTreeMap::new();
     for (name, entry) in &manifest.datasets {
-        if entry.recipe().is_none() || waiting.iter().any(|waiting| waiting.name == *name) {
+        if entry.recipe().is_none() || lock.waits(name).is_some() {
             continue;
         }
         let changes = recipe::drift(&project.root, manifest, lock, name)?;
-        if !changes.is_empty() {
+        if !changes.is_empty() && !recipe::only_waiting(&changes) {
             building.insert(name.clone(), changes);
         }
     }
@@ -557,14 +558,11 @@ fn not_placed(manifest: &Manifest) -> Vec<String> {
         .collect()
 }
 
-/// the datasets of data.toml that wait for their file list, as this run's reads of data.lock
-/// found them, by name.
-fn waiting(project: &Project, manifest: &Manifest) -> BTreeMap<String, Waiting> {
-    project
-        .waiting()
-        .into_iter()
+/// the datasets of data.toml that wait for their file list, by name.
+fn waiting(lock: &Lock, manifest: &Manifest) -> BTreeMap<String, Waiting> {
+    lock.still_waiting()
         .filter(|waiting| manifest.datasets.contains_key(&waiting.name))
-        .map(|waiting| (waiting.name.clone(), waiting))
+        .map(|waiting| (waiting.name.clone(), waiting.clone()))
         .collect()
 }
 
@@ -597,7 +595,7 @@ fn check(
         .collect();
     let (mut unlocked, removed) = out_of_date(&manifest, &lock);
     let building = unbuilt(project, &manifest, &lock)?;
-    let waiting = waiting(project, &manifest);
+    let waiting = waiting(&lock, &manifest);
     unlocked.extend(building.keys().chain(waiting.keys()).cloned());
     unlocked.extend(renamed.keys().cloned());
     unlocked.sort();
@@ -935,8 +933,16 @@ fn compare(
 ) -> Result<(), Error> {
     let targets = &planned.targets;
     let going = OnceCell::new();
-    let going_now =
-        || going.get_or_init(|| place::going(survey, targets, &planned.unknown, &project.root));
+    let going_now = || {
+        going.get_or_init(|| {
+            place::going(
+                survey,
+                targets,
+                (&planned.unknown, &planned.waiting),
+                &project.root,
+            )
+        })
+    };
     let freeing = OnceCell::new();
     let mut listed = HashSet::new();
     for target in targets {
@@ -1016,12 +1022,9 @@ fn compare(
     wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
     let going = going_now();
     // what fetchloom placed of a dataset whose archive's list this machine lacks may be that
-    // archive's files, which only the list tells, so it is neither extra nor going
-    let unsure: HashSet<&str> = planned
-        .unknown
-        .iter()
-        .map(|(dataset, _)| *dataset)
-        .collect();
+    // archive's files, which only the list tells, and so may what it placed of a dataset waiting
+    // for its file list, so it is neither extra nor going
+    let unsure = place::unsure((&planned.unknown, &planned.waiting));
     let unrecorded = unrecorded_folders(manifest, survey, &planned.unknown);
     (status.unneeded, status.extra) = extra(survey, &wanted)
         .into_iter()
@@ -1645,6 +1648,7 @@ mod tests {
                 holder: plan::Holder::Result,
             }],
             unknown: Vec::new(),
+            waiting: Vec::new(),
         };
         let web = url::Url::parse("https://lab.example/fetchloom/").unwrap();
         for (mirrors, unbuilt) in [

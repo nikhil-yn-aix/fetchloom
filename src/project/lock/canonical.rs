@@ -591,6 +591,7 @@ mod tests {
                 ],
                 derived: vec![recipe("b-small", 2), recipe("d", 0)],
                 stated: Vec::new(),
+                waiting: Vec::new(),
             },
         ]
     }

@@ -545,6 +545,7 @@ impl<'a> Loop<'a> {
                 .collect(),
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let planned = plan::inputs(manifest, &sources, &self.cache)?;
         let unknown: Vec<(String, &LockedFile)> = planned
@@ -832,10 +833,17 @@ impl<'a> Loop<'a> {
             mut drafts,
         } = self.sorted(manifest, old.datasets, upgrade, &mut whole)?;
         let (results, dropped, moved) = rename::results(manifest, old.derived);
+        // a dataset waiting for its list is never resolved: relocking puts its entry back
+        let waiting: HashSet<&str> = old
+            .waiting
+            .iter()
+            .map(|waiting| waiting.name.as_str())
+            .collect();
         let given: HashSet<&str> = listed
             .iter()
             .map(|(name, _)| name.as_str())
             .chain(whole.iter().map(|locked| locked.name.as_str()))
+            .chain(waiting.iter().copied())
             .collect();
         let mut renamed = rename::carry(
             manifest,
@@ -850,6 +858,7 @@ impl<'a> Loop<'a> {
             datasets: others,
             derived: dropped,
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let mut asks = Vec::new();
         for (name, entry) in &manifest.datasets {
@@ -864,6 +873,7 @@ impl<'a> Loop<'a> {
                 && !is_kept
                 && !is_whole
                 && !old.stated.iter().any(|stated| stated.name() == name)
+                && !waiting.contains(name.as_str())
                 && !drafts.iter().any(|(drafted, _)| drafted == name)
             {
                 asks.push((
@@ -872,18 +882,7 @@ impl<'a> Loop<'a> {
                 ));
             }
         }
-        // an import names no source to list it again, so the run stops before it asks anyone
-        if let Some((name, _)) = asks
-            .iter()
-            .find(|(name, _)| manifest.datasets[name].is_import())
-        {
-            let error = if others.get(name).is_some() {
-                local::changed(name)
-            } else {
-                local::unpinned(name)
-            };
-            return Err(cite_place(error, &manifest.datasets[name], "ref"));
-        }
+        refuse_imports(manifest, &asks, &others)?;
         let added: HashSet<String> = listed.iter().map(|(name, _)| name.clone()).collect();
         let listings = self.resolve_all(manifest, asks, listed).await?;
         for (name, listing) in listings {
@@ -1888,16 +1887,12 @@ pub(super) fn tell_stale(
     scope: &Scope,
 ) -> Vec<String> {
     let mut stale = Vec::new();
-    let waiting = crate::project::Project {
-        root: root.to_path_buf(),
-    }
-    .waiting();
     for (name, entry) in &manifest.datasets {
         let Some(recipe) = entry.recipe().filter(|_| scope.includes(name)) else {
             continue;
         };
         // its own warning names the list it waits for, which a build makes again too
-        if waiting.iter().any(|waiting| waiting.name == *name) {
+        if lock.waits(name).is_some() {
             stale.push(name.clone());
             continue;
         }
@@ -1912,6 +1907,10 @@ pub(super) fn tell_stale(
                 continue;
             }
         };
+        // each dataset it reads that waits for its list has a warning of its own
+        if crate::recipe::only_waiting(&changes) {
+            continue;
+        }
         if changes.first() == Some(&crate::recipe::Change::Unbuilt) {
             output.warn_with(
                 Warning::BuildUnbuilt,
@@ -1972,6 +1971,27 @@ pub(super) fn unbuilt_here(names: &[String]) -> Error {
         "run `{}` to make {them} here",
         super::project::command(&format!("build {}", names.join(" ")))
     ))
+}
+
+/// refuses `asks`, the datasets a relock would resolve again, when one is an import: it names no
+/// source to list it again, so the run stops before it asks anyone. `others` holds the old pins.
+fn refuse_imports(
+    manifest: &Manifest,
+    asks: &[(String, String)],
+    others: &Lock,
+) -> Result<(), Error> {
+    let Some((name, _)) = asks
+        .iter()
+        .find(|(name, _)| manifest.datasets[name].is_import())
+    else {
+        return Ok(());
+    };
+    let error = if others.get(name).is_some() {
+        local::changed(name)
+    } else {
+        local::unpinned(name)
+    };
+    Err(cite_place(error, &manifest.datasets[name], "ref"))
 }
 
 /// what [`Loop::relock_dry`] found relocking would do.
@@ -2037,6 +2057,7 @@ fn settled(
             datasets,
             derived: results,
             stated: Vec::new(),
+            waiting: Vec::new(),
         },
         kept,
     )
@@ -3211,6 +3232,7 @@ mod tests {
             datasets: vec![raw],
             derived: vec![result],
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let relock = |manifest: &Manifest| {
             block_on(runner.relock(manifest, Some(old.clone()), &Upgrade::Nothing, Vec::new()))

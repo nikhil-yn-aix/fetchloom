@@ -97,15 +97,14 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
     let cache = super::peek_cache().ok();
     let mut report = report(&manifest, &lock, cache.as_ref(), name, output.json());
     let dropped = project.dropped();
-    let waiting = project.waiting();
     for dataset in &mut report.datasets {
         dataset.dropped = dropped.contains(&dataset.name);
-        dataset.waiting = waiting
-            .iter()
-            .find(|waiting| waiting.name == dataset.name)
+        dataset.waiting = lock
+            .waits(&dataset.name)
             .map(|waiting| waiting.part.clone());
     }
-    super::project::tell_waiting(output, &project, &super::sync::Scope::All);
+    let waiting: Vec<_> = lock.still_waiting().cloned().collect();
+    super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
     if name.is_some() {
         // `--json` prints the report alone, so the lines for a person are not built
         if let Some(dataset) = report.datasets.first()
@@ -1234,6 +1233,7 @@ mod tests {
                 files: result_files,
             }],
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         (manifest, lock, folder, cache)
     }

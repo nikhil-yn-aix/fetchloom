@@ -4189,3 +4189,134 @@ fn a_title_stays_as_written_when_data_lock_is_written_again() -> Result {
     }
     Ok(())
 }
+
+/// fetchloom with `args` in `folder`, writing every source's list beside data.lock, with the step
+/// program on PATH.
+fn listing_in(
+    sandbox: &Sandbox,
+    folder: &std::path::Path,
+    args: &[&str],
+) -> Result<std::process::Output> {
+    let mut command = crate::build::building_in(sandbox, folder, args)?;
+    command.env("FETCHLOOM_TEST_INLINE", "0");
+    Ok(command.output()?)
+}
+
+/// [`clone`] with every list of data.lock.d but `left_out`'s, as `git commit -a` leaves a new list
+/// out. gives the clone's folder and the part it lacks.
+fn clone_without(sandbox: &Sandbox, left_out: &str) -> Result<(std::path::PathBuf, String)> {
+    let folder = clone(sandbox, "clone")?;
+    fs::create_dir(folder.join("data.lock.d"))?;
+    let mut missing = None;
+    for part in parts(sandbox)? {
+        if part.starts_with(&format!("data.lock.d/{left_out}.")) {
+            missing = Some(part);
+        } else {
+            fs::copy(sandbox.work().join(&part), folder.join(&part))?;
+        }
+    }
+    Ok((folder, missing.ok_or("no list to leave out")?))
+}
+
+/// `lock --check` in `folder` says the list `part` of `name` is not there.
+fn checked_missing(sandbox: &Sandbox, folder: &std::path::Path, name: &str, part: &str) -> Result {
+    let output = listing_in(sandbox, folder, &["--json", "lock", "--check"])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "project.invalid");
+    assert_eq!(
+        error["message"],
+        format!("data.lock names {part}, the file list of {name}, which is not there")
+    );
+    Ok(())
+}
+
+/// a clone that lacks the list of big, imported from files: big waits alone, so every command
+/// that pins, places or builds the rest works and writes data.lock as it was.
+#[test]
+fn a_clone_missing_an_import_list_waits_for_it_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (name, files) in [("big", &["a.csv", "b.csv"][..]), ("small", &["c.csv"])] {
+        let folder = sandbox.folder(name)?;
+        for each in files {
+            fs::write(folder.join(each), each)?;
+        }
+        let added = listing_in(
+            &sandbox,
+            &sandbox.work(),
+            &["add", &folder.to_string_lossy(), "--as", name],
+        )?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let manifest = sandbox.work().join("data.toml");
+    let made = "\n[datasets.made]\nfrom = [\"small\"]\nrun = [\"recipe-step\", \"copy\", \"{small}\", \"{out}\"]\n";
+    fs::write(
+        &manifest,
+        format!("{}{made}", fs::read_to_string(&manifest)?),
+    )?;
+    let built = listing_in(&sandbox, &sandbox.work(), &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let (clone, part) = clone_without(&sandbox, "big")?;
+    let lock = fs::read(clone.join("data.lock"))?;
+    for args in [
+        &["sync"][..],
+        &["sync", "--dry-run"],
+        &["lock"],
+        &["lock", "--dry-run"],
+        &["build"],
+    ] {
+        let output = listing_in(&sandbox, &clone, args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert_eq!(fs::read(clone.join("data.lock"))?, lock, "{args:?}");
+    }
+    let synced = listing_in(&sandbox, &clone, &["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert!(
+        stderr.contains("the file list of big, which is not there, so big waits for it"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(clone.join("data/small/c.csv"))?, b"c.csv");
+    assert_eq!(fs::read(clone.join("data/made/c.csv"))?, b"c.csv");
+    assert!(!clone.join("data/big").exists());
+    checked_missing(&sandbox, &clone, "big", &part)
+}
+
+/// a clone that lacks iris's list never asks iris's source, which serves other bytes now: iris
+/// waits, and the rest syncs and locks with data.lock as it was.
+#[test]
+fn a_clone_missing_a_fetched_list_never_asks_its_source() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    for (name, path) in [("iris", PATH), ("b", "/files/b.csv")] {
+        let link = format!("{}{path}", routes.url);
+        let added = listing_in(&sandbox, &sandbox.work(), &["add", &link, "--as", name])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    routes.change(vec![(
+        PATH.to_owned(),
+        file(b"sepal_length\n9.9\n", "\"v2\""),
+    )]);
+    let (clone, part) = clone_without(&sandbox, "iris")?;
+    let lock = fs::read(clone.join("data.lock"))?;
+    let asked = routes.requests().len();
+    for args in [
+        &["sync"][..],
+        &["sync", "--dry-run"],
+        &["lock"],
+        &["lock", "--dry-run"],
+    ] {
+        let output = listing_in(&sandbox, &clone, args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert_eq!(fs::read(clone.join("data.lock"))?, lock, "{args:?}");
+    }
+    assert_eq!(routes.requests().len(), asked, "{:?}", routes.requests());
+    assert_eq!(fs::read(clone.join("data/b/b.csv"))?, b"b\n");
+    assert!(!clone.join("data/iris").exists());
+    checked_missing(&sandbox, &clone, "iris", &part)
+}

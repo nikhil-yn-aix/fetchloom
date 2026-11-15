@@ -27,11 +27,17 @@ pub(in crate::cli) fn forecast(manifest: &Manifest, lock: Lock) -> (Lock, Vec<Re
     derived.sort_by(|a, b| a.name.cmp(&b.name));
     let mut datasets = Vec::new();
     let mut others = lock.datasets;
+    // a dataset waiting for its list keeps its own pin
+    let waiting: HashSet<&str> = lock
+        .waiting
+        .iter()
+        .map(|waiting| waiting.name.as_str())
+        .collect();
     renamed.extend(carry(
         manifest,
         &Scope::All,
         &Upgrade::Nothing,
-        &HashSet::new(),
+        &waiting,
         &mut datasets,
         &mut others,
     ));
@@ -43,6 +49,7 @@ pub(in crate::cli) fn forecast(manifest: &Manifest, lock: Lock) -> (Lock, Vec<Re
             datasets,
             derived,
             stated,
+            waiting: lock.waiting,
         },
         renamed,
     )

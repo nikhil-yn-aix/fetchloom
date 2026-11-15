@@ -183,7 +183,9 @@ fn pins(project: &Project, manifest: &Manifest, name: &str) -> Result<Option<Loc
     let lock = project
         .lock_only(&|other| needed.contains(other))?
         .map(|(lock, _)| lock);
-    project.not_waiting(&|other| other == name)?;
+    if let Some(lock) = &lock {
+        lock.refuse_waiting([name])?;
+    }
     Ok(lock)
 }
 

@@ -43,8 +43,6 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     })?;
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
-    // before data.toml changes: data.lock, written after it, would refuse to drop a waiting pin
-    project.not_waiting(&|_| true)?;
     let imported: Vec<Sha256> = names
         .iter()
         .filter(|name| manifest.datasets[name.as_str()].is_import())
@@ -58,6 +56,9 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         .retain(|result| !going.contains(result.name.as_str()));
     lock.stated
         .retain(|stated| !names.iter().any(|name| name == stated.name()));
+    // one waiting for its file list goes too, as a removal needs nothing of its list
+    lock.waiting
+        .retain(|waiting| !going.contains(waiting.name.as_str()));
     let listed = crate::units::listed(&names, "and");
     let cache = if dry_run {
         peek_cache()?

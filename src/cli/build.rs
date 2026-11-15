@@ -384,6 +384,9 @@ impl<'a> Building<'a> {
         let output = &self.context.output;
         let step = Step::read(&self.work.project.root, &self.manifest, &self.lock, name)?
             .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
+        // a result waiting for its file list has no files here to compare with
+        self.lock.refuse_waiting([name])?;
+        self.refuse_waiting(&step)?;
         let key = keyed(&step)?;
         let Some(pinned) = self.lock.result(name).filter(|pinned| pinned.key == key) else {
             return Err(Error::new(
@@ -449,6 +452,7 @@ impl<'a> Building<'a> {
         for name in self.recipes.clone() {
             let step = Step::read(&self.work.project.root, &self.manifest, &self.lock, &name)?
                 .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
+            self.refuse_waiting(&step)?;
             let after = step.inputs.iter().any(|read| running.contains(&read.name));
             let key = step.key();
             if !check
@@ -552,6 +556,7 @@ impl<'a> Building<'a> {
                 .collect(),
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let project = self.work.project;
         let cache = &self.work.cache;
@@ -579,6 +584,17 @@ impl<'a> Building<'a> {
         Ok(())
     }
 
+    /// refuses `step` when a fetched dataset it reads waits for its file list, as none of that
+    /// dataset's files is known here.
+    fn refuse_waiting(&self, step: &Step) -> Result<(), Error> {
+        self.lock.refuse_waiting(
+            step.inputs
+                .iter()
+                .filter(|read| read.waiting)
+                .map(|read| read.name.as_str()),
+        )
+    }
+
     /// builds the recipe `name` as [`course`] decides. a pin whose key is still the recipe's keeps
     /// its files: other files a step makes for it are kept for a person to choose.
     async fn step(&mut self, name: &str) -> Result<Done, Error> {
@@ -586,6 +602,7 @@ impl<'a> Building<'a> {
         let output = &self.context.output;
         let step = Step::read(&project.root, &self.manifest, &self.lock, name)?
             .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
+        self.refuse_waiting(&step)?;
         let key = keyed(&step)?;
         if let Some(done) = self.as_pinned(name, key).await? {
             return Ok(done);

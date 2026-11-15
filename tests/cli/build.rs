@@ -10,7 +10,8 @@ use serde_json::Value;
 
 use crate::project::{IRIS, PATH, added};
 use crate::support::{
-    Fetchloom, Result, Running, Sandbox, Server, file, json, sha256_hex, text, wait_until, zip_of,
+    Fetchloom, Result, Routes, Running, Sandbox, Server, file, json, sha256_hex, text, wait_until,
+    zip_of,
 };
 
 /// a recipe that makes `clean` from iris with clean.py.
@@ -1021,14 +1022,18 @@ fn a_recipe_whose_list_was_not_committed_waits_alone() -> Result {
             "{help}"
         );
     }
-    // gc cannot see which files the pin that waits needs
-    let gc = run(&["--json", "cache", "gc", "--now"])?;
-    assert_eq!(gc.status.code(), Some(50), "{}", text(&gc.stderr)?);
-    assert_eq!(error(&json(&gc)?).2, [said.as_str()]);
+    // gc keeps the result the pin that waits names, which the build below takes again
+    let gc = run(&["cache", "gc", "--now"])?;
+    assert_eq!(gc.status.code(), Some(0), "{}", text(&gc.stderr)?);
     assert_eq!(fs::read(clone.join("data.lock"))?, lock);
 
     let rebuilt = run(&["build"])?;
     assert_eq!(rebuilt.status.code(), Some(0), "{}", text(&rebuilt.stderr)?);
+    assert!(
+        text(&rebuilt.stderr)?.contains("Reused clean"),
+        "{}",
+        text(&rebuilt.stderr)?
+    );
     assert_eq!(
         fs::read(clone.join("data").join("clean").join("iris.csv"))?,
         IRIS
@@ -1042,6 +1047,282 @@ fn a_recipe_whose_list_was_not_committed_waits_alone() -> Result {
     let placed = clone.join("data").join("clean").join("iris.csv");
     assert!(placed.is_file(), "{stderr}");
     assert_eq!(fs::read(placed)?, IRIS);
+    Ok(())
+}
+
+/// the bytes of zen, a second fetched dataset, and of more, one a teammate adds.
+const ZEN: &[u8] = b"zen\n1\n";
+const MORE: &[u8] = b"more\n2\n";
+
+/// clean writes a file of its own from iris, which no other pin holds, and stats one from clean.
+const MADE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"made here\", \"{iris}\", \"{out}\"]\n\n[datasets.stats]\nfrom = [\"clean\"]\nrun = [\"recipe-step\", \"write\", \"stats.csv\", \"counted\", \"{clean}\", \"{out}\"]\n";
+
+/// a server of iris, zen and more.
+fn sources() -> Result<Routes> {
+    Routes::start(vec![
+        ("/files/iris.csv".to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/zen.csv".to_owned(), file(ZEN, "\"z1\"")),
+        ("/files/more.csv".to_owned(), file(MORE, "\"m1\"")),
+    ])
+}
+
+/// a project of iris and zen from `routes` with [`MADE`] built, and a clone of it whose
+/// data.lock.d lacks clean's list, as `git commit -a` leaves a rebuilt recipe's new list out. the
+/// clone shares the cache. gives the clone's folder and clean's part, as data.lock names it.
+fn missing_clean(sandbox: &Sandbox, routes: &Routes) -> Result<(PathBuf, String)> {
+    sandbox.allow(&routes.url);
+    for name in ["iris", "zen"] {
+        let link = format!("{}/files/{name}.csv", routes.url);
+        let added = sandbox.run(&["add", &link, "--as", name])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!("{}{MADE}", fs::read_to_string(&manifest)?),
+    )?;
+    let built = build(sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let clone = crate::project::clone(sandbox, "clone")?;
+    let lists = sandbox.work().join("data.lock.d");
+    fs::create_dir(clone.join("data.lock.d"))?;
+    let mut missing = None;
+    for entry in fs::read_dir(&lists)? {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        if name.starts_with("clean.") {
+            missing = Some(format!("data.lock.d/{name}"));
+        } else {
+            fs::copy(lists.join(&name), clone.join("data.lock.d").join(&name))?;
+        }
+    }
+    Ok((clone, missing.ok_or("clean's list")?))
+}
+
+/// the table of `name` in data.lock's `text`, or nothing when it has none.
+fn table<'t>(text: &'t str, name: &str) -> &'t str {
+    let Some(start) = text.find(&format!("[[dataset]]\nname = \"{name}\"\n")) else {
+        return "";
+    };
+    let rest = &text[start..];
+    let end = rest[1..]
+        .find("[[dataset]]")
+        .map_or(rest.len(), |at| at + 1);
+    &rest[..end]
+}
+
+/// a clone that lacks clean's list keeps clean's pin as it was through every write of data.lock:
+/// the first sync of a pin by its source's digests, a dataset a teammate added, and an add. stats,
+/// made from clean, is as data.lock pins it, so nothing calls it unbuilt or stale.
+#[test]
+fn a_clone_missing_a_list_writes_data_lock_with_its_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = sources()?;
+    let (clone, part) = missing_clean(&sandbox, &routes)?;
+    let run = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(building_in(&sandbox, &clone, args)?.output()?)
+    };
+    let lock = clone.join("data.lock");
+    let pinned = fs::read_to_string(&lock)?;
+    let zen = table(&pinned, "zen");
+    let stated = zen.replacen("files = [", "downloaded = false\nfiles = [", 1);
+    fs::write(&lock, pinned.replacen(zen, &stated, 1))?;
+    let clean = table(&pinned, "clean").to_owned();
+    assert!(clean.contains(&part), "{clean}");
+
+    let synced = run(&["sync", "iris", "zen"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(clone.join("data").join("zen").join("zen.csv"))?,
+        ZEN
+    );
+    let written = fs::read_to_string(&lock)?;
+    assert_eq!(table(&written, "zen"), zen, "pinned whole");
+    assert_eq!(table(&written, "clean"), clean);
+
+    let manifest = clone.join("data.toml");
+    let more = format!(
+        "{}\n[datasets.more]\nref = \"{}/files/more.csv\"\n",
+        fs::read_to_string(&manifest)?,
+        routes.url
+    );
+    fs::write(&manifest, more)?;
+    let synced = run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("so clean waits for it"), "{stderr}");
+    assert!(!stderr.contains("not built yet"), "{stderr}");
+    assert!(!stderr.contains("since it was built"), "{stderr}");
+    assert_eq!(
+        fs::read(clone.join("data").join("more").join("more.csv"))?,
+        MORE
+    );
+    assert_eq!(
+        fs::read(clone.join("data").join("stats").join("stats.csv"))?,
+        b"counted"
+    );
+    let written = fs::read_to_string(&lock)?;
+    assert!(written.contains("name = \"more\""), "{written}");
+    assert_eq!(table(&written, "clean"), clean);
+
+    let link = format!("{}/files/more.csv", routes.url);
+    let added = run(&["add", &link, "--as", "again"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let written = fs::read_to_string(&lock)?;
+    assert!(written.contains("name = \"again\""), "{written}");
+    assert_eq!(table(&written, "clean"), clean);
+    assert!(!clone.join(&part).exists());
+
+    let told = text(&run(&["status"])?.stdout)?;
+    assert!(
+        told.contains(&format!(
+            "Waiting clean · its file list {part} is not there"
+        )),
+        "{told}"
+    );
+    assert!(!told.contains("stats"), "{told}");
+    Ok(())
+}
+
+/// `lock --check`, `sync --locked` and `build --locked` in a clone that lacks clean's list say
+/// that it is not there, as a command needing clean does, not that clean or stats needs a build.
+#[test]
+fn a_check_says_a_list_is_missing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = sources()?;
+    let (clone, part) = missing_clean(&sandbox, &routes)?;
+    let said = format!("data.lock names {part}, the file list of clean, which is not there");
+    for args in [
+        &["--json", "lock", "--check"][..],
+        &["--json", "sync", "--locked"],
+        &["--json", "build", "--locked"],
+    ] {
+        let output = building_in(&sandbox, &clone, args)?.output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(50),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+        let document = json(&output)?;
+        let (kind, message, details, help, _) = error(&document);
+        assert_eq!(
+            (kind, message),
+            ("project.invalid", said.as_str()),
+            "{args:?}"
+        );
+        assert!(
+            !details.iter().any(|line| line.contains("stats")),
+            "{details:?}"
+        );
+        assert!(help.contains("`git add data.lock.d`"), "{help}");
+    }
+    Ok(())
+}
+
+/// a placed result whose list then goes missing waits with its files as they are: status lists
+/// none of them as extra.
+#[test]
+fn status_counts_no_file_of_a_waiting_result_as_extra() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = sources()?;
+    let (_, part) = missing_clean(&sandbox, &routes)?;
+    fs::remove_file(sandbox.work().join(&part))?;
+    let told = text(&sandbox.run(&["status"])?.stdout)?;
+    assert!(
+        told.contains(&format!(
+            "Waiting clean · its file list {part} is not there"
+        )),
+        "{told}"
+    );
+    assert!(!told.contains("Extra"), "{told}");
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        document["result"]["extra"],
+        serde_json::json!([]),
+        "{document}"
+    );
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("clean").join("clean.csv"))?,
+        b"made here"
+    );
+    Ok(())
+}
+
+/// a clone waiting for clean's list stops neither `cache gc` nor a drop in another project, and
+/// gc keeps the result the clone's pin of clean names, which no other project needs.
+#[test]
+fn a_clone_waiting_for_a_list_stops_no_gc_or_drop() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = sources()?;
+    let (clone, _) = missing_clean(&sandbox, &routes)?;
+    let synced = building_in(&sandbox, &clone, &["sync"])?.output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let removed = sandbox.run(&["remove", "stats", "clean"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    let dropped = sandbox.run(&["--yes", "drop", "zen"])?;
+    assert_eq!(dropped.status.code(), Some(0), "{}", text(&dropped.stderr)?);
+    let gc = sandbox.run(&["cache", "gc", "--now"])?;
+    assert_eq!(gc.status.code(), Some(0), "{}", text(&gc.stderr)?);
+    assert!(object(&sandbox, b"made here").is_file());
+    Ok(())
+}
+
+/// in a project whose clean list is gone, plain `diff`, `export`, and `remove` or `exclude` of
+/// another dataset work, telling that clean waits; `export clean` says its list is not there.
+#[test]
+fn commands_of_other_datasets_go_on_while_a_list_is_missing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = sources()?;
+    let (_, part) = missing_clean(&sandbox, &routes)?;
+    let said = format!("data.lock names {part}, the file list of clean, which is not there");
+    let pair = sandbox.folder("pair")?;
+    for name in ["a.csv", "b.csv"] {
+        fs::write(pair.join(name), name)?;
+    }
+    let added = sandbox.run(&["add", &pair.to_string_lossy(), "--as", "pair"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let committed = crate::merge::ok(&sandbox, &["init", "-q"])?.is_some();
+    if committed {
+        crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock", "data.lock.d"])?;
+        crate::merge::ok(&sandbox, &["commit", "-qm", "built"])?;
+    }
+    fs::remove_file(sandbox.work().join(&part))?;
+    let run = |args: &[&str]| -> Result<std::process::Output> {
+        let mut command = sandbox.command(args);
+        for name in crate::merge::git_variables() {
+            command.env_remove(name);
+        }
+        Ok(command.output()?)
+    };
+    if committed {
+        let diffed = run(&["diff"])?;
+        assert_eq!(diffed.status.code(), Some(0), "{}", text(&diffed.stderr)?);
+        assert_eq!(
+            text(&diffed.stdout)?,
+            "clean changed: its file list is not in the project folder, so its files were not compared\n"
+        );
+    }
+    let exported = run(&["export"])?;
+    let stderr = text(&exported.stderr)?;
+    assert_eq!(exported.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("so clean waits for it"), "{stderr}");
+    assert!(text(&exported.stdout)?.contains("zen.csv"));
+    for args in [
+        &["remove", "zen", "--dry-run"][..],
+        &["exclude", "data/pair/a.csv", "--dry-run"],
+    ] {
+        let output = run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    let named = run(&["--json", "export", "clean"])?;
+    assert_eq!(named.status.code(), Some(50), "{}", text(&named.stderr)?);
+    assert_eq!(error(&json(&named)?).1, said);
     Ok(())
 }
 

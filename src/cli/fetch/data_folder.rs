@@ -555,6 +555,7 @@ mod tests {
             }],
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         }
     }
 

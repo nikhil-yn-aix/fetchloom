@@ -65,6 +65,8 @@ pub(crate) struct Plan<'a> {
     /// archives never unpacked on this machine, with their dataset, so the files they hold
     /// cannot be planned until they are.
     pub(crate) unknown: Vec<(&'a str, &'a LockedFile)>,
+    /// the datasets that wait for their file list, none of whose files is known.
+    pub(crate) waiting: Vec<&'a str>,
 }
 
 /// the folder a dataset lands in, relative to the project: the data folder itself for
@@ -114,13 +116,22 @@ pub(crate) fn from_cache_adding<'a>(
             Patterns::InDataToml
         }
     };
-    planned(
+    let mut plan = planned(
         manifest,
         &lock.datasets,
         &lock.derived,
         &|archive| archive.recorded(cache),
         &patterns,
-    )
+    )?;
+    plan.waiting = waiting(lock);
+    Ok(plan)
+}
+
+/// the datasets of `lock` that wait for their file list, by name.
+fn waiting(lock: &Lock) -> Vec<&str> {
+    lock.still_waiting()
+        .map(|waiting| waiting.name.as_str())
+        .collect()
 }
 
 /// every file of `lock`'s fetched datasets as a build reads them, those `place = false` keeps out
@@ -180,7 +191,9 @@ pub(crate) fn plan<'a>(
     members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
     let patterns = |_: &str| Patterns::InDataToml;
-    planned(manifest, &lock.datasets, &lock.derived, members, &patterns)
+    let mut plan = planned(manifest, &lock.datasets, &lock.derived, members, &patterns)?;
+    plan.waiting = waiting(lock);
+    Ok(plan)
 }
 
 /// [`plan`] for `datasets` and `results`, telling a clash in each dataset as `patterns` says

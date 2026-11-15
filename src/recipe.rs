@@ -143,6 +143,8 @@ pub(crate) struct Read {
     pub(crate) content: Option<Sha256>,
     /// whether a recipe makes it, so only a build pins it.
     pub(crate) made: bool,
+    /// whether data.lock pins it in a file list that is not there, so its content is not known.
+    pub(crate) waiting: bool,
 }
 
 impl Step {
@@ -160,13 +162,17 @@ impl Step {
         let inputs = recipe
             .from
             .iter()
-            .map(|input| Read {
-                name: input.clone(),
-                content: pinned(manifest, lock, input),
-                made: manifest
-                    .datasets
-                    .get(input)
-                    .is_some_and(|entry| entry.recipe().is_some()),
+            .map(|input| {
+                let content = pinned(manifest, lock, input);
+                Read {
+                    name: input.clone(),
+                    content,
+                    made: manifest
+                        .datasets
+                        .get(input)
+                        .is_some_and(|entry| entry.recipe().is_some()),
+                    waiting: content.is_none() && lock.waits(input).is_some(),
+                }
             })
             .collect();
         let mut hashed = Vec::with_capacity(recipe.code.len());
@@ -217,7 +223,9 @@ impl Step {
             .iter()
             .filter(|read| read.content.is_none())
             .map(|read| {
-                if read.made {
+                if read.waiting {
+                    Change::Waiting(read.name.clone())
+                } else if read.made {
                     Change::Unmade(read.name.clone())
                 } else {
                     Change::Unpinned(read.name.clone())
@@ -328,13 +336,16 @@ fn only_renamed(was: &[String], now: &[String], renames: &[(&str, &str)]) -> boo
 }
 
 /// what data.lock pins of the dataset `name` that a recipe reads: a fetched dataset's content, or
-/// the tree of a recipe's result.
+/// the tree of a recipe's result, which data.lock gives even while its file list is not there.
 fn pinned(manifest: &Manifest, lock: &Lock, name: &str) -> Option<Sha256> {
     match &manifest.datasets.get(name)?.origin {
         Origin::Source(_) => {
             source_read(manifest, lock, name).map(|(locked, members)| content(locked, members))
         }
-        Origin::Derived(_) => lock.result(name).map(|result| result.tree),
+        Origin::Derived(_) => lock
+            .result(name)
+            .or_else(|| lock.waits(name)?.result())
+            .map(|result| result.tree),
     }
 }
 
@@ -359,6 +370,9 @@ pub(crate) enum Change {
     Unpinned(String),
     /// data.lock pins no result yet of a recipe it reads.
     Unmade(String),
+    /// data.lock pins a fetched dataset it reads in a file list that is not there, so whether that
+    /// changed is not known.
+    Waiting(String),
     /// a dataset it reads holds other content, or it reads another set of datasets.
     Input(String),
     /// a dataset it reads has another name and the same content: the old name, then the new.
@@ -379,6 +393,7 @@ impl fmt::Display for Change {
             Change::Unbuilt => f.write_str("not built yet"),
             Change::Unpinned(input) => write!(f, "{input} is not pinned yet"),
             Change::Unmade(input) => write!(f, "{input} is not built yet"),
+            Change::Waiting(input) => write!(f, "{input} waits for its file list"),
             Change::Input(input) => write!(f, "{input} changed"),
             Change::Renamed(old, new) => write!(f, "{old} was renamed to {new}"),
             Change::Run => f.write_str("run changed"),
@@ -399,8 +414,18 @@ pub(crate) fn is_pattern(path: &str) -> bool {
     path.contains(['*', '?', '['])
 }
 
+/// whether `changes` hold only fetched datasets waiting for their file lists, which tell nothing
+/// of whether the recipe changed: its pinned result stands, and each waiting dataset is told of.
+pub(crate) fn only_waiting(changes: &[Change]) -> bool {
+    !changes.is_empty()
+        && changes
+            .iter()
+            .all(|change| matches!(change, Change::Waiting(_)))
+}
+
 /// what moved since data.lock's result of the recipe `name` was built, as [`Step::changes`] finds
-/// it, failing as [`Step::read`] does. nothing for a dataset fetched from a source.
+/// it, failing as [`Step::read`] does; a result waiting for its file list is compared by the pin
+/// data.lock gives. nothing for a dataset fetched from a source.
 pub(crate) fn drift(
     root: &Path,
     manifest: &Manifest,
@@ -408,7 +433,7 @@ pub(crate) fn drift(
     name: &str,
 ) -> Result<Vec<Change>, Error> {
     Ok(Step::read(root, manifest, lock, name)?
-        .map(|step| step.changes(lock.result(name)))
+        .map(|step| step.changes(lock.result(name).or_else(|| lock.waits(name)?.result())))
         .unwrap_or_default())
 }
 

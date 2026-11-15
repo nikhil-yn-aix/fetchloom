@@ -281,6 +281,7 @@ mod tests {
             ],
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         assert_eq!(
             largest(&lock, 3),

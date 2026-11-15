@@ -129,7 +129,7 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
         known(&manifest, name, "drop")?;
     }
     let lock = project.lock()?.unwrap_or_default();
-    project.not_waiting(&|name| given.is_empty() || given.iter().any(|named| named == name))?;
+    lock.refuse_waiting(given.iter().map(String::as_str))?;
     let marked = project.dropped();
     let (state, _) = project.state();
     let cache = peek_cache().ok();

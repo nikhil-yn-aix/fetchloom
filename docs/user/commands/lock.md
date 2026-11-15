@@ -38,7 +38,7 @@ as in `sync`, each dataset pinned for the first time gets a `Pinned` line with w
 
 files already pinned need not be cached. a source that states a SHA-256 and size lets a file be locked without a download, but an archive that unpacks needs its tree hash, so it is downloaded.
 
-a passing `lock --check` ends with `Ok data.lock matches data.toml` on stderr, and with `-q` prints nothing. it checks data.toml against the lock, not the files in the data folder. an empty data.toml passes even without a lock, while `sync --locked` needs `data.lock` to exist.
+a passing `lock --check` ends with `Ok data.lock matches data.toml` on stderr, and with `-q` prints nothing. it checks data.toml against the lock, not the files in the data folder. an empty data.toml passes even without a lock, while `sync --locked` needs `data.lock` to exist. a dataset whose file list `data.lock.d` lacks, as in a clone of a commit that left it out, fails it with `project.invalid`, exit 50, once nothing else is out of date, as it does `sync --locked` and `build --locked`, so a ci run catches the missing `git add data.lock.d`; [big datasets](../reference/data-lock.md#big-datasets) says what every other command does then.
 
 only `fetchloom build` pins a [recipe](../guides/recipes.md), so `lock` keeps a recipe's pin while `data.toml` has the recipe, and drops it with the recipe. `lock --check` fails with `build.needed`, exit 60, when data.lock pins no result for a recipe or something it is made from changed since, after any `lock.outdated` finding. `lock` itself still exits 0 then: it warns about each such recipe as `sync` does, and its last line names the recipes that need a build. stderr after mc's code, c.py, changed, from a real run:
 

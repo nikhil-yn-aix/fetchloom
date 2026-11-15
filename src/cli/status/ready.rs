@@ -8,6 +8,7 @@ use crate::cli::sync::Scope;
 use crate::cli::sync::place::{Placement, Reason};
 use crate::error::{Error, Kind};
 use crate::project::Project;
+use crate::project::lock::Waiting;
 
 /// the most files and datasets the error names; the command's result lists them all.
 const NAMED: usize = 20;
@@ -39,7 +40,7 @@ pub(in crate::cli) enum Unready {
     /// a dataset its source's digests pin, `by` naming them, that no sync has downloaded yet.
     NotDownloaded { name: String, by: &'static str },
     /// a dataset whose file list, which data.lock names, is not beside it.
-    Waiting(crate::project::lock::Waiting),
+    Waiting(Box<Waiting>),
 }
 
 impl Unready {
@@ -95,7 +96,7 @@ impl Unready {
                 command("sync")
             ),
             Unready::Waiting(waiting) => {
-                let build = if waiting.made {
+                let build = if waiting.made() {
                     format!(
                         ", or `{}` makes it here",
                         command(&format!("build {}", waiting.name))
@@ -143,11 +144,13 @@ pub(in crate::cli) fn ready(unready: &[Unready]) -> Result<(), Error> {
 }
 
 /// what keeps the data of `scope` from being ready after a sync left `placement`: the files it kept
-/// but unneeded ones, the results it left out, and stale recipes, which only a build changes.
+/// but unneeded ones, the results it left out, stale recipes, which only a build changes, and the
+/// datasets of `waiting`, whose file lists are not there.
 pub(in crate::cli) fn after_sync(
     project: &Project,
     scope: &Scope,
     placement: &Placement,
+    waiting: &[Waiting],
 ) -> Result<Vec<Unready>, Error> {
     let mut unready: Vec<Unready> = placement
         .kept
@@ -180,11 +183,10 @@ pub(in crate::cli) fn after_sync(
         }
     }
     unready.extend(
-        project
-            .waiting()
-            .into_iter()
+        waiting
+            .iter()
             .filter(|waiting| scope.includes(&waiting.name))
-            .map(Unready::Waiting),
+            .map(|waiting| Unready::Waiting(Box::new(waiting.clone()))),
     );
     Ok(unready)
 }
@@ -205,7 +207,12 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
                 .map(|name| Unready::Unpinned(Some(name.clone()))),
         );
     }
-    unready.extend(status.waiting.values().cloned().map(Unready::Waiting));
+    unready.extend(
+        status
+            .waiting
+            .values()
+            .map(|waiting| Unready::Waiting(Box::new(waiting.clone()))),
+    );
     unready.extend(
         status
             .not_downloaded

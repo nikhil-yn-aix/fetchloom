@@ -131,8 +131,6 @@ pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Erro
     };
     let (text, manifest) = project.manifest()?;
     let lock = project.lock()?.unwrap_or_default();
-    // before data.toml changes: data.lock, written after it, would refuse to drop a waiting pin
-    project.not_waiting(&|_| true)?;
     let cache = if dry_run {
         peek_cache()?
     } else {
@@ -141,6 +139,7 @@ pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Erro
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let paths = data_paths(&manifest, (&project.root, &here), &args.paths)?;
+    refuse_waiting(&manifest, &lock, &paths)?;
     let poll = || unchanged_by_a_stop(&context.stop);
     let mut pace = Pace::new(&poll);
     let progress = context.output.wait("Planning", planning(&paths));
@@ -349,6 +348,23 @@ fn data_paths(
             })
         })
         .collect()
+}
+
+/// refuses `paths` when one is in the folder of a dataset waiting for its file list, which files
+/// it holds being not known here.
+fn refuse_waiting(manifest: &Manifest, lock: &Lock, paths: &[String]) -> Result<(), Error> {
+    let inside = |name: &&str| {
+        let folder = name::fold(&plan::folder(manifest, name));
+        paths
+            .iter()
+            .map(|path| name::fold(path))
+            .any(|path| path == folder || path.starts_with(&format!("{folder}/")))
+    };
+    lock.refuse_waiting(
+        lock.still_waiting()
+            .map(|waiting| waiting.name.as_str())
+            .filter(inside),
+    )
 }
 
 /// the help for a dataset's name given where exclude takes a path: `remove` takes the dataset
@@ -1318,6 +1334,7 @@ mod tests {
             datasets: vec![pinned(&manifest, "tiny", &files)],
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
@@ -1594,6 +1611,7 @@ mod tests {
             ],
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let mut beta = leaves(&[], &[("parts.zip", "a/one.txt")]);
         beta.copied.insert(
@@ -1660,6 +1678,7 @@ mod tests {
                     .collect(),
                 derived: Vec::new(),
                 stated: Vec::new(),
+                waiting: Vec::new(),
             };
             let edits: BTreeMap<&str, Edit> = names
                 .iter()
@@ -1701,6 +1720,7 @@ mod tests {
             ],
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();

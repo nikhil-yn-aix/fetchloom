@@ -127,6 +127,7 @@ pub(super) fn merge(
         dry_run: args.dry.dry_run,
         changes: args.dry.dry_run.then(Changes::default),
         merge: Some(merged.summary),
+        waiting: Vec::new(),
     }))
 }
 

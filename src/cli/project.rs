@@ -51,6 +51,9 @@ pub(super) struct Report {
     /// how each dataset came out when `lock` merged both sides of a git merge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) merge: Option<merge::Summary>,
+    /// for `sync`, the datasets of data.lock that wait for their file list, which it warns of.
+    #[serde(skip)]
+    pub(super) waiting: Vec<lock::Waiting>,
 }
 
 impl Report {
@@ -64,6 +67,7 @@ impl Report {
             dry_run: true,
             changes: Some(outcome.placed.changes),
             merge: None,
+            waiting: Vec::new(),
         }
     }
 }
@@ -349,12 +353,9 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let strict = args.strict.then(|| args.names.clone());
     let (report, closing) = sync_as_asked(context, args).await?;
-    let synced = Project {
-        root: report.project.clone(),
-    };
     tell_waiting(
         &context.output,
-        &synced,
+        &report.waiting,
         report.selected.as_ref().unwrap_or(&Scope::All),
     );
     let ready = match (strict, &report.placement) {
@@ -367,7 +368,8 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
             } else {
                 Scope::Only(names.into_iter().collect())
             };
-            let unready = super::status::ready::after_sync(&project, &scope, placement)?;
+            let unready =
+                super::status::ready::after_sync(&project, &scope, placement, &report.waiting)?;
             super::status::ready::ready(&unready)
         }
         _ => Ok(()),
@@ -451,11 +453,15 @@ async fn sync_held(
             .as_ref()
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
+    let waiting = read
+        .as_ref()
+        .map(|(lock, _)| waiting_in(lock))
+        .unwrap_or_default();
     if dry_run {
         let seen = (!back).then_some(&seen);
         return preview_sync(context, &project, &manifest, read, seen, &args, scope)
             .await
-            .map(|report| (report, None));
+            .map(|report| (Report { waiting, ..report }, None));
     }
     // no data.lock yet means this sync begins the project, which outside git still wants the rule
     let begins = read.is_none();
@@ -496,9 +502,15 @@ async fn sync_held(
         datasets: pins,
         lock_changed,
         placement: Some(placement),
+        waiting,
         ..Report::default()
     };
     Ok((report, Some(closing)))
+}
+
+/// the datasets of `lock` that wait for their file list.
+fn waiting_in(lock: &Lock) -> Vec<lock::Waiting> {
+    lock.still_waiting().cloned().collect()
 }
 
 /// data.toml's `text` as [`manifest::read_plain`] reads it, with its SHA-256, for a plain sync of
@@ -536,6 +548,7 @@ async fn sync_plain(
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
     let old = lock.map(|(lock, _)| lock);
+    let waiting = old.as_ref().map(waiting_in).unwrap_or_default();
     let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?).filling();
     let survey = surveyed(&work, &plain.data_dir, false)?;
     let dropped = survey.state.dropped.clone();
@@ -577,6 +590,7 @@ async fn sync_plain(
         datasets: pins,
         lock_changed,
         placement: Some(placement),
+        waiting,
         ..Report::default()
     };
     Ok((report, closing))
@@ -621,7 +635,7 @@ fn settled_named(
     drop(lock_text);
     let work =
         Loop::new(context, project, Arc::new(context.net()), open_cache()?).within(scope.clone());
-    refuse_unbuilt(project, manifest, Some(&lock), scope)?;
+    refuse_unbuilt(manifest, Some(&lock), scope)?;
     let folders: Vec<String> = names
         .iter()
         .map(|name| plan::folder(manifest, name))
@@ -657,6 +671,7 @@ fn settled_named(
         datasets: Vec::new(),
         lock_changed: false,
         placement: Some(placement),
+        waiting: waiting_in(&lock),
         ..Report::default()
     };
     Ok(Some((report, closing)))
@@ -721,6 +736,7 @@ fn settled_unheld(
         datasets: Vec::new(),
         lock_changed: false,
         placement: Some(placement),
+        waiting: waiting_in(&lock),
         ..Report::default()
     };
     Ok(Some((report, closing)))
@@ -975,6 +991,10 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
                     return Err(local::no_newer(name));
                 }
             }
+            // a dataset waiting for its list is never resolved
+            if let Some(old) = &old {
+                old.refuse_waiting(names.iter().map(String::as_str))?;
+            }
             Upgrade::Only(names.into_iter().collect::<BTreeSet<_>>())
         }
     };
@@ -988,7 +1008,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     context.stop.finish();
     // lock keeps a recipe's pin, which only a build moves, so it says which ones moved
     let stale = work.tell_stale(&manifest, &lock);
-    tell_waiting(&context.output, &project, &Scope::All);
+    tell_waiting(&context.output, &waiting_in(&lock), &Scope::All);
     let changed = work.write_lock(&before, &lock)?.is_some();
     work.drop_unpacked(&lock);
     engine::tell_upgrades(
@@ -1063,6 +1083,7 @@ async fn preview_lock(
     let dry = work.relock_dry(manifest, old, upgrade, Vec::new()).await?;
     let output = &context.output;
     let stale = work.tell_stale(manifest, &dry.lock);
+    tell_waiting(output, &waiting_in(&dry.lock), &Scope::All);
     let changed = !dry.before.holds(&dry.lock);
     if changed {
         engine::tell_lock(
@@ -1117,6 +1138,7 @@ async fn preview_lock(
             ..Changes::default()
         }),
         merge: None,
+        waiting: Vec::new(),
     })
 }
 
@@ -1187,20 +1209,28 @@ fn check(
             continue;
         }
         if entry.recipe().is_some() {
-            if old.get(name).is_some() {
+            if old.get(name).is_some() || old.waits(name).is_some_and(|waiting| !waiting.made()) {
                 stale.push(format!(
                     "{name} is made by a recipe in data.toml, but data.lock has it as fetched"
                 ));
             }
             let changes = recipe::drift(&project.root, manifest, old, name)?;
-            if !changes.is_empty() {
+            // a dataset it reads that waits for its list is told of below
+            if !changes.is_empty() && !recipe::only_waiting(&changes) {
                 unbuilt.push((name.clone(), changes));
             }
             continue;
         }
-        // a pin by its source's digests counts as locked until data.toml changes
+        // a pin by its source's digests counts as locked until data.toml changes, and so does
+        // one waiting for its list, whose missing list is told of below
         let stated = old.stated(name).map(|stated| &stated.pin);
-        match old.get(name).or(stated).map(|locked| locked.drift(entry)) {
+        let waiting = old.waits(name).and_then(lock::Waiting::pin);
+        match old
+            .get(name)
+            .or(stated)
+            .or(waiting)
+            .map(|locked| locked.drift(entry))
+        {
             None => stale.push(format!("{name} is not in data.lock yet")),
             Some(Some(Drift::Spec)) => stale.push(format!("{name} changed in data.toml")),
             Some(Some(Drift::Extract)) if stated.is_some() => {
@@ -1214,16 +1244,19 @@ fn check(
     }
     let names = old.datasets.iter().map(|dataset| &dataset.name);
     let stated = old.stated.iter().map(|stated| &stated.pin.name);
+    let waiting = old.still_waiting().map(|waiting| &waiting.name);
     for name in names
         .chain(old.derived.iter().map(|result| &result.name))
         .chain(stated)
+        .chain(waiting)
     {
         if !scope.includes(name) {
             continue;
         }
+        let made = old.result(name).is_some() || old.waits(name).is_some_and(lock::Waiting::made);
         match manifest.datasets.get(name) {
             None => stale.push(format!("{name} is in data.lock but no longer in data.toml")),
-            Some(entry) if entry.source().is_some() && old.result(name).is_some() => {
+            Some(entry) if entry.source().is_some() && made => {
                 stale.push(format!(
                     "{name} is fetched in data.toml, but data.lock has it as made by a recipe"
                 ));
@@ -1240,6 +1273,13 @@ fn check(
     }
     if let Some(error) = needs_building(&unbuilt) {
         return Err(error);
+    }
+    // its pin stands, but nothing here can place or check it until its list is back
+    if let Some(waiting) = old
+        .still_waiting()
+        .find(|waiting| scope.includes(&waiting.name))
+    {
+        return Err(waiting.error());
     }
     if let Some(error) = mispinned(project, manifest, old, scope) {
         return Err(error);
@@ -1367,7 +1407,7 @@ pub(super) async fn sync_all(
     given: Option<(String, Listing)>,
     run: Run<'_>,
 ) -> Result<Outcome<Placement>, Error> {
-    refuse_unbuilt(work.project, manifest, old.as_ref(), &work.scope)?;
+    refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
     let survey = surveyed(work, &manifest.data_dir, run.verify)?;
     sync_surveyed(work, manifest, old, given, run, survey).await
 }
@@ -1553,7 +1593,7 @@ pub(super) async fn preview_all(
     given: Vec<Given>,
     seen: Option<&Seen>,
 ) -> Result<Outcome<Preview>, Error> {
-    refuse_unbuilt(work.project, manifest, old.as_ref(), &work.scope)?;
+    refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
     let reading = work.context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(
         work.project,
@@ -1621,18 +1661,16 @@ pub(super) async fn preview_all(
     })
 }
 
-/// refuses a run of named datasets that names a recipe `lock` pins no result of, before
-/// anything else: only `fetchloom build` makes one, so the run has nothing to place for it.
-fn refuse_unbuilt(
-    project: &Project,
-    manifest: &Manifest,
-    lock: Option<&Lock>,
-    scope: &Scope,
-) -> Result<(), Error> {
+/// refuses a run of named datasets that names one waiting for its file list, or a recipe `lock`
+/// pins no result of, before anything else: only `fetchloom build` makes one, so the run has
+/// nothing to place for it.
+fn refuse_unbuilt(manifest: &Manifest, lock: Option<&Lock>, scope: &Scope) -> Result<(), Error> {
     let Scope::Only(names) = scope else {
         return Ok(());
     };
-    project.not_waiting(&|name| names.contains(name))?;
+    if let Some(lock) = lock {
+        lock.refuse_waiting(names.iter().map(String::as_str))?;
+    }
     let unbuilt: Vec<(String, Vec<Change>)> = names
         .iter()
         .filter(|name| {
@@ -1647,10 +1685,10 @@ fn refuse_unbuilt(
     needs_building(&unbuilt).map_or(Ok(()), Err)
 }
 
-/// warns of each dataset of `scope` that waits for its file list, as this run's reads of data.lock
-/// found them, with the part that is not there and how to bring it back.
-pub(super) fn tell_waiting(output: &Output, project: &Project, scope: &Scope) {
-    for waiting in project.waiting() {
+/// warns of each dataset of `waiting`, those that wait for their file list, in `scope`, with the
+/// part that is not there and how to bring it back.
+pub(super) fn tell_waiting(output: &Output, waiting: &[lock::Waiting], scope: &Scope) {
+    for waiting in waiting {
         if let Scope::Only(names) = scope
             && !names.contains(&waiting.name)
         {

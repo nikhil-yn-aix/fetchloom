@@ -409,16 +409,8 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
             } else {
                 Vec::new()
             };
-            let waiting = if waiting {
-                vec![Waiting {
-                    name: "set".to_owned(),
-                    part: format!("data.lock.d/set.{}.tsv.zst", "a".repeat(12)),
-                    made: false,
-                }]
-            } else {
-                Vec::new()
-            };
-            let actual = unwanted(&survey, &wanted, &unknown, &waiting, &scope, |_, _, _| {
+            let waiting = if waiting { vec!["set"] } else { Vec::new() };
+            let actual = unwanted(&survey, &wanted, (&unknown, &waiting), &scope, |_, _, _| {
                 holds
             });
             let protected =

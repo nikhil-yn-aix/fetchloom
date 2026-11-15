@@ -131,6 +131,10 @@ pub(crate) struct Lock {
     /// the datasets pinned by what their sources state, not downloaded yet, sorted by name. no
     /// name is in two lists.
     pub(crate) stated: Vec<Stated>,
+    /// the datasets whose list data.lock names and data.lock.d lacks, sorted by name: none of
+    /// their files is known, and data.lock is written with each entry as it was read. one the other
+    /// lists pin again is written as they pin it.
+    pub(crate) waiting: Vec<Waiting>,
 }
 
 /// a dataset `add --no-sync` pinned by what its source states of each file, its size and SHA-256
@@ -165,28 +169,98 @@ impl Words {
     }
 }
 
-/// a dataset data.lock pins in a list that is not beside it, which waits while every other
-/// dataset is used, as [`Lock::read_waiting`] finds it.
+/// a dataset data.lock pins in a list that is not beside it, as [`Lock::read_waiting`] finds it:
+/// it waits while every other dataset is used, its entry kept as data.lock gives it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Waiting {
     pub(crate) name: String,
     /// the first part of its list that is not there, by its path below the project.
     pub(crate) part: String,
-    /// whether a recipe made it, so a build can make it again here.
-    pub(crate) made: bool,
+    /// its entry as read, with no files and the list that holds them.
+    entry: Unread,
 }
 
-impl Waiting {
-    /// what a command that needs it says: the part that is not there, and how to bring it back.
-    pub(crate) fn error(&self) -> Error {
-        lists::not_there(&self.name, &self.part, self.made)
+/// the entry of a dataset that waits for its list, which holds its files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Unread {
+    Source(Locked, lists::Listed),
+    Derived(Derived, lists::Listed),
+}
+
+impl Unread {
+    fn name(&self) -> &str {
+        match self {
+            Unread::Source(dataset, _) => &dataset.name,
+            Unread::Derived(derived, _) => &derived.name,
+        }
+    }
+
+    fn listed(&self) -> &lists::Listed {
+        match self {
+            Unread::Source(_, listed) | Unread::Derived(_, listed) => listed,
+        }
     }
 }
 
+impl Waiting {
+    /// whether a recipe made it, so a build can make it again here.
+    pub(crate) fn made(&self) -> bool {
+        matches!(self.entry, Unread::Derived(..))
+    }
+
+    /// what a command that needs it says: the part that is not there, and how to bring it back.
+    pub(crate) fn error(&self) -> Error {
+        lists::not_there(&self.name, &self.part, self.made())
+    }
+
+    /// the result a recipe made, as data.lock pins it, without its files.
+    pub(crate) fn result(&self) -> Option<&Derived> {
+        match &self.entry {
+            Unread::Derived(derived, _) => Some(derived),
+            Unread::Source(..) => None,
+        }
+    }
+
+    /// the pin of a fetched dataset, as data.lock gives it, without its files.
+    pub(crate) fn pin(&self) -> Option<&Locked> {
+        match &self.entry {
+            Unread::Source(locked, _) => Some(locked),
+            Unread::Derived(..) => None,
+        }
+    }
+
+    /// the parts of its list, each a path below the project, the missing ones among them.
+    pub(crate) fn parts(&self) -> &[String] {
+        &self.entry.listed().parts
+    }
+}
+
+/// the datasets whose list data.lock's `text` names as fetchloom writes it and the project at
+/// `root` lacks a part of, by name, with the first such part and whether a recipe made each. none
+/// if it does not read; a list's lines are not read.
+pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<(String, String, bool)> {
+    // no list, nothing to miss, without parsing a lock of only inline files
+    if !text.contains("files_in") {
+        return Vec::new();
+    }
+    parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|parsed| {
+            let (listed, made) = parsed.written()?;
+            let part = listed
+                .parts
+                .iter()
+                .find(|part| lists::missing(root, part))?;
+            Some((parsed.name().to_owned(), part.clone(), made))
+        })
+        .collect()
+}
+
 /// each dataset data.lock's `text` pins, by name, with the parts of its file list, none if it
-/// does not read.
+/// does not read; a list's lines are not read.
 pub(crate) fn listed(text: &str) -> Vec<(String, Vec<String>)> {
-    parse(text)
+    parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX))
         .unwrap_or_default()
         .iter()
         .map(|parsed| {
@@ -718,24 +792,48 @@ impl Lock {
         let mut names = Vec::with_capacity(unlisted.len());
         for entry in unlisted {
             names.push(entry.name().to_owned());
-            match entry {
-                Parsed::Source(dataset, _) => {
-                    check_resolved(&dataset)?;
-                    let at = lock
-                        .datasets
-                        .partition_point(|known| known.name < dataset.name);
-                    lock.datasets.insert(at, dataset);
-                }
-                Parsed::Derived(derived, _) => {
-                    let at = lock
-                        .derived
-                        .partition_point(|known| known.name < derived.name);
-                    lock.derived.insert(at, derived);
-                }
-                Parsed::Stated(_) => {}
+            if let Parsed::Source(dataset, _) = &entry {
+                check_resolved(dataset)?;
             }
+            lock.put_unlisted(entry);
         }
         Ok((lock, names))
+    }
+
+    /// puts `entry`, whose list is not read, among the datasets with no files.
+    fn put_unlisted(&mut self, entry: Parsed) {
+        match entry {
+            Parsed::Source(dataset, _) => {
+                let at = self
+                    .datasets
+                    .partition_point(|known| known.name < dataset.name);
+                self.datasets.insert(at, dataset);
+            }
+            Parsed::Derived(derived, _) => {
+                let at = self
+                    .derived
+                    .partition_point(|known| known.name < derived.name);
+                self.derived.insert(at, derived);
+            }
+            Parsed::Stated(_) => {}
+        }
+    }
+
+    /// moves each dataset that waits for its list among the datasets with no files, as
+    /// [`Lock::read_with`] gives a commit's that lacks one, and gives their names.
+    pub(crate) fn unwait(&mut self) -> Vec<String> {
+        let waiting = std::mem::take(&mut self.waiting);
+        let mut names = Vec::with_capacity(waiting.len());
+        for waiting in waiting {
+            if !self.pins(&waiting.name) {
+                names.push(waiting.name);
+                self.put_unlisted(match waiting.entry {
+                    Unread::Source(dataset, listed) => Parsed::Source(dataset, Some(listed)),
+                    Unread::Derived(derived, listed) => Parsed::Derived(derived, listed),
+                });
+            }
+        }
+        names
     }
 
     /// the memory a lock with as many files as this one takes as it is read.
@@ -754,14 +852,15 @@ impl Lock {
     /// the lock `text` holds of the datasets `keep` accepts by name, their lists in
     /// [`lists::FOLDER`] below `root` read and checked; the others are left out, their lists not
     /// read. a dataset whose list is not beside data.lock, as in a clone of a commit that left
-    /// data.lock.d out, waits: it is left out and named, so every other dataset can be used. a
-    /// list that is there but does not read, one named otherwise than fetchloom writes it, and a
-    /// data.lock.d that is no real folder still stop the read.
+    /// data.lock.d out, waits: its entry is kept in [`Lock::waiting`] as read, so every other
+    /// dataset can be used and data.lock written. a list that is there but does not read, one
+    /// named otherwise than fetchloom writes it, and a data.lock.d that is no real folder still
+    /// stop the read.
     pub(crate) fn read_waiting(
         text: &str,
         root: &Path,
         keep: &dyn Fn(&str) -> bool,
-    ) -> Result<(Lock, Vec<Waiting>), Error> {
+    ) -> Result<Lock, Error> {
         Lock::read_waiting_within(text, root, keep, ROOM.get().copied().unwrap_or(u64::MAX))
     }
 
@@ -771,7 +870,7 @@ impl Lock {
         root: &Path,
         keep: &dyn Fn(&str) -> bool,
         memory: u64,
-    ) -> Result<(Lock, Vec<Waiting>), Error> {
+    ) -> Result<Lock, Error> {
         let mut parsed = parse_within(text, keep, memory)?;
         parsed.retain(|entry| keep(entry.name()));
         // a part looked for through a linked data.lock.d would be looked for outside the project
@@ -779,21 +878,68 @@ impl Lock {
             lists::folder(root)?;
         }
         let mut waiting = Vec::new();
-        parsed.retain(|entry| {
-            let Some((listed, made)) = entry.written() else {
-                return true;
-            };
-            let Some(part) = listed.parts.iter().find(|part| lists::missing(root, part)) else {
-                return true;
-            };
-            waiting.push(Waiting {
-                name: entry.name().to_owned(),
-                part: part.clone(),
-                made,
+        let mut listed = Vec::with_capacity(parsed.len());
+        for entry in parsed {
+            let missing = entry.written().and_then(|(listed, _)| {
+                listed
+                    .parts
+                    .iter()
+                    .find(|part| lists::missing(root, part))
+                    .cloned()
             });
-            false
-        });
-        Ok((resolve(parsed, Some(root))?, waiting))
+            let (part, entry) = match (missing, entry) {
+                // written back as read, so its link is held to what any read allows
+                (Some(part), Parsed::Source(dataset, Some(list))) => {
+                    check_resolved(&dataset)?;
+                    (part, Unread::Source(dataset, list))
+                }
+                (Some(part), Parsed::Derived(derived, list)) => {
+                    (part, Unread::Derived(derived, list))
+                }
+                (_, entry) => {
+                    listed.push(entry);
+                    continue;
+                }
+            };
+            let name = entry.name().to_owned();
+            waiting.push(Waiting { name, part, entry });
+        }
+        let mut lock = resolve(listed, Some(root))?;
+        lock.waiting = waiting;
+        Ok(lock)
+    }
+
+    /// the dataset named `name` that waits for its list, as [`Lock::read_waiting`] found it,
+    /// unless another list pins it again.
+    pub(crate) fn waits(&self, name: &str) -> Option<&Waiting> {
+        let index = self
+            .waiting
+            .binary_search_by(|waiting| waiting.name.as_str().cmp(name))
+            .ok()?;
+        self.waiting.get(index).filter(|_| !self.pins(name))
+    }
+
+    /// the datasets that wait for their lists, as [`Lock::waits`] tells each.
+    pub(crate) fn still_waiting(&self) -> impl Iterator<Item = &Waiting> {
+        self.waiting
+            .iter()
+            .filter(|waiting| !self.pins(&waiting.name))
+    }
+
+    /// refuses with what [`Waiting::error`] says when one of `names` waits for its list.
+    pub(crate) fn refuse_waiting<'n>(
+        &self,
+        names: impl IntoIterator<Item = &'n str>,
+    ) -> Result<(), Error> {
+        match names.into_iter().find_map(|name| self.waits(name)) {
+            Some(waiting) => Err(waiting.error()),
+            None => Ok(()),
+        }
+    }
+
+    /// whether a list other than [`Lock::waiting`] pins `name`.
+    fn pins(&self, name: &str) -> bool {
+        self.get(name).is_some() || self.result(name).is_some() || self.stated(name).is_some()
     }
 
     /// the dataset named `name`, found by halving, since every lock keeps its datasets sorted by
@@ -884,6 +1030,7 @@ impl Lock {
             Source(&'a Locked),
             Derived(&'a Derived),
             Stated(&'a Stated),
+            Waiting(&'a Unread),
         }
         let mut tables: Vec<(&str, Table)> = self
             .datasets
@@ -899,6 +1046,10 @@ impl Lock {
                     .iter()
                     .map(|stated| (stated.name(), Table::Stated(stated))),
             )
+            .chain(
+                self.still_waiting()
+                    .map(|waiting| (waiting.name.as_str(), Table::Waiting(&waiting.entry))),
+            )
             .collect();
         tables.sort_by(|a, b| a.0.cmp(b.0));
         let mut out = format!("version = {VERSION}\n");
@@ -907,6 +1058,13 @@ impl Lock {
                 Table::Source(dataset) => write_source(&mut out, dataset, inline),
                 Table::Derived(derived) => derived::write(&mut out, derived),
                 Table::Stated(stated) => write_stated(&mut out, stated),
+                Table::Waiting(Unread::Source(dataset, listed)) => {
+                    write_head(&mut out, dataset);
+                    write_listed(&mut out, listed);
+                }
+                Table::Waiting(Unread::Derived(derived, listed)) => {
+                    derived::write_listed(&mut out, derived, listed);
+                }
             }
         }
         out
@@ -1730,9 +1888,9 @@ mod tests {
             );
         }
         assert_eq!(Lock::parse(&text).unwrap().render(), text);
-        let (kept, _) = Lock::read_waiting(&text, Path::new("."), &|name| name == "zeta").unwrap();
+        let kept = Lock::read_waiting(&text, Path::new("."), &|name| name == "zeta").unwrap();
         assert_eq!(kept.stated, []);
-        let (only, _) = Lock::read_waiting(&text, Path::new("."), &|name| name == "mnist").unwrap();
+        let only = Lock::read_waiting(&text, Path::new("."), &|name| name == "mnist").unwrap();
         assert_eq!(only.stated, lock.stated);
     }
 
@@ -2131,9 +2289,9 @@ mod tests {
         let (root, text) = written(&lock);
         let whole = Lock::read(&text, root.path()).unwrap();
         for keep in [&["iris"][..], &["zeta", "clean"], &[]] {
-            let (read, waiting) =
+            let read =
                 Lock::read_waiting(&text, root.path(), &|name| keep.contains(&name)).unwrap();
-            assert_eq!(waiting, []);
+            assert_eq!(read.waiting, []);
             let kept: Vec<&Locked> = whole
                 .datasets
                 .iter()
@@ -2500,11 +2658,15 @@ mod tests {
     }
 
     /// a list that is not there, as in a clone of a commit that left data.lock.d out, leaves its
-    /// dataset waiting and the others read. a list named otherwise than fetchloom writes it, a
-    /// part that is a link and a data.lock.d that is a link still stop the read.
+    /// dataset waiting with its entry as read, written back unchanged, and the others read. a list
+    /// named otherwise than fetchloom writes it, a part that is a link and a data.lock.d that is a
+    /// link still stop the read.
     #[test]
     fn a_dataset_whose_list_is_not_there_waits_alone() {
-        let lock = sample();
+        let lock = Lock {
+            derived: vec![clean()],
+            ..sample()
+        };
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
         let parts = lock.lists_with(0);
@@ -2513,21 +2675,37 @@ mod tests {
         }
         let text = lock.render_with(0);
         let gone = lock.datasets[1].name.clone();
-        let prefix = format!("{}/{gone}.", lists::FOLDER);
-        let (part, _) = parts
+        let part_of = |name: &str| {
+            let prefix = format!("{}/{name}.", lists::FOLDER);
+            parts
+                .iter()
+                .map(|(part, _)| part.clone())
+                .find(|part| part.starts_with(&prefix))
+                .unwrap()
+        };
+        let part = part_of(&gone);
+        for missing in [&part, &part_of("clean")] {
+            std::fs::remove_file(root.path().join(missing)).unwrap();
+        }
+        let read = Lock::read_waiting(&text, root.path(), &|_| true).unwrap();
+        let waiting: Vec<(&str, &str, bool)> = read
+            .waiting
             .iter()
-            .find(|(part, _)| part.starts_with(&prefix))
-            .unwrap();
-        std::fs::remove_file(root.path().join(part)).unwrap();
-        let (read, waiting) = Lock::read_waiting(&text, root.path(), &|_| true).unwrap();
+            .map(|waiting| (waiting.name.as_str(), waiting.part.as_str(), waiting.made()))
+            .collect();
         assert_eq!(
             waiting,
-            [Waiting {
-                name: gone.clone(),
-                part: part.clone(),
-                made: false,
-            }]
+            [
+                ("clean", part_of("clean").as_str(), true),
+                (gone.as_str(), part.as_str(), false)
+            ]
         );
+        assert_eq!(read.render_with(0), text);
+        assert_eq!(
+            read.waits("clean").unwrap().result().unwrap().tree,
+            clean().tree
+        );
+        assert!(read.result("clean").is_none());
         let names = |lock: &Lock| -> Vec<String> {
             lock.datasets
                 .iter()
@@ -2537,6 +2715,11 @@ mod tests {
         };
         assert_eq!(read.datasets.len(), lock.datasets.len() - 1);
         assert_eq!(names(&read), names(&lock));
+        // a pin made again is written in place of the entry that waited
+        let mut pinned = read.clone();
+        pinned.derived.push(clean());
+        assert!(pinned.waits("clean").is_none());
+        assert_eq!(pinned.render_with(0), text);
         let renamed = text.replace(part.as_str(), &format!("{}/{gone}.tsv.zst", lists::FOLDER));
         let error = Lock::read_waiting(&renamed, root.path(), &|_| true).unwrap_err();
         assert!(

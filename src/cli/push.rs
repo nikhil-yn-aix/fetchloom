@@ -285,8 +285,8 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     }
     let target = opened(context, target, args.verify)?;
     let lock = project.lock()?;
-    project.not_waiting(&|name| datasets.iter().any(|named| named == name))?;
     if let Some(lock) = &lock {
+        lock.refuse_waiting(datasets.iter().map(String::as_str))?;
         lock.refuse_stated(datasets.iter().map(String::as_str))?;
     }
     let scope = Scope::Only(datasets.iter().cloned().collect());
@@ -1911,6 +1911,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
                 files,
             }],
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
@@ -1945,6 +1946,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             ],
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let asks = asking(
             &manifest,
@@ -1963,6 +1965,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             ],
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         assert!(asking(&manifest, &public, &["report".to_owned()], &Keys::default()).is_empty());
     }
@@ -1985,6 +1988,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             datasets: vec![raw, locked("vault", Access::Public)],
             derived: Vec::new(),
             stated: Vec::new(),
+            waiting: Vec::new(),
         };
         let names = ["raw".to_owned(), "clean".to_owned(), "vault".to_owned()];
         assert!(asking(&manifest, &lock, &names, &Keys::default()).is_empty());

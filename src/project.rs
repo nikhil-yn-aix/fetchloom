@@ -47,12 +47,6 @@ pub(crate) struct Project {
     pub(crate) root: PathBuf,
 }
 
-/// the datasets whose file list data.lock names is not beside it, by project folder, as this
-/// run's reads of data.lock found them: each waits while every other dataset is used, and no
-/// write of data.lock drops its pin.
-static WAITING: std::sync::Mutex<std::collections::BTreeMap<PathBuf, Vec<lock::Waiting>>> =
-    std::sync::Mutex::new(std::collections::BTreeMap::new());
-
 /// the project lock, held while a command changes the project. dropping it lets others in.
 pub(crate) struct Held {
     lock: Option<File>,
@@ -297,16 +291,6 @@ fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
 }
 
 impl Project {
-    /// what this run's reads of data.lock found waiting for a file list, sorted by name.
-    pub(crate) fn waiting(&self) -> Vec<lock::Waiting> {
-        WAITING
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&self.root)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     /// the nearest folder at or above `start` holding a data.toml, inside `start`'s git repository,
     /// since a data.toml above it belongs to another history. any entry named data.toml marks the
     /// project, so one that is no file is told as such when read rather than passed over.
@@ -370,7 +354,7 @@ impl Project {
     }
 
     /// data.lock with the text it was read from, or nothing when the project has none yet. a
-    /// dataset whose file list is not beside it waits, as [`Lock::read_waiting`] leaves it out.
+    /// dataset whose file list is not beside it waits, as [`Lock::read_waiting`] keeps it.
     pub(crate) fn lock_and_text(&self) -> Result<Option<(Lock, String)>, Error> {
         self.lock_only(&|_| true)
     }
@@ -381,20 +365,7 @@ impl Project {
         &self,
         keep: &dyn Fn(&str) -> bool,
     ) -> Result<Option<(Lock, String)>, Error> {
-        self.lock_by(|text| {
-            let (lock, found) = Lock::read_waiting(text, &self.root, keep)?;
-            let mut all = WAITING
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let waiting = all.entry(self.root.clone()).or_default();
-            for found in found {
-                if !waiting.iter().any(|known| known.name == found.name) {
-                    waiting.push(found);
-                }
-            }
-            waiting.sort_by(|a, b| a.name.cmp(&b.name));
-            Ok(lock)
-        })
+        self.lock_by(|text| Lock::read_waiting(text, &self.root, keep))
     }
 
     fn lock_by(
@@ -500,51 +471,35 @@ impl Project {
             self.keeps_waiting(bytes)?;
         }
         write_atomically(&self.root.join(name), bytes)
-            .map_err(|err| self.refused(format_args!("could not write {name}"), &err))?;
-        // what waited is pinned again with its list written first, or left data.toml
-        if name == lock::FILE {
-            WAITING
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&self.root);
-        }
-        Ok(())
+            .map_err(|err| self.refused(format_args!("could not write {name}"), &err))
     }
 
     /// refuses data.lock's new text `bytes` when it drops the pin of a dataset that waits for its
-    /// file list while data.toml still has it, or pins a fetched one by another list: only that
-    /// list, once it is back, says what it pins. a recipe's result only a build pins again.
+    /// file list, one data.lock names and data.lock.d lacks, while data.toml still has it, or pins
+    /// a fetched one by another list: only that list, once it is back, says what it pins. a
+    /// recipe's result only a build pins again. every writer keeps such a pin as it was read, so
+    /// this stops only a mistake.
     fn keeps_waiting(&self, bytes: &[u8]) -> Result<(), Error> {
-        let waiting = self.waiting();
+        let Ok(old) = fs::read_to_string(self.root.join(lock::FILE)) else {
+            return Ok(());
+        };
+        let waiting = lock::missing_lists(&old, &self.root);
         if waiting.is_empty() {
             return Ok(());
         }
         let pinned = lock::listed(&String::from_utf8_lossy(bytes));
         let asked = self.manifest().ok().map(|(_, manifest)| manifest.datasets);
-        let lost = waiting.iter().find(|waiting| {
-            let kept = pinned.iter().any(|(name, parts)| {
-                *name == waiting.name && (waiting.made || parts.contains(&waiting.part))
-            });
+        let lost = waiting.iter().find(|(waiting, part, made)| {
+            let kept = pinned
+                .iter()
+                .any(|(name, parts)| name == waiting && (*made || parts.contains(part)));
             !kept
                 && asked
                     .as_ref()
-                    .is_none_or(|asked| asked.contains_key(&waiting.name))
+                    .is_none_or(|asked| asked.contains_key(waiting))
         });
         match lost {
-            Some(waiting) => Err(waiting.error()),
-            None => Ok(()),
-        }
-    }
-
-    /// refuses with what [`lock::Waiting::error`] says when a dataset `named` accepts waits for
-    /// its file list, as this run's reads of data.lock found it.
-    pub(crate) fn not_waiting(&self, named: &dyn Fn(&str) -> bool) -> Result<(), Error> {
-        match self
-            .waiting()
-            .into_iter()
-            .find(|waiting| named(&waiting.name))
-        {
-            Some(waiting) => Err(waiting.error()),
+            Some((name, part, made)) => Err(lock::lists::not_there(name, part, *made)),
             None => Ok(()),
         }
     }
@@ -587,8 +542,16 @@ impl Project {
         let Ok(entries) = fs::read_dir(&folder) else {
             return;
         };
-        let named: std::collections::HashSet<String> =
-            lock.lists().into_iter().map(|(part, _)| part).collect();
+        // the parts there of a list that waits for another stay with it
+        let named: std::collections::HashSet<String> = lock
+            .lists()
+            .into_iter()
+            .map(|(part, _)| part)
+            .chain(
+                lock.still_waiting()
+                    .flat_map(|waiting| waiting.parts().iter().cloned()),
+            )
+            .collect();
         for entry in entries.flatten() {
             let file = entry.file_name().to_string_lossy().into_owned();
             let unnamed = lock::lists::is_part(&file)
@@ -2574,34 +2537,39 @@ mod tests {
         );
     }
 
-    /// while a dataset waits for its list, data.lock is written only with its pin: a fetched one
-    /// by the same list, a recipe's result by any, which only a build makes. then nothing waits.
+    /// while data.lock names a list data.lock.d lacks, it is written only with that pin: a fetched
+    /// one by the same list, a recipe's result by any, which only a build makes, unless data.toml
+    /// no longer has the dataset.
     #[test]
     fn a_write_never_drops_or_moves_the_pin_of_a_dataset_that_waits() {
         let root = tempfile::tempdir().unwrap();
         let project = Project {
             root: root.path().to_path_buf(),
         };
-        let pinned = |name: &str, list: char| {
+        let pinned = |name: &str, list: char, made: bool| {
+            let head = if made {
+                format!(
+                    "from = []\nrun = [\"make\"]\ncode = []\nkey = \"sha256:{}\"\nlocked = \"2026-10-27T17:30:00Z\"\ntree = \"sha256:{}\"\n",
+                    "1".repeat(64),
+                    "2".repeat(64)
+                )
+            } else {
+                "ref = \"zenodo:3608990\"\nspec = \"sha256:11\"\nresolved = \"zenodo:3608990\"\nlocked = \"2026-10-27T17:30:00Z\"\n".to_owned()
+            };
             format!(
-                "version = 1\n\n[[dataset]]\nname = \"{name}\"\nref = \"zenodo:3608990\"\nspec = \"sha256:11\"\nresolved = \"zenodo:3608990\"\nlocked = \"2026-10-27T17:30:00Z\"\nfiles_in = [\"data.lock.d/{name}.{}.tsv.zst\"]\nfile_count = 2\nfile_bytes = 9\nfiles_sha256 = \"sha256:{}\"\n",
+                "version = 1\n\n[[dataset]]\nname = \"{name}\"\n{head}files_in = [\"data.lock.d/{name}.{}.tsv.zst\"]\nfile_count = 2\nfile_bytes = 9\nfiles_sha256 = \"sha256:{}\"\n",
                 list.to_string().repeat(12),
                 list.to_string().repeat(64)
             )
         };
+        let lock = root.path().join(lock::FILE);
         for made in [false, true] {
-            WAITING.lock().unwrap().insert(
-                project.root.clone(),
-                vec![lock::Waiting {
-                    name: "iris".to_owned(),
-                    part: format!("data.lock.d/iris.{}.tsv.zst", "a".repeat(12)),
-                    made,
-                }],
-            );
+            fs::write(&lock, pinned("iris", 'a', made)).unwrap();
             for (text, kept) in [
                 ("version = 1\n".to_owned(), false),
-                (pinned("other", 'a'), false),
-                (pinned("iris", 'b'), made),
+                (pinned("other", 'a', made), false),
+                (pinned("iris", 'b', made), made),
+                (pinned("iris", 'a', made), true),
             ] {
                 let written = project.write(lock::FILE, text.as_bytes());
                 assert_eq!(written.is_ok(), kept, "{made} {text}");
@@ -2610,10 +2578,9 @@ mod tests {
                     assert!(error.message.contains("the file list of iris"), "{error:?}");
                 }
             }
-            project
-                .write(lock::FILE, pinned("iris", 'a').as_bytes())
-                .unwrap();
-            assert_eq!(project.waiting(), []);
+            fs::write(root.path().join(manifest::FILE), "").unwrap();
+            project.write(lock::FILE, b"version = 1\n").unwrap();
+            fs::remove_file(root.path().join(manifest::FILE)).unwrap();
         }
     }
 }

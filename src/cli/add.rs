@@ -66,8 +66,7 @@ impl AddProject {
             self.manifest = manifest;
         }
         (self.old, self.lock_text) = self.project.lock_and_text()?.unzip();
-        // a data.lock written without the pin of a dataset that waits for its list would lose it
-        self.project.not_waiting(&|_| true)
+        Ok(())
     }
 
     /// which of data.toml and data.lock are no longer as the add found them.

@@ -112,6 +112,7 @@ fn generated(bytes: &[u8]) -> Lock {
         datasets,
         derived,
         stated: Vec::new(),
+        waiting: Vec::new(),
     }
 }
 

@@ -19,7 +19,7 @@ use crate::name;
 use crate::output::Warning;
 use crate::place::Placer;
 use crate::plan;
-use crate::project::lock::{self, Lock};
+use crate::project::lock::{self, Lock, Waiting};
 use crate::project::manifest::{Entry, Manifest};
 
 #[derive(Default, Serialize)]
@@ -80,6 +80,8 @@ enum Reason {
     NotPlaced,
     /// `fetchloom drop` freed its files on this machine.
     Dropped,
+    /// its file list, which data.lock names, is not there, so none of its files is known.
+    Waiting,
 }
 
 /// a file downloaded for a dataset, as data.lock pins it.
@@ -115,19 +117,24 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
             .map(|(lock, _)| lock)
     }
     .unwrap_or_default();
-    project.not_waiting(&|_| true)?;
     if args.names.is_empty() {
         lock.refuse_stated(manifest.datasets.keys().map(String::as_str))?;
     } else {
+        lock.refuse_waiting(args.names.iter().map(String::as_str))?;
         lock.refuse_stated(args.names.iter().map(String::as_str))?;
     }
+    let waiting: Vec<Waiting> = lock.still_waiting().cloned().collect();
     let dropped = project.dropped();
-    // the data folder as this machine holds it: a dataset dropped here has no files there
+    // the data folder as this machine holds it: a dataset dropped here has no files there, and
+    // one waiting for its file list has none known
     let mut held = manifest.clone();
     super::drop::left_out(&mut held, &dropped);
+    held.datasets
+        .retain(|name, _| !waiting.iter().any(|waiting| waiting.name == *name));
     let mut report = inventory(&held, lock, &super::peek_cache()?, &args.names)?;
-    report.left_out = left_out(&manifest, &dropped, &args.names, args.format);
+    report.left_out = left_out(&manifest, (&dropped, &waiting), &args.names, args.format);
     let output = &context.output;
+    super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
     if manifest.datasets.is_empty() {
         output.done("Ok", "data.toml has no datasets yet");
         return Ok(report);
@@ -193,11 +200,11 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
     );
 }
 
-/// the datasets `names`, or every one when none is named, that `format` never lists, or that
-/// `dropped` here leaves out of the data folder.
+/// the datasets `names`, or every one when none is named, that `format` never lists, that
+/// `dropped` here leaves out of the data folder, or that wait for their file list.
 fn left_out(
     manifest: &Manifest,
-    dropped: &std::collections::BTreeSet<String>,
+    (dropped, waiting): (&std::collections::BTreeSet<String>, &[Waiting]),
     names: &[String],
     format: Format,
 ) -> Vec<LeftOut> {
@@ -207,6 +214,7 @@ fn left_out(
         .filter(|(name, _)| names.is_empty() || names.contains(name))
         .filter_map(|(name, entry)| {
             let reason = match format {
+                _ if waiting.iter().any(|waiting| waiting.name == *name) => Reason::Waiting,
                 Format::Sha256 if dropped.contains(name) => Reason::Dropped,
                 Format::Sha256 if !entry.place => Reason::NotPlaced,
                 Format::Links | Format::Aria2 if entry.recipe().is_some() => Reason::Recipe,

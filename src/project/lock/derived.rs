@@ -128,6 +128,13 @@ pub(super) fn check_files(derived: &Derived) -> Result<(), Error> {
 
 /// the dataset's table in the order data.lock keeps its keys.
 pub(super) fn write(out: &mut String, derived: &Derived) {
+    let files = sorted(&derived.files);
+    let texts = lists::texts(&files);
+    write_listed(out, derived, &lists::listed(&derived.name, &files, &texts));
+}
+
+/// [`write()`] of a result whose files are in `listed`, as data.lock names it.
+pub(super) fn write_listed(out: &mut String, derived: &Derived, listed: &lists::Listed) {
     out.push_str("\n[[dataset]]\n");
     let _ = writeln!(out, "name = {}", quoted(&derived.name));
     if derived.from.is_empty() {
@@ -181,9 +188,7 @@ pub(super) fn write(out: &mut String, derived: &Derived) {
     let _ = writeln!(out, "key = \"sha256:{}\"", derived.key);
     let _ = writeln!(out, "locked = {}", quoted(&derived.timestamp));
     let _ = writeln!(out, "tree = \"sha256:{}\"", derived.tree);
-    let files = sorted(&derived.files);
-    let texts = lists::texts(&files);
-    super::write_listed(out, &lists::listed(&derived.name, &files, &texts));
+    super::write_listed(out, listed);
 }
 
 /// the parts of the result's list, each with its path below the project and its text.

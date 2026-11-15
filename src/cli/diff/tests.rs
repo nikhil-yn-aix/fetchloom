@@ -106,6 +106,7 @@ fn each_dataset_and_file_that_differs_has_a_line() {
         ],
         derived: vec![made("sim", "7", &[("draws.csv", b"1\n2\n")])],
         stated: Vec::new(),
+        waiting: Vec::new(),
     };
     let mut moved = file("a.csv", b"same");
     moved.url = "https://mirror.example.org/a.csv".to_owned();
@@ -126,6 +127,7 @@ fn each_dataset_and_file_that_differs_has_a_line() {
         ],
         derived: vec![made("sim", "8", &[("draws.csv", b"3\n4\n")])],
         stated: Vec::new(),
+        waiting: Vec::new(),
     };
     let datasets = diffed(&before, &after);
     assert_eq!(
@@ -244,6 +246,7 @@ fn a_spec_tells_select_and_a_kind_is_said_alone() {
         datasets: vec![selected],
         derived: vec![swap],
         stated: Vec::new(),
+        waiting: Vec::new(),
     };
     assert_eq!(
         told(&diffed(&before, &after)),

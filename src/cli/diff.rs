@@ -153,12 +153,13 @@ fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
         let after = at(&git, root, named, to, before.lock.taken())?;
         (before, after)
     } else {
-        let now = project.lock()?;
-        project.not_waiting(&|_| true)?;
+        let mut now = project.lock()?;
+        // a list the project folder lacks leaves its dataset's files uncompared, as a commit's does
+        let unlisted = now.as_mut().map(Lock::unwait).unwrap_or_default();
         let after = Read {
             found: now.is_some(),
             lock: now.unwrap_or_default(),
-            unlisted: Vec::new(),
+            unlisted,
         };
         (
             at(&git, root, &from_commit, from, after.lock.taken())?,

@@ -12,7 +12,7 @@ use super::{Given, Loop, Upgrade};
 use crate::cli::fetch::{Again, Job};
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch};
-use crate::project::lock::{Lock, Locked, Stated};
+use crate::project::lock::{Lock, Locked, Stated, Waiting};
 use crate::project::manifest::Manifest;
 use crate::source::{self, Listing, Reference, Remote};
 
@@ -20,6 +20,8 @@ use crate::source::{self, Listing, Reference, Remote};
 #[derive(Default)]
 pub(super) struct Carried {
     stated: Vec<Stated>,
+    /// the datasets waiting for their file lists, which relocking never resolves.
+    waiting: Vec<Waiting>,
     /// when each dataset this run pins whole was pinned by its source's digests, by name: the data
     /// stays the same, so its date does too.
     dates: Vec<(String, String)>,
@@ -37,6 +39,7 @@ impl Carried {
             }
         }
         lock.stated = self.stated;
+        lock.waiting = self.waiting;
     }
 }
 
@@ -57,6 +60,15 @@ impl Loop<'_> {
         let Some(mut old) = old else {
             return Ok((None, given, carried));
         };
+        // a dataset waiting for its list keeps its entry while data.toml has it as the same kind;
+        // otherwise it is relocked as one data.lock does not pin
+        old.waiting.retain(|waiting| {
+            manifest
+                .datasets
+                .get(&waiting.name)
+                .is_some_and(|entry| entry.recipe().is_some() == waiting.made())
+        });
+        carried.waiting.clone_from(&old.waiting);
         let named: HashSet<String> = given
             .iter()
             .map(|given| match given {

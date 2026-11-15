@@ -25,7 +25,7 @@ use crate::output::Output;
 use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
 use crate::project::Project;
-use crate::project::lock::{Lock, LockedFile, Waiting};
+use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
 use crate::project::state::{Look, Placed, State, Synced};
 use crate::stop::Stop;
@@ -403,6 +403,8 @@ pub(crate) struct Placing<'a> {
     targets: Vec<Target<'a>>,
     /// the archives of datasets in `scope` that this machine never unpacked.
     unknown: Vec<(&'a str, &'a LockedFile)>,
+    /// the datasets that wait for their file list.
+    waiting: Vec<&'a str>,
     actions: Vec<Action>,
     survey: Survey,
     scope: Scope,
@@ -469,7 +471,13 @@ impl<'a> Placing<'a> {
                 .iter()
                 .map(|target| target.path.as_str())
                 .collect();
-            let going = removable(&survey, &wanted, &unknown, scope, &project.root);
+            let going = removable(
+                &survey,
+                &wanted,
+                (&unknown, &plan.waiting),
+                scope,
+                &project.root,
+            );
             let freeing = survey.freeing(&going);
             actions = actions
                 .into_iter()
@@ -481,6 +489,7 @@ impl<'a> Placing<'a> {
             manifest,
             targets: plan.targets,
             unknown,
+            waiting: plan.waiting,
             actions,
             survey,
             scope: scope.clone(),
@@ -880,13 +889,11 @@ impl<'a> Placing<'a> {
             .iter()
             .map(|target| target.path.as_str())
             .collect();
-        let waiting = self.project.waiting();
         let holds = still_placed(&self.survey, &self.project.root);
         let unwanted = unwanted(
             &self.survey,
             &wanted,
-            &self.unknown,
-            &waiting,
+            (&self.unknown, &self.waiting),
             &self.scope,
             holds,
         );
@@ -972,6 +979,7 @@ impl<'a> Placing<'a> {
     /// removes what no dataset needs, places what is missing or outdated and records it, `synced`
     /// complete if every file the lock asks for is in place. `told` names an add's datasets, whose
     /// lines wait for `-v` since the add tells them, and whose files go if placing fails or stops.
+    #[expect(clippy::too_many_lines, reason = "one pass over the plan, in the order it is told")]
     pub(crate) fn apply(
         self,
         output: &Output,
@@ -990,6 +998,7 @@ impl<'a> Placing<'a> {
             actions,
             mut survey,
             unknown,
+            waiting,
             scope,
             unbuilt,
             unlisted,
@@ -1011,7 +1020,7 @@ impl<'a> Placing<'a> {
             &mut placer,
             &mut survey,
             &wanted,
-            &unknown,
+            (&unknown, &waiting),
             &scope,
             &mut placement,
         )?;
@@ -1111,6 +1120,7 @@ impl<'a> Placing<'a> {
             targets,
             mut survey,
             unknown,
+            waiting,
             scope,
             ..
         } = self;
@@ -1124,7 +1134,7 @@ impl<'a> Placing<'a> {
             &mut placer,
             &mut survey,
             &wanted,
-            &unknown,
+            (&unknown, &waiting),
             &scope,
             &mut placement,
         )?;
@@ -1875,12 +1885,12 @@ fn remove_unwanted(
     placer: &mut Placer,
     survey: &mut Survey,
     wanted: &HashSet<&str>,
-    unknown: &[(&str, &LockedFile)],
+    unsure: Unsure<'_>,
     scope: &Scope,
     placement: &mut Placement,
 ) -> Result<bool, Error> {
     let holds = still_placed(survey, &project.root);
-    let unwanted = unwanted(survey, wanted, unknown, &project.waiting(), scope, holds);
+    let unwanted = unwanted(survey, wanted, unsure, scope, holds);
     let changed = !unwanted.is_empty();
     let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
     placement.retired = survey.retired(wanted, &going);
@@ -1980,36 +1990,25 @@ fn swept<'t>(
 pub(crate) fn going(
     survey: &Survey,
     targets: &[Target],
-    unknown: &[(&str, &LockedFile)],
+    unsure: Unsure<'_>,
     root: &Path,
 ) -> HashSet<String> {
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-    removable(survey, &wanted, unknown, &Scope::All, root)
+    removable(survey, &wanted, unsure, &Scope::All, root)
 }
 
 /// the files [`going`] names, for the datasets in `scope` alone.
 fn removable(
     survey: &Survey,
     wanted: &HashSet<&str>,
-    unknown: &[(&str, &LockedFile)],
+    unsure: Unsure<'_>,
     scope: &Scope,
     root: &Path,
 ) -> HashSet<String> {
-    let waiting = Project {
-        root: root.to_path_buf(),
-    }
-    .waiting();
-    unwanted(
-        survey,
-        wanted,
-        unknown,
-        &waiting,
-        scope,
-        still_placed(survey, root),
-    )
-    .into_iter()
-    .filter_map(|(path, fate)| matches!(fate, Unwanted::Remove(_)).then_some(path))
-    .collect()
+    unwanted(survey, wanted, unsure, scope, still_placed(survey, root))
+        .into_iter()
+        .filter_map(|(path, fate)| matches!(fate, Unwanted::Remove(_)).then_some(path))
+        .collect()
 }
 
 /// `action` for a file an entry keeps out, freed when `freeing` clears that entry. one holding a
@@ -2046,23 +2045,30 @@ fn clearing(action: Action, survey: &Survey, freeing: &Freeing, scope: &Scope) -
     }
 }
 
-/// what becomes of each file fetchloom placed for `scope` that no dataset needs now. a dataset with
-/// an archive never unpacked here keeps its files, since nothing tells which it needs, and so does
-/// one `waiting` for its file list. a file that no longer looks as placed goes only when `holds`
-/// finds its placed bytes.
+/// the datasets whose files are not all known: those with an archive never unpacked here, each
+/// with the archive, and those waiting for their file list.
+pub(crate) type Unsure<'u> = (&'u [(&'u str, &'u LockedFile)], &'u [&'u str]);
+
+/// the datasets of `unsure`, by name.
+pub(crate) fn unsure((unknown, waiting): Unsure<'_>) -> HashSet<&str> {
+    unknown
+        .iter()
+        .map(|(dataset, _)| *dataset)
+        .chain(waiting.iter().copied())
+        .collect()
+}
+
+/// what becomes of each file fetchloom placed for `scope` that no dataset needs now. a dataset of
+/// `unsure` keeps its files, since nothing tells which it needs. a file that no longer looks as
+/// placed goes only when `holds` finds its placed bytes.
 fn unwanted(
     survey: &Survey,
     wanted: &HashSet<&str>,
-    unknown: &[(&str, &LockedFile)],
-    waiting: &[Waiting],
+    unsure: Unsure<'_>,
     scope: &Scope,
     holds: impl Fn(&str, &Placed, &Look) -> bool,
 ) -> Vec<(String, Unwanted)> {
-    let unsure: HashSet<&str> = unknown
-        .iter()
-        .map(|(dataset, _)| *dataset)
-        .chain(waiting.iter().map(|waiting| waiting.name.as_str()))
-        .collect();
+    let unsure = self::unsure(unsure);
     survey
         .state
         .files
@@ -2450,6 +2456,7 @@ mod tests {
             manifest: &manifest,
             targets: vec![target],
             unknown: Vec::new(),
+            waiting: Vec::new(),
             actions: vec![Action::Keep],
             survey: surveyed(&project),
             scope: Scope::All,
@@ -2524,6 +2531,7 @@ mod tests {
                 holder: crate::plan::Holder::File(&locked),
             }],
             unknown: Vec::new(),
+            waiting: Vec::new(),
         };
         let all = Placing::from_plan(
             &project,
@@ -2642,6 +2650,7 @@ mod tests {
             manifest: &manifest,
             targets,
             unknown: Vec::new(),
+            waiting: Vec::new(),
             actions,
             survey,
             scope: Scope::All,
@@ -2711,6 +2720,7 @@ mod tests {
                 manifest: &manifest,
                 targets: vec![target],
                 unknown: Vec::new(),
+                waiting: Vec::new(),
                 actions: vec![Action::Overwrite(Reason::Foreign)],
                 survey: surveyed(&project),
                 scope: Scope::All,
@@ -2784,6 +2794,7 @@ mod tests {
                 manifest: &manifest,
                 targets: vec![target],
                 unknown: Vec::new(),
+                waiting: Vec::new(),
                 actions: vec![Action::Unblock(blocker)],
                 survey,
                 scope: Scope::All,
@@ -2862,6 +2873,7 @@ mod tests {
             manifest: &manifest,
             targets: Vec::new(),
             unknown: Vec::new(),
+            waiting: Vec::new(),
             actions: Vec::new(),
             survey,
             scope: Scope::All,
@@ -3020,6 +3032,7 @@ mod tests {
                 })
                 .collect(),
             unknown: Vec::new(),
+            waiting: Vec::new(),
             actions: cases.into_iter().map(|(_, _, action)| action).collect(),
             survey: surveyed(&project),
             scope: Scope::All,
