@@ -1117,10 +1117,18 @@ fn tell_unplaced(output: &Output, status: &Status) {
 fn tell_not_downloaded(output: &Output, status: &Status) {
     for name in &status.not_downloaded {
         let by = status.pinned_by.get(name).copied().unwrap_or("digests");
+        // MD5 alone checks the first download, which then records the SHA-256 the pin lacks
+        let does = match by {
+            "MD5" => "downloads it, checks its MD5 and records its SHA-256",
+            "SHA-256" => "downloads and checks it",
+            _ => {
+                "downloads and checks it, and records the SHA-256 of each file pinned by MD5 alone"
+            }
+        };
         output.report(
             "To download",
             &format!(
-                "{name} · pinned by its source's {by}, not downloaded yet; `{}` downloads and checks it",
+                "{name} · pinned by its source's {by}, not downloaded yet; `{}` {does}",
                 super::project::command(&format!("sync {name}"))
             ),
         );

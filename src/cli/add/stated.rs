@@ -141,6 +141,26 @@ fn stated(remote: &Remote) -> Option<StatedFile> {
     })
 }
 
+/// the line saying that MD5 alone checks the first download of the files of `stated` its source
+/// states no SHA-256 of, and that this sync records the SHA-256 every later one checks; none when
+/// every file has one.
+fn md5_alone(stated: &Stated) -> Option<&'static str> {
+    let unstated = stated
+        .files
+        .iter()
+        .filter(|file| file.sha256.is_none())
+        .count();
+    match unstated {
+        0 => None,
+        all if all == stated.files.len() => Some(
+            "the first sync checks these files by MD5 alone, then records their SHA-256 for every later sync",
+        ),
+        _ => Some(
+            "the first sync checks each file with no stated SHA-256 by MD5 alone, then records its SHA-256 for every later sync",
+        ),
+    }
+}
+
 /// `old` with `stated` in place of any entry of its name.
 fn with(old: Option<Lock>, stated: Stated) -> Lock {
     let mut lock = old.unwrap_or_default();
@@ -187,8 +207,12 @@ pub(super) fn write(
     let output = &work.context.output;
     let project = work.project;
     let name = stated.name().to_owned();
+    let unchecked = md5_alone(&stated);
     if dry_run {
         output.step("Would pin", &facts(work, &stated));
+        if let Some(line) = unchecked {
+            output.item(line);
+        }
         for file in &stated.files {
             output.detail(&format!("{name}/{}", file.path));
         }
@@ -245,6 +269,9 @@ pub(super) fn write(
         );
     }
     output.step("Pinned", &said);
+    if let Some(line) = unchecked {
+        output.item(line);
+    }
     ignore_data(work, manifest)?;
     output.done("Added", &format!("{name} to data.toml, nothing downloaded"));
     output.next(&format!(

@@ -1492,7 +1492,7 @@ fn a_pin_by_the_sources_md5_is_downloaded_and_completed_by_a_sync() -> Result {
     let status = sandbox.run(&["status"])?;
     assert!(
         text(&status.stdout)?.contains(
-            "To download archiving · pinned by its source's MD5, not downloaded yet; `fetchloom sync archiving` downloads and checks it"
+            "To download archiving · pinned by its source's MD5, not downloaded yet; `fetchloom sync archiving` downloads it, checks its MD5 and records its SHA-256"
         ),
         "{}",
         text(&status.stdout)?
@@ -1740,5 +1740,29 @@ fn status_check_fails_while_a_pin_is_not_downloaded_yet() -> Result {
     assert_eq!(error["fix"], "fetchloom sync");
     ok(&command(&sandbox, &routes, &["sync"]).output()?)?;
     ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
+/// a pin by MD5 alone is only as strong as MD5 until the first sync records each file's
+/// SHA-256, and the add says so in one line; one by SHA-256 says nothing more.
+#[test]
+fn add_no_sync_says_the_first_sync_records_the_sha256() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    let page = "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7";
+    for args in [
+        &["add", page, "--as", "archiving", "--no-sync", "--dry-run"][..],
+        &["add", page, "--as", "archiving", "--no-sync"],
+    ] {
+        let output = command(&sandbox, &routes, args).output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert!(
+            stderr.contains(
+                "            the first sync checks these files by MD5 alone, then records their SHA-256 for every later sync\n"
+            ),
+            "{args:?}: {stderr}"
+        );
+    }
     Ok(())
 }
