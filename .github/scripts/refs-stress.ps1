@@ -278,10 +278,10 @@ $script:Exe = Join-Path $Work 'refs-stress.exe'
 if ($LASTEXITCODE) { throw 'refs-stress.cs did not compile' }
 [RefsHang]::InheritStandardHandles($false)
 Set-Content $Summary 'job,run,arm,drive,started,seconds,ops,hang,stalled,failed'
-$arms = @($Arms -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$armList = @($Arms -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $deadline = $Started.AddMinutes($Minutes)
 $counts = @{}
-foreach ($arm in $arms) { $counts[$arm] = @{ Runs = 0; Hangs = 0; Ops = 0 } }
+foreach ($arm in $armList) { $counts[$arm] = @{ Runs = 0; Hangs = 0; Ops = 0 } }
 $fresh = $false
 New-Volume 'R'
 while ((Get-Date) -lt $deadline) {
@@ -292,16 +292,16 @@ while ((Get-Date) -lt $deadline) {
         New-Volume $letter
     }
     $fresh = $true
-    $arm = $arms[($script:Iteration + $Job) % $arms.Count]
+    $arm = $armList[($script:Iteration + $Job) % $armList.Count]
     $began = Get-Date
     $run = Invoke-Arm $arm $Seconds
-    $seconds = [int]((Get-Date) - $began).TotalSeconds
+    $took = [int]((Get-Date) - $began).TotalSeconds
     $stall = if ($run.Line) { ($run.Line -split ' ')[2] } else { '' }
     $failed = $run.Failed -replace '[,\r\n]', ' '
-    Add-Content $Summary "$Job,$script:Iteration,$arm,$($script:Drive),$($began.ToString('o')),$seconds,$($run.Ops),$([int]$run.Hung),$stall,$failed"
+    Add-Content $Summary "$Job,$script:Iteration,$arm,$($script:Drive),$($began.ToString('o')),$took,$($run.Ops),$([int]$run.Hung),$stall,$failed"
     $counts[$arm].Runs++
     $counts[$arm].Ops += $run.Ops
-    Write-Host ('run {0} {1} on {2}: {3} ops in {4} s, hang {5}, longest stall {6} s {7}' -f $script:Iteration, $arm, $script:Drive, $run.Ops, $seconds, $run.Hung, $stall, $failed)
+    Write-Host ('run {0} {1} on {2}: {3} ops in {4} s, hang {5}, longest stall {6} s {7}' -f $script:Iteration, $arm, $script:Drive, $run.Ops, $took, $run.Hung, $stall, $failed)
     if ($run.Failed -and -not $run.Hung) { Write-Host "::warning::run $script:Iteration ${arm}: $($run.Failed)" }
     if (-not $run.Hung) { continue }
     $counts[$arm].Hangs++
@@ -320,5 +320,5 @@ while ((Get-Date) -lt $deadline) {
         break
     }
 }
-$summary = ($arms | ForEach-Object { '{0} {1}/{2} hung ({3} ops)' -f $_, $counts[$_].Hangs, $counts[$_].Runs, $counts[$_].Ops }) -join ', '
-Write-Host "::notice::job ${Job}: $summary"
+$tally = ($armList | ForEach-Object { '{0} {1}/{2} hung ({3} ops)' -f $_, $counts[$_].Hangs, $counts[$_].Runs, $counts[$_].Ops }) -join ', '
+Write-Host "::notice::job ${Job}: $tally"
