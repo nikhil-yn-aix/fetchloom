@@ -99,6 +99,23 @@ impl Proxies {
         }
     }
 
+    /// why the proxy cannot be reached, once a request through it failed before it answered.
+    /// one that answered earlier this run is checked again, since it may have gone since, as a
+    /// proxy stopped partway through a download has.
+    pub(crate) async fn unreachable_now(&self, carrier: &Carrier) -> Option<String> {
+        if self.verdict(carrier) != Some(Verdict::Reached) {
+            return self.unreachable(carrier).await;
+        }
+        let Probe::Failed(reason) = self.probe(carrier).await else {
+            return None;
+        };
+        self.checked().insert(
+            (carrier.host.clone(), carrier.port),
+            Verdict::Unreachable(reason.clone()),
+        );
+        Some(reason)
+    }
+
     /// waits while a request through `carrier` has no answer, checking the proxy after [`GRACE`]:
     /// it ends only with why the proxy cannot be reached, and never for one that answers.
     pub(crate) async fn watch(&self, carrier: &Carrier) -> String {

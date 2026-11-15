@@ -1309,7 +1309,8 @@ async fn still(moved: &std::sync::atomic::AtomicU64, quiet: Duration) {
 }
 
 /// a request that failed before any answer came. when the proxy carrying it cannot be reached,
-/// the proxy is named rather than the site, and no other try is made.
+/// even one that answered before, the proxy is named rather than the site, and no other try is
+/// made.
 async fn unanswered(
     wire: &Wire,
     url: &Url,
@@ -1319,7 +1320,7 @@ async fn unanswered(
 ) -> Failure {
     if let Some(carrier) = carrier
         && failure::before_proxy(err)
-        && let Some(reason) = wire.proxies.unreachable(carrier).await
+        && let Some(reason) = wire.proxies.unreachable_now(carrier).await
     {
         return Failure::Final(failure::proxy_down(url, carrier, &reason));
     }

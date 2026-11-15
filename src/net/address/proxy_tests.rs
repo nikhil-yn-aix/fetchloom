@@ -234,6 +234,24 @@ async fn a_proxy_that_answers_leaves_its_requests_alone() {
     }
 }
 
+/// a proxy that answered earlier in the run and went away since, as one stopped partway through
+/// a download has, is checked again once a request through it fails, so it is named rather than
+/// the site behind it. a request still waiting for its answer does not check it again.
+#[tokio::test(start_paused = true)]
+async fn a_proxy_gone_since_it_answered_is_checked_again_once_a_request_fails() {
+    let proxies = Proxies::with_probe("HTTPS_PROXY", "http://proxy.lab:8080", |_, _| {
+        Box::pin(async { Probe::Failed("it refused the connection".to_owned()) })
+    });
+    let url = Url::parse("https://storage.googleapis.com/arxiv/1706.03762v7.pdf").unwrap();
+    let carrier = proxies.carrier(&url).unwrap();
+    proxies.reached(&carrier);
+    assert_eq!(proxies.unreachable(&carrier).await, None);
+    assert_eq!(
+        proxies.unreachable_now(&carrier).await.as_deref(),
+        Some("it refused the connection")
+    );
+}
+
 /// a lookup of the proxy's name that failed for now says nothing about the proxy, so the
 /// request goes on as before, and the next one checks again.
 #[tokio::test(start_paused = true)]
