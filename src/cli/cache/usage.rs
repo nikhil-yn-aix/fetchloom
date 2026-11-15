@@ -146,7 +146,12 @@ impl Usage {
             .collect();
         let found = crate::place::run_all(&files, threads, |(path, placed)| {
             (!stop.is_asked())
-                .then(|| copied(&root.join(path), placed))
+                .then(|| {
+                    copied(
+                        &root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR)),
+                        placed,
+                    )
+                })
                 .flatten()
         });
         stop.check()?;
