@@ -849,12 +849,12 @@ fn a_recipe_needs_run_and_no_ref() {
         (
             format!("ref = \"zenodo:2\"\nfrom = [\"raw\"]\n{run}"),
             "datasets.clean has both ref and from, but a dataset is fetched from a source or made by a recipe, not both",
-            "keep ref to fetch it, or from and run to make it from other datasets",
+            "keep ref to fetch it, or remove ref to make it by a recipe",
         ),
         (
             "ref = \"zenodo:2\"\nenv = { SEED = \"1\" }\n".to_owned(),
             "datasets.clean has both ref and env, but a dataset is fetched from a source or made by a recipe, not both",
-            "keep ref to fetch it, or from and run to make it from other datasets",
+            "keep ref to fetch it, or remove ref to make it by a recipe",
         ),
         (
             format!("from = [\"raw\"]\n{run}select = \"*.csv\"\n"),

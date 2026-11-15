@@ -781,7 +781,7 @@ impl Reader<'_> {
                     span(first),
                     format!("datasets.{name} has both ref and {first}, but a dataset is fetched from a source or made by a recipe, not both"),
                 )
-                .help("keep ref to fetch it, or from and run to make it from other datasets"));
+                .help("keep ref to fetch it, or remove ref to make it by a recipe"));
         }
         if let Some(key) = SOURCE_KEYS.into_iter().find(|key| table.contains_key(key)) {
             return Err(self
