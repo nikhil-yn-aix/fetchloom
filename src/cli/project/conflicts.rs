@@ -28,6 +28,14 @@ struct Conflicted {
 }
 
 impl Conflicted {
+    /// whether git's conflict lines name the sides as `git stash` does.
+    fn stashed(&self) -> bool {
+        [&self.manifest_sides, &self.lock_sides]
+            .into_iter()
+            .flatten()
+            .any(|sides| sides.stashed)
+    }
+
     /// the files that hold conflict lines, as a message names them.
     fn files(&self) -> &'static str {
         match (&self.manifest_sides, &self.lock_sides) {
@@ -83,6 +91,7 @@ pub(super) fn merge(
             in_project(error, project),
             program.as_deref(),
             &project.root,
+            conflicted.stashed(),
         )
     })?;
     for warning in &merged.warnings {
@@ -118,20 +127,33 @@ pub(super) fn merge(
 }
 
 /// the refusal of `--ours` or `--theirs` where neither file holds git's conflict lines, as after a
-/// side was chosen: while git is still in the merge, `git checkout -m` brings the lines back.
+/// side was chosen: while git is still in the merge, or still holds both sides of either file, as
+/// after `git stash pop`, `git checkout -m` brings the lines back.
 fn nothing_to_choose(conflicted: &Conflicted, git: Option<&Path>, root: &Path) -> Error {
     let error = Error::new(
         Kind::Usage,
         "--ours and --theirs choose a side in a merge, and neither data.toml nor data.lock holds git's conflict lines",
     );
-    let Some(operation) = git.and_then(|git| git::operation(git, root)) else {
+    let Some(git) = git else {
         return error.help("run `fetchloom lock` without them");
     };
-    let operation = match operation {
-        Operation::Merge => "merge",
-        Operation::Rebase => "rebase",
-        Operation::CherryPick => "cherry-pick",
-        Operation::Revert => "revert",
+    let held = || {
+        [manifest::FILE, lock::FILE]
+            .into_iter()
+            .any(|file| git::stages(git, root, file).is_some())
+    };
+    let why = match git::operation(git, root) {
+        Some(operation) => {
+            let operation = match operation {
+                Operation::Merge => "merge",
+                Operation::Rebase => "rebase",
+                Operation::CherryPick => "cherry-pick",
+                Operation::Revert => "revert",
+            };
+            format!("the git {operation} is still under way")
+        }
+        None if held() => "git still holds both sides of the conflict".to_owned(),
+        None => return error.help("run `fetchloom lock` without them"),
     };
     let files = if conflicted.lock.is_some() {
         "data.toml data.lock"
@@ -140,7 +162,7 @@ fn nothing_to_choose(conflicted: &Conflicted, git: Option<&Path>, root: &Path) -
     };
     error
         .detail(format!(
-            "the git {operation} is still under way, so a side chosen before can be chosen again"
+            "{why}, so a side chosen before can be chosen again"
         ))
         .help(format!(
             "bring back git's conflict lines with `git checkout -m {files}`, then run the same command again"
@@ -238,31 +260,34 @@ fn same(text: &str, whole: Option<[String; 2]>) -> Sides {
 /// `error`, a merge that needs a choice, with whose each side is and its commit, since a rebase
 /// turns git's ours and theirs around from the branch a person is on. any other error stays as
 /// it is.
-fn whose(mut error: Error, git: Option<&Path>, root: &Path) -> Error {
-    let Some((git, operation)) = git
-        .filter(|_| error.kind == Kind::Unconfirmed)
-        .and_then(|git| Some((git, git::operation(git, root)?)))
-    else {
+fn whose(mut error: Error, git: Option<&Path>, root: &Path, stashed: bool) -> Error {
+    let Some(git) = git.filter(|_| error.kind == Kind::Unconfirmed) else {
         return error;
     };
-    let [our_role, their_role] = match operation {
-        Operation::Merge => ["the branch you are on", "the branch you are merging"],
-        Operation::Rebase => [
-            "the branch you are rebasing onto",
-            "your commit being replayed",
-        ],
-        Operation::CherryPick => ["the branch you are on", "the commit you are picking"],
-        Operation::Revert => [
-            "the branch you are on",
-            "the commit before the one you are reverting",
-        ],
+    let ours = "the branch you are on";
+    let (our_role, their_role, theirs) = match git::operation(git, root) {
+        Some(operation) => {
+            let (our_role, their_role) = match operation {
+                Operation::Merge => (ours, "the branch you are merging"),
+                Operation::Rebase => (
+                    "the branch you are rebasing onto",
+                    "your commit being replayed",
+                ),
+                Operation::CherryPick => (ours, "the commit you are picking"),
+                Operation::Revert => (ours, "the commit before the one you are reverting"),
+            };
+            (our_role, their_role, Some(operation.theirs()))
+        }
+        // git records no commit for the stash it could not apply whole
+        None if stashed => (ours, "your stashed changes", None),
+        None => return error,
     };
     for (side, role, commit) in [
-        ("ours", our_role, "HEAD"),
-        ("theirs", their_role, operation.theirs()),
+        ("ours", our_role, Some("HEAD")),
+        ("theirs", their_role, theirs),
     ] {
         let mut line = format!("{side} is {role}");
-        if let Some(commit) = git::commit(git, root, commit) {
+        if let Some(commit) = commit.and_then(|commit| git::commit(git, root, commit)) {
             let _ = write!(line, ": {}", units::clip(&commit, SUBJECT, "\u{2026}"));
         }
         error = error.detail(line);

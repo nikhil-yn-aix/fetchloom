@@ -114,14 +114,6 @@ impl Operation {
     }
 }
 
-/// each operation, in the order git's commits for them are looked for: one is under way at a time.
-const OPERATIONS: [Operation; 4] = [
-    Operation::Merge,
-    Operation::Rebase,
-    Operation::CherryPick,
-    Operation::Revert,
-];
-
 /// `file` in `root`, which git merged by itself, whole as each side of the unfinished merge,
 /// rebase, cherry-pick or revert has it in its commit. none when none is under way or one lacks it.
 pub(crate) fn committed(git: &Path, root: &Path, file: &str) -> Option<[String; 2]> {
@@ -132,30 +124,57 @@ pub(crate) fn committed(git: &Path, root: &Path, file: &str) -> Option<[String; 
 /// `file` in `root` as one side's commit of the unfinished merge, rebase, cherry-pick or revert
 /// holds it: ours, `HEAD`, unless `theirs`. none when none is under way or that commit lacks it.
 pub(crate) fn in_commit(git: &Path, root: &Path, file: &str, theirs: bool) -> Option<Vec<u8>> {
-    let read = |commit: &str| {
-        let blob = format!("{commit}:./{file}");
-        read_objects(git, root, &["cat-file", "blob", &blob])
-    };
-    if theirs {
-        OPERATIONS
-            .into_iter()
-            .find_map(|operation| read(operation.theirs()))
+    let commit = if theirs {
+        operation(git, root)?.theirs()
     } else {
-        read("HEAD")
+        "HEAD"
+    };
+    let blob = format!("{commit}:./{file}");
+    read_objects(git, root, &["cat-file", "blob", &blob])
+}
+
+/// the merge, rebase, cherry-pick or revert under way in the repository at `root`, as `git status`
+/// tells it, none when git is in none of them. git leaves `REBASE_HEAD` behind once a rebase that
+/// stopped is done, so only the rebase's own folder says one is under way.
+pub(crate) fn operation(git: &Path, root: &Path) -> Option<Operation> {
+    let head = |name: &str| run(git, root, &["rev-parse", "-q", "--verify", name]).is_ok();
+    if head("MERGE_HEAD") {
+        Some(Operation::Merge)
+    } else if rebasing(git, root) {
+        Some(Operation::Rebase)
+    } else if head("CHERRY_PICK_HEAD") {
+        Some(Operation::CherryPick)
+    } else if head("REVERT_HEAD") {
+        Some(Operation::Revert)
+    } else {
+        None
     }
 }
 
-/// the merge, rebase, cherry-pick or revert under way in the repository at `root`, none when git
-/// is in none of them.
-pub(crate) fn operation(git: &Path, root: &Path) -> Option<Operation> {
-    OPERATIONS.into_iter().find(|operation| {
-        run(
-            git,
-            root,
-            &["rev-parse", "-q", "--verify", operation.theirs()],
-        )
-        .is_ok()
-    })
+/// whether a rebase is under way: its folder in the repository's git folder, `rebase-merge`, or
+/// `rebase-apply` without the `applying` that `git am` adds.
+fn rebasing(git: &Path, root: &Path) -> bool {
+    let Ok(listed) = run(
+        git,
+        root,
+        &[
+            "rev-parse",
+            "--git-path",
+            "rebase-merge",
+            "--git-path",
+            "rebase-apply",
+            "--git-path",
+            "rebase-apply/applying",
+        ],
+    ) else {
+        return false;
+    };
+    let listed = String::from_utf8_lossy(&listed);
+    let paths: Vec<PathBuf> = listed.lines().map(|line| root.join(line)).collect();
+    match paths.as_slice() {
+        [merging, applying, am] => merging.is_dir() || (applying.is_dir() && !am.exists()),
+        _ => false,
+    }
 }
 
 /// `commit`, as `HEAD` or [`Operation::theirs`] names it, by its short name and subject, as
@@ -592,6 +611,39 @@ mod tests {
             Some(["base\n".to_owned(), "theirs\n".to_owned()]),
             "the commit a rebase replays is theirs"
         );
+    }
+
+    /// git leaves `REBASE_HEAD` behind once a rebase that stopped at a conflict is done: only the
+    /// rebase's own folder says one is under way, as `git status` tells it, and only then is the
+    /// commit it names a side to read.
+    #[test]
+    fn a_rebase_is_under_way_only_while_its_folder_is_there() {
+        let Some(git) = git() else {
+            return;
+        };
+        let repository = tempfile::tempdir().unwrap();
+        let at = repository.path();
+        let root = at.join("study");
+        let one = |reference: u8| format!("[datasets.beta]\nref = \"zenodo:{reference}\"\n");
+        diverged(&git, at, Some(&one(4)), &one(6), &one(5));
+        if !trusted(&git, at) {
+            return;
+        }
+        assert_eq!(operation(&git, &root), None);
+        git_in(&git, at, &["checkout", "-q", "theirs"]);
+        git_in(&git, at, &["rebase", "-q", "main"]);
+        assert_eq!(operation(&git, &root), Some(Operation::Rebase));
+        assert!(committed(&git, &root, "notes").is_some());
+        std::fs::write(root.join("data.toml"), one(7)).unwrap();
+        git_in(&git, at, &["add", "."]);
+        git_in(
+            &git,
+            at,
+            &["-c", "core.editor=true", "rebase", "--continue"],
+        );
+        assert!(at.join(".git/REBASE_HEAD").exists(), "git keeps it");
+        assert_eq!(operation(&git, &root), None);
+        assert_eq!(committed(&git, &root, "notes"), None, "no side to read");
     }
 
     /// a hook or `git rebase --exec` hands its own repository down in `GIT_DIR` and its kin; the

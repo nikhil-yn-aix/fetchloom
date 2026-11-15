@@ -20,6 +20,9 @@ pub(crate) struct Sides {
     /// each side's file whole from git, ours then theirs: lines git merged by itself belong to
     /// the side that wrote them, not to both as in `ours` and `theirs`. none when git cannot tell.
     pub(crate) whole: Option<[String; 2]>,
+    /// whether the conflict lines name the sides as `git stash` does when it cannot apply a stash
+    /// whole: `Updated upstream`, the branch, and `Stashed changes`.
+    pub(crate) stashed: bool,
 }
 
 /// a stretch of a file with conflict lines, as the base sees it.
@@ -54,6 +57,11 @@ fn marker(line: &str) -> Option<Marker> {
     .map(|(_, marker)| marker)
 }
 
+/// what git wrote after the marker that starts `line`, a conflict line, to name its side.
+fn label(line: &str) -> &str {
+    bare(line).get(7..).unwrap_or_default().trim()
+}
+
 /// `line` without its line break, which may be a windows one.
 fn bare(line: &str) -> &str {
     let line = line.strip_suffix('\n').unwrap_or(line);
@@ -80,12 +88,14 @@ pub(crate) fn split(text: &str, file: &str) -> Result<Option<Sides>, Error> {
     let (mut conflicts, mut based) = (0, 0);
     let mut inside: Option<Marker> = None;
     let mut last = 0;
+    let mut labels = [None, None];
     for (number, line) in text.split_inclusive('\n').enumerate() {
         last = number;
         inside = match (marker(bare(line)), inside) {
             (Some(Marker::Ours), None) => {
                 conflicts += 1;
                 parts.push(Part::Base(Vec::new()));
+                labels[0].get_or_insert(label(line));
                 Some(Marker::Ours)
             }
             (Some(Marker::Base), Some(Marker::Ours)) => {
@@ -93,7 +103,10 @@ pub(crate) fn split(text: &str, file: &str) -> Result<Option<Sides>, Error> {
                 Some(Marker::Base)
             }
             (Some(Marker::Theirs), Some(Marker::Ours | Marker::Base)) => Some(Marker::Theirs),
-            (Some(Marker::End), Some(Marker::Theirs)) => None,
+            (Some(Marker::End), Some(Marker::Theirs)) => {
+                labels[1].get_or_insert(label(line));
+                None
+            }
             (Some(_), _) => return Err(out_of_order(file, number)),
             (None, None) => {
                 sides.ours.push_str(line);
@@ -124,6 +137,7 @@ pub(crate) fn split(text: &str, file: &str) -> Result<Option<Sides>, Error> {
     if conflicts == 0 {
         return Ok(None);
     }
+    sides.stashed = labels == [Some("Updated upstream"), Some("Stashed changes")];
     sides.shows_base = based == conflicts;
     if sides.shows_base {
         let base = whole(&parts, &[]);

@@ -1115,3 +1115,61 @@ fn a_merge_names_the_recipes_it_left_stale() -> Result {
     assert!(told.contains("run `fetchloom build b-mk`"), "{told}");
     Ok(())
 }
+
+/// git leaves `REBASE_HEAD` behind once a rebase that stopped is done, and a later conflict from
+/// `git stash pop` is no rebase: the choice names the stash's sides, and once a side is chosen,
+/// the way back is git's, since git still holds both sides.
+#[test]
+fn a_conflict_after_a_finished_rebase_is_named_for_what_made_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    if placed_apart(&sandbox)?.is_none() {
+        return Ok(());
+    }
+    stopped(&sandbox, &["rebase", "-q", "tom"])?;
+    succeeded(&run(&sandbox, &["lock", "--theirs", "kappa"])?)?;
+    ok(&sandbox, &["add", "-A"])?;
+    ok(
+        &sandbox,
+        &["-c", "core.editor=true", "rebase", "--continue"],
+    )?;
+    assert!(
+        sandbox.work().join(".git/REBASE_HEAD").exists(),
+        "git keeps it"
+    );
+    let manifest = sandbox.work().join("data.toml");
+    let place = |folder: &str| -> Result {
+        let text = fs::read_to_string(&manifest)?;
+        let kept = text.rsplit_once("path = ").ok_or("no path")?.0;
+        fs::write(&manifest, format!("{kept}path = \"{folder}\"\n"))?;
+        Ok(())
+    };
+    place("tables-stashed")?;
+    ok(&sandbox, &["stash", "-q"])?;
+    place("tables-kept")?;
+    ok(&sandbox, &["commit", "-qam", "keep the tables"])?;
+    stopped(&sandbox, &["stash", "pop", "-q"])?;
+    let head = oneline(&sandbox, "HEAD")?;
+
+    let output = run(&sandbox, &["--json", "lock"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["details"],
+        serde_json::json!([
+            "kappa: each side changed it its own way",
+            "kappa on ours: path = \"tables-kept\"",
+            "kappa on theirs: path = \"tables-stashed\"",
+            format!("ours is the branch you are on: {head}"),
+            "theirs is your stashed changes",
+        ])
+    );
+    succeeded(&run(&sandbox, &["lock", "--ours", "kappa"])?)?;
+    let again = run(&sandbox, &["--json", "lock", "--theirs", "kappa"])?;
+    assert_eq!(again.status.code(), Some(2), "{}", text(&again.stderr)?);
+    assert_eq!(
+        json(&again)?["errors"][0]["details"],
+        serde_json::json!([
+            "git still holds both sides of the conflict, so a side chosen before can be chosen again"
+        ])
+    );
+    Ok(())
+}
