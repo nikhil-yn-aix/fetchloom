@@ -1384,6 +1384,7 @@ async fn run_each(
                 held.clone(),
             );
             let yes = context.yes;
+            let damaged = context.mirrors.damaged_folder(job.fetch.expect.sha256);
             tasks.spawn(async move {
                 let watch = Watch::new(&job, &output, &overall, &approval, yes, &held[index]);
                 // with no bar for them all, a lone download shows its bar while the server
@@ -1418,7 +1419,7 @@ async fn run_each(
                         "try the article or DOI link, which names its files",
                     );
                 }
-                (index, fetched.map_err(|err| explain(err, &job)))
+                (index, fetched.map_err(|err| explain(err, &job, damaged)))
             });
         }
         let Some(joined) = tasks.join_next().await else {
@@ -1738,10 +1739,14 @@ fn cause(message: &str, label: &str) -> String {
 
 /// says which file a failure concerns, and for pinned bytes that changed upstream, the ways on: a
 /// folder mirror someone pushed them to, or an upgrade only a person may choose, so no fix takes
-/// it. a pinned link with nothing at it now may still be on such a mirror.
-fn explain(error: Error, job: &Job) -> Error {
+/// it. a pinned link with nothing at it now may still be on such a mirror. `damaged` is a folder
+/// mirror this run found a damaged copy of the file on.
+fn explain(error: Error, job: &Job, damaged: Option<std::path::PathBuf>) -> Error {
     if job.again.is_some() && error.help.as_deref() == Some(crate::net::MOVED_HELP) {
-        return error.help(GONE_HELP);
+        return error.help(format!(
+            "{} if the file moved, put its new link as ref in data.toml",
+            keep_pinned(damaged)
+        ));
     }
     // an MD5 mismatch comes with its own help, since the source contradicts itself, unless
     // data.lock pinned that MD5, as `add --no-sync` does, and the file changed since
@@ -1759,18 +1764,29 @@ fn explain(error: Error, job: &Job) -> Error {
     };
     Error {
         message: format!("{} is not the file data.lock records", job.label),
-        help: Some(changed_upstream(dataset).into()),
+        help: Some(changed_upstream(dataset, damaged).into()),
         ..error
     }
 }
 
-/// what to do about a file data.lock pins whose link has nothing at it now.
-const GONE_HELP: &str = "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the file moved, put its new link as ref in data.toml";
+/// how pinned bytes a source no longer serves are kept: pushed to a folder mirror, or, when
+/// `damaged` is a folder mirror holding a damaged copy, pushed there by a push that checks the
+/// copies it finds, since a plain push leaves one of the pinned size as it is.
+fn keep_pinned(damaged: Option<std::path::PathBuf>) -> String {
+    match damaged {
+        Some(root) => format!(
+            "to keep the pinned bytes, someone who has them runs `fetchloom push --verify --to {}`, which replaces the damaged copy there, then you run this command again.",
+            crate::suggested::shell_word(&root.display().to_string())
+        ),
+        None => "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`.".to_owned(),
+    }
+}
 
 /// what to do about pinned bytes of `dataset` that its source no longer serves.
-fn changed_upstream(dataset: &str) -> String {
+fn changed_upstream(dataset: &str, damaged: Option<std::path::PathBuf>) -> String {
     format!(
-        "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade {dataset}`"
+        "{} if the new bytes are intended, run `fetchloom lock --upgrade {dataset}`",
+        keep_pinned(damaged)
     )
 }
 
@@ -2846,6 +2862,7 @@ mod tests {
         let error = explain(
             Error::new(Kind::IntegrityMismatch, "the file differs"),
             &job,
+            None,
         );
         assert_eq!(error.message, "the file differs");
         assert!(error.help.unwrap().contains("published size or SHA-256"));
@@ -2865,7 +2882,7 @@ mod tests {
             again: None,
         };
         assert_eq!(
-            explain(gone(), &job).help.as_deref(),
+            explain(gone(), &job, None).help.as_deref(),
             Some(crate::net::MOVED_HELP)
         );
         job.again = Some(Again {
@@ -2874,7 +2891,7 @@ mod tests {
             alone: true,
         });
         assert_eq!(
-            explain(gone(), &job).help.as_deref(),
+            explain(gone(), &job, None).help.as_deref(),
             Some(
                 "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the file moved, put its new link as ref in data.toml"
             )

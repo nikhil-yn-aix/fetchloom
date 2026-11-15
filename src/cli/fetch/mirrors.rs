@@ -24,6 +24,9 @@ use crate::work::Work;
 /// damaged copies one mirror's warnings name before they are counted instead.
 const NAMED: usize = 5;
 
+/// what a mirror answered for a copy that is not the pinned file.
+const DAMAGED: &str = "a damaged copy";
+
 /// the mirrors a run asks, and what they answered, so no mirror is asked twice for one file and
 /// one that is not there is asked nothing more.
 #[derive(Default)]
@@ -89,6 +92,31 @@ impl Mirrored {
             return None;
         };
         (!folder::still(root, digest, &seen)).then(|| (root.clone(), label))
+    }
+
+    /// the first folder mirror that holds a damaged copy of the file pinned to `digest`, which a
+    /// plain push leaves as it is when it has the pinned size.
+    pub(in crate::cli) fn damaged_folder(
+        &self,
+        digest: Option<Sha256>,
+    ) -> Option<std::path::PathBuf> {
+        let digest = digest?;
+        let answers = self.answers();
+        self.mirrors
+            .list
+            .iter()
+            .enumerate()
+            .find_map(|(index, location)| match location {
+                Location::Folder(root)
+                    if answers
+                        .lacked
+                        .get(&(index, digest))
+                        .is_some_and(|said| said == DAMAGED) =>
+                {
+                    Some(root.clone())
+                }
+                _ => None,
+            })
     }
 
     /// the link the web or S3 mirror `index` at `location` keeps its files below, once
@@ -580,7 +608,7 @@ async fn from_folder(
             }
             Gave::Absent => mirrored.lacked(index, want.digest, "not there".to_owned()),
             Gave::Damaged => {
-                mirrored.lacked(index, want.digest, "a damaged copy".to_owned());
+                mirrored.lacked(index, want.digest, DAMAGED.to_owned());
                 damaged.push(want.label);
             }
             Gave::Unreadable(err) => {
@@ -661,7 +689,7 @@ async fn from_web(
                 mirrored.lacked(index, want.digest, "not there".to_owned());
             }
             Kind::IntegrityMismatch => {
-                mirrored.lacked(index, want.digest, "a damaged copy".to_owned());
+                mirrored.lacked(index, want.digest, DAMAGED.to_owned());
                 damaged.push(want.label);
             }
             Kind::LocalIo => return Err(error),
@@ -813,7 +841,7 @@ async fn tree_from_mirrors(
         if recorded {
             return Ok(true);
         }
-        mirrored.lacked(index, tree, "a damaged copy".to_owned());
+        mirrored.lacked(index, tree, DAMAGED.to_owned());
         tell_damaged(context, location, std::slice::from_ref(&label));
     }
     Ok(false)

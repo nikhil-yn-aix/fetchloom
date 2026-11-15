@@ -512,6 +512,41 @@ fn a_damaged_mirror_copy_is_told_and_the_source_gives_the_file() -> Result {
     Ok(())
 }
 
+/// once the source has nothing at the link either, the error under that warning sends whoever
+/// has the bytes to `push --verify` on that mirror, since a plain push leaves a copy of the
+/// pinned size as it is.
+#[test]
+fn a_damaged_copy_and_a_gone_source_ask_for_a_push_that_verifies() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let hex = sha256_hex(IRIS);
+    let copy = root.join("objects").join(&hex[..2]).join(&hex[2..]);
+    edit(&copy, &IRIS.to_ascii_uppercase())?;
+    source.change(vec![(
+        "/files/iris.csv".to_owned(),
+        reply("404 Not Found", &[("Content-Length", "0")], b""),
+    )]);
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&folder, &["--json", "sync", "--mirror"])
+        .arg(&root)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["help"],
+        format!(
+            "to keep the pinned bytes, someone who has them runs `fetchloom push --verify --to {}`, which replaces the damaged copy there, then you run this command again. if the file moved, put its new link as ref in data.toml",
+            root.display()
+        ),
+        "{error}"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_mirror_that_is_not_there_is_skipped_with_one_warning() -> Result {
     let sandbox = Sandbox::new()?;
