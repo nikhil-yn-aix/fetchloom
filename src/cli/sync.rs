@@ -1134,7 +1134,7 @@ impl<'a> Loop<'a> {
     /// asks once before anything downloads when the cache's disk may lack room for all placing
     /// needs, which per-download questions miss, then likewise for the data folder's copies.
     fn ask_room(&self, lock: &Lock, placing: &Placing<'_>) -> Result<(), Error> {
-        if self.yes() {
+        if self.roomy.load(Ordering::Relaxed) {
             return Ok(());
         }
         let needed = if self.net.offline().enabled() {
@@ -1144,6 +1144,15 @@ impl<'a> Loop<'a> {
         };
         let free = crate::space::free(self.cache.root());
         if crate::space::short(needed, free).is_none() {
+            return self.ask_room_to_place(placing, needed);
+        }
+        if self.context.yes {
+            super::warn_short(
+                &self.context.output,
+                "this sync",
+                (needed, free.unwrap_or_default()),
+                &format!("the cache at {}", units::path(self.cache.root())),
+            );
             return self.ask_room_to_place(placing, needed);
         }
         super::ask_room(
@@ -1215,11 +1224,17 @@ impl<'a> Loop<'a> {
         if crate::space::short(needed, free).is_none() {
             return Ok(());
         }
+        let place = format!("the data folder at {}", units::path(&copies.folder));
+        if self.context.yes {
+            let room = (needed, free.unwrap_or_default());
+            super::warn_short(&self.context.output, "this sync", room, &place);
+            return Ok(());
+        }
         super::ask_room_on(
             &self.context.output,
             "this sync",
             (needed, free.unwrap_or_default()),
-            &format!("the data folder at {}", units::path(&copies.folder)),
+            &place,
             "free space on that disk, then run the same command again. add --yes to go on anyway, as on a disk that compresses what it stores",
         )
         .map_err(|error| self.as_left(error))?;

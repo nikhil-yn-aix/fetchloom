@@ -1099,10 +1099,8 @@ fn ask_room_on(
     place: &str,
     help: &str,
 ) -> Result<(), Error> {
-    let (needs, has) = (units::size(needed), units::size(free));
-    let cancel = format!("{doing} ({needs})");
-    let shortage =
-        format!("{doing} needs at least {needs} on the disk holding {place}, which has {has} free");
+    let cancel = format!("{doing} ({})", units::size(needed));
+    let shortage = shortage(doing, (needed, free), place);
     match output
         .confirm(&format!("{shortage}. go on anyway?"))
         .map_err(|error| error.cancelling(&cancel))?
@@ -1113,6 +1111,21 @@ fn ask_room_on(
         }
         None => Err(Error::new(Kind::Unconfirmed, shortage).help(help.to_owned())),
     }
+}
+
+/// what `doing` needs on the disk holding `place` and what it has free, in words.
+fn shortage(doing: &str, (needed, free): (u64, u64), place: &str) -> String {
+    format!(
+        "{doing} needs at least {} on the disk holding {place}, which has {} free",
+        units::size(needed),
+        units::size(free)
+    )
+}
+
+/// warns, for a run told `--yes`, that `doing` may lack room on the disk holding `place`: free
+/// space is an estimate on network disks and under quotas, so the run goes on.
+fn warn_short(output: &Output, doing: &str, room: (u64, u64), place: &str) {
+    output.warn(Warning::SpaceShort, &shortage(doing, room, place));
 }
 
 /// asks whether to download `what`, which needs `size`, as [`confirm`] does.

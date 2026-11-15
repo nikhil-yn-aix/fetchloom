@@ -100,6 +100,8 @@ pub(crate) enum Warning {
     SearchPartial,
     /// `FETCHLOOM_COLORS` holds entries fetchloom cannot read.
     SettingsColorsUnread,
+    /// a run told `--yes` goes on though a disk may lack the room it needs.
+    SpaceShort,
     /// a variable that changes only what a person sees holds neither true nor false.
     SettingsSwitchUnread,
     /// a variable set is one typo from one fetchloom reads.
@@ -165,6 +167,7 @@ impl Warning {
             Warning::SettingsColorsUnread => "settings.colors_unread",
             Warning::SettingsSwitchUnread => "settings.switch_unread",
             Warning::SettingsUnknownVariable => "settings.unknown_variable",
+            Warning::SpaceShort => "space.short",
             Warning::SourceMoved => "source.moved",
             Warning::SourcePartial => "source.partial",
             Warning::TraceUnwritable => "trace.unwritable",
@@ -243,6 +246,7 @@ mod tests {
             SettingsColorsUnread,
             SettingsSwitchUnread,
             SettingsUnknownVariable,
+            SpaceShort,
             SourceMoved,
             SourcePartial,
             TraceUnwritable,

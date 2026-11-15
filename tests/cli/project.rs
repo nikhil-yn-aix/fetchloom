@@ -2733,6 +2733,40 @@ fn a_sync_the_cache_disk_cannot_hold_asks_once_before_downloading() -> Result {
     Ok(())
 }
 
+/// `--yes` still checks the room, and says so when it may run short, but goes on: free space is
+/// only an estimate on network disks and under quotas.
+#[test]
+fn a_sync_told_yes_warns_of_too_little_room_and_goes_on() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (one, two) = (vec![b'x'; 1024], vec![b'y'; 1024]);
+    let first = Server::start("/one.bin", vec![file(&one, "\"a\""), file(&one, "\"a\"")])?;
+    let second = Server::start("/two.bin", vec![file(&two, "\"b\""), file(&two, "\"b\"")])?;
+    for server in [&first, &second] {
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let fresh = clone(&sandbox, "fresh")?;
+    let empty = sandbox.folder("empty-cache")?;
+    let output = sandbox
+        .command_in(&fresh, &["--json", "sync", "--yes"])
+        .env("FETCHLOOM_CACHE", &empty)
+        .env("FETCHLOOM_TEST_FREE", "1500")
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(
+        crate::support::warning(&document, "space.short")["message"],
+        format!(
+            "this sync needs at least 2.0 KiB on the disk holding the cache at {}, which has 1.5 KiB free",
+            empty.display()
+        ),
+        "{document}"
+    );
+    assert!(fresh.join("data").join("one").exists());
+    Ok(())
+}
+
 /// freeing space cannot help, so the refusal comes before the question about room.
 #[test]
 fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Result {
