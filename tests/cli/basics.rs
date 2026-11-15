@@ -974,7 +974,7 @@ fn story_lines_wrap_between_words_at_a_narrow_terminal() -> Result {
     assert_eq!(code, Some(1), "{screen}");
     assert!(
         screen.contains(
-            "error: downloading dumb-prompt.bin needs 1.0 KiB, and\n       fetchloom cannot ask you here\n  help: add --yes to download it without being asked\n"
+            "error: downloading dumb-prompt.bin needs 1.0 KiB, and\n       fetchloom cannot ask you here\n  help: fetchloom asks before a download over 100 B, its\n        ask_above setting: add --yes to download it without\n        being asked\n"
         ),
         "{screen}"
     );

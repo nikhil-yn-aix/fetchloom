@@ -1589,6 +1589,29 @@ fn a_sync_that_finds_other_bytes_than_the_stated_md5_records_nothing() -> Result
     Ok(())
 }
 
+/// offline, a pin data.lock keeps by its source's MD5 needs one download to learn its SHA-256,
+/// so the help says to run the same sync online, not to get a new link.
+#[test]
+fn an_offline_sync_of_a_stated_pin_says_to_run_it_online() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    added_unsynced(&sandbox, &routes)?;
+    let (_, synced) = teammate_sync(&sandbox, &routes, &["--json", "--offline", "sync"])?;
+    assert_eq!(synced.status.code(), Some(20), "{}", text(&synced.stderr)?);
+    let error = &json(&synced)?["errors"][0];
+    assert_eq!(error["kind"], "offline.missing", "{error}");
+    assert_eq!(
+        error["message"],
+        "offline, and a file pinned by what its source states, not by a SHA-256, must be downloaded once to learn it",
+        "{error}"
+    );
+    assert_eq!(
+        error["help"], "run it again without --offline to download it",
+        "{error}"
+    );
+    Ok(())
+}
+
 /// `--locked` refuses a pin a sync would complete, since data.lock would change, saying which
 /// sync completes it; the check without it counts the pin as locked.
 #[test]

@@ -3,4 +3,4 @@ source: tests/cli/get.rs
 expression: stderr
 ---
 error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask you here
-  help: add --yes to download it without being asked
+  help: fetchloom asks before a download over 1.0 GiB, its ask_above setting: add --yes to download it without being asked

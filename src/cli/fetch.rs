@@ -705,7 +705,15 @@ impl<'a> Watch<'a> {
                 self.approve(|| self.ask_budget(past))?;
             } else if left > self.approval.above {
                 let size = units::size(left);
-                self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
+                self.approve(|| {
+                    super::ask(
+                        self.output,
+                        self.yes,
+                        &self.job.label,
+                        &size,
+                        self.approval.above,
+                    )
+                })?;
             }
         }
         // only once a person said yes, so a no never follows a line saying the download began
@@ -865,7 +873,15 @@ impl<'a> Watch<'a> {
                 let received = self.received.fetch_add(bytes, Ordering::Relaxed) + bytes;
                 if self.unbounded.load(Ordering::Relaxed) && received > self.approval.above {
                     let size = format!("more than {}", units::size(self.approval.above));
-                    self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
+                    self.approve(|| {
+                        super::ask(
+                            self.output,
+                            self.yes,
+                            &self.job.label,
+                            &size,
+                            self.approval.above,
+                        )
+                    })?;
                     self.unbounded.store(false, Ordering::Relaxed);
                 }
                 self.room(received)?;
@@ -1999,7 +2015,9 @@ mod tests {
         );
         assert_eq!(
             stopped.help.as_deref(),
-            Some("add --yes to download it without being asked")
+            Some(
+                "fetchloom asks before a download over 10.0 GiB, its ask_above setting: add --yes to download it without being asked"
+            )
         );
         assert_eq!(
             watch.on(&Event::Bytes(1)).unwrap_err().kind,

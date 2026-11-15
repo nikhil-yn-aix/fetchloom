@@ -1595,16 +1595,29 @@ impl<'a> Loop<'a> {
             return Ok(());
         }
         // a new link has no fingerprint yet, so the cache cannot be asked for it
-        let unknown = jobs
+        let unlearned: Vec<&Job> = jobs
             .iter()
-            .any(|job| job.fetch.expect.sha256.is_none() && !available(job));
-        if unknown {
-            let mut error = Error::new(
-                Kind::OfflineMissing,
-                "offline, and a new link must be downloaded once to learn its SHA-256",
-            );
-            error = error.details_up_to(&missing, NAMED);
-            return Err(error.help(self.net.offline().unlearned_help()));
+            .filter(|job| job.fetch.expect.sha256.is_none() && !available(job))
+            .collect();
+        if !unlearned.is_empty() {
+            let offline = self.net.offline();
+            // a pin data.lock keeps by what its source states, an md5 or a size, is no new link
+            let stated = unlearned
+                .iter()
+                .all(|job| job.fetch.expect.md5.is_some() || job.fetch.expect.size.is_some());
+            let (said, help) = if stated {
+                (
+                    "offline, and a file pinned by what its source states, not by a SHA-256, must be downloaded once to learn it",
+                    format!("{} to download it", offline.retry()),
+                )
+            } else {
+                (
+                    "offline, and a new link must be downloaded once to learn its SHA-256",
+                    offline.unlearned_help(),
+                )
+            };
+            let error = Error::new(Kind::OfflineMissing, said).details_up_to(&missing, NAMED);
+            return Err(error.help(help));
         }
         Err(self.offline_missing(&missing))
     }

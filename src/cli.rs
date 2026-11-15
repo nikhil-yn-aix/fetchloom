@@ -1117,7 +1117,7 @@ fn confirm_doing(
     if bytes <= above {
         return Ok(false);
     }
-    ask(output, yes, what, &units::size(bytes)).map(|()| false)
+    ask(output, yes, what, &units::size(bytes), above).map(|()| false)
 }
 
 /// asks whether to go on `doing` what needs `needed` bytes on the disk holding `cache`, which has
@@ -1176,8 +1176,9 @@ fn warn_short(output: &Output, doing: &str, room: (u64, u64), place: &str) {
     output.warn(Warning::SpaceShort, &shortage(doing, room, place));
 }
 
-/// asks whether to download `what`, which needs `size`, as [`confirm`] does.
-fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> {
+/// asks whether to download `what`, which needs `size`, past `above`, the `ask_above` setting, as
+/// [`confirm`] does.
+fn ask(output: &Output, yes: bool, what: &str, size: &str, above: u64) -> Result<(), Error> {
     if yes {
         return Ok(());
     }
@@ -1194,7 +1195,10 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
             Kind::Unconfirmed,
             format!("downloading {what} needs {size}, and fetchloom cannot ask you here"),
         )
-        .help("add --yes to download it without being asked")),
+        .help(format!(
+            "fetchloom asks before a download over {}, its ask_above setting: add --yes to download it without being asked",
+            units::size(above)
+        ))),
     }
 }
 
