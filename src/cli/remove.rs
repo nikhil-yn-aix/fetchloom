@@ -49,6 +49,8 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     lock.datasets
         .retain(|dataset| !names.contains(&dataset.name));
     lock.derived.retain(|result| !names.contains(&result.name));
+    lock.stated
+        .retain(|stated| !names.iter().any(|name| name == stated.name()));
     let listed = crate::units::listed(&names, "and");
     let cache = if dry_run {
         peek_cache()?

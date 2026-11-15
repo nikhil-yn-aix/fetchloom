@@ -400,7 +400,9 @@ async fn sync_held(
             .map(|report| (report, None));
     }
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?).within(scope);
+    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
+        .within(scope)
+        .filling();
     let Outcome {
         lock_changed,
         pins,
@@ -474,7 +476,7 @@ async fn sync_plain(
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
     let old = lock.map(|(lock, _)| lock);
-    let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?);
+    let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?).filling();
     let survey = surveyed(&work, &plain.data_dir, false)?;
     let (whole, outcome) =
         if let Some(outcome) = settle(&work, plain, &survey, &seen, old.as_ref())? {
@@ -844,7 +846,9 @@ async fn preview_sync(
     scope: Scope,
 ) -> Result<Report, Error> {
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?).within(scope);
+    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?)
+        .within(scope)
+        .filling();
     let outcome = preview_all(
         &work,
         manifest,
@@ -1122,7 +1126,21 @@ pub(super) fn locked(
         .map_err(|error| match error.kind {
             Kind::Outdated => error.help(help),
             _ => error,
-        })
+        })?;
+    // filling in what only a source's digests pin changes data.lock, which --locked forbids
+    let stated: Vec<&lock::Stated> = lock
+        .stated
+        .iter()
+        .filter(|stated| scope.includes(stated.name()))
+        .collect();
+    match lock::stated_error(&stated) {
+        Some(error) => Err(Error {
+            kind: Kind::Outdated,
+            message: format!("data.lock would change: {}", error.message),
+            ..error
+        }),
+        None => Ok(()),
+    }
 }
 
 /// `lock --check`, without network or writing. a recipe not built as it would be now is
@@ -1153,9 +1171,14 @@ fn check(
             }
             continue;
         }
-        match old.get(name).map(|locked| locked.drift(entry)) {
+        // a pin by its source's digests counts as locked until data.toml changes
+        let stated = old.stated(name).map(|stated| &stated.pin);
+        match old.get(name).or(stated).map(|locked| locked.drift(entry)) {
             None => stale.push(format!("{name} is not in data.lock yet")),
             Some(Some(Drift::Spec)) => stale.push(format!("{name} changed in data.toml")),
+            Some(Some(Drift::Extract)) if stated.is_some() => {
+                stale.push(format!("{name} changed in data.toml"));
+            }
             Some(Some(Drift::Extract)) => stale.push(format!(
                 "{name} changed extract in data.toml; `fetchloom lock` needs no network for it while its archives are cached"
             )),
@@ -1163,7 +1186,11 @@ fn check(
         }
     }
     let names = old.datasets.iter().map(|dataset| &dataset.name);
-    for name in names.chain(old.derived.iter().map(|result| &result.name)) {
+    let stated = old.stated.iter().map(|stated| &stated.pin.name);
+    for name in names
+        .chain(old.derived.iter().map(|result| &result.name))
+        .chain(stated)
+    {
         if !scope.includes(name) {
             continue;
         }

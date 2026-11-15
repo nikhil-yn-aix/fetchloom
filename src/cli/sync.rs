@@ -4,6 +4,7 @@
 mod cache_budget;
 pub(super) mod disk;
 mod draft;
+mod fill;
 pub(super) mod place;
 pub(super) mod rename;
 pub(super) mod unpack;
@@ -120,6 +121,8 @@ pub(super) struct Loop<'a> {
     readying: &'static str,
     /// whether placing follows relocking, so the first downloads tell what placing adds.
     places: AtomicBool,
+    /// whether relocking downloads the datasets only their sources' digests pin, as a sync does.
+    fills: bool,
     /// what relocking told ahead and fetched, which placing's downloads finish telling.
     ahead: Mutex<Option<Ahead>>,
 }
@@ -162,8 +165,15 @@ impl<'a> Loop<'a> {
             past_budget: AtomicBool::new(false),
             readying: "build",
             places: AtomicBool::new(false),
+            fills: false,
             ahead: Mutex::default(),
         }
+    }
+
+    /// relocking downloads each dataset in scope only its source's digests pin, and pins it whole.
+    pub(super) fn filling(mut self) -> Self {
+        self.fills = true;
+        self
     }
 
     /// says placing follows the next relock, so downloads that learn hashes tell placing's too.
@@ -471,6 +481,7 @@ impl<'a> Loop<'a> {
         given: Vec<Given>,
     ) -> Result<(Lock, Before), Error> {
         let existed = old.is_some();
+        let (old, given, carried) = self.stated(manifest, old, upgrade, given, true).await?;
         let Drafted {
             kept,
             mut drafts,
@@ -545,7 +556,8 @@ impl<'a> Loop<'a> {
             locked.timestamp.clone_from(&now);
             locked
         }));
-        let (lock, kept) = settled(&others, kept, drafted, results);
+        let (mut lock, kept) = settled(&others, kept, drafted, results);
+        carried.back(&mut lock);
         Ok((
             lock,
             Before {
@@ -567,6 +579,7 @@ impl<'a> Loop<'a> {
         given: Vec<Given>,
     ) -> Result<DryRelock, Error> {
         let existed = old.is_some();
+        let (old, given, carried) = self.stated(manifest, old, upgrade, given, false).await?;
         let Drafted {
             kept,
             mut drafts,
@@ -602,7 +615,8 @@ impl<'a> Loop<'a> {
             locked.timestamp.clone_from(&now);
             drafted.push(locked);
         }
-        let (lock, kept) = settled(&others, kept, drafted, results);
+        let (mut lock, kept) = settled(&others, kept, drafted, results);
+        carried.back(&mut lock);
         let before = Before {
             existed,
             others,
@@ -627,8 +641,7 @@ impl<'a> Loop<'a> {
         upgrade: &Upgrade,
         given: Vec<Given>,
     ) -> Result<Drafted, Error> {
-        let mut listed = Vec::new();
-        let mut whole = Vec::new();
+        let (mut listed, mut whole) = (Vec::new(), Vec::new());
         for given in given {
             match given {
                 Given::Listing(name, listing) => listed.push((name, listing)),
@@ -672,6 +685,7 @@ impl<'a> Loop<'a> {
             if self.scope.includes(name)
                 && !is_kept
                 && !is_whole
+                && !old.stated.iter().any(|stated| stated.name() == name)
                 && !drafts.iter().any(|(drafted, _)| drafted == name)
             {
                 asks.push((
