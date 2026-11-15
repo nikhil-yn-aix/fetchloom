@@ -1782,8 +1782,12 @@ mod tests {
         );
     }
 
+    /// the size above which these tests' downloads ask first: far below the room any disk the
+    /// tests run on has free, so the room check never answers before the question does.
+    const LIMIT: u64 = 1 << 20;
+
     fn approval_context() -> Context {
-        Context::new(crate::output::Output::new(
+        let mut context = Context::new(crate::output::Output::new(
             crate::output::Style {
                 color: false,
                 unicode: false,
@@ -1795,7 +1799,9 @@ mod tests {
             crate::output::Level::Quiet,
             true,
             false,
-        ))
+        ));
+        context.settings.ask_above.value = LIMIT;
+        context
     }
 
     #[test]
@@ -1806,7 +1812,7 @@ mod tests {
         cache.record_unpacked(&digest, &[]).unwrap();
         let remote = Remote {
             path: "large.zip".to_owned(),
-            size: Some(crate::settings::ASK_ABOVE + 1),
+            size: Some(LIMIT + 1),
             sha256: Some(digest),
             md5: None,
             url: url::Url::parse("https://example.org/large.zip").unwrap(),
@@ -1833,7 +1839,7 @@ mod tests {
         cache.record_unpacked(&digest, &[]).unwrap();
         let mut remote = Remote {
             path: "cached.zip".to_owned(),
-            size: Some(crate::settings::ASK_ABOVE),
+            size: Some(LIMIT),
             sha256: Some(digest),
             md5: None,
             url: url::Url::parse("https://example.org/cached.zip").unwrap(),
@@ -1846,10 +1852,14 @@ mod tests {
         jobs.push(fetch::listed_job(&remote, &remote.path, false));
         let context = approval_context();
         approve(&context, &cache, &jobs).unwrap();
-        jobs[1].fetch.expect.size = Some(crate::settings::ASK_ABOVE + 1);
+        jobs[1].fetch.expect.size = Some(LIMIT + 1);
+        let asked = approve(&context, &cache, &jobs).unwrap_err();
         assert_eq!(
-            approve(&context, &cache, &jobs).unwrap_err().kind,
-            Kind::Unconfirmed
+            (asked.kind, asked.message.as_str()),
+            (
+                Kind::Unconfirmed,
+                "downloading 1 file needs 1.0 MiB, and fetchloom cannot ask you here"
+            )
         );
     }
 
@@ -1860,7 +1870,7 @@ mod tests {
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let remote = Remote {
             path: "large.bin".to_owned(),
-            size: Some(crate::settings::ASK_ABOVE + 1),
+            size: Some(LIMIT + 1),
             sha256: None,
             md5: None,
             url: url::Url::parse("https://example.org/large.bin").unwrap(),
