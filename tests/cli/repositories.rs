@@ -1895,3 +1895,38 @@ fn add_no_sync_says_the_first_sync_records_the_sha256() -> Result {
     }
     Ok(())
 }
+
+/// a pin `add --no-sync` replaces takes its file list in data.lock.d with it, as any write of
+/// data.lock does, so `git add data.lock.d` never commits a list nothing names.
+#[test]
+fn add_no_sync_sweeps_the_list_of_a_pin_it_replaces() -> Result {
+    let sandbox = Sandbox::new()?;
+    let files = Routes::start(vec![("/files/rows.csv".to_owned(), file(ROWS, "\"r1\""))])?;
+    let listed = sandbox
+        .command(&[
+            "add",
+            &format!("{}/files/rows.csv", files.url),
+            "--as",
+            "archiving",
+        ])
+        .env("FETCHLOOM_TEST_INLINE", "0")
+        .output()?;
+    assert_eq!(listed.status.code(), Some(0), "{}", text(&listed.stderr)?);
+    let lists = sandbox.work().join("data.lock.d");
+    assert!(lists.is_dir());
+    // data.toml loses the dataset by hand, so data.lock still pins it, with its list
+    fs::write(sandbox.work().join("data.toml"), "")?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    let page = "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7";
+    let output = command(
+        &sandbox,
+        &routes,
+        &["add", page, "--as", "archiving", "--no-sync"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains("downloaded = false"), "{lock}");
+    assert!(!lists.exists(), "{:?}", fs::read_dir(&lists)?.count());
+    Ok(())
+}

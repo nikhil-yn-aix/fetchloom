@@ -306,6 +306,8 @@ pub(super) fn write(
         return Err(error);
     }
     work.context.stop.finish();
+    // the list of a pin this one replaced goes, as with any write of data.lock
+    project.sweep_lists(&lock);
     register(work);
     if starting {
         output.step(
