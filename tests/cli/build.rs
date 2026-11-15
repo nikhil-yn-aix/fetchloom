@@ -2715,6 +2715,31 @@ fn check_reproduces_a_deterministic_step() -> Result {
     Ok(())
 }
 
+/// a dry run after an input of a built recipe was renamed in data.toml says it was renamed, as
+/// the build carries its pin over, not that it and the command changed.
+#[test]
+fn a_dry_run_names_an_input_renamed_since_the_build() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let manifest = sandbox.work().join("data.toml");
+    let text_now = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        text_now
+            .replace("[datasets.iris]", "[datasets.flowers]")
+            .replace("[\"iris\"]", "[\"flowers\"]")
+            .replace("{iris}", "{flowers}"),
+    )?;
+    let stderr = text(&sandbox.run(&["build", "--dry-run"])?.stderr)?;
+    assert!(
+        stderr.contains(" run clean · iris was renamed to flowers\n"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a check that makes the pinned files again keeps the rebuild an earlier check kept, whose pin
 /// did not change, so `--accept` still pins it.
 #[test]

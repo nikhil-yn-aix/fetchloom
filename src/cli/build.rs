@@ -423,12 +423,12 @@ impl<'a> Building<'a> {
         if made.tree == tree {
             output.step(
                 "Checked",
-                &format!("{name} · {} data.lock", matched(&compared)),
+                &format!("{name} · {}", matched(&compared, " data.lock")),
             );
         } else {
             output.mark(
                 "Differs",
-                &format!("{name} · {} data.lock", matched(&compared)),
+                &format!("{name} · {}", matched(&compared, " data.lock")),
             );
             self.keep(
                 name,
@@ -651,7 +651,7 @@ impl<'a> Building<'a> {
             let compared = compare(&pinned.files, &made.members);
             output.mark(
                 "Differs",
-                &format!("{name} · {} data.lock", matched(&compared)),
+                &format!("{name} · {}", matched(&compared, " data.lock")),
             );
             self.keep(
                 name,
@@ -1430,10 +1430,17 @@ fn taken(name: &str, fault: Fault) -> Error {
     Error::new(Kind::BuildFailed, message).help(help)
 }
 
-/// how many of the files data.lock pins a rerun made as they are: `9,998 of 10,000 files match`.
-fn matched(compared: &Compared) -> String {
+/// how many of the files data.lock pins a rerun made as they are, with `against` after the count,
+/// then how many it made that data.lock does not pin: `9,998 of 10,000 files match data.lock`,
+/// `1 of 1 file matches, and 1 file is new`.
+fn matched(compared: &Compared, against: &str) -> String {
+    let new = match compared.extra.len() {
+        0 => String::new(),
+        1 => ", and 1 file is new".to_owned(),
+        many => format!(", and {} files are new", units::grouped(many as u64)),
+    };
     format!(
-        "{} of {} {}",
+        "{} of {} {}{against}{new}",
         units::grouped(compared.matching as u64),
         units::count(compared.pinned() as u64, "file", "files"),
         if compared.matching == 1 {
@@ -1463,14 +1470,18 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
         [(step, compared)] => format!(
             "{} differs from data.lock: {}",
             step.name,
-            matched(compared)
+            matched(compared, "")
         ),
         _ => format!("{} differ from data.lock", units::listed(&names, "and")),
     };
     let mut error = Error::new(Kind::BuildDiffers, message);
     for (step, compared) in &differing {
         if differing.len() > 1 {
-            error = error.detail(format!("{}: {} data.lock", step.name, matched(compared)));
+            error = error.detail(format!(
+                "{}: {}",
+                step.name,
+                matched(compared, " data.lock")
+            ));
         }
         let lines: Vec<String> = [
             ("changed", &compared.changed),
@@ -1547,7 +1558,7 @@ mod tests {
             (2, 1, "2 of 3 files match"),
             (9_998, 2, "9,998 of 10,000 files match"),
         ] {
-            assert_eq!(matched(&compared(matching, changed)), said);
+            assert_eq!(matched(&compared(matching, changed), ""), said);
         }
     }
 
@@ -1705,7 +1716,7 @@ mod tests {
         let rows = [
             (
                 vec![step("emb", Did::Ran, Some(emb), true)],
-                "emb differs from data.lock: 2 of 4 files match",
+                "emb differs from data.lock: 2 of 4 files match, and 1 file is new",
                 vec![
                     "changed vectors.bin".to_owned(),
                     "missing index.json".to_owned(),

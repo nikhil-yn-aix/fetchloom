@@ -133,7 +133,11 @@ pub(super) fn preview(
     if let Some((lock, _)) = &read {
         lock.refuse_stated(closure.iter().copied())?;
     }
-    let lock = read.map(|(lock, _)| lock).unwrap_or_default();
+    // as the build would, which carries a renamed dataset's pin to its new name first
+    let (lock, _) = crate::cli::sync::rename::forecast(
+        manifest,
+        read.map(|(lock, _)| lock).unwrap_or_default(),
+    );
     let cache = peek_cache()?;
     let ahead = Ahead::new(context, project, manifest, &cache);
     let steps = foresee(project, manifest, &lock, &closure, ahead)?;
