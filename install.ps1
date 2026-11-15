@@ -5,7 +5,12 @@
 #   powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.ps1 | iex"
 #
 # the version is the first argument, else FETCHLOOM_VERSION, else the latest release.
-# FETCHLOOM_DOWNLOAD_URL names a folder that holds a release's files, for testing.
+# FETCHLOOM_DOWNLOAD_URL names a folder that holds a release's files, for testing: https, or
+# plain http on this machine only.
+#
+# the archive is checked against the release's SHA256SUMS, which catches a broken download but
+# not a release whose files were all replaced. to check that the release workflow built the
+# archive, download it and run: gh attestation verify <archive> --repo nikhil-yn-aix/fetchloom
 
 param([string]$Version = $env:FETCHLOOM_VERSION)
 
@@ -66,6 +71,12 @@ function Install-Fetchloom([string]$Version) {
 
     if ($env:FETCHLOOM_DOWNLOAD_URL) {
         $release = $env:FETCHLOOM_DOWNLOAD_URL.TrimEnd('/')
+        # read as Invoke-WebRequest reads it, so a name before an @ cannot pass for the host
+        $uri = $null
+        if (-not [Uri]::TryCreate($release, [UriKind]::Absolute, [ref]$uri) -or
+            -not ($uri.Scheme -eq 'https' -or ($uri.Scheme -eq 'http' -and $uri.IsLoopback))) {
+            throw 'FETCHLOOM_DOWNLOAD_URL must be https, or plain http to this machine (127.0.0.1, localhost or [::1]): anyone on the way could swap a plain http download, SHA256SUMS and all. nothing was installed'
+        }
     } elseif ($Version) {
         $release = "$repository/releases/download/v$Version"
     } else {

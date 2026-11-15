@@ -8,7 +8,12 @@
 #
 # the version is the first argument, else FETCHLOOM_VERSION, else the latest release.
 # FETCHLOOM_NO_MODIFY_PATH=1 leaves your shell profiles alone.
-# FETCHLOOM_DOWNLOAD_URL names a folder that holds a release's files, for testing.
+# FETCHLOOM_DOWNLOAD_URL names a folder that holds a release's files, for testing: https, or
+# plain http on this machine only.
+#
+# the archive is checked against the release's SHA256SUMS, which catches a broken download but
+# not a release whose files were all replaced. to check that the release workflow built the
+# archive, download it and run: gh attestation verify <archive> --repo nikhil-yn-aix/fetchloom
 
 set -eu
 
@@ -24,6 +29,28 @@ check_destination() {
     if [ -d "$bin_dir/fetchloom" ]; then
         fail "$bin_dir/fetchloom is a directory or a link to one. nothing was installed"
     fi
+}
+
+# whether the url $1 is plain http to this machine: 127.0.0.1, localhost or [::1], with a port
+# or none, and nothing else before the path
+on_this_machine() {
+    case $1 in
+        http://*) authority=${1#http://} ;;
+        *) return 1 ;;
+    esac
+    authority=${authority%%/*}
+    case $authority in
+        127.0.0.1*) port=${authority#127.0.0.1} ;;
+        localhost*) port=${authority#localhost} ;;
+        '[::1]'*) port=${authority#'[::1]'} ;;
+        *) return 1 ;;
+    esac
+    case $port in
+        '') ;;
+        : | :*[!0-9]*) return 1 ;;
+        :*) ;;
+        *) return 1 ;;
+    esac
 }
 
 if command -v curl > /dev/null 2>&1; then
@@ -85,7 +112,14 @@ esac
 protocols='=https'
 if [ -n "${FETCHLOOM_DOWNLOAD_URL:-}" ]; then
     release=${FETCHLOOM_DOWNLOAD_URL%/}
-    protocols='=http,https'
+    if on_this_machine "$release"; then
+        protocols='=http,https'
+    else
+        case $release in
+            https://*) ;;
+            *) fail "FETCHLOOM_DOWNLOAD_URL must be https, or plain http to this machine (127.0.0.1, localhost or [::1]): anyone on the way could swap a plain http download, SHA256SUMS and all. nothing was installed" ;;
+        esac
+    fi
 elif [ -n "$version" ]; then
     release=$repository/releases/download/v$version
 else

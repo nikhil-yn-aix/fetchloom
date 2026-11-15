@@ -1,4 +1,4 @@
-"""the shell installer against a private release served only on loopback."""
+"""the installers against a private release served only on loopback."""
 
 import functools
 import hashlib
@@ -6,6 +6,7 @@ import http.server
 import io
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REFUSED = "FETCHLOOM_DOWNLOAD_URL must be https, or plain http to this machine (127.0.0.1, localhost or [::1])"
 # the programs install.sh runs. a test's PATH holds their folders and nothing else, so a
 # program named fl elsewhere on this machine cannot change what the installer sees
 TOOLS = ["sh", "curl", "wget", "sha256sum", "shasum", "tar", "gzip", "grep", "head", "cut",
@@ -36,6 +38,21 @@ def tool_folders():
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
+
+
+def serve(test, folder):
+    """the http address of a server on loopback that serves ``folder`` until ``test`` ends."""
+    handler = functools.partial(QuietHandler, directory=str(folder))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    # shutdown waits out one poll, which is half a second by default
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
+    thread.start()
+    test.addCleanup(thread.join)
+    test.addCleanup(server.server_close)
+    test.addCleanup(server.shutdown)
+    return f"http://127.0.0.1:{server.server_port}"
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "shell installer coverage runs on linux")
@@ -62,17 +79,7 @@ class LocalRelease(unittest.TestCase):
         self.profile.write_text("# existing profile\n", encoding="utf-8")
         self.target = f"{arch}-unknown-linux-musl"
         self.tools = tool_folders()
-        handler = functools.partial(QuietHandler, directory=str(self.release))
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        # shutdown waits out one poll, which is half a second by default
-        thread = threading.Thread(
-            target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
-        )
-        thread.start()
-        self.addCleanup(thread.join)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        self.url = f"http://127.0.0.1:{server.server_port}"
+        self.url = serve(self, self.release)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(self.url + "/", timeout=5) as response:
             self.assertEqual(response.status, 200)
@@ -94,10 +101,10 @@ class LocalRelease(unittest.TestCase):
         (self.release / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
         return executable
 
-    def install(self, modify_path=False, path=None):
+    def install(self, modify_path=False, path=None, url=None):
         env = {name: value for name, value in os.environ.items()
                if not name.upper().startswith("FETCHLOOM_") and not name.upper().endswith("_PROXY")}
-        env.update(HOME=str(self.home), FETCHLOOM_DOWNLOAD_URL=self.url, NO_PROXY="127.0.0.1",
+        env.update(HOME=str(self.home), FETCHLOOM_DOWNLOAD_URL=url or self.url, NO_PROXY="127.0.0.1",
                    PATH=os.pathsep.join(self.tools if path is None else path))
         if not modify_path:
             env["FETCHLOOM_NO_MODIFY_PATH"] = "1"
@@ -158,6 +165,30 @@ class InstallerChecks(LocalRelease):
         self.assertIn("install curl", result.stderr)
         self.assertFalse((self.home / "downloaded").exists())
         self.assertEqual(self.bin.read_bytes(), b"previous installation\n")
+
+
+    def test_plain_http_is_taken_only_from_this_machine(self):
+        executable = self.package()
+        port = self.url.rsplit(":", 1)[1]
+        for url in ["http://example.invalid", f"http://localhost:{port}@example.invalid",
+                    f"http://127.0.0.1.example.invalid:{port}", f"ftp://127.0.0.1:{port}"]:
+            with self.subTest(url=url):
+                result = self.install(url=url)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(REFUSED, result.stderr)
+                self.assertNotIn("downloading", result.stdout)
+                self.assertEqual(self.bin.read_bytes(), b"previous installation\n")
+        result = self.install(url=f"http://localhost:{port}")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.bin.read_bytes(), executable)
+
+    def test_an_https_folder_passes_to_the_download(self):
+        self.package()
+        url = self.url.replace("http://", "https://")
+        result = self.install(url=url)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"downloading {url}/SHA256SUMS", result.stdout)
+        self.assertIn(f"could not download {url}/SHA256SUMS", result.stderr)
 
 
 class InstallerDestinationTests(LocalRelease):
@@ -274,3 +305,38 @@ class ShortNameTests(LocalRelease):
                 self.assertEqual(self.bin.read_bytes(), executable)
                 self.assertIn(f"left fl alone: it runs {other} here. to use fl for fetchloom in your "
                               "shell, add alias fl=fetchloom to its startup file\n", result.stdout)
+
+
+@unittest.skipUnless(shutil.which("pwsh"), "install.ps1's address check runs in powershell 7")
+class PowerShellDownloadUrl(unittest.TestCase):
+    """install.ps1 refuses a FETCHLOOM_DOWNLOAD_URL that is neither https nor plain http to this
+    machine before it downloads anything. the others reach a loopback server holding no release."""
+
+    def run_installer(self, url):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        env = {name: value for name, value in os.environ.items()
+               if not name.upper().startswith("FETCHLOOM_") and not name.upper().endswith("_PROXY")}
+        env.update(LOCALAPPDATA=home.name, FETCHLOOM_DOWNLOAD_URL=url, FETCHLOOM_NO_MODIFY_PATH="1")
+        result = subprocess.run([shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                 "-File", str(ROOT / "install.ps1")], env=env, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        # powershell may color an error and wraps a long one across lines behind a | gutter
+        return result.stdout, " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.stderr).replace("|", " ").split())
+
+    def test_plain_http_is_taken_only_from_this_machine(self):
+        empty = tempfile.TemporaryDirectory()
+        self.addCleanup(empty.cleanup)
+        port = serve(self, empty.name).rsplit(":", 1)[1]
+        for url in ["http://example.invalid", f"http://127.0.0.1:{port}@example.invalid", f"ftp://127.0.0.1:{port}"]:
+            with self.subTest(url=url):
+                printed, said = self.run_installer(url)
+                self.assertIn(REFUSED, said)
+                self.assertNotIn("downloading", printed)
+        for url in [f"http://127.0.0.1:{port}", f"http://localhost:{port}", f"https://127.0.0.1:{port}"]:
+            with self.subTest(url=url):
+                printed, said = self.run_installer(url)
+                self.assertIn(f"downloading {url}/SHA256SUMS", printed)
+                self.assertIn(f"could not download {url}/SHA256SUMS", said)
+                self.assertNotIn(REFUSED, said)
