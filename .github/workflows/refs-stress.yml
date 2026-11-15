@@ -53,7 +53,7 @@ jobs:
     needs: plan
     name: stress ${{ matrix.job }}
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 130
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJSON(needs.plan.outputs.parallel) }}
@@ -96,7 +96,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: churn files on new refs volumes
         shell: pwsh
-        timeout-minutes: 80
+        timeout-minutes: 115
         env:
           ARMS: ${{ needs.plan.outputs.arms }}
           SECONDS_EACH: ${{ needs.plan.outputs.seconds }}

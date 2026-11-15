@@ -16,9 +16,10 @@ param(
 
 # runs refs-stress.exe, one arm per new refs volume made as the windows refs lane makes it, the
 # arms taking turns; the arm "tests" runs fetchloom's own tests $Filter picks from the nextest
-# archive $Archive instead, $Threads at once. a run where some thread makes no progress for 15 s is a hang: the volume is
-# left to its stuck process, a short plain run on a new volume checks that refs still works
-# elsewhere, and the loop goes on there. a hang outside the link arm saves kernel stacks.
+# archive $Archive instead, $Threads at once; tests-old and tests-fix run that pick from the old
+# and the fixed build. a run where some thread makes no progress for 15 s is a hang, and ends the
+# job, since diskpart makes no new volume once refs is stuck. a hang where nothing links saves
+# kernel stacks first.
 
 $ErrorActionPreference = 'Stop'
 $Root = (Get-Location).Path
@@ -265,7 +266,7 @@ function Start-Stress([string]$Arm, [int]$For, [string]$Progress) {
 
 # runs fetchloom's tests once on the current volume, as the refs lane runs them, through a batch
 # file in a console of its own
-function Start-Tests([string]$Log, [string]$From = $Archive, [string]$Source = $Root, [string]$Pick = $Filter) {
+function Start-Tests([string]$Log, [string]$From = $Archive, [string]$Source = $Root, [string]$Pick = $Filter, [string[]]$Extra = @()) {
     $batch = "$Log.cmd"
     Set-Content -Path $batch -Encoding ascii -Value @(
         '@echo off'
@@ -274,6 +275,7 @@ function Start-Tests([string]$Log, [string]$From = $Archive, [string]$Source = $
         'set "FETCHLOOM_CI_VOLUME=refs"'
         'set "INSTA_UPDATE=no"'
         'set "INSTA_FORCE_PASS=0"'
+        $Extra
         ('"{0}" nextest run --profile ci --no-fail-fast --color never --test-threads {1} --archive-file "{2}" --extract-to "{3}" --extract-overwrite --workspace-remap "{3}" -E "{4}" < NUL > "{5}.out" 2> "{5}"' -f
             (Get-Command cargo-nextest).Source, $Threads, $From, $Source, $Pick, $Log)
         'exit /b %ERRORLEVEL%'
@@ -293,6 +295,11 @@ function Invoke-Tests([string]$Arm) {
     $process = switch ($Arm) {
         'lane-old' { Start-Tests $log $OldArchive $Root $Lane }
         'lane-fix' { Start-Tests $log $FixArchive $FixSource $Lane }
+        'tests-old' { Start-Tests $log $OldArchive $Root $Filter }
+        'tests-fix' { Start-Tests $log $FixArchive $FixSource $Filter }
+        # one experiment build: FETCHLOOM_EXP_REFS_LINKS puts back the links it no longer makes on refs
+        'tests-links' { Start-Tests $log $FixArchive $FixSource $Filter @('set "FETCHLOOM_EXP_REFS_LINKS=1"') }
+        'tests-nolinks' { Start-Tests $log $FixArchive $FixSource $Filter }
         default { Start-Tests $log }
     }
     $finished = 0
@@ -320,7 +327,7 @@ function Invoke-Tests([string]$Arm) {
 
 # runs one arm for $For seconds on the current volume: ops, the longest stall, and whether it hung
 function Invoke-Arm([string]$Arm, [int]$For) {
-    if ($Arm -in 'tests', 'lane-old', 'lane-fix') { return Invoke-Tests $Arm }
+    if ($Arm -like 'tests*' -or $Arm -like 'lane-*') { return Invoke-Tests $Arm }
     $progress = Join-Path $Work ("run-{0}-{1}.txt" -f $script:Iteration, $Arm)
     $process = Start-Stress $Arm $For $progress
     $deadline = (Get-Date).AddSeconds($For + 45)
@@ -379,19 +386,9 @@ while ((Get-Date) -lt $deadline) {
     if (-not $run.Hung) { continue }
     $counts[$arm].Hangs++
     Write-Host "::warning::job ${Job}: $arm hung on run $script:Iteration on $($script:Drive):"
-    if ($arm -notin 'link', 'seal-link', 'tree-link', 'tests', 'lane-old') { Save-Hang "$script:Iteration-$arm" $run.Process }
-    # the stuck process keeps its volume; refs must still work on a new one for the loop to go on
-    $next = [string][char]([int][char]$script:Drive + 1)
-    if ($next -gt 'Z') { break }
-    New-Volume $next
-    $fresh = $false
-    $probe = Invoke-Arm 'plain' 10
-    Write-Host ('probe on {0}: {1} ops, hang {2}' -f $script:Drive, $probe.Ops, $probe.Hung)
-    if ($probe.Hung) {
-        Write-Host "::warning::job ${Job}: after the hang refs hung on a new volume too, so the job ends"
-        Add-Content $Summary "$Job,$script:Iteration,probe,$($script:Drive),,10,$($probe.Ops),1,,"
-        break
-    }
+    if ($arm -notin 'link', 'seal-link', 'tree-link', 'tests', 'lane-old', 'tests-old', 'tests-links') { Save-Hang "$script:Iteration-$arm" $run.Process }
+    # once refs is stuck, diskpart hangs before it makes a new volume, so the job ends here
+    break
 }
 $tally = ($armList | ForEach-Object { '{0} {1}/{2} hung ({3} ops)' -f $_, $counts[$_].Hangs, $counts[$_].Runs, $counts[$_].Ops }) -join ', '
 Write-Host "::notice::job ${Job}: $tally"
