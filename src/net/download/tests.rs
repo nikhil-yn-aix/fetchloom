@@ -51,8 +51,8 @@ async fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
 }
 
 /// a server that sends a byte every 2 s is never silent for the 5 s timeout, yet a window as
-/// long as the timeout that moves less than 1 KiB fails the try as a silence does. a slow body
-/// that moves more goes on.
+/// long as the timeout that moves less than 1 KiB fails the try as a silence does, keeping the
+/// bytes it counted. a slow body that moves more goes on.
 #[tokio::test(start_paused = true)]
 async fn a_body_that_trickles_in_fails_the_try_as_a_silence_does() {
     let url = Url::parse("https://example.org/file").unwrap();
@@ -60,7 +60,7 @@ async fn a_body_that_trickles_in_fails_the_try_as_a_silence_does() {
     net.idle = std::time::Duration::from_secs(5);
     for (chunk, trickles) in [(1, true), (512, false)] {
         let (source, mut chunks) = tokio::sync::mpsc::channel(16);
-        let (sender, _written) = tokio::sync::mpsc::channel(16);
+        let (sender, mut written) = tokio::sync::mpsc::channel(16);
         let listener = |_| Ok(());
         let mut reading =
             std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, None));
@@ -78,6 +78,8 @@ async fn a_body_that_trickles_in_fails_the_try_as_a_silence_does() {
                 panic!("a body trickling in went on");
             };
             assert_eq!(reason, "example.org sent only 3 B in 5 s");
+            let kept: usize = written.try_recv().unwrap().iter().map(Bytes::len).sum();
+            assert_eq!(kept, 3, "the bytes the reason counts are kept");
         } else {
             assert!(read.is_pending(), "1.5 KiB in 6 s is slow, not stalled");
         }

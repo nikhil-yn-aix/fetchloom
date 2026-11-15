@@ -1339,9 +1339,11 @@ impl Net {
                 Ok(Some(chunk)) => {
                     asked = None;
                     let length = chunk.len() as u64;
-                    if let Err(moved) = trickle.heard(length, waiting_since.elapsed(), self.idle) {
-                        break Err(trickled(url, moved, self.idle));
-                    }
+                    // judged before the rate cap waits, and failed only once its bytes are kept,
+                    // as every byte that arrived is
+                    let stalled = trickle
+                        .heard(length, waiting_since.elapsed(), self.idle)
+                        .err();
                     if let Err(err) = self.throttle(url, chunk.len()).await {
                         break Err(err);
                     }
@@ -1351,6 +1353,9 @@ impl Net {
                         break Err(Failure::Final(err));
                     }
                     batch.push(chunk);
+                    if let Some(moved) = stalled {
+                        break Err(trickled(url, moved, self.idle));
+                    }
                     if batch.full() {
                         // a writer with every slot taken is the disk falling behind, which the
                         // bar tells apart from a server that sends nothing
