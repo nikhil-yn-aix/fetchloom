@@ -3,7 +3,9 @@
 // arms: plain (write, delete), link (write, hard link, delete), rename (write, rename without
 // replacing), clone (write, block clone, delete), fix (publish by rename, place by clone and rename),
 // seal-link and seal-fix (as link and fix, each file sealed as fetchloom seals an object: written,
-// dated, flushed and read-only, and removed by a posix delete that ignores read-only)
+// dated, flushed and read-only, and removed by a posix delete that ignores read-only), tree-link and
+// tree-fix (each pass a new small tree, as a test's sandbox: a probe link, then sealed files published
+// into objects/ and placed in data/, by links or by rename and clone, then the tree removed)
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -140,6 +142,52 @@ static class RefsStress
         }
     }
 
+    // one pass of a small tree, as a fetchloom command in a new sandbox makes and drops one
+    static void Tree(string folder, byte[] bytes, long size, bool links)
+    {
+        string tmp = Path.Combine(folder, "tmp");
+        string objects = Path.Combine(folder, "objects", "ab");
+        string data = Path.Combine(folder, "data", "set");
+        Directory.CreateDirectory(tmp);
+        Directory.CreateDirectory(objects);
+        Directory.CreateDirectory(data);
+        if (links)
+        {
+            string probe = Path.Combine(tmp, ".probe");
+            File.WriteAllBytes(probe, new byte[0]);
+            File.SetAttributes(probe, FileAttributes.Hidden);
+            string probed = Path.Combine(tmp, ".probe-link");
+            Check(CreateHardLinkW(probed, probe, IntPtr.Zero), "link " + probed);
+            Remove(probe);
+            Remove(probed);
+        }
+        for (int file = 0; file < 4; file++)
+        {
+            string part = Path.Combine(tmp, file + ".part");
+            string obj = Path.Combine(objects, "object" + file);
+            string placed = Path.Combine(data, file + ".csv");
+            Seal(part, bytes);
+            if (links)
+            {
+                Check(CreateHardLinkW(obj, part, IntPtr.Zero), "link " + obj);
+                Remove(part);
+                Check(CreateHardLinkW(placed, obj, IntPtr.Zero), "link " + placed);
+            }
+            else
+            {
+                File.SetAttributes(part, FileAttributes.Normal);
+                Rename(part, obj);
+                File.SetAttributes(obj, FileAttributes.ReadOnly);
+                string staged = Path.Combine(data, "." + file + ".copy");
+                Clone(obj, staged, size);
+                Rename(staged, placed);
+                File.SetAttributes(placed, FileAttributes.ReadOnly);
+            }
+        }
+        foreach (string file in Directory.GetFiles(folder, "*", SearchOption.AllDirectories)) Remove(file);
+        Directory.Delete(folder, true);
+    }
+
     static void Work(object state)
     {
         int index = (int)state;
@@ -153,6 +201,13 @@ static class RefsStress
         {
             while (!stop)
             {
+                if (arm.StartsWith("tree-"))
+                {
+                    Tree(Path.Combine(root, "t" + index + "-" + count++), bytes, size, arm == "tree-link");
+                    Interlocked.Increment(ref ops);
+                    Interlocked.Exchange(ref last[index], Stopwatch.GetTimestamp());
+                    continue;
+                }
                 string name = index + "-" + count++;
                 string a = Path.Combine(root, "a" + random.Next(Folders));
                 string b = Path.Combine(root, "b" + random.Next(Folders));
