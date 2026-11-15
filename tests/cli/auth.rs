@@ -788,6 +788,46 @@ fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
     Ok(())
 }
 
+/// a dataverse sign-in offered for a host this project's data.toml names says so before asking,
+/// since a file anyone could have written chose that host; one the person typed is not marked.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_dataverse_sign_in_for_a_host_data_toml_names_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let refused = || reply("401 Unauthorized", &[("Content-Length", "0")], b"");
+    let target = |id: &str| {
+        format!(
+            "/dv.example.org/api/datasets/:persistentId/versions/:latest-published?persistentId=doi%3A10.1%2F{id}"
+        )
+    };
+    let routes = Routes::start(vec![(target("X"), refused()), (target("Y"), refused())])?;
+    let named = "Check that you trust dv.example.org: this project's data.toml named it";
+    for (args, toml) in [
+        (&["add", "dataverse:dv.example.org/doi:10.1/Y"][..], false),
+        (&["sync"][..], true),
+    ] {
+        if toml {
+            std::fs::write(
+                sandbox.work().join("data.toml"),
+                "[datasets.x]\nref = \"dataverse:dv.example.org/doi:10.1/X\"\n",
+            )?;
+        }
+        let mut command = sandbox.command(args);
+        command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+        let Some((_, screen)) = crate::support::typed(&sandbox.work(), &command, "", "now?", "\r")?
+        else {
+            return Ok(());
+        };
+        let screen = screen.replace('\r', "");
+        assert!(
+            screen.contains("sign in to dataverse at dv.example.org now? [y/N]"),
+            "{screen}"
+        );
+        assert_eq!(screen.contains(named), toml, "{args:?}: {screen}");
+    }
+    Ok(())
+}
+
 /// the command runs again after signing in, and its refusal never offers another sign-in; a key
 /// kept for the command alone is named so, and a saved key's help says how to check it.
 #[cfg(target_os = "linux")]

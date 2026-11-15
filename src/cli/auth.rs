@@ -1102,6 +1102,14 @@ pub(super) async fn offer(
             output.link(terms)
         ));
     }
+    if let Account::Dataverse(host) = account
+        && named_here(account)
+    {
+        output.say(&format!(
+            "{:>11} that you trust {host}: this project's data.toml named it",
+            "Check"
+        ));
+    }
     if need.site {
         let signed = site::offered(context, account)
             .await
@@ -1126,6 +1134,29 @@ pub(super) async fn offer(
         .await
         .map_err(|error| error.cancelling(signing))?;
     Ok(true)
+}
+
+/// whether the data.toml of the project here names a dataset on the dataverse `account` signs in
+/// to, so the host a refusal offers a sign-in for came from a file, not from the person.
+fn named_here(account: &Account) -> bool {
+    std::env::current_dir()
+        .ok()
+        .and_then(|here| crate::project::Project::find(&here))
+        .and_then(|project| project.manifest().ok())
+        .is_some_and(|(_, manifest)| names(&manifest, account))
+}
+
+/// whether `manifest` names a dataset on the dataverse `account` signs in to.
+fn names(manifest: &crate::project::manifest::Manifest, account: &Account) -> bool {
+    use crate::source::Reference;
+    manifest.datasets.values().any(|entry| {
+        let crate::project::manifest::Origin::Source(source) = &entry.origin else {
+            return false;
+        };
+        Reference::parse(&source.reference).is_ok_and(|parsed| {
+            matches!(&parsed.reference, Reference::Dataverse(dataset) if dataset.account() == *account)
+        })
+    })
 }
 
 /// how to replace a key the source refused: a variable wins over the key a sign-in saves, so a
