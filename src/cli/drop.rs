@@ -134,10 +134,15 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
     let marked = project.dropped();
     let (state, _) = project.state();
     let cache = peek_cache().ok();
+    let planned = cache
+        .as_ref()
+        .and_then(|cache| crate::plan::from_cache(&manifest, &lock, cache).ok());
     let (mut asked, mut already, mut absent) = (Vec::new(), Vec::new(), Vec::new());
     for name in given {
         // a dataset dropped before whose bytes came back, as a build or push brings them, goes again
-        if here(&project.root, &state, cache.as_ref(), &lock, &name) {
+        if here(&project.root, &state, cache.as_ref(), &lock, &name)
+            || in_folder(&project.root, planned.as_ref(), &name)
+        {
             asked.push(name);
         } else if marked.contains(&name) {
             context.output.faint_step(
@@ -225,6 +230,28 @@ fn here(root: &Path, state: &State, cache: Option<&Cache>, lock: &Lock, name: &s
                 .keys()
                 .any(|digest| cache.find(digest, None).is_some())
         })
+}
+
+/// whether the data folder under `root` holds the pinned bytes of a file of `name` at its place in
+/// `planned`, as a copy of the project does while its state records none of them.
+fn in_folder(root: &Path, planned: Option<&crate::plan::Plan<'_>>, name: &str) -> bool {
+    planned.is_some_and(|planned| {
+        planned
+            .targets
+            .iter()
+            .filter(|target| target.dataset == name)
+            .any(|target| {
+                let file = native(root, &target.path);
+                std::fs::symlink_metadata(&file).is_ok_and(|found| {
+                    found.is_file()
+                        && place::holds_target(
+                            target,
+                            &crate::project::state::Look::of(&found),
+                            &file,
+                        )
+                })
+            })
+    })
 }
 
 /// why nothing of `name` is on this machine, as drop tells it.
@@ -693,7 +720,16 @@ fn preview(
     report: &mut Report,
 ) -> Result<(), Error> {
     let cache = peek_cache()?;
-    let survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
+    let mut survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
+    in_place(
+        context,
+        project,
+        (manifest, lock),
+        &cache,
+        &mut survey,
+        freeing,
+        "would keep",
+    );
     let copies = copies(&survey, freeing);
     let (without, unpinned) = without(manifest, lock, freeing);
     let scope = Scope::Only(freeing.clone());
@@ -734,6 +770,38 @@ fn preview(
     tell_kept(&context.output, &preview.placement, "would keep");
     report.placement = Some(preview.placement);
     Ok(())
+}
+
+/// takes as placed the files of `freeing` that hold their pinned bytes at their places while the
+/// state records none there, as in a copy of the project, whose state is not used, so the drop
+/// frees them as status counts them in place. one with other bytes stays, and a warning says so,
+/// with `verb`.
+fn in_place(
+    context: &Context,
+    project: &crate::project::Project,
+    (manifest, lock): (&Manifest, &Lock),
+    cache: &Cache,
+    survey: &mut Survey,
+    freeing: &BTreeSet<String>,
+    verb: &str,
+) {
+    // a plan that fails here fails the removal's own plan too, which says why
+    let Ok(planned) = crate::plan::from_cache(manifest, lock, cache) else {
+        return;
+    };
+    let targets: Vec<&crate::plan::Target> = planned
+        .targets
+        .iter()
+        .filter(|target| freeing.contains(target.dataset))
+        .collect();
+    for path in place::take_in_place(project, cache, survey, &targets) {
+        context.output.warn(
+            Warning::PlaceKept,
+            &format!(
+                "{path} holds other bytes than data.lock pins and fetchloom did not place it, so drop {verb} it"
+            ),
+        );
+    }
 }
 
 /// what `report` frees, after `verb`: its datasets, their bytes, and their files in the data
@@ -780,7 +848,16 @@ fn free(
     report: &mut Report,
 ) -> Result<(), Error> {
     let cache = super::cache::hold(context)?;
-    let survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
+    let mut survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
+    in_place(
+        context,
+        project,
+        (manifest, lock),
+        &cache,
+        &mut survey,
+        freeing,
+        "keeps",
+    );
     let copies = copies(&survey, freeing);
     let (without, unpinned) = without(manifest, lock, freeing);
     let scope = Scope::Only(freeing.clone());

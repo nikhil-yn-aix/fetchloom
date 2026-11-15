@@ -1619,6 +1619,36 @@ fn adopt(
     placement.unchanged += 1;
 }
 
+/// records as adopted each file at a place of `targets` the state records nothing at that holds
+/// its target's bytes, as status counts it in place, so a removal of its dataset frees it as a
+/// placed file, as in a copy of the project, whose state is not used. returns the paths of those
+/// holding other bytes, which stay.
+pub(crate) fn take_in_place(
+    project: &Project,
+    cache: &Cache,
+    survey: &mut Survey,
+    targets: &[&Target],
+) -> Vec<String> {
+    let mut other = Vec::new();
+    for target in targets {
+        if survey.state.files.contains_key(&target.path) {
+            continue;
+        }
+        let Some(seen) = survey.disk.get(&target.path).copied() else {
+            continue;
+        };
+        let destination = native(&project.root, &target.path);
+        if holds_target(target, &seen, &destination) {
+            let mut found = adoption(target, seen, &destination, cache, survey.started);
+            found.adopted = found.method != Method::Hardlink;
+            survey.state.files.insert(target.path.clone(), found);
+        } else {
+            other.push(target.path.clone());
+        }
+    }
+    other
+}
+
 /// counts a replaced file as restored when no edit of this project's put it in the survey.
 fn restore(survey: &Survey, path: &str, placement: &mut Placement) {
     if survey.elsewhere.contains(path) {

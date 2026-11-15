@@ -41,7 +41,7 @@ fn copied(sandbox: &Sandbox, name: &str) -> Result<(PathBuf, PathBuf)> {
 
 /// copies every file below `from` into `to`, keeping each file's modification time and
 /// read-only flag.
-fn copy_tree(from: &Path, to: &Path) -> Result {
+pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;

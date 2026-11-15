@@ -324,6 +324,57 @@ fn a_dataset_with_nothing_here_has_nothing_to_drop() -> Result {
     Ok(())
 }
 
+/// in a copy of the project, whose state is not used, drop takes the files that hold the pinned
+/// bytes as placed, as status counts them in place, and frees them, so status then agrees; one with
+/// other bytes stays, and drop says why.
+#[test]
+fn a_drop_in_a_copied_project_frees_the_files_in_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = iris(&sandbox)?;
+    let (two, three) = (sandbox.folder("two")?, sandbox.folder("three")?);
+    for copy in [&two, &three] {
+        crate::copied::copy_tree(&sandbox.work(), copy)?;
+    }
+    let output = sandbox
+        .command_in(&two, &["--json", "--yes", "drop", "iris"])
+        .output()?;
+    ok(&output)?;
+    let result = &json(&output)?["result"];
+    assert_eq!(result["files"], 1, "{result}");
+    assert!(!two.join("data/iris/iris.csv").exists());
+    let status = sandbox.command_in(&two, &["status"]).output()?;
+    ok(&status)?;
+    assert_eq!(text(&status.stdout)?, "");
+    assert!(
+        text(&status.stderr)?.contains("Dropped iris · freed on this machine"),
+        "{}",
+        text(&status.stderr)?
+    );
+    let other = three.join("data/iris/iris.csv");
+    edit(&other, b"my notes\n")?;
+    let output = sandbox
+        .command_in(&three, &["--yes", "drop", "iris"])
+        .output()?;
+    ok(&output)?;
+    let told = text(&output.stderr)?;
+    assert!(
+        told.contains("warning: data/iris/iris.csv holds other bytes than data.lock pins and fetchloom did not place it, so drop keeps it\n"),
+        "{told}"
+    );
+    assert_eq!(fs::read(&other)?, b"my notes\n");
+    // on a machine whose cache never held them, the data folder's files are still this machine's
+    let (four, cache) = (sandbox.folder("four")?, sandbox.folder("four cache")?);
+    crate::copied::copy_tree(&sandbox.work(), &four)?;
+    let output = sandbox
+        .command_in(&four, &["--json", "--yes", "drop", "iris"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    ok(&output)?;
+    assert_eq!(json(&output)?["result"]["files"], 1);
+    assert!(!four.join("data/iris/iris.csv").exists());
+    Ok(())
+}
+
 /// a dataset dropped before whose bytes came back into the cache, as a build or a push brings
 /// them, is freed again rather than called dropped already.
 #[test]
