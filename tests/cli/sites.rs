@@ -1328,6 +1328,8 @@ fn a_cookie_a_signed_in_site_sets_goes_only_where_its_credential_may() -> Result
         "--yes",
     ])?;
     assert!(login.status.success(), "{}", text(&login.stderr)?);
+    // only the proxy can look up files.data.lab, so the redirect there goes only once allowed
+    sandbox.allow("http://files.data.lab/");
     let proxied = sandbox
         .command(&["get", "http://data.lab/renew", "-o", "two.csv"])
         .env("HTTP_PROXY", &proxy.url)

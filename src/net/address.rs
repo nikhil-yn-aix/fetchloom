@@ -121,6 +121,11 @@ impl Typed {
         self.hosts().refused(reason, &key(host))
     }
 
+    /// whether a person gave `host`, by a trusted origin on it.
+    fn trusts_host(&self, host: &str) -> bool {
+        self.hosts().trusts_on(&key(host))
+    }
+
     /// whether the origin of `url` is trusted.
     pub(crate) fn trusts(&self, url: &Url) -> bool {
         self.hosts().origins.contains(&url.origin())
@@ -337,8 +342,8 @@ pub(crate) struct Proxies {
     matcher: Matcher,
     /// each variable that names a proxy, with the proxy it names, as the matcher reads them.
     named: Vec<(&'static str, http::Uri)>,
-    /// for each host looked up, why it was refused, if it was.
-    looked_up: Mutex<HashMap<String, Option<String>>>,
+    /// what looking up each host found.
+    looked_up: Mutex<HashMap<String, Looked>>,
     /// what this run decided about each proxy it checked, by host and port.
     checked: Mutex<HashMap<(String, u16), reach::Verdict>>,
     #[cfg(test)]
@@ -478,7 +483,8 @@ impl Proxies {
 
     /// checks `url` before a proxy carries it: the proxy resolves names itself, so an untrusted
     /// host is looked up here first and refused when any address is private. a name this machine
-    /// cannot resolve is left to the proxy, since some networks resolve names only through it.
+    /// cannot look up is refused too, unless a person gave the host, by a link or
+    /// `allowed_origins`, since only the proxy knows where it leads.
     pub(crate) async fn check(&self, url: &Url, typed: &Typed) -> Result<(), Refused> {
         let Some(proxy) = url
             .as_str()
@@ -499,15 +505,25 @@ impl Proxies {
             return Ok(());
         }
         let known = self.lock().get(&name).cloned();
-        let refused = if let Some(refused) = known {
-            refused
+        let looked = if let Some(looked) = known {
+            looked
         } else {
             let port = url.port_or_known_default().unwrap_or(443);
-            let refused = self.lookup(&name, port).await;
-            self.lock().insert(name.clone(), refused.clone());
-            refused
+            let looked = self.lookup(&name, port).await;
+            self.lock().insert(name.clone(), looked.clone());
+            looked
         };
-        refused.map_or(Ok(()), |reason| Err(typed.refused(reason, &name)))
+        match looked {
+            Looked::Public => Ok(()),
+            Looked::Unknown if typed.trusts_host(&name) => Ok(()),
+            Looked::Unknown => Err(typed.refused(
+                format!(
+                    "this machine cannot look up {name}, so only the proxy knows where it leads, which may be a server on its own network"
+                ),
+                &name,
+            )),
+            Looked::Private(reason) => Err(typed.refused(reason, &name)),
+        }
     }
 
     #[cfg(test)]
@@ -544,29 +560,53 @@ impl Proxies {
         }
     }
 
-    async fn lookup(&self, name: &str, port: u16) -> Option<String> {
+    async fn lookup(&self, name: &str, port: u16) -> Looked {
         #[cfg(test)]
         if let Some(lookup) = &self.test_lookup {
-            return lookup(name.to_owned(), port).await;
+            return lookup(name.to_owned(), port)
+                .await
+                .map_or(Looked::Public, Looked::Private);
         }
-        private_address(name, port).await
+        look_up(name, port).await
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Option<String>>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Looked>> {
         self.looked_up
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
-/// why `name` may not go through a proxy, when this machine resolves it to a private address.
-async fn private_address(name: &str, port: u16) -> Option<String> {
-    let mut found = tokio::net::lookup_host((name, port)).await.ok()?;
-    let address = found.find(|address| is_private(address.ip()))?;
-    Some(format!(
-        "{name} resolves to the private address {}, and a proxy would reach it",
-        address.ip()
-    ))
+/// what this machine's lookup of a name a proxy would carry found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Looked {
+    /// public addresses alone.
+    Public,
+    /// a private address, which the proxy would reach, for this reason.
+    Private(String),
+    /// no address: a split dns, or a name such as metadata.google.internal, leads where only the
+    /// proxy knows.
+    Unknown,
+}
+
+/// what this machine's lookup of `name` at `port` finds.
+async fn look_up(name: &str, port: u16) -> Looked {
+    let found = tokio::net::lookup_host((name, port)).await;
+    looked(name, found.map(Iterator::collect))
+}
+
+/// what looking up `name` `found`.
+fn looked(name: &str, found: std::io::Result<Vec<SocketAddr>>) -> Looked {
+    let Some(found) = found.ok().filter(|found| !found.is_empty()) else {
+        return Looked::Unknown;
+    };
+    match found.iter().find(|address| is_private(address.ip())) {
+        Some(address) => Looked::Private(format!(
+            "{name} resolves to the private address {}, and a proxy would reach it",
+            address.ip()
+        )),
+        None => Looked::Public,
+    }
 }
 
 /// resolves names for one HTTP client, keeping the private addresses only that its `reach`

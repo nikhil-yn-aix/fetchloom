@@ -37,6 +37,42 @@ fn proxy_verdicts_are_cached_and_typed_origins_skip_preflight() {
     }
 }
 
+/// a name this machine cannot look up, or that has no address, goes through a proxy no more
+/// than a private address does: only the proxy knows where it leads, which may be a server on
+/// its own network, as metadata.google.internal is on a cloud machine. a host a person gave, on
+/// another of its origins, still goes, as a typed http link that moves to https does.
+#[test]
+fn a_name_only_the_proxy_can_look_up_goes_only_for_a_host_a_person_gave() {
+    let unknown = || std::io::Error::new(std::io::ErrorKind::NotFound, "Name or service not known");
+    let address = |text: &str| -> SocketAddr { text.parse().unwrap() };
+    let name = "metadata.google.internal";
+    for (found, expected) in [
+        (Err(unknown()), Looked::Unknown),
+        (Ok(Vec::new()), Looked::Unknown),
+        (Ok(vec![address("8.8.8.8:80")]), Looked::Public),
+        (
+            Ok(vec![address("8.8.8.8:80"), address("169.254.169.254:80")]),
+            Looked::Private(
+                "metadata.google.internal resolves to the private address 169.254.169.254, and a proxy would reach it"
+                    .to_owned(),
+            ),
+        ),
+    ] {
+        assert_eq!(looked(name, found), expected);
+    }
+    let proxies = Proxies::with_lookup("http://127.0.0.1:9", |_, _| Box::pin(async { None }));
+    proxies.lock().insert(name.to_owned(), Looked::Unknown);
+    let typed = Typed::default();
+    let url = Url::parse("https://metadata.google.internal/computeMetadata/v1/").unwrap();
+    let refused = block_on(proxies.check(&url, &typed)).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "this machine cannot look up metadata.google.internal, so only the proxy knows where it leads, which may be a server on its own network"
+    );
+    typed.add(&Url::parse("http://metadata.google.internal/").unwrap());
+    assert!(block_on(proxies.check(&url, &typed)).is_ok());
+}
+
 #[test]
 fn a_proxy_is_shown_without_its_login() {
     let url = Url::parse("https://data.example.org/iris.csv").unwrap();
