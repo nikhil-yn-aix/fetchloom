@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use super::put::Tally;
 use super::{
     Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope,
-    Undroppable,
+    Unexcludable,
 };
 use crate::output::{Output, Warning};
 use crate::place::{Because, Placer, Unlinked};
@@ -134,7 +134,7 @@ fn warn_unreached(output: &Output, unreached: &[plan::Unreached]) {
     }
 }
 
-/// what an exclude naming files inside an archive leaves undone, and the drop that does it.
+/// what an exclude naming files inside an archive leaves undone, and the command that does it.
 fn unreached_said(found: &plan::Unreached) -> (String, String) {
     let inside = match found.archives.as_slice() {
         [one] => one
@@ -144,12 +144,13 @@ fn unreached_said(found: &plan::Unreached) -> (String, String) {
         many => format!("{} archives", units::grouped(many.len() as u64)),
     };
     let first = found.paths.first().map_or("", String::as_str);
-    let command = crate::cli::project::command(&format!("drop {}", crate::cli::shell_word(first)));
+    let command =
+        crate::cli::project::command(&format!("exclude {}", crate::cli::shell_word(first)));
     let (what, help) = match found.paths.len() {
         1 => ("a file".to_owned(), format!("run `{command}`")),
         count => (
             format!("{} files", units::grouped(count as u64)),
-            format!("run `fetchloom drop` with their paths, as `{command}`"),
+            format!("run `fetchloom exclude` with their paths, as `{command}`"),
         ),
     };
     (
@@ -201,7 +202,7 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
     let mut leave = Vec::new();
     if let Some((name, files, path)) = items
         .iter()
-        .find(|(_, _, path)| !placement.undroppable.contains_key(*path))
+        .find(|(_, _, path)| !placement.unexcludable.contains_key(*path))
     {
         let (what, name) = if *files > 1 {
             ("folder", *name)
@@ -210,22 +211,22 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
         };
         leave.push(format!(
             "to leave a {what} out for good, run `{}`",
-            crate::cli::project::command(&format!("drop {}", crate::cli::shell_word(name)))
+            crate::cli::project::command(&format!("exclude {}", crate::cli::shell_word(name)))
         ));
     }
     let mut told = BTreeSet::new();
     for (path, why) in paths
         .iter()
-        .filter_map(|path| Some((*path, placement.undroppable.get(*path)?)))
+        .filter_map(|path| Some((*path, placement.unexcludable.get(*path)?)))
     {
         if leave.len() == NAMED {
             break;
         }
         match why {
-            Undroppable::Made(recipe) if told.insert(recipe) => leave.push(format!(
+            Unexcludable::Made(recipe) if told.insert(recipe) => leave.push(format!(
                 "{recipe} makes {path}, so to leave it out for good, choose the files inside {recipe}'s step"
             )),
-            Undroppable::Only(dataset) if told.insert(dataset) => leave.push(format!(
+            Unexcludable::Only(dataset) if told.insert(dataset) => leave.push(format!(
                 "{path} is the only file of {dataset}, so to leave it out for good, run `{}`",
                 crate::cli::project::command(&format!("remove {dataset}"))
             )),
@@ -1178,7 +1179,7 @@ mod tests {
         }
     }
 
-    /// the help gives drop with the first file it can leave out, quoted for a shell, else a
+    /// the help gives exclude with the first file it can leave out, quoted for a shell, else a
     /// recipe's step or a dataset's removal, and `data_dir` when the whole data folder was gone.
     #[test]
     fn files_put_back_are_counted_and_the_first_five_named() {
@@ -1196,9 +1197,9 @@ mod tests {
             false,
         );
         let manifest = Manifest::parse("[datasets.pets]\nref = \"x\"\n").unwrap();
-        let put_back = |paths: &[&str], undroppable: Vec<(&str, Undroppable)>| Placement {
+        let put_back = |paths: &[&str], unexcludable: Vec<(&str, Unexcludable)>| Placement {
             put_back: paths.iter().map(|path| (*path).to_owned()).collect(),
-            undroppable: undroppable
+            unexcludable: unexcludable
                 .into_iter()
                 .map(|(path, why)| (path.to_owned(), why))
                 .collect(),
@@ -1208,7 +1209,7 @@ mod tests {
             .map(|n| format!("data/pets/my images/{n}.png"))
             .collect();
         let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let made = || Undroppable::Made("thumbs".to_owned());
+        let made = || Unexcludable::Made("thumbs".to_owned());
         warn_put_back(&output, &manifest, &put_back(&paths, vec![]), "put back");
         let first = put_back(&paths[..1], vec![]);
         warn_put_back(&output, &manifest, &first, "a sync would put back");
@@ -1222,13 +1223,13 @@ mod tests {
         warn_put_back(&output, &manifest, &result, "put back");
         let only = put_back(
             &["data/m/m.csv"],
-            vec![("data/m/m.csv", Undroppable::Only("m".to_owned()))],
+            vec![("data/m/m.csv", Unexcludable::Only("m".to_owned()))],
         );
         warn_put_back(&output, &manifest, &only, "put back");
         let both = put_back(
             &["data/m/m.csv", "data/thumbs/a.png"],
             vec![
-                ("data/m/m.csv", Undroppable::Only("m".to_owned())),
+                ("data/m/m.csv", Unexcludable::Only("m".to_owned())),
                 ("data/thumbs/a.png", made()),
             ],
         );
@@ -1242,13 +1243,13 @@ mod tests {
             output.warned(),
             [
                 format!(
-                    "put back 7 files that were deleted or moved, since data.lock pins them: data/pets/my images/1.png, data/pets/my images/2.png, data/pets/my images/3.png, data/pets/my images/4.png, data/pets/my images/5.png and 2 more; to leave a file out for good, run `fetchloom drop \"data/pets/my images/1.png\"`; {own}"
+                    "put back 7 files that were deleted or moved, since data.lock pins them: data/pets/my images/1.png, data/pets/my images/2.png, data/pets/my images/3.png, data/pets/my images/4.png, data/pets/my images/5.png and 2 more; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`; {own}"
                 ),
                 format!(
-                    "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; to leave a file out for good, run `fetchloom drop \"data/pets/my images/1.png\"`; {own}"
+                    "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`; {own}"
                 ),
                 format!(
-                    "put back 2 files that were deleted or moved, since data.lock pins them: data/thumbs/a.png, data/pets/b.png; to leave a file out for good, run `fetchloom drop data/pets/b.png`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
+                    "put back 2 files that were deleted or moved, since data.lock pins them: data/thumbs/a.png, data/pets/b.png; to leave a file out for good, run `fetchloom exclude data/pets/b.png`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
                 ),
                 format!(
                     "put back data/thumbs/a.png, which was deleted or moved, since data.lock pins it; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
@@ -1260,7 +1261,7 @@ mod tests {
                     "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/thumbs/a.png; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside thumbs's step; {own}"
                 ),
                 format!(
-                    "put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more; to leave a file out for good, run `fetchloom drop data/pets/0.png`; {own}; to keep the data folder somewhere else than data/, set data_dir in data.toml"
+                    "put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more; to leave a file out for good, run `fetchloom exclude data/pets/0.png`; {own}; to keep the data folder somewhere else than data/, set data_dir in data.toml"
                 ),
             ]
         );

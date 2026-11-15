@@ -1,4 +1,4 @@
-//! `fetchloom drop`: files left out of their dataset for good, by patterns in data.toml, from
+//! `fetchloom exclude`: files left out of their dataset for good, by patterns in data.toml, from
 //! data.lock for files a source lists, and from the data folder when unchanged. it asks no server.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 
-use super::args::Drop;
+use super::args::Exclude;
 use super::project::{committed, dry_run_done, find, hold};
 use super::sync::disk::Survey;
 use super::sync::place::{self, Changes, Placement};
@@ -23,12 +23,12 @@ use crate::project::manifest::{self, Manifest, Narrowing};
 use crate::recipe;
 use crate::units;
 
-/// what `drop` did, or with `--dry-run` would do, as `--json` prints it.
+/// what `exclude` did, or with `--dry-run` would do, as `--json` prints it.
 #[derive(Serialize)]
 pub(super) struct Report {
     project: PathBuf,
     /// each file left out, by its path in the project.
-    dropped: Vec<Left>,
+    excluded: Vec<Left>,
     copied: Vec<Copied>,
     lock_changed: bool,
     placement: Option<Placement>,
@@ -77,7 +77,7 @@ struct Asked<'p, 'a> {
 /// each one's path inside the archive.
 type Inside = HashMap<String, String>;
 
-/// what drop writes for one dataset.
+/// what exclude writes for one dataset.
 #[derive(Default)]
 struct Edit<'a> {
     /// patterns for the dataset's own exclude, which leave out files its source lists.
@@ -121,13 +121,13 @@ impl<'p> Pace<'p> {
     }
 }
 
-pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> {
+pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Error> {
     let project = find(&context.output)?;
     let dry_run = args.dry.dry_run;
     let _held = if dry_run {
         None
     } else {
-        Some(hold(context, &project, "drop").await?)
+        Some(hold(context, &project, "exclude").await?)
     };
     let (text, manifest) = project.manifest()?;
     let lock = project.lock()?.unwrap_or_default();
@@ -147,7 +147,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     let mut pace = Pace::new(&poll);
     let progress = context.output.wait("Planning", planning(&paths));
     pace.look()?;
-    // a dataset with `place = false` is planned where its files would land, so they drop too
+    // a dataset with `place = false` is planned where its files would land, so exclude reaches them
     let planned = plan::inputs(&manifest, &lock, &cache)?;
     let asked = asked(
         &manifest,
@@ -163,8 +163,8 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     let (updated, new_lock) = written(&text, &manifest, &lock, &edits, &pace)?;
     let new_manifest = Manifest::parse(&updated)?;
     let lock_changed = edits.values().any(|edit| !edit.leaving.is_empty());
-    let mut dropped: Vec<Left> = edits.values().flat_map(|edit| edit.left.clone()).collect();
-    dropped.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut excluded: Vec<Left> = edits.values().flat_map(|edit| edit.left.clone()).collect();
+    excluded.sort_by(|a, b| a.path.cmp(&b.path));
     let copied = copies(&edits);
     let scope = Scope::Only(edits.keys().map(|name| (*name).to_owned()).collect());
     pace.look()?;
@@ -187,7 +187,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     pace.look()?;
     let report = |placement, changes| Report {
         project: project.root.clone(),
-        dropped: dropped.clone(),
+        excluded: excluded.clone(),
         copied: copied.clone(),
         lock_changed,
         placement: Some(placement),
@@ -204,7 +204,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         dry_run_done(&context.output, None);
         return Ok(report(preview.placement, Some(preview.changes)));
     }
-    // the last look for a stop: once the files change, the drop runs to its end
+    // the last look for a stop: once the files change, the command runs to its end
     pace.look()?;
     context.stop.finish();
     drop(progress);
@@ -247,7 +247,7 @@ fn copies(edits: &BTreeMap<&str, Edit>) -> Vec<Copied> {
         .collect()
 }
 
-/// a stop asked while drop plans, which writes nothing, so the stop says that nothing changed.
+/// a stop asked while exclude plans, which writes nothing, so the stop says that nothing changed.
 fn unchanged_by_a_stop(stop: &crate::stop::Stop) -> Result<(), Error> {
     stop.check().map_err(|mut error| {
         error.message = format!("{}, so nothing changed", error.message);
@@ -288,7 +288,9 @@ fn tell_next(
                 } else {
                     "data.toml"
                 };
-                format!("commit {changed}; other clones drop them at their next `fetchloom sync`")
+                format!(
+                    "commit {changed}; other clones leave them out at their next `fetchloom sync`"
+                )
             }
             recipes => format!(
                 "run `{}`, then commit data.toml, data.lock and data.lock.d",
@@ -323,9 +325,9 @@ fn built_again<'m>(manifest: &'m Manifest, changed: &[&str]) -> Vec<&'m str> {
 
 fn planning(paths: &[String]) -> String {
     match paths {
-        [one] => format!("the drop of {one}"),
+        [one] => format!("to exclude {one}"),
         many => format!(
-            "the drop of {}",
+            "to exclude {}",
             units::count(many.len() as u64, "path", "paths")
         ),
     }
@@ -343,7 +345,7 @@ fn in_data_folder(root: &Path, here: &Path, data_dir: &str, arg: &Path) -> Resul
             ),
         )
         .help(format!(
-            "drop leaves out files data.lock places in {data_dir}/; delete other files yourself"
+            "exclude leaves out files data.lock places in {data_dir}/; delete other files yourself"
         ))
     };
     let joined = here.join(arg);
@@ -498,7 +500,7 @@ fn unplanned(
     if let Some(wild) = path.chars().find(|c| matches!(c, '*' | '?' | '[')) {
         return error
             .detail(format!(
-                "drop takes paths, not patterns, so {wild} is part of the name it looks for"
+                "exclude takes paths, not patterns, so {wild} is part of the name it looks for"
             ))
             .help(exclude_help(manifest, lock, cache, sorted, path));
     }
@@ -510,7 +512,7 @@ fn unplanned(
                 super::meant(
                     &[typed],
                     &[&retyped],
-                    format!("fetchloom drop {}", super::shell_word(&retyped)),
+                    format!("fetchloom exclude {}", super::shell_word(&retyped)),
                 )
             ),
             _ => format!("did you mean {meant}?"),
@@ -518,7 +520,7 @@ fn unplanned(
         return error.help(help);
     }
     error.help(
-        "check the path; a file of your own needs no drop: delete it yourself if you do not need it",
+        "check the path; exclude leaves out files data.lock places, so delete a file of your own yourself if you do not need it",
     )
 }
 
@@ -581,7 +583,7 @@ fn retyped(typed: &Path, path: &str, meant: &str) -> Option<String> {
     Some(format!("{}{}", &typed[..start], changed[first..].join("/")))
 }
 
-/// the help for `path`, a pattern given where drop takes a path: the exclude to write and where,
+/// the help for `path`, a pattern given where exclude takes a path: the exclude to write and where,
 /// when its folder holds planned files of one dataset from its source's list or one archive.
 fn exclude_help(
     manifest: &Manifest,
@@ -846,7 +848,7 @@ fn missing_pin(dataset: &str) -> Error {
         format!("data.lock does not pin {dataset}"),
     )
     .help(format!(
-        "run `{}`, then drop again",
+        "run `{}`, then exclude again",
         super::project::command("sync")
     ))
 }
@@ -865,7 +867,7 @@ fn unpacked(
             format!("the cache lost what {} unpacked to", file.path),
         )
         .help(format!(
-            "run `{}`, then drop again",
+            "run `{}`, then exclude again",
             super::project::command("sync")
         ))
     })?;
@@ -1020,8 +1022,8 @@ fn whole_archives<'a>(
     }
 }
 
-/// refuses a drop that would leave a dataset no file, or move files it keeps. data.lock can drop a
-/// listed file offline only while it pins what data.toml asks.
+/// refuses an exclude that would leave a dataset no file, or move files it keeps. data.lock can
+/// leave out a listed file offline only while it pins what data.toml asks.
 fn refuse_what_breaks(
     manifest: &Manifest,
     lock: &Lock,
@@ -1057,10 +1059,10 @@ fn refuse_what_breaks(
         {
             return Err(Error::new(
                 Kind::Outdated,
-                format!("data.toml changed {dataset} since data.lock was written, so drop cannot leave files out of its pin"),
+                format!("data.toml changed {dataset} since data.lock was written, so exclude cannot leave files out of its pin"),
             )
             .help(format!(
-                "run `{}` to bring data.lock in line, then drop again",
+                "run `{}` to bring data.lock in line, then exclude again",
                 super::project::command("sync")
             )));
         }
@@ -1321,7 +1323,7 @@ mod tests {
     /// a recipe another rebuilt recipe is made from builds along with it, and recipes made from
     /// other datasets stay out.
     #[test]
-    fn a_drop_names_the_builds_that_make_every_result_again() {
+    fn an_exclude_names_the_builds_that_make_every_result_again() {
         let manifest = Manifest::parse(concat!(
             "[datasets.lab]\nref = \"local\"\n\n",
             "[datasets.mnist]\nref = \"local\"\n\n",
@@ -1505,7 +1507,7 @@ mod tests {
         }
     }
 
-    /// what drop leaves out of one dataset: `exclude` in its own table, the same paths leaving
+    /// what exclude leaves out of one dataset: `exclude` in its own table, the same paths leaving
     /// data.lock, and `members`, patterns for an archive's table.
     fn leaves<'a>(exclude: &[&'a str], members: &[(&'a str, &str)]) -> Edit<'a> {
         let mut by_archive: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
@@ -1537,7 +1539,7 @@ mod tests {
     /// an archive a glob covered gets its own table copied from it, one that leaves whole takes its
     /// own table with it, and every comment and the layout around them stay.
     #[test]
-    fn a_drop_across_datasets_writes_each_dataset_in_place() {
+    fn an_exclude_across_datasets_writes_each_dataset_in_place() {
         let manifest = Manifest::parse(ACROSS).unwrap();
         let lock = Lock {
             datasets: vec![
@@ -1600,7 +1602,7 @@ mod tests {
     }
 
     #[test]
-    fn a_drop_across_many_datasets_reads_data_toml_as_often_as_across_few() {
+    fn an_exclude_across_many_datasets_reads_data_toml_as_often_as_across_few() {
         let reads = |count: usize| {
             let mut text = String::new();
             for at in 0..count {
@@ -1642,7 +1644,7 @@ mod tests {
     /// names come in name order, and a dataset whose archive was never unpacked here is not
     /// counted out.
     #[test]
-    fn a_drop_across_datasets_refuses_the_first_left_with_no_file() {
+    fn an_exclude_across_datasets_refuses_the_first_left_with_no_file() {
         let manifest = Manifest::parse(concat!(
             "[datasets.a]\nref = \"local\"\n\n[datasets.b]\nref = \"local\"\n\n",
             "[datasets.c]\nref = \"local\"\n\n[datasets.d]\nref = \"local\"\n",

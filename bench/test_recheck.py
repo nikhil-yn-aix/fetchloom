@@ -49,11 +49,11 @@ class FixtureTests(unittest.TestCase):
             recheck.sources(root, 0.0001, 7, "http://127.0.0.1:10")
             self.assertFalse(kept.exists())
 
-    def test_the_drop_names_one_file_of_every_dataset(self):
+    def test_the_exclude_names_one_file_of_every_dataset(self):
         with tempfile.TemporaryDirectory() as folder:
             project = Path(folder)
             (project / "data.toml").write_text('[datasets.p00001]\nref = "local"\n\n[datasets.p00000]\nref = "local"\n')
-            self.assertEqual(recheck.drop_paths(project), ["data/p00000/remove.bin", "data/p00001/remove.bin"])
+            self.assertEqual(recheck.exclude_paths(project), ["data/p00000/remove.bin", "data/p00001/remove.bin"])
 
     def test_every_arm_runs_a_fresh_copy_and_the_aa_arm_the_baseline(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -111,7 +111,7 @@ class PreparationTests(unittest.TestCase):
         binary = build(self.root / "fetchloom")
         folder = recheck.prepare(self.root, "fetchloom+candidate", binary, self.signature, "http://127.0.0.1:9")
         self.assertEqual(folder, self.root / "fx/fetchloom-candidate")
-        self.assertEqual(recheck.drop_paths(folder / "drop"), [f"data/p0000{index}/remove.bin" for index in range(3)])
+        self.assertEqual(recheck.exclude_paths(folder / "exclude"), [f"data/p0000{index}/remove.bin" for index in range(3)])
         merged = (folder / "merge/data.toml").read_text()
         self.assertTrue(merged.startswith("<<<<<<< ours\n[datasets.ours]") and "=======\n[datasets.theirs]" in merged, merged)
         marker = (folder / "ready.json").stat().st_mtime_ns

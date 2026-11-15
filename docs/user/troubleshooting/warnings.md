@@ -4,8 +4,8 @@
 |---|---|---|
 | `fl` runs another program, or an installer said it left `fl` alone | type `fetchloom`, which always works. the installers never replace or hide another `fl`, so for the short name add `alias fl=fetchloom` to your shell's startup file; in powershell, `fl` is the alias of `Format-List` | [short name](../guides/windows.md#short-name) |
 | sync succeeds but a file is still edited | sync keeps conflicts: inspect `status` and JSON `placement.kept`, and save edits before choosing `--force` | [local changes](../commands/sync.md#local-changes) |
-| `warning: put back data/pets/images/x.png, which was deleted or moved, since data.lock pins it` | to leave it out for good, run `fetchloom drop <path>`, which takes a folder too; keep files of your own outside the data folder | [local changes](../commands/sync.md#local-changes) |
-| `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | run the `fetchloom drop` the help names, which writes the archive's members table | [drop](../commands/drop.md) |
+| `warning: put back data/pets/images/x.png, which was deleted or moved, since data.lock pins it` | to leave it out for good, run `fetchloom exclude <path>`, which takes a folder too; keep files of your own outside the data folder | [local changes](../commands/sync.md#local-changes) |
+| `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | run the `fetchloom exclude` the help names, which writes the archive's members table | [exclude](../commands/exclude.md) |
 | `warning: <path> was put back as pinned: it is linked to the cache's copy, which was changed. the changed copy is kept as <path>.changed` | nothing: sync downloaded the file again, and the edit is in the `.changed` file. use `copy = true` for files you edit | [local changes](../commands/sync.md#local-changes) |
 | `warning: <path> was edited, and the file is shared with other projects, so they see the edit too` | a hardlink shared by several projects changed after the cache lost its own copy: save the edit, then run `fetchloom sync --force` in each project, and use `copy = true` for files you edit | [local changes](../commands/sync.md#local-changes) |
 | `warning: <path> is a link where data.lock places a file` | move what you need, then run `fetchloom sync --force`, which removes the link itself, never what it points to | [local changes](../commands/sync.md#local-changes) |
@@ -52,7 +52,7 @@
 | symptom | cause | fix |
 |---|---|---|
 | the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
-| `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | a dataset's `exclude` chooses among the files its source lists, and the archive is one of them. sync warns when it lists the source again and the pattern matches none of those files | run the [`fetchloom drop`](../commands/drop.md) the help names, which writes the archive's [members table](../reference/data-toml.md#files-inside-archives); a dry run warns the same way |
+| `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | a dataset's `exclude` chooses among the files its source lists, and the archive is one of them. sync warns when it lists the source again and the pattern matches none of those files | run the [`fetchloom exclude`](../commands/exclude.md) the help names, which writes the archive's [members table](../reference/data-toml.md#files-inside-archives); a dry run warns the same way |
 
 ### status
 

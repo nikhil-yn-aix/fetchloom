@@ -52,7 +52,7 @@ threads           2                        resources = lean  FETCHLOOM_THREADS
 
 `fetchloom settings --json` gives those values the origin `resources`.
 
-`-v` starts each command that downloads, hashes or places files, `add`, `remove`, `drop`, `sync`, `lock`, `build`, `status`, `path`, `push`, `get` and `cache verify`, with what that run spends: downloads at once and to one host, the local workers one step runs at most, the memory budget for buffers, and hash lanes, which is two when a download that needs an MD5 beside its SHA-256 may hash it on a second worker. a line below names what holds each number that is not fetchloom's own default: a level, a variable or the settings file, the processors this process may use, or the memory the system or a cgroup leaves. stderr from a run in a cgroup limited to 512 MiB and two processors' time, on a machine of 24:
+`-v` starts each command that downloads, hashes or places files, `add`, `remove`, `exclude`, `sync`, `lock`, `build`, `status`, `path`, `push`, `get` and `cache verify`, with what that run spends: downloads at once and to one host, the local workers one step runs at most, the memory budget for buffers, and hash lanes, which is two when a download that needs an MD5 beside its SHA-256 may hash it on a second worker. a line below names what holds each number that is not fetchloom's own default: a level, a variable or the settings file, the processors this process may use, or the memory the system or a cgroup leaves. stderr from a run in a cgroup limited to 512 MiB and two processors' time, on a machine of 24:
 
 ```text
   Resources default: 8 downloads at once, 4 to one host, 2 local workers, 254.8 MiB for buffers, 2 hash lanes

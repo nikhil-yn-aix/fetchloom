@@ -240,7 +240,7 @@ fn removing_an_import_asks_at_a_terminal() -> Result {
     Ok(())
 }
 
-/// remove takes several names, as sync and drop do: every one is checked before any changes.
+/// remove takes several names, as sync and exclude do: every one is checked before any changes.
 #[test]
 fn remove_takes_several_names() -> Result {
     let sandbox = Sandbox::new()?;

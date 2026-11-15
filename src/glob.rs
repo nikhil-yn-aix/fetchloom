@@ -194,8 +194,8 @@ impl Glob {
     }
 }
 
-/// patterns that match a path when any one does. a pattern without wildcards, as `drop` writes one
-/// per file, is looked up by path, so ten thousand cost one lookup per path.
+/// patterns that match a path when any one does. a pattern without wildcards, as `exclude` writes
+/// one per file, is looked up by path, so ten thousand cost one lookup per path.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Set {
     /// every pattern, as written.
@@ -655,7 +655,7 @@ mod tests {
         assert!(matched > 1_000, "only {matched} matches were tried");
     }
 
-    /// drop writes one escaped path per file it leaves out, so ten thousand must cost one lookup.
+    /// exclude writes one escaped path per file it leaves out, so ten thousand cost one lookup.
     #[test]
     fn literal_patterns_are_looked_up_rather_than_tried() {
         let mut globs: Vec<Glob> = (0..10_000)

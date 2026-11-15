@@ -2,7 +2,7 @@
 
 the recheck times the commands a release must not slow down: a status, a settled sync and a cache
 check of 100,000 files, `path` beside them, verifying 512 MiB, placing 40,000 datasets, adding
-1,000 links, a zip of 10,000 files, a 1 GiB `get`, a merge and a drop across 1,000 datasets, and
+1,000 links, a zip of 10,000 files, a 1 GiB `get`, a merge and an exclude across 1,000 datasets, and
 the commands of a few milliseconds. each arm makes its own projects and caches from the same
 generated files with its own binary, so no arm reads another's formats. a byte-identical copy of
 the baseline runs as a third arm, an a/a control for the machine's noise. linux only.
@@ -33,7 +33,7 @@ import run
 ARMS = ("fetchloom", "fetchloom+candidate", "fetchloom+aa")
 # measured rounds per case after a warmup round; the shortest commands need many pairs
 ROUNDS = dict(status=20, sync=20, cache_verify=20, path=100, verify=20, place=10, add_links=25, zip=20,
-              get=15, merge=15, drop=15, version=100, help=100, tiny_sync=100)
+              get=15, merge=15, exclude=15, version=100, help=100, tiny_sync=100)
 
 
 def sizes(scale):
@@ -160,13 +160,13 @@ def prepare(root, arm, binary, signature, origin):
         write(folder / "merge" / name, conflict((folder / "ours" / name).read_text(),
                                                 (folder / "theirs" / name).read_text()).encode())
     for pair in sorted((src / "pairs").iterdir()):
-        fetchloom(folder / "drop", "drop-cache", "add", pair)
+        fetchloom(folder / "exclude", "exclude-cache", "add", pair)
     marker.write_text(json.dumps(ready) + "\n")
     return folder
 
 
-def drop_paths(project):
-    """one file of every dataset in the project, which the drop case names."""
+def exclude_paths(project):
+    """one file of every dataset in the project, which the exclude case names."""
     names = tomllib.loads((project / "data.toml").read_text())["datasets"]
     return [f"data/{name}/remove.bin" for name in sorted(names)]
 
@@ -207,8 +207,8 @@ def cases(root, arm, binary, folder, origin):
                  prep=lambda: (work / "get").mkdir(parents=True, exist_ok=True)),
         merge=dict(argv=[fl, "--json", "--offline", "lock", "--dry-run"], cwd=folder / "merge",
                    env=env(folder / "merge-cache")),
-        drop=dict(argv=[fl, "--json", "--offline", "drop", "--dry-run", *drop_paths(folder / "drop")],
-                  cwd=folder / "drop", env=env(folder / "drop-cache")),
+        exclude=dict(argv=[fl, "--json", "--offline", "exclude", "--dry-run", *exclude_paths(folder / "exclude")],
+                     cwd=folder / "exclude", env=env(folder / "exclude-cache")),
         version=dict(argv=[fl, "--version"], cwd=root, env=env(root / "home" / "cache")),
         help=dict(argv=[fl, "help"], cwd=root, env=env(root / "home" / "cache")),
         tiny_sync=dict(argv=[fl, "-q", "--yes", "sync"], cwd=folder / "tiny", env=env(folder / "tiny-cache")),

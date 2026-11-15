@@ -1850,7 +1850,7 @@ fn members_out(document: &mut DocumentMut, name: &str, archive: &str) {
     }
 }
 
-/// one change drop makes to data.toml, as the function it names makes it.
+/// one change exclude makes to data.toml, as the function it names makes it.
 #[derive(Debug)]
 pub(crate) enum Narrowing<'a> {
     /// [`with_members_copied`].

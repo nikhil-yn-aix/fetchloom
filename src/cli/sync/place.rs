@@ -48,9 +48,9 @@ pub(crate) struct Placement {
     pub(crate) changed_copies: Vec<ChangedCopy>,
     /// files fetchloom placed that someone deleted or moved, placed again. `placed` counts them.
     pub(crate) put_back: Vec<String>,
-    /// those of `put_back` that `fetchloom drop` would not leave out, by path, with why.
+    /// those of `put_back` that `fetchloom exclude` would not leave out, by path, with why.
     #[serde(skip)]
-    pub(crate) undroppable: BTreeMap<String, Undroppable>,
+    pub(crate) unexcludable: BTreeMap<String, Unexcludable>,
     /// those of `put_back` in a folder that held no file, with that folder, no higher than
     /// their dataset's own, so a warning names the folder once.
     #[serde(skip)]
@@ -98,9 +98,9 @@ pub(crate) struct Placement {
     pub(crate) left_behind: Option<LeftBehind>,
 }
 
-/// why `fetchloom drop` would not leave out a file sync put back.
+/// why `fetchloom exclude` would not leave out a file sync put back.
 #[derive(Debug)]
-pub(crate) enum Undroppable {
+pub(crate) enum Unexcludable {
     /// a file of the result of this recipe, whose step decides its files.
     Made(String),
     /// the only file of this dataset, which needs one.
@@ -168,17 +168,17 @@ impl Placement {
             }
             self.emptied.insert(target.path.clone(), folder.to_owned());
         }
-        self.undroppable = targets
+        self.unexcludable = targets
             .iter()
             .filter(|target| back.contains(target.path.as_str()))
             .filter_map(|target| {
                 let dataset = target.dataset.to_owned();
                 let why = if target.holder == plan::Holder::Result {
-                    Undroppable::Made(dataset)
+                    Unexcludable::Made(dataset)
                 } else if planned.get(target.dataset) == Some(&1)
                     && !unknown.iter().any(|(name, _)| *name == target.dataset)
                 {
-                    Undroppable::Only(dataset)
+                    Unexcludable::Only(dataset)
                 } else {
                     return None;
                 };

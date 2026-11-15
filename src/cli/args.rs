@@ -27,10 +27,10 @@ on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git pr
 
 on disk: edits data.toml and data.lock, and deletes the unchanged files it placed in data/. --dry-run writes nothing";
 
-    pub(super) const DROP: &str = "examples:
-  fetchloom drop data/pets/images/dog_010_corrupt.png
-  fetchloom drop data/pets/images/blurry --dry-run
-  fetchloom drop data/eeg/sub-07 --json
+    pub(super) const EXCLUDE: &str = "examples:
+  fetchloom exclude data/pets/images/dog_010_corrupt.png
+  fetchloom exclude data/pets/images/blurry --dry-run
+  fetchloom exclude data/eeg/sub-07 --json
 
 on disk: edits data.toml, and data.lock for files a source lists, and deletes the unchanged files it names from data/. --dry-run writes nothing";
 
@@ -531,8 +531,8 @@ pub(crate) enum Command {
     Remove(Remove),
 
     /// leave files out of their dataset for good, such as bad samples
-    #[command(override_usage = "fetchloom drop [options] <path>...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::DROP)]
-    Drop(Drop),
+    #[command(override_usage = "fetchloom exclude [options] <path>...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::EXCLUDE)]
+    Exclude(Exclude),
 
     /// put the files data.lock lists into the data folder
     #[command(override_usage = "fetchloom sync [options] [name]...", help_template = TEMPLATE, after_help = examples::SYNC)]
@@ -600,7 +600,7 @@ impl Command {
         match self {
             Command::Add(_) => "add",
             Command::Remove(_) => "remove",
-            Command::Drop(_) => "drop",
+            Command::Exclude(_) => "exclude",
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
             Command::Build(_) => "build",
@@ -652,7 +652,7 @@ impl Command {
             }
             Command::Add(add) => !add.dry.dry_run,
             Command::Remove(remove) => !remove.dry.dry_run,
-            Command::Drop(drop) => !drop.dry.dry_run,
+            Command::Exclude(exclude) => !exclude.dry.dry_run,
             _ => false,
         }
     }
@@ -682,7 +682,7 @@ impl Command {
             Command::Export(export) => !export.force,
             Command::Get(get) => (!get.force && !get.web_page) || get.dry.dry_run,
             Command::Remove(Remove { dry, .. })
-            | Command::Drop(Drop { dry, .. })
+            | Command::Exclude(Exclude { dry, .. })
             | Command::Build(Build { dry, .. })
             | Command::Cache(Cache {
                 action: Some(CacheAction::Gc(Gc { dry, .. })),
@@ -921,7 +921,7 @@ pub(crate) struct Remove {
 
 /// leave files out of their dataset for good, such as bad samples
 #[derive(Clone, Debug, clap::Args)]
-pub(crate) struct Drop {
+pub(crate) struct Exclude {
     /// files or folders in the data folder, from the current folder. a file may be deleted
     /// already
     #[arg(value_name = "path", required = true, help_heading = "arguments")]

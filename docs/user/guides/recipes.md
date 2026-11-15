@@ -81,7 +81,7 @@ the build places the result and retires what the add placed of raw, unchanged fi
          Ok pinned clean's result in data.lock
 ```
 
-to leave a bad sample of raw out of what clean reads, run [`fetchloom drop`](../commands/drop.md#raw-data-only-recipes-read) with the path the file would have in the data folder, as for any dataset. `status` and `list` say raw is not placed, as `Not placed raw · place = false in data.toml`, `fetchloom path raw` refuses it with exit 2, and `fetchloom cache` counts its bytes as read only by builds; `cache gc` keeps them, since the next build reads them.
+to leave a bad sample of raw out of what clean reads, run [`fetchloom exclude`](../commands/exclude.md#raw-data-only-recipes-read) with the path the file would have in the data folder, as for any dataset. `status` and `list` say raw is not placed, as `Not placed raw · place = false in data.toml`, `fetchloom path raw` refuses it with exit 2, and `fetchloom cache` counts its bytes as read only by builds; `cache gc` keeps them, since the next build reads them.
 
 a teammate's sync of the same commit places clean from their cache or a mirror and fetches nothing of raw. with neither holding clean, as in a fresh clone, the sync leaves it out, and `status` names the build, and raw, which it reads and the cache lacks too, as [status](../commands/status.md#what-happens) shows. their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. a plain [`fetchloom push`](../commands/push.md) sends clean and leaves raw off the mirror, and `push --inputs clean` sends raw too, for a teammate who must rebuild. the examples are stderr from one run against a server on this machine.
 

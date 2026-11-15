@@ -33,17 +33,17 @@ class Lines(unittest.TestCase):
             '<span class="fl-accent">`fetchloom sync`</span>\n'))
 
     def test_an_error_after_the_command_typed(self):
-        # docs/user/commands/drop.md, whose details are dim under the error, help or not
-        run = ("$ fetchloom drop 'data/dot/*.wav'\n"
+        # docs/user/commands/exclude.md, whose details are dim under the error, help or not
+        run = ("$ fetchloom exclude 'data/dot/*.wav'\n"
                "error: data/dot/*.wav names no file of dot\n"
-               "  drop takes paths, not patterns, so * is part of the name it looks for\n"
+               "  exclude takes paths, not patterns, so * is part of the name it looks for\n"
                "  help: add \"*.wav\" to exclude by hand, then run `fetchloom sync`\n"
                "  127.0.0.1 refused access to http://127.0.0.1:[port]/denied.csv (403)\n"
                "    http://127.0.0.1:[port]/gone/b.csv\n")
         self.assertEqual(render(run), (
-            '<span class="fl-dim">$</span> <span class="fl-typed">fetchloom drop \'data/dot/*.wav\'</span>\n'
+            '<span class="fl-dim">$</span> <span class="fl-typed">fetchloom exclude \'data/dot/*.wav\'</span>\n'
             '<span class="fl-fail">error:</span> data/dot/*.wav names no file of dot\n'
-            '  <span class="fl-dim">drop takes paths, not patterns, so * is part of the name it looks for</span>\n'
+            '  <span class="fl-dim">exclude takes paths, not patterns, so * is part of the name it looks for</span>\n'
             '  <span class="fl-accent">help:</span> add "*.wav" to exclude by hand, then run '
             '<span class="fl-accent">`fetchloom sync`</span>\n'
             '  <span class="fl-dim">127.0.0.1 refused access to http://127.0.0.1:[port]/denied.csv (403)</span>\n'

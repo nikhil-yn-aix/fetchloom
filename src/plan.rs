@@ -499,7 +499,7 @@ impl<'m, 'a> Covered<'m, 'a> {
 }
 
 /// whether a file among `members`, whose paths are `paths`, matches `glob`: looked up when it
-/// names one path, as drop writes one.
+/// names one path, as exclude writes one.
 fn holds(members: &[Member], paths: &HashSet<&str>, glob: &Glob) -> bool {
     match glob.literal() {
         Some(path) => paths.contains(path.as_str()),

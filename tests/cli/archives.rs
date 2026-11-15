@@ -183,7 +183,7 @@ fn a_zip_finder_made_lands_as_one_made_elsewhere() -> Result {
 fn a_select_meant_for_inside_an_archive_points_at_its_members_table() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
-    let help = "  help: --select chooses among the files the link lists, and dataset.zip is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [\"**/*.csv\"] under [datasets.<name>.members.\"dataset.zip\"] in data.toml, or `fetchloom drop <path>` leaves files out\n";
+    let help = "  help: --select chooses among the files the link lists, and dataset.zip is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [\"**/*.csv\"] under [datasets.<name>.members.\"dataset.zip\"] in data.toml, or `fetchloom exclude <path>` leaves files out\n";
     for args in [
         &["add", &server.url, "--select", "**/*.csv"][..],
         &[
@@ -1254,7 +1254,7 @@ mod shards {
         let stderr = text(&synced.stderr)?;
         assert!(
             stderr.contains(
-                "  help: select chooses among the files the source lists, and its 8 numbered .tar shards are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [\"*.txt\"] under [datasets.shards.members.\"train-*.tar\"], or leave files out with `fetchloom drop <path>`\n"
+                "  help: select chooses among the files the source lists, and its 8 numbered .tar shards are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [\"*.txt\"] under [datasets.shards.members.\"train-*.tar\"], or leave files out with `fetchloom exclude <path>`\n"
             ),
             "{stderr}"
         );
@@ -1374,7 +1374,7 @@ fn gc_frees_a_file_a_members_table_leaves_out() -> Result {
 /// an exclude naming a file inside the zip matches nothing the source lists, so the file stays.
 /// status reads only data.lock, which keeps no excluded file, so it cannot tell and says nothing.
 #[test]
-fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
+fn an_exclude_naming_a_member_warns_and_points_at_the_command() -> Result {
     let sandbox = Sandbox::new()?;
     let zip = fixture("python.zip")?;
     let server = Server::start(PATH, vec![file(&zip, "\"z1\""), file(&zip, "\"z1\"")])?;
@@ -1387,7 +1387,7 @@ fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
         format!("{plain}exclude = [\"data/train.csv\"]\n"),
     )?;
     let said = "exclude \"data/train.csv\" in datasets.dataset names a file inside dataset.zip, which exclude does not reach";
-    let help = "run `fetchloom drop data/dataset/data/train.csv`";
+    let help = "run `fetchloom exclude data/dataset/data/train.csv`";
     let status = text(&sandbox.run(&["status"])?.stderr)?;
     assert!(!status.contains("does not reach"), "{status}");
     let synced = sandbox.run(&["sync"])?;
@@ -1399,7 +1399,7 @@ fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
     );
     let train = sandbox.work().join("data/dataset/data/train.csv");
     assert!(train.exists(), "exclude does not reach it");
-    ok(&sandbox.run(&["drop", "data/dataset/data/train.csv"])?)?;
+    ok(&sandbox.run(&["exclude", "data/dataset/data/train.csv"])?)?;
     assert!(!train.exists());
     let stderr = text(&sandbox.run(&["sync"])?.stderr)?;
     assert!(!stderr.contains("warning"), "{stderr}");
@@ -1493,16 +1493,16 @@ mod split {
         Ok(())
     }
 
-    /// dropping every file of an archive split into parts leaves out every part, not only the
+    /// excluding every file of an archive split into parts leaves out every part, not only the
     /// first, so data.lock pins none of them, while the dataset keeps its other files.
     #[test]
-    fn dropping_every_file_of_a_split_archive_leaves_out_every_part() -> Result {
+    fn excluding_every_file_of_a_split_archive_leaves_out_every_part() -> Result {
         let sandbox = Sandbox::new()?;
         let folder = sandbox.folder("scans")?;
         cut(&folder, &scans_zip()?, &["scans.zip.001", "scans.zip.002"])?;
         fs::write(folder.join("notes.txt"), "n\n")?;
         ok(&sandbox.run(&["add", "../scans"])?)?;
-        ok(&sandbox.run(&["drop", "data/scans/scans"])?)?;
+        ok(&sandbox.run(&["exclude", "data/scans/scans"])?)?;
         assert_eq!(
             fs::read_to_string(sandbox.work().join("data.toml"))?,
             "[datasets.scans]\nref = \"local\"\nexclude = [\n  \"scans.zip.001\",\n  \"scans.zip.002\",\n]\n"
@@ -1696,11 +1696,11 @@ mod split {
         }
 
         #[test]
-        fn drop_names_a_split_archive_by_its_first_part() -> Result {
+        fn exclude_names_a_split_archive_by_its_first_part() -> Result {
             let sandbox = Sandbox::new()?;
             let (routes, _) = bucket()?;
             ok(&run(&sandbox, &routes, &["add", LINK, "--as", "scans"])?)?;
-            ok(&sandbox.run(&["drop", "data/scans/a.csv"])?)?;
+            ok(&sandbox.run(&["exclude", "data/scans/a.csv"])?)?;
             let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
             assert!(
                 manifest.contains("[datasets.scans.members.\"scans.zip.001\"]"),

@@ -436,7 +436,7 @@ fn every_command_a_run_with_c_suggests_names_the_project() -> Result {
             " remove iris` first",
         ),
         (None, vec!["build", "iris"], " sync` places it"),
-        (None, vec!["drop", "data/iris/iris.csv"], " remove iris`"),
+        (None, vec!["exclude", "data/iris/iris.csv"], " remove iris`"),
         (None, vec!["path", "/iris"], " path iris` or"),
         (
             None,
@@ -2773,7 +2773,7 @@ fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Res
     Ok(())
 }
 
-/// kaggle serves `train.csv` beside `train.csv.zip`, a zip of it. a drop of data/kag/train.csv
+/// kaggle serves `train.csv` beside `train.csv.zip`, a zip of it. excluding data/kag/train.csv
 /// would leave out the zip's copy, the wanted file, so no run may offer one.
 #[cfg(debug_assertions)]
 #[test]
@@ -2819,7 +2819,7 @@ fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> R
         let (code, said) = run(args)?;
         assert_eq!(code, Some(0), "{args:?}: {said}");
         assert!(
-            !said.contains("does not reach") && !said.contains("drop data/kag/train.csv"),
+            !said.contains("does not reach") && !said.contains("exclude data/kag/train.csv"),
             "{args:?}: {said}"
         );
     }

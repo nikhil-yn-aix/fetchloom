@@ -26,7 +26,7 @@ copy = true
 
 sync then replaces unchanged read-only files with writable reflinks or copies, never hardlinks, and keeps files you edited. turning `copy` off leaves writable files as they are.
 
-keep your own results outside the data folder, or make them with a [recipe](../guides/recipes.md). a file you delete from the data folder comes back at the next sync, since data.lock still pins it; [`fetchloom drop <path>`](../commands/drop.md) leaves a bad sample out for good, with a pattern in data.toml that every clone follows. never make a hardlinked file writable to edit it: the edit changes the cache's copy, which every project linked to it shares, and sync treats that as damage, as [local changes](../commands/sync.md#local-changes) explains. [working with raw data](../guides/edit-input-files.md) shows each case from a real run.
+keep your own results outside the data folder, or make them with a [recipe](../guides/recipes.md). a file you delete from the data folder comes back at the next sync, since data.lock still pins it; [`fetchloom exclude <path>`](../commands/exclude.md) leaves a bad sample out for good, with a pattern in data.toml that every clone follows. never make a hardlinked file writable to edit it: the edit changes the cache's copy, which every project linked to it shares, and sync treats that as damage, as [local changes](../commands/sync.md#local-changes) explains. [working with raw data](../guides/edit-input-files.md) shows each case from a real run.
 
 sync keeps local edits unless forced, and status differences and kept conflicts still exit 0; [scripting](../guides/scripts.md) shows how to check for them.
 

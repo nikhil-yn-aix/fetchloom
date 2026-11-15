@@ -1,4 +1,4 @@
-//! `drop`: files left out of their dataset for good, written as patterns in data.toml, with no
+//! `exclude`: files left out of their dataset for good, written as patterns in data.toml, with no
 //! request, a pin data.lock keeps current and the unchanged files gone from the data folder.
 
 use std::fs;
@@ -65,12 +65,12 @@ fn set(sandbox: &Sandbox) -> Result<PathBuf> {
 
 /// the pattern uses the archive's own paths, and the next locked sync asks the server nothing.
 #[test]
-fn drop_leaves_out_a_file_inside_an_archive_without_a_request() -> Result {
+fn exclude_leaves_out_a_file_inside_an_archive_without_a_request() -> Result {
     let sandbox = Sandbox::new()?;
     let server = pets(&sandbox)?;
     let work = sandbox.work();
     let lock = fs::read(work.join("data.lock"))?;
-    let output = sandbox.run(&["drop", "data/pets/images/dog_010_corrupt.png"])?;
+    let output = sandbox.run(&["exclude", "data/pets/images/dog_010_corrupt.png"])?;
     ok(&output)?;
     assert_eq!(
         text(&output.stderr)?,
@@ -95,14 +95,14 @@ fn drop_leaves_out_a_file_inside_an_archive_without_a_request() -> Result {
 }
 
 #[test]
-fn a_dry_run_names_what_drop_would_write_and_changes_nothing() -> Result {
+fn a_dry_run_names_what_exclude_would_write_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     pets(&sandbox)?;
     let work = sandbox.work();
     let before = fs::read(work.join("data.toml"))?;
     let output = sandbox.run(&[
         "--json",
-        "drop",
+        "exclude",
         "data/pets/images/dog_010_corrupt.png",
         "data/pets/images/blurry_011.png",
         "--dry-run",
@@ -112,7 +112,7 @@ fn a_dry_run_names_what_drop_would_write_and_changes_nothing() -> Result {
     assert_eq!(result["dry_run"], true);
     assert_eq!(result["lock_changed"], false);
     assert_eq!(
-        result["dropped"],
+        result["excluded"],
         json!([
             {"path": "data/pets/images/blurry_011.png", "dataset": "pets", "archive": "pets.zip", "pattern": "pets-v1/images/blurry_011.png"},
             {"path": "data/pets/images/dog_010_corrupt.png", "dataset": "pets", "archive": "pets.zip", "pattern": "pets-v1/images/dog_010_corrupt.png"},
@@ -132,7 +132,7 @@ fn a_dry_run_names_what_drop_would_write_and_changes_nothing() -> Result {
 
 /// fat settles a file's time after it is written, so a placed file can look changed.
 #[test]
-fn a_dropped_file_whose_time_moved_still_goes() -> Result {
+fn an_excluded_file_whose_time_moved_still_goes() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = set(&sandbox)?;
     let file = folder.join("train/images/x.png");
@@ -149,7 +149,7 @@ fn a_dropped_file_whose_time_moved_still_goes() -> Result {
     permissions.set_readonly(true);
     fs::set_permissions(&file, permissions)?;
 
-    let output = sandbox.run(&["drop", "data/set/train/images/x.png"])?;
+    let output = sandbox.run(&["exclude", "data/set/train/images/x.png"])?;
 
     ok(&output)?;
     let stderr = text(&output.stderr)?;
@@ -160,10 +160,10 @@ fn a_dropped_file_whose_time_moved_still_goes() -> Result {
 
 /// train.zip and test.zip both hold images/x.png; a table names one archive.
 #[test]
-fn drop_excludes_a_member_of_its_own_archive_only() -> Result {
+fn exclude_leaves_out_a_member_of_its_own_archive_only() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = set(&sandbox)?;
-    ok(&sandbox.run(&["drop", "data/set/train/images/x.png"])?)?;
+    ok(&sandbox.run(&["exclude", "data/set/train/images/x.png"])?)?;
     assert!(!folder.join("train/images/x.png").exists());
     assert_eq!(fs::read(folder.join("test/images/x.png"))?, b"test");
     assert_eq!(
@@ -190,7 +190,7 @@ fn globbed(sandbox: &Sandbox) -> Result<PathBuf> {
 fn a_file_a_glob_table_leaves_out_is_named_by_its_key() -> Result {
     let sandbox = Sandbox::new()?;
     globbed(&sandbox)?;
-    let output = sandbox.run(&["--json", "drop", "data/set/test/labels.csv"])?;
+    let output = sandbox.run(&["--json", "exclude", "data/set/test/labels.csv"])?;
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         json(&output)?["errors"][0]["message"],
@@ -202,10 +202,10 @@ fn a_file_a_glob_table_leaves_out_is_named_by_its_key() -> Result {
 /// an archive's own table wins over a glob, so copying the glob's keeps what it chose, and the
 /// pattern never reaches the other archives the glob covers.
 #[test]
-fn drop_under_a_glob_table_writes_the_archives_own_table_from_it() -> Result {
+fn exclude_under_a_glob_table_writes_the_archives_own_table_from_it() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = globbed(&sandbox)?;
-    let preview = sandbox.run(&["--json", "drop", "-n", "data/set/train/images/x.png"])?;
+    let preview = sandbox.run(&["--json", "exclude", "-n", "data/set/train/images/x.png"])?;
     ok(&preview)?;
     assert_eq!(
         json(&preview)?["result"]["copied"],
@@ -215,7 +215,7 @@ fn drop_under_a_glob_table_writes_the_archives_own_table_from_it() -> Result {
         fs::read_to_string(sandbox.work().join("data.toml"))?,
         GLOBBED
     );
-    let output = sandbox.run(&["drop", "data/set/train/images/x.png"])?;
+    let output = sandbox.run(&["exclude", "data/set/train/images/x.png"])?;
     ok(&output)?;
     assert!(
         text(&output.stderr)?.contains(
@@ -252,13 +252,13 @@ fn a_glob_table_goes_with_the_last_archive_it_matches() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = globbed(&sandbox)?;
     let manifest = sandbox.work().join("data.toml");
-    ok(&sandbox.run(&["drop", "data/set/test"])?)?;
+    ok(&sandbox.run(&["exclude", "data/set/test"])?)?;
     assert_eq!(
         fs::read_to_string(&manifest)?,
         "[datasets.set]\nref = \"local\"\nexclude = [\"test.zip\"]\n\n[datasets.set.members.\"*.zip\"]\nselect = [\"images/*\"]\n",
         "train.zip still takes the table"
     );
-    ok(&sandbox.run(&["drop", "data/set/train"])?)?;
+    ok(&sandbox.run(&["exclude", "data/set/train"])?)?;
     assert_eq!(
         fs::read_to_string(&manifest)?,
         "[datasets.set]\nref = \"local\"\nexclude = [\n  \"test.zip\",\n  \"train.zip\",\n]\n"
@@ -271,7 +271,7 @@ fn a_glob_table_goes_with_the_last_archive_it_matches() -> Result {
 /// a pattern that matches nothing in the archive keeps nothing there, and the archive's own table
 /// would refuse it.
 #[test]
-fn drop_copies_only_the_select_patterns_its_archive_matches() -> Result {
+fn exclude_copies_only_the_select_patterns_its_archive_matches() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = sandbox.folder("uneven")?;
     fs::write(
@@ -287,7 +287,7 @@ fn drop_copies_only_the_select_patterns_its_archive_matches() -> Result {
     let glob = "[datasets.uneven]\nref = \"local\"\n\n[datasets.uneven.members.\"*.zip\"]\nselect = [\"*.png\", \"*.md\"]\n";
     fs::write(&manifest, glob)?;
     ok(&sandbox.run(&["sync"])?)?;
-    ok(&sandbox.run(&["drop", "data/uneven/b/y.png"])?)?;
+    ok(&sandbox.run(&["exclude", "data/uneven/b/y.png"])?)?;
     assert_eq!(
         fs::read_to_string(&manifest)?,
         format!(
@@ -304,16 +304,16 @@ fn drop_copies_only_the_select_patterns_its_archive_matches() -> Result {
 /// data.lock is rewritten as relocking would pin it, so a locked sync takes it; an import cannot
 /// be listed again, so a stale pin would fail here.
 #[test]
-fn drop_of_a_listed_file_keeps_the_lock_current() -> Result {
+fn excluding_a_listed_file_keeps_the_lock_current() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = set(&sandbox)?;
     let work = sandbox.work();
-    let output = sandbox.run(&["--json", "drop", "data/set/notes [v1].md"])?;
+    let output = sandbox.run(&["--json", "exclude", "data/set/notes [v1].md"])?;
     ok(&output)?;
     let result = &json(&output)?["result"];
     assert_eq!(result["lock_changed"], true);
-    assert_eq!(result["dropped"][0]["archive"], serde_json::Value::Null);
-    assert_eq!(result["dropped"][0]["pattern"], "notes [[]v1].md");
+    assert_eq!(result["excluded"][0]["archive"], serde_json::Value::Null);
+    assert_eq!(result["excluded"][0]["pattern"], "notes [[]v1].md");
     assert_eq!(
         fs::read_to_string(work.join("data.toml"))?,
         "[datasets.set]\nref = \"local\"\nexclude = [\"notes [[]v1].md\"]\n"
@@ -326,7 +326,7 @@ fn drop_of_a_listed_file_keeps_the_lock_current() -> Result {
         text(&status.stderr)?,
         "         Ok everything matches data.lock by size and time\n"
     );
-    let again = sandbox.run(&["--json", "drop", "data/set/notes [v1].md"])?;
+    let again = sandbox.run(&["--json", "exclude", "data/set/notes [v1].md"])?;
     assert_eq!(again.status.code(), Some(2));
     assert_eq!(
         json(&again)?["errors"][0]["message"],
@@ -338,16 +338,16 @@ fn drop_of_a_listed_file_keeps_the_lock_current() -> Result {
 /// a folder becomes one pattern when that pattern leaves out exactly its files, and every file
 /// an archive keeps becomes the archive itself, so its members table goes.
 #[test]
-fn a_folder_is_dropped_as_one_pattern_and_a_whole_archive_leaves_data_lock() -> Result {
+fn a_folder_is_excluded_as_one_pattern_and_a_whole_archive_leaves_data_lock() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = set(&sandbox)?;
     let work = sandbox.work();
-    ok(&sandbox.run(&["drop", "data/set/test/images"])?)?;
+    ok(&sandbox.run(&["exclude", "data/set/test/images"])?)?;
     assert_eq!(
         fs::read_to_string(work.join("data.toml"))?,
         "[datasets.set]\nref = \"local\"\n\n[datasets.set.members.\"test.zip\"]\nexclude = [\"images/**\"]\n"
     );
-    let output = sandbox.run(&["drop", "data/set/test"])?;
+    let output = sandbox.run(&["exclude", "data/set/test"])?;
     ok(&output)?;
     assert_eq!(
         text(&output.stderr)?,
@@ -366,13 +366,13 @@ fn a_folder_is_dropped_as_one_pattern_and_a_whole_archive_leaves_data_lock() -> 
 
 /// the pattern is written all the same.
 #[test]
-fn drop_keeps_an_edited_file_and_says_so() -> Result {
+fn exclude_keeps_an_edited_file_and_says_so() -> Result {
     let sandbox = Sandbox::new()?;
     pets(&sandbox)?;
     let labels = sandbox.work().join("data/pets/labels.csv");
     delete(&labels)?;
     fs::write(&labels, b"my own labels\n")?;
-    let output = sandbox.run(&["drop", "data/pets/labels.csv"])?;
+    let output = sandbox.run(&["exclude", "data/pets/labels.csv"])?;
     ok(&output)?;
     let stderr = text(&output.stderr)?;
     assert!(
@@ -390,7 +390,7 @@ fn drop_keeps_an_edited_file_and_says_so() -> Result {
 }
 
 #[test]
-fn a_clone_syncs_a_drop_without_downloads() -> Result {
+fn a_clone_syncs_an_exclude_without_downloads() -> Result {
     let sandbox = Sandbox::new()?;
     let server = pets(&sandbox)?;
     let work = sandbox.work();
@@ -401,7 +401,7 @@ fn a_clone_syncs_a_drop_without_downloads() -> Result {
     ok(&sandbox.command_in(&clone, &["sync"]).output()?)?;
     let dog = clone.join("data/pets/images/dog_010_corrupt.png");
     assert!(dog.exists());
-    ok(&sandbox.run(&["drop", "data/pets/images/dog_010_corrupt.png"])?)?;
+    ok(&sandbox.run(&["exclude", "data/pets/images/dog_010_corrupt.png"])?)?;
     fs::copy(work.join("data.toml"), clone.join("data.toml"))?;
     let pulled = sandbox
         .command_in(&clone, &["--json", "sync", "--locked"])
@@ -415,10 +415,10 @@ fn a_clone_syncs_a_drop_without_downloads() -> Result {
     Ok(())
 }
 
-/// drop leaves out only files data.lock places, never every file of a dataset, never moves the
+/// exclude leaves out only files data.lock places, never every file of a dataset, never moves the
 /// files a dataset keeps, and rewrites a pin only while it answers data.toml.
 #[test]
-fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
+fn exclude_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     pets(&sandbox)?;
     set(&sandbox)?;
@@ -434,27 +434,27 @@ fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
     let before = (fs::read(&manifest)?, fs::read(work.join("data.lock"))?);
     for (arguments, code, message) in [
         (
-            &["drop", "../notes.txt"][..],
+            &["exclude", "../notes.txt"][..],
             2,
             "../notes.txt is not inside the data folder, data/",
         ),
         (
-            &["drop", "data/pets/notes.txt"],
+            &["exclude", "data/pets/notes.txt"],
             2,
             "data/pets/notes.txt names no file of pets",
         ),
         (
-            &["drop", "data/pets"],
+            &["exclude", "data/pets"],
             2,
             "that is every file of pets, and a dataset needs one",
         ),
         (
-            &["drop", "data/clean/x.csv"],
+            &["exclude", "data/clean/x.csv"],
             2,
             "data/clean/x.csv belongs to clean, which a recipe makes",
         ),
         (
-            &["drop", "data/set/notes [v1].md", "data/set/test"],
+            &["exclude", "data/set/notes [v1].md", "data/set/test"],
             2,
             "that would leave train.zip the only file of set, and its files would move, since a dataset that is one archive places them straight in its folder",
         ),
@@ -468,7 +468,7 @@ fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
         "[datasets.set]\nref = \"local\"\nexclude = \"*.tmp\"\n",
     );
     fs::write(&manifest, &stale)?;
-    let output = sandbox.run(&["--json", "drop", "data/set/notes [v1].md"])?;
+    let output = sandbox.run(&["--json", "exclude", "data/set/notes [v1].md"])?;
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(json(&output)?["errors"][0]["kind"], "lock.outdated");
     assert_eq!(fs::read_to_string(&manifest)?, stale);
@@ -482,7 +482,7 @@ fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
         fs::copy(work.join(name), fresh.join(name))?;
     }
     let unknown = sandbox
-        .command_in(&fresh, &["drop", "data/pets/images/cat_001.png"])
+        .command_in(&fresh, &["exclude", "data/pets/images/cat_001.png"])
         .env("FETCHLOOM_CACHE", sandbox.folder("fresh-cache")?)
         .output()?;
     assert_eq!(unknown.status.code(), Some(2));
@@ -498,17 +498,17 @@ fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
 /// the file goes by the path it would have in the data folder; one left out already names its
 /// pattern, and a path naming no file gets neither.
 #[test]
-fn drop_leaves_out_a_file_of_a_dataset_kept_out_of_the_data_folder() -> Result {
+fn exclude_leaves_out_a_file_of_a_dataset_kept_out_of_the_data_folder() -> Result {
     let sandbox = Sandbox::new()?;
     pets(&sandbox)?;
     let work = sandbox.work();
     crate::recipes::unplace(&work, "pets")?;
     ok(&sandbox.run(&["sync"])?)?;
     let lock = fs::read(work.join("data.lock"))?;
-    let output = sandbox.run(&["--json", "drop", "data/pets/images/dog_010_corrupt.png"])?;
+    let output = sandbox.run(&["--json", "exclude", "data/pets/images/dog_010_corrupt.png"])?;
     ok(&output)?;
     assert_eq!(
-        json(&output)?["result"]["dropped"],
+        json(&output)?["result"]["excluded"],
         json!([{"path": "data/pets/images/dog_010_corrupt.png", "dataset": "pets", "archive": "pets.zip", "pattern": "pets-v1/images/dog_010_corrupt.png"}])
     );
     let manifest = fs::read_to_string(work.join("data.toml"))?;
@@ -517,7 +517,7 @@ fn drop_leaves_out_a_file_of_a_dataset_kept_out_of_the_data_folder() -> Result {
         "{manifest}"
     );
     assert_eq!(fs::read(work.join("data.lock"))?, lock);
-    let keep = "check the path; a file of your own needs no drop: delete it yourself if you do not need it";
+    let keep = "check the path; exclude leaves out files data.lock places, so delete a file of your own yourself if you do not need it";
     for (path, message, help) in [
         (
             "data/pets/images/dog_010_corrupt.png",
@@ -535,7 +535,7 @@ fn drop_leaves_out_a_file_of_a_dataset_kept_out_of_the_data_folder() -> Result {
             keep,
         ),
     ] {
-        let output = sandbox.run(&["--json", "drop", path])?;
+        let output = sandbox.run(&["--json", "exclude", path])?;
         assert_eq!(output.status.code(), Some(2), "{path}");
         let error = &json(&output)?["errors"][0];
         assert_eq!(
@@ -559,7 +559,7 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     ok(&output)?;
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it\n  help: to leave a file out for good, run `fetchloom drop data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/\n"),
+        stderr.contains("warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it\n  help: to leave a file out for good, run `fetchloom exclude data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/\n"),
         "{stderr}"
     );
     assert_eq!(fs::read(&dog)?, b"broken");
@@ -579,7 +579,7 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     );
     assert_eq!(document["result"]["placement"]["placed"], 2);
     // a drive that cannot link warns of that too, so the warning is found, not counted
-    let warning = "put back 2 files that were deleted or moved, since data.lock pins them: data/pets/images/cat_001.png, data/pets/labels.csv; to leave a file out for good, run `fetchloom drop data/pets/images/cat_001.png`; keep files of your own in a folder outside data/";
+    let warning = "put back 2 files that were deleted or moved, since data.lock pins them: data/pets/images/cat_001.png, data/pets/labels.csv; to leave a file out for good, run `fetchloom exclude data/pets/images/cat_001.png`; keep files of your own in a folder outside data/";
     assert!(
         crate::support::warned(&document)
             .iter()
@@ -591,7 +591,7 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     Ok(())
 }
 
-/// the warning names the drop that leaves the folder out; a deleted dataset or data folder is a
+/// the warning names the exclude that leaves the folder out; a deleted dataset or data folder is a
 /// fresh start, told only as a missing folder.
 #[test]
 fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() -> Result {
@@ -602,7 +602,7 @@ fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() ->
     ok(&output)?;
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("warning: put back the 3 files in data/tree/sub/, which was deleted or moved, since data.lock pins them\n  help: to leave a folder out for good, run `fetchloom drop data/tree/sub`; keep files of your own in a folder outside data/\n"),
+        stderr.contains("warning: put back the 3 files in data/tree/sub/, which was deleted or moved, since data.lock pins them\n  help: to leave a folder out for good, run `fetchloom exclude data/tree/sub`; keep files of your own in a folder outside data/\n"),
         "{stderr}"
     );
     for gone in [folder.clone(), sandbox.work().join("data")] {
@@ -635,16 +635,17 @@ fn a_folder_of_listed_files_leaves_as_one_pattern() -> Result {
         ["data/tree/sub/s2.txt", "data/tree/sub"],
         ["data/tree/sub", "data/tree/sub/s2.txt"],
     ] {
-        let output = sandbox.run(&[&["--json", "drop", "--dry-run"][..], &arguments].concat())?;
+        let output =
+            sandbox.run(&[&["--json", "exclude", "--dry-run"][..], &arguments].concat())?;
         ok(&output)?;
         let record = |name: &str| json!({"path": format!("data/tree/sub/{name}"), "dataset": "tree", "archive": null, "pattern": "sub/**"});
         assert_eq!(
-            json(&output)?["result"]["dropped"],
+            json(&output)?["result"]["excluded"],
             json!([record("s1.txt"), record("s2.txt"), record("s3.txt")]),
             "{arguments:?}"
         );
     }
-    ok(&sandbox.run(&["drop", "data/tree/sub"])?)?;
+    ok(&sandbox.run(&["exclude", "data/tree/sub"])?)?;
     assert_eq!(
         fs::read_to_string(work.join("data.toml"))?,
         "[datasets.tree]\nref = \"local\"\nexclude = [\"sub/**\"]\n"
@@ -654,7 +655,7 @@ fn a_folder_of_listed_files_leaves_as_one_pattern() -> Result {
     assert!(!fs::read_to_string(work.join("data.lock"))?.contains("sub/"));
     ok(&sandbox.run(&["sync", "--locked"])?)?;
 
-    ok(&sandbox.run(&["drop", "data/tree/flac/a.flac", "data/tree/flac/b.flac"])?)?;
+    ok(&sandbox.run(&["exclude", "data/tree/flac/a.flac", "data/tree/flac/b.flac"])?)?;
     assert_eq!(
         fs::read_to_string(work.join("data.toml"))?,
         "[datasets.tree]\nref = \"local\"\nexclude = [\n  \"sub/**\",\n  \"flac/a.flac\",\n  \"flac/b.flac\",\n]\n"
@@ -662,7 +663,7 @@ fn a_folder_of_listed_files_leaves_as_one_pattern() -> Result {
     Ok(())
 }
 
-/// neither the drop nor a locked sync after it asks the bucket anything.
+/// neither the exclude nor a locked sync after it asks the bucket anything.
 #[cfg(debug_assertions)]
 #[test]
 fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
@@ -693,7 +694,7 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     ok(&run(&["add", "s3://openneuro.org/ds000001/"])?)?;
     let asked = routes.requests().len();
     let work = sandbox.work();
-    let output = run(&["drop", "data/ds000001/sub-01"])?;
+    let output = run(&["exclude", "data/ds000001/sub-01"])?;
     ok(&output)?;
     assert_eq!(
         text(&output.stderr)?,
@@ -717,11 +718,11 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     Ok(())
 }
 
-/// data.lock is a fifo the test fills only once the drop heard the ctrl-c, so the stop always
-/// lands after the drop began and before it plans.
+/// data.lock is a fifo the test fills only once exclude heard the ctrl-c, so the stop always
+/// lands after exclude began and before it plans.
 #[cfg(unix)]
 #[test]
-fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
+fn a_stop_while_exclude_plans_changes_nothing_and_claims_nothing() -> Result {
     use std::io::Write as _;
     use std::os::unix::fs::FileTypeExt as _;
 
@@ -747,9 +748,9 @@ fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
             .status()?
             .success()
     );
-    let mut command = sandbox.command(&["drop", "data/tree/sub"]);
+    let mut command = sandbox.command(&["exclude", "data/tree/sub"]);
     let running = Running::start(command.stdin(std::process::Stdio::null()))?;
-    // opening the fifo waits for the drop to open it, long after it listens for ctrl-c
+    // opening the fifo waits for exclude to open it, long after it listens for ctrl-c
     let (opened, open) = std::sync::mpsc::channel();
     let fifo = lock_path.clone();
     std::thread::spawn(move || {
@@ -772,29 +773,29 @@ fn a_stop_while_drop_plans_changes_nothing_and_claims_nothing() -> Result {
     assert_eq!(files(&folder)?, placed);
     fs::remove_file(&lock_path)?;
     fs::write(&lock_path, &lock)?;
-    ok(&sandbox.run(&["drop", "data/tree/sub"])?)?;
+    ok(&sandbox.run(&["exclude", "data/tree/sub"])?)?;
     assert!(!folder.join("sub/s1.txt").exists());
     assert_eq!(fs::read(folder.join("keep.txt"))?, b"keep\n");
     Ok(())
 }
 
-/// the recipe's pinned result came from files the drop left out, so the next step is that build,
-/// even for raw data only recipes read; a drop no recipe reads says to commit.
+/// the recipe's pinned result came from files exclude left out, so the next step is that build,
+/// even for raw data only recipes read; an exclude no recipe reads says to commit.
 #[cfg(target_os = "linux")]
 #[test]
-fn drop_names_the_build_that_reads_what_it_left_out() -> Result {
+fn exclude_names_the_build_that_reads_what_it_left_out() -> Result {
     let sandbox = Sandbox::new()?;
     pets(&sandbox)?;
     set(&sandbox)?;
     let work = sandbox.work();
     crate::recipes::unplace(&work, "pets")?;
     ok(&sandbox.run(&["sync"])?)?;
-    let Some(screen) = sandbox.on_a_terminal(&["drop", "data/set/notes [v1].md"])? else {
+    let Some(screen) = sandbox.on_a_terminal(&["exclude", "data/set/notes [v1].md"])? else {
         return Ok(());
     };
     assert!(
         screen.contains(
-            "\n  next: commit data.toml and data.lock; other clones drop them at their next `fetchloom sync`\n"
+            "\n  next: commit data.toml and data.lock; other clones leave them out at their next `fetchloom sync`\n"
         ),
         "{screen}"
     );
@@ -807,7 +808,7 @@ fn drop_names_the_build_that_reads_what_it_left_out() -> Result {
         ),
     )?;
     let screen = sandbox
-        .on_a_terminal(&["drop", "data/pets/images/dog_010_corrupt.png"])?
+        .on_a_terminal(&["exclude", "data/pets/images/dog_010_corrupt.png"])?
         .unwrap_or_default();
     assert!(
         screen.contains(
@@ -820,25 +821,25 @@ fn drop_names_the_build_that_reads_what_it_left_out() -> Result {
 
 /// the rest of the line stays as typed, and the path relative to where it was typed.
 #[test]
-fn a_path_one_typo_away_names_the_drop_that_was_meant() -> Result {
+fn a_path_one_typo_away_names_the_exclude_that_was_meant() -> Result {
     let sandbox = Sandbox::new()?;
     pets(&sandbox)?;
     let work = sandbox.work();
     for (arguments, message, meant) in [
         (
-            &["drop", "data/pets/lables.csv"][..],
+            &["exclude", "data/pets/lables.csv"][..],
             "data/pets/lables.csv names no file of pets",
-            "fetchloom drop data/pets/labels.csv",
+            "fetchloom exclude data/pets/labels.csv",
         ),
         (
-            &["drop", "data/pest/images/cat_001.png", "--dry-run"],
+            &["exclude", "data/pest/images/cat_001.png", "--dry-run"],
             "data/pest/images/cat_001.png names no file of any dataset",
-            "fetchloom drop data/pets/images/cat_001.png --dry-run",
+            "fetchloom exclude data/pets/images/cat_001.png --dry-run",
         ),
         (
-            &["drop", "data/pets/imagse"],
+            &["exclude", "data/pets/imagse"],
             "data/pets/imagse names no file of pets",
-            "fetchloom drop data/pets/images",
+            "fetchloom exclude data/pets/images",
         ),
     ] {
         let output = sandbox.run(arguments)?;
@@ -851,33 +852,33 @@ fn a_path_one_typo_away_names_the_drop_that_was_meant() -> Result {
     let inside = sandbox
         .command_in(
             &work.join("data/pets/images"),
-            &["drop", "dog_01_corrupt.png"],
+            &["exclude", "dog_01_corrupt.png"],
         )
         .output()?;
     assert_eq!(inside.status.code(), Some(2));
     assert!(
         text(&inside.stderr)?
-            .ends_with("  help: did you mean `fetchloom drop dog_010_corrupt.png`?\n"),
+            .ends_with("  help: did you mean `fetchloom exclude dog_010_corrupt.png`?\n"),
         "{}",
         text(&inside.stderr)?
     );
     Ok(())
 }
 
-/// drop takes paths, and the exclude the help gives works as given.
+/// exclude takes paths, and the pattern the help gives works as given.
 #[test]
 fn a_quoted_pattern_is_explained_with_the_exclude_that_does_it() -> Result {
     let sandbox = Sandbox::new()?;
     pets(&sandbox)?;
     let work = sandbox.work();
-    let output = sandbox.run(&["drop", "data/pets/images/*.png"])?;
+    let output = sandbox.run(&["exclude", "data/pets/images/*.png"])?;
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         text(&output.stderr)?,
-        "error: data/pets/images/*.png names no file of pets\n  drop takes paths, not patterns, so * is part of the name it looks for\n  help: to leave out every file a pattern matches, add \"pets-v1/images/*.png\" to exclude in members.\"pets.zip\" of datasets.pets in data.toml by hand, then run `fetchloom sync`\n"
+        "error: data/pets/images/*.png names no file of pets\n  exclude takes paths, not patterns, so * is part of the name it looks for\n  help: to leave out every file a pattern matches, add \"pets-v1/images/*.png\" to exclude in members.\"pets.zip\" of datasets.pets in data.toml by hand, then run `fetchloom sync`\n"
     );
     let manifest = work.join("data.toml");
-    let agent = sandbox.run(&["--json", "drop", "data/pets/images/*.png"])?;
+    let agent = sandbox.run(&["--json", "exclude", "data/pets/images/*.png"])?;
     assert_eq!(
         json(&agent)?["errors"][0]["fix"],
         serde_json::Value::Null,
@@ -899,13 +900,13 @@ fn a_quoted_pattern_is_explained_with_the_exclude_that_does_it() -> Result {
 
 #[cfg(unix)]
 #[test]
-fn a_file_named_with_a_star_drops_by_its_name() -> Result {
+fn a_file_named_with_a_star_is_excluded_by_its_name() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = sandbox.folder("odd")?;
     fs::write(folder.join("a*b.txt"), b"star\n")?;
     fs::write(folder.join("keep.txt"), b"keep\n")?;
     ok(&sandbox.run(&["add", "../odd"])?)?;
-    ok(&sandbox.run(&["drop", "data/odd/a*b.txt"])?)?;
+    ok(&sandbox.run(&["exclude", "data/odd/a*b.txt"])?)?;
     assert_eq!(
         fs::read_to_string(sandbox.work().join("data.toml"))?,
         "[datasets.odd]\nref = \"local\"\nexclude = [\"a[*]b.txt\"]\n"

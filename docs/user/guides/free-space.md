@@ -11,7 +11,7 @@ warning: data/penguins/penguins.csv is no longer needed, but it has changed, so 
     Removed penguins
 ```
 
-the cache keeps the bytes. `fetchloom cache gc` removes what no project needs once it is a day old, and `--now` removes it at once, here the CSV and the dropped member:
+the cache keeps the bytes. `fetchloom cache gc` removes what no project needs once it is a day old, and `--now` removes it at once, here the CSV and the excluded member:
 
 ```text
 $ fetchloom cache gc --now

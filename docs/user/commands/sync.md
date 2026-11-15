@@ -116,10 +116,10 @@ a file fetchloom placed that someone deleted or moved comes back, since data.loc
 
 ```text
 warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it
-  help: to leave a file out for good, run `fetchloom drop data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/
+  help: to leave a file out for good, run `fetchloom exclude data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/
 ```
 
-[`fetchloom drop`](drop.md) writes a pattern into data.toml, so every clone leaves the file out too. the help names drop only where it works: a recipe's result gets its files from the recipe's step, as in the `squares` example above, and the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once, as `put back 60 files that were deleted or moved, since data.lock pins them: the 30 in data/many/part03/, the 30 in data/many/part04/`, with the `fetchloom drop` of that folder.
+[`fetchloom exclude`](exclude.md) writes a pattern into data.toml, so every clone leaves the file out too. the help names exclude only where it works: a recipe's result gets its files from the recipe's step, as in the `squares` example above, and the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once, as `put back 60 files that were deleted or moved, since data.lock pins them: the 30 in data/many/part03/, the 30 in data/many/part04/`, with the `fetchloom exclude` of that folder.
 
 a dataset's own folder, or the whole data folder, deleted to start afresh is no mistake, so sync places it again with no warning and says why, as `Placed data/many · 120 files linked to the cache · the folder was missing`. a copy you moved elsewhere in the data folder stays, and status lists it as extra. a dry run warns the same way, as `a sync would put back`.
 

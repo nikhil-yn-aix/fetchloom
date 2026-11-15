@@ -77,11 +77,11 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 
 ## rules that keep data safe
 
-- preview with `--dry-run` (`-n`): `add`, `remove`, `drop`, `sync`, `lock`, `push`, `cache gc` and `get` then change nothing and list the paths in `result.changes`, and `build` lists the commands it would run.
-- never delete or chmod placed files: they come back at the next sync, and one can be a hardlink shared with other projects. `fetchloom drop <path>` leaves files out for good; `copy = true` on a dataset in data.toml, then `fetchloom sync --json`, gives writable copies.
+- preview with `--dry-run` (`-n`): `add`, `remove`, `exclude`, `sync`, `lock`, `push`, `cache gc` and `get` then change nothing and list the paths in `result.changes`, and `build` lists the commands it would run.
+- never delete or chmod placed files: they come back at the next sync, and one can be a hardlink shared with other projects. `fetchloom exclude <path>` leaves files out for good; `copy = true` on a dataset in data.toml, then `fetchloom sync --json`, gives writable copies.
 - messages and `--json` show each query or fragment value of a link as `***` unless its name is known to be harmless, such as `dl` or `version`: take a link from the user or from data.toml, never from output.
 - write results outside `data/`. sync keeps files written inside it, but `status` lists them as extra.
-- `remove`, `drop` and `sync` delete only unchanged files fetchloom placed, inside the data folder. a warning names each folder they leave holding other files; tell the user rather than delete them. an imported dataset (`ref = "local"`) has no source to give its files back, so its `remove` needs `--yes`: ask the user whether a copy is kept elsewhere first.
+- `remove`, `exclude` and `sync` delete only unchanged files fetchloom placed, inside the data folder. a warning names each folder they leave holding other files; tell the user rather than delete them. an imported dataset (`ref = "local"`) has no source to give its files back, so its `remove` needs `--yes`: ask the user whether a copy is kept elsewhere first.
 - to rename a dataset, rename its table in data.toml, and the `from` and `{name}` of every recipe that reads it; the next `fetchloom lock --json` keeps its pin. `remove` then `add --as` resolves it again and may pin newer data.
 - never delete data.lock to get past an error: relocking pins newer data and drops every recipe's pin.
 - an archive fetchloom cannot unpack, such as a `.rar`, stays packed with a warning whose help unpacks it: show that command rather than run it. parts such as `scans.zip.001` to `.003` unpack only when one dataset lists every part. add webdataset `.tar` shards with `--no-extract`, since loaders read them packed.
@@ -95,7 +95,7 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 | choose a dataset's files and name | `fetchloom add <ref> --as <name> --select "**/*.csv" --exclude "raw/**" --no-extract --dry-run --json`; `--dry-run` (`-n`) lists the changes in `result.changes`. a link that answers with a web page exits 10 unless the user wants the page itself, which `add <link> --web-page` pins. the same add again exits 0 and changes nothing; a name the project has for another link exits 2 |
 | files only on this machine | `fetchloom add ./folder --json` pins them with `ref = "local"`. a clone whose cache lacks them exits 10 with `reference.unresolved`; ask the user where they are, then `fetchloom add <folder> --as <name> --json` checks them against data.lock |
 | scripts already read `data/train.csv` | set `path = "."` on the dataset in data.toml, then `fetchloom sync --json` |
-| leave bad samples out for good | `fetchloom drop <path>... --dry-run --json`, then without `--dry-run`: paths in data/, never patterns. `result.dropped` names each file and the pattern written to data.toml |
+| leave bad samples out for good | `fetchloom exclude <path>... --dry-run --json`, then without `--dry-run`: paths in data/, never patterns. `result.excluded` names each file and the pattern written to data.toml |
 | stop using datasets | `fetchloom remove <name>... --dry-run --json`, then without `--dry-run` |
 | newer versions | `fetchloom lock --upgrade <name> --dry-run --json` shows them; only the user decides to pin them |
 | a git merge left `<<<<<<<` lines | `fetchloom lock --json` merges both sides. on `unconfirmed`, `result.merge.conflicts` names the datasets to choose for: ask the user, then `fetchloom lock --ours <name>` or `--theirs <name>`. in a rebase, ours is the branch rebased onto |

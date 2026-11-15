@@ -49,7 +49,7 @@ warning: data/penguins/penguins.csv has changed, so it stays
 
 once data.lock pins other bytes for that file, as after `fetchloom lock --upgrade` or a rebuild of a recipe's result, the warning adds that the file is an edit of an earlier version, not what data.lock pins now.
 
-the edit lives on this machine only. a teammate's sync places the pinned bytes, so a change others need belongs in a recipe, or, for a file that should not be there at all, in a drop.
+the edit lives on this machine only. a teammate's sync places the pinned bytes, so a change others need belongs in a recipe, or, for a file that should not be there at all, in an [exclude](../commands/exclude.md).
 
 a [recipe](recipes.md) never reads the edit either: its step reads the bytes data.lock pins. so when a recipe reads the dataset, `build` and `sync` say so instead of offering `--force`, which would replace your fix. stderr from a project where the recipe `mc` reads `m`, a table with `copy = true` whose missing value was filled in by hand:
 

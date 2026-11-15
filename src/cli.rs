@@ -6,7 +6,7 @@ mod auth;
 mod build;
 mod cache;
 mod completions;
-mod drop;
+mod exclude;
 mod export;
 mod fetch;
 mod get;
@@ -834,7 +834,7 @@ fn reminds(command: &args::Command) -> bool {
     match command {
         args::Command::Add(args) => !args.dry.dry_run,
         args::Command::Remove(args) => !args.dry.dry_run,
-        args::Command::Drop(args) => !args.dry.dry_run,
+        args::Command::Exclude(args) => !args.dry.dry_run,
         args::Command::Sync(args) => !args.dry.dry_run,
         args::Command::Get(_) => true,
         _ => false,
@@ -847,7 +847,7 @@ fn spends(command: &args::Command) -> bool {
         command,
         args::Command::Add(_)
             | args::Command::Remove(_)
-            | args::Command::Drop(_)
+            | args::Command::Exclude(_)
             | args::Command::Sync(_)
             | args::Command::Lock(_)
             | args::Command::Build(_)
@@ -878,8 +878,8 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = block_on(context, remove::remove(context, args));
             finish(context, name, outcome, started)
         }
-        args::Command::Drop(args) => {
-            let outcome = block_on(context, drop::run(context, args));
+        args::Command::Exclude(args) => {
+            let outcome = block_on(context, exclude::run(context, args));
             finish(context, name, outcome, started)
         }
         args::Command::Sync(args) => {

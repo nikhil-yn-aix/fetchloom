@@ -184,7 +184,7 @@ fn a_push_marks_its_work_as_finishing_before_its_flush() -> Result {
 fn a_member_left_out_of_a_dataset_is_not_pushed() -> Result {
     let sandbox = Sandbox::new()?;
     project(&sandbox)?;
-    ok(&sandbox.run(&["drop", "data/dataset/data/train.csv"])?)?;
+    ok(&sandbox.run(&["exclude", "data/dataset/data/train.csv"])?)?;
     ok(&sandbox.run(&["cache", "gc", "--now"])?)?;
     let root = sandbox.folder("lab")?.join("mirror");
     let output = sandbox
@@ -192,9 +192,9 @@ fn a_member_left_out_of_a_dataset_is_not_pushed() -> Result {
         .arg(&root)
         .output()?;
     ok(&output)?;
-    let dropped = sha256_hex(b"x,y\n1,2\n3,4\n");
+    let excluded = sha256_hex(b"x,y\n1,2\n3,4\n");
     let mut kept = pinned();
-    kept.retain(|hash| *hash != dropped);
+    kept.retain(|hash| *hash != excluded);
     assert_eq!(named(&root, "objects")?, kept);
     Ok(())
 }

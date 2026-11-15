@@ -39,7 +39,7 @@
 | symptom | cause | fix |
 |---|---|---|
 | a pattern matches nothing | it targets a different source path | inspect listed paths and [pattern rules](../reference/data-toml.md#patterns) |
-| `--select` matches nothing in a link to a zip | select chooses among the files a link lists, and the zip is one of them; the help says so whenever the link lists an archive | add the link without `--select`, then keep files inside the zip with a [members table](../reference/data-toml.md#files-inside-archives) or leave some out with [`fetchloom drop`](../commands/drop.md) |
+| `--select` matches nothing in a link to a zip | select chooses among the files a link lists, and the zip is one of them; the help says so whenever the link lists an archive | add the link without `--select`, then keep files inside the zip with a [members table](../reference/data-toml.md#files-inside-archives) or leave some out with [`fetchloom exclude`](../commands/exclude.md) |
 | a shell expands a pattern | the glob was not quoted | use `--select "**/*.csv"` |
 | adding fails for inline `datasets` | `add` cannot extend an inline table | use `[datasets.name]` tables |
 | a large download stops in CI | it needs approval | check the size, then pass `--yes` if approved |

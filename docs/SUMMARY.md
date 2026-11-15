@@ -36,7 +36,7 @@
         - [build](user/commands/build.md)
         - [cache](user/commands/cache.md)
         - [completions](user/commands/completions.md)
-        - [drop](user/commands/drop.md)
+        - [exclude](user/commands/exclude.md)
         - [export](user/commands/export.md)
         - [get](user/commands/get.md)
         - [list](user/commands/list.md)

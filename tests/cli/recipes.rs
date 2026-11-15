@@ -347,7 +347,7 @@ fn status_counts_an_input_the_build_copies_from_the_data_folder() -> Result {
     Ok(())
 }
 
-/// drop cannot leave out a result's file or a dataset's only file, so the help names what can.
+/// exclude cannot leave out a result's file or a dataset's only file, so the help names what can.
 #[test]
 fn a_put_back_file_names_what_leaves_it_out() -> Result {
     let sandbox = Sandbox::new()?;

@@ -17,7 +17,7 @@ fetchloom remove [options] <name>...
 |---|---|
 | `-n`, `--dry-run` | plan removal without applying project or cache changes |
 
-[global options](global-options.md) also apply. each argument is a dataset name from `data.toml`, not a source reference; several remove together, as `sync` and `drop` take several, and every name is checked before anything changes.
+[global options](global-options.md) also apply. each argument is a dataset name from `data.toml`, not a source reference; several remove together, as `sync` and `exclude` take several, and every name is checked before anything changes.
 
 ## what happens
 

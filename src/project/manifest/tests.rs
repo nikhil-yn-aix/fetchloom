@@ -1592,7 +1592,7 @@ fn edits_at_once_write_what_edits_one_at_a_time_write() {
     assert!(compared * 2 > cases, "{compared} of {cases} compared");
 }
 
-/// a data.toml for drop to change: excludes as one pattern or a list, members tables for a
+/// a data.toml for exclude to change: excludes as one pattern or a list, members tables for a
 /// glob or one archive, dotted or inline, and now and then a dataset written inline.
 fn narrowable(layouts: &mut Layouts) -> (String, Vec<&'static str>) {
     let mut text = String::new();
@@ -1643,7 +1643,7 @@ fn narrowable(layouts: &mut Layouts) -> (String, Vec<&'static str>) {
 
 /// at once or one at a time, changes fail alike where one meets a part written inline.
 #[test]
-fn drop_changes_at_once_write_what_changes_one_at_a_time_write() {
+fn exclude_changes_at_once_write_what_changes_one_at_a_time_write() {
     let missing = ["e", "z"];
     let archives = [
         "*.zip", "own.zip", "new.zip", "*.zip", "own.zip", "new.zip", "dot.zip", "in.zip",

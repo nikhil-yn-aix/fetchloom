@@ -660,7 +660,7 @@ mod tests {
             ("add", "add needs <link>, <path> or -i <file>"),
             ("get", "get needs <link>"),
             ("search", "search needs <words>"),
-            ("drop", "drop needs <path>"),
+            ("exclude", "exclude needs <path>"),
             ("path", "path needs <name>"),
             ("completions", "completions needs <shell>"),
             ("auth login", "auth login needs <account>"),

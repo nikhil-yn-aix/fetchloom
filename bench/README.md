@@ -113,7 +113,7 @@ client processes do not inherit service credentials, native client configuration
 
 ## release recheck
 
-`recheck.py` times what a release must not slow down, a build against the last release on the machine it runs on: a status, a settled sync and a cache check of 100,000 files, `path` of a small dataset beside them, `status --verify` of 512 MiB, placing 40,000 one-file datasets, `add -i` of 1,000 links, a zip of 10,000 files, a 1 GiB `get`, a merge and a drop across 1,000 datasets, and `--version`, `help` and a settled sync of 3 files. it needs linux, python 3.11 or later and GNU time, but not root or the lab.
+`recheck.py` times what a release must not slow down, a build against the last release on the machine it runs on: a status, a settled sync and a cache check of 100,000 files, `path` of a small dataset beside them, `status --verify` of 512 MiB, placing 40,000 one-file datasets, `add -i` of 1,000 links, a zip of 10,000 files, a 1 GiB `get`, a merge and an exclude across 1,000 datasets, and `--version`, `help` and a settled sync of 3 files. it needs linux, python 3.11 or later and GNU time, but not root or the lab.
 
 each arm runs a fresh copy of its binary and makes its own projects and caches from the same generated files, so the old release never reads the new one's formats. a third arm runs the baseline's bytes again: its intervals are the a/a control, how far this machine's own noise reaches. every arm runs once a round, in a seeded shuffled order after a warmup round, and a local server on `127.0.0.1:19400` (`--port`) serves the links, the zip and the 1 GiB file. the fixtures stay under `--root` for the next run; on ext4 they took 7.7 GB and four minutes to make on a 24-core machine. `--scale 0.01` makes a smoke run.
 

@@ -1015,8 +1015,8 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
 }
 
 /// how to keep only the files inside `archive` that `glob`, a select pattern of `name` matching no
-/// listed file, was likely meant for: a members table, one per shard of `shards`, or drop. advice
-/// for a command-line pattern also works for get, which keeps no project.
+/// listed file, was likely meant for: a members table, one per shard of `shards`, or exclude.
+/// advice for a command-line pattern also works for get, which keeps no project.
 fn inside(
     name: &str,
     glob: &Glob,
@@ -1027,14 +1027,14 @@ fn inside(
     let select = toml_edit::Value::from(glob.as_str());
     match (shards, patterns) {
         (None, Patterns::OnCommandLine) => format!(
-            "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [{select}] under [datasets.<name>.members.\"{archive}\"] in data.toml, or `fetchloom drop <path>` leaves files out"
+            "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [{select}] under [datasets.<name>.members.\"{archive}\"] in data.toml, or `fetchloom exclude <path>` leaves files out"
         ),
         (None, Patterns::InDataToml) => format!(
             "select chooses among the files the source lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [{select}] under [datasets.{name}.members.\"{archive}\"], or leave files out with `{}`",
-            crate::cli::project::command("drop <path>")
+            crate::cli::project::command("exclude <path>")
         ),
         (Some(shards), Patterns::OnCommandLine) => format!(
-            "--select chooses among the files the link lists, and its {} are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [{select}] under [datasets.<name>.members.\"{}\"] in data.toml, or `fetchloom drop <path>` leaves files out",
+            "--select chooses among the files the link lists, and its {} are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [{select}] under [datasets.<name>.members.\"{}\"] in data.toml, or `fetchloom exclude <path>` leaves files out",
             shards.told(),
             shards.key()
         ),
@@ -1042,7 +1042,7 @@ fn inside(
             "select chooses among the files the source lists, and its {} are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [{select}] under [datasets.{name}.members.\"{}\"], or leave files out with `{}`",
             shards.told(),
             shards.key(),
-            crate::cli::project::command("drop <path>")
+            crate::cli::project::command("exclude <path>")
         ),
     }
 }
@@ -1059,11 +1059,11 @@ mod tests {
         let glob = Glob::new("*.data").unwrap();
         assert_eq!(
             inside("new", &glob, "iris.zip", None, Patterns::OnCommandLine),
-            "--select chooses among the files the link lists, and iris.zip is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [\"*.data\"] under [datasets.<name>.members.\"iris.zip\"] in data.toml, or `fetchloom drop <path>` leaves files out"
+            "--select chooses among the files the link lists, and iris.zip is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [\"*.data\"] under [datasets.<name>.members.\"iris.zip\"] in data.toml, or `fetchloom exclude <path>` leaves files out"
         );
         assert_eq!(
             inside("uci", &glob, "iris.zip", None, Patterns::InDataToml),
-            "select chooses among the files the source lists, and iris.zip is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [\"*.data\"] under [datasets.uci.members.\"iris.zip\"], or leave files out with `fetchloom drop <path>`"
+            "select chooses among the files the source lists, and iris.zip is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [\"*.data\"] under [datasets.uci.members.\"iris.zip\"], or leave files out with `fetchloom exclude <path>`"
         );
         let paths: Vec<String> = (0..8).map(|n| format!("wds/shard-{n:06}.tar")).collect();
         let shards = archive::shards(paths.iter().map(String::as_str));
@@ -1075,7 +1075,7 @@ mod tests {
                 shards.as_ref(),
                 Patterns::OnCommandLine
             ),
-            "--select chooses among the files the link lists, and its 8 numbered .tar shards in wds are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [\"*.data\"] under [datasets.<name>.members.\"wds/shard-*.tar\"] in data.toml, or `fetchloom drop <path>` leaves files out"
+            "--select chooses among the files the link lists, and its 8 numbered .tar shards in wds are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [\"*.data\"] under [datasets.<name>.members.\"wds/shard-*.tar\"] in data.toml, or `fetchloom exclude <path>` leaves files out"
         );
     }
     use crate::cache::tests::store;
@@ -1295,10 +1295,10 @@ mod tests {
         }
     }
 
-    /// drop rewrites a dataset's pin offline when it leaves out a file its source lists: the
-    /// same pin a relock of the same listing makes with the exclude drop writes.
+    /// exclude rewrites a dataset's pin offline when it leaves out a file its source lists: the
+    /// same pin a relock of the same listing makes with the pattern exclude writes.
     #[test]
-    fn a_source_drop_rewrites_the_lock_as_a_relock_would() {
+    fn a_source_exclude_rewrites_the_lock_as_a_relock_would() {
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         let remote = |path: &str| Remote {
@@ -1339,21 +1339,21 @@ mod tests {
         let text = "[datasets.eeg]\nref = \"zenodo:1\"\nexclude = \"*.tmp\"\n";
         let before = pinned(text, None);
         let left_out = "sub/b[1].csv";
-        let dropped = crate::project::manifest::with_exclusions(
+        let excluded = crate::project::manifest::with_exclusions(
             text,
             "eeg",
             None,
             &[crate::glob::escape(left_out)],
         )
         .unwrap();
-        let manifest = Manifest::parse(&dropped).unwrap();
+        let manifest = Manifest::parse(&excluded).unwrap();
         let rewritten = without_files(
             &before,
             manifest.datasets["eeg"].source().unwrap(),
             &HashSet::from([left_out]),
             "2026-11-11T09:00:00Z",
         );
-        let mut relocked = pinned(&dropped, Some(&before));
+        let mut relocked = pinned(&excluded, Some(&before));
         relocked.timestamp = "2026-11-11T09:00:00Z".to_owned();
         assert_eq!(rewritten, relocked);
         assert_eq!(rewritten.files.len(), 2);
