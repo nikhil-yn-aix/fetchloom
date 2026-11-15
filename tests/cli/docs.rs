@@ -514,6 +514,7 @@ fn the_home_page_shows_what_fetchloom_prints() -> Result {
     }
     let files = Routes::start(served)?;
     let sandbox = Sandbox::new()?;
+    let clones = sandbox.links()?.reflinks_read_only();
     let run = |folder: &Path, transcript: &str, cache: &Path| -> Result {
         let shown = read(transcript)?;
         let (typed, said) = shown.split_once('\n').ok_or("an empty transcript")?;
@@ -530,8 +531,13 @@ fn the_home_page_shows_what_fetchloom_prints() -> Result {
             .output()?;
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(0), "{stderr}");
+        // the transcripts were recorded on a disk that hardlinks; one that clones says cloned
+        let mut printed = kept(&stderr);
+        if clones {
+            printed = printed.replace(" cloned from the cache", " linked to the cache");
+        }
         assert_eq!(
-            kept(&stderr),
+            printed,
             kept(said),
             "{transcript} is not what fetchloom prints now: record the run again, as building and testing says"
         );
