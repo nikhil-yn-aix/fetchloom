@@ -21,6 +21,7 @@ mod google;
 mod hints;
 mod import;
 mod inputs;
+mod keyring;
 mod layout;
 mod merge;
 mod mirrors;

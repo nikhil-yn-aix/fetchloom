@@ -151,7 +151,7 @@ jobs:
         # what each runner has, so a test that lacks one fails rather than skips
         include:
           - os: ubuntu-24.04
-            require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish
+            require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish,secret-service
           - os: ubuntu-24.04-arm
             require: script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash
           - os: windows-11-arm
@@ -181,6 +181,10 @@ jobs:
       - name: install fish for the quoting test
         if: matrix.os == 'ubuntu-24.04'
         run: .github/scripts/apt-install.sh fish
+      # the keyring tests start a session bus and gnome keyring of their own
+      - name: install a keyring for the secret service tests
+        if: matrix.os == 'ubuntu-24.04'
+        run: .github/scripts/apt-install.sh dbus gnome-keyring libsecret-tools
       - name: nextest
         env:
           FETCHLOOM_TEST_REQUIRE: ${{ matrix.require }}

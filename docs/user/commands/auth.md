@@ -46,7 +46,7 @@ it asks before replacing a saved key; `--yes` answers both questions yes, and a 
 | nasa earthdata, physionet, any host | `.netrc` in your home folder, or the file `NETRC` names; `_netrc` on windows when it already exists | curl, wget, python's requests |
 | zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse | the system's credential store: windows credential manager, the macos keychain or the linux secret service | nothing else; these sources have no shared file |
 
-a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable by you only on linux and macos: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=false`, or `0`, skips the credential store.
+a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable by you only on linux and macos: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=false`, or `0`, skips the credential store. a credential store that refuses the key, as a locked linux keyring does where nothing can ask for its password, such as over ssh, fails the sign-in with `local.io`, exit 50, and its help says to unlock it or set `FETCHLOOM_KEYRING=false`.
 
 [where a key goes](../concepts/privacy.md#where-a-key-goes) lists the hosts each key is sent to.
 
@@ -134,7 +134,7 @@ a key whose source gives no answer, as a host this machine cannot reach, ends it
 
 ## signing out
 
-`fetchloom auth logout <account>` removes the saved key. when the source's own tools read the same file, it asks first, since they are signed out too, and a no keeps the key and exits 1. `--yes` answers that question yes. where nobody can answer, as in a script, the key stays and the run exits 1 with `unconfirmed`, as any unanswered question does, so the file goes only with `--yes`. a key from an environment variable cannot be removed this way; unset the variable.
+`fetchloom auth logout <account>` removes the saved key. when the source's own tools read the same file, it asks first, since they are signed out too, and a no keeps the key and exits 1. `--yes` answers that question yes. where nobody can answer, as in a script, the key stays and the run exits 1 with `unconfirmed`, as any unanswered question does, so the file goes only with `--yes`. a key from an environment variable cannot be removed this way; unset the variable. a key a locked credential store keeps stays there: the run fails with `local.io`, exit 50, and its help says to unlock the store and run it again.
 
 ## JSON
 

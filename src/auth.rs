@@ -81,6 +81,18 @@ impl Origin {
         }
     }
 
+    /// where a key fetchloom saved in `place` is.
+    pub(crate) fn saved(var: Var<'_>, place: store::Place) -> Origin {
+        match place {
+            store::Place::Keyring => Origin::Keyring,
+            store::Place::File => Origin::File(
+                crate::machine::settings_folder(var)
+                    .unwrap_or_default()
+                    .join("credentials.json"),
+            ),
+        }
+    }
+
     /// the key as messages name it, by where it comes from and never by its value: `the key in
     /// HF_TOKEN`, or `the key saved in ~/.cache/huggingface/token`.
     pub(crate) fn named(&self) -> String {
@@ -562,14 +574,7 @@ impl Account {
         let stored = |id: &str| {
             let place = *saved.get(id)?;
             store::read(var, id, place).map(|secret| Found {
-                origin: match place {
-                    store::Place::Keyring => Origin::Keyring,
-                    store::Place::File => Origin::File(
-                        crate::machine::settings_folder(var)
-                            .unwrap_or_default()
-                            .join("credentials.json"),
-                    ),
-                },
+                origin: Origin::saved(var, place),
                 secret,
                 login: None,
             })

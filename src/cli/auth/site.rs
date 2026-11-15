@@ -624,9 +624,10 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
             agrees(context, host, saved, &question, true)?;
         }
         return site::save(var, host, saved, store::Place::Keyring).map_err(|err| {
+            let locked = store::locked(&err);
             let error = failed(err);
-            if site::too_big_for_windows(saved) {
-                error.help(format!("set FETCHLOOM_KEYRING=false to keep {it} in fetchloom's own file, readable only by you, then run it again"))
+            if locked || site::too_big_for_windows(saved) {
+                error.help(super::elsewhere(it, locked))
             } else {
                 error
             }
@@ -772,8 +773,10 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
     }
     // a sign-out has nothing to stop, so a stop asked once it starts lets it finish
     context.stop.finish();
-    let removed = site::forget(var, &host)
-        .map_err(|err| Error::io(format!("could not remove what was saved for {host}"), &err))?;
+    let removed = site::forget(var, &host).map_err(|err| {
+        let doing = format!("could not remove what was saved for {host}");
+        super::not_removed(&doing, &logout.account, &err)
+    })?;
     let removed_from = removed.map(|origin| {
         output.done(
             "Signed out",

@@ -752,7 +752,10 @@ fn save(
                 if !agrees(format!("save it in {}?", auth::keyring_name()), true)? {
                     return Ok(None);
                 }
-                store::save(var, &id, secret, store::Place::Keyring).map_err(failed)?;
+                store::save(var, &id, secret, store::Place::Keyring).map_err(|err| {
+                    let locked = store::locked(&err);
+                    failed(err).help(elsewhere("the key", locked))
+                })?;
                 return Ok(Some(auth::keyring_name().to_owned()));
             }
             let file = crate::machine::settings_folder(var)
@@ -777,6 +780,43 @@ fn save(
             }
             Ok(Some(file.display().to_string()))
         }
+    }
+}
+
+/// where the key of `account` is kept: where it is found, or where the index of saved keys still
+/// lists one the store would not give, as a locked keyring keeps it. none when nothing is.
+fn kept(account: &Account, var: crate::machine::Var<'_>) -> Option<Origin> {
+    account.find(var).map(|found| found.origin).or_else(|| {
+        let place = *store::saved(var).get(&account.id())?;
+        Some(Origin::saved(var, place))
+    })
+}
+
+/// the error for a key of `typed`, an account as typed, that `doing` could not remove for `err`;
+/// a locked credential store's says to unlock it first.
+fn not_removed(doing: &str, typed: &str, err: &std::io::Error) -> Error {
+    let error = Error::io(doing, err);
+    if store::locked(err) {
+        error.help(format!(
+            "unlock {}, then run `fetchloom auth logout {}` again",
+            auth::keyring_name(),
+            crate::suggested::shell_word(typed)
+        ))
+    } else {
+        error
+    }
+}
+
+/// the help when the credential store would not take `it`: to keep it in fetchloom's own file
+/// instead, after unlocking the store when it is `locked`.
+fn elsewhere(it: &str, locked: bool) -> String {
+    let file = format!(
+        "set FETCHLOOM_KEYRING=false to keep {it} in fetchloom's own file, readable only by you, then run it again"
+    );
+    if locked {
+        format!("unlock {}, or {file}", auth::keyring_name())
+    } else {
+        file
     }
 }
 
@@ -849,7 +889,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     let output = &context.output;
     let account = Account::parse(&logout.account, logout.host.as_deref())?;
     let var = &crate::machine::env;
-    let Some(found) = account.find(var) else {
+    let Some(origin) = kept(&account, var) else {
         output.done("Ok", &format!("no {} key was saved", title(&account)));
         return Ok(Report::Logout {
             account: account.id(),
@@ -860,12 +900,10 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     // there cancels as a key, so a stop asked otherwise lets it finish
     context.stop.finish();
     let failed = |err: std::io::Error| {
-        Error::io(
-            format!("could not remove the {} key", title(&account)),
-            &err,
-        )
+        let doing = format!("could not remove the {} key", title(&account));
+        not_removed(&doing, &logout.account, &err)
     };
-    let removed = match &found.origin {
+    let removed = match &origin {
         Origin::Variable(name) => {
             return Err(Error::new(
                 Kind::Usage,

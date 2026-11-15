@@ -30,12 +30,13 @@ a test that needs what a machine may lack returns early and says `skipped: <reas
 | `sparse-files` | a disk that holds a sparse file of 64 GiB |
 | `file-locks` | a disk that takes file locks |
 | `bash`, `sh`, `zsh`, `fish`, `pwsh` | each shell the quoting test pastes a command into; the completion tests also need `bash` and `pwsh` |
+| `secret-service` | `dbus-daemon`, `dbus-send`, `gnome-keyring-daemon` and `secret-tool`, for a session bus and a gnome keyring of the test's own, which `keyring.rs` keeps keys in |
 
 `FETCHLOOM_TEST_REQUIRE` lists the ones the tests must find, as `script,git,hardlinks`; the shared helper in `tests/support/skips.rs` reads it once, and a test that lacks a listed capability fails instead of skipping. CI's native runs set what each runner has:
 
 | runner | `FETCHLOOM_TEST_REQUIRE` |
 |---|---|
-| ubuntu-24.04 | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish`; CI installs fish first |
+| ubuntu-24.04 | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash,pwsh,fish,secret-service`; CI installs fish, gnome keyring and libsecret's tools first |
 | ubuntu-24.04-arm | `script,git,hardlinks,placed-hardlinks,raw-names,distinct-names,unprivileged,symlinks,birth-time,freed-names,sparse-files,file-locks,bash` |
 | macos-15 | `script,git,hardlinks,unprivileged,pwsh,zsh` |
 | windows-2025 | `git,hardlinks,pwsh` |

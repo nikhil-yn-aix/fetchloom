@@ -67,6 +67,14 @@ impl Keyring {
     }
 }
 
+/// whether `err`, from the credential store, says the store would not let fetchloom in, as a
+/// locked keyring does where it cannot ask for its password.
+pub(crate) fn locked(err: &io::Error) -> bool {
+    err.get_ref()
+        .and_then(|inner| inner.downcast_ref::<keyring::Error>())
+        .is_some_and(|err| matches!(err, keyring::Error::NoStorageAccess(_)))
+}
+
 /// whether `FETCHLOOM_KEYRING` leaves the system's credential store in use: unless it is false,
 /// as an on/off variable is read. a run refuses any other value before it starts.
 fn keyring_allowed(var: Var<'_>) -> bool {

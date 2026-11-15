@@ -238,19 +238,7 @@ pub(crate) fn find(var: Var<'_>, host: &str) -> Option<(Saved, Origin)> {
     let place = *store::saved(var).get(&id)?;
     let text = store::read(var, &id, place)?;
     let saved = serde_json::from_str(&text).ok()?;
-    Some((saved, origin(var, place)))
-}
-
-/// where a key in `place` is, as `auth` names it.
-fn origin(var: Var<'_>, place: store::Place) -> Origin {
-    match place {
-        store::Place::Keyring => Origin::Keyring,
-        store::Place::File => Origin::File(
-            crate::machine::settings_folder(var)
-                .unwrap_or_default()
-                .join("credentials.json"),
-        ),
-    }
+    Some((saved, Origin::saved(var, place)))
 }
 
 /// the most bytes windows' credential store keeps for an entry, `CRED_MAX_CREDENTIAL_BLOB_SIZE`.
@@ -278,7 +266,7 @@ pub(crate) fn save(
 ) -> std::io::Result<Origin> {
     let text = serde_json::to_string(saved).map_err(std::io::Error::other)?;
     store::save(var, &id(host), &text, place)?;
-    Ok(origin(var, place))
+    Ok(Origin::saved(var, place))
 }
 
 /// removes what is saved for `host`. returns where it was, or none when nothing was.
@@ -292,7 +280,7 @@ pub(crate) fn forget(var: Var<'_>, host: &str) -> std::io::Result<Option<Origin>
         return Ok(None);
     };
     store::forget(var, &id)?;
-    Ok(Some(origin(var, place)))
+    Ok(Some(Origin::saved(var, place)))
 }
 
 /// every website's saved credential, each with the host it goes to alone.

@@ -9,7 +9,7 @@ use crate::support::{
 };
 
 /// the host and port of a server on this machine, as `auth login` takes it.
-fn host_of(server: &Routes) -> String {
+pub(crate) fn host_of(server: &Routes) -> String {
     server.url.trim_start_matches("http://").to_owned()
 }
 
@@ -26,7 +26,7 @@ fn sign_in_with_token(sandbox: &Sandbox, host: &str, token: &str) -> Result {
 }
 
 /// the value of `name` in each request `server` took, lowercased.
-fn heard(server: &Routes, name: &str) -> Vec<Option<String>> {
+pub(crate) fn heard(server: &Routes, name: &str) -> Vec<Option<String>> {
     server
         .requests()
         .iter()
@@ -1421,15 +1421,27 @@ fn chrome_profile(sandbox: &Sandbox, domain: &str, name: &str, value: &str) -> R
 /// whether chrome sealed it, as [`chrome_profile`] does; an unsealed row keeps its value plain.
 #[cfg(target_os = "linux")]
 fn chrome_cookies(folder: &std::path::Path, rows: &[(&str, &str, &str, bool)]) -> Result {
-    use aes::cipher::block_padding::Pkcs7;
-    use aes::cipher::{BlockModeEncrypt as _, KeyIvInit as _};
-    use sha2::Digest as _;
     // PBKDF2-HMAC-SHA1 of "peanuts" over "saltysalt", once, as chromium's posix_key_provider.cc
     // gives it
     let key: [u8; 16] = [
         0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x02, 0x53, 0x9d, 0xfa, 0x14, 0x7c, 0xa9, 0x27, 0x27,
         0x78,
     ];
+    chrome_cookies_sealed(folder, rows, "v10", &key)
+}
+
+/// [`chrome_cookies`], each sealed row under `tag` with `key`, as chrome seals them with the key
+/// of a secret it keeps in the system keyring.
+#[cfg(target_os = "linux")]
+pub(crate) fn chrome_cookies_sealed(
+    folder: &std::path::Path,
+    rows: &[(&str, &str, &str, bool)],
+    tag: &str,
+    key: &[u8; 16],
+) -> Result {
+    use aes::cipher::block_padding::Pkcs7;
+    use aes::cipher::{BlockModeEncrypt as _, KeyIvInit as _};
+    use sha2::Digest as _;
     let folder = folder.join("Network");
     std::fs::create_dir_all(&folder)?;
     let db = rusqlite::Connection::open(folder.join("Cookies"))?;
@@ -1451,9 +1463,9 @@ fn chrome_cookies(folder: &std::path::Path, rows: &[(&str, &str, &str, bool)]) -
                 value.as_bytes(),
             ]
             .concat();
-            let sealed = cbc::Encryptor::<aes::Aes128>::new(&key.into(), &[b' '; 16].into())
+            let sealed = cbc::Encryptor::<aes::Aes128>::new(key.into(), &[b' '; 16].into())
                 .encrypt_padded_vec::<Pkcs7>(&plain);
-            (String::new(), [b"v10".as_slice(), &sealed].concat())
+            (String::new(), [tag.as_bytes(), &sealed].concat())
         } else {
             ((*value).to_owned(), Vec::new())
         };
