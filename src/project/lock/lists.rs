@@ -43,6 +43,8 @@ pub(crate) const LONGEST_PATH: usize = 4096;
 /// [`LONGEST_PATH`] it keeps a cloned part of long rows, a few bytes each once compressed, from
 /// asking for gigabytes.
 pub(crate) const LONGEST_URL: usize = 64 << 10;
+/// what to do about a list whose columns this fetchloom does not know.
+const NEWER: &str = "install a newer fetchloom to read it; if someone edited data.lock.d by hand, restore it from git";
 /// how to recover a list fetchloom cannot use.
 pub(super) const BROKEN: &str = "restore data.lock and data.lock.d from git, or delete data.lock and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
 
@@ -444,7 +446,9 @@ pub(crate) fn read<R: Row>(
             hasher.update(&line);
             if number == 1 {
                 if line != R::HEADER.as_bytes() {
-                    return Err(other_kind::<R>(part, &line).unwrap_or_else(|| damaged(part, 1)));
+                    return Err(other_kind::<R>(part, &line)
+                        .or_else(|| newer_columns::<R>(part, &line))
+                        .unwrap_or_else(|| damaged(part, 1)));
                 }
                 continue;
             }
@@ -484,6 +488,40 @@ fn other_kind<R: Row>(part: &str, header: &[u8]) -> Option<Error> {
         "{part} holds {holds}, where data.lock names {}",
         R::HOLDS
     )))
+}
+
+/// the error for `part`, a list of `R` whose `header` names a column this fetchloom does not
+/// know, as a newer fetchloom may add one: none when it names no columns at all, or only known
+/// ones, as a damaged part's first line does.
+fn newer_columns<R: Row>(part: &str, header: &[u8]) -> Option<Error> {
+    let header = std::str::from_utf8(header).ok()?.strip_suffix('\n')?;
+    let columns: Vec<&str> = header.split('\t').collect();
+    let named = |column: &&str| {
+        !column.is_empty()
+            && column.len() <= 40
+            && column
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    };
+    if !columns.iter().all(named) {
+        return None;
+    }
+    let known: Vec<&str> = R::HEADER.trim_end().split('\t').collect();
+    let unknown: Vec<&str> = columns
+        .into_iter()
+        .filter(|column| !known.contains(column))
+        .collect();
+    let message = match unknown.as_slice() {
+        [] => return None,
+        [one] => format!(
+            "{part} has the column {one}, which this fetchloom does not know, so a newer fetchloom likely wrote it"
+        ),
+        many => format!(
+            "{part} has the columns {}, which this fetchloom does not know, so a newer fetchloom likely wrote it",
+            crate::units::listed(many, "and")
+        ),
+    };
+    Some(Error::new(Kind::ProjectInvalid, message).help(NEWER))
 }
 
 /// appends `text` with backslashes, tabs and line breaks escaped, so a field never splits a line.
@@ -713,6 +751,47 @@ mod tests {
             let read = read::<Member>(Parts::Folder(root.path()), "made", &listed);
             assert_eq!(read.is_ok(), reads, "{length}");
         }
+    }
+
+    /// a part whose header names a column this fetchloom does not know, as a newer one may add,
+    /// is no damage: the error asks for that newer fetchloom, never to pin anew. a first line
+    /// that names no columns, or only known ones, is still damaged.
+    #[test]
+    fn a_column_a_newer_fetchloom_writes_asks_for_that_fetchloom() {
+        let root = tempfile::tempdir().unwrap();
+        let rows = files(2);
+        let listed = write(root.path(), "set", &rows);
+        let part = &listed.parts[0];
+        let text = texts(&rows).remove(0);
+        for (header, says) in [
+            (
+                "path\tsize\tsha256\tmd5\turl\tunpacks_to\tcitation\n",
+                Some(format!(
+                    "{part} has the column citation, which this fetchloom does not know, so a newer fetchloom likely wrote it"
+                )),
+            ),
+            (
+                "path\tsize\tsha256\tmd5\turl\tunpacks_to\tcitation\tlicense\n",
+                Some(format!(
+                    "{part} has the columns citation and license, which this fetchloom does not know, so a newer fetchloom likely wrote it"
+                )),
+            ),
+            ("\u{1b}[2J\tpath\n", None),
+            ("path\tsize\tsha256\tmd5\turl\n", None),
+        ] {
+            let changed = text.replacen(LockedFile::HEADER, header, 1);
+            fs::write(root.path().join(part), compress(&changed).unwrap()).unwrap();
+            let error = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            match says {
+                Some(says) => {
+                    assert_eq!(error.message, says);
+                    assert_eq!(error.help.as_deref(), Some(NEWER));
+                }
+                None => assert_eq!(error.message, format!("{part} is damaged at line 1")),
+            }
+        }
+        assert!(!NEWER.contains("delete") && !NEWER.contains("fetchloom lock"));
     }
 
     #[test]

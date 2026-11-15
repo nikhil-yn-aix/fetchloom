@@ -178,6 +178,9 @@ fn raise(short: u64) -> String {
     )
 }
 
+/// what to do about a data.lock holding a field or a value this fetchloom does not know.
+const NEWER: &str = "install a newer fetchloom to read it; if someone edited data.lock by hand, restore it from git";
+
 /// how to recover a data.lock this fetchloom cannot use. `fetchloom lock` alone reads the same
 /// file first and fails the same way.
 pub(crate) const BROKEN: &str = "restore data.lock from git, or delete it and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
@@ -1659,6 +1662,9 @@ fn other_version(version: i64) -> Error {
 /// the error for a data.lock the toml reader refused: the line it stopped at, in plain words, with
 /// the reader's own reason after them.
 fn unreadable(text: &str, err: &toml::de::Error) -> Error {
+    if let Some(error) = newer(text, err) {
+        return error;
+    }
     let reason = err.message();
     // serde names the integer type it could not fill, as "as i128, expected u64"
     let what = if reason.starts_with("invalid type: integer") || reason.contains("out of range") {
@@ -1674,6 +1680,42 @@ fn unreadable(text: &str, err: &toml::de::Error) -> Error {
         None => format!("data.lock cannot be read: it {what}"),
     };
     broken(message).detail(format!("the toml reader says: {reason}"))
+}
+
+/// the error for a data.lock the toml reader refused for a field or a value this fetchloom does
+/// not know, as a newer fetchloom may write one, none for any other reason: such a lock is not
+/// damaged, and pinning anew would throw away what it pins. the reader's words follow as a detail.
+fn newer(text: &str, err: &toml::de::Error) -> Option<Error> {
+    let reason = err.message();
+    let (rest, what) = match reason.strip_prefix("unknown field `") {
+        Some(rest) => (rest, "field"),
+        None => (reason.strip_prefix("unknown variant `")?, "value"),
+    };
+    // the name is the lock's own text, so only a plain word is repeated
+    let word = rest.split_once('`').map(|(word, _)| word).filter(|word| {
+        !word.is_empty()
+            && word.len() <= 40
+            && word
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    });
+    let at = err.span().map_or_else(String::new, |span| {
+        let line = text[..span.start.min(text.len())].matches('\n').count() + 1;
+        format!(" on line {line}")
+    });
+    let message = match word {
+        Some(word) => format!(
+            "data.lock holds {word}{at}, a {what} this fetchloom does not know, so a newer fetchloom likely wrote it"
+        ),
+        None => format!(
+            "data.lock holds a {what} this fetchloom does not know{at}, so a newer fetchloom likely wrote it"
+        ),
+    };
+    Some(
+        Error::new(Kind::ProjectInvalid, message)
+            .detail(format!("the toml reader says: {reason}"))
+            .help(NEWER),
+    )
 }
 
 fn broken(message: String) -> Error {
@@ -2264,6 +2306,64 @@ mod tests {
                 "data.lock cannot be read: line {line} holds a number too large for fetchloom to store"
             )
         );
+    }
+
+    /// a field or a value this fetchloom does not know, as a newer fetchloom may write, is no
+    /// damage: the error asks for that newer fetchloom, or a restore from git of a hand edit,
+    /// never to delete data.lock and pin anew, which would throw its pins away. reading stays
+    /// strict.
+    #[test]
+    fn a_field_a_newer_fetchloom_writes_asks_for_that_fetchloom() {
+        let text = sample().render();
+        let line = |changed: &str, word: &str| {
+            changed[..changed.find(word).unwrap()].matches('\n').count() + 1
+        };
+        for (changed, word, what) in [
+            (
+                text.replacen("locked = ", "citation = \"x\"\nlocked = ", 1),
+                "citation",
+                "field",
+            ),
+            (
+                text.replacen("version = 1\n", "version = 1\nrequires = \"0.2\"\n", 1),
+                "requires",
+                "field",
+            ),
+            (
+                text.replacen("access = \"public\"", "access = \"embargoed\"", 1),
+                "embargoed",
+                "value",
+            ),
+        ] {
+            let error = Lock::parse(&changed).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{changed}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "data.lock holds {word} on line {}, a {what} this fetchloom does not know, so a newer fetchloom likely wrote it",
+                    line(&changed, word)
+                )
+            );
+            assert_eq!(error.help.as_deref(), Some(NEWER));
+        }
+        // a field inside a file's table, and one whose name is no plain word, are not named
+        let inline = text.replacen(", url = ", ", citation = \"x\", url = ", 1);
+        let error = Lock::parse(&inline).unwrap_err();
+        assert!(
+            error
+                .message
+                .starts_with("data.lock holds citation on line ")
+        );
+        let odd = text.replacen("locked = ", "\"cit\\u001b[2Jation\" = \"x\"\nlocked = ", 1);
+        let error = Lock::parse(&odd).unwrap_err();
+        assert!(
+            error
+                .message
+                .starts_with("data.lock holds a field this fetchloom does not know on line "),
+            "{}",
+            error.message
+        );
+        assert!(!NEWER.contains("delete") && !NEWER.contains("fetchloom lock"));
     }
 
     /// a version error says what the field holds and leaves the rest of the lock out.
@@ -3230,9 +3330,10 @@ mod tests {
                 .all(|dataset| dataset.access == Access::Unknown)
         );
         assert!(!read.render().contains("access"));
+        // a value a newer fetchloom may write, which a hand edit's restore from git mends too
         let error = Lock::parse(&text.replace("\"public\"", "\"secret\"")).unwrap_err();
         assert_eq!(error.kind, Kind::ProjectInvalid);
-        assert_eq!(error.help.as_deref(), Some(BROKEN));
+        assert_eq!(error.help.as_deref(), Some(NEWER));
     }
 
     #[test]

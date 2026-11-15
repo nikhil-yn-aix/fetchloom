@@ -49,7 +49,7 @@ hashes are written in lowercase. datasets sort by name and files by path. the wr
 
 `lock` can record a file without downloading it when its SHA-256 and size are known. an archive needs a tree hash before the lock can mark it for extraction.
 
-fetchloom reads and writes format 1 only. a lock with a higher `version` comes from a newer fetchloom and asks you to update. any other version, or a lock that does not parse, is broken: restore it from git, or delete it before `fetchloom lock` rebuilds it. rebuilding can pin newer data. a `version` that is no whole number names no format, so the error says what it holds instead; for `version = "1"` that is `data.lock cannot be read: version is text in quotes, not a whole number such as 1`.
+fetchloom reads and writes format 1 only. a lock with a higher `version` comes from a newer fetchloom and asks you to update. so does a key or a value this fetchloom does not know, which a newer fetchloom may write: `data.lock holds citation on line 8, a field this fetchloom does not know, so a newer fetchloom likely wrote it`, `project.invalid`, exit 50, with help to install a newer fetchloom, or, after a hand edit, to restore data.lock from git, and the same for a column of a list in `data.lock.d`. reading stays strict: the lock is not read until a fetchloom that knows the key reads it. any other version, or a lock that does not parse, is broken: restore it from git, or delete it before `fetchloom lock` rebuilds it. rebuilding can pin newer data. a `version` that is no whole number names no format, so the error says what it holds instead; for `version = "1"` that is `data.lock cannot be read: version is text in quotes, not a whole number such as 1`.
 
 ## big datasets
 
@@ -179,7 +179,7 @@ paths in this record retain their archive folders; placement may strip a shared 
 
 ## encoding and validation
 
-locks are UTF-8 TOML. a byte order mark is accepted on read and omitted on write. unknown keys fail, and the parser lists the allowed fields. duplicate dataset names are refused with `project.invalid` and lock-recovery help. restore the intended lock rather than relying on one duplicate to win. a dataset name data.toml would refuse, such as `../outside`, is refused the same way, since a name also names its list's parts in `data.lock.d`.
+locks are UTF-8 TOML. a byte order mark is accepted on read and omitted on write. unknown keys and values fail as a newer fetchloom's, with the error the top of this page shows, and the parser's own words list the allowed fields. duplicate dataset names are refused with `project.invalid` and lock-recovery help. restore the intended lock rather than relying on one duplicate to win. a dataset name data.toml would refuse, such as `../outside`, is refused the same way, since a name also names its list's parts in `data.lock.d`.
 
 each file's `url`, and `resolved` when it is an http or https link, are the links a request uses. neither may hold a login or a recognized secret such as `token=`: fetchloom never pins one, so a lock that holds one was edited, and every command that reads it stops with `project.invalid`, exit 50, before any request. the error names the key, never its value, and its JSON `fix` is null. on stderr:
 

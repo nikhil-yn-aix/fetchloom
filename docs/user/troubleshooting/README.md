@@ -58,7 +58,7 @@ in a new terminal, `fetchloom settings` shows the `rate` row coming from the env
 
 ## project recovery
 
-- restore a broken lock from git when you need its exact pins; deleting it and running `fetchloom lock` can resolve newer inputs. a lock with a higher `version` comes from a newer fetchloom and needs one.
+- restore a broken lock from git when you need its exact pins; deleting it and running `fetchloom lock` can resolve newer inputs. a lock with a higher `version`, or with a field or a list column the error says this fetchloom does not know, comes from a newer fetchloom and needs one; deleting it would throw its pins away.
 - a failed `add` puts `data.toml` and `data.lock` back. if that fails, copy them back from the recovery file the error names under `.fetchloom/`, which holds their bytes as they were; never paste it into a log, since it may hold credentials.
 - a `remove` that changed `data.toml` and `data.lock` but could not delete files finishes with `fetchloom sync` once you fix the reported error.
 - a command that was killed can leave a record that it holds the project. delete only the exact path a waiting command names, and only once the process it names has ended, as [owner record](../reference/project-folder.md#owner-record) explains.

@@ -4452,3 +4452,42 @@ fn a_clone_missing_a_fetched_list_never_asks_its_source() -> Result {
     assert!(!clone.join("data/iris").exists());
     checked_missing(&sandbox, &clone, "iris", &part)
 }
+
+/// a data.lock field this fetchloom does not know, as a newer fetchloom may write, stops each
+/// reader with words that ask for that fetchloom, never with advice to delete data.lock and pin
+/// anew, which would throw its pins away.
+#[test]
+fn a_lock_a_newer_fetchloom_wrote_asks_for_that_fetchloom() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("flowers")?;
+    fs::write(folder.join("sepals.csv"), b"length\n5.1\n")?;
+    let added = sandbox.run(&["add", "../flowers"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let path = sandbox.work().join("data.lock");
+    let lock = fs::read_to_string(&path)?.replacen("locked = ", "citation = \"x\"\nlocked = ", 1);
+    fs::write(&path, &lock)?;
+    let line = lock[..lock.find("citation").unwrap_or_default()]
+        .matches('\n')
+        .count()
+        + 1;
+    for command in [&["lock", "--check"][..], &["status"], &["export"]] {
+        let output = sandbox.run(&[&["--json"][..], command].concat())?;
+        assert_eq!(output.status.code(), Some(50), "{command:?}");
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "project.invalid", "{command:?}");
+        assert_eq!(
+            error["message"],
+            format!(
+                "data.lock holds citation on line {line}, a field this fetchloom does not know, so a newer fetchloom likely wrote it"
+            ),
+            "{command:?}"
+        );
+        assert_eq!(
+            error["help"],
+            "install a newer fetchloom to read it; if someone edited data.lock by hand, restore it from git",
+            "{command:?}"
+        );
+        assert_eq!(error["fix"], serde_json::Value::Null, "{command:?}");
+    }
+    Ok(())
+}
