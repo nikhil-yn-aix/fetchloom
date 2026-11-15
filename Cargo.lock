@@ -853,6 +853,8 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit 0.25.19+spec-1.1.0",
+ "tower-layer",
+ "tower-service",
  "tracing",
  "tracing-chrome",
  "tracing-subscriber",

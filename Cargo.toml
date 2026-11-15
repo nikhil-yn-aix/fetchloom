@@ -73,6 +73,10 @@ sha2 = "0.11"
 tar = { version = "0.4.46", default-features = false }
 tempfile = "3.27"
 tokio = { version = "1.54", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+# a layer under reqwest's connector, so a request knows when its connection opened and its wait
+# for an answer counts from then. both are already in the tree under reqwest
+tower-layer = "0.3.3"
+tower-service = "0.3.3"
 toml = { version = "1.1", default-features = false, features = ["std", "serde", "parse"] }
 toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }

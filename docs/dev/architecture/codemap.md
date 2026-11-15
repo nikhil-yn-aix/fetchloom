@@ -211,6 +211,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/net/speeds.rs` | what this machine remembers of each host's speed, from the transfers a run makes, smoothed over recent runs in a small file of fetchloom's state folder | `Speeds`, `Memory` | `Run`, `folder`, `smoothed` |
 | `src/net/headers.rs` | the headers downloads read: lengths, ranges, validators and `Content-Disposition` file names | `file_name`, `validators` | `if_range`, `changed`, `range_start`, `range_end` |
 | `src/net/failure.rs` | which failures get another try, and how long to wait | `classify`, `Failure` | `Retry`, `retry_after` |
+| `src/net/opened.rs` | when a request's connection opened, from a layer under reqwest's connector, so the wait for its answer counts from then | `Opening` | `Watching`, `answer_by` |
 | `src/net/pace.rs` | how often a host lets fetchloom ask, from its rate-limit headers or a spacing such as NCBI's, longer after it refuses for load, and which waits get a line | `Paces` | `Limit`, `Hold`, `Ticket`, `admit`, `heard`, `answered`, `pause`, `busy`, `told` |
 | `src/net/rate.rs` | the one byte budget every response in a run shares | `Rate` | `read`, `throttle` |
 | `src/net/relink.rs` | links a source gives only for a while: a fresh one by the stable link data.lock keeps, asked again once when it expired, and during a download only while it holds no slot | `Net::relinked`, `Net::refreshed` |  |

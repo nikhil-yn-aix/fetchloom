@@ -10,6 +10,7 @@ pub(crate) mod estimate;
 mod failure;
 pub(crate) mod google;
 mod headers;
+mod opened;
 mod pace;
 mod rate;
 mod relink;
@@ -408,6 +409,7 @@ impl Wire {
         let builder = reqwest::Client::builder()
             .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(self.connect)
+            .connector_layer(opened::Watching)
             .dns_resolver(Arc::new(self.resolver(reach)))
             // `send` follows redirects itself, so that each hop is checked before it goes out
             .redirect(reqwest::redirect::Policy::none())
@@ -994,13 +996,16 @@ impl Net {
         let sent = metadata
             .then(|| api::Sent::capture(wire, hop, &request))
             .flatten();
-        let deadline = self.connect + self.idle;
+        let opening = Arc::new(opened::Opening::default());
+        let asked = tokio::time::Instant::now();
         let mut response = tokio::select! {
-            sent = tokio::time::timeout(deadline, request.send()) => match sent {
-                Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(hop), deadline.as_secs()))),
-                Ok(Err(err)) => return Err(unanswered(wire, hop, carrier, &err, self.offline).await),
-                Ok(Ok(response)) => response,
+            sent = opening.watching(request.send()) => match sent {
+                Err(err) => return Err(unanswered(wire, hop, carrier, &err, self.offline).await),
+                Ok(response) => response,
             },
+            () = overdue(&opening, asked, self.idle) => {
+                return Err(failure::transient(format!("{} did not answer within {} s", host(hop), self.idle.as_secs())));
+            }
             (carrier, reason) = watched(wire, carrier) => {
                 return Err(Failure::Final(failure::proxy_down(hop, carrier, &reason)));
             }
@@ -1301,6 +1306,19 @@ async fn watched<'c>(
     }
 }
 
+/// resolves once the answer to a request `asked` then is overdue, `idle` after its connection
+/// opened as `opening` tells, and never while that connection is still opening, which the
+/// connect time bounds. a connection opening is looked at again each second.
+async fn overdue(opening: &opened::Opening, asked: tokio::time::Instant, idle: Duration) {
+    loop {
+        match opening.answer_by(asked, idle) {
+            Some(by) if tokio::time::Instant::now() >= by => return,
+            Some(by) => tokio::time::sleep_until(by).await,
+            None => tokio::time::sleep(Duration::from_secs(1)).await,
+        }
+    }
+}
+
 /// resolves once `moved` has not changed for `quiet`, checked each `quiet`.
 async fn still(moved: &std::sync::atomic::AtomicU64, quiet: Duration) {
     let mut seen = moved.load(std::sync::atomic::Ordering::Relaxed);
@@ -1515,6 +1533,43 @@ mod tests {
             "{}",
             heads[1]
         );
+    }
+
+    /// a server that takes the connection and never answers fails the try once the run's
+    /// timeout passes, not once the time a connection may take to open has passed too.
+    #[test]
+    fn a_server_that_never_answers_fails_the_try_after_the_timeout() {
+        use crate::source::recorded::block_on;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!(
+            "http://{}/stallhead/s.csv",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        // holds the connection open without a word until the test ends
+        std::thread::spawn(move || {
+            let held = listener.accept();
+            std::thread::sleep(Duration::from_mins(2));
+            drop(held);
+        });
+        let options = Options {
+            offline: Offline::No,
+            jobs: 1,
+            credentials: Vec::new(),
+            split: Splitting::Never,
+        };
+        let mut net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        net.idle = Duration::from_secs(1);
+        net.connect = Duration::from_hours(1);
+        net.typed(&url);
+        let sent = block_on(async {
+            tokio::time::timeout(Duration::from_secs(30), net.send(&url, |request| request)).await
+        });
+        let Ok(Err(Failure::Transient { reason, .. })) = sent else {
+            panic!("the try outlasted its timeout");
+        };
+        assert_eq!(reason, "127.0.0.1 did not answer within 1 s");
     }
 
     #[test]
