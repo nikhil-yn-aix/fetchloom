@@ -647,7 +647,7 @@ impl Net {
                     "fetchloom will not ask {asked}, since mirrors_only lets it ask its mirrors alone"
                 ),
             )
-            .help("ask whoever keeps the mirrors to add what is missing, or turn off mirrors_only in the settings file or FETCHLOOM_MIRRORS_ONLY"),
+            .help("ask whoever keeps the mirrors to add what is missing, or run `fetchloom settings unset mirrors_only` or unset FETCHLOOM_MIRRORS_ONLY, whichever turned it on, to ask sources too"),
         ))
     }
 
