@@ -727,7 +727,7 @@ fn save(
         |err: std::io::Error| Error::io(format!("could not save the {} key", title(account)), &err);
     match account.home(var, secret) {
         Home::File(path) => {
-            let (question, default) = save_question(account, &path);
+            let (question, default) = save_question(account, &path, false);
             if !agrees(question, default)? {
                 return Ok(None);
             }
@@ -741,7 +741,7 @@ fn save(
             Ok(Some(path.display().to_string()))
         }
         Home::Netrc(path) => {
-            let (question, default) = save_question(account, &path);
+            let (question, default) = save_question(account, &path, false);
             if !agrees(question, default)? {
                 return Ok(None);
             }
@@ -768,7 +768,8 @@ fn save(
                 .unwrap_or_default()
                 .join("credentials.json");
             if !told {
-                let (question, default) = save_question(account, &file);
+                let (question, default) =
+                    save_question(account, &file, !store::keyring_allowed(var));
                 if !agrees(question, default)? {
                     output.hint(&format!(
                         "to keep it out of files, set {} in your environment instead",
@@ -779,10 +780,14 @@ fn save(
             }
             store::save(var, &id, secret, store::Place::File).map_err(failed)?;
             if told {
-                output.warn(Warning::AuthNoKeyring, &format!(
-                    "this machine has no credential store, so the key is saved in {}, readable only by you",
-                    units::path(&file)
-                ));
+                output.warn(
+                    Warning::AuthNoKeyring,
+                    &format!(
+                        "{}, so the key is saved in {}, readable only by you",
+                        no_store(var),
+                        units::path(&file)
+                    ),
+                );
             }
             Ok(Some(file.display().to_string()))
         }
@@ -827,17 +832,33 @@ fn elsewhere(it: &str, locked: bool) -> String {
 }
 
 /// the question before saving `account`'s key to the file `path`, and the answer enter gives:
-/// yes for a file the source's own tools read, no for the file a machine with no credential store
-/// keeps keys in. the tools are named once the key is saved, so the question fits a terminal.
-fn save_question(account: &Account, path: &std::path::Path) -> (String, bool) {
+/// yes for a file the source's own tools read, no for the file keys go in without a credential
+/// store, which `off` says `FETCHLOOM_KEYRING` turned off. the tools are named once the key is
+/// saved, so the question fits a terminal.
+fn save_question(account: &Account, path: &std::path::Path, off: bool) -> (String, bool) {
     let save = format!("save it to {}?", units::path(path));
     if account.shared_with().is_some() || matches!(account, Account::Login(_)) {
         (save, true)
     } else {
+        let why = if off {
+            "FETCHLOOM_KEYRING is off"
+        } else {
+            "no credential store here"
+        };
         (
-            format!("no credential store here, so it would go in a file only you can read\n{save}"),
+            format!("{why}, so it would go in a file only you can read\n{save}"),
             false,
         )
+    }
+}
+
+/// why a key goes in fetchloom's own file, as a warning begins: `FETCHLOOM_KEYRING` turned the
+/// system's credential store off, or the machine has none.
+pub(super) fn no_store(var: crate::machine::Var<'_>) -> &'static str {
+    if store::keyring_allowed(var) {
+        "this machine has no credential store"
+    } else {
+        "FETCHLOOM_KEYRING is off"
     }
 }
 
@@ -1277,7 +1298,8 @@ mod tests {
             ),
         ] {
             let path = std::path::Path::new(path);
-            questions.push(save_question(account, path).0);
+            questions.push(save_question(account, path, false).0);
+            questions.push(save_question(account, path, true).0);
             if let Some(tools) = account.shared_with() {
                 questions.push(remove_question(tools, path));
             }

@@ -77,7 +77,7 @@ pub(crate) fn locked(err: &io::Error) -> bool {
 
 /// whether `FETCHLOOM_KEYRING` leaves the system's credential store in use: unless it is false,
 /// as an on/off variable is read. a run refuses any other value before it starts.
-fn keyring_allowed(var: Var<'_>) -> bool {
+pub(crate) fn keyring_allowed(var: Var<'_>) -> bool {
     let name = "FETCHLOOM_KEYRING";
     !matches!(
         crate::machine::switched(name, var(name).as_deref()),

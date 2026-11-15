@@ -647,8 +647,13 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
         .join("credentials.json");
     let asked = !(told || context.yes);
     if asked {
+        let why = if store::keyring_allowed(var) {
+            "no credential store here"
+        } else {
+            "FETCHLOOM_KEYRING is off"
+        };
         let question = format!(
-            "no credential store here, so {they} would go in a file only you can read\nsave {it} to {}?",
+            "{why}, so {they} would go in a file only you can read\nsave {it} to {}?",
             crate::units::path(&file)
         );
         agrees(context, host, saved, &question, false)?;
@@ -658,7 +663,8 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
         context.output.warn(
             Warning::AuthNoKeyring,
             &format!(
-                "this machine has no credential store, so {they} went in {}, readable only by you",
+                "{}, so {they} went in {}, readable only by you",
+                super::no_store(var),
                 crate::units::path(&file)
             ),
         );

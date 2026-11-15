@@ -207,7 +207,10 @@ fn a_key_without_a_home_of_its_own_needs_the_store_or_a_warning() -> Result {
     )?;
     assert!(login.status.success(), "{}", text(&login.stderr)?);
     let stderr = text(&login.stderr)?;
-    assert!(stderr.contains("no credential store"), "{stderr}");
+    assert!(
+        stderr.contains("warning: FETCHLOOM_KEYRING is off, so the key is saved in "),
+        "{stderr}"
+    );
     assert!(!stderr.contains("zenodo-key"));
     let status = json(&sandbox.run(&["auth", "--json", "--offline"])?)?;
     let zenodo = status["result"]["accounts"]

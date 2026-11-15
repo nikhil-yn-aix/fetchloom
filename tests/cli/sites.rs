@@ -976,7 +976,7 @@ fn a_refusal_after_a_redirect_names_the_host_that_refused() -> Result {
     Ok(())
 }
 
-/// a key saved where the machine has no credential store names fetchloom's file the way the
+/// a key saved in fetchloom's file, with the credential store off, names that file the way the
 /// `Signed in` line below it does, a file below the home folder as `~/…`.
 #[test]
 fn a_key_saved_without_a_credential_store_names_its_file_as_the_sign_in_line_does() -> Result {
@@ -1001,7 +1001,7 @@ fn a_key_saved_without_a_credential_store_names_its_file_as_the_sign_in_line_doe
         let stderr = text(&login.stderr)?;
         assert!(login.status.success(), "{stderr}");
         let warned = stderr.lines().find_map(|line| {
-            let told = line.strip_prefix("warning: this machine has no credential store, so ")?;
+            let told = line.strip_prefix("warning: FETCHLOOM_KEYRING is off, so ")?;
             told.strip_suffix(", readable only by you")?
                 .rsplit(" in ")
                 .next()
