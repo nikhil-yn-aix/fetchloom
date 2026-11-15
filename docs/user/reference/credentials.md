@@ -27,7 +27,7 @@ AWS keys sign requests only for the buckets `s3_buckets` lists, in the order [pr
 |---|---|
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | a key and its secret, which come before any profile; one without the other fails with `auth.required` |
 | `AWS_SESSION_TOKEN` | the session of temporary keys, sent with them |
-| `AWS_PROFILE` | the profile to read, `default` when unset; one neither file has fails with `usage` |
+| `AWS_PROFILE`, `AWS_DEFAULT_PROFILE` | the profile to read: `AWS_PROFILE`, else `AWS_DEFAULT_PROFILE`, as the AWS CLI reads them, and `default` when neither is set; one neither file has fails with `usage`, naming the variable that chose it |
 | `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE` | the credentials and config files, `~/.aws/credentials` and `~/.aws/config` when unset |
 | `AWS_REGION`, `AWS_DEFAULT_REGION` | the region to sign for when neither the host nor S3 names one, before the profile's `region` |
 | `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` | the S3-compatible service the keys above sign for, instead of AWS; a profile's `endpoint_url` does the same |

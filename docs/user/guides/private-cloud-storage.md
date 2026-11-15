@@ -33,7 +33,7 @@ each run asks a bucket without a key first, so a public bucket never sees your k
 keys come from where the AWS tools keep them, in this order:
 
 1. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, with `AWS_SESSION_TOKEN` for temporary keys.
-2. the profile `AWS_PROFILE` names, else `default`, in `~/.aws/credentials` and `~/.aws/config`, or the files `AWS_SHARED_CREDENTIALS_FILE` and `AWS_CONFIG_FILE` name. the first of these the profile has gives its keys, as the AWS tools take them:
+2. the profile `AWS_PROFILE` names, else the one `AWS_DEFAULT_PROFILE` names, as the AWS CLI reads them, else `default`, in `~/.aws/credentials` and `~/.aws/config`, or the files `AWS_SHARED_CREDENTIALS_FILE` and `AWS_CONFIG_FILE` name. the first of these the profile has gives its keys, as the AWS tools take them:
     1. a role or a sign-in: `role_arn`, `source_profile`, `web_identity_token_file` or any `sso_` setting, such as `sso_session`. fetchloom leaves these to the AWS CLI, version 2.9 or later, and runs `aws configure export-credentials --profile <name> --format process` for the keys.
     2. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/credentials`.
     3. `credential_process`, a program that prints the keys.

@@ -119,6 +119,14 @@ impl Source {
     }
 }
 
+/// the profile the AWS settings choose, with the variable that chose it: `AWS_PROFILE`, else
+/// `AWS_DEFAULT_PROFILE`, as the AWS CLI reads them. none chooses the default profile.
+fn chosen(var: Var<'_>) -> Option<(&'static str, String)> {
+    ["AWS_PROFILE", "AWS_DEFAULT_PROFILE"]
+        .into_iter()
+        .find_map(|name| set(var, name).map(|profile| (name, profile)))
+}
+
 /// where the AWS settings send S3 requests when not to AWS, as the aws cli reads them:
 /// `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` or the chosen profile's endpoint, unless
 /// `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS` or the profile turns them off.
@@ -128,8 +136,8 @@ impl Source {
 /// `usage` when an endpoint setting is no link.
 pub(crate) fn s3_endpoint(var: Var<'_>) -> Result<Option<url::Origin>, Error> {
     let files = Files::read(var);
-    let chosen = set(var, "AWS_PROFILE");
-    let profile = chosen.as_deref().unwrap_or("default");
+    let chosen = chosen(var);
+    let profile = chosen.as_ref().map_or("default", |(_, profile)| profile);
     if files.ignores_endpoints(var, profile) {
         return Ok(None);
     }
@@ -151,16 +159,18 @@ pub(crate) fn find(
     endpoint: Option<&url::Origin>,
 ) -> Result<Option<Identity>, Error> {
     let files = Files::read(var);
-    let chosen = set(var, "AWS_PROFILE");
-    let profile = chosen.as_deref().unwrap_or("default");
-    if chosen.is_some() && !files.has(profile) {
+    let chosen = chosen(var);
+    let profile = chosen.as_ref().map_or("default", |(_, profile)| profile);
+    if let Some((variable, _)) = chosen
+        && !files.has(profile)
+    {
         return Err(Error::new(
             Kind::Usage,
             format!(
-                "AWS_PROFILE names the profile {profile}, which the AWS credentials and config files do not have"
+                "{variable} names the profile {profile}, which the AWS credentials and config files do not have"
             ),
         )
-        .help("set AWS_PROFILE to a profile in ~/.aws/credentials or ~/.aws/config, or unset it to use the default one"));
+        .help(format!("set {variable} to a profile in ~/.aws/credentials or ~/.aws/config, or unset it to use the default one")));
     }
     let ignored = files.ignores_endpoints(var, profile);
     let sent = if ignored {
@@ -265,8 +275,8 @@ impl How {
 /// what [`find`] finds wrong with the settings.
 pub(crate) fn describe(var: Var<'_>) -> Result<Option<Described>, Error> {
     let files = Files::read(var);
-    let chosen = set(var, "AWS_PROFILE");
-    let profile = chosen.as_deref().unwrap_or("default");
+    let chosen = chosen(var);
+    let profile = chosen.as_ref().map_or("default", |(_, profile)| profile);
     let endpoint = if files.ignores_endpoints(var, profile) {
         None
     } else {
@@ -953,6 +963,37 @@ mod tests {
             "AWS_PROFILE names the profile missing, which the AWS credentials and config files do not have"
         );
         assert_eq!(found(home.path(), &[("AWS_PROFILE", "lab")]), None);
+    }
+
+    /// `AWS_DEFAULT_PROFILE` chooses the profile when `AWS_PROFILE` is not set, and `AWS_PROFILE`
+    /// wins when both are, as the AWS CLI reads them; a profile neither file has is named with the
+    /// variable that chose it.
+    #[test]
+    fn aws_default_profile_chooses_a_profile_after_aws_profile() {
+        let home = tempfile::tempdir().unwrap();
+        files(
+            home.path(),
+            "[lab]\naws_access_key_id = AKIALAB\naws_secret_access_key = lab-secret\n\n[default]\naws_access_key_id = AKIADEFAULT\naws_secret_access_key = default-secret\n",
+            "",
+        );
+        let chosen = |pairs: &[(&str, &str)]| found(home.path(), pairs).map(|found| found.0);
+        assert_eq!(
+            chosen(&[("AWS_DEFAULT_PROFILE", "lab")]).as_deref(),
+            Some("AKIALAB")
+        );
+        assert_eq!(
+            chosen(&[("AWS_PROFILE", "default"), ("AWS_DEFAULT_PROFILE", "lab")]).as_deref(),
+            Some("AKIADEFAULT")
+        );
+        let unknown = [("AWS_DEFAULT_PROFILE", "missing")];
+        let error = find(&machine(home.path(), &unknown), None).unwrap_err();
+        assert_eq!(
+            (error.kind, error.message.as_str()),
+            (
+                Kind::Usage,
+                "AWS_DEFAULT_PROFILE names the profile missing, which the AWS credentials and config files do not have"
+            )
+        );
     }
 
     #[test]
