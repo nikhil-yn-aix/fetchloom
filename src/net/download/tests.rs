@@ -1226,6 +1226,59 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
     );
 }
 
+/// a part answering an `If-Range` is of the version that request named, though RFC 9110 lets a
+/// 206 leave `Last-Modified` off, and some servers leave every validator off: the bytes stay
+/// proven, so a stop keeps them and a cut after the part goes on from where it ended.
+#[test]
+fn a_part_that_names_no_version_continues_the_one_kept() {
+    let first = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nLast-Modified: Sun, 01 Nov 2026 10:00:00 GMT\r\nDate: Sun, 01 Nov 2026 11:00:00 GMT\r\n\r\naaaa";
+    let bare = "HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Length: 4\r\nContent-Range: bytes 4-7/8\r\n\r\nbb";
+    let (url, asked) = serve(vec![
+        first.as_bytes().to_vec(),
+        bare.as_bytes().to_vec(),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 6-7/8")],
+            b"cc",
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let heard = Mutex::new(Vec::new());
+    let listen = |event: Event| {
+        if let Event::Started {
+            resumed, resumable, ..
+        } = event
+        {
+            heard.lock().unwrap().push((resumed, resumable));
+        }
+        Ok(())
+    };
+    let fetched = block_on(net(&url).download(&Fetch::new(url.clone()), &cache, &listen));
+    let asked: Vec<String> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|head| head.to_ascii_lowercase())
+        .collect();
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            (0, Resumable::Maybe),
+            (4, Resumable::Yes),
+            (6, Resumable::Yes)
+        ],
+        "{asked:?}"
+    );
+    assert!(
+        asked[2].contains("range: bytes=6-")
+            && asked[2].contains("if-range: sun, 01 nov 2026 10:00:00 gmt"),
+        "{}",
+        asked[2]
+    );
+    assert_eq!(fetched.unwrap().digest, crate::digest::sha256(b"aaaabbcc"));
+}
+
 /// a stop while the download waits for a slot or an answer still counts the kept bytes. their
 /// `ETag` proves they may be continued, and once the server sends the rest, they can.
 #[test]

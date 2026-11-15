@@ -1614,8 +1614,10 @@ fn served_name(response: &reqwest::Response, url: &Url) -> Result<Option<String>
     Ok(name)
 }
 
-/// how an answer identified its bytes. a range continuing kept bytes is the S3 version the
-/// answer that sent them named, whether or not this one names it again.
+/// how an answer identified its bytes. a range continuing kept bytes is of the version its
+/// `If-Range` named, so a validator it leaves off is the one the kept bytes came with: RFC 9110
+/// lets a 206 leave `Last-Modified` off, and some servers leave every one off. a date goes with
+/// the `Last-Modified` it dates.
 fn answered(
     head: &header::HeaderMap,
     status: StatusCode,
@@ -1623,10 +1625,18 @@ fn answered(
 ) -> Validators {
     let mut validators = headers::validators(head);
     if status == StatusCode::PARTIAL_CONTENT
-        && validators.version.is_none()
         && let Some((_, kept)) = earlier
     {
-        validators.version.clone_from(&kept.version);
+        if validators.etag.is_none() {
+            validators.etag.clone_from(&kept.etag);
+        }
+        if validators.last_modified.is_none() {
+            validators.last_modified.clone_from(&kept.last_modified);
+            validators.date.clone_from(&kept.date);
+        }
+        if validators.version.is_none() {
+            validators.version.clone_from(&kept.version);
+        }
     }
     validators
 }
