@@ -258,13 +258,14 @@ fn a_junction_swapped_into_a_build_mid_clear_keeps_what_it_points_at() {
     fs::create_dir(&outside).unwrap();
     let kept = outside.join("notes.txt");
     fs::write(&kept, b"keep these bytes").unwrap();
-    let build = cache.root.join("tmp/0123456789abcdef.build");
-    fs::create_dir_all(build.join("out")).unwrap();
-    fs::write(build.join("out/result.csv"), b"a,b\n").unwrap();
+    let build = cache.root.join("tmp").join("0123456789abcdef.build");
+    let out = build.join("out");
+    fs::create_dir_all(&out).unwrap();
+    fs::write(out.join("result.csv"), b"a,b\n").unwrap();
 
     let cleared = super::staging::clear_held(&cache.root, &build, || {
-        fs::rename(build.join("out"), dir.path().join("moved")).unwrap();
-        crate::test_links::link_folder(&outside, &build.join("out")).unwrap();
+        fs::rename(&out, dir.path().join("moved")).unwrap();
+        crate::test_links::link_folder(&outside, &out).unwrap();
     });
 
     cleared.unwrap();
@@ -364,7 +365,7 @@ fn clearing_a_build_folder_never_follows_a_link_inside_it() {
     fs::create_dir(&outside).unwrap();
     let kept = outside.join("notes.txt");
     fs::write(&kept, b"keep these bytes").unwrap();
-    let build = cache.root.join("tmp/0123456789abcdef.build");
+    let build = cache.root.join("tmp").join("0123456789abcdef.build");
     fs::create_dir_all(build.join("out")).unwrap();
     fs::write(build.join("lock"), b"").unwrap();
     if crate::test_links::link_folder(&outside, &build.join("linked")).is_err() {
