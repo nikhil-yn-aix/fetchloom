@@ -144,7 +144,7 @@ keys are read as each source's own tools read them, and a variable wins over
 a key fetchloom auth login saved:
 
   HF_TOKEN, HF_TOKEN_PATH, HF_HOME
-                       hugging face, else the token file huggingface-cli saved
+                       hugging face, else the token file the hf command saved
   KAGGLE_API_TOKEN, KAGGLE_USERNAME, KAGGLE_KEY, KAGGLE_CONFIG_DIR
                        kaggle, else the kaggle.json the kaggle cli reads
   ZENODO_TOKEN, FIGSHARE_TOKEN, OSF_TOKEN, DRYAD_TOKEN, GH_TOKEN, GITHUB_TOKEN,
@@ -163,11 +163,17 @@ a key fetchloom auth login saved:
                        drive_folders: the key file, else the login that
                        gcloud auth application-default login saved
   AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_KEY, AZURE_STORAGE_ACCOUNT,
-  AZURE_TOKEN_CREDENTIALS, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
-  AZURE_CLIENT_CERTIFICATE_PATH, AZURE_FEDERATED_TOKEN_FILE, AZURE_CONFIG_DIR
+  AZURE_TOKEN_CREDENTIALS, AZURE_CLIENT_ID, AZURE_CONFIG_DIR
                        azure containers in azure_containers: a SAS, else the
                        key, else the az cli's login or a managed identity, as
                        AZURE_TOKEN_CREDENTIALS chooses
+  AZURE_CLIENT_SECRET, AZURE_CLIENT_CERTIFICATE_PATH,
+  AZURE_FEDERATED_TOKEN_FILE
+                       a service principal's secret or certificate, or a
+                       workload identity's token, which fetchloom does not
+                       sign in with; under AZURE_TOKEN_CREDENTIALS=prod, one
+                       set stops the command, since azure's libraries would
+                       sign in with it first
 
 drive needs the google login made through an oauth client of your own: see the
 google drive page.
