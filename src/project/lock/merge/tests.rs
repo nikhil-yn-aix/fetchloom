@@ -633,7 +633,7 @@ fn recipe_results_merge_by_name() {
         datasets: vec![core.clone()],
         derived: vec![Derived {
             key: digest::sha256(b"another key"),
-            ..clean.clone()
+            ..clean
         }],
         stated: Vec::new(),
     };
@@ -658,7 +658,7 @@ fn recipe_results_merge_by_name() {
     assert_eq!(merged.lock.unwrap().derived, []);
     let built_before = sides(
         with_result.render(),
-        lock(vec![core.clone()]),
+        lock(vec![core]),
         Some(with_result.render()),
     );
     let merged = merging(&dropped, &built_before, &choices).unwrap();
@@ -809,7 +809,7 @@ fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
         )
     );
     let whole = Sides {
-        whole: Some([core.clone(), kept_toml.clone()]),
+        whole: Some([core, kept_toml.clone()]),
         ..manifest.clone()
     };
     let kept = merged(&whole, &locks, &[("beta", Side::Theirs)]).unwrap();
@@ -823,7 +823,7 @@ fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
     );
     assert_eq!(kept.summary.from_theirs, ["beta"]);
 
-    let unknown = sides(locks.ours.clone(), locks.theirs.clone(), None);
+    let unknown = sides(locks.ours.clone(), locks.theirs, None);
     assert_eq!(
         merged(&manifest, &unknown, &[]).unwrap_err().details[0],
         "beta: only theirs has it, and fetchloom cannot tell whether theirs added it or ours removed it"

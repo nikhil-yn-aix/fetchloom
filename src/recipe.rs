@@ -548,7 +548,7 @@ mod tests {
             pinned("b/x.zip", b"zipped", Some(digest::sha256(b"tree"))),
             pinned("a.csv", b"abc", None),
         ];
-        let raw = locked(files.clone());
+        let raw = locked(files);
         let none = Members::new();
         // the lines `path \t size \t sha256`, or `path \t sha256:<tree>` for an archive that
         // unpacks, hashed by python
@@ -773,7 +773,7 @@ mod tests {
         rekeyed.key = digest::sha256(b"another scheme");
         assert_eq!(step.changes(Some(&rekeyed)), [Change::Key]);
         // raw renamed rows in data.toml, run with it, keeps its content
-        let mut rows = step.clone();
+        let mut rows = step;
         rows.inputs[0].name = "rows".to_owned();
         rows.run[2] = "{rows}".to_owned();
         let renamed = Change::Renamed("raw".to_owned(), "rows".to_owned());

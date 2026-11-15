@@ -2307,7 +2307,7 @@ pub(crate) mod tests {
             manifest: digest::sha256(text.as_bytes()),
             lock: Some(digest::sha256(locked.as_bytes())),
         };
-        let work = Loop::new(&first, &project, Arc::new(first.net()), cache.clone());
+        let work = Loop::new(&first, &project, Arc::new(first.net()), cache);
         let synced = sync_all(&work, &manifest, Some(lock), None, Run::planned(&seen));
         super::super::block_on(&first, synced).unwrap();
         let own = Cache::open(dir.path().join("own")).unwrap();

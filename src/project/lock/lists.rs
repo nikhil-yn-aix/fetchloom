@@ -602,7 +602,7 @@ mod tests {
         // a part fetchloom does not write, such as one outside its folder
         let elsewhere = Listed {
             parts: vec!["../outside.tsv.zst".to_owned()],
-            ..listed.clone()
+            ..listed
         };
         assert!(
             read::<LockedFile>(Parts::Folder(root.path()), "set", &elsewhere)

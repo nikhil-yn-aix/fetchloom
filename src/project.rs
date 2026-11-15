@@ -2041,7 +2041,7 @@ mod tests {
         project.inner().unwrap();
         assert_eq!(
             DIRECTORY_SYNCS.with_borrow_mut(std::mem::take),
-            [project.own_folder(), project.root.clone()]
+            [project.own_folder(), project.root]
         );
     }
 }
