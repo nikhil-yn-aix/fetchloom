@@ -1900,10 +1900,6 @@ mod tests {
                 "unknown field",
             ),
             (
-                text.replacen(&format!("  {{ name = \"iris\", {content} }},\n"), "", 1),
-                "no dataset it is made from",
-            ),
-            (
                 text.replacen("name = \"iris\"", "name = \"clean\"", 1),
                 "the input \"clean\" twice, as itself or with no name",
             ),
@@ -1947,6 +1943,12 @@ mod tests {
             error.message.ends_with("made by a recipe, no files_in"),
             "{}",
             error.message
+        );
+        // a recipe may read no dataset, as a seeded simulation, so an empty from is no mistake
+        let unread = text.replacen(&format!("  {{ name = \"iris\", {content} }},\n"), "", 1);
+        assert_eq!(
+            Lock::read(&unread, root.path()).unwrap().derived[0].from,
+            []
         );
     }
 

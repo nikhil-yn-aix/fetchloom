@@ -622,6 +622,7 @@ fn folder(dataset: &Listed, folders: Folders) -> String {
 fn source(dataset: &Listed) -> String {
     let source = match (&dataset.reference, &dataset.from) {
         (Some(reference), _) => reference.clone(),
+        (None, Some(from)) if from.is_empty() => "made from no dataset".to_owned(),
         (None, Some(from)) => format!("made from {}", from.join(", ")),
         (None, None) => String::new(),
     };
@@ -758,6 +759,11 @@ mod tests {
         assert!(
             heading(&dataset).starts_with("iris · made from raw, labels · Iris Species"),
             "a recipe's result names what it is made from"
+        );
+        dataset.from = Some(Vec::new());
+        assert!(
+            heading(&dataset).starts_with("iris · made from no dataset · Iris Species"),
+            "a step that reads nothing says so"
         );
     }
 

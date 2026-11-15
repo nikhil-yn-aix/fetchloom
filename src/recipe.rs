@@ -693,6 +693,49 @@ mod tests {
         );
     }
 
+    /// a step that reads no dataset, as a seeded simulation, is keyed by its command, code and
+    /// variables alone, the JSON python writes for them hashed, so it builds once and then stays
+    /// up to date until one of them changes.
+    #[test]
+    fn a_step_that_reads_nothing_keys_its_command_and_code() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("sim.py"), b"print(7)\n").unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.sim]\nrun = [\"python3\", \"sim.py\", \"{out}\"]\ncode = [\"sim.py\"]\nenv = { SEED = \"7\" }\n",
+        )
+        .unwrap();
+        let lock = Lock::default();
+        let step = Step::read(root.path(), &manifest, &lock, "sim")
+            .unwrap()
+            .unwrap();
+        assert_eq!(step.from(), Some(Vec::new()));
+        assert_eq!(
+            step.key().unwrap().hex(),
+            "5770bf76da2f637035632f6fefba399edd3c46582ac80ca49acc1cfc48bac119"
+        );
+        assert_eq!(step.changes(None), [Change::Unbuilt]);
+        let built = Derived {
+            name: "sim".to_owned(),
+            from: Vec::new(),
+            run: step.run.clone(),
+            code: step.hashed().unwrap(),
+            env: step.env.clone(),
+            key: step.key().unwrap(),
+            timestamp: "2026-11-10T00:00:00Z".to_owned(),
+            tree: crate::cache::tree_hash(&[]),
+            files: Vec::<Member>::new(),
+        };
+        assert_eq!(step.changes(Some(&built)), []);
+        std::fs::write(root.path().join("sim.py"), b"print(8)\n").unwrap();
+        let edited = Step::read(root.path(), &manifest, &lock, "sim")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            edited.changes(Some(&built)),
+            [Change::Code("sim.py".to_owned())]
+        );
+    }
+
     #[test]
     fn changes_name_what_moved_since_the_build() {
         let (root, manifest, lock) = project("clean", &[("clean.py", b"print()\n")]);

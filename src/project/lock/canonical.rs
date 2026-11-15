@@ -283,27 +283,29 @@ fn list(line: &str, lines: &mut Lines) -> Option<Listed> {
     })
 }
 
-/// a dataset a recipe made, after its name: `from` and `code` a line an entry, `run` on one line,
-/// `env` when it has variables, then `key`, `locked`, `tree` and the list of its files.
+/// a dataset a recipe made, after its name: `from` and `code` a line an entry, or `[]` with none,
+/// `run` on one line, `env` when it has variables, then `key`, `locked`, `tree` and the list of
+/// its files.
 fn recipe(name: String, lines: &mut Lines) -> Option<Parsed> {
-    if lines.next()? != "from = [" {
-        return None;
-    }
     let mut from = Vec::new();
-    loop {
-        let line = lines.next()?;
-        if line == "]" {
-            break;
-        }
-        let (input, rest) = string(line.strip_prefix("  { name = ")?)?;
-        let (content, rest) = string(rest.strip_prefix(", content = ")?)?;
-        if rest != " }," {
-            return None;
-        }
-        from.push(Input {
-            name: input.into_owned(),
-            content: prefixed(&content)?,
-        });
+    match lines.next()? {
+        "from = []" => {}
+        "from = [" => loop {
+            let line = lines.next()?;
+            if line == "]" {
+                break;
+            }
+            let (input, rest) = string(line.strip_prefix("  { name = ")?)?;
+            let (content, rest) = string(rest.strip_prefix(", content = ")?)?;
+            if rest != " }," {
+                return None;
+            }
+            from.push(Input {
+                name: input.into_owned(),
+                content: prefixed(&content)?,
+            });
+        },
+        _ => return None,
     }
     let run = strings(lines.next()?.strip_prefix("run = ")?)?;
     let mut code = Vec::new();
@@ -587,7 +589,8 @@ mod tests {
         ]
     }
 
-    /// a result of `count` files, escapes and unicode in its command, code and variables.
+    /// a result of `count` files, escapes and unicode in its command, code and variables; with no
+    /// files it reads no dataset and has no code.
     fn recipe(name: &str, count: usize) -> Derived {
         let files: Vec<Member> = (0..count)
             .map(|index| Member {
@@ -596,18 +599,17 @@ mod tests {
                 sha256: digest::sha256(&[u8::try_from(index).unwrap()]),
             })
             .collect();
+        let input = |name: &str| Input {
+            name: name.to_owned(),
+            content: digest::sha256(name.as_bytes()),
+        };
         Derived {
             name: name.to_owned(),
-            from: vec![
-                Input {
-                    name: "b".to_owned(),
-                    content: digest::sha256(b"b"),
-                },
-                Input {
-                    name: "a".to_owned(),
-                    content: digest::sha256(b"a"),
-                },
-            ],
+            from: if count == 0 {
+                Vec::new()
+            } else {
+                vec![input("b"), input("a")]
+            },
             run: vec![
                 "python3".to_owned(),
                 "say \"hi\"\t{b}".to_owned(),
@@ -647,6 +649,12 @@ mod tests {
 
     #[test]
     fn the_writers_form_reads_as_the_toml_reader_reads_it() {
+        assert!(
+            samples()[2]
+                .render()
+                .contains("name = \"d\"\nfrom = []\nrun = "),
+            "a recipe that reads no dataset is in the samples"
+        );
         for lock in samples() {
             let text = lock.render();
             assert_eq!(read(&text, false), Some(full(&text)), "{text}");

@@ -219,10 +219,11 @@ impl MemberFilter {
     }
 }
 
-/// a dataset made from other datasets by a command. only `fetchloom build` runs it.
+/// a dataset made by a command, from other datasets or from its command and code alone. only
+/// `fetchloom build` runs it.
 #[derive(Clone, Debug)]
 pub(crate) struct Recipe {
-    /// the datasets it is made from, in data.toml's order.
+    /// the datasets it is made from, in data.toml's order; none when `from` is empty or left out.
     pub(crate) from: Vec<String>,
     /// the program and its arguments, never read by a shell.
     pub(crate) run: Vec<Template>,
@@ -790,28 +791,20 @@ impl Reader<'_> {
                 )
                 .help(format!("remove {key}, and choose files inside the step instead")));
         }
-        let (from, run) = match (table.get("from"), table.get("run")) {
-            (Some(from), Some(run)) => (from, run),
-            (Some(_), None) => {
-                return Err(self
-                    .error(
-                        span("from"),
-                        format!("datasets.{name} has from but no run, so nothing makes it"),
-                    )
-                    .help(format!(
-                        "add run, the program and arguments that make it, as {RUN_EXAMPLE}"
-                    )));
-            }
-            (None, _) => {
-                return Err(self
-                    .error(
-                        span(first),
-                        format!("datasets.{name} has {first} but no from, so it reads no dataset"),
-                    )
-                    .help("add from with the datasets run reads, as from = [\"raw\"]"));
-            }
+        let Some(run) = table.get("run") else {
+            return Err(self
+                .error(
+                    span(first),
+                    format!("datasets.{name} has {first} but no run, so nothing makes it"),
+                )
+                .help(format!(
+                    "add run, the program and arguments that make it, as {RUN_EXAMPLE}"
+                )));
         };
-        let from = self.inputs(from, name)?;
+        let from = match table.get("from") {
+            Some(from) => self.inputs(from, name)?,
+            None => Vec::new(),
+        };
         let run = self.run(run, name, &from)?;
         let code = match table.get("code") {
             None => Vec::new(),
@@ -955,7 +948,8 @@ impl Reader<'_> {
         Ok(variables)
     }
 
-    /// the datasets a recipe reads: a list of names, each once.
+    /// the datasets a recipe reads: a list of names, each once, or none for a step that makes its
+    /// result from its command and code alone, as a seeded simulation does.
     fn inputs(&self, item: &Item, name: &str) -> Result<Vec<String>, Error> {
         let names = Self::strings(item).ok_or_else(|| {
             self.error(
@@ -964,14 +958,6 @@ impl Reader<'_> {
             )
             .help("write it as from = [\"raw\"]")
         })?;
-        if names.is_empty() {
-            return Err(self
-                .error(
-                    item.span(),
-                    format!("datasets.{name} is made from no dataset"),
-                )
-                .help("name the datasets run reads in from, as from = [\"raw\"]"));
-        }
         for (index, input) in names.iter().enumerate() {
             if input == recipes::OUT {
                 return Err(self

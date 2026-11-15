@@ -567,3 +567,111 @@ fn gc_keeps_what_builds_read_and_frees_records_no_project_pins() -> Result {
     assert!(object(&sandbox.cache(), b"done").is_file(), "the result");
     Ok(())
 }
+
+/// a seeded simulation as a recipe: it reads no dataset, so its key covers its command alone.
+const SIMULATION: &str = "[datasets.sim]\nrun = [\"recipe-step\", \"seeded\", \"draws.csv\", \"{out}\"]\nenv = { SEED = \"7\" }\n";
+
+/// the draws `recipe-step seeded` writes for the seeds 7 and 8, worked out in python.
+const DRAWS_7: &[u8] = b"278\n231\n753\n673\n545\n";
+const DRAWS_8: &[u8] = b"244\n312\n12\n307\n454\n";
+
+/// a project in the work folder whose data.toml holds [`SIMULATION`] alone.
+fn simulation(sandbox: &Sandbox) -> Result {
+    fs::write(sandbox.work().join("data.toml"), SIMULATION)?;
+    Ok(())
+}
+
+/// a build runs it once and pins its result, skips it while its command stays, runs it again for
+/// `--check`, and again once its seed changes, which every check of data.lock tells first.
+#[test]
+fn a_recipe_that_reads_no_dataset_builds_once_and_checks_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    simulation(&sandbox)?;
+    let dry = text(&build(&sandbox, &["build", "--dry-run"])?.stderr)?;
+    assert!(dry.contains("  Would run sim · not built yet\n"), "{dry}");
+    assert!(
+        dry.contains("reads nothing, with SEED=7; writes data/sim\n"),
+        "{dry}"
+    );
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["result"]["steps"][0]["action"], "ran");
+    let draws = sandbox.work().join("data").join("sim").join("draws.csv");
+    assert_eq!(fs::read(&draws)?, DRAWS_7);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains("name = \"sim\"\nfrom = []\nrun = "), "{lock}");
+    let again = build(&sandbox, &["build"])?;
+    assert!(
+        text(&again.stderr)?.contains(" Up to date sim\n"),
+        "{}",
+        text(&again.stderr)?
+    );
+    assert_eq!(runs(&sandbox.work())?, 1);
+    for args in [&["lock", "--check"][..], &["status", "--check"]] {
+        let output = sandbox.run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    let checked = build(&sandbox, &["build", "--check"])?;
+    let told = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains("Checked sim · 1 of 1 file matches data.lock\n"),
+        "{told}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 2);
+
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(&manifest, SIMULATION.replace("\"7\"", "\"8\""))?;
+    let output = sandbox.run(&["--json", "lock", "--check"])?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["details"],
+        json!(["sim: env changed"])
+    );
+    let rebuilt = build(&sandbox, &["build"])?;
+    assert_eq!(rebuilt.status.code(), Some(0), "{}", text(&rebuilt.stderr)?);
+    assert_eq!(runs(&sandbox.work())?, 3);
+    assert_eq!(fs::read(&draws)?, DRAWS_8);
+    Ok(())
+}
+
+/// `--prepare` has nothing to fetch for it, `push --inputs` copies its result alone, and
+/// `cache gc --inputs` keeps the result, which no raw input stands behind.
+#[test]
+fn a_recipe_that_reads_no_dataset_is_prepared_pushed_and_kept() -> Result {
+    let sandbox = Sandbox::new()?;
+    simulation(&sandbox)?;
+    let prepared = build(&sandbox, &["build", "--prepare"])?;
+    let told = text(&prepared.stderr)?;
+    assert_eq!(prepared.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains("   Prepared sim · it reads no dataset\n"),
+        "{told}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 0);
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let pushed = sandbox
+        .command(&["--json", "push", "--inputs", "sim", "--to"])
+        .arg(&mirror)
+        .output()?;
+    assert_eq!(pushed.status.code(), Some(0), "{}", text(&pushed.stdout)?);
+    assert_eq!(json(&pushed)?["result"]["datasets"], json!(["sim"]));
+    assert!(
+        object(&mirror, DRAWS_7).is_file(),
+        "the result is on the mirror"
+    );
+    let gc = sandbox
+        .command(&["--yes", "cache", "gc", "--inputs", "--mirror"])
+        .arg(&mirror)
+        .output()?;
+    assert_eq!(gc.status.code(), Some(0), "{}", text(&gc.stderr)?);
+    assert!(object(&sandbox.cache(), DRAWS_7).is_file(), "the result");
+    Ok(())
+}

@@ -773,9 +773,9 @@ const RAW: &str = "[datasets.raw]\nref = \"zenodo:1\"\n\n";
 const CLEAN: &str =
     "[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n";
 
-/// a dataset is fetched from a source or made by a recipe, never both.
+/// a dataset is fetched from a source or made by a recipe, never both, and a recipe needs run.
 #[test]
-fn a_recipe_needs_from_and_run_and_no_ref() {
+fn a_recipe_needs_run_and_no_ref() {
     let manifest = parse(&format!(
         "{RAW}{CLEAN}code = [\"clean.py\", \"lib/\"]\nenv = {{ SEED = \"1\" }}\ncopy = true\n"
     ));
@@ -799,9 +799,9 @@ fn a_recipe_needs_from_and_run_and_no_ref() {
             "add run, the program and arguments that make it, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
         ),
         (
-            run.to_owned(),
-            "datasets.clean has run but no from, so it reads no dataset",
-            "add from with the datasets run reads, as from = [\"raw\"]",
+            "code = [\"clean.py\"]\n".to_owned(),
+            "datasets.clean has code but no run, so nothing makes it",
+            "add run, the program and arguments that make it, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
         ),
         (
             format!("ref = \"zenodo:2\"\nfrom = [\"raw\"]\n{run}"),
@@ -825,8 +825,8 @@ fn a_recipe_needs_from_and_run_and_no_ref() {
         ),
         (
             format!("from = []\n{run}"),
-            "datasets.clean is made from no dataset",
-            "name the datasets run reads in from, as from = [\"raw\"]",
+            "run in datasets.clean names {raw}, which is not a dataset it is made from",
+            "a name in braces is one of from, or out",
         ),
         (
             format!("from = \"raw\"\n{run}"),
@@ -865,6 +865,24 @@ fn a_recipe_needs_from_and_run_and_no_ref() {
         assert_eq!(error.help.as_deref(), Some(help), "{table}");
         assert_eq!(error.details.len(), 1, "{table}: {:?}", error.details);
         assert!(error.details[0].starts_with("data.toml:"), "{table}");
+    }
+}
+
+/// a step such as a seeded simulation makes its result from its command and code alone, with
+/// from empty or left out, and a recipe may read its result like any dataset.
+#[test]
+fn a_recipe_may_read_no_dataset() {
+    let sim =
+        "run = [\"python3\", \"sim.py\", \"{out}\"]\ncode = [\"sim.py\"]\nenv = { SEED = \"7\" }\n";
+    let reader = "\n[datasets.stats]\nfrom = [\"sim\"]\nrun = [\"python3\", \"stats.py\", \"{sim}\", \"{out}\"]\n";
+    for from in ["", "from = []\n"] {
+        let manifest = parse(&format!("[datasets.sim]\n{from}{sim}{reader}"));
+        let recipe = manifest.datasets["sim"].recipe().unwrap();
+        assert!(recipe.from.is_empty(), "{from:?}");
+        let words: Vec<&str> = recipe.run.iter().map(Template::text).collect();
+        assert_eq!(words, ["python3", "sim.py", "{out}"]);
+        assert_eq!(recipe.code, ["sim.py"]);
+        assert_eq!(recipes::order(&manifest.datasets), Ok(vec!["sim", "stats"]));
     }
 }
 

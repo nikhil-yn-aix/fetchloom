@@ -49,15 +49,10 @@ pub(crate) struct Code {
     pub(crate) folder: bool,
 }
 
-/// refuses a recipe entry fetchloom never writes, such as one with no input or a code path that
-/// leaves the project. [`check_files`] checks its files once their list is read.
+/// refuses a recipe entry fetchloom never writes, such as one with an input twice or a code path
+/// that leaves the project. [`check_files`] checks its files once their list is read.
 pub(super) fn check(derived: &Derived) -> Result<(), Error> {
     let name = &derived.name;
-    if derived.from.is_empty() {
-        return Err(broken(format!(
-            "data.lock gives {name} no dataset it is made from"
-        )));
-    }
     for (index, input) in derived.from.iter().enumerate() {
         if input.name.is_empty()
             || input.name == *name
@@ -135,16 +130,20 @@ pub(super) fn check_files(derived: &Derived) -> Result<(), Error> {
 pub(super) fn write(out: &mut String, derived: &Derived) {
     out.push_str("\n[[dataset]]\n");
     let _ = writeln!(out, "name = {}", quoted(&derived.name));
-    out.push_str("from = [\n");
-    for input in &derived.from {
-        let _ = writeln!(
-            out,
-            "  {{ name = {}, content = \"sha256:{}\" }},",
-            quoted(&input.name),
-            input.content
-        );
+    if derived.from.is_empty() {
+        out.push_str("from = []\n");
+    } else {
+        out.push_str("from = [\n");
+        for input in &derived.from {
+            let _ = writeln!(
+                out,
+                "  {{ name = {}, content = \"sha256:{}\" }},",
+                quoted(&input.name),
+                input.content
+            );
+        }
+        out.push_str("]\n");
     }
-    out.push_str("]\n");
     let run: Vec<String> = derived
         .run
         .iter()

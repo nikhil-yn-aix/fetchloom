@@ -9,6 +9,7 @@
 //! | `write <name> <text>` | writes `text` into the file `name` of the result folder |
 //! | `notes <text>` | writes `a.txt`, the same on every run, and `b.txt`, which holds `text` |
 //! | `random` | writes bytes that differ on every run |
+//! | `seeded <name>` | writes numbers drawn from the variable `SEED` into the file `name` of the result folder, the same for the same seed |
 //! | `fail <code>` | prints a few lines, writes a file and exits with `code` |
 //! | `nothing` | writes nothing |
 //! | `hold <marker> <release>` | makes the file `marker`, waits for `release`, then copies |
@@ -63,6 +64,13 @@ fn run(args: &[String]) -> io::Result<ExitCode> {
                 Instant::now(),
             );
             fs::write(out(folders)?.join("random.bin"), seed.to_le_bytes())?;
+        }
+        ("seeded", [name, folders @ ..]) => {
+            let seed: u64 = std::env::var("SEED")
+                .ok()
+                .and_then(|seed| seed.parse().ok())
+                .ok_or_else(|| invalid("seeded reads a whole number from SEED"))?;
+            fs::write(out(folders)?.join(name), draws(seed))?;
         }
         ("fail", [code, folders @ ..]) => {
             let code: u8 = code.parse().map_err(|_| invalid("fail takes a code"))?;
@@ -232,6 +240,21 @@ fn call(program: &str) -> io::Result<ExitCode> {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// five numbers below 1000 from a linear congruential generator started at `seed`, a line each,
+/// as a seeded simulation writes the same draws for the same seed.
+fn draws(seed: u64) -> String {
+    use std::fmt::Write as _;
+    let mut state = seed;
+    let mut text = String::new();
+    for _ in 0..5 {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let _ = writeln!(text, "{}", (state >> 33) % 1000);
+    }
+    text
 }
 
 fn invalid(message: &str) -> io::Error {

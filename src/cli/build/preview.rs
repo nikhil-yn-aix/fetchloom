@@ -533,6 +533,11 @@ fn tell(output: &Output, steps: &[Planned]) {
             .map(|input| input.name.as_str())
             .chain(step.code.iter().map(String::as_str))
             .collect();
+        let read = if read.is_empty() {
+            "nothing".to_owned()
+        } else {
+            units::listed(&read, "and")
+        };
         let with = if step.env.is_empty() {
             String::new()
         } else {
@@ -543,11 +548,7 @@ fn tell(output: &Output, steps: &[Planned]) {
                 .collect();
             format!(", with {}", pairs.join(" "))
         };
-        output.item(&format!(
-            "reads {}{with}; writes {}",
-            units::listed(&read, "and"),
-            step.output
-        ));
+        output.item(&format!("reads {read}{with}; writes {}", step.output));
     }
     if steps.is_empty() {
         output.done(

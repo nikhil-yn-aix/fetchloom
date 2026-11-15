@@ -468,10 +468,12 @@ impl<'a> Building<'a> {
                 .map(|read| read.name.as_str())
                 .collect();
             self.ready(&sources).await?;
-            output.step(
-                "Prepared",
-                &format!("{name} · what it reads is on this machine"),
-            );
+            let said = if step.inputs.is_empty() {
+                "it reads no dataset"
+            } else {
+                "what it reads is on this machine"
+            };
+            output.step("Prepared", &format!("{name} · {said}"));
             let (tree, files) = match pinned {
                 Some(pinned) => (Some(pinned.tree), pinned.files.as_slice()),
                 None => (None, &[][..]),

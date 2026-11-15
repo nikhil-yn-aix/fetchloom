@@ -240,6 +240,9 @@ shell reads: {iris} stands for a folder holding a copy of iris's files, and
 the project the result depends on, such as the script, and
 env = { NAME = \"value\" } sets variables for the step alone.
 
+a recipe can also read no dataset, as a seeded simulation does: leave from
+out, and a build runs it again only when its run, code or env changes.
+
 run finds a bare program name on PATH, so for a project's own python write
 \".venv/bin/python\", on windows \".venv/Scripts/python.exe\", or start run
 with \"uv\", \"run\", \"python\".
