@@ -23,8 +23,9 @@ use crate::account::Account;
 use crate::error::{Error, Kind};
 use crate::machine::Var;
 
-/// a token from where its source keeps it, sent only to its own host and port and only over
-/// https.
+/// a token from where its source keeps it, sent only to its own host, at its own port unless
+/// `every_port` says otherwise, over https, or over plain http only to this machine or an origin
+/// `allowed_origins` lists, with no proxy on the way.
 #[derive(Clone)]
 pub(crate) struct Credential {
     /// the host, with `:port` when the key belongs to another port than 443.
