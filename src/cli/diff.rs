@@ -395,17 +395,16 @@ fn fields(before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Vec<Field> {
         }];
     }
     let (was, now) = (listed(before), listed(after));
-    let every = if was.is_empty() { &now } else { &was };
-    let names: Vec<&'static str> = every.iter().map(|(name, _)| *name).collect();
     let value = |fields: &[(&'static str, Option<String>)], name: &str| {
         fields
             .iter()
             .find(|(field, _)| *field == name)
             .and_then(|(_, value)| value.clone())
     };
-    names
-        .into_iter()
-        .map(|name| Field {
+    let every = if was.is_empty() { &now } else { &was };
+    every
+        .iter()
+        .map(|&(name, _)| Field {
             name,
             before: value(&was, name),
             after: value(&now, name),
@@ -415,7 +414,7 @@ fn fields(before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Vec<Field> {
 }
 
 /// the files added, removed and changed from `before` to `after`, each sorted by path, as data.lock
-/// keeps them: a file changes when its size or SHA-256 does, not its link.
+/// keeps them: a file changes when its bytes do, as [`Pinned::same`] tells, not when its link does.
 fn files(before: Vec<(&str, Pinned)>, after: Vec<(&str, Pinned)>) -> Vec<File> {
     let mut found = Vec::new();
     let mut was = before.into_iter().peekable();
