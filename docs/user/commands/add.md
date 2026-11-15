@@ -1,6 +1,6 @@
 # add
 
-`add` puts a dataset in `data.toml`, pins its files in `data.lock` and syncs the whole project.
+`add` puts a dataset in `data.toml`, pins its files in `data.lock` and places them in the data folder. the project's other datasets stay as they are until `fetchloom sync`.
 
 ```sh
 fetchloom add iris    # at a terminal, pick one from a list
@@ -37,8 +37,8 @@ fetchloom add [options] -i <file>
 
 1. find the nearest project, or start one in the current folder, which a closing `Started a project in <folder>` line names. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given. its help suggests a folder of its own, `mkdir my-project` and `cd my-project`, and repeats your command for that folder, each relative path one folder further up, as `fetchloom add ../stuff` for `fetchloom add ./stuff`.
 2. resolve the reference, filter its files and choose a dataset name. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../reference/archives.md#webdataset-shards) get a hint before anything downloads.
-3. download every file the project lacks into the cache, with the project still as it was.
-4. write the entry in `data.toml`, pin its files in `data.lock` and place the project's files. entries are kept in name order, so two people adding different datasets rarely change the same lines.
+3. download the new dataset's files the cache lacks, with the project still as it was.
+4. write the entry in `data.toml`, pin its files in `data.lock` and place them. entries are kept in name order, so two people adding different datasets rarely change the same lines. every other dataset keeps its pin and files as they are, even one whose entry changed or whose files are not here, as in a fresh clone, so a link of another dataset that no longer answers never stops the add: `fetchloom sync` does the rest.
 5. add the data folder to `.gitignore` if needed: in a git repository, and outside one when the add begins the project, starting it or pinning the first datasets of a hand-written data.toml, so a later `git init` leaves the data out.
 
 below a project's folder, `add` works on that project, says `using the project in <folder>` once at a terminal, and gives the dataset's folder from where you stand, such as `../data/iris`. the search for a project stops at a git repository, so in a repository with no `data.toml` of its own, `add` starts a project there, as [finding the project](../reference/project-folder.md#finding-the-project) explains. there is no `init` command: `fetchloom init` is a usage error, exit 2, whose help says `add` starts a project.
@@ -70,9 +70,9 @@ error: 127.0.0.1 has nothing at http://127.0.0.1:19450/files/missing.csv (404)
   help: check the link in a browser. if it moved, run `fetchloom add <new link>`
 ```
 
-for a link data.toml already has, the help names its `ref` there instead, whether you add it again or another add syncs it.
+for a link data.toml already has, the help names its `ref` there instead, whether you add it again or a sync reaches it.
 
-adding a reference data.toml has, with the same patterns and extraction, syncs it without another entry, and so does the same add with the `--as` name it already has, so a setup script can run twice. other settings, or another link under a name data.toml has, as in `data.toml already has a dataset called notes`, fail with `usage`, exit 2, and change nothing: give an unused `--as` name, edit `data.toml` to change the entry, or run `fetchloom remove <name>` first to replace it. removing is your choice, so the JSON `fix` is null.
+adding a reference data.toml has, with the same patterns and extraction, syncs that dataset alone without another entry, and so does the same add with the `--as` name it already has, so a setup script can run twice. other settings, or another link under a name data.toml has, as in `data.toml already has a dataset called notes`, fail with `usage`, exit 2, and change nothing: give an unused `--as` name, edit `data.toml` to change the entry, or run `fetchloom remove <name>` first to replace it. removing is your choice, so the JSON `fix` is null.
 
 a failed add puts `data.toml` and `data.lock` back as they were, or removes them if it made them, and removes the files it placed; what it downloaded stays cached for the next try. before it changes either file it saves a copy under `.fetchloom/`, readable only by you on unix. if putting a file back fails, the error names that copy, which stays, without printing it, since it may hold credentials.
 
@@ -202,7 +202,7 @@ a first add that ends without adding anything, because it failed, was stopped or
 
 `add <path> --dry-run` reads no file's bytes: it names the files it would import, their count and size, and the dataset it would add, and lists their places in `changes.place`. it cannot tell yet whether the same files are in data.toml already.
 
-the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place, or as one to check, under `Would check`, when a file already stands where it goes. an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link; pass `--as` to fix the name. a plain link is asked nothing, so what only the real add finds shows then, as [URLs and DOIs](../sources/urls-and-dois.md#dry-runs) shows. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+the plan covers the datasets the add adds, as the real addition does. a file whose hash only a download can tell counts as one to place, or as one to check, under `Would check`, when a file already stands where it goes. an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link; pass `--as` to fix the name. a plain link is asked nothing, so what only the real add finds shows then, as [URLs and DOIs](../sources/urls-and-dois.md#dry-runs) shows. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## generated names
 

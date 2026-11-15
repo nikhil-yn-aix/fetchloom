@@ -91,7 +91,7 @@ pub(super) async fn import_held(
         } else {
             new_name(&context.output, manifest, args, own)?
         };
-        let work = Loop::new(context, project, net, cache).telling(&name);
+        let work = Loop::new(context, project, net, cache).adding(&name);
         let found = (&walked, shown, supplying);
         return Ok(preview_import(&work, manifest, found, &name, here));
     }
@@ -107,7 +107,7 @@ pub(super) async fn import_held(
     // peak of placing them
     drop(walked);
     let report = if let Some(name) = supplied {
-        let work = Loop::new(context, project, net, cache).telling(&name);
+        let work = Loop::new(context, project, net, cache).adding(&name);
         let imported = Imported {
             name: &name,
             source: &source,
@@ -118,7 +118,7 @@ pub(super) async fn import_held(
         && same_import(manifest, old.as_ref(), &own, &source, &copied.files)
     {
         // the same files imported again under their own name change nothing, as the same link does
-        let work = Loop::new(context, project, net, cache).telling(&own);
+        let work = Loop::new(context, project, net, cache).adding(&own);
         already_imported(&work, adding, old, (&own, &told), here).await
     } else {
         if let Some(entry) = retaken {
@@ -127,7 +127,7 @@ pub(super) async fn import_held(
             return Err(other_import(manifest, &own, shown, difference));
         }
         let name = new_name(&context.output, manifest, args, own)?;
-        let work = Loop::new(context, project, net, cache).telling(&name);
+        let work = Loop::new(context, project, net, cache).adding(&name);
         let imported = Imported {
             name: &name,
             source: &source,

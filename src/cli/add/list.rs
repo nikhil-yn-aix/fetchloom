@@ -92,7 +92,7 @@ pub(super) async fn add_list_held(
     // each dataset added gets one last line, so what it pinned and placed is told only with -v
     let work = names.iter().fold(
         Loop::new(context, project, net, cache).running("this add"),
-        |work, name| work.telling(name),
+        |work, name| work.adding(name),
     );
     if dry_run {
         let nothing = list.nothing_new();

@@ -459,10 +459,8 @@ fn a_link_typed_in_a_clone_trusts_its_own_origin_alone() -> Result {
         "the clone asked the source: {}",
         text(&output.stdout)?
     );
-    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
-    let error = &json(&output)?["errors"][0];
-    assert_eq!(error["kind"], "network.refused", "{error}");
-    assert_eq!(error["details"][0], trusted_alone(&other.url, "127.0.0.1"));
+    // an add touches only what it adds, so it goes in without reaching the pinned server
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     Ok(())
 }
 
@@ -533,7 +531,8 @@ fn a_secret_in_a_link_data_lock_gives_stops_every_command_before_any_request() -
     Ok(())
 }
 
-/// an add syncs all of data.toml, and the typed link's trust must not reach the server it names.
+/// an add touches only what it adds, so the typed link's trust never reaches the server data.toml
+/// names, and a sync then refuses that server.
 #[test]
 fn a_typed_link_reaches_no_other_port_that_data_toml_names() -> Result {
     let sandbox = Sandbox::new()?;
@@ -544,7 +543,9 @@ fn a_typed_link_reaches_no_other_port_that_data_toml_names() -> Result {
         format!("[datasets.internal]\nref = \"{link}\"\n"),
     )?;
     let typed = Routes::start(vec![("/y.csv".to_owned(), file(b"y\n1\n", "\"y1\""))])?;
-    let output = sandbox.run(&["--json", "add", &format!("{}/y.csv", typed.url)])?;
+    let added = sandbox.run(&["--json", "add", &format!("{}/y.csv", typed.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stdout)?);
+    let output = sandbox.run(&["--json", "sync"])?;
     assert_eq!(
         named.requests(),
         Vec::<String>::new(),
@@ -557,14 +558,6 @@ fn a_typed_link_reaches_no_other_port_that_data_toml_names() -> Result {
     assert_eq!(
         error["message"],
         format!("fetchloom will not follow {link}: it points at the private address 127.0.0.1")
-    );
-    assert_eq!(error["details"][0], trusted_alone(&typed.url, "127.0.0.1"));
-    assert_eq!(
-        error["help"],
-        format!(
-            "to reach it too, save it with `fetchloom settings set allowed_origins {}`, or set `FETCHLOOM_ALLOWED_ORIGINS={}` for one run",
-            named.url, named.url
-        )
     );
     Ok(())
 }

@@ -13,6 +13,51 @@ use crate::support::{
     sha256_hex, text, warned, without_copy_warning,
 };
 
+/// an add in a fresh clone downloads and places only what it adds, as its help says: another
+/// dataset waits for a sync, and its link, which answers no more, never cancels the add.
+#[test]
+fn an_add_in_a_fresh_clone_touches_only_what_it_adds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &first)?;
+    let fresh = crate::project::clone(&sandbox, "fresh")?;
+    let second = Server::start("/files/tips.csv", vec![file(b"tip\n1\n", "\"t1\"")])?;
+    sandbox.allow(&second.url);
+    let output = sandbox
+        .command_in(&fresh, &["add", &second.url])
+        .env("FETCHLOOM_CACHE", sandbox.folder("fresh-cache")?)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(fresh.join("data/tips/tips.csv"))?, b"tip\n1\n");
+    assert!(!fresh.join("data/iris").exists(), "{stderr}");
+    assert_eq!(first.requests().len(), 1, "{stderr}");
+    Ok(())
+}
+
+/// a pin data.toml no longer has stays in data.lock through an add, which touches only what it
+/// adds, so the add leaves the project for the next sync to settle, which takes the pin out.
+#[test]
+fn a_pin_data_toml_lost_waits_through_an_add_for_a_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &first)?;
+    let fresh = crate::project::clone(&sandbox, "fresh")?;
+    fs::write(fresh.join("data.toml"), "")?;
+    let second = Server::start("/files/tips.csv", vec![file(b"tip\n1\n", "\"t1\"")])?;
+    sandbox.allow(&second.url);
+    let lock = fresh.join("data.lock");
+    let output = sandbox.command_in(&fresh, &["add", &second.url]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(fs::read_to_string(&lock)?.contains(&first.url));
+    let output = sandbox.command_in(&fresh, &["sync"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let pinned = fs::read_to_string(&lock)?;
+    assert!(!pinned.contains(&first.url), "{pinned}");
+    assert!(pinned.contains(&second.url), "{pinned}");
+    Ok(())
+}
+
 #[test]
 fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
     let sandbox = Sandbox::new()?;
@@ -453,10 +498,12 @@ fn adding_a_previous_source_does_not_match_an_edited_reference() -> Result {
     assert!(updated.contains("[datasets.old]"), "{updated}");
     assert!(updated.contains(&first.url) && updated.contains(&second.url));
     assert_eq!(fs::read(sandbox.work().join("data/old/old.csv"))?, b"old\n");
-    assert_eq!(
-        fs::read(sandbox.work().join("data/existing/new.csv"))?,
-        b"new\n"
-    );
+    // the add touches only what it adds, so the edited reference waits for a sync
+    let existing = sandbox.work().join("data/existing");
+    assert!(!existing.join("new.csv").exists());
+    let synced = sandbox.run(&["sync"])?;
+    assert!(synced.status.success(), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(existing.join("new.csv"))?, b"new\n");
     Ok(())
 }
 
@@ -1642,7 +1689,8 @@ fn a_new_link_with_nothing_at_it_is_fixed_on_the_command_line() -> Result {
 }
 
 /// the help offers the pinned bytes from a folder mirror or a new ref in data.toml, whether the
-/// add names the link again or syncs it beside a new one.
+/// add names the link again or a sync reaches it. an add of a new link touches only that one, so
+/// it goes in while the moved one waits for the sync.
 #[test]
 fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1660,14 +1708,18 @@ fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
     )]);
     delete_folder(&sandbox.cache())?;
     delete_folder(&sandbox.work().join("data"))?;
-    for link in [&iris, &wine] {
-        let output = sandbox.run(&["--json", "add", link])?;
+    let added = sandbox.run(&["add", &wine])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    // data.toml names a server on this machine, which only allowed_origins lets a sync reach
+    sandbox.allow(&server.url);
+    for args in [&["--json", "add", &iris][..], &["--json", "sync"]] {
+        let output = sandbox.run(args)?;
         let document = json(&output)?;
         assert_eq!(output.status.code(), Some(10), "{document}");
         assert_eq!(
             document["errors"][0]["help"],
             "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the file moved, put its new link as ref in data.toml",
-            "{link}"
+            "{args:?}"
         );
     }
     // a catalog on this machine stands in for zenodo, which debug builds alone allow

@@ -565,10 +565,11 @@ fn a_version_taken_out_stays_locked_until_an_upgrade() -> Result {
     // each command that pins data.toml anew keeps the version, and says so once
     fs::write(sandbox.folder("more")?.join("more.csv"), "more")?;
     let taken_out = (fs::read(&manifest)?, fs::read(&lock)?);
+    // an add pins only what it adds and leaves jq's entry to the lock and sync after it
     for args in [
-        &["lock"][..],
+        &["add", "../more", "--as", "more"][..],
+        &["lock"],
         &["sync"],
-        &["add", "../more", "--as", "more"],
     ] {
         fs::write(&manifest, &taken_out.0)?;
         fs::write(&lock, &taken_out.1)?;

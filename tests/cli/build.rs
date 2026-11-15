@@ -2900,10 +2900,11 @@ fn a_plain_sync_leaves_out_a_result_found_nowhere() -> Result {
         told.contains("Synced 1 dataset into data · 1 result left out until built\n"),
         "{told}"
     );
+    // an add touches only what it adds, so it says nothing of clean
     let added = there(&["add", &server.url, "--as", "again"])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     assert!(
-        text(&added.stderr)?.contains("so it is left out\n"),
+        !text(&added.stderr)?.contains("left out"),
         "{}",
         text(&added.stderr)?
     );

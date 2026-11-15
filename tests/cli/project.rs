@@ -3201,6 +3201,29 @@ fn a_read_only_project_with_nothing_to_do_syncs() -> Result {
     Ok(())
 }
 
+/// an add places what it adds alone, and a project settled before it stays settled, so a sync
+/// on a checkout it may not write has nothing to do.
+#[cfg(unix)]
+#[test]
+fn an_add_leaves_a_settled_project_settled() -> Result {
+    if rustix::process::geteuid().is_root() {
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let tips = Server::start("/files/tips.csv", vec![file(b"tip\n1\n", "\"t1\"")])?;
+    sandbox.allow(&tips.url);
+    let output = sandbox.run(&["add", &tips.url])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    writable(&sandbox.work(), false)?;
+    let settled = sandbox.run(&["sync"]);
+    writable(&sandbox.work(), true)?;
+    let settled = settled?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+    Ok(())
+}
+
 /// each download fits on its own, so only their sum shows the shortfall.
 #[test]
 fn a_sync_the_cache_disk_cannot_hold_asks_once_before_downloading() -> Result {
@@ -3436,32 +3459,33 @@ fn a_link_is_held_to_the_budget_as_the_disk_stores_the_cache() -> Result {
     Ok(())
 }
 
-/// the budget's question names the command that would pass it.
+/// the budget's question names the command that would pass it. an add touches only what it adds,
+/// so in a fresh clone it is the pinned two, of a size data.lock knows, that passes the budget.
 #[test]
 fn an_add_past_the_cache_budget_is_named_as_an_add() -> Result {
     let sandbox = Sandbox::new()?;
     let (one, two) = (vec![b'x'; 1024], vec![b'y'; 1024]);
-    let first = Server::start("/one.bin", vec![file(&one, "\"a\""), file(&one, "\"a\"")])?;
-    let second = Server::start("/two.bin", vec![file(&two, "\"b\""), file(&two, "\"b\"")])?;
-    sandbox.allow(&first.url);
-    sandbox.allow(&second.url);
-    let output = sandbox.run(&["add", &first.url])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let first = Server::start("/one.bin", vec![file(&one, "\"a\"")])?;
+    let second = Server::start("/two.bin", vec![file(&two, "\"b\"")])?;
+    for server in [&first, &second] {
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
     let fresh = clone(&sandbox, "fresh")?;
     let empty = sandbox.folder("empty-cache")?;
     let output = sandbox
         .command_in(&fresh, &["--json", "add", &second.url])
         .env("FETCHLOOM_CACHE", &empty)
-        .env("FETCHLOOM_CACHE_BUDGET", "1.5K")
+        .env("FETCHLOOM_CACHE_BUDGET", "512B")
         .output()?;
     let document = json(&output)?;
     assert_eq!(output.status.code(), Some(1), "{document}");
     let message = document["errors"][0]["message"]
         .as_str()
         .unwrap_or_default();
-    assert!(
-        message.starts_with("this add would bring the cache to ")
-            && message.ends_with(", past the 1.5 KiB cache_budget"),
+    assert_eq!(
+        message, "this add would bring the cache to 1.0 KiB, past the 512 B cache_budget",
         "{document}"
     );
     // two is what the add brings, so only one is offered for removal

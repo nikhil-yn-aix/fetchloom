@@ -652,7 +652,7 @@ async fn add_held(
         None => Sources::new(manifest, old.as_ref()).present(&addition.entry, &addition.listing),
     };
     if let Some(name) = present {
-        let work = adding_loop(context, project, net, cache);
+        let work = adding_loop(context, project, net, cache).adding(&name);
         let present = Present {
             name: &name,
             entry: &addition.entry,
@@ -680,7 +680,7 @@ async fn add_held(
     let name = new_name(context, &mut args, &addition, &parsed, manifest)?;
     let text = adding.text.as_deref().unwrap_or_default();
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
-    let work = adding_loop(context, project, net, cache).telling(&name);
+    let work = adding_loop(context, project, net, cache).adding(&name);
     if args.no_sync {
         let shown = parsed.reference.shown();
         let pinned = stated::pinned(&name, &addition.entry, &addition.listing, (&shown, link))?;
@@ -1163,6 +1163,34 @@ async fn preview_add(
     Ok(Report::dry(work.project.root.clone(), names, outcome))
 }
 
+/// whether the datasets an add of `names` leaves alone were in place before it, as `survey` read
+/// the state, so placing those it adds settles the project: the last complete sync left the
+/// data.toml and data.lock the add began from, or data.toml, `lock` and the state name no other.
+fn settled_before(
+    adding: &AddProject,
+    (manifest, lock): (&Manifest, &Lock),
+    names: &[String],
+    survey: &Survey,
+) -> bool {
+    let adds = |name: &str| names.iter().any(|added| added == name);
+    let alone = manifest.datasets.keys().all(|name| adds(name))
+        && lock.datasets.iter().all(|dataset| adds(&dataset.name))
+        && lock.derived.iter().all(|result| adds(&result.name))
+        && lock.stated.iter().all(|stated| adds(stated.name()))
+        && survey
+            .state
+            .files
+            .values()
+            .all(|placed| adds(&placed.dataset));
+    let hash = |text: Option<&str>| text.map(|text| digest::sha256(text.as_bytes()));
+    alone
+        || survey.state.synced.is_some_and(|synced| {
+            synced.complete
+                && Some(synced.manifest) == hash(adding.text.as_deref())
+                && Some(synced.lock) == hash(adding.lock_text.as_deref())
+        })
+}
+
 /// brings the project in line with `manifest`, the add's data.toml, `updated` its text when the add
 /// changes it. every byte goes into the cache before data.toml or data.lock is written, so an add
 /// cut off while it downloads has changed nothing; a later failure or stop puts both back.
@@ -1202,7 +1230,9 @@ pub(super) async fn sync_add(
     // never pins what no sync can place
     let placed = super::drop::placed_adding(manifest, names, &survey);
     let plan = plan::from_cache_adding(&placed, &lock, &work.cache, names)?;
-    let placing = work.prepare(&placed, &lock, plan, false, survey).await?;
+    let settled = settled_before(adding, (&placed, &lock), names, &survey);
+    let mut placing = work.prepare(&placed, &lock, plan, false, survey).await?;
+    placing.vouch_rest(settled);
     if pinning.is_none() {
         pinning = pinning_line(work, names);
     }
@@ -2365,8 +2395,7 @@ mod tests {
         context.offline = crate::net::Offline::Flag;
         let manifest = Manifest::parse(&updated).unwrap();
         let old = adding.old.take();
-        let work =
-            Loop::new(&context, &adding.project, Arc::new(context.net()), cache).telling("b");
+        let work = Loop::new(&context, &adding.project, Arc::new(context.net()), cache).adding("b");
         // the add goes on once the line shows, as one of many files would still be pinning
         EDIT_AT.set(Some(("saved", |_| {
             let screen = SCREEN.with_borrow(Clone::clone).unwrap();

@@ -200,8 +200,17 @@ impl<'a> Loop<'a> {
         self
     }
 
-    pub(super) fn telling(mut self, name: &str) -> Self {
+    /// the run adds `name`, which the command's last lines tell about, and works on the datasets
+    /// it adds alone, since an add touches no other.
+    pub(super) fn adding(mut self, name: &str) -> Self {
         self.told.insert(name.to_owned());
+        self.scope = match self.scope {
+            Scope::Only(mut names) => {
+                names.insert(name.to_owned());
+                Scope::Only(names)
+            }
+            Scope::All => Scope::Only(BTreeSet::from([name.to_owned()])),
+        };
         self
     }
 

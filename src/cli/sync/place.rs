@@ -410,6 +410,10 @@ pub(crate) struct Placing<'a> {
     unbuilt: Vec<String>,
     /// each listed dataset's excludes that matched no listed file, from [`Placing::listed`].
     unlisted: plan::Unlisted,
+    /// whether every dataset outside `scope` is vouched for: none is outside a run of all, or they
+    /// were settled before the run, as [`Placing::vouch_rest`] says. only then does placing every
+    /// file settle the project.
+    vouched: bool,
 }
 
 impl<'a> Placing<'a> {
@@ -482,7 +486,15 @@ impl<'a> Placing<'a> {
             scope: scope.clone(),
             unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
+            vouched: *scope == Scope::All,
         })
+    }
+
+    /// says the datasets outside the scope were `settled` before the run, as an add in a synced
+    /// project finds them and leaves them as they were, so placing every file of the scope settles
+    /// the project as a sync of all would.
+    pub(crate) fn vouch_rest(&mut self, settled: bool) {
+        self.vouched |= settled;
     }
 
     /// takes each listed dataset's excludes that matched no listed file; without them none is told
@@ -941,6 +953,7 @@ impl<'a> Placing<'a> {
             scope,
             unbuilt,
             unlisted,
+            vouched,
         } = self;
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement {
@@ -980,13 +993,9 @@ impl<'a> Placing<'a> {
             actions,
             &mut placement,
         );
-        let (todo, adopted) = match settled {
-            Ok(settled) => settled,
-            Err(error) => {
-                settle_aside(project, &data_dir, survey.threads, &placement, |_| false);
-                return Err(error);
-            }
-        };
+        let (todo, adopted) = settled.inspect_err(|_| {
+            settle_aside(project, &data_dir, survey.threads, &placement, |_| false);
+        })?;
         survey.smudge_edited();
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
@@ -1019,8 +1028,9 @@ impl<'a> Placing<'a> {
             && adding
                 .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
         flushed?;
-        // a run of named datasets never vouches for the others, so the next sync looks at all
-        let whole = scope == Scope::All && unknown.is_empty() && placement.unbuilt.is_empty();
+        // a run of named datasets vouches for the others only as its caller says, else the next
+        // sync looks at all
+        let whole = vouched && unknown.is_empty() && placement.unbuilt.is_empty();
         let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let recorded = removed || adopted || undone || !tallies.is_empty();
@@ -2326,6 +2336,7 @@ mod tests {
             scope: Scope::All,
             unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
+            vouched: true,
         };
 
         placing
@@ -2517,6 +2528,7 @@ mod tests {
             scope: Scope::All,
             unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
+            vouched: true,
         };
         placing
             .apply(
@@ -2585,6 +2597,7 @@ mod tests {
                 scope: Scope::All,
                 unbuilt: Vec::new(),
                 unlisted: plan::Unlisted::new(),
+                vouched: true,
             };
 
             let placed = placing.apply(
@@ -2657,6 +2670,7 @@ mod tests {
                 scope: Scope::All,
                 unbuilt: Vec::new(),
                 unlisted: plan::Unlisted::new(),
+                vouched: true,
             };
 
             let placed = placing.apply(
@@ -2734,6 +2748,7 @@ mod tests {
             scope: Scope::All,
             unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
+            vouched: true,
         };
 
         placing
@@ -2891,6 +2906,7 @@ mod tests {
             scope: Scope::All,
             unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
+            vouched: true,
         };
         let holding: Vec<String> = placing
             .holding()
