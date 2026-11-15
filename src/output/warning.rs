@@ -105,8 +105,6 @@ pub(crate) enum Warning {
     /// a variable set here holds a setting the settings file just changed, so runs where it is
     /// set keep the variable's value.
     SettingsOverridden,
-    /// a run told `--yes` goes on though a disk may lack the room it needs.
-    SpaceShort,
     /// a variable that changes only what a person sees holds neither true nor false.
     SettingsSwitchUnread,
     /// a variable set is one typo from one fetchloom reads.
@@ -115,6 +113,8 @@ pub(crate) enum Warning {
     SourceMoved,
     /// what a source lists may not be all of the dataset.
     SourcePartial,
+    /// a run told `--yes` goes on though a disk may lack the room it needs.
+    SpaceShort,
     /// `FETCHLOOM_TRACE` names a file fetchloom cannot write.
     TraceUnwritable,
 }
@@ -174,9 +174,9 @@ impl Warning {
             Warning::SettingsOverridden => "settings.overridden",
             Warning::SettingsSwitchUnread => "settings.switch_unread",
             Warning::SettingsUnknownVariable => "settings.unknown_variable",
-            Warning::SpaceShort => "space.short",
             Warning::SourceMoved => "source.moved",
             Warning::SourcePartial => "source.partial",
+            Warning::SpaceShort => "space.short",
             Warning::TraceUnwritable => "trace.unwritable",
         }
     }
@@ -255,9 +255,9 @@ mod tests {
             SettingsOverridden,
             SettingsSwitchUnread,
             SettingsUnknownVariable,
-            SpaceShort,
             SourceMoved,
             SourcePartial,
+            SpaceShort,
             TraceUnwritable,
         ];
         let mut named: Vec<&str> = kinds.iter().map(|kind| kind.name()).collect();
