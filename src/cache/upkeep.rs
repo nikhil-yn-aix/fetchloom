@@ -168,6 +168,26 @@ struct Registration {
     root: PathBuf,
 }
 
+/// the most bytes a project's registration may hold: its folder's path, as json.
+const REGISTRATION_MOST: u64 = 64 * 1024;
+
+/// the bytes of the registration at `path`, read without following a link or waiting on a fifo,
+/// as a plain file of [`REGISTRATION_MOST`] bytes at most: anyone who can write a shared cache can
+/// put anything among them, such as a fifo or a link to /dev/zero.
+fn read_registration(path: &Path) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    crate::volume::read_unfollowed(path)?
+        .take(REGISTRATION_MOST + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > REGISTRATION_MOST {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} is larger than any record of a project", path.display()),
+        ));
+    }
+    Ok(bytes)
+}
+
 impl Cache {
     /// remembers that the project at `root` uses this cache, so gc keeps what it needs. a
     /// registration turns read-only once its folder is flushed, so an unchanged read-only one costs
@@ -181,7 +201,7 @@ impl Cache {
         match fs::symlink_metadata(&path) {
             Ok(found)
                 if crate::volume::is_plain(&found)
-                    && fs::read(&path).is_ok_and(|bytes| bytes == text) =>
+                    && read_registration(&path).is_ok_and(|bytes| bytes == text) =>
             {
                 if found.permissions().readonly() {
                     return Ok(());
@@ -234,7 +254,20 @@ impl Cache {
         for entry in entries {
             stop.check()?;
             let path = entry.map_err(|err| unreadable(&folder, &err))?.path();
-            let bytes = fs::read(&path).map_err(|err| unreadable(&path, &err))?;
+            let bytes = read_registration(&path).map_err(|err| {
+                let foreign = matches!(
+                    err.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData
+                );
+                let error = unreadable(&path, &err);
+                if foreign {
+                    error.help(
+                        "fetchloom writes each project's record there as a small plain file, so this one is not its own: remove it; a sync in a project writes that project's record again",
+                    )
+                } else {
+                    error
+                }
+            })?;
             let registration: Registration = serde_json::from_slice(&bytes).map_err(|err| {
                 unreadable(&path, &io::Error::new(io::ErrorKind::InvalidData, err))
             })?;
@@ -1236,6 +1269,65 @@ mod tests {
         cache.register(&root).unwrap();
         assert_eq!(cache.projects(), vec![root]);
         assert!(fs::metadata(&path).unwrap().permissions().readonly());
+    }
+
+    /// a record someone put among the projects' records of a cache they share, a link, a fifo or
+    /// a file larger than any record, is refused at once rather than followed, waited on or read
+    /// to its end, as a fifo or a link to /dev/zero would hang gc.
+    #[test]
+    fn a_planted_project_record_is_refused_unread() {
+        let planted = |found: &Cache| {
+            let planted = found.root.join("projects").join("0000-planted.json");
+            fs::create_dir_all(planted.parent().unwrap()).unwrap();
+            planted
+        };
+        let record = |root: &Path| {
+            serde_json::to_vec(&Registration {
+                root: root.to_path_buf(),
+            })
+            .unwrap()
+        };
+        let (dir, large) = cache();
+        let mut padded = vec![b' '; 1024 * 1024];
+        padded.extend(record(dir.path()));
+        fs::write(planted(&large), padded).unwrap();
+        assert!(
+            large.registered_projects(&Stop::default()).is_err(),
+            "too large"
+        );
+
+        #[cfg(unix)]
+        {
+            let (dir, linked) = cache();
+            let elsewhere = dir.path().join("elsewhere.json");
+            fs::write(&elsewhere, record(dir.path())).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, planted(&linked)).unwrap();
+            assert!(
+                linked.registered_projects(&Stop::default()).is_err(),
+                "a link"
+            );
+
+            let (dir, waiting) = cache();
+            let fifo = planted(&waiting);
+            let made = std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap();
+            assert!(made.success());
+            // a writer answers a reader that waits for one, so an open that waits still ends
+            let (path, written) = (fifo.clone(), record(dir.path()));
+            let writer = std::thread::spawn(move || {
+                let mut opened = fs::OpenOptions::new().write(true).open(path).unwrap();
+                // a reader that refused the fifo is gone, so the write may find none
+                let _ = io::Write::write_all(&mut opened, &written);
+            });
+            let registered = waiting.registered_projects(&Stop::default());
+            let flags = rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK;
+            let released = rustix::fs::open(&fifo, flags, rustix::fs::Mode::empty()).unwrap();
+            writer.join().unwrap();
+            drop(released);
+            assert!(registered.is_err(), "a fifo: {registered:?}");
+        }
     }
 
     #[test]
