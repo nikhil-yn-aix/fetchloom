@@ -547,6 +547,135 @@ fn a_fresh_request_answered_416_is_refused() {
     assert_eq!(asked.lock().unwrap().len(), 1);
 }
 
+/// leaves what a run killed once every byte of `body` from `url` arrived, before the file took
+/// its name, leaves: the bytes and a record naming them all, of a file `length` long, sealed for
+/// publication when `sealed`.
+fn kept_whole(cache: &Cache, url: &Url, body: &[u8], length: Option<u64>, sealed: bool) {
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let validators = Validators {
+        etag: Some("\"v1\"".to_owned()),
+        ..Validators::default()
+    };
+    let mut writer = partial.writer(0, length, validators, false, false).unwrap();
+    writer.write_all(body).unwrap();
+    writer.save().unwrap();
+    drop(writer);
+    if sealed {
+        let key = crate::digest::sha256(url.as_str().as_bytes()).hex();
+        let part = cache.root().join("partial").join(&key[..1]);
+        crate::cache::tests::seal(&part.join(format!("{key}.part")));
+    }
+}
+
+/// a pinned file whose every byte an earlier run kept is checked and put in place with no
+/// request, whether that run was killed before or after it sealed the file to publish it.
+#[test]
+fn a_pinned_file_kept_whole_needs_no_request() {
+    // past the size whose closing checkpoint is skipped, so the record names every byte
+    let body = pattern(0, (1 << 20) + 7);
+    for sealed in [false, true] {
+        let (url, asked) = serve(vec![reply("200 OK", &[("ETag", "\"v1\"")], &body)]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        kept_whole(&cache, &url, &body, Some(body.len() as u64), sealed);
+        let mut fetch = Fetch::new(url.clone());
+        fetch.expect.sha256 = Some(crate::digest::sha256(&body));
+        fetch.expect.size = Some(body.len() as u64);
+        let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+        assert_eq!(
+            fetched.digest,
+            crate::digest::sha256(&body),
+            "sealed: {sealed}"
+        );
+        assert!(cache.object_path(&fetched.digest).exists());
+        assert_eq!(
+            (fetched.moved, lines(&asked).len()),
+            (0, 0),
+            "sealed: {sealed}"
+        );
+    }
+}
+
+/// a file no pin checks, kept whole, asks for its last byte alone: an answer of the same version
+/// says the bytes are still the file and names it as the whole answer did, so none comes again.
+#[test]
+fn a_file_kept_whole_asks_only_for_its_last_byte() {
+    let body = pattern(0, (1 << 20) + 7);
+    let total = body.len();
+    let last = format!("bytes {}-{}/{total}", total - 1, total - 1);
+    for sealed in [false, true] {
+        let (url, asked) = serve(vec![
+            reply(
+                "206 Partial Content",
+                &[
+                    ("Content-Range", &last),
+                    ("ETag", "\"v1\""),
+                    ("Content-Disposition", "attachment; filename=\"named.bin\""),
+                ],
+                &body[total - 1..],
+            ),
+            reply("200 OK", &[("ETag", "\"v2\"")], b"another file"),
+        ]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        kept_whole(&cache, &url, &body, Some(total as u64), sealed);
+        let fetch = Fetch::new(url.clone());
+        let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+        assert_eq!(
+            fetched.digest,
+            crate::digest::sha256(&body),
+            "sealed: {sealed}"
+        );
+        assert!(cache.object_path(&fetched.digest).exists());
+        assert_eq!(
+            fetched.name.as_deref(),
+            Some("named.bin"),
+            "sealed: {sealed}"
+        );
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1, "sealed: {sealed}: {asked:?}");
+        let head = asked[0].to_ascii_lowercase();
+        assert!(
+            head.contains(&format!("range: bytes={}-\r\n", total - 1)),
+            "{head}"
+        );
+        assert!(head.contains("if-range: \"v1\""), "{head}");
+    }
+}
+
+/// a server that says nothing lies past the bytes kept, and that the file is that long, says
+/// they are all of it, even where no earlier answer stated the length.
+#[test]
+fn a_416_at_the_end_of_the_bytes_kept_finishes_them() {
+    let body = b"every byte of a file sent without a length".to_vec();
+    let refused = format!("bytes */{}", body.len());
+    for sealed in [false, true] {
+        let (url, asked) = serve(vec![
+            reply(
+                "416 Range Not Satisfiable",
+                &[("Content-Range", &refused), ("Content-Type", "text/html")],
+                b"<html>416</html>",
+            ),
+            reply("200 OK", &[("ETag", "\"v2\"")], b"another file"),
+        ]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        kept_whole(&cache, &url, &body, None, sealed);
+        let fetch = Fetch::new(url.clone());
+        let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+        assert_eq!(
+            fetched.digest,
+            crate::digest::sha256(&body),
+            "sealed: {sealed}"
+        );
+        assert!(cache.object_path(&fetched.digest).exists());
+        let asked = lines(&asked);
+        assert_eq!(asked.len(), 1, "sealed: {sealed}: {asked:?}");
+    }
+}
+
 /// a long download over a connection that drops every few minutes still finishes.
 #[test]
 fn tries_that_move_the_file_on_earn_the_tries_back() {

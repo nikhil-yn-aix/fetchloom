@@ -367,6 +367,7 @@ enum Answer {
 
 /// what an answer said of the bytes it brought: the file name it gave, and whether they came as
 /// a web page.
+#[derive(Default)]
 struct Told {
     name: Option<String>,
     page: bool,
@@ -731,6 +732,10 @@ impl Net {
     }
 
     /// tries one download until its bytes are in the cache and checked.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "every kind of answer a try gets is handled in one place"
+    )]
     async fn transfer(
         &self,
         fetch: &Fetch,
@@ -739,14 +744,7 @@ impl Net {
         known: Option<UrlRecord>,
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
-        // what an earlier run kept counts as kept from the start, before any server answers
-        if let Some((received, validators)) = partial.resumable() {
-            let proven = fetch.expect.proves() || if_range(&validators).is_some();
-            on(Event::Kept {
-                bytes: received,
-                resumable: Resumable::kept(proven),
-            })?;
-        }
+        let mut whole = kept_before(fetch, partial, on)?;
         let validators = known.as_ref().map(|record| record.validators.clone());
         let mut from = fetch.from.clone();
         let mut diversions = 0;
@@ -756,7 +754,10 @@ impl Net {
         // answers did not match
         let mut state = Transfer {
             split: true,
-            permits: Some(self.permit(&fetch.from).await?),
+            permits: match whole {
+                Some(_) => None,
+                None => Some(self.permit(&fetch.from).await?),
+            },
         };
         let began = Instant::now();
         let mut retry = Retry::new(self, &fetch.url).telling(on);
@@ -766,9 +767,12 @@ impl Net {
             on(event)
         };
         loop {
-            self.keep_permit(&fetch.from, &mut state.permits).await?;
-            let answer = self
-                .attempt(
+            let answer = if let Some(kept) = whole.take() {
+                self.finish_kept(fetch, partial, kept, Told::default(), &watched)
+                    .await
+            } else {
+                self.keep_permit(&fetch.from, &mut state.permits).await?;
+                self.attempt(
                     &from,
                     fetch,
                     partial,
@@ -776,7 +780,8 @@ impl Net {
                     &watched,
                     &mut state,
                 )
-                .await;
+                .await
+            };
             retry.moved(reach.further());
             match answer {
                 Ok(Answer::NotModified) => {
@@ -939,7 +944,14 @@ impl Net {
         let earlier = partial
             .resumable()
             .filter(|(_, validators)| fetch.expect.proves() || if_range(validators).is_some());
-        let shape = conditions(earlier.as_ref(), known);
+        let length = earlier.as_ref().and_then(|_| partial.length());
+        // bytes kept that are all of the file ask for their last byte alone: an answer of the same
+        // version says they still are, and names the file as a whole answer does
+        let asked = earlier.as_ref().map(|(received, validators)| {
+            let whole = *received > 0 && length == Some(*received);
+            (received - u64::from(whole), validators.clone())
+        });
+        let shape = conditions(asked.as_ref(), known);
         let holding = super::Holding::new(&fetch.from, &mut state.permits);
         let response = self
             .send_body(from, fetch.mirror, shape, Some(holding))
@@ -950,7 +962,7 @@ impl Net {
             self.heard.answered(&host, *waited);
         }
         let status = response.status();
-        tracing::debug!(url = %crate::shown::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
+        tracing::debug!(url = %crate::shown::Shown(from), status = status.as_u16(), from_byte = asked.as_ref().map(|(start, _)| *start), "response");
         let head = response.headers().clone();
         let response = match self.instead(from, fetch, response).await? {
             Ok(response) => response,
@@ -961,8 +973,26 @@ impl Net {
         if status == StatusCode::NOT_MODIFIED && earlier.is_none() && known.is_some() {
             return Ok(Answer::NotModified);
         }
+        if let Some((received, kept)) = &earlier
+            && let Some(size) = confirmed(status, &head, (*received, kept), length, &validators)
+        {
+            // a refusal's headers tell of the refusal, not of the file
+            let told = Told {
+                name: match status {
+                    StatusCode::PARTIAL_CONTENT => describe_response(&response, &fetch.url, on)?,
+                    _ => None,
+                },
+                page: status == StatusCode::PARTIAL_CONTENT && headers::is_html(&head),
+            };
+            refuse_other_length(fetch, Some(size))?;
+            // the bytes are all here, so the slots go to other files before the check
+            drop(state.permits.take());
+            return self
+                .finish_kept(fetch, partial, (size, kept.clone()), told, on)
+                .await;
+        }
         let Some(offset) =
-            self.starting_offset(from, status, &head, earlier.as_ref(), &validators)?
+            self.starting_offset(from, status, &head, asked.as_ref(), &validators)?
         else {
             return Ok(Answer::StartOver);
         };
@@ -1013,18 +1043,7 @@ impl Net {
                 .await?
             {
                 Run::Whole(mut writer) => {
-                    if writer.written() < LFS_LARGEST
-                        && is_lfs_pointer(
-                            &writer
-                                .head(LFS_POINTER.len())
-                                .map_err(|err| Failure::Final(local(&err)))?,
-                        )
-                    {
-                        return Err(Failure::Final(lfs_pointer(
-                            &fetch.url,
-                            (self.rules.lfs_link)(&fetch.url),
-                        )));
-                    }
+                    self.refuse_pointer(fetch, &mut writer)?;
                     self.heard.received(
                         &host,
                         writer.written().saturating_sub(offset),
@@ -1089,6 +1108,57 @@ impl Net {
         .map_err(Failure::Final)?;
         if resumed > 0 {
             Work::add(&self.work.resumes, 1);
+        }
+        Ok(())
+    }
+
+    /// the answer for bytes an earlier run kept, `size` of them under `validators`, that are all
+    /// of the file: opened as a resume opens them, which checks them against their record, and
+    /// put in the cache with no byte more. a later run would do the same.
+    async fn finish_kept(
+        &self,
+        fetch: &Fetch,
+        partial: &Partial,
+        (size, validators): (u64, Validators),
+        told: Told,
+        on: Listener<'_>,
+    ) -> Result<Answer, Failure> {
+        let body = Body {
+            offset: size,
+            total: Some(size),
+            validators: validators.clone(),
+            md5: fetch.expect.needs_md5(),
+            keep: false,
+            hashing: self.hashing.clone(),
+        };
+        let Some(mut writer) = open(partial, body).await? else {
+            return Ok(Answer::StartOver);
+        };
+        self.started(on, Some(size), size, Resumable::Yes)?;
+        self.refuse_pointer(fetch, &mut writer)?;
+        on(Event::Arrived).map_err(Failure::Final)?;
+        Ok(Answer::Stored {
+            received: finish(writer).await?,
+            validators,
+            told,
+            resumed: true,
+        })
+    }
+
+    /// refuses a file small enough to be a git-lfs pointer that is one, naming the link that
+    /// serves the file it stands for.
+    fn refuse_pointer(&self, fetch: &Fetch, writer: &mut PartialWriter) -> Result<(), Failure> {
+        if writer.written() < LFS_LARGEST
+            && is_lfs_pointer(
+                &writer
+                    .head(LFS_POINTER.len())
+                    .map_err(|err| Failure::Final(local(&err)))?,
+            )
+        {
+            return Err(Failure::Final(lfs_pointer(
+                &fetch.url,
+                (self.rules.lfs_link)(&fetch.url),
+            )));
         }
         Ok(())
     }
@@ -1529,6 +1599,30 @@ fn answered(
     validators
 }
 
+/// the size of the file when an answer says the bytes kept, `received` of them under validators
+/// `kept`, still are all of it: the last of them sent alone, as asked for when the record's stated
+/// `length` says they are all of it, or a refusal of the range past bytes of no stated length
+/// that states their size. either of the same version.
+fn confirmed(
+    status: StatusCode,
+    head: &header::HeaderMap,
+    (received, kept): (u64, &Validators),
+    length: Option<u64>,
+    validators: &Validators,
+) -> Option<u64> {
+    // a refused range states the size as a part does
+    let total = headers::total_length(head, StatusCode::PARTIAL_CONTENT)
+        .filter(|total| *total == received && *total > 0)?;
+    let alone = match (status, length) {
+        (StatusCode::PARTIAL_CONTENT, Some(length)) => {
+            length == total && headers::range_start(head) == Some(total - 1)
+        }
+        (StatusCode::RANGE_NOT_SATISFIABLE, None) => true,
+        _ => false,
+    };
+    (alone && !headers::changed(kept, validators)).then_some(total)
+}
+
 impl Net {
     /// accepts a full body or a range that continues the same representation at the saved offset.
     fn starting_offset(
@@ -1751,6 +1845,26 @@ fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
 
 fn local(err: &io::Error) -> Error {
     crate::cache::unwritten(err)
+}
+
+/// tells `on` what an earlier run kept, which counts as kept from the start, before any server
+/// answers. those bytes come back when they are all of a file a pin checks, which then needs no
+/// request, nor a slot to send one.
+fn kept_before(
+    fetch: &Fetch,
+    partial: &Partial,
+    on: Listener<'_>,
+) -> Result<Option<(u64, Validators)>, Error> {
+    let Some((received, validators)) = partial.resumable() else {
+        return Ok(None);
+    };
+    let proven = fetch.expect.proves() || if_range(&validators).is_some();
+    on(Event::Kept {
+        bytes: received,
+        resumable: Resumable::kept(proven),
+    })?;
+    let whole = fetch.expect.pins() && received > 0 && partial.length() == Some(received);
+    Ok(whole.then_some((received, validators)))
 }
 
 /// the headers that ask for the rest of an earlier download, which `If-Range` keeps to the

@@ -102,6 +102,16 @@ struct Range {
     sha256: Sha256,
 }
 
+impl Record {
+    /// whether the record names every byte of a part `size` long and no gap: the last record of
+    /// a download whose bytes all arrived, of the length its server stated if it stated one.
+    fn names_all(&self, size: u64) -> bool {
+        self.received == size
+            && self.ranges.is_empty()
+            && self.length.is_none_or(|length| length == size)
+    }
+}
+
 /// a run of bytes one stream wrote past the prefix, hashed on its own for the checkpoint.
 struct Run {
     start: u64,
@@ -258,6 +268,19 @@ impl Partial {
     /// how many bytes an earlier run kept from the first on, and how the server identified them
     /// then. a split download may have kept ranges past them with none at the start.
     pub(crate) fn resumable(&self) -> Option<(u64, Validators)> {
+        let record = self.kept()?;
+        Some((record.received, record.validators))
+    }
+
+    /// the length the server stated for the file when the bytes an earlier run kept came, when
+    /// it stated one and a run may go on from them: all of it once they are that many.
+    pub(crate) fn length(&self) -> Option<u64> {
+        self.kept()?.length
+    }
+
+    /// the record of the bytes an earlier run kept, when a run may go on from them: a part it
+    /// may write on, or one sealed to publish that holds every byte the record names.
+    fn kept(&self) -> Option<Record> {
         let record = self.recorded()?;
         let kept = self
             .folder
@@ -265,8 +288,48 @@ impl Partial {
             .and_then(|file| file.metadata())
             .ok()?;
         let any = record.received > 0 || !record.ranges.is_empty();
-        (any && continuable(&kept) && kept.len() >= record.received)
-            .then_some((record.received, record.validators))
+        let open = continuable(&kept) || (record.names_all(kept.len()) && self.sealed(&kept));
+        (any && open && kept.len() >= record.received).then_some(record)
+    }
+
+    /// whether `metadata` is of a part a run sealed to publish and never published: read-only,
+    /// and otherwise one it could write on, with no other name, so no object's.
+    fn sealed(&self, metadata: &Metadata) -> bool {
+        metadata.permissions().readonly()
+            && alone(metadata)
+            && !(cfg!(windows) && crate::place::has_other_names(&self.bytes))
+    }
+
+    /// makes such a sealed part writable again when it holds the `offset` bytes its record names,
+    /// so it is published as any finished download is.
+    fn unseal(&self, offset: u64) {
+        let Ok(file) = self.folder.read_file(name_of(&self.bytes)) else {
+            return;
+        };
+        let Ok(metadata) = file.metadata() else {
+            return;
+        };
+        let named = self
+            .recorded()
+            .is_some_and(|record| record.names_all(offset));
+        if !named || metadata.len() != offset || !self.sealed(&metadata) {
+            return;
+        }
+        #[cfg(unix)]
+        let unsealed = {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = metadata.permissions();
+            permissions.set_mode(permissions.mode() | 0o200);
+            file.set_permissions(permissions)
+        };
+        #[cfg(windows)]
+        let unsealed = {
+            drop(file);
+            crate::volume::set_read_only(&self.bytes, false)
+        };
+        if let Err(err) = unsealed {
+            tracing::debug!(%err, "could not open a sealed download to publish it");
+        }
     }
 
     /// writes from byte `offset` on, after hashing the bytes before it again, which fail with
@@ -388,12 +451,17 @@ impl Partial {
 
     /// the file for the bytes, cut to `offset` unless `keep`, with its [`super::object::begun`]
     /// time when this run made it. from the first byte, kept bytes it may not continue get a new
-    /// file, as a read-only one may be a name of the object, which must never become writable.
+    /// file, as a read-only one may be a name of the object, which must never become writable;
+    /// only a sealed part with no other name, holding the `offset` bytes its record names, is
+    /// opened again.
     fn open(&self, offset: u64, keep: bool, lean: bool) -> io::Result<(File, Option<SystemTime>)> {
         let name = name_of(&self.bytes);
         if lean && let Ok(file) = self.folder.create_new(name) {
             let begun = super::object::begun(&file);
             return Ok((file, begun));
+        }
+        if offset > 0 {
+            self.unseal(offset);
         }
         // unix counts a second name in the metadata `continuable` reads; windows reports no link
         // count there, so it is asked for apart
@@ -448,6 +516,11 @@ fn name_of(path: &Path) -> &str {
 /// whether this process may write on into the file `metadata` describes: a writable plain file,
 /// on unix this user's own with no other name, so writing changes nothing outside the download.
 fn continuable(metadata: &Metadata) -> bool {
+    alone(metadata) && !metadata.permissions().readonly()
+}
+
+/// whether `metadata` describes a plain file, on unix this user's own with no other name.
+fn alone(metadata: &Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -455,7 +528,7 @@ fn continuable(metadata: &Metadata) -> bool {
             return false;
         }
     }
-    is_plain(metadata) && !metadata.permissions().readonly()
+    is_plain(metadata)
 }
 
 /// keeps the download claimed while its writer and hash worker still use the unfinished file.
