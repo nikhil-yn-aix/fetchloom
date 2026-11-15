@@ -104,17 +104,36 @@ fn a_name_looks_internal_by_its_ending_or_its_one_label() {
     }
 }
 
+/// a proxy is shown without the login its address holds, which the carrier still knows is sent.
 #[test]
 fn a_proxy_is_shown_without_its_login() {
     let url = Url::parse("https://data.example.org/iris.csv").unwrap();
-    let matcher = Matcher::builder()
-        .all("http://name:secret@proxy.example.org:8080".to_owned())
-        .build();
-    assert_eq!(
-        shown_proxy(&matcher, &url).as_deref(),
-        Some("http://proxy.example.org:8080")
-    );
-    assert_eq!(shown_proxy(&Matcher::builder().build(), &url), None);
+    for (value, shown, login) in [
+        (
+            "http://name:secret@proxy.example.org:8080",
+            "http://proxy.example.org:8080",
+            true,
+        ),
+        (
+            "http://name@proxy.example.org:8080",
+            "http://proxy.example.org:8080",
+            true,
+        ),
+        (
+            "socks5://name:secret@proxy.example.org:1080",
+            "socks5://proxy.example.org:1080",
+            true,
+        ),
+        (
+            "http://proxy.example.org:8080",
+            "http://proxy.example.org:8080",
+            false,
+        ),
+    ] {
+        let carrier = proxies(&[("HTTPS_PROXY", value)]).carrier(&url).unwrap();
+        assert_eq!((carrier.shown.as_str(), carrier.login), (shown, login));
+    }
+    assert!(proxies(&[]).carrier(&url).is_none());
 }
 
 /// the environment a test gives: each variable `pairs` names, and no other.

@@ -442,16 +442,12 @@ type ProbeFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Probe> + S
 #[cfg(test)]
 type TestProbe = Arc<dyn Fn(String, u16) -> ProbeFuture + Send + Sync>;
 
-/// the proxy this machine sends `url` through, as its scheme, host and port, without any login
-/// its address holds. none when the request goes straight to the host.
-pub(crate) fn proxy_of(url: &Url) -> Option<String> {
-    shown_proxy(&Matcher::from_system(), url)
-}
-
-/// the proxy `matcher` picks for `url`, as [`proxy_of`] shows it.
-fn shown_proxy(matcher: &Matcher, url: &Url) -> Option<String> {
-    let uri = url.as_str().parse::<http::Uri>().ok()?;
-    shown(matcher.intercept(&uri)?.uri())
+/// the proxy this machine sends `url` through, as the proxy variables and the system's settings
+/// name it. none when the request goes straight to the host.
+pub(crate) fn carrier_of(url: &Url) -> Option<Carrier> {
+    Proxies::read(&|name| std::env::var_os(name))
+        .ok()?
+        .carrier(url)
 }
 
 /// a proxy's address as messages show it: its scheme, host and port, without a login.

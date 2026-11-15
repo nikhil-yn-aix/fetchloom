@@ -139,51 +139,85 @@ fn a_typed_http_link_follows_its_site_to_https() -> Result {
     Ok(())
 }
 
-/// a 407 answers an https tunnel and a plain http request alike; the error names the proxy, not
-/// the site, a retry would get no further, and the help fits each kind of login.
+/// a 407 answers an https tunnel and a plain http request alike; the error names the proxy and the
+/// variable that set it, never its password, a retry would get no further, and the help fits the
+/// login: one the variable gave is called refused, and only a proxy that asks for a windows
+/// sign-in, or a tunnel's refusal, which names no kind of login, on windows, gets the relay.
 #[test]
 fn a_proxy_that_wants_a_login_is_named_and_asked_once() -> Result {
     let sandbox = Sandbox::new()?;
-    for (link, variable, scheme, help) in [
+    let address = "give it a name and password in its address, as http://name:password@proxy.example.org:8080, in HTTPS_PROXY and HTTP_PROXY";
+    let relay = "it likely wants your windows sign-in, which fetchloom cannot send: run a local relay such as px or cntlm, and point HTTPS_PROXY and HTTP_PROXY at it";
+    let tunnel = if cfg!(windows) {
+        format!(
+            "{relay}. if it wants a name and password instead, give them in its address in both, as http://name:password@proxy.example.org:8080"
+        )
+    } else {
+        address.to_owned()
+    };
+    let https = "https://data.example.org/iris.csv";
+    let http = "http://data.example.org/iris.csv";
+    let basic = "Basic realm=\"lab\"";
+    for (link, variable, scheme, login, help) in [
+        (https, "HTTPS_PROXY", "NTLM", false, tunnel.as_str()),
+        (http, "HTTP_PROXY", "NTLM", false, relay),
+        (http, "HTTP_PROXY", basic, false, address),
         (
-            "https://data.example.org/iris.csv",
+            https,
             "HTTPS_PROXY",
-            "NTLM",
-            "it likely wants your windows sign-in, which fetchloom cannot send: run a local relay such as px or cntlm, and point HTTPS_PROXY and HTTP_PROXY at it",
+            basic,
+            true,
+            "check the name and password in HTTPS_PROXY",
         ),
         (
-            "http://data.example.org/iris.csv",
+            http,
             "HTTP_PROXY",
-            "Basic realm=\"lab\"",
-            "give it a name and password in its address, as http://name:password@proxy.example.org:8080, in HTTPS_PROXY and HTTP_PROXY",
+            basic,
+            true,
+            "check the name and password in HTTP_PROXY",
         ),
     ] {
-        let login = || {
+        let login_asked = || {
             reply(
                 "407 Proxy Authentication Required",
                 &[("Proxy-Authenticate", scheme), ("Content-Length", "0")],
                 b"",
             )
         };
-        let proxy = Server::start("", vec![login(), login()])?;
+        let proxy = Server::start("", vec![login_asked(), login_asked()])?;
+        let set = if login {
+            proxy.url.replace("http://", "http://ada:pw-it-refuses@")
+        } else {
+            proxy.url.clone()
+        };
         let output = sandbox
             .command(&["--json", "get", link])
-            .env(variable, &proxy.url)
+            .env(variable, &set)
             .env("NO_PROXY", "")
             .env("no_proxy", "")
             .env("FETCHLOOM_RETRIES", "1")
             .output()?;
-        assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+        let (stdout, stderr) = (text(&output.stdout)?, text(&output.stderr)?);
+        assert_eq!(output.status.code(), Some(20), "{stdout}");
+        assert!(
+            !stdout.contains("pw-it-refuses") && !stderr.contains("pw-it-refuses"),
+            "{stdout}{stderr}"
+        );
         let error = &json(&output)?["errors"][0];
         assert_eq!(error["kind"], "network.unreachable", "{error}");
-        assert_eq!(
-            error["message"],
+        let message = if login {
             format!(
-                "the proxy at {} asked for a login before it would reach data.example.org",
+                "the proxy at {} refused the name and password in {variable} before it would reach data.example.org",
                 proxy.url
             )
-        );
-        assert_eq!(error["help"], help);
+        } else {
+            format!(
+                "the proxy at {}, which {variable} names, asked for a login before it would reach data.example.org",
+                proxy.url
+            )
+        };
+        assert_eq!(error["message"], message, "{link} {scheme} {login}");
+        assert_eq!(error["help"], help, "{link} {scheme} {login}");
         assert_eq!(
             proxy.requests().len(),
             1,

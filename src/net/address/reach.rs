@@ -23,6 +23,8 @@ pub(crate) struct Carrier {
     port: u16,
     /// the variable that names it, none when the system's proxy settings do.
     pub(crate) variable: Option<&'static str>,
+    /// its address holds a login, which every request through it sends.
+    pub(crate) login: bool,
 }
 
 /// what this run decided about a proxy.
@@ -79,6 +81,7 @@ impl Proxies {
                 .to_ascii_lowercase(),
             port,
             variable,
+            login: intercept.basic_auth().is_some() || intercept.raw_auth().is_some(),
         })
     }
 

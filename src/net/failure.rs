@@ -484,6 +484,7 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
         }
         StatusCode::PROXY_AUTHENTICATION_REQUIRED => proxy_login(
             url,
+            address::carrier_of(url).as_ref(),
             headers
                 .get(header::PROXY_AUTHENTICATE)
                 .and_then(|value| value.to_str().ok()),
@@ -557,29 +558,47 @@ pub(super) fn moved_refusal(
     ))
 }
 
-/// a proxy on the way to `url` asked for a login, which no other try would give it. any `scheme`
-/// but basic, or none, as a tunnel's refusal gives, most likely wants a windows sign-in.
-fn proxy_login(url: &Url, scheme: Option<&str>) -> Error {
-    let message = match address::proxy_of(url) {
-        Some(proxy) => format!(
-            "the proxy at {proxy} asked for a login before it would reach {}",
+/// a proxy on the way to `url`, `carrier` as this machine names it, asked for a login, which no
+/// other try would give it. a `scheme` but basic most likely wants a windows sign-in. a tunnel's
+/// refusal names no scheme, so a relay for that sign-in is offered then on windows alone.
+fn proxy_login(url: &Url, carrier: Option<&address::Carrier>, scheme: Option<&str>) -> Error {
+    const RELAY: &str = "it likely wants your windows sign-in, which fetchloom cannot send: run a local relay such as px or cntlm, and point HTTPS_PROXY and HTTP_PROXY at it";
+    let given = carrier
+        .filter(|carrier| carrier.login)
+        .and_then(|carrier| carrier.variable);
+    let message = match (carrier, given) {
+        (Some(carrier), Some(variable)) => format!(
+            "the proxy at {} refused the name and password in {variable} before it would reach {}",
+            carrier.shown,
             host(url)
         ),
-        None => format!(
+        (Some(carrier), None) => format!(
+            "the proxy at {}, which {}, asked for a login before it would reach {}",
+            carrier.shown,
+            carrier.variable.map_or_else(
+                || "the system's proxy settings name".to_owned(),
+                |variable| format!("{variable} names")
+            ),
+            host(url)
+        ),
+        (None, _) => format!(
             "a proxy asked for a login before it would reach {}",
             host(url)
         ),
     };
-    let basic = scheme.is_some_and(|scheme| {
+    let basic = scheme.map(|scheme| {
         scheme
             .trim_start()
             .get(..5)
             .is_some_and(|word| word.eq_ignore_ascii_case("basic"))
     });
-    let help = if basic {
-        "give it a name and password in its address, as http://name:password@proxy.example.org:8080, in HTTPS_PROXY and HTTP_PROXY"
-    } else {
-        "it likely wants your windows sign-in, which fetchloom cannot send: run a local relay such as px or cntlm, and point HTTPS_PROXY and HTTP_PROXY at it"
+    let help = match (basic, given) {
+        (Some(false), _) => RELAY.to_owned(),
+        (_, Some(variable)) => format!("check the name and password in {variable}"),
+        (None, None) if cfg!(windows) => format!(
+            "{RELAY}. if it wants a name and password instead, give them in its address in both, as http://name:password@proxy.example.org:8080"
+        ),
+        (Some(true) | None, None) => "give it a name and password in its address, as http://name:password@proxy.example.org:8080, in HTTPS_PROXY and HTTP_PROXY".to_owned(),
     };
     Error::new(Kind::NetworkUnreachable, message).help(help)
 }
@@ -676,10 +695,10 @@ pub(super) fn classify(
                 .help("check the link for a typo, and that this machine is online"),
             );
         }
-        // a proxy refusing a tunnel without a login does so on every try. hyper-util keeps that
+        // a proxy refuses a tunnel with no login or a wrong one on every try. hyper-util keeps that
         // error's type private, so its own words are matched, never the link's
         if current.to_string() == "tunnel error: proxy authorization required" {
-            return Failure::Final(proxy_login(url, None));
+            return Failure::Final(proxy_login(url, carrier, None));
         }
         // a certificate the system does not trust fails the same way on every try. matched by
         // type: the text of the outer error holds the link, which may well say "certificate"
