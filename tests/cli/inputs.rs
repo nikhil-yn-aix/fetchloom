@@ -166,7 +166,7 @@ fn gc_inputs_needs_yes_without_a_terminal() -> Result {
 /// the question at a terminal shows what gc would free.
 #[cfg(target_os = "linux")]
 #[test]
-fn no_at_the_question_frees_nothing() -> Result {
+fn freeing_inputs_asks_and_frees_only_on_a_yes() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let mirror = built_and_pushed(&sandbox, &server)?;
@@ -181,6 +181,13 @@ fn no_at_the_question_frees_nothing() -> Result {
     assert!(screen.contains("Would free iris"), "{screen}");
     assert!(screen.contains("Cancelled"), "{screen}");
     assert!(object(&sandbox.cache(), IRIS).is_file());
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &command, "", "from the cache?", "y\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!object(&sandbox.cache(), IRIS).is_file(), "{screen}");
     Ok(())
 }
 

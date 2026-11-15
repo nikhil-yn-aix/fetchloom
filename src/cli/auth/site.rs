@@ -236,7 +236,7 @@ fn asked_file(output: &Output) -> Result<Option<PathBuf>, Error> {
     output.item("the cookies.txt file's path");
     let home = crate::machine::home(&crate::machine::env);
     let mut path = PathBuf::new();
-    for _ in 0..3 {
+    for asked in 1..=3 {
         let Some(typed) = output
             .ask_text("file", false)?
             .filter(|text| !text.is_empty())
@@ -247,6 +247,10 @@ fn asked_file(output: &Output) -> Result<Option<PathBuf>, Error> {
         if path.is_file() {
             return Ok(Some(path));
         }
+        // the last answer's error says what is there, with nothing more asked
+        if asked == 3 {
+            break;
+        }
         let shown = crate::units::path(&path);
         output.item(&if path.is_dir() {
             format!("{shown} is a folder; type the path of the file in it")
@@ -254,9 +258,14 @@ fn asked_file(output: &Output) -> Result<Option<PathBuf>, Error> {
             format!("there is no file at {shown}; type its path again")
         });
     }
+    let kind = if path.is_dir() {
+        std::io::ErrorKind::IsADirectory
+    } else {
+        std::io::ErrorKind::NotFound
+    };
     Err(unreadable(
         &crate::units::path(&path),
-        &std::io::Error::from(std::io::ErrorKind::NotFound),
+        &std::io::Error::from(kind),
     ))
 }
 
@@ -524,7 +533,7 @@ fn secret(context: &Context, login: &Login, host: &str, asked: &Asked) -> Result
         output
             .ask_text(prompt, true)?
             .filter(|text| !text.trim().is_empty())
-            .ok_or_else(|| Error::new(Kind::Interrupted, "stopped signing in"))?
+            .ok_or_else(super::nothing_pasted)?
     } else {
         return Err(Error::new(
             Kind::Usage,

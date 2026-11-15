@@ -589,7 +589,8 @@ fn a_website_that_refuses_is_offered_each_way_in() -> Result {
 }
 
 /// the cookies file a refusal's sign-in asks for takes a path dragged into the terminal, which
-/// comes quoted, and `~`, and is asked for again when no file is at the path typed.
+/// comes quoted, and `~`, and is asked for again when no file is at the path typed, three times
+/// at most.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_cookies_file_asked_for_after_a_refusal_is_asked_again_when_missing() -> Result {
@@ -635,6 +636,197 @@ fn the_cookies_file_asked_for_after_a_refusal_is_asked_again_when_missing() -> R
             .get(1)
             .is_some_and(|head| head.contains("cookie: sid=s-dragged")),
         "{heads:?}\n{screen}"
+    );
+    // three paths with no file at them end the sign-in, saying why of the last without asking
+    // for it again, and the download stays refused
+    let refused = Server::start(
+        "/data.csv",
+        vec![reply("403 Forbidden", &[("Content-Length", "0")], b"")],
+    )?;
+    let host = refused.url.trim_start_matches("http://");
+    let host = host.split_once('/').map_or(host, |(host, _)| host);
+    let get = sandbox.command(&["get", &refused.url, "-o", "refused.csv"]);
+    let keys = "2~/nope.txt\r~/gone.txt\r~/my files\r";
+    let asked = format!("sign in to {host} with");
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &get, "", &asked, keys)?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(40), "{screen}");
+    for told in [
+        "there is no file at ~/nope.txt; type its path again",
+        "there is no file at ~/gone.txt; type its path again",
+        "error: ~/my files is a folder, not a cookies.txt file",
+    ] {
+        assert!(screen.contains(told), "{told}: {screen}");
+    }
+    assert!(
+        !screen.contains("type the path of the file in it"),
+        "{screen}"
+    );
+    assert!(!sandbox.work().join("refused.csv").exists(), "{screen}");
+    Ok(())
+}
+
+/// a website's key typed at a terminal stays hidden, whether `auth login` asks for it or a
+/// refusal's offer does; the offer reaches a header by its name and a browser by its name, and
+/// with `FETCHLOOM_ACCESSIBLE` it lists the ways once, numbered. nothing pasted three times
+/// cancels the sign-in.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_site_sign_in_at_a_terminal_reads_each_key_hidden() -> Result {
+    let sandbox = Sandbox::new()?;
+    let gated = || {
+        Server::start(
+            "/data.csv",
+            vec![
+                reply("403 Forbidden", &[("Content-Length", "0")], b""),
+                file(b"a,b\n", "\"v1\""),
+            ],
+        )
+    };
+    let host_of = |server: &Server| {
+        let host = server.url.trim_start_matches("http://");
+        host.split_once('/')
+            .map_or(host, |(host, _)| host)
+            .to_owned()
+    };
+    let save = "save it to ~/.config/fetchloom/credentials.json? [y/N] y\n";
+    let typed = |command: &crate::support::Fetchloom, after: &str, keys: &str| {
+        crate::support::typed(&sandbox.work(), command, "", after, keys)
+    };
+    let token = Server::start("/data.csv", vec![file(b"a,b\n", "\"v1\"")])?;
+    let login = sandbox.command(&["auth", "login", &host_of(&token), "--token"]);
+    let Some((code, screen)) = typed(&login, "      token ", "t-typed\ry\r")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(screen.contains(save), "{screen}");
+    assert!(
+        screen.contains(&format!("Signed in to {} with a token", host_of(&token))),
+        "{screen}"
+    );
+    assert!(!screen.contains("t-typed"), "{screen}");
+    let output = sandbox.run(&["get", &token.url, "-o", "token.csv"])?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert!(
+        token.requests()[0].contains("authorization: bearer t-typed"),
+        "{:?}",
+        token.requests()
+    );
+    let header = gated()?;
+    let mut get = sandbox.command(&["get", &header.url, "-o", "header.csv"]);
+    get.env("FETCHLOOM_ACCESSIBLE", "1");
+    let keys = "4\rX-Lab-Key\rh-typed\ry\r";
+    let Some((code, screen)) = typed(&get, "or q to cancel: ", keys)? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(
+        screen.contains("    4 header   a key the site sends in a header of its own\n"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains(&format!(
+            "Signed in to {} with the X-Lab-Key header",
+            host_of(&header)
+        )),
+        "{screen}"
+    );
+    assert!(!screen.contains("h-typed"), "{screen}");
+    assert!(!screen.contains('\u{1b}'), "{screen:?}");
+    let browser = gated()?;
+    firefox_profile(&sandbox, &[("session", "127.0.0.1", 4_000_000_000_000, "")])?;
+    let get = sandbox.command(&["get", &browser.url, "-o", "browser.csv"]);
+    let asked = format!("sign in to {} with", host_of(&browser));
+    let Some((code, screen)) = typed(&get, &asked, "1firefox\ry\r")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(
+        screen.contains(&format!(
+            "Signed in to {} with 1 cookie from firefox",
+            host_of(&browser)
+        )),
+        "{screen}"
+    );
+    for (server, carried) in [
+        (&header, "x-lab-key: h-typed"),
+        (&browser, "cookie: session=session-value"),
+    ] {
+        let heads = server.requests();
+        assert!(!heads[0].contains(carried), "{heads:?}");
+        assert!(
+            heads.get(1).is_some_and(|head| head.contains(carried)),
+            "{carried}: {heads:?}"
+        );
+    }
+    let nothing = gated()?;
+    let login = sandbox.command(&["auth", "login", &host_of(&nothing), "--token"]);
+    let Some((code, screen)) = typed(&login, "      token ", "\r\r\r")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(1), "{screen}");
+    assert!(
+        screen.contains(&format!(
+            "  Cancelled signing in to {}, so nothing changed\n",
+            host_of(&nothing)
+        )),
+        "{screen}"
+    );
+    Ok(())
+}
+
+/// a website's sign-in at a terminal asks before it saves in fetchloom's own file and before it
+/// replaces what is saved: a no keeps what was there, a yes saves, and --yes answers both unasked.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_site_sign_in_asks_before_saving_or_replacing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    let login = sandbox.command(&["auth", "login", &host, "--token"]);
+    let typed = |command: &crate::support::Fetchloom, after: &str, keys: &str| {
+        crate::support::typed(&sandbox.work(), command, "", after, keys)
+    };
+    let fetched = || -> Result {
+        let link = format!("{}/data.csv", site.url);
+        let output = sandbox.run(&["get", &link, "-o", "data.csv", "--force"])?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        Ok(())
+    };
+    let cancelled = format!("  Cancelled signing in to {host}, so nothing changed\n");
+    let replace = "replace it? [y/N]";
+    for (command, after, keys, code) in [
+        (&login, "      token ", "t-one\rn\r", 1),
+        (&login, "      token ", "t-one\ry\r", 0),
+        (&login, replace, "n\r", 1),
+        (&login, replace, "y\rt-two\ry\r", 0),
+    ] {
+        let Some((exit, screen)) = typed(command, after, keys)? else {
+            return Ok(());
+        };
+        assert_eq!(exit, Some(code), "{keys:?}: {screen}");
+        assert_eq!(screen.contains(&cancelled), code == 1, "{keys:?}: {screen}");
+        fetched()?;
+    }
+    let told = sandbox.command(&["auth", "login", &host, "--token", "--yes"]);
+    let Some((code, screen)) = typed(&told, "      token ", "t-three\r")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!screen.contains("[y/N]"), "{screen}");
+    fetched()?;
+    let bearer = |token: &str| Some(format!("bearer {token}"));
+    assert_eq!(
+        heard(&site, "authorization"),
+        [
+            None,
+            bearer("t-one"),
+            bearer("t-one"),
+            bearer("t-two"),
+            bearer("t-three")
+        ]
     );
     Ok(())
 }

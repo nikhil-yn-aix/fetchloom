@@ -436,10 +436,11 @@ fn a_stopped_push_says_it_copied_nothing_of_its_plan() -> Result {
     Ok(())
 }
 
-/// the question at a terminal names the data and who can read the mirror.
+/// the question at a terminal names the data and who can read the mirror: a no pushes nothing,
+/// and a yes or --yes pushes.
 #[cfg(target_os = "linux")]
 #[test]
-fn no_at_the_question_pushes_nothing() -> Result {
+fn a_push_that_asks_goes_only_on_a_yes() -> Result {
     let sandbox = Sandbox::new()?;
     project(&sandbox)?;
     access(&sandbox, &[("iris", "terms"), ("dataset", "public")])?;
@@ -455,6 +456,22 @@ fn no_at_the_question_pushes_nothing() -> Result {
     assert!(screen.contains("iris needs accepted terms"), "{screen}");
     assert!(screen.contains("Cancelled"), "{screen}");
     assert!(!root.exists());
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &command, "", "push it anyway?", "y\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(root.exists(), "{screen}");
+    let again = sandbox.work().join("again");
+    let mut told = sandbox.command(&["push", "--yes", "--to"]);
+    told.arg(&again);
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &told, "", "", "")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!screen.contains("push it anyway?"), "{screen}");
+    assert!(again.exists(), "{screen}");
     Ok(())
 }
 

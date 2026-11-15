@@ -2366,16 +2366,21 @@ fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {
     Ok(())
 }
 
-/// a terminal's question names the cache folder as the error without a terminal does.
+/// a terminal's question names the cache folder as the error without a terminal does; a yes or
+/// --yes downloads all the same, as on a disk that compresses what it stores.
 #[cfg(target_os = "linux")]
 #[test]
 fn the_question_about_room_names_the_cache_folder() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(&[b'x'; 2048], "\"v1\"")])?;
-    let mut command = sandbox.command(&["get", &server.url]);
-    command.env("FETCHLOOM_TEST_FREE", "1000");
+    let body = [b'x'; 2048];
+    let server = Server::start(PATH, (0..3).map(|_| file(&body, "\"v1\"")).collect())?;
+    let command = |args: &[&str]| {
+        let mut command = sandbox.command(&[&["get", &server.url], args].concat());
+        command.env("FETCHLOOM_TEST_FREE", "1000");
+        command
+    };
     let Some((exit, screen)) =
-        crate::support::typed(&sandbox.work(), &command, "", "go on anyway?", "n\r")?
+        crate::support::typed(&sandbox.work(), &command(&[]), "", "go on anyway?", "n\r")?
     else {
         return Ok(());
     };
@@ -2385,6 +2390,25 @@ fn the_question_about_room_names_the_cache_folder() -> Result {
         sandbox.cache().display()
     );
     assert!(screen.contains(&asked), "{screen}");
+    assert!(!sandbox.work().join("iris.csv").exists(), "{screen}");
+    for (args, keys, name) in [
+        (&["-o", "yes.csv"][..], "y\r", "yes.csv"),
+        (&["-o", "told.csv", "--yes"][..], "", "told.csv"),
+    ] {
+        let after = if keys.is_empty() { "" } else { "go on anyway?" };
+        let Some((exit, screen)) =
+            crate::support::typed(&sandbox.work(), &command(args), "", after, keys)?
+        else {
+            return Ok(());
+        };
+        assert_eq!(exit, Some(0), "{args:?}: {screen}");
+        assert_eq!(
+            screen.contains("go on anyway?"),
+            !keys.is_empty(),
+            "{screen}"
+        );
+        assert_eq!(fs::read(sandbox.work().join(name))?, body, "{screen}");
+    }
     Ok(())
 }
 

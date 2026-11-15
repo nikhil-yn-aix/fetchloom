@@ -195,7 +195,8 @@ fn removing_an_import_needs_a_yes() -> Result {
     Ok(())
 }
 
-/// at a terminal the removal of an import asks first: a no changes nothing, and a yes removes it.
+/// at a terminal the removal of an import asks first: a no changes nothing, and a yes or --yes
+/// removes it.
 #[cfg(target_os = "linux")]
 #[test]
 fn removing_an_import_asks_at_a_terminal() -> Result {
@@ -225,6 +226,16 @@ fn removing_an_import_asks_at_a_terminal() -> Result {
         return Ok(());
     };
     assert_eq!(code, Some(0), "{screen}");
+    assert!(!work.join("data/precious").exists(), "{screen}");
+    // --yes answers it unasked
+    let added = sandbox.run(&["add", "../precious"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let told = sandbox.command(&["remove", "precious", "--yes"]);
+    let Some((code, screen)) = crate::support::typed(&work, &told, "", "", "")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!screen.contains(asked), "{screen}");
     assert!(!work.join("data/precious").exists(), "{screen}");
     Ok(())
 }

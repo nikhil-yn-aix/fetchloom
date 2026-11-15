@@ -523,6 +523,12 @@ fn answered_no() -> Error {
     Error::new(Kind::Unconfirmed, "answered no").cancelled("the question")
 }
 
+/// the error once a prompt got nothing three times, which cancels the question as a no does: a
+/// person who stops pasting sends no ctrl-c.
+fn nothing_pasted() -> Error {
+    Error::new(Kind::Unconfirmed, "nothing was pasted").cancelled("the question")
+}
+
 /// the error for a key, or a login's username and password, the source refused.
 fn refused(account: &Account) -> Error {
     let (secret, help) = match account.secret() {
@@ -557,24 +563,23 @@ fn guide(context: &Context, account: &Account) {
 
 fn ask(context: &Context, account: &Account) -> Result<(String, Option<String>), Error> {
     let output = &context.output;
-    let stopped = || Error::new(Kind::Interrupted, "stopped signing in");
     match account.secret() {
         Secret::Password => {
             let login = output
                 .ask_text("username", false)?
                 .filter(|text| !text.is_empty())
-                .ok_or_else(stopped)?;
+                .ok_or_else(nothing_pasted)?;
             let password = output
                 .ask_text("password", true)?
                 .filter(|text| !text.trim().is_empty())
-                .ok_or_else(stopped)?;
+                .ok_or_else(nothing_pasted)?;
             Ok((password, Some(login)))
         }
         Secret::Token => {
             let pasted = output
                 .ask_text("key", true)?
                 .filter(|text| !text.is_empty())
-                .ok_or_else(stopped)?;
+                .ok_or_else(nothing_pasted)?;
             Ok(token_from(account, &pasted))
         }
     }

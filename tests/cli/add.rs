@@ -1055,6 +1055,36 @@ fn a_cancel_at_a_question_is_no_error() -> Result {
     Ok(())
 }
 
+/// a yes at the home folder's question, or --yes, starts the project there all the same.
+#[cfg(all(target_os = "linux", debug_assertions))]
+#[test]
+fn a_yes_starts_a_project_in_the_home_folder() -> Result {
+    for (flag, keys) in [(None, "y\r"), (Some("--yes"), "")] {
+        let sandbox = Sandbox::new()?;
+        let home = sandbox.folder("home")?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+        let mut args = vec!["add", server.url.as_str()];
+        args.extend(flag);
+        let asked = sandbox.command(&args);
+        let after = if keys.is_empty() {
+            ""
+        } else {
+            "start one anyway?"
+        };
+        let Some((code, screen)) = crate::support::typed(&home, &asked, "", after, keys)? else {
+            return Ok(());
+        };
+        assert_eq!(code, Some(0), "{flag:?}: {screen}");
+        assert_eq!(
+            screen.contains("start one anyway?"),
+            flag.is_none(),
+            "{screen}"
+        );
+        assert!(home.join("data.toml").is_file(), "{flag:?}: {screen}");
+    }
+    Ok(())
+}
+
 /// with `FETCHLOOM_ACCESSIBLE=1` the list is drawn once, numbered and free of cursor escapes; a
 /// number out of range asks again, and q cancels as at the picker.
 #[cfg(all(target_os = "linux", debug_assertions))]
@@ -1087,6 +1117,56 @@ fn an_accessible_terminal_picks_a_dataset_by_its_number() -> Result {
         "{screen}"
     );
     assert_eq!(listed(&sandbox.work())?, Vec::<String>::new(), "{screen}");
+    Ok(())
+}
+
+/// at the drawn list, the arrow keys move to a match and enter takes it, and a digit takes its row
+/// at once, the rows as the numbered list gives them.
+#[cfg(all(target_os = "linux", debug_assertions))]
+#[test]
+fn the_picker_takes_a_match_by_the_arrow_keys_or_its_number() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut command = sandbox.command(&["add", "iris", "--dry-run"]);
+    // a choice's dry run asks its catalog again, so each answers more than once a run
+    let _catalogs = searched(&mut command, 8)?;
+    let mut numbered = sandbox.command(&["add", "iris", "--dry-run"]);
+    numbered.env("FETCHLOOM_ACCESSIBLE", "1");
+    for (name, value) in command.get_envs() {
+        if let Some(value) = value.filter(|_| name.to_string_lossy().ends_with("_API")) {
+            numbered.env(name, value);
+        }
+    }
+    let asked = "or q to cancel: ";
+    let Some((_, screen)) = crate::support::typed(&sandbox.work(), &numbered, "", asked, "q\r")?
+    else {
+        return Ok(());
+    };
+    let row = |number: usize| {
+        screen
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("    {number} ")))
+            .and_then(|row| row.split_whitespace().next())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("no row {number}: {screen}"))
+    };
+    for (keys, number) in [("\u{1b}[B\u{1b}[B\r", 3), ("2", 2)] {
+        let Some((code, chosen)) = crate::support::typed(
+            &sandbox.work(),
+            &command,
+            "rows 40 cols 100",
+            "which one?",
+            keys,
+        )?
+        else {
+            return Ok(());
+        };
+        assert_ne!(code, Some(2), "{keys:?}: {chosen}");
+        assert!(
+            chosen.contains(&format!("  Chose {}\n", row(number)?)),
+            "{keys:?}: {chosen}"
+        );
+    }
+    assert_eq!(listed(&sandbox.work())?, Vec::<String>::new());
     Ok(())
 }
 

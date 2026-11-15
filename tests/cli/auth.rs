@@ -496,6 +496,65 @@ fn a_key_typed_for_with_token_at_a_terminal_stays_hidden() -> Result {
     Ok(())
 }
 
+/// a key typed at the terminal that the source refuses is never saved, never asked about saving
+/// and never shown.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_key_typed_at_a_terminal_that_the_source_refuses_is_never_saved() -> Result {
+    let sandbox = Sandbox::new()?;
+    let refusing = Server::start("/", vec![reply("401 Unauthorized", &[], b"{}")])?;
+    let mut login = sandbox.command(&["auth", "login", "hf"]);
+    login.env("FETCHLOOM_TEST_HF_API", &refusing.url);
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &login,
+        "",
+        "        key ",
+        "hf_wrong1234567890\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(40), "{screen}");
+    assert!(
+        screen.contains("error: hugging face did not accept this key"),
+        "{screen}"
+    );
+    assert!(!screen.contains("hf_wrong1234567890"), "{screen}");
+    assert!(!screen.contains("[Y/n]"), "{screen}");
+    assert!(
+        refusing.requests()[0].starts_with("get /api/whoami-v2 "),
+        "{screen}"
+    );
+    assert!(!home(&sandbox).join(".cache/huggingface/token").exists());
+    Ok(())
+}
+
+/// ctrl-c at the key's prompt, or enter three times with nothing pasted, cancels the sign-in:
+/// one line says so, nothing is saved, and only ctrl-c exits as a stop does.
+#[cfg(target_os = "linux")]
+#[test]
+fn ctrl_c_or_no_key_at_the_prompt_cancels_the_sign_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let login = sandbox.command(&["auth", "login", "hf", "--offline"]);
+    for (keys, code) in [("\u{3}", 130), ("\r\r\r", 1)] {
+        // -isig lets ctrl-c reach the prompt as the key it reads, whenever it is typed
+        let Some((exit, screen)) =
+            crate::support::typed(&sandbox.work(), &login, "-isig", "        key ", keys)?
+        else {
+            return Ok(());
+        };
+        assert_eq!(exit, Some(code), "{keys:?}: {screen}");
+        assert!(
+            screen.contains("  Cancelled signing in to hugging face, so nothing changed\n"),
+            "{keys:?}: {screen}"
+        );
+        assert!(!screen.contains("error:"), "{keys:?}: {screen}");
+        assert!(!home(&sandbox).join(".cache/huggingface/token").exists());
+    }
+    Ok(())
+}
+
 /// the questions are saving the key, replacing one and removing a key other tools read; one line
 /// says what was cancelled, and the exit code is 1, as for any no.
 #[cfg(target_os = "linux")]
@@ -547,6 +606,60 @@ fn a_no_while_signing_in_or_out_is_a_cancel_that_changes_nothing() -> Result {
         "{screen}"
     );
     assert_eq!(std::fs::read_to_string(&token)?, "hf_old\n");
+    Ok(())
+}
+
+/// a yes replaces a saved key and removes one other tools read, and --yes answers both unasked.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_yes_while_signing_in_or_out_replaces_or_removes_the_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let token = home(&sandbox).join(".cache/huggingface/token");
+    std::fs::create_dir_all(token.parent().ok_or("no folder")?)?;
+    std::fs::write(&token, "hf_old\n")?;
+    let login = sandbox.command(&["auth", "login", "hf", "--offline"]);
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &login,
+        "",
+        "replace it?",
+        "y\rhf_new1234567890\r\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert_eq!(std::fs::read_to_string(&token)?, "hf_new1234567890\n");
+    let told = sandbox.command(&["auth", "login", "hf", "--offline", "--yes"]);
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &told,
+        "",
+        "        key ",
+        "hf_told1234567890\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!screen.contains("replace it?"), "{screen}");
+    assert_eq!(std::fs::read_to_string(&token)?, "hf_told1234567890\n");
+    let logout = sandbox.command(&["auth", "logout", "hf"]);
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &logout, "", "remove it from", "y\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!token.exists(), "{screen}");
+    std::fs::write(&token, "hf_old\n")?;
+    let told = sandbox.command(&["auth", "logout", "hf", "--yes"]);
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &told, "", "", "")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(!screen.contains("remove it from"), "{screen}");
+    assert!(!token.exists(), "{screen}");
     Ok(())
 }
 
