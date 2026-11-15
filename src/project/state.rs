@@ -5,7 +5,7 @@
 //! its records come in path order, in blocks of about [`BLOCK`] bytes indexed at its end, so a
 //! command that names a dataset reads only the blocks that can hold its folder's paths.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::Metadata;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::ops::Range;
@@ -49,6 +49,10 @@ pub(crate) struct State {
     /// `fetchloom build --accept` pins it, a build pins another or data.toml drops the recipe.
     #[serde(default)]
     pub(crate) candidates: BTreeMap<String, Candidate>,
+    /// the datasets `fetchloom drop` freed on this machine, which a plain sync leaves out until a
+    /// command that names one brings it back.
+    #[serde(default)]
+    pub(crate) dropped: BTreeSet<String>,
 }
 
 /// a rebuild of a recipe that made other files than data.lock pins for the same key. its files are
@@ -248,6 +252,10 @@ impl State {
             out.extend_from_slice(br#","candidates":"#);
             serde_json::to_writer(&mut *out, &self.candidates)?;
         }
+        if !self.dropped.is_empty() {
+            out.extend_from_slice(br#","dropped":"#);
+            serde_json::to_writer(&mut *out, &self.dropped)?;
+        }
         out.extend_from_slice(br#","blocks":"#);
         serde_json::to_writer(&mut *out, &blocks)?;
         out.push(b'}');
@@ -278,6 +286,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         use serde::de::Error;
         let mut state = State::default();
         let (mut version, mut files, mut synced, mut candidates) = (None, false, false, false);
+        let mut dropped = false;
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -292,6 +301,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "candidates" => {
                     state.candidates = map.next_value()?;
                     std::mem::replace(&mut candidates, true)
+                }
+                "dropped" => {
+                    state.dropped = map.next_value()?;
+                    std::mem::replace(&mut dropped, true)
                 }
                 _ => {
                     map.next_value::<serde::de::IgnoredAny>()?;
@@ -376,13 +389,16 @@ impl serde::de::Visitor<'_> for Kept<'_> {
 /// a block of records: the path of its first record, and where its bytes start and end.
 type Block = (String, u64, u64);
 
-/// what follows the records: the settled sync, the kept rebuilds and the blocks.
+/// what follows the records: the settled sync, the kept rebuilds, the dropped datasets and the
+/// blocks.
 #[derive(Deserialize)]
 struct Tail {
     #[serde(default)]
     synced: Option<Synced>,
     #[serde(default)]
     candidates: BTreeMap<String, Candidate>,
+    #[serde(default)]
+    dropped: BTreeSet<String>,
     blocks: Vec<Block>,
 }
 
@@ -424,6 +440,7 @@ fn indexed(
     let Tail {
         synced,
         candidates,
+        dropped,
         blocks,
     } = index(reading)?;
     let mut files = BTreeMap::new();
@@ -442,6 +459,7 @@ fn indexed(
         files,
         synced,
         candidates,
+        dropped,
     })
 }
 
@@ -451,6 +469,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
     let Tail {
         synced,
         candidates,
+        dropped,
         blocks,
     } = index(reading)?;
     let mut records = Vec::new();
@@ -472,6 +491,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         files: records.into_iter().collect(),
         synced,
         candidates,
+        dropped,
     })
 }
 
@@ -928,7 +948,10 @@ mod tests {
         };
         state.candidates.insert("clean".to_owned(), kept);
         assert_eq!(State::parse(&state.render()).candidates, state.candidates);
+        state.dropped.insert("pets".to_owned());
+        assert_eq!(State::parse(&state.render()).dropped, state.dropped);
         state.candidates.clear();
+        state.dropped.clear();
         state.synced = None;
         assert!(State::parse(b"not json").files.is_empty());
         assert!(
@@ -1068,6 +1091,7 @@ mod tests {
             lock: digest::sha256(b"lock"),
             complete: true,
         });
+        state.dropped.insert("pets".to_owned());
         state
     }
 
@@ -1089,6 +1113,7 @@ mod tests {
         assert_eq!(read.files, whole.files, "{case}");
         assert_eq!(read.synced, whole.synced, "{case}");
         assert_eq!(read.candidates, whole.candidates, "{case}");
+        assert_eq!(read.dropped, whole.dropped, "{case}");
         assert_eq!(read.version, whole.version, "{case}");
     }
 
