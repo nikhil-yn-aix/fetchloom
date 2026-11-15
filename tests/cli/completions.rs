@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::support::{Result, Sandbox, command_help, text};
 
 /// each shell, a line only its script has, and the text that completes `fl` the same way for
-/// every way the shell may load the script.
+/// every way the shell may load the script, where fl runs fetchloom.
 const SHELLS: [(&str, &str, &[&str]); 5] = [
     (
         "bash",
@@ -41,11 +41,44 @@ const SHELLS: [(&str, &str, &[&str]); 5] = [
     ),
 ];
 
+/// fl as a file on PATH.
+const SHORT: &str = if cfg!(windows) { "fl.exe" } else { "fl" };
+
+/// a folder holding fl as an installer makes it, a link to fetchloom, for PATH; on windows, where
+/// a link needs rights a test may lack, the python package's starter.
+fn linked_fl(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
+    let linked = sandbox.folder("linked")?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(crate::support::executable(), linked.join(SHORT))?;
+    #[cfg(not(unix))]
+    std::fs::write(linked.join(SHORT), "from fetchloom.__main__ import main\n")?;
+    Ok(linked)
+}
+
+/// each script completes fl only where fl runs this fetchloom, as the installers' link does; a
+/// program of someone else's called fl keeps its own completions.
 #[test]
 fn completions_print_a_script_for_each_shell() -> Result {
     let sandbox = Sandbox::new()?;
+    let linked = linked_fl(&sandbox)?;
+    let other = sandbox.folder("other")?;
+    std::fs::write(other.join(SHORT), "another program")?;
     for (shell, marker, short) in SHELLS {
-        let output = sandbox.run(&["completions", shell])?;
+        let elsewhere = sandbox
+            .command(&["completions", shell])
+            .env("PATH", &other)
+            .output()?;
+        let script = text(&elsewhere.stdout)?;
+        for line in short {
+            assert!(
+                !script.contains(line),
+                "{shell} completes another fl: {line}"
+            );
+        }
+        let output = sandbox
+            .command(&["completions", shell])
+            .env("PATH", &linked)
+            .output()?;
         assert!(
             output.status.success(),
             "{shell}: {}",
@@ -146,7 +179,11 @@ fn completions_have_their_own_help() -> Result {
 fn bash_loads_the_script() -> Result {
     let sandbox = Sandbox::new()?;
     let script = sandbox.folder("scripts")?.join("fetchloom.bash");
-    std::fs::write(&script, sandbox.run(&["completions", "bash"])?.stdout)?;
+    let printed = sandbox
+        .command(&["completions", "bash"])
+        .env("PATH", linked_fl(&sandbox)?)
+        .output()?;
+    std::fs::write(&script, printed.stdout)?;
     let complete = r#". "$1" && complete -p fetchloom && spec=$(complete -p fl) && echo "$spec" &&
         function=${spec#*-F } && function=${function%% *} &&
         COMP_WORDS=(fl ca) COMP_CWORD=1 COMP_LINE="fl ca" COMP_POINT=5 &&

@@ -209,6 +209,8 @@ on disk: nothing";
   fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
   fetchloom completions powershell | Out-String | Invoke-Expression
 
+the script completes fl too, the short name the installers make, when fl runs this fetchloom.
+
 on disk: nothing. it prints the script on stdout, for a file your shell loads";
 }
 

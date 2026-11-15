@@ -27,7 +27,9 @@ pub(super) fn print(context: &Context, asked: &args::Completions, started: Insta
             "run `fetchloom completions {shell}` without --json"
         )))
     } else {
-        write(&script(shell))
+        let program = std::env::current_exe().ok();
+        let short = short_name_runs(std::env::var_os("PATH").as_deref(), program.as_deref());
+        write(&script(shell, short))
     };
     finish(context, Some("completions"), outcome, started)
 }
@@ -254,13 +256,43 @@ fn takes_names(arg: &clap::Arg) -> bool {
             .is_some_and(|names| names.iter().any(|name| name == "name"))
 }
 
-/// the completion script for `shell`, for `fetchloom` on PATH and `fl`, the short name installers
-/// make for it, asking fetchloom for dataset names where they go.
-pub(super) fn script(shell: Shell) -> Vec<u8> {
+/// the completion script for `shell`, for `fetchloom` on PATH and with `short` for `fl` too,
+/// asking fetchloom for dataset names where they go.
+pub(super) fn script(shell: Shell, short: bool) -> Vec<u8> {
     let mut script = Vec::new();
     clap_complete::generate(shell, &mut completed(), "fetchloom", &mut script);
     let named = with_names(shell, &String::from_utf8_lossy(&script));
-    with_short_name(shell, &named).into_bytes()
+    if short {
+        with_short_name(shell, &named).into_bytes()
+    } else {
+        named.into_bytes()
+    }
+}
+
+/// whether `fl`, the short name the installers and the python package make for fetchloom, runs
+/// `program` here: the first `fl` on `path` is it through a link, or the python package's
+/// starter. another program called fl keeps its own completions.
+fn short_name_runs(path: Option<&std::ffi::OsStr>, program: Option<&std::path::Path>) -> bool {
+    let (Some(path), Some(program)) = (path, program) else {
+        return false;
+    };
+    let name = if cfg!(windows) { "fl.exe" } else { "fl" };
+    let Some(found) = std::env::split_paths(path)
+        .map(|folder| folder.join(name))
+        .find(|file| file.is_file())
+    else {
+        return false;
+    };
+    same_file::is_same_file(&found, program).unwrap_or(false) || starter(&found)
+}
+
+/// whether `file` is the python package's starter, which names fetchloom's module: a short
+/// script, or on windows a small program with the script at its end.
+fn starter(file: &std::path::Path) -> bool {
+    const MODULE: &[u8] = b"fetchloom.__main__";
+    std::fs::metadata(file).is_ok_and(|found| found.len() <= 1 << 20)
+        && std::fs::read(file)
+            .is_ok_and(|bytes| bytes.windows(MODULE.len()).any(|window| window == MODULE))
 }
 
 /// fetchloom's command line as the scripts complete it, without the arguments only the scripts
@@ -549,6 +581,48 @@ mod tests {
         assert_eq!(dataset_names("[datasets.iris\n"), None);
     }
 
+    /// fl is completed only where it runs fetchloom: a link to it, or the python package's
+    /// starter; someone's own fl, or none, keeps its completions.
+    #[cfg(unix)]
+    #[test]
+    fn fl_is_completed_only_where_it_runs_fetchloom() {
+        let folder = tempfile::tempdir().unwrap();
+        let program = folder.path().join("fetchloom");
+        std::fs::write(&program, "the program").unwrap();
+        let path = |name: &str| {
+            let bin = folder.path().join(name);
+            std::fs::create_dir(&bin).unwrap();
+            (bin.join("fl"), bin.into_os_string())
+        };
+        let (linked, linked_path) = path("linked");
+        std::os::unix::fs::symlink(&program, linked).unwrap();
+        let (started, started_path) = path("started");
+        let python = "#!/usr/bin/python3\nimport sys\nfrom fetchloom.__main__ import main\nsys.exit(main())\n";
+        std::fs::write(started, python).unwrap();
+        let (other, other_path) = path("other");
+        std::fs::write(other, "#!/bin/sh\necho flights\n").unwrap();
+        let (_, empty_path) = path("empty");
+        for (path, runs) in [
+            (linked_path, true),
+            (started_path, true),
+            (other_path.clone(), false),
+            (empty_path, false),
+        ] {
+            assert_eq!(
+                short_name_runs(Some(&path), Some(&program)),
+                runs,
+                "{path:?}"
+            );
+        }
+        assert!(!short_name_runs(None, Some(&program)));
+        assert!(!short_name_runs(Some(&other_path), None));
+        assert!(
+            !String::from_utf8(script(Shell::Bash, false))
+                .unwrap()
+                .contains(" fl\n")
+        );
+    }
+
     #[test]
     fn every_shell_completes_every_command() {
         for shell in [
@@ -558,7 +632,7 @@ mod tests {
             Shell::PowerShell,
             Shell::Elvish,
         ] {
-            let script = String::from_utf8(script(shell)).unwrap();
+            let script = String::from_utf8(script(shell, true)).unwrap();
             for command in ["add", "sync", "status", "gc", "verify", "completions"] {
                 assert!(script.contains(command), "{shell} lacks {command}");
             }
@@ -590,7 +664,7 @@ mod tests {
             (Shell::PowerShell, "\n$global:FetchloomStatic = {"),
             (Shell::Elvish, "var fetchloom-static = "),
         ] {
-            let script = String::from_utf8(script(shell)).unwrap();
+            let script = String::from_utf8(script(shell, true)).unwrap();
             assert!(script.contains(kept), "{shell} lost its own completer");
         }
     }
