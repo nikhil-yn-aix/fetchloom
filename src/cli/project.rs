@@ -190,17 +190,27 @@ pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -
 }
 
 /// the project files a person commits: data.lock.d too, if any, since a clone without it cannot
-/// read data.lock, and in a git repository the .gitignore that keeps the data folder out.
+/// read data.lock, or once a run removed its last list git has, so the commit takes that away too;
+/// and in a git repository the .gitignore that keeps the data folder out.
 pub(super) fn committed(project: &Project) -> &'static str {
-    let lists = project.root.join(lock::lists::FOLDER).is_dir();
-    let ignore =
-        Project::repository(&project.root).is_some() && project.root.join(".gitignore").is_file();
+    let repository = Project::repository(&project.root).is_some();
+    let lists = project.root.join(lock::lists::FOLDER).is_dir()
+        || (repository && lists_gone(&project.root));
+    let ignore = repository && project.root.join(".gitignore").is_file();
     match (lists, ignore) {
         (true, true) => "data.toml, data.lock, data.lock.d and .gitignore",
         (true, false) => "data.toml, data.lock and data.lock.d",
         (false, true) => "data.toml, data.lock and .gitignore",
         (false, false) => "data.toml and data.lock",
     }
+}
+
+/// whether git has lists in data.lock.d, which is gone from the project at `root`.
+fn lists_gone(root: &Path) -> bool {
+    std::env::var_os("PATH")
+        .and_then(|path| git::find(Some(&path), root))
+        .and_then(|program| git::tracked(&program, root, lock::lists::FOLDER))
+        .is_some_and(|tracked| !tracked.is_empty())
 }
 
 /// the most files of recipe code a warning names in its `git add`; `-v` names each one.

@@ -1016,6 +1016,36 @@ fn a_new_list_git_does_not_have_is_named_at_the_end() -> Result {
     Ok(())
 }
 
+/// a removal that deletes the last list git has names data.lock.d among the files to commit,
+/// since a commit of data.toml and data.lock alone leaves the deleted list in the repository.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_removal_that_deletes_a_list_git_has_says_to_commit_data_lock_d() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let added = sandbox
+        .command(&["add", &server.url, "--as", "first"])
+        .env("FETCHLOOM_TEST_INLINE", "0")
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    crate::merge::ok(&sandbox, &["add", "."])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "first"])?;
+    let Some(told) = sandbox.on_a_terminal_running(&sandbox.command(&["remove", "first"]))? else {
+        return Ok(());
+    };
+    assert!(!sandbox.work().join("data.lock.d").exists(), "{told}");
+    let next = told.lines().last().unwrap_or_default();
+    assert!(
+        next.starts_with("  next: commit data.toml, data.lock, data.lock.d and .gitignore;"),
+        "{told}"
+    );
+    Ok(())
+}
+
 /// the source serves other bytes now, which a relock that asked it would pin. a sync of one name,
 /// as `path` runs, changes no other entry, so it copies the pin; the next lock drops the old one.
 #[test]
