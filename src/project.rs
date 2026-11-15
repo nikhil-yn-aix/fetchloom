@@ -253,21 +253,10 @@ impl Project {
     /// data.toml's text, not yet parsed.
     pub(crate) fn manifest_text(&self) -> Result<String, Error> {
         let path = self.manifest_path();
-        // a folder or a pipe there would fail the read, or never end it
-        if let Ok(found) = fs::metadata(&path)
-            && !found.is_file()
-        {
-            let what = if found.is_dir() {
-                "a folder"
-            } else {
-                "a special file"
-            };
-            return Err(Error::new(
-                Kind::LocalIo,
-                format!("{} is {what}, not a file", path.display()),
-            )
-            .help("move it aside, then put the project's data.toml file there, or run the command in another folder"));
-        }
+        refuse_unreadable(
+            &path,
+            "move it aside, then put the project's data.toml file there, or run the command in another folder",
+        )?;
         fs::read_to_string(&path).map_err(|err| {
             if err.kind() == io::ErrorKind::InvalidData {
                 Error::new(Kind::ProjectInvalid, "data.toml is not UTF-8 text")
@@ -309,7 +298,12 @@ impl Project {
         read: impl FnOnce(&str) -> Result<Lock, Error>,
     ) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
-        match fs::read_to_string(self.root.join(lock::FILE)) {
+        let path = self.root.join(lock::FILE);
+        refuse_unreadable(
+            &path,
+            "move it aside, then restore data.lock from git, or run `fetchloom lock`, which resolves every dataset again",
+        )?;
+        match fs::read_to_string(&path) {
             Ok(text) => {
                 span.record("bytes", text.len());
                 let lock =
@@ -848,6 +842,27 @@ impl Project {
 /// a submodule or worktree has.
 fn is_repository(folder: &Path) -> bool {
     folder.join(".git").exists()
+}
+
+/// refuses the project file at `path` when it is a folder or a special file, as a link a clone
+/// holds to a device or a pipe, which a read would fail on or never finish. `help` says what to do.
+fn refuse_unreadable(path: &Path, help: &str) -> Result<(), Error> {
+    let Ok(found) = fs::metadata(path) else {
+        return Ok(());
+    };
+    if found.is_file() {
+        return Ok(());
+    }
+    let what = if found.is_dir() {
+        "a folder"
+    } else {
+        "a special file"
+    };
+    Err(Error::new(
+        Kind::LocalIo,
+        format!("{} is {what}, not a file", path.display()),
+    )
+    .help(help))
 }
 
 /// the error for project file `name` when its `text` holds git's conflict lines at a line start,
@@ -1795,6 +1810,28 @@ mod tests {
             mistake.message.starts_with("data.toml is not valid TOML"),
             "{}",
             mistake.message
+        );
+    }
+
+    /// data.lock gets the check data.toml gets: a folder or a special file there, as a link a
+    /// clone holds to a device or a pipe, is refused before a read that would fail or never end.
+    #[cfg(unix)]
+    #[test]
+    fn a_data_lock_that_is_no_file_is_refused_unread() {
+        let (_dir, project) = project(&[("data.toml", "")]);
+        let path = project.root.join("data.lock");
+        std::os::unix::fs::symlink("/dev/null", &path).unwrap();
+        let error = project.lock().unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo);
+        assert_eq!(
+            error.message,
+            format!("{} is a special file, not a file", path.display())
+        );
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(
+            project.lock().unwrap_err().message,
+            format!("{} is a folder, not a file", path.display())
         );
     }
 

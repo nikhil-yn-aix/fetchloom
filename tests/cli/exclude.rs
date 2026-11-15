@@ -718,15 +718,14 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     Ok(())
 }
 
-/// data.lock is a fifo the test fills only once exclude heard the ctrl-c, so the stop always
-/// lands after exclude began and before it plans.
+/// a data.lock that is a pipe, as a clone can hold, is refused before exclude plans, never read
+/// and waited on: nothing changes. a stop while exclude plans is held to the same by
+/// `planning_ends_at_the_first_look_after_a_stop`.
 #[cfg(unix)]
 #[test]
-fn a_stop_while_exclude_plans_changes_nothing_and_claims_nothing() -> Result {
-    use std::io::Write as _;
+fn a_data_lock_that_is_a_pipe_is_refused_before_exclude_plans() -> Result {
     use std::os::unix::fs::FileTypeExt as _;
 
-    use crate::support::Running;
     let sandbox = Sandbox::new()?;
     let folder = tree(&sandbox)?;
     let work = sandbox.work();
@@ -748,25 +747,18 @@ fn a_stop_while_exclude_plans_changes_nothing_and_claims_nothing() -> Result {
             .status()?
             .success()
     );
-    let mut command = sandbox.command(&["exclude", "data/tree/sub"]);
-    let running = Running::start(command.stdin(std::process::Stdio::null()))?;
-    // opening the fifo waits for exclude to open it, long after it listens for ctrl-c
-    let (opened, open) = std::sync::mpsc::channel();
-    let fifo = lock_path.clone();
-    std::thread::spawn(move || {
-        let _ = opened.send(fs::OpenOptions::new().write(true).open(fifo));
-    });
-    let mut writer = open.recv_timeout(std::time::Duration::from_secs(30))??;
-    running.interrupt()?;
-    running.wait_for("Stopping")?;
-    writer.write_all(&lock)?;
-    drop(writer);
-    let output = running.finish()?;
+    let output = sandbox
+        .command(&["exclude", "data/tree/sub"])
+        .stdin(std::process::Stdio::null())
+        .output()?;
     let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(130), "{stderr}");
-    assert_eq!(
-        stderr,
-        "   Stopping (press ctrl-c again to quit at once)\n    Stopped at your request, so nothing changed\n"
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "{} is a special file, not a file",
+            lock_path.display()
+        )),
+        "{stderr}"
     );
     assert!(fs::symlink_metadata(&lock_path)?.file_type().is_fifo());
     assert_eq!(fs::read(work.join("data.toml"))?, manifest);
