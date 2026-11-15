@@ -256,7 +256,7 @@ fn refused(path: &Path) -> io::Error {
 /// the folder `below` `root`, opened folder by folder without following a link, making a missing
 /// one when `make` says so.
 #[cfg(unix)]
-fn walk(root: &Path, below: &Path, make: bool) -> io::Result<File> {
+pub(super) fn walk(root: &Path, below: &Path, make: bool) -> io::Result<File> {
     use rustix::fs::{Mode, OFlags};
     use rustix::io::Errno;
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;

@@ -369,17 +369,12 @@ fn owned(entry: &fs::DirEntry) -> bool {
 /// nowhere else.
 #[cfg(unix)]
 fn clear_below(root: &Path, folder: &Path) -> io::Result<()> {
-    use rustix::fs::{Mode, OFlags};
     let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "a folder outside the cache");
     let below = folder.strip_prefix(root).map_err(|_| invalid())?;
-    let mut parts: Vec<&std::ffi::OsStr> = below.iter().collect();
-    let name = parts.pop().ok_or_else(invalid)?;
-    let mut parent = File::open(root)?;
-    for part in parts {
-        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        parent = File::from(rustix::fs::openat(&parent, part, flags, Mode::empty())?);
-    }
-    clear_at(&parent, name)
+    let (Some(parent), Some(name)) = (below.parent(), below.file_name()) else {
+        return Err(invalid());
+    };
+    clear_at(&super::folder::walk(root, parent, false)?, name)
 }
 
 /// [`clear_tree`] for `folder`, with the folders from `root` down to it held so none is a link or
