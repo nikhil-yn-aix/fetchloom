@@ -434,6 +434,59 @@ enum Run {
 
 pub(crate) type Listener<'a> = &'a (dyn Fn(Event) -> Result<(), Error> + Sync);
 
+/// the least a body moves while the timeout passes waiting on its server, so one that sends a
+/// byte now and then counts as stalled, as curl's --speed-limit does, at a pace any working link
+/// beats.
+const LEAST_MOVED: u64 = 1024;
+
+/// what a body moved over the time its server took to send it, judged in windows as long as the
+/// timeout, so a body that trickles in fails a try as one that goes silent does. time this
+/// machine spends, on the rate cap, the disk or a question, is no time the server took.
+#[derive(Default)]
+pub(super) struct Trickle {
+    waited: Duration,
+    moved: u64,
+}
+
+impl Trickle {
+    /// counts `bytes` that took the server `waited` to send. a window as long as `timeout` that
+    /// moved less than [`LEAST_MOVED`] gives back what it moved. a wait as long as the timeout
+    /// itself starts a new window: only a process stopped past its deadline, as a sleeping
+    /// laptop's is, finds bytes after one, and they are no trickle.
+    pub(super) fn heard(
+        &mut self,
+        bytes: u64,
+        waited: Duration,
+        timeout: Duration,
+    ) -> Result<(), u64> {
+        if waited >= timeout {
+            *self = Trickle::default();
+            return Ok(());
+        }
+        self.waited += waited;
+        self.moved = self.moved.saturating_add(bytes);
+        if self.waited < timeout {
+            return Ok(());
+        }
+        let moved = std::mem::take(self).moved;
+        if moved < LEAST_MOVED {
+            Err(moved)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// a body that moved only `moved` bytes from `url` while the `timeout` passed.
+pub(super) fn trickled(url: &Url, moved: u64, timeout: Duration) -> Failure {
+    failure::transient(format!(
+        "{} sent only {} in {} s",
+        host(url),
+        units::size(moved),
+        timeout.as_secs()
+    ))
+}
+
 /// how much a stream gathers before the writer thread takes it. a 16 KiB chunk at a time woke
 /// the writer for each, which cost more than the download on a fast link.
 const BATCH: usize = 256 * 1024;
@@ -1232,7 +1285,9 @@ impl Net {
         tokio::pin!(quiet);
         let stopped = self.stop.asked();
         tokio::pin!(stopped);
+        let (mut trickle, mut asked) = (Trickle::default(), None);
         loop {
+            let waiting_since = *asked.get_or_insert_with(tokio::time::Instant::now);
             let next = tokio::select! {
                 next = response.chunk() => next,
                 () = &mut quiet => {
@@ -1271,10 +1326,14 @@ impl Net {
                 Err(err) => break Err(failure::broke(url, "the file", &err)),
                 Ok(None) => break Ok(None),
                 Ok(Some(chunk)) => {
+                    asked = None;
+                    let length = chunk.len() as u64;
+                    if let Err(moved) = trickle.heard(length, waiting_since.elapsed(), self.idle) {
+                        break Err(trickled(url, moved, self.idle));
+                    }
                     if let Err(err) = self.throttle(url, chunk.len()).await {
                         break Err(err);
                     }
-                    let length = chunk.len() as u64;
                     Work::add(&self.work.bytes_down, length);
                     (reached, moved) = (reached + length, moved + length);
                     if let Err(err) = on(Event::Bytes(length)) {

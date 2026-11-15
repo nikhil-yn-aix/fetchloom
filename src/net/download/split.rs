@@ -615,7 +615,9 @@ impl Net {
     ) -> Result<(), Ended> {
         let url = shared.job.from;
         let broke = |reason: String| Ended::Failed(failure::transient(reason));
+        let mut trickle = super::Trickle::default();
         while shared.board().left(id) > 0 {
+            let since = tokio::time::Instant::now();
             let next = tokio::select! {
                 next = tokio::time::timeout(self.idle, response.chunk()) => next,
                 () = self.stop.asked() => {
@@ -641,6 +643,9 @@ impl Net {
                 }
                 Ok(Ok(Some(chunk))) => chunk,
             };
+            if let Err(moved) = trickle.heard(chunk.len() as u64, since.elapsed(), self.idle) {
+                return Err(Ended::Failed(super::trickled(url, moved, self.idle)));
+            }
             self.throttle(url, chunk.len())
                 .await
                 .map_err(Ended::Failed)?;
