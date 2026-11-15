@@ -68,6 +68,7 @@ pub(super) fn listed_job(remote: &Remote, name: &str, extract: bool) -> Job {
             },
             revalidate: remote.sha256.is_none() && remote.md5.is_none(),
             unpack: extract && archive::by_name(name) == Some(Packed::Archive),
+            named: remote.named_by_server,
             ..source::fetch_plan(&remote.url)
         },
         label: remote.path.clone(),
@@ -106,6 +107,8 @@ struct Overall {
     /// first ctrl-c with only the disk left lets the run finish. `waiting` counts those not begun.
     stop: Arc<Stop>,
     waiting: AtomicUsize,
+    /// the batch is one download, which its lines call by its own name.
+    alone: bool,
 }
 
 impl Overall {
@@ -165,15 +168,25 @@ impl Overall {
             limits: limits(context),
             stop: context.stop.clone(),
             waiting: AtomicUsize::new(count),
+            alone: count == 1,
         }
     }
 
-    /// starts the plain lines, when the first download of the batch starts.
-    fn begin(&self, output: &Output) {
+    /// what the plain lines call the batch, whose lone download is called `label` now.
+    fn told_as(&self, label: &str) -> String {
+        if self.alone {
+            label.to_owned()
+        } else {
+            self.what.clone()
+        }
+    }
+
+    /// starts the plain lines, when the first download of the batch starts, as `label` now.
+    fn begin(&self, output: &Output, label: &str) {
         let (total, unknown) = self.sizes;
         self.ticker.get_or_init(|| {
             let sizes = std::iter::once(Some(total)).chain(std::iter::repeat_n(None, unknown));
-            output.ticker("Downloading", self.what.clone(), sizes)
+            output.ticker("Downloading", self.told_as(label), sizes)
         });
     }
 
@@ -402,6 +415,9 @@ struct Watch<'a> {
     arrived: AtomicBool,
     /// nanoseconds the download waited for a person to say whether it may go on.
     asked: AtomicU64,
+    /// what the progress line calls the file once its server named it, for a file that takes
+    /// that name.
+    named: Mutex<Option<String>>,
 }
 
 impl<'a> Watch<'a> {
@@ -439,7 +455,33 @@ impl<'a> Watch<'a> {
             encoded: AtomicBool::new(false),
             arrived: AtomicBool::new(false),
             asked: AtomicU64::new(0),
+            named: Mutex::new(None),
         }
+    }
+
+    /// what the download is called on its progress line: its label, or once its server named a
+    /// file that takes that name, the label with that name in place of its last part.
+    fn label(&self) -> String {
+        self.named
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| self.job.label.clone())
+    }
+
+    /// shows the name the server gave a file that takes it, in place of the label's last part.
+    fn renamed(&self, given: &str) {
+        let Some(name) = crate::name::sanitize(given).filter(|_| self.job.fetch.named) else {
+            return;
+        };
+        let label = match self.job.label.rsplit_once('/') {
+            Some((folder, _)) => format!("{folder}/{name}"),
+            None => name,
+        };
+        if let Some(bar) = self.bar.get() {
+            bar.message("Downloading", label.clone());
+        }
+        *self.named.lock().unwrap_or_else(PoisonError::into_inner) = Some(label);
     }
 
     /// the download's bar, made when it is first needed.
@@ -616,7 +658,7 @@ impl<'a> Watch<'a> {
             }
         }
         // only once a person said yes, so a no never follows a line saying the download began
-        self.overall.begin(self.output);
+        self.overall.begin(self.output, &self.label());
         if unknown {
             if let Some(total) = total
                 && !self.sized.swap(true, Ordering::Relaxed)
@@ -641,7 +683,7 @@ impl<'a> Watch<'a> {
         }
         self.restarting(resumed, resumable);
         let bar = self.bar();
-        bar.message("Downloading", self.job.label.clone());
+        bar.message("Downloading", self.label());
         bar.start(total, resumed);
         self.held.keep(resumed, resumable);
         self.count_kept(resumed);
@@ -721,6 +763,7 @@ impl<'a> Watch<'a> {
                     self.output.warn_with(Warning::DownloadWebPage, &format!("{named} came back as a web page, not a data file. the link may open a page instead of downloading"), "look for a download or raw link");
                 }
             }
+            Event::Named(ref given) => self.renamed(given),
             Event::Encoded(ref encoding) => {
                 if !compressed_by_name(label, encoding)
                     && !self.encoded.swap(true, Ordering::Relaxed)
@@ -1597,6 +1640,7 @@ mod tests {
             },
             stop: Arc::default(),
             waiting: AtomicUsize::new(0),
+            alone: false,
         }
     }
 
@@ -2232,6 +2276,55 @@ mod tests {
             "received bytes tell the rest"
         );
         assert_eq!(room_needed(Some(u64::MAX), 0, true), u64::MAX);
+    }
+
+    /// a file that takes the name its server gives, as a drive link's does, shows that name on
+    /// its progress line once the server answers, in its dataset's folder; another keeps the
+    /// name it was asked by.
+    #[test]
+    fn a_download_named_by_its_server_shows_that_name() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: true,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        ));
+        for (named, shown) in [
+            (true, "gdrive-spam/spam.txt"),
+            (false, "gdrive-spam/download"),
+        ] {
+            let job = Job {
+                fetch: Fetch {
+                    named,
+                    ..Fetch::new(Url::parse("https://drive.google.com/uc?id=0B9P1L").unwrap())
+                },
+                label: "gdrive-spam/download".to_owned(),
+                dataset: Some("gdrive-spam".to_owned()),
+                again: None,
+            };
+            let overall = Overall::new(&context, std::slice::from_ref(&job));
+            let approval = Approval::new(crate::settings::ASK_ABOVE);
+            let held = Held::default();
+            let watch = Watch::new(&job, &context.output, &overall, &approval, false, &held);
+            watch.bar();
+            watch.on(&Event::Named("spam.txt".to_owned())).unwrap();
+            watch
+                .on(&Event::Started {
+                    total: Some(5),
+                    resumed: 0,
+                    resumable: Resumable::Maybe,
+                })
+                .unwrap();
+            assert_eq!(watch.bar().told().as_deref(), Some(shown), "named: {named}");
+            assert_eq!(overall.told_as(&watch.label()), shown, "named: {named}");
+        }
     }
 
     /// a lone download's bar shows the kept bytes before the server answers, not an empty bar.

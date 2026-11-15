@@ -95,6 +95,9 @@ pub(crate) struct Fetch {
     pub(crate) mirror: bool,
     /// the person asked for the web page itself, so one is the file rather than a mistake.
     pub(crate) page: bool,
+    /// the file takes the name its server gives, as a drive link's does, so its progress line
+    /// shows that name once the server answers.
+    pub(crate) named: bool,
 }
 
 impl Fetch {
@@ -144,6 +147,7 @@ impl Fetch {
             unpack: false,
             mirror: false,
             page: false,
+            named: false,
         }
     }
 
@@ -176,6 +180,9 @@ pub(crate) enum Event {
     WebPage {
         name: Option<String>,
     },
+    /// the server named the file, by its answer's `Content-Disposition` or a redirect's, before
+    /// any byte flows.
+    Named(String),
     /// the server compressed the bytes on their way, as `Content-Encoding` names, lowercased.
     /// fetchloom keeps them as sent, since a hash published for the file matches those.
     Encoded(String),
@@ -541,6 +548,7 @@ impl Reach {
             Event::Waiting
             | Event::Kept { .. }
             | Event::WebPage { .. }
+            | Event::Named(_)
             | Event::Encoded(_)
             | Event::Arrived
             | Event::Behind(_)
@@ -636,6 +644,7 @@ impl Net {
             unpack: fetch.unpack,
             mirror: fetch.mirror,
             page: fetch.page,
+            named: fetch.named,
         };
         let bucket = super::s3::Bucket::holding(&fetch.from);
         if bucket
@@ -1483,6 +1492,9 @@ fn describe_response(
     }
     if headers::is_html(response.headers()) {
         on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
+    }
+    if let Some(given) = &name {
+        on(Event::Named(given.clone())).map_err(Failure::Final)?;
     }
     if let Some(encoding) = headers::encoding(response.headers()) {
         on(Event::Encoded(encoding)).map_err(Failure::Final)?;
