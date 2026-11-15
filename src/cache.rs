@@ -1412,7 +1412,7 @@ pub(crate) mod tests {
         for name in ["notes.txt", "unknown"] {
             fs::write(cache.root.join(name), b"leave this alone").unwrap();
         }
-        let cache = Cache::open(cache.root.clone()).unwrap();
+        let cache = Cache::open(cache.root).unwrap();
         store(&cache, b"abc");
         // finder leaves .DS_Store in any folder a person opens, objects/ too
         fs::write(cache.root.join("objects/.DS_Store"), b"finder").unwrap();

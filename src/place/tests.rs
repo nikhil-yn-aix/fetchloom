@@ -1197,7 +1197,7 @@ fn work_spread_over_threads_comes_back_in_order() {
         Vec::<u64>::new()
     );
     assert_eq!(
-        run_owned(items.clone(), Threads::default(), |item| item * 2),
+        run_owned(items, Threads::default(), |item| item * 2),
         doubled
     );
     assert_eq!(
