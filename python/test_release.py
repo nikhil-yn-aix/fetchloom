@@ -207,6 +207,30 @@ class ProvenanceDocumentation(unittest.TestCase):
         self.assertIn("not verified: check/fetchloom_0.1.0_amd64.deb\n", printed)
 
 
+class VerifyAdvice(unittest.TestCase):
+    """a bare --repo accepts an attestation any workflow of the repository made from any ref, so
+    every place that tells someone how to check an archive names the release workflow and tag."""
+
+    def test_the_installers_and_releasing_md_name_the_release_workflow_and_tag(self):
+        for path, start in [("install.sh", "gh attestation verify <archive>"), ("install.ps1", "gh attestation verify <archive>"),
+                            ("docs/dev/engineering/releasing.md", "gh attestation verify fetchloom-")]:
+            with self.subTest(path=path):
+                lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
+                first = next(number for number, line in enumerate(lines) if start in line)
+                words = []
+                for line in lines[first:]:
+                    line = line.strip().lstrip("#").strip()
+                    words += line.rstrip("\\`").split()
+                    if not line.endswith(("\\", "`")):
+                        break
+                words = words[words.index("gh"):]
+                self.assertEqual(words[words.index("--repo") + 1], "nikhil-yn-aix/fetchloom")
+                self.assertEqual(words[words.index("--signer-workflow") + 1],
+                                 "nikhil-yn-aix/fetchloom/.github/workflows/release.yml")
+                self.assertRegex(words[words.index("--source-ref") + 1], r"^refs/tags/v")
+                self.assertIn("--deny-self-hosted-runners", words)
+
+
 class GateDocumentation(unittest.TestCase):
     def test_local_gate_lists_the_linux_release_and_python_checks(self):
         required = [

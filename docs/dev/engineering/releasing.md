@@ -133,7 +133,8 @@ the checksums come from the same release as the archive, so they show a download
 ```sh
 gh release download v0.1.0 --repo nikhil-yn-aix/fetchloom --pattern 'fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz'
 gh attestation verify fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz --repo nikhil-yn-aix/fetchloom \
-    --signer-workflow nikhil-yn-aix/fetchloom/.github/workflows/release.yml --source-ref refs/tags/v0.1.0
+    --signer-workflow nikhil-yn-aix/fetchloom/.github/workflows/release.yml --source-ref refs/tags/v0.1.0 \
+    --deny-self-hosted-runners
 ```
 
 `install.sh` downloads with curl when it can, held to https and TLS 1.2 or later by `--proto =https --tlsv1.2`. otherwise it uses wget with `--https-only --secure-protocol=TLSv1_2`, the options rustup's installer passes; `--secure-protocol=TLSv1_2` makes wget speak TLS 1.2 only, and gnu wget applies `--https-only` to recursive downloads alone, so wget does not refuse a redirect to http the way curl does. busybox wget takes neither option, so the installer refuses it before any download and says to install curl: a download it cannot hold to https would let anyone on the way swap the archive and `SHA256SUMS` alike. a `FETCHLOOM_DOWNLOAD_URL` folder on this machine may be served over plain http, so neither downloader insists on https for it; an https folder is held to https as a release is.

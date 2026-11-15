@@ -12,8 +12,10 @@
 # plain http on this machine only.
 #
 # the archive is checked against the release's SHA256SUMS, which catches a broken download but
-# not a release whose files were all replaced. to check that the release workflow built the
-# archive, download it and run: gh attestation verify <archive> --repo nikhil-yn-aix/fetchloom
+# not a release whose files were all replaced. to check that release.yml built the archive from
+# the version's tag on github's own runners, download it and run:
+#   gh attestation verify <archive> --repo nikhil-yn-aix/fetchloom --source-ref refs/tags/v<version> \
+#     --signer-workflow nikhil-yn-aix/fetchloom/.github/workflows/release.yml --deny-self-hosted-runners
 
 set -eu
 
