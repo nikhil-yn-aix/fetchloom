@@ -52,6 +52,12 @@ pub(super) struct AddProject {
 }
 
 impl AddProject {
+    /// whether the add begins the project, its first pins: there was no data.lock when it read
+    /// the project, as with a hand-written data.toml or none.
+    pub(super) fn begins(&self) -> bool {
+        self.lock_text.is_none()
+    }
+
     /// reads data.toml and data.lock as the add finds them once it holds the project.
     fn read(&mut self) -> Result<(), Error> {
         if self.project.manifest_path().is_file() {
@@ -711,7 +717,7 @@ async fn add_held(
         &new_manifest,
         (&name, has_files),
         here,
-        starting,
+        (starting, adding.begins()),
         &private,
     )?;
     Ok(Report {
@@ -1291,17 +1297,18 @@ fn lock_changed_meanwhile() -> Error {
     .help("your change is kept. run the same add again; what it downloaded is in the cache")
 }
 
-/// the last lines of an add of the dataset `added`, a name and whether it has files.
+/// the last lines of an add of the dataset `added`, a name and whether it has files, in a project
+/// it is `starting`, or whose first pins it `begins`, as [`AddProject::begins`] tells.
 pub(super) fn render_add(
     work: &Loop<'_>,
     manifest: &Manifest,
     added: (&str, bool),
     here: &Path,
-    starting: bool,
+    (starting, begins): (bool, bool),
     private: &[url::Origin],
 ) -> Result<(), Error> {
     tell_started(work, starting);
-    ignore_data(work, manifest, starting)?;
+    ignore_data(work, manifest, starting || begins)?;
     tell_added(work, manifest, added, here, private);
     Ok(())
 }

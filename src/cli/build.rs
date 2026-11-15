@@ -989,7 +989,9 @@ impl<'a> Building<'a> {
             Run::planned(&seen),
         )
         .await?;
-        ignore_data(&self.work, &self.manifest, false)?;
+        // with no data.lock before it, this build begins the project, which wants the rule
+        // outside git too
+        ignore_data(&self.work, &self.manifest, self.old.is_none())?;
         let built: Vec<&str> = self
             .report
             .steps

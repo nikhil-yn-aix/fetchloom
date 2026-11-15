@@ -420,7 +420,14 @@ async fn import_new(
         .output
         .step("Imported", &format!("{name} · {told}"));
     let has_files = outcome.placed.planned.contains(name);
-    render_add(work, &manifest, (name, has_files), here, starting, &[])?;
+    render_add(
+        work,
+        &manifest,
+        (name, has_files),
+        here,
+        (starting, adding.begins()),
+        &[],
+    )?;
     Ok(Report {
         project: work.project.root.clone(),
         datasets: names.to_vec(),

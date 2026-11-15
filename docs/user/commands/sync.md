@@ -37,7 +37,7 @@ names, as data.toml gives them, limit the sync to those datasets, as [named data
 3. reuse unchanged placed files and cached files, then take what the cache lacks from files [already in place](#already-in-place) in the data folder, then from the [mirrors](../guides/mirrors.md) you named, and download the rest. in [mirror-only mode](../guides/mirrors.md#mirror-only-mode), a file no mirror holds fails the run before any download.
 4. check downloads against their pinned sizes and hashes, then place files and remove the unchanged files fetchloom placed that no dataset needs now.
 5. save the project's state and register the project with the cache.
-6. in a git repository, add the data folder to `.gitignore` if needed.
+6. add the data folder to `.gitignore` if needed: in a git repository, and outside one on the project's first sync, when there is no data.lock yet.
 
 with `--json`, `result.datasets` names the datasets whose pins changed and `result.selected` the names the sync was given, or null; [JSON output](../reference/json-output.md) has the rest. [placement](../concepts/cache-and-placement.md#placement) says how files are placed and when they are writable.
 

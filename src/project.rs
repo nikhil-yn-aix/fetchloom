@@ -818,10 +818,11 @@ impl Project {
     }
 
     /// adds the data folder to the .gitignore of the git repository the project is in, unless it is
-    /// there, and says what it found: [`Ignore::Add`] once it wrote the rule. a project `starting`
-    /// gets the rule outside git too, so a `git init` after it leaves the data out all the same.
-    pub(crate) fn ignore_in_git(&self, data_dir: &str, starting: bool) -> Result<Ignore, Error> {
-        let ignore = self.ignored_in_git(data_dir, starting)?;
+    /// there, and says what it found: [`Ignore::Add`] once it wrote the rule. a run that `begins`
+    /// the project, its first pins, gets the rule outside git too, so a later `git init` leaves
+    /// the data out all the same.
+    pub(crate) fn ignore_in_git(&self, data_dir: &str, begins: bool) -> Result<Ignore, Error> {
+        let ignore = self.ignored_in_git(data_dir, begins)?;
         if let Ignore::Add(updated) = &ignore {
             self.write(".gitignore", updated.as_bytes())?;
         }
@@ -829,9 +830,9 @@ impl Project {
     }
 
     /// what [`Project::ignore_in_git`] would do to the .gitignore of the git repository the
-    /// project is in, or of the project `starting` outside git.
-    pub(crate) fn ignored_in_git(&self, data_dir: &str, starting: bool) -> Result<Ignore, Error> {
-        if !starting && Project::repository(&self.root).is_none() {
+    /// project is in, or of the project a run `begins` outside git.
+    pub(crate) fn ignored_in_git(&self, data_dir: &str, begins: bool) -> Result<Ignore, Error> {
+        if !begins && Project::repository(&self.root).is_none() {
             return Ok(Ignore::Done);
         }
         // git reads [, *, ? and \ in a rule as a pattern, so a folder named data[1] needs them

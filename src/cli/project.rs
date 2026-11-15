@@ -69,11 +69,11 @@ impl Report {
 }
 
 /// says what [`ignore_data`] would add to .gitignore, or what a person adds by hand. a project
-/// with no data.toml yet, as a dry run of its start leaves it, is told as one starting.
+/// with no data.lock yet, as a dry run leaves it, is told as one the run begins.
 pub(super) fn preview_ignore(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
     let output = &work.context.output;
-    let starting = std::fs::symlink_metadata(work.project.manifest_path()).is_err();
-    match work.project.ignored_in_git(&manifest.data_dir, starting)? {
+    let begins = std::fs::symlink_metadata(work.project.root.join(lock::FILE)).is_err();
+    match work.project.ignored_in_git(&manifest.data_dir, begins)? {
         Ignore::Add(_) => output.step(
             "Would add",
             &format!(
@@ -86,15 +86,11 @@ pub(super) fn preview_ignore(work: &Loop<'_>, manifest: &Manifest) -> Result<(),
     Ok(())
 }
 
-/// adds the data folder's rule to .gitignore inside git, and outside it for a project `starting`,
-/// saying so only when it added the line.
-pub(super) fn ignore_data(
-    work: &Loop<'_>,
-    manifest: &Manifest,
-    starting: bool,
-) -> Result<(), Error> {
+/// adds the data folder's rule to .gitignore inside git, and outside it for a run that `begins`
+/// the project, its first pins, saying so only when it added the line.
+pub(super) fn ignore_data(work: &Loop<'_>, manifest: &Manifest, begins: bool) -> Result<(), Error> {
     let output = &work.context.output;
-    match work.project.ignore_in_git(&manifest.data_dir, starting)? {
+    match work.project.ignore_in_git(&manifest.data_dir, begins)? {
         Ignore::Add(_) => output.step(
             "Ignored",
             &format!(
@@ -435,6 +431,8 @@ async fn sync_held(
             .await
             .map(|report| (report, None));
     }
+    // no data.lock yet means this sync begins the project, which outside git still wants the rule
+    let begins = read.is_none();
     let old = read.map(|(lock, _)| lock);
     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
         .within(scope)
@@ -457,7 +455,7 @@ async fn sync_held(
     )
     .await?;
     // a project that became a git repository after its add gets its ignore rule now
-    ignore_data(&work, &manifest, false)?;
+    ignore_data(&work, &manifest, begins)?;
     let closing = closing(
         &project,
         &manifest,

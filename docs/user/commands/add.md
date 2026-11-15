@@ -39,7 +39,7 @@ fetchloom add [options] -i <file>
 2. resolve the reference, filter its files and choose a dataset name. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../reference/archives.md#webdataset-shards) get a hint before anything downloads.
 3. download every file the project lacks into the cache, with the project still as it was.
 4. write the entry in `data.toml`, pin its files in `data.lock` and place the project's files. entries are kept in name order, so two people adding different datasets rarely change the same lines.
-5. add the data folder to `.gitignore` if needed: in a git repository, and outside one when the add starts the project, so a later `git init` leaves the data out.
+5. add the data folder to `.gitignore` if needed: in a git repository, and outside one when the add begins the project, starting it or pinning the first datasets of a hand-written data.toml, so a later `git init` leaves the data out.
 
 below a project's folder, `add` works on that project, says `using the project in <folder>` once at a terminal, and gives the dataset's folder from where you stand, such as `../data/iris`. the search for a project stops at a git repository, so in a repository with no `data.toml` of its own, `add` starts a project there, as [finding the project](../reference/project-folder.md#finding-the-project) explains. there is no `init` command: `fetchloom init` is a usage error, exit 2, whose help says `add` starts a project.
 

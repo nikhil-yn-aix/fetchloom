@@ -272,7 +272,7 @@ pub(super) fn write(
     if let Some(line) = unchecked {
         output.item(line);
     }
-    ignore_data(work, manifest, starting)?;
+    ignore_data(work, manifest, starting || adding.begins())?;
     output.done("Added", &format!("{name} to data.toml, nothing downloaded"));
     output.next(&format!(
         "commit {}; where the data can download, `{}` downloads and checks it",

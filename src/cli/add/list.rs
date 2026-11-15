@@ -111,7 +111,7 @@ pub(super) async fn add_list_held(
     .await
     .map_err(|error| on_lines(error, list.name.as_deref(), &lines))?;
     tell_started(&work, starting);
-    ignore_data(&work, &manifest, starting)?;
+    ignore_data(&work, &manifest, starting || adding.begins())?;
     let private = private_origins(
         &work,
         list.lines

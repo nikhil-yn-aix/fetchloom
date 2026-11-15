@@ -1203,6 +1203,63 @@ fn inside_git_the_data_folder_is_ignored_once() -> Result {
     Ok(())
 }
 
+/// a project begun from a hand-written data.toml gets the ignore rule from its first build, sync
+/// or add outside git, as one an add starts does, so a later `git init` and `git add -A` commit no
+/// data file.
+#[test]
+fn a_hand_written_project_gets_the_ignore_rule_from_its_first_run() -> Result {
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    for (command, data_dir) in [("build", "data"), ("sync", "data"), ("add", "inputs")] {
+        let sandbox = Sandbox::new()?;
+        sandbox.allow(&server.url);
+        let work = sandbox.work();
+        let output = match command {
+            "build" => {
+                fs::write(
+                    work.join("data.toml"),
+                    "[datasets.sim]\nrun = [\"recipe-step\", \"seeded\", \"draws.csv\", \"{out}\"]\nenv = { SEED = \"7\" }\n",
+                )?;
+                crate::build::building_in(&sandbox, &work, &["build"])?.output()?
+            }
+            "sync" => {
+                fs::write(
+                    work.join("data.toml"),
+                    format!("[datasets.iris]\nref = \"{}\"\n", server.url),
+                )?;
+                sandbox.run(&["sync"])?
+            }
+            _ => {
+                fs::write(work.join("data.toml"), "[project]\ndata_dir = \"inputs\"\n")?;
+                sandbox.run(&["add", &server.url])?
+            }
+        };
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{command}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "    Ignored {data_dir}/ in .gitignore, since its files come from data.lock\n"
+            )),
+            "{command}: {stderr}"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join(".gitignore"))?,
+            format!("/{data_dir}/\n"),
+            "{command}"
+        );
+        if crate::merge::ok(&sandbox, &["init", "-q"])?.is_some() {
+            crate::merge::ok(&sandbox, &["add", "-A"])?;
+            let staged = crate::merge::git(&sandbox, &work, &["diff", "--cached", "--name-only"])?
+                .ok_or("git went away")?;
+            let staged = text(&staged.stdout)?;
+            assert!(
+                !staged.contains(&format!("{data_dir}/")),
+                "{command}: {staged}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// a record in .fetchloom/owner that no fetchloom writes, as a clone can carry, keeps nobody out:
 /// the command removes it, says so once, and goes on.
 #[test]
@@ -1328,16 +1385,15 @@ fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
             )?;
         }
         added(&sandbox, &server)?;
-        // a project started here has the rule from its start, outside git too; taking it out
-        // stands for a project that never had it, which each command then gives it inside git
-        if data_dir == "data" {
-            assert_eq!(
-                fs::read_to_string(work.join(".gitignore"))?,
-                "/data/\n",
-                "{command}"
-            );
-            fs::remove_file(work.join(".gitignore"))?;
-        }
+        // the first add of a project has the rule from its start, outside git too, whether it
+        // started the project or pinned a hand-written data.toml; taking it out stands for a
+        // project that never had it, which each command then gives it inside git
+        assert_eq!(
+            fs::read_to_string(work.join(".gitignore"))?,
+            format!("/{data_dir}/\n"),
+            "{command}"
+        );
+        fs::remove_file(work.join(".gitignore"))?;
         fs::create_dir(work.join(".git"))?;
         let args = match command {
             "add" => vec!["add", server.url.as_str()],
