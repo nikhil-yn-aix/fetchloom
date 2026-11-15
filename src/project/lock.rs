@@ -945,15 +945,26 @@ impl Lock {
 }
 
 /// the list parts data.lock's `text` names, as paths below the project; none if it does not read.
+/// a list named otherwise than fetchloom writes it, as a cloned lock may, gives none.
 pub(crate) fn parts(text: &str) -> Vec<String> {
     parse(text)
         .unwrap_or_default()
         .into_iter()
         .flat_map(|parsed| match parsed {
-            Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed) => listed.parts,
+            Parsed::Source(locked, Some(listed)) => written(&locked.name, listed),
+            Parsed::Derived(derived, listed) => written(&derived.name, listed),
             Parsed::Source(_, None) | Parsed::Stated(_) => Vec::new(),
         })
         .collect()
+}
+
+/// the parts of `name`'s list `listed`, when they are named as fetchloom writes them.
+fn written(name: &str, listed: lists::Listed) -> Vec<String> {
+    if lists::named_as_written(name, &listed) {
+        listed.parts
+    } else {
+        Vec::new()
+    }
 }
 
 /// `files` sorted by path, as the lock keeps them.
@@ -2157,6 +2168,18 @@ mod tests {
             Lock::read(&unread, root.path()).unwrap().derived[0].from,
             []
         );
+    }
+
+    /// the parts a lock names are only those fetchloom writes for each list, as a read takes them,
+    /// so another path in a cloned lock never reaches git or a folder as a part.
+    #[test]
+    fn parts_are_only_the_names_fetchloom_writes() {
+        let text = sample_sorted().render_with(1);
+        let named = parts(&text);
+        assert_eq!(named.len(), 1, "{named:?}");
+        assert!(named[0].starts_with("data.lock.d/iris."), "{named:?}");
+        let elsewhere = text.replace(&named[0], "../outside.tsv.zst");
+        assert_eq!(parts(&elsewhere), Vec::<String>::new());
     }
 
     /// the memory check counts a dataset's files whether data.lock or its list holds them; a read
