@@ -3657,6 +3657,63 @@ fn synced_fresh(sandbox: &Sandbox) -> Result<(std::path::PathBuf, std::process::
     Ok((fresh, output))
 }
 
+/// the datasets a partial sync places whole come from the data folder as `--verify` checked it,
+/// so a copy whose bytes changed under the same size and time is put back there too.
+#[test]
+fn a_partial_sync_puts_back_what_verify_found_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let one = Server::start("/one.csv", vec![file(b"one\n", "\"o\"")])?;
+    let two = Server::start("/two.csv", vec![file(b"two\n", "\"t\"")])?;
+    for server in [&one, &two] {
+        sandbox.allow(&server.url);
+    }
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.one]\nref = \"{}\"\ncopy = true\n\n[datasets.two]\nref = \"{}\"\ncopy = true\n",
+            one.url, two.url
+        ),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    // a state written in a later tick than the files vouches for their size and time
+    let state = sandbox.work().join(".fetchloom").join("state");
+    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
+    let placed = sandbox.work().join("data/one/one.csv");
+    let time = fs::metadata(&placed)?.modified()?;
+    fs::write(&placed, b"ONE\n")?;
+    fs::File::options()
+        .write(true)
+        .open(&placed)?
+        .set_modified(time)?;
+    // two waits: neither its file nor its bytes are on this machine
+    delete(&sandbox.work().join("data/two/two.csv"))?;
+    let hex = sha256_hex(b"two\n");
+    delete(
+        &sandbox
+            .cache()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..]),
+    )?;
+
+    let output = sandbox.run(&["--json", "sync", "--verify", "--offline"])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(20), "{document}");
+    assert_eq!(
+        document["result"]["waiting"],
+        serde_json::json!(["two"]),
+        "{document}"
+    );
+    assert_eq!(fs::read(&placed)?, b"one\n", "{document}");
+    assert_eq!(
+        document["result"]["placement"]["restored"],
+        serde_json::json!(["data/one/one.csv"]),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// an archive no source serves now fails before the other files download, and they still do.
 #[test]
 fn an_archive_that_cannot_be_got_stops_no_other_download() -> Result {

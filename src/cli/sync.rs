@@ -247,12 +247,16 @@ impl<'a> Loop<'a> {
         survey: Survey,
         synced: Option<Synced>,
     ) -> Result<Placement, Error> {
-        match self.prepare(manifest, lock, plan, force, survey).await {
+        // what hashing found changed, as `--verify` does, holds for the datasets placed whole
+        let changed = (survey.damaged.clone(), survey.elsewhere.clone());
+        // preparing waits on the heap, so the run's own future, which holds what the survey found
+        // changed, stays small
+        match Box::pin(self.prepare(manifest, lock, plan, force, survey)).await {
             Ok(placing) => self.apply(manifest, lock, placing, synced),
             // a sync still places the datasets it has whole, of those named or of all, and names
             // the rest
             Err(error) if lacks_files(&error) => {
-                match self.place_whole(manifest, lock, force, synced) {
+                match self.place_whole(manifest, lock, force, synced, changed) {
                     Ok(Some(partial)) => Err(self.partly(error, partial)),
                     Ok(None) => Err(self.before_placing(error)),
                     Err(other) => {
@@ -295,20 +299,26 @@ impl<'a> Loop<'a> {
 
     /// places the datasets of `lock` in the run's scope whose files the cache holds whole, once
     /// the run could not get the rest: the names it placed, those that wait and what placing did,
-    /// or none when no dataset is whole.
+    /// or none when no dataset is whole. `changed` holds the files the run's survey found damaged
+    /// and those changed through a link elsewhere, which a look at the folder alone misses.
     fn place_whole(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         force: bool,
         synced: Option<Synced>,
+        changed: (HashSet<String>, HashSet<String>),
     ) -> Result<Option<Partial>, Error> {
-        let survey = Survey::read(
+        let mut survey = Survey::read(
             self.project,
             &manifest.data_dir,
             self.context.threads,
             &self.context.stop,
         )?;
+        survey.check_doubted(&self.project.root, &self.cache)?;
+        let (damaged, elsewhere) = changed;
+        survey.damaged.extend(damaged);
+        survey.elsewhere.extend(elsewhere);
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let placing = Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         // a result whose bytes a download that failed was to bring waits with it
