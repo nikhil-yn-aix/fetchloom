@@ -73,18 +73,22 @@ impl Repo {
         files: &mut Vec<Remote>,
     ) -> Result<bool, Error> {
         first.query_pairs_mut().append_pair("recursive", "true");
+        let invalid = |reason: &str| {
+            Error::new(
+                Kind::SourceInvalid,
+                format!("huggingface.co sent an invalid listing of {self}: {reason}"),
+            )
+            .help(crate::error::report_answer())
+        };
+        let start = first.clone();
         let mut next = Some(first);
         let mut pages = crate::source::Pages::most(api.most_files());
         let mut first = true;
         let mut listed = 0;
         while let Some(url) = next {
-            pages.next(url.clone(), listed).map_err(|reason| {
-                Error::new(
-                    Kind::SourceInvalid,
-                    format!("huggingface.co sent an invalid listing of {self}: {reason}"),
-                )
-                .help(crate::error::report_answer())
-            })?;
+            pages
+                .next(url.clone(), listed)
+                .map_err(|reason| invalid(&reason))?;
             let response = api.get(&url).await?;
             if folder && first && response.status == 404 {
                 return Ok(false);
@@ -102,7 +106,14 @@ impl Repo {
                     "select the folders you need with --select",
                 ));
             }
-            next = response.next;
+            // a page goes on only to the next page of this listing, on the hub
+            next = match response.next {
+                Some(page) if page.origin() == start.origin() && page.path() == start.path() => {
+                    Some(page)
+                }
+                Some(_) => return Err(invalid("a page's next page is not one of this listing's")),
+                None => None,
+            };
         }
         Ok(true)
     }
@@ -147,6 +158,31 @@ mod tests {
 
     const FIRST: &str = "https://huggingface.co/api/datasets/org/data/tree/abc123?recursive=true";
     const SECOND: &str = "https://huggingface.co/api/datasets/org/data/tree/abc123?cursor=next";
+
+    /// a next page elsewhere, on another host or another listing of the hub, is refused before it
+    /// is asked, so a page cannot send a request, with that host's key, where the hub points.
+    #[test]
+    fn a_next_page_outside_this_listing_is_refused_unasked() {
+        for elsewhere in [
+            "https://api.github.com/repos/org/private/contents/",
+            "https://huggingface.co/api/datasets/org/other/tree/abc123?cursor=next",
+        ] {
+            let recorded = Recorded::default()
+                .on(FIRST, 200, r#"[{"type":"file","path":"a.csv","size":1}]"#)
+                .next(FIRST, elsewhere);
+            let repo = Repo::parse("datasets/org/data").unwrap();
+            let error = block_on(repo.tree(&recorded, "abc123", None)).unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid, "{elsewhere}");
+            assert!(
+                error
+                    .message
+                    .contains("a page's next page is not one of this listing's"),
+                "{}",
+                error.message
+            );
+            assert_eq!(recorded.asked(), [FIRST], "{elsewhere}");
+        }
+    }
 
     #[test]
     fn files_keep_their_metadata_and_encoded_paths_across_pages() {

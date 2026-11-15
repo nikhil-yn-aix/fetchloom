@@ -382,13 +382,16 @@ impl Net {
                 .and_then(|value: &header::HeaderValue| value.to_str().ok())
                 .map(str::to_owned)
         };
+        // a next page stays with the server that named it, so a listing cannot send the next
+        // request, with that host's key, to another host
         let next = response
             .headers()
             .get_all(header::LINK)
             .iter()
             .filter_map(|value| value.to_str().ok())
             .filter_map(next_link)
-            .find_map(|link| response.url().join(&link).ok());
+            .find_map(|link| response.url().join(&link).ok())
+            .filter(|next| next.origin() == response.url().origin());
         let total = text(header::CONTENT_RANGE).as_deref().and_then(items_total);
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let keyed = response.extensions().get::<super::s3::Keyed>().cloned();
@@ -639,6 +642,23 @@ mod tests {
         );
         net.typed(url);
         net
+    }
+
+    /// a next page on another origin than the page that named it is no next page.
+    #[test]
+    fn a_next_page_on_another_origin_is_dropped() {
+        let (url, _) = serve(vec![reply(
+            "200 OK",
+            &[(
+                "Link",
+                "<https://api.github.com/repos/org/private/contents/>; rel=next",
+            )],
+            b"[]",
+        )]);
+        let net = net(&url);
+        let response = block_on(net.get(&url)).unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.next, None);
     }
 
     #[test]
