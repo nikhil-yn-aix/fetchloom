@@ -263,24 +263,31 @@ pub(crate) struct Listing {
 
 impl Listing {
     /// the title a generated name may come from. a hugging face repository is known by its id,
-    /// such as `multi_nli`, more than by its card's title, so its name comes from the id.
+    /// such as `multi_nli`, more than by its card's title, and a release by its repository, as
+    /// `ripgrep`, since its title is often its tag alone, so their names come from the reference.
     pub(crate) fn naming_title(&self) -> Option<&str> {
         match self.resolved {
-            Reference::HuggingFace(_) | Reference::ArxivMonth(_) | Reference::S2Dataset(_) => None,
+            Reference::HuggingFace(_)
+            | Reference::ArxivMonth(_)
+            | Reference::S2Dataset(_)
+            | Reference::GitHub(_)
+            | Reference::GitLab(_) => None,
             _ => self.title.as_deref(),
         }
     }
 
     /// whether a generated name may come from the one file the listing holds. a paper is known by
     /// its title, and its file only by an id, as `1706.03762v7.pdf`; an arXiv month and a
-    /// semantic scholar dataset by their reference, and their files by ids and times; a bucket's
-    /// folder by its path, since folders often hold objects of one name, as `part_0000.gz`.
+    /// semantic scholar dataset by their reference, and their files by ids and times; a dandiset
+    /// by its title, its files by subject, as `sub-RAT123.nwb`; a bucket's folder by its path,
+    /// since folders often hold objects of one name, as `part_0000.gz`.
     pub(crate) fn names_its_file(&self) -> bool {
         match &self.resolved {
             Reference::Arxiv(_)
             | Reference::ArxivMonth(_)
             | Reference::S2Paper(_)
-            | Reference::S2Dataset(_) => false,
+            | Reference::S2Dataset(_)
+            | Reference::Dandi(_) => false,
             Reference::Bucket(prefix) => !prefix.names_a_folder(),
             _ => true,
         }
@@ -1934,6 +1941,38 @@ mod tests {
         assert_eq!(
             titled("zenodo:3608990").naming_title(),
             Some("Multi-Genre Natural Language Inference")
+        );
+    }
+
+    /// a release is named after its repository, whose title is often its tag alone, and a
+    /// dandiset after its title, not its one file, which is named by subject.
+    #[test]
+    fn a_release_and_a_dandiset_get_readable_names() {
+        let listed = |text: &str, title: &str| {
+            let mut listing =
+                single(&Url::parse("https://example.org/sub-RAT123/sub-RAT123.nwb").unwrap());
+            listing.resolved = parse(text).reference;
+            listing.title = Some(title.to_owned());
+            listing
+        };
+        for release in [
+            "github:BurntSushi/ripgrep@14.1.0",
+            "gitlab:gitlab-org/gitlab-runner@v19.3.6",
+        ] {
+            assert_eq!(listed(release, "14.1.0").naming_title(), None, "{release}");
+        }
+        assert_eq!(
+            crate::name::reference_name("github:BurntSushi/ripgrep@14.1.0").as_deref(),
+            Some("ripgrep")
+        );
+        let dandiset = listed("dandi:000027", "Test dataset for testing dandi-cli.");
+        assert!(!dandiset.names_its_file());
+        assert_eq!(
+            dandiset
+                .naming_title()
+                .and_then(crate::name::title_name)
+                .as_deref(),
+            Some("test-dataset-for-testing")
         );
     }
 
