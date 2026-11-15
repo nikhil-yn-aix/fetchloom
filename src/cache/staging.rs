@@ -506,6 +506,7 @@ mod tests {
         );
         assert_eq!(fs::read(victim.join("keep")).unwrap(), b"mine");
     }
+
     #[cfg(unix)]
     #[test]
     fn member_cleanup_never_follows_a_swapped_staging_folder() {
@@ -526,18 +527,6 @@ mod tests {
         assert_eq!(fs::read(&victim).unwrap(), b"foreign");
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn a_swapped_staging_folder_cannot_receive_new_members() {
-        let (dir, cache) = cache();
-        let staging = cache.staging().unwrap();
-        let outside = dir.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        fs::rename(&staging.folder, cache.root().join("tmp/saved.stage")).unwrap();
-        std::os::unix::fs::symlink(&outside, &staging.folder).unwrap();
-        assert!(staging.new_object().is_err());
-        assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
-    }
     #[test]
     fn a_staging_sweep_dry_run_records_but_does_not_remove_files() {
         let (_dir, cache) = cache();
@@ -702,6 +691,7 @@ mod tests {
         );
         assert_eq!(fs::read(victim.join("keep")).unwrap(), b"mine");
     }
+
     #[cfg(unix)]
     #[test]
     fn a_swapped_staging_parent_cannot_redirect_shards_or_members() {

@@ -79,6 +79,16 @@ fn files_in(folder: &Path) -> Result<Vec<String>> {
     Ok(found)
 }
 
+/// runs fetchloom in `sandbox` with `routes` standing in for every host, as only debug builds
+/// allow.
+#[cfg(debug_assertions)]
+fn run(sandbox: &Sandbox, routes: &crate::support::Routes, args: &[&str]) -> Result<Output> {
+    Ok(sandbox
+        .command(args)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?)
+}
+
 #[test]
 fn a_dataset_that_is_one_zip_lands_unpacked_and_leaves_the_cache() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1039,7 +1049,7 @@ fn a_folder_of_shards_hints_keeping_them_packed() -> Result {
 /// which only debug builds can be pointed at.
 #[cfg(debug_assertions)]
 mod shards {
-    use super::{Output, Result, Sandbox, file, files_in, fs, ok, text};
+    use super::{Result, Sandbox, file, files_in, fs, ok, run, text};
     use crate::buckets::{s3_listing, s3_page};
     use crate::support::Routes;
     use crate::support::md5_hex;
@@ -1119,13 +1129,6 @@ mod shards {
             ));
         }
         Routes::start(routes)
-    }
-
-    fn run(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Result<Output> {
-        Ok(sandbox
-            .command(args)
-            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-            .output()?)
     }
 
     /// the hint comes after the listing and before anything downloads, while the choice is free.
@@ -1600,7 +1603,7 @@ mod split {
     /// parts in a bucket prefix, which only debug builds can point at a server of their own.
     #[cfg(debug_assertions)]
     mod bucket {
-        use super::super::{Output, ok, text};
+        use super::super::{ok, run, text};
         use super::{SCANS, Sandbox, cut, files_in, fs, scans_zip};
         use crate::buckets::{s3_listing, s3_page};
         use crate::support::md5_hex;
@@ -1629,13 +1632,6 @@ mod split {
                 }
             }
             Ok((Routes::start(routes)?, halves))
-        }
-
-        fn run(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Result<Output> {
-            Ok(sandbox
-                .command(args)
-                .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-                .output()?)
         }
 
         /// no part lands, and a clone with an empty cache downloads each part once.
