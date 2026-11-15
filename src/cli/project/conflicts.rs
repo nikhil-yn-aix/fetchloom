@@ -7,6 +7,7 @@ use std::path::Path;
 use super::{Changes, Report, committed, dry_run_done};
 use crate::cli::Context;
 use crate::cli::args;
+use crate::cli::sync::{Scope, tell_stale};
 use crate::error::{Error, Kind};
 use crate::output::Warning;
 use crate::project::Project;
@@ -322,12 +323,17 @@ fn tell(context: &Context, project: &Project, merged: &Merged, files: &str, dry_
             "{names} {are} not pinned, as neither side of data.lock pins {them} as data.toml now asks"
         ));
     }
+    let manifest = Manifest::parse(&merged.manifest).ok();
+    // a recipe's result taken from one side may be made from inputs the other side changed
+    if let (Some(manifest), Some(lock)) = (&manifest, &merged.lock) {
+        tell_stale(output, &project.root, manifest, lock, &Scope::All);
+    }
     if dry_run {
         dry_run_done(output, None);
         return;
     }
-    let data_dir = Manifest::parse(&merged.manifest).map_or_else(
-        |_| manifest::DATA_DIR.to_owned(),
+    let data_dir = manifest.map_or_else(
+        || manifest::DATA_DIR.to_owned(),
         |manifest| manifest.data_dir,
     );
     let sync = if unpinned.is_empty() {

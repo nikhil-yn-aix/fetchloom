@@ -804,15 +804,10 @@ fn lock_merges_a_rebuilt_recipe_beside_a_new_dataset_by_itself() -> Result {
     Ok(())
 }
 
-/// a changes b-mk's command and b upgrades its input, and git merges b's input into a's side of
-/// the conflict, which would pin a's files as made from b's input.
-#[test]
-fn a_choice_takes_the_whole_pin_its_branch_committed() -> Result {
-    let sandbox = Sandbox::new()?;
-    let input = upstream()?;
-    sandbox.allow(&input.url);
-    if rebuilt_on_b(&sandbox, &input)?.is_none() {
-        return Ok(());
+/// [`rebuilt_on_b`], and branch a makes b-mk another way, built and committed. none without git.
+fn remade_on_a(sandbox: &Sandbox, server: &Server) -> Result<Option<()>> {
+    if rebuilt_on_b(sandbox, server)?.is_none() {
+        return Ok(None);
     }
     let manifest = sandbox.work().join("data.toml");
     let text = fs::read_to_string(&manifest)?.replace(
@@ -820,9 +815,22 @@ fn a_choice_takes_the_whole_pin_its_branch_committed() -> Result {
         "\"write\", \"made.txt\", \"by a\", \"{a-src}\"",
     );
     fs::write(&manifest, text)?;
-    succeeded(&building(&sandbox, &["build"])?)?;
-    ok(&sandbox, &["add", "."])?;
-    ok(&sandbox, &["commit", "-qm", "make b-mk another way"])?;
+    succeeded(&building(sandbox, &["build"])?)?;
+    ok(sandbox, &["add", "."])?;
+    ok(sandbox, &["commit", "-qm", "make b-mk another way"])?;
+    Ok(Some(()))
+}
+
+/// a changes b-mk's command and b upgrades its input, and git merges b's input into a's side of
+/// the conflict, which would pin a's files as made from b's input.
+#[test]
+fn a_choice_takes_the_whole_pin_its_branch_committed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let input = upstream()?;
+    sandbox.allow(&input.url);
+    if remade_on_a(&sandbox, &input)?.is_none() {
+        return Ok(());
+    }
     let asked = input.requests().len();
     for (side, branch) in [("ours", "a"), ("theirs", "b")] {
         stopped(&sandbox, &["merge", "-q", "b"])?;
@@ -1075,5 +1083,37 @@ fn a_side_chosen_wrong_is_chosen_again_after_git_checkout_m() -> Result {
         "{}",
         text(&outside.stderr)?
     );
+    Ok(())
+}
+
+/// a's b-mk was made from the a-src that b upgraded, so keeping it beside b's a-src leaves it
+/// stale, and the merge says so with the build that makes it again; b's b-mk is not stale.
+#[test]
+fn a_merge_names_the_recipes_it_left_stale() -> Result {
+    let sandbox = Sandbox::new()?;
+    let input = upstream()?;
+    sandbox.allow(&input.url);
+    if remade_on_a(&sandbox, &input)?.is_none() {
+        return Ok(());
+    }
+    for (side, stale) in [("ours", true), ("theirs", false)] {
+        stopped(&sandbox, &["merge", "-q", "b"])?;
+        let output = run(&sandbox, &["--json", "lock", &format!("--{side}"), "b-mk"])?;
+        succeeded(&output)?;
+        let document = json(&output)?;
+        let warned = document["warnings"]
+            .as_array()
+            .ok_or("no warnings")?
+            .iter()
+            .any(|warning| {
+                warning["kind"] == "build.changed"
+                    && warning["message"] == "b-mk changed since it was built: a-src changed"
+            });
+        assert_eq!(warned, stale, "--{side}: {document}");
+        abandon(&sandbox)?;
+    }
+    stopped(&sandbox, &["merge", "-q", "b"])?;
+    let told = text(&run(&sandbox, &["lock", "--ours", "b-mk"])?.stderr)?;
+    assert!(told.contains("run `fetchloom build b-mk`"), "{told}");
     Ok(())
 }
