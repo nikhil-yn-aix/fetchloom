@@ -340,7 +340,7 @@ pub(crate) fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Res
             let read = (&mut reader)
                 .take(LONGEST)
                 .read_until(b'\n', &mut line)
-                .map_err(|err| unreadable(name, part, &err))?;
+                .map_err(|err| unread_line(part, number + 1, &err))?;
             if read == 0 {
                 break;
             }
@@ -434,6 +434,16 @@ fn unreadable(name: &str, part: &str, err: &std::io::Error) -> Error {
         return not_there(name, part, false);
     }
     broken(format!("could not read {part}: {err}"))
+}
+
+/// the error for `line` of `part`, which did not read as `err` says: the system's own failure in
+/// its words, else a part the decoder refused, which is damaged there.
+fn unread_line(part: &str, line: usize, err: &std::io::Error) -> Error {
+    // the decoder's errors carry no code of the system's
+    if err.raw_os_error().is_some() {
+        return broken(format!("could not read {part}: {err}"));
+    }
+    damaged(part, line)
 }
 
 /// the error for `part` of `name`'s list, which is not beside data.lock. the usual cause is a
@@ -701,6 +711,42 @@ mod tests {
                 "{}",
                 error.message
             );
+        }
+    }
+
+    /// a part that is no compressed list, or whose lines stop partway, is damaged at the first
+    /// line it lacks, in words of fetchloom's rather than the decoder's.
+    #[test]
+    fn a_part_that_does_not_decompress_is_damaged_at_the_line_it_stops() {
+        let root = tempfile::tempdir().unwrap();
+        let listed = write(root.path(), "set", &files(3));
+        let text = texts(&files(3)).remove(0);
+        // the header and two files, so a part continuing past them stops at line 4
+        let three = text.split_inclusive('\n').take(3).collect::<String>();
+        let rest = compress(&text[three.len()..]).unwrap();
+        let first = compress(&three).unwrap();
+        for (reason, bytes, line) in [
+            ("not compressed", text.clone().into_bytes(), 1),
+            (
+                "no frame after",
+                [first.clone(), b"rest".to_vec()].concat(),
+                4,
+            ),
+            (
+                "cut short",
+                [first.clone(), rest[..rest.len() - 3].to_vec()].concat(),
+                4,
+            ),
+        ] {
+            fs::write(root.path().join(&listed.parts[0]), bytes).unwrap();
+            let error =
+                read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).expect_err(reason);
+            assert_eq!(
+                error.message,
+                format!("{} is damaged at line {line}", listed.parts[0]),
+                "{reason}"
+            );
+            assert_eq!(error.help.as_deref(), Some(BROKEN), "{reason}");
         }
     }
 
