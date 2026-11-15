@@ -1116,21 +1116,13 @@ fn dandi(embargo: &str, assets: &[(&str, &[u8], &str)]) -> Result<Routes> {
     Routes::start(routes)
 }
 
-/// a command whose requests to dandi's API and its S3 bucket go to `routes`.
-fn dandi_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
-    let mut command = command(sandbox, routes, args);
-    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
-    command
-}
-
 /// the newest published version is pinned, and a teammate's sync reads only data.lock's blobs.
 #[test]
 fn a_dandiset_is_pinned_with_dandis_sha256_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
     let stated = sha256_hex(ROWS);
     let routes = dandi("OPEN", &[("sub-RAT123/sub-RAT123.nwb", ROWS, &stated)])?;
-    let output =
-        dandi_command(&sandbox, &routes, &["add", "dandi:000027", "--as", "rat"]).output()?;
+    let output = command(&sandbox, &routes, &["add", "dandi:000027", "--as", "rat"]).output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let work = sandbox.work();
     let lock = fs::read_to_string(work.join("data.lock"))?;
@@ -1163,8 +1155,7 @@ fn bytes_that_differ_from_dandis_sha256_are_refused() -> Result {
         "OPEN",
         &[("sub-RAT123/sub-RAT123.nwb", ROWS, &sha256_hex(NOTES))],
     )?;
-    let output =
-        dandi_command(&sandbox, &routes, &["add", "dandi:000027", "--as", "rat"]).output()?;
+    let output = command(&sandbox, &routes, &["add", "dandi:000027", "--as", "rat"]).output()?;
     let stderr = text(&output.stderr)?;
     assert!(!output.status.success(), "{stderr}");
     assert!(
@@ -1192,7 +1183,7 @@ fn an_embargoed_dandiset_is_refused_and_says_why() -> Result {
             br#"{"detail":"Authentication credentials were not provided."}"#,
         ),
     )])?;
-    let output = dandi_command(&sandbox, &routes, &["--json", "add", "dandi:000027"]).output()?;
+    let output = command(&sandbox, &routes, &["--json", "add", "dandi:000027"]).output()?;
     assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
     let said = json(&output)?;
     assert_eq!(said["errors"][0]["kind"], "auth.required");
@@ -1214,7 +1205,7 @@ fn get_takes_the_folder_a_pasted_dandi_page_names() -> Result {
     )?;
     let page =
         "https://dandiarchive.org/dandiset/000027/0.210831.2033/files?location=sub-RAT124%2F";
-    let output = dandi_command(&sandbox, &routes, &["get", page, "--dir", "rats"]).output()?;
+    let output = command(&sandbox, &routes, &["get", page, "--dir", "rats"]).output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let rats = sandbox.work().join("rats");
     assert_eq!(fs::read(rats.join("sub-RAT124/sub-RAT124.nwb"))?, NOTES);
@@ -1285,13 +1276,6 @@ fn openneuro(key: &str, scan: &[u8]) -> Result<Routes> {
     ])
 }
 
-/// a command whose requests to openneuro's API and its S3 bucket go to `routes`.
-fn openneuro_command(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Fetchloom {
-    let mut command = command(sandbox, routes, args);
-    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
-    command
-}
-
 /// the files come from the S3 links pinned to the snapshot, every query carries the header
 /// openneuro's API asks of a GET, and `DataLad`'s own folder is never asked for.
 #[test]
@@ -1299,7 +1283,7 @@ fn an_openneuro_snapshot_is_pinned_by_its_annex_keys_and_synced_from_the_lock() 
     let sandbox = Sandbox::new()?;
     let key = format!("SHA256E-s{}--{}.nii.gz", ROWS.len(), sha256_hex(ROWS));
     let routes = openneuro(&key, ROWS)?;
-    let output = openneuro_command(
+    let output = command(
         &sandbox,
         &routes,
         &["add", "openneuro:ds000001@1.0.0", "--as", "bart"],
@@ -1361,16 +1345,16 @@ fn an_upgrade_to_the_snapshot_data_lock_pins_fetches_no_file() -> Result {
     let key = format!("SHA256E-s{}--{}.nii.gz", ROWS.len(), sha256_hex(ROWS));
     let routes = openneuro(&key, ROWS)?;
     let add = &["add", "openneuro:ds000001@1.0.0", "--as", "bart"];
-    ok(&openneuro_command(&sandbox, &routes, add).output()?)?;
+    ok(&command(&sandbox, &routes, add).output()?)?;
     let listed = routes.targets().len();
     let dry = &["--json", "lock", "--upgrade", "--dry-run"];
-    let planned = openneuro_command(&sandbox, &routes, dry).output()?;
+    let planned = command(&sandbox, &routes, dry).output()?;
     ok(&planned)?;
     assert_eq!(
         json(&planned)?["result"]["changes"]["download"],
         serde_json::json!([])
     );
-    ok(&openneuro_command(&sandbox, &routes, &["lock", "--upgrade"]).output()?)?;
+    ok(&command(&sandbox, &routes, &["lock", "--upgrade"]).output()?)?;
     let fetched: Vec<String> = routes.targets()[listed..]
         .iter()
         .filter(|target| !target.starts_with(OPENNEURO))
@@ -1386,7 +1370,7 @@ fn bytes_that_differ_from_an_openneuro_annex_key_are_refused() -> Result {
     let sandbox = Sandbox::new()?;
     let key = format!("MD5E-s{}--{}.nii.gz", ROWS.len(), md5_hex(NOTES));
     let routes = openneuro(&key, ROWS)?;
-    let output = openneuro_command(
+    let output = command(
         &sandbox,
         &routes,
         &["add", "openneuro:ds000001@1.0.0", "--as", "bart"],
@@ -1410,7 +1394,7 @@ fn a_top_level_pattern_lists_openneuros_top_folder_alone() -> Result {
     let sandbox = Sandbox::new()?;
     let key = format!("SHA256E-s{}--{}.nii.gz", ROWS.len(), sha256_hex(ROWS));
     let routes = openneuro(&key, ROWS)?;
-    let output = openneuro_command(
+    let output = command(
         &sandbox,
         &routes,
         &[
@@ -1450,8 +1434,7 @@ fn a_private_openneuro_dataset_is_refused_and_says_why() -> Result {
             "data": {"dataset": null},
         }))?,
     )])?;
-    let output =
-        openneuro_command(&sandbox, &routes, &["--json", "add", "openneuro:ds004999"]).output()?;
+    let output = command(&sandbox, &routes, &["--json", "add", "openneuro:ds004999"]).output()?;
     assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
     let said = json(&output)?;
     assert_eq!(said["errors"][0]["kind"], "auth.required");
