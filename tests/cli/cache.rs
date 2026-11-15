@@ -1365,7 +1365,8 @@ fn a_cache_folder_outside_the_windows_profile_is_warned_about() -> Result {
             json(&command.output()?)
         };
 
-    let outside = report(None, None)?;
+    // ci also runs this on fat and exfat drives, which keep no permissions to warn about
+    let outside = report(None, Some("ntfs"))?;
 
     let warning = crate::support::warning(&outside, "cache.foreign");
     let message = warning["message"].as_str().unwrap_or_default();
