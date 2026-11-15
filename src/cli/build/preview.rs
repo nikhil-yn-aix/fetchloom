@@ -84,7 +84,7 @@ enum Action {
     /// a build of the same key left a result the cache holds whole, which the build pins.
     WouldReuse,
     /// known only once the build learns something first: a result of a step before it that runs, a
-    /// dataset it pins anew, or whether a web mirror holds its pinned result.
+    /// dataset it pins anew, or whether a web or S3 mirror holds its pinned result.
     MayRun,
     /// data.lock pins its result as building it now would make, and the cache holds it.
     UpToDate,
@@ -152,16 +152,16 @@ struct Ahead<'a> {
     added: HashSet<Sha256>,
     /// the folder mirrors there now, in the order a build asks them.
     folders: Vec<&'a Path>,
-    /// the web mirrors a build would ask, which a dry run does not: none offline.
-    web: Vec<String>,
+    /// the web and S3 mirrors a build would ask, which a dry run does not: none offline.
+    remote: Vec<String>,
 }
 
 /// where the files of a pinned result that the cache lacks would come from.
 enum Found {
     /// these hold every one between them: the data folder, by its name, and folder mirrors.
     Here(Vec<String>),
-    /// nothing here holds them all, and only asking a web mirror would tell.
-    Web,
+    /// nothing here holds them all, and only asking a web or S3 mirror would tell.
+    Remote,
     Nowhere,
 }
 
@@ -183,7 +183,7 @@ impl<'a> Ahead<'a> {
             })
             .filter(|root| crate::mirror::folder::probe(root).is_ok())
             .collect();
-        let web = mirrors
+        let remote = mirrors
             .list
             .iter()
             .filter(|location| !offline && !matches!(location, Location::Folder(_)))
@@ -196,7 +196,7 @@ impl<'a> Ahead<'a> {
             cache,
             added: HashSet::new(),
             folders,
-            web,
+            remote,
         }
     }
 
@@ -245,10 +245,10 @@ impl<'a> Ahead<'a> {
                 return Found::Here(sources);
             }
         }
-        if self.web.is_empty() {
+        if self.remote.is_empty() {
             Found::Nowhere
         } else {
-            Found::Web
+            Found::Remote
         }
     }
 
@@ -350,9 +350,9 @@ fn foresee(
                             );
                             (Action::WouldFetch, said)
                         }
-                        Found::Web => {
-                            changes.push(web_said(&ahead));
-                            (Action::MayRun, web_said(&ahead))
+                        Found::Remote => {
+                            changes.push(remote_said(&ahead));
+                            (Action::MayRun, remote_said(&ahead))
                         }
                         Found::Nowhere => {
                             ahead.readied(manifest, &now, &step)?;
@@ -443,7 +443,7 @@ fn waiting(
                 ),
             };
         }
-        (true, Some(Found::Web)) => parts.push(web_said(ahead)),
+        (true, Some(Found::Remote)) => parts.push(remote_said(ahead)),
         (true, Some(Found::Nowhere)) => parts.push(NOWHERE.to_owned()),
         _ => {}
     }
@@ -458,11 +458,12 @@ fn waiting(
     parts.join("; ")
 }
 
-/// why a step whose pinned result the cache lacks may run when only a web mirror could give it.
-fn web_said(ahead: &Ahead<'_>) -> String {
+/// why a step whose pinned result the cache lacks may run when only a web or S3 mirror could give
+/// it.
+fn remote_said(ahead: &Ahead<'_>) -> String {
     format!(
         "its pinned result is not on this machine; it runs unless {} holds it",
-        units::listed(&ahead.web, "or")
+        units::listed(&ahead.remote, "or")
     )
 }
 
