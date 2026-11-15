@@ -97,12 +97,10 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                             &scope,
                         )?;
                     }
-                    let cache = match cache {
-                        Some(cache) => cache,
-                        None => open_cache()?,
-                    };
+                    let cache = cache.map_or_else(open_cache, Ok)?;
                     let work = Loop::new(context, &project, Arc::new(context.net()), cache)
-                        .within(scope.clone());
+                        .within(scope.clone())
+                        .filling();
                     let seen = Seen {
                         manifest: digest::sha256(text.as_bytes()),
                         lock: read
@@ -225,12 +223,8 @@ fn tell_stale_again(
 }
 
 /// refuses a recipe data.lock pins no result of: only `fetchloom build` makes one, so it has no
-/// folder in the data folder yet. so is a dataset only its source's digests pin, which only a
-/// sync downloads.
+/// folder in the data folder yet.
 fn unbuilt(manifest: &Manifest, lock: Option<&Lock>, name: &str) -> Result<(), Error> {
-    if let Some(lock) = lock {
-        lock.refuse_stated([name])?;
-    }
     if manifest.datasets[name].recipe().is_none()
         || lock.is_some_and(|lock| lock.result(name).is_some())
     {

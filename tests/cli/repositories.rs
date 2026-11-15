@@ -1503,18 +1503,6 @@ fn a_pin_by_the_sources_md5_is_downloaded_and_completed_by_a_sync() -> Result {
         "{listed}"
     );
     assert_eq!(listed["result"]["datasets"][0]["files"], 2, "{listed}");
-    let path = sandbox.run(&["--json", "path", "archiving"])?;
-    assert_eq!(path.status.code(), Some(1), "{}", text(&path.stderr)?);
-    let error = &json(&path)?["errors"][0];
-    assert_eq!(error["kind"], "data.not_ready");
-    assert_eq!(
-        error["message"],
-        "archiving is pinned by its source's MD5 until a sync downloads it"
-    );
-    assert_eq!(
-        error["help"],
-        "run `fetchloom sync archiving` where the data can download, then commit data.lock"
-    );
 
     let (teammate, synced) = teammate_sync(&sandbox, &routes, &["--json", "sync"])?;
     ok(&synced)?;
@@ -1691,6 +1679,34 @@ fn a_later_add_leaves_a_pin_not_downloaded_to_the_next_sync() -> Result {
         fs::read(sandbox.work().join("data/archiving/rows.csv"))?,
         ROWS
     );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(!lock.contains("downloaded = false"), "{lock}");
+    Ok(())
+}
+
+/// `path` syncs a dataset not downloaded yet, as it syncs any dataset not in place: it downloads
+/// it, checks each stated MD5, pins it whole and prints its folder; only `--locked` refuses.
+#[test]
+fn path_downloads_a_pin_not_downloaded_yet_and_answers() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    added_unsynced(&sandbox, &routes)?;
+    let locked = command(
+        &sandbox,
+        &routes,
+        &["--json", "path", "archiving", "--locked"],
+    )
+    .output()?;
+    assert_eq!(locked.status.code(), Some(1), "{}", text(&locked.stderr)?);
+    assert_eq!(json(&locked)?["errors"][0]["kind"], "lock.outdated");
+    let output = command(&sandbox, &routes, &["path", "archiving/rows.csv"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let placed = sandbox.work().join("data/archiving/rows.csv");
+    assert_eq!(
+        text(&output.stdout)?.trim_end(),
+        placed.display().to_string()
+    );
+    assert_eq!(fs::read(&placed)?, ROWS);
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
     assert!(!lock.contains("downloaded = false"), "{lock}");
     Ok(())
