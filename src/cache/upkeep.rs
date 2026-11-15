@@ -223,15 +223,31 @@ impl Cache {
     /// how many unfinished downloads the partial folder keeps, and what they take on the disk. a
     /// folder that cannot be read holds none.
     pub(crate) fn unfinished(&self) -> Unfinished {
+        self.unfinished_where(|_| true)
+    }
+
+    /// [`Cache::unfinished`] for the downloads no run holds, which `cache gc --now` frees: a run
+    /// working on one, this one too, finishes it or deletes it itself.
+    pub(crate) fn unfinished_unheld(&self) -> Unfinished {
+        self.unfinished_where(|claim| {
+            // a claim file a run holds cannot be locked again until that run lets it go
+            fs::File::open(claim).map_or(true, |file| file.try_lock().is_ok())
+        })
+    }
+
+    /// the unfinished downloads whose claim file, beside each, `counted` takes.
+    fn unfinished_where(&self, counted: impl Fn(&Path) -> bool) -> Unfinished {
         let mut unfinished = Unfinished::default();
         for folder in self.partial_folders() {
-            let Ok(entries) = fs::read_dir(folder) else {
+            let Ok(entries) = fs::read_dir(&folder) else {
                 continue;
             };
             for entry in entries.flatten() {
-                if entry.file_name().to_string_lossy().ends_with(".part")
+                let name = entry.file_name();
+                if let Some(key) = name.to_str().and_then(|name| name.strip_suffix(".part"))
                     && let Ok(metadata) = entry.metadata()
                     && metadata.is_file()
+                    && counted(&folder.join(format!("{key}.lock")))
                 {
                     unfinished.downloads += 1;
                     unfinished.bytes += on_disk(&metadata);

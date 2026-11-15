@@ -629,10 +629,10 @@ impl Cache {
         io::Error::new(err.kind(), Explained { words, cause: err })
     }
 
-    /// what unfinished downloads hold of the cache's disk and how to free it, when they hold
-    /// anything.
+    /// what unfinished downloads no run holds take of the cache's disk and how to free it, when
+    /// they take anything: the ones a run holds are its own to finish or delete.
     pub(crate) fn unfinished_held(&self) -> Option<String> {
-        let unfinished = self.unfinished();
+        let unfinished = self.unfinished_unheld();
         (unfinished.bytes > 0).then(|| {
             format!(
                 "unfinished downloads in {} hold {} of it, which `fetchloom cache gc --now` frees",
@@ -1170,6 +1170,18 @@ pub(crate) mod tests {
             error.help.as_deref(),
             Some("free some space on that disk, then run the command again")
         );
+        // a download a run holds is that run's to finish or delete, so gc frees none of it
+        let claim = fs::File::create(shard.join(format!("{key}.lock"))).unwrap();
+        claim.lock().unwrap();
+        let error = crate::error::Error::io(
+            "could not write to the cache",
+            &cache.explained(&partial, full()),
+        );
+        assert_eq!(
+            error.message,
+            "could not write to the cache: the disk is full"
+        );
+        drop(claim);
         let code = if cfg!(windows) { 5 } else { 13 };
         let denied = cache.explained(&partial, io::Error::from_raw_os_error(code));
         assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
