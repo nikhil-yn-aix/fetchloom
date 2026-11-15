@@ -533,10 +533,8 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
     crate::merge::ok(&sandbox, &["add", "tracked"])?;
     let run = |args: &[&str]| -> Result<serde_json::Value> {
         let mut command = sandbox.command(args);
-        for (name, _) in std::env::vars_os() {
-            if name.to_string_lossy().starts_with("GIT_") {
-                command.env_remove(name);
-            }
+        for name in crate::merge::git_variables() {
+            command.env_remove(name);
         }
         let output = command.output()?;
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);

@@ -18,10 +18,8 @@ pub(crate) fn git(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Opt
         fs::write(&config, "[safe]\n\tdirectory = *\n")?;
     }
     let mut command = Command::new("git");
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(name);
-        }
+    for name in git_variables() {
+        command.env_remove(name);
     }
     let identity = [
         "-c",
@@ -63,13 +61,19 @@ pub(crate) fn ok(sandbox: &Sandbox, args: &[&str]) -> Result<Option<()>> {
     Ok(Some(()))
 }
 
+/// the variables of whatever runs the tests that set up git, such as `GIT_DIR`, which git and
+/// fetchloom run without here, so git reads only what a test gives it.
+pub(crate) fn git_variables() -> impl Iterator<Item = std::ffi::OsString> {
+    std::env::vars_os()
+        .map(|(name, _)| name)
+        .filter(|name| name.to_string_lossy().starts_with("GIT_"))
+}
+
 /// fetchloom in the work folder, where git was given no settings of the machine's.
 fn run(sandbox: &Sandbox, args: &[&str]) -> Result<Output> {
     let mut command = sandbox.command(args);
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(name);
-        }
+    for name in git_variables() {
+        command.env_remove(name);
     }
     Ok(command.output()?)
 }
@@ -216,10 +220,8 @@ fn lock_reads_the_merge_base_from_git_or_asks_for_choices() -> Result {
     let nowhere = sandbox.folder("no-git")?;
     let without_git = |args: &[&str]| -> Result<Output> {
         let mut command = sandbox.command(args);
-        for (name, _) in std::env::vars_os() {
-            if name.to_string_lossy().starts_with("GIT_") {
-                command.env_remove(name);
-            }
+        for name in git_variables() {
+            command.env_remove(name);
         }
         Ok(command.env("PATH", &nowhere).output()?)
     };
@@ -339,10 +341,8 @@ fn lock_merges_datasets_listed_in_parts() -> Result {
     sandbox.allow(&routes.url);
     let listed = |args: &[&str]| -> Result<Output> {
         let mut command = sandbox.command(args);
-        for (name, _) in std::env::vars_os() {
-            if name.to_string_lossy().starts_with("GIT_") {
-                command.env_remove(name);
-            }
+        for name in git_variables() {
+            command.env_remove(name);
         }
         Ok(command.env("FETCHLOOM_TEST_INLINE", "0").output()?)
     };
@@ -474,10 +474,8 @@ fn lock_reads_the_base_around_lines_zdiff3_moved_out_of_a_conflict() -> Result {
 /// given no settings of the machine's.
 fn building(sandbox: &Sandbox, args: &[&str]) -> Result<Output> {
     let mut command = crate::build::building_in(sandbox, &sandbox.work(), args)?;
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(name);
-        }
+    for name in git_variables() {
+        command.env_remove(name);
     }
     Ok(command.output()?)
 }
