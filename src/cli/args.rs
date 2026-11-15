@@ -730,7 +730,8 @@ impl Command {
             | Command::Auth(Auth { action: None }) => true,
             // a lock may download a file to pin it; --check only compares
             Command::Lock(lock) => lock.check || lock.dry.dry_run,
-            Command::Export(export) => !export.force,
+            // -o may name a file anywhere, outside the project too
+            Command::Export(export) => export.output.is_none(),
             Command::Add(Add { dry, .. })
             | Command::Get(Get { dry, .. })
             | Command::Push(Push { dry, .. })

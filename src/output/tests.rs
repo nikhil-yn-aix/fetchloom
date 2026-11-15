@@ -554,7 +554,7 @@ fn a_fix_is_only_a_command_the_table_allows() {
         ("status", true, &["--verify", "--check", "--sources"]),
         ("diff", true, &[]),
         ("list", true, &[]),
-        ("export", true, &["--format", "--output"]),
+        ("export", true, &["--format"]),
         ("push", false, &["--dry-run"]),
         ("path", false, &[]),
         ("cache", true, &[]),
