@@ -36,6 +36,11 @@ _SWITCHES = {
     "--strict": "strict",
 }
 _VALUES = {"-o": "path", "--output": "path", "--dir": "folder", "--sha256": "sha256", "-C": "project"}
+# flags no helper takes, as help names them, each with what a python caller does instead
+_UNTAKEN = {
+    "add --web-page": "run `fetchloom get --web-page` at a terminal, as get() has no keyword for it",
+    "`--mirror <folder>`": "the FETCHLOOM_MIRRORS variable set to <folder>",
+}
 # an example or command in backticks, or input fetchloom quotes, as in `found no dataset matching "x"`
 _QUOTED = re.compile(r'`[^`]*`|"[^"]*"')
 # a fetchloom command in backticks, which fetchloom words with the arguments the helper gave it
@@ -74,7 +79,9 @@ class Error(Exception):
     ``message`` its summary. ``details`` lists supporting lines, ``help`` is advice for a person
     or None, and ``code`` is the exit code. ``kind`` is None when fetchloom stopped without a JSON
     answer, and ``message`` then ends with the last lines it said on stderr. ``code`` is None when
-    the helper raised the error itself, with no process to exit. ``str(error)`` reads like the
+    the helper raised the error itself, with no process to exit. ``result`` is the JSON result
+    fetchloom gave with the error, as a sync that placed some datasets lists them in
+    ``datasets`` and those that wait in ``waiting``, or None. ``str(error)`` reads like the
     command line's error: the message, then each detail and the help on a line of its own.
     """
 
@@ -85,14 +92,16 @@ class Error(Exception):
         details: list[str] | None = None,
         help: str | None = None,
         code: int | None = None,
+        result: Any = None,
     ) -> None:
         # every field goes to args, so the error survives pickling between processes
-        super().__init__(kind, message, details, help, code)
+        super().__init__(kind, message, details, help, code, result)
         self.kind = kind
         self.message = message
         self.details = details or []
         self.help = help
         self.code = code
+        self.result = result
 
     def __str__(self) -> str:
         lines = [self.message if self.kind is None else f"{self.kind}: {self.message}"]
@@ -130,7 +139,7 @@ def path(
         call = _path_call(meant, project, {"yes": yes, "offline": offline, "locked": locked})
         help = f"did you mean `{call}`?"
         details = _still_named(error.details, error.message, help)
-        raise Error(error.kind, error.message, details, help, error.code) from None
+        raise Error(error.kind, error.message, details, help, error.code, error.result) from None
     return Path(answer["path"])
 
 
@@ -172,7 +181,16 @@ def sync(
     named = [names] if isinstance(names, str) else list(names)
     if named:
         arguments += ["--", *named]
-    result = _run(arguments, project, {"project", "yes", "offline", "locked", "verify", "strict"})
+    switches = {"yes": yes, "offline": offline, "locked": locked, "verify": verify, "strict": strict}
+    try:
+        result = _run(arguments, project, {"project", *switches})
+    except Error as error:
+        meant = _meant_names(error.help, project, _placeholders(error.details))
+        if meant is None:
+            raise
+        help = f"did you mean `{_sync_call(meant, project, switches)}`?"
+        details = _still_named(error.details, error.message, help)
+        raise Error(error.kind, error.message, details, help, error.code, error.result) from None
     return Path(result["project"])
 
 
@@ -218,7 +236,18 @@ def get(
         arguments.append("--force")
     _options(arguments, yes, offline, False)
     keywords = {"path", "folder", "sha256", "force", "yes", "offline"}
-    result = _run([*arguments, "--", link], ".", keywords)
+    try:
+        result = _run([*arguments, "--", link], ".", keywords)
+    except Error as error:
+        meant = _meant_link(error.help)
+        if meant is None:
+            raise
+        guessed, after = meant
+        given = {"path": path, "folder": folder, "sha256": sha256}
+        call = _get_call(guessed, given, {"force": force, "yes": yes, "offline": offline})
+        help = f"did you mean `{call}`?{after}"
+        details = _still_named(error.details, error.message, help)
+        raise Error(error.kind, error.message, details, help, error.code, error.result) from None
     return Path(result["file"] if path is not None else result["folder"])
 
 
@@ -319,7 +348,7 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
             help = told(help, placeholders)
         message = told(error["message"], placeholders)
         details = _still_named([told(detail, placeholders) for detail in error["details"]], message, help)
-        raise Error(error["kind"], message, details, help, finished.returncode)
+        raise Error(error["kind"], message, details, help, finished.returncode, answer.get("result"))
     return answer["result"]
 
 
@@ -370,13 +399,25 @@ def _as_typed(text: str, project: str | os.PathLike[str], placeholders: dict[str
             for folder in [".", os.getcwd()]:
                 shown = _folder_shown(folder, placeholders)
                 if shown is not None:
-                    words = words.removeprefix(f"-C {shown} ")
+                    words = words.removeprefix(f"-C {hidden.get(shown, shown)} ")
         before, separator, names = words.partition(" -- ")
         if separator and not any(name.lstrip("'\"").startswith("-") for name in names.split()):
             words = f"{before} {names}"
         return f"`fetchloom {words}`"
 
-    return _COMMAND.sub(typed, text)
+    # a folder holding a backtick would end its command's backticks early, so a mark without one
+    # stands in for it while the commands are read
+    hidden: dict[str, str] = {}
+    for folder in [".", os.getcwd(), _local(project)]:
+        shown = _folder_shown(folder, placeholders)
+        if shown is not None and "`" in shown and shown not in hidden:
+            hidden[shown] = f"\0{len(hidden)}\0"
+    for shown, mark in hidden.items():
+        text = text.replace(f"-C {shown} ", f"-C {mark} ")
+    text = _COMMAND.sub(typed, text)
+    for shown, mark in hidden.items():
+        text = text.replace(mark, shown)
+    return text
 
 
 def _meant(help: str | None, project: str | os.PathLike[str], placeholders: dict[str, str]) -> str | None:
@@ -384,17 +425,49 @@ def _meant(help: str | None, project: str | os.PathLike[str], placeholders: dict
     ``path`` in ``project``, whose folder ``placeholders`` may name, that names nothing, or None
     for any other help and for a name a shell needs quoted. that help repeats the command line as
     typed, so the folder after ``-C`` is ``project`` as the helper gave it."""
-    folder = ""
-    if os.fspath(project) != ".":
-        shown = _folder_shown(_local(project), placeholders)
-        if shown is None:
-            return None
-        folder = f"-C {shown} "
+    folder = _typed_folder(project, placeholders)
+    if folder is None:
+        return None
     flags = "(?: --(?:yes|offline|locked))*"
     guess = re.fullmatch(
         rf"did you mean `fetchloom {re.escape(folder)}path{flags} ([A-Za-z0-9_./:@%+=,~-]+)`\?", help or ""
     )
     return guess.group(1) if guess else None
+
+
+def _meant_names(help: str | None, project: str | os.PathLike[str], placeholders: dict[str, str]) -> list[str] | None:
+    """the names fetchloom guessed were meant in ``help``, its did-you-mean for names given to
+    ``sync``, as :func:`_meant` reads one given to ``path``."""
+    folder = _typed_folder(project, placeholders)
+    if folder is None:
+        return None
+    flags = "(?: --(?:yes|offline|locked|verify|strict))*"
+    name = "[A-Za-z0-9_./:@%+=,~][A-Za-z0-9_./:@%+=,~-]*"
+    guess = re.fullmatch(rf"did you mean `fetchloom {re.escape(folder)}sync{flags}((?: {name})+)`\?", help or "")
+    return guess.group(1).split() if guess else None
+
+
+def _meant_link(help: str | None) -> tuple[str, str] | None:
+    """the link fetchloom guessed was meant in ``help``, its did-you-mean for a link given to
+    ``get``, with what the help says after it, or None for any other help. fetchloom shows a link
+    with no character a shell reads as it is, and puts any other in double quotes."""
+    guess = re.fullmatch(
+        r'did you mean `fetchloom get(?: [^`]*)? (?:"([^"$`!\\]*)"|([A-Za-z0-9_./:@%+=,~-]+))`\?(.*)',
+        help or "",
+        re.DOTALL,
+    )
+    if guess is None:
+        return None
+    return guess.group(1) or guess.group(2), guess.group(3)
+
+
+def _typed_folder(project: str | os.PathLike[str], placeholders: dict[str, str]) -> str | None:
+    """``-C`` and ``project`` as fetchloom repeats them in a command line typed with them, with
+    the space after, nothing for the working folder, or None for a folder it withholds."""
+    if os.fspath(project) == ".":
+        return ""
+    shown = _folder_shown(_local(project), placeholders)
+    return None if shown is None else f"-C {shown} "
 
 
 def _path_call(name: str, project: str | os.PathLike[str], switches: dict[str, bool]) -> str:
@@ -405,6 +478,34 @@ def _path_call(name: str, project: str | os.PathLike[str], switches: dict[str, b
         words.append(f"project={json.dumps(os.fspath(project), ensure_ascii=False)}")
     words += [f"{keyword}=True" for keyword, on in switches.items() if on]
     return f"fetchloom.path({', '.join(words)})"
+
+
+def _sync_call(names: list[str], project: str | os.PathLike[str], switches: dict[str, bool]) -> str:
+    """the call of :func:`sync` for ``names`` in ``project`` with the keywords in ``switches``
+    that are on, as a python caller types it."""
+    words = []
+    if os.fspath(project) != ".":
+        words.append(json.dumps(os.fspath(project), ensure_ascii=False))
+    named = names[0] if len(names) == 1 else names
+    words.append(f"names={json.dumps(named, ensure_ascii=False)}")
+    words += [f"{keyword}=True" for keyword, on in switches.items() if on]
+    return f"fetchloom.sync({', '.join(words)})"
+
+
+def _get_call(link: str, given: dict[str, Any], switches: dict[str, bool]) -> str:
+    """the call of :func:`get` for ``link`` with the ``path``, ``folder`` and ``sha256`` in
+    ``given`` that were given and the keywords in ``switches`` that are on, as a python caller
+    types it."""
+    words = [json.dumps(link, ensure_ascii=False)]
+    if given["path"] is not None:
+        words.append(json.dumps(os.fspath(given["path"]), ensure_ascii=False))
+    words += [
+        f"{keyword}={json.dumps(os.fspath(value), ensure_ascii=False)}"
+        for keyword, value in given.items()
+        if keyword != "path" and value is not None
+    ]
+    words += [f"{keyword}=True" for keyword, on in switches.items() if on]
+    return f"fetchloom.get({', '.join(words)})"
 
 
 def _call(argv: list[str]) -> subprocess.CompletedProcess[str]:
@@ -476,6 +577,8 @@ def _spoken(text: str, keywords: set[str]) -> str:
     values = {flag: name for flag, name in _VALUES.items() if name in keywords}
     longest = sorted([*switches, *values], key=len, reverse=True)
     found = re.compile(rf"(add )?(?<![\w-])({'|'.join(map(re.escape, longest))})(?![\w-])")
+    for flag, instead in _UNTAKEN.items():
+        text = text.replace(flag, instead)
 
     def named(match: re.Match[str]) -> str:
         added, flag = match.group(1), match.group(2)

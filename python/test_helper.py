@@ -332,8 +332,8 @@ class Errors(unittest.TestCase):
             ),
             (
                 lambda: fetchloom.sync(names=["irs"]),
-                "did you mean `fetchloom --json --progress -C . sync -- iris`?",
-                "did you mean `fetchloom sync iris`?",
+                "run `fetchloom --json --progress -C . sync -- iris` again",
+                "run `fetchloom sync iris` again",
             ),
             (
                 lambda: fetchloom.sync(names=["-irs"]),
@@ -663,6 +663,97 @@ class Errors(unittest.TestCase):
         self.assertEqual((copy.kind, copy.message, copy.details, copy.help, copy.code),
                          ("usage", "no data.toml here", ["looked in /p"], "run `fetchloom add`", 2))
         self.assertEqual(str(copy), str(error))
+
+    def test_a_partial_sync_raises_with_what_it_placed_and_what_waits(self):
+        # a pipeline can go on with what was placed without reading the english of the details
+        result = {"project": "p", "datasets": ["keep", "zen"], "waiting": ["gone"]}
+        answer = {
+            "status": "error",
+            "result": result,
+            "errors": [{
+                "kind": "reference.unresolved",
+                "message": "127.0.0.1 has nothing at http://127.0.0.1/gone.csv (404)",
+                "details": ["placed keep, zen, whose files are all on this machine", "gone waits for files this run could not get"],
+                "help": None,
+            }],
+            "warnings": [],
+        }
+        response = subprocess.CompletedProcess([], 10, json.dumps(answer), "")
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom, "_call", return_value=response):
+                with self.assertRaises(fetchloom.Error) as raised:
+                    fetchloom.sync("p")
+        self.assertEqual(raised.exception.result, result)
+        self.assertEqual(pickle.loads(pickle.dumps(raised.exception)).result, result)
+        self.assertIsNone(fetchloom.Error("usage", "refused").result)
+
+    def mistyped(self, call, help):
+        """the help of the :class:`fetchloom.Error` ``call`` raises when fetchloom answers a
+        mistyped name or link with ``help``."""
+        answer = {
+            "status": "error",
+            "errors": [{"kind": "usage", "message": "refused", "details": [], "help": help}],
+            "warnings": [],
+        }
+        response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+        with patch.object(fetchloom, "_WINDOWS", False), patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom, "_call", return_value=response):
+                with self.assertRaises(fetchloom.Error) as raised:
+                    call()
+        return raised.exception.help
+
+    def test_a_mistyped_name_to_sync_or_link_to_get_is_suggested_as_the_call(self):
+        for call, help, shown in [
+            (
+                lambda: fetchloom.sync("study", names="irs", offline=True),
+                "did you mean `fetchloom --json --progress -C study sync --offline -- iris`?",
+                'did you mean `fetchloom.sync("study", names="iris", offline=True)`?',
+            ),
+            (
+                lambda: fetchloom.sync(names=["irs", "penguins"]),
+                "did you mean `fetchloom --json --progress -C . sync -- iris penguins`?",
+                'did you mean `fetchloom.sync(names=["iris", "penguins"])`?',
+            ),
+            (
+                lambda: fetchloom.get("zenodo.org/records/3608990", "py-iris.csv", yes=True),
+                "did you mean `fetchloom --json --progress -C . get --output=py-iris.csv --yes -- "
+                "https://zenodo.org/records/3608990`? a link starts with https://",
+                'did you mean `fetchloom.get("https://zenodo.org/records/3608990", "py-iris.csv", yes=True)`? '
+                "a link starts with https://",
+            ),
+            (
+                lambda: fetchloom.get("zenodo.org/records/1?download=1", folder="out"),
+                'did you mean `fetchloom --json --progress -C . get --dir=out -- "https://zenodo.org/records/1?download=1"`?',
+                'did you mean `fetchloom.get("https://zenodo.org/records/1?download=1", folder="out")`?',
+            ),
+        ]:
+            with self.subTest(help=help):
+                self.assertEqual(self.mistyped(call, help), shown)
+
+    def test_a_backtick_in_the_project_folder_still_gives_the_call(self):
+        folder = "/work/back`id`tick"
+        help = f"did you mean `fetchloom --json --progress -C '{folder}' path -- iris`?"
+        call = f'fetchloom.path("iris", project="{folder}")'
+        self.assertEqual(self.mistyped(lambda: fetchloom.path("irs", folder), help), f"did you mean `{call}`?")
+
+    def test_help_says_what_a_python_caller_does_for_flags_no_helper_takes(self):
+        for call, help, shown in [
+            (
+                lambda: fetchloom.get("https://example.org/login.csv", "l.csv"),
+                "open it in a browser, else look for a download or raw link. if the page itself is the data, add --web-page",
+                "open it in a browser, else look for a download or raw link. if the page itself is the data, "
+                "run `fetchloom get --web-page` at a terminal, as get() has no keyword for it",
+            ),
+            (
+                lambda: fetchloom.sync(yes=True),
+                "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, "
+                "then you run this command again with `--mirror <folder>`.",
+                "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, "
+                "then you run this command again with the FETCHLOOM_MIRRORS variable set to <folder>.",
+            ),
+        ]:
+            with self.subTest(help=help):
+                self.assertEqual(self.mistyped(call, help), shown)
 
 
 def standing_in(child):
