@@ -574,6 +574,15 @@ impl Reference {
             && version.is_some_and(|version| !version.is_empty())
     }
 
+    /// the text a dataset's name is made from when no file or title names it: the reference
+    /// itself, or for a list its folder or its own name.
+    pub(crate) fn naming(&self) -> String {
+        match self {
+            Reference::List(list) => list.naming(),
+            other => other.to_string(),
+        }
+    }
+
     /// the reference as messages and logs show it, a secret in a link masked.
     pub(crate) fn shown(&self) -> String {
         match self {

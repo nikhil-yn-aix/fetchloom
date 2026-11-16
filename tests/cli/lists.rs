@@ -405,3 +405,17 @@ fn get_checks_the_md5_a_list_line_states() -> Result {
     );
     Ok(())
 }
+
+/// `get` of a checksum list's link fetches every file it lists into one folder, named as `add`
+/// names its dataset, after the list's folder.
+#[test]
+fn get_of_a_checksum_list_fetches_every_file_it_lists() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(&[("SHA256SUMS", gnu())])?;
+    let output = sandbox.run(&["get", &format!("{}/data/SHA256SUMS", server.url)])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let folder = sandbox.work().join("data");
+    assert_eq!(fs::read(folder.join("iris.csv"))?, IRIS);
+    assert_eq!(fs::read(folder.join("sub").join("tips.csv"))?, TIPS);
+    Ok(())
+}

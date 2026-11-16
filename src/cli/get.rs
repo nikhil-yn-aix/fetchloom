@@ -1591,7 +1591,7 @@ fn folder_for(
         _ => listing
             .naming_title()
             .and_then(name::title_name)
-            .or_else(|| name::reference_name(&parsed.reference.to_string()))
+            .or_else(|| name::reference_name(&parsed.reference.naming()))
             .unwrap_or_else(|| "download".to_owned()),
     };
     // a folder named con or aux cannot exist on windows
