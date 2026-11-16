@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::io::{IsTerminal as _, Read as _};
+use std::io::{IsTerminal as _, Read};
 use std::path::Path;
 
 use crate::digest::Sha256;
@@ -30,18 +30,19 @@ pub(super) struct Listed {
     pub(super) checksum: Option<Checksum>,
 }
 
-/// the text of the list at `path`, or of stdin for `-`, and the name messages give it.
+/// the links of the list at `path`, or of stdin for `-`, at most `most`, as [`listed`] reads them.
 pub(super) async fn read(
     path: &Path,
+    most: usize,
     output: &Output,
     stop: &Stop,
-) -> Result<(String, String), Error> {
+) -> Result<Vec<Listed>, Error> {
     stop.check()?;
     if path == Path::new("-") && std::io::stdin().is_terminal() {
         output.awaiting(&format!("reading links from stdin, one per line; {ENDS}"));
     }
     let path = path.to_path_buf();
-    let reading = tokio::task::spawn_blocking(move || read_text(&path, list::MOST_BYTES));
+    let reading = tokio::task::spawn_blocking(move || read_links(&path, most));
     tokio::select! {
         biased;
         () = stop.asked() => Err(Stop::stopped()),
@@ -52,36 +53,24 @@ pub(super) async fn read(
     }
 }
 
-/// the list at `path`, or stdin for `-`, read up to `most` bytes, as a list may be no longer.
-fn read_text(path: &Path, most: u64) -> Result<(String, String), Error> {
-    let (name, reading): (String, Box<dyn std::io::Read>) = if path == Path::new("-") {
-        ("stdin".to_owned(), Box::new(std::io::stdin()))
-    } else {
-        let name = crate::shown::mask_query(&path.display().to_string()).into_owned();
-        let file = std::fs::File::open(path)
-            .map_err(|err| Error::io(format_args!("could not read {name}"), &err))?;
-        (name, Box::new(file))
-    };
-    let mut bytes = Vec::new();
-    reading
-        .take(most + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|err| Error::io(format_args!("could not read {name}"), &err))?;
-    if bytes.len() as u64 > most {
-        return Err(list::too_big(&name, most));
+/// the links of the list at `path`, or stdin for `-`, at most `most`.
+fn read_links(path: &Path, most: usize) -> Result<Vec<Listed>, Error> {
+    if path == Path::new("-") {
+        return listed("stdin", std::io::stdin().lock(), most);
     }
-    let text = String::from_utf8(bytes).map_err(|_| {
-        Error::new(Kind::Usage, format!("{name} is not UTF-8 text"))
-            .help("save the list as UTF-8, then run the command again")
-    })?;
-    Ok((name, text))
+    let name = crate::shown::mask_query(&path.display().to_string()).into_owned();
+    let file = std::fs::File::open(path)
+        .map_err(|err| Error::io(format_args!("could not read {name}"), &err))?;
+    listed(&name, file, most)
 }
 
-/// the links the list `name` holds in `text`, at most `most`, each with the hash its line states:
-/// none on this machine, and no two naming the same data. a path below a folder is refused, as a
-/// list on this machine has no folder.
-pub(super) fn listed(name: &str, text: &str, most: usize) -> Result<Vec<Listed>, Error> {
-    let entries = list::read(name, text, most)?;
+/// the links the list `name` that `reading` gives holds, at most `most`, each with the hash its
+/// line states: none on this machine, and no two naming the same data. a path below a folder is
+/// refused, as a list on this machine has no folder.
+pub(super) fn listed(name: &str, reading: impl Read, most: usize) -> Result<Vec<Listed>, Error> {
+    let mut lines = list::Lines::new(name, most, None);
+    lines.read_from(reading)?;
+    let entries = lines.finish()?;
     if entries.is_empty() {
         return Err(
             Error::new(Kind::Usage, format!("{name} lists no links")).help(
@@ -99,13 +88,9 @@ pub(super) fn listed(name: &str, text: &str, most: usize) -> Result<Vec<Listed>,
                 link: Some(link), ..
             } => link.clone(),
             Named::Path { path, link: None } => {
-                // the line as written, since a path on this machine lost its `./` as a path
-                let written = text
-                    .trim_start_matches('\u{feff}')
-                    .lines()
-                    .nth(entry.number - 1)
-                    .and_then(|line| line.split_whitespace().next())
-                    .unwrap_or(path);
+                // the line as written, since a path on this machine lost its `./` as a path. the
+                // first path refused is the first a line names
+                let written = lines.first_path().unwrap_or(path);
                 if local::is_path(written) {
                     return Err(on_this_machine(&at, written));
                 }
@@ -299,7 +284,7 @@ mod tests {
         let text = format!(
             "\u{feff}# measurements to compare\r\n\r\nzenodo:3608990\n  https://example.org/iris.csv   {IRIS}  \nhttps://example.org/tips.csv md5:{md5}\n{IRIS}  https://example.org/wine.csv\nnames.csv sha256:{IRIS} https://elsewhere.org/names.csv\n# done\n",
         );
-        let got: Vec<(String, String, Option<Checksum>)> = listed("links.txt", &text, 10)
+        let got: Vec<(String, String, Option<Checksum>)> = listed("links.txt", text.as_bytes(), 10)
             .unwrap()
             .into_iter()
             .map(|listed| (listed.link, listed.at, listed.checksum))
@@ -335,7 +320,7 @@ mod tests {
                 ),
             ]
         );
-        let error = listed("links.txt", &format!("{IRIS}  iris.csv\n"), 10).unwrap_err();
+        let error = listed("links.txt", format!("{IRIS}  iris.csv\n").as_bytes(), 10).unwrap_err();
         assert_eq!(
             error.message,
             "line 1 of links.txt names \"iris.csv\", a path, and only a list at a link has a folder to read it below"
@@ -346,7 +331,7 @@ mod tests {
     /// line one literal word for a shell.
     #[test]
     fn a_line_of_search_words_names_a_search_a_shell_reads_as_written() {
-        let error = listed("links.txt", "iris $(id) a;b&c it's\n", 10)
+        let error = listed("links.txt", "iris $(id) a;b&c it's\n".as_bytes(), 10)
             .unwrap_err()
             .told();
         let help = error.help.as_deref().unwrap_or_default();
@@ -384,7 +369,7 @@ mod tests {
     #[test]
     fn a_list_is_refused_at_its_first_unusable_line_with_any_secret_masked() {
         let text = "https://example.org/iris.csv\nhttps://example.org/wine.csv?token=hunter2\nzenodo:not-a-number\n";
-        let error = listed("links.txt", text, 10).unwrap_err();
+        let error = listed("links.txt", text.as_bytes(), 10).unwrap_err();
         assert_eq!(error.kind, Kind::ReferenceInvalid);
         assert!(
             error.message.starts_with("line 3 of links.txt: "),
@@ -399,7 +384,7 @@ mod tests {
             ),
             ("# nothing yet\n\n", Kind::Usage, "links.txt lists no links"),
         ] {
-            let error = listed("links.txt", text, 10).unwrap_err();
+            let error = listed("links.txt", text.as_bytes(), 10).unwrap_err();
             assert_eq!(
                 (error.kind, error.message.as_str()),
                 (kind, message),
@@ -409,7 +394,7 @@ mod tests {
         let files =
             "https://zenodo.org/records/1/files/a.csv\nhttps://zenodo.org/records/1/files/b.csv\n";
         assert_eq!(
-            listed("links.txt", files, 10).unwrap().len(),
+            listed("links.txt", files.as_bytes(), 10).unwrap().len(),
             2,
             "two files of one record are two links"
         );
@@ -482,7 +467,7 @@ mod tests {
     fn local_paths_and_file_links_are_refused_in_lists() {
         for link in ["./flowers", "file:///etc/hostname", "~/flowers.csv"] {
             let text = format!("zenodo:1\n{link}\n");
-            let error = listed("links.txt", &text, 10).unwrap_err();
+            let error = listed("links.txt", text.as_bytes(), 10).unwrap_err();
             assert_eq!(error.kind, Kind::ReferenceInvalid, "{link}");
             assert_eq!(
                 error.message,
@@ -497,21 +482,5 @@ mod tests {
                 "{link}"
             );
         }
-    }
-
-    /// a list longer than a list may be is refused before it is read whole.
-    #[test]
-    fn a_list_past_its_size_limit_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("links.txt");
-        std::fs::write(&path, "https://example.org/iris.csv\n").unwrap();
-        let error = read_text(&path, 10).unwrap_err();
-        assert!(
-            error
-                .message
-                .ends_with("is larger than 10 B, the most fetchloom reads of a list"),
-            "{error:?}"
-        );
-        assert!(read_text(&path, 100).is_ok());
     }
 }

@@ -1,11 +1,14 @@
 //! lists of files, each one dataset: a `SHA256SUMS` or `MD5SUMS` file, a pooch registry or a list
 //! of links names files at their own links or below the list's folder, with the MD5 or SHA-256 a
 //! line states, which the first download checks. one reader takes every line form, told apart by
-//! which field is a hash. a list is text anyone could have written, so it is read whole and
+//! which field is a hash. a list is text anyone could have written, so it is read to its end and
 //! strictly before any file is asked for, and the links it gives are trusted no more than others.
+//! it is read a line at a time, as long as the files it names are no more than a dataset may hold.
 
+use std::collections::{HashMap, HashSet, hash_map};
 use std::fmt;
-use std::io::Read as _;
+use std::hash::BuildHasher as _;
+use std::io::Read;
 use std::path::Path;
 
 use url::Url;
@@ -13,10 +16,7 @@ use url::Url;
 use super::{Access, Listing, Reference, Remote};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
-use crate::net::Api;
-
-/// the most bytes of a list read, as much as the network reads of any answer read whole.
-pub(crate) const MOST_BYTES: u64 = 64 << 20;
+use crate::net::{Api, Through};
 
 /// what a line holds, for messages about one that cannot be read.
 pub(crate) const FORM: &str = "a line is a file's link, then its MD5 or SHA-256 if known, as md5:<32 hex digits> or sha256:<64 hex digits>. a list at a link may name paths below its folder, as `<hash>  <path>`, `SHA256 (<path>) = <hash>` or `<path> <hash> [<link>]`. blank lines and lines starting with # are skipped";
@@ -27,6 +27,10 @@ const MARK: &str = "list:";
 /// the longest path and link, in bytes, a list may give a file: the most data.lock keeps.
 const LONGEST_PATH: usize = 4096;
 const LONGEST_LINK: usize = 64 << 10;
+
+/// the longest line of a list: a path and a link as long as data.lock keeps, a hash, and room for
+/// the spaces between them.
+const LONGEST_LINE: usize = LONGEST_PATH + LONGEST_LINK + 1024;
 
 /// a list as data.toml names it after `list:`: at a link, or a file in the project folder by its
 /// path there, with `/` between folders.
@@ -176,7 +180,8 @@ impl List {
             }
         };
         let shown = self.shown();
-        let response = api.get(url).await?;
+        let mut lines = Lines::new(&shown, api.most_files(), Some(url));
+        let response = api.get_through(url, &mut lines).await?;
         let host = crate::net::host(&response.url);
         match response.status {
             200..=299 => {}
@@ -195,35 +200,10 @@ impl List {
                 ));
             }
         }
-        let text = String::from_utf8(response.body.to_vec())
-            .map_err(|_| super::invalid(&shown, "the list is not UTF-8 text"))?;
-        if text
-            .trim_start_matches('\u{feff}')
-            .trim_start()
-            .starts_with('<')
-        {
-            return Err(Error::new(
-                Kind::SourceInvalid,
-                format!("{shown} answers with a web page, not a list of files"),
-            )
-            .help("open the link in a browser: a site that asks you to sign in shows a page instead. use the link that downloads the list itself"));
-        }
-        let summed_at = text
-            .lines()
-            .position(|line| is_summed(line.trim()))
-            .map(|index| format!("line {} of {shown}", index + 1));
-        let read = match summed_at {
-            Some(at) => Err(summed(&at, Some(&below(url, "")))),
-            None => read(&shown, &text, api.most_files()),
-        }
-        .and_then(|entries| listing(self, entries, Some(url)));
-        read.map_err(|mut error| {
-            // the list is the server's, so nothing on this machine is to blame
-            if error.kind == Kind::Usage {
-                error.kind = Kind::SourceInvalid;
-            }
-            error
-        })
+        lines
+            .finish()
+            .and_then(|entries| listing(self, entries, Some(url)))
+            .map_err(server_blamed)
     }
 
     /// the files a list in the project at `root` names, read from its file there, at most `most`.
@@ -234,8 +214,7 @@ impl List {
                 format!("{self} is no list in the project folder"),
             ));
         };
-        let text = read_file(root, path, MOST_BYTES)?;
-        let entries = read(path, &text, most)?;
+        let entries = read(path, open(root, path)?, most)?;
         let listing = listing(self, entries, None)?;
         super::check(&Reference::List(self.clone()), listing, most)
     }
@@ -298,10 +277,9 @@ fn summed(at: &str, folder: Option<&Url>) -> Error {
     }
 }
 
-/// the text of the list at `path` in the project at `root`, at most `most` bytes, refused when a
-/// folder on the way or the list itself is a link, since a cloned project's link could take the
-/// reading anywhere.
-fn read_file(root: &Path, path: &str, most: u64) -> Result<String, Error> {
+/// the list at `path` in the project at `root`, opened to read, refused when a folder on the way
+/// or the list itself is a link, since a cloned project's link could take the reading anywhere.
+fn open(root: &Path, path: &str) -> Result<std::fs::File, Error> {
     let shown = crate::name::escaped(path);
     let mut at = root.to_path_buf();
     let mut parts = path.split('/').peekable();
@@ -322,18 +300,7 @@ fn read_file(root: &Path, path: &str, most: u64) -> Result<String, Error> {
             Err(err) => return Err(not_there(&shown, &err)),
         }
     }
-    let file = crate::volume::read_unfollowed(&at).map_err(|err| not_there(&shown, &err))?;
-    let mut bytes = Vec::new();
-    file.take(most + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|err| Error::io(format_args!("could not read {shown}"), &err))?;
-    if bytes.len() as u64 > most {
-        return Err(too_big(&shown, most));
-    }
-    String::from_utf8(bytes).map_err(|_| {
-        Error::new(Kind::Usage, format!("{shown} is not UTF-8 text"))
-            .help("save the list as UTF-8, then run the command again")
-    })
+    crate::volume::read_unfollowed(&at).map_err(|err| not_there(&shown, &err))
 }
 
 fn not_there(shown: &str, err: &std::io::Error) -> Error {
@@ -350,43 +317,257 @@ fn not_there(shown: &str, err: &std::io::Error) -> Error {
     )
 }
 
-/// the error for the list `shown`, which holds more than the `most` bytes a list may.
-pub(crate) fn too_big(shown: &str, most: u64) -> Error {
-    Error::new(
-        Kind::Usage,
-        format!(
-            "{shown} is larger than {}, the most fetchloom reads of a list",
-            crate::units::size(most)
-        ),
-    )
-    .help("split it into lists of fewer files, each a dataset of its own")
+/// the entries of the list on this machine `name` that `reading` gives, at most `most` of them.
+pub(crate) fn read(name: &str, reading: impl Read, most: usize) -> Result<Vec<Entry>, Error> {
+    let mut lines = Lines::new(name, most, None);
+    lines.read_from(reading)?;
+    lines.finish()
 }
 
-/// the entries of the list `name`, whose text is `text`, at most `most` of them. a line in no
-/// known form, a hash fetchloom does not check, or a path that could leave its folder is refused,
-/// naming the line. a line naming a file at a hash an earlier line gave counts once.
-pub(crate) fn read(name: &str, text: &str, most: usize) -> Result<Vec<Entry>, Error> {
-    let mut entries = Vec::new();
-    // openbsd's own SHA256 repeats lines byte for byte, as `sha256sum -c` accepts
-    let mut seen = std::collections::HashSet::new();
-    for (index, written) in text.trim_start_matches('\u{feff}').lines().enumerate() {
-        let number = index + 1;
-        let Some((named, checksum)) = read_line(name, number, written)? else {
-            continue;
+/// a list read a piece at a time as its bytes come, holding only its entries, at most `most`, and
+/// the line whose end has not come yet, at most [`LONGEST_LINE`] bytes. a line in no known form,
+/// a hash fetchloom does not check, or a path that could leave its folder is refused, naming the
+/// line. a line naming a file at a hash an earlier line gave counts once.
+pub(crate) struct Lines<'a> {
+    name: &'a str,
+    most: usize,
+    /// the list's own link, when it is at one: its text is the server's, so a line it cannot read
+    /// is the source's fault, and its folder's link pins what a `sum` line lists.
+    link: Option<&'a Url>,
+    entries: Vec<Entry>,
+    seen: Seen,
+    /// the lines read so far.
+    number: usize,
+    /// whether a line with text was read, before which a list at a link starting with `<` is a
+    /// web page.
+    begun: bool,
+    /// the first word, as written, of the first line naming a path, which no list on this
+    /// machine has a folder for: a path its line writes from `./` is a path on this machine.
+    first_path: Option<String>,
+    unended: Vec<u8>,
+}
+
+impl<'a> Lines<'a> {
+    /// a reader of the list `name`, at most `most` entries; `link` is the list's own link when it
+    /// is at one.
+    pub(crate) fn new(name: &'a str, most: usize, link: Option<&'a Url>) -> Self {
+        Lines {
+            name,
+            most,
+            link,
+            entries: Vec::new(),
+            seen: Seen::default(),
+            number: 0,
+            begun: false,
+            first_path: None,
+            unended: Vec::new(),
+        }
+    }
+
+    /// reads what `reading` gives, to its end.
+    pub(crate) fn read_from(&mut self, mut reading: impl Read) -> Result<(), Error> {
+        let mut buffer = vec![0; 64 << 10];
+        loop {
+            match reading.read(&mut buffer) {
+                Ok(0) => return Ok(()),
+                Ok(read) => self.piece(&buffer[..read])?,
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(err) => {
+                    return Err(Error::io(
+                        format_args!("could not read {}", crate::name::escaped(self.name)),
+                        &err,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// the entries of the whole list, once its last piece is read.
+    pub(crate) fn finish(&mut self) -> Result<Vec<Entry>, Error> {
+        let unended = std::mem::take(&mut self.unended);
+        if !unended.is_empty() {
+            self.line(&unended).map_err(|error| self.blamed(error))?;
+        }
+        Ok(std::mem::take(&mut self.entries))
+    }
+
+    /// the first word, as written, of the first line naming a path.
+    pub(crate) fn first_path(&self) -> Option<&str> {
+        self.first_path.as_deref()
+    }
+
+    fn lines(&mut self, mut bytes: &[u8]) -> Result<(), Error> {
+        while let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+            let (line, rest) = bytes.split_at(end);
+            bytes = &rest[1..];
+            if self.unended.is_empty() {
+                self.line(line)?;
+            } else {
+                self.unended_grows(line)?;
+                let mut unended = std::mem::take(&mut self.unended);
+                self.line(&unended)?;
+                unended.clear();
+                self.unended = unended;
+            }
+        }
+        self.unended_grows(bytes)
+    }
+
+    /// keeps `bytes` as more of the line whose end has not come yet.
+    fn unended_grows(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        if self.unended.len() + bytes.len() > LONGEST_LINE {
+            return Err(self.too_long(self.number + 1));
+        }
+        self.unended.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    /// reads the next line, `raw`, without its line break.
+    fn line(&mut self, raw: &[u8]) -> Result<(), Error> {
+        self.number += 1;
+        let number = self.number;
+        if raw.len() > LONGEST_LINE {
+            return Err(self.too_long(number));
+        }
+        let Ok(mut written) = std::str::from_utf8(raw) else {
+            return Err(self.not_text());
         };
-        if !seen.insert((named.clone(), checksum)) {
-            continue;
+        if number == 1 {
+            written = written.trim_start_matches('\u{feff}');
         }
-        if entries.len() == most {
-            return Err(super::too_many(name, most, "list fewer files"));
+        let line = written.trim();
+        if line.is_empty() {
+            return Ok(());
         }
-        entries.push(Entry {
+        if !std::mem::replace(&mut self.begun, true) && self.link.is_some() && line.starts_with('<')
+        {
+            return Err(Error::new(
+                Kind::SourceInvalid,
+                format!("{} answers with a web page, not a list of files", self.name),
+            )
+            .help("open the link in a browser: a site that asks you to sign in shows a page instead. use the link that downloads the list itself"));
+        }
+        if is_summed(line) {
+            let folder = self.link.map(|link| below(link, ""));
+            return Err(summed(
+                &format!("line {number} of {}", self.name),
+                folder.as_ref(),
+            ));
+        }
+        let Some((named, checksum)) = read_line(self.name, number, written)? else {
+            return Ok(());
+        };
+        // openbsd's own SHA256 repeats lines byte for byte, as `sha256sum -c` accepts
+        if self.seen.repeats(&self.entries, &named, checksum) {
+            return Ok(());
+        }
+        if self.entries.len() == self.most {
+            let instead = if self.link.is_some() {
+                "use the list of a narrower folder if the site has one"
+            } else {
+                "split it into lists of fewer files, each a dataset of its own"
+            };
+            return Err(super::too_many(self.name, self.most, instead));
+        }
+        if self.first_path.is_none() && matches!(named, Named::Path { link: None, .. }) {
+            self.first_path = line.split_whitespace().next().map(str::to_owned);
+        }
+        self.entries.push(Entry {
             number,
             named,
             checksum,
         });
+        Ok(())
     }
-    Ok(entries)
+
+    fn too_long(&self, number: usize) -> Error {
+        Error::new(
+            Kind::Usage,
+            format!(
+                "line {number} of {} is longer than {}, the most one line of a list holds",
+                self.name,
+                crate::units::size(LONGEST_LINE as u64)
+            ),
+        )
+        .help("a line names one file: data.lock keeps a path of up to 4,096 bytes and a link of up to 64 KiB")
+    }
+
+    fn not_text(&self) -> Error {
+        if self.link.is_some() {
+            return super::invalid(self.name, "the list is not UTF-8 text");
+        }
+        Error::new(
+            Kind::Usage,
+            format!("{} is not UTF-8 text", crate::name::escaped(self.name)),
+        )
+        .help("save the list as UTF-8, then run the command again")
+    }
+
+    fn blamed(&self, error: Error) -> Error {
+        if self.link.is_some() {
+            server_blamed(error)
+        } else {
+            error
+        }
+    }
+}
+
+impl Through for Lines<'_> {
+    fn restart(&mut self) {
+        *self = Lines::new(self.name, self.most, self.link);
+    }
+
+    fn piece(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        self.lines(bytes).map_err(|error| self.blamed(error))
+    }
+}
+
+/// `error` about a list at a link: the list is the server's, so nothing on this machine is to
+/// blame.
+fn server_blamed(mut error: Error) -> Error {
+    if error.kind == Kind::Usage {
+        error.kind = Kind::SourceInvalid;
+    }
+    error
+}
+
+/// the entries a list has read, by a hash of what each names, so a repeated line is found without
+/// a second copy of its text.
+#[derive(Default)]
+struct Seen {
+    hashing: std::hash::RandomState,
+    /// the index of the first entry of each hash.
+    first: HashMap<u64, usize>,
+    /// each entry whose hash an earlier, other entry had first.
+    clashed: HashSet<(Named, Option<Checksum>)>,
+}
+
+impl Seen {
+    /// whether one of `entries` names `named` at `checksum`; if not, it is counted as the next.
+    fn repeats(&mut self, entries: &[Entry], named: &Named, checksum: Option<Checksum>) -> bool {
+        let hash = self.hashing.hash_one((named, checksum));
+        self.repeats_at(hash, entries, named, checksum)
+    }
+
+    fn repeats_at(
+        &mut self,
+        hash: u64,
+        entries: &[Entry],
+        named: &Named,
+        checksum: Option<Checksum>,
+    ) -> bool {
+        match self.first.entry(hash) {
+            hash_map::Entry::Vacant(free) => {
+                free.insert(entries.len());
+                false
+            }
+            hash_map::Entry::Occupied(first) => {
+                let first = &entries[*first.get()];
+                (first.named == *named && first.checksum == checksum)
+                    || !self.clashed.insert((named.clone(), checksum))
+            }
+        }
+    }
 }
 
 /// what the line `written`, number `number` of the list `name`, names, or none for a blank line
@@ -401,9 +582,6 @@ fn read_line(
         return Ok(None);
     }
     let at = format!("line {number} of {name}");
-    if is_summed(line) {
-        return Err(summed(&at, None));
-    }
     if line.starts_with('\\') {
         return Err(Error::new(
             Kind::Usage,

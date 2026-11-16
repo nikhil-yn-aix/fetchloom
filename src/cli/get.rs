@@ -360,8 +360,13 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
     let Some(path) = &args.input_file else {
         return Ok(asked);
     };
-    let (name, text) = links::read(path, &context.output, &context.stop).await?;
-    let listed = links::listed(&name, &text, context.settings.most_files.value)?;
+    let listed = links::read(
+        path,
+        context.settings.most_files.value,
+        &context.output,
+        &context.stop,
+    )
+    .await?;
     asked.extend(listed.into_iter().map(|listed| Asked {
         expected: listed.checksum.map(|checksum| Expected {
             checksum,

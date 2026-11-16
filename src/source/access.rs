@@ -12,7 +12,7 @@ use url::Url;
 
 use crate::account::{self, Account, KeyShape};
 use crate::error::{Error, Kind};
-use crate::net::{Api, Extra, Response};
+use crate::net::{Api, Extra, Response, Through};
 
 /// what one source may ask and link to, and the key it takes.
 pub(crate) struct Access {
@@ -639,6 +639,18 @@ impl<A: Api> Api for Scoped<'_, A> {
         async move {
             allowed?;
             self.api.get_once(url).await
+        }
+    }
+
+    fn get_through(
+        &self,
+        url: &Url,
+        through: &mut impl Through,
+    ) -> impl Future<Output = Result<Response, Error>> + Send {
+        let allowed = self.allows(url);
+        async move {
+            allowed?;
+            self.api.get_through(url, through).await
         }
     }
 

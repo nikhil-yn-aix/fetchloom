@@ -20,7 +20,7 @@ fn path(path: &str) -> Named {
 }
 
 fn entries(text: &str) -> Vec<(Named, Option<Checksum>)> {
-    read("SUMS", text, 100)
+    read("SUMS", text.as_bytes(), 100)
         .unwrap()
         .into_iter()
         .map(|entry| (entry.named, entry.checksum))
@@ -28,7 +28,7 @@ fn entries(text: &str) -> Vec<(Named, Option<Checksum>)> {
 }
 
 fn refused(text: &str) -> Error {
-    read("SUMS", text, 100).unwrap_err()
+    read("SUMS", text.as_bytes(), 100).unwrap_err()
 }
 
 /// GNU's two modes and `md5 -r`'s one space, BSD's tagged lines, pooch's registry and a list of
@@ -192,7 +192,7 @@ fn a_line_that_could_leave_its_folder_is_refused() {
         assert_eq!(error.message, message, "{text}");
     }
     let many = format!("{SHA}  a\n{SHA}  b\n{SHA}  c\n");
-    let error = read("SUMS", &many, 2).unwrap_err();
+    let error = read("SUMS", many.as_bytes(), 2).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
     assert_eq!(
         error.message,
@@ -209,7 +209,12 @@ fn a_list_at_a_link_places_each_path_below_its_folder() {
     let text = format!(
         "{SHA}  iris.csv\n{OTHER}  sub/odd name?#%.csv\n{MD5}  https://elsewhere.org/x.csv\nhttp:x {MD5}\n"
     );
-    let error = listing(&list, read("SHA256SUMS", &text, 10).unwrap(), Some(&at)).unwrap_err();
+    let error = listing(
+        &list,
+        read("SHA256SUMS", text.as_bytes(), 10).unwrap(),
+        Some(&at),
+    )
+    .unwrap_err();
     assert!(
         error
             .message
@@ -221,7 +226,12 @@ fn a_list_at_a_link_places_each_path_below_its_folder() {
         error.message
     );
     let text = text.lines().take(3).collect::<Vec<_>>().join("\n");
-    let listed = listing(&list, read("SHA256SUMS", &text, 10).unwrap(), Some(&at)).unwrap();
+    let listed = listing(
+        &list,
+        read("SHA256SUMS", text.as_bytes(), 10).unwrap(),
+        Some(&at),
+    )
+    .unwrap();
     let files: Vec<(&str, &str, Option<Sha256>, Option<Md5>)> = listed
         .files
         .iter()
@@ -271,7 +281,12 @@ fn a_repeated_line_counts_once_and_a_path_with_two_hashes_is_refused() {
     let at = Url::parse("https://example.org/pub/SHA256").unwrap();
     let list = List::Link(at.clone());
     let twice = format!("{SHA}  install78.img\n{OTHER}  install78.img\n");
-    let listed = listing(&list, read("SHA256", &twice, 10).unwrap(), Some(&at)).unwrap();
+    let listed = listing(
+        &list,
+        read("SHA256", twice.as_bytes(), 10).unwrap(),
+        Some(&at),
+    )
+    .unwrap();
     let error = crate::source::check(&Reference::List(list), listed, 10).unwrap_err();
     assert_eq!(
         error.message,
@@ -348,7 +363,8 @@ fn a_list_on_this_machine_gives_each_files_link() {
             "line 1 of links.txt gives a path longer than data.lock keeps",
         ),
     ] {
-        let error = listing(&list, read("links.txt", &text, 10).unwrap(), None).unwrap_err();
+        let error =
+            listing(&list, read("links.txt", text.as_bytes(), 10).unwrap(), None).unwrap_err();
         assert_eq!(error.message, message, "{text}");
         assert!(!format!("{error:?}").contains("hunter2"), "{error:?}");
     }
@@ -443,10 +459,9 @@ fn a_dataset_of_a_list_is_named_after_the_list_or_its_folder() {
     }
 }
 
-/// a list in the project is read only from a real file there, never through a link, and never
-/// past its size limit.
+/// a list in the project is read only from a real file there, never through a link.
 #[test]
-fn a_list_in_the_project_is_read_from_a_real_file_of_bounded_size() {
+fn a_list_in_the_project_is_read_from_a_real_file() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("lists")).unwrap();
     std::fs::write(
@@ -458,11 +473,6 @@ fn a_list_in_the_project_is_read_from_a_real_file_of_bounded_size() {
     let listed = list.read_in(root.path(), 10).unwrap();
     assert_eq!(listed.files.len(), 1);
     assert_eq!(listed.files[0].path, "iris.csv");
-    let error = read_file(root.path(), "lists/links.txt", 10).unwrap_err();
-    assert_eq!(
-        error.message,
-        "lists/links.txt is larger than 10 B, the most fetchloom reads of a list"
-    );
     let missing = List::Project("lists/gone.txt".to_owned())
         .read_in(root.path(), 10)
         .unwrap_err();
@@ -499,4 +509,127 @@ fn a_list_in_the_project_is_read_from_a_real_file_of_bounded_size() {
             "{error:?}"
         );
     }
+}
+
+/// a list in the project is as long as the files it names, not its bytes: one past 64 MiB reads
+/// to its last line.
+#[test]
+fn a_list_in_the_project_past_64_mib_reads_to_its_last_line() {
+    let root = tempfile::tempdir().unwrap();
+    let comment = format!("# {}\n", "-".repeat(32 << 10));
+    let long = comment.repeat((64 << 20) / comment.len() + 1);
+    std::fs::write(
+        root.path().join("links.txt"),
+        format!("https://example.org/iris.csv {SHA}\n{long}https://example.org/tips.csv\n"),
+    )
+    .unwrap();
+    let listed = List::Project("links.txt".to_owned())
+        .read_in(root.path(), 10)
+        .unwrap();
+    let files: Vec<&str> = listed.files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(files, ["iris.csv", "tips.csv"]);
+}
+
+/// the entries of `text`, a list at `at`, given to its reader in pieces that end at `ends`.
+fn in_pieces(text: &str, at: &Url, ends: &[usize]) -> Vec<Entry> {
+    let mut lines = Lines::new("SHA256SUMS", 10, Some(at));
+    let mut start = 0;
+    for &end in ends.iter().chain([text.len()].iter()) {
+        Through::piece(&mut lines, &text.as_bytes()[start..end]).unwrap();
+        start = end;
+    }
+    lines.finish().unwrap()
+}
+
+/// a list reads the same whatever pieces its bytes come in, a line, a line break or a character
+/// split between two, and a reader told to start over reads as a new one.
+#[test]
+fn a_list_reads_the_same_in_any_pieces() {
+    let at = Url::parse("https://example.org/data/SHA256SUMS").unwrap();
+    let text = format!(
+        "\u{feff}# släkt\r\n{SHA}  iris.csv\r\n\r\nMD5 (sub/tips.csv) = {MD5}\n{OTHER} *dir/naïve.csv\n{SHA}  iris.csv\n{OTHER}  last.csv"
+    );
+    let whole = in_pieces(&text, &at, &[]);
+    assert_eq!(
+        whole
+            .iter()
+            .map(|entry| (entry.number, entry.named.clone(), entry.checksum))
+            .collect::<Vec<_>>(),
+        [
+            (2, path("iris.csv"), sha(SHA)),
+            (4, path("sub/tips.csv"), md5(MD5)),
+            (5, path("dir/naïve.csv"), sha(OTHER)),
+            (7, path("last.csv"), sha(OTHER)),
+        ]
+    );
+    for end in 1..text.len() {
+        assert_eq!(in_pieces(&text, &at, &[end]), whole, "pieces end at {end}");
+        assert_eq!(
+            in_pieces(&text, &at, &[end / 2, end]),
+            whole,
+            "pieces end at {} and {end}",
+            end / 2
+        );
+        let mut lines = Lines::new("SHA256SUMS", 10, Some(&at));
+        Through::piece(&mut lines, &text.as_bytes()[..end]).unwrap();
+        lines.restart();
+        Through::piece(&mut lines, text.as_bytes()).unwrap();
+        assert_eq!(
+            lines.finish().unwrap(),
+            whole,
+            "restarted after {end} bytes"
+        );
+    }
+}
+
+/// a line holds one file, so one longer than a path, a hash and a link as long as data.lock keeps
+/// is refused at that line, whole or in pieces, before more of it is held.
+#[test]
+fn a_line_longer_than_one_file_needs_is_refused_at_that_line() {
+    let longest = format!("# {}\n", "-".repeat(LONGEST_LINE - 2));
+    let listed = read("SUMS", format!("{longest}{SHA}  iris.csv\n").as_bytes(), 10).unwrap();
+    assert_eq!(listed.len(), 1);
+    let longer = format!("{SHA}  iris.csv\n# {}\n", "-".repeat(LONGEST_LINE - 1));
+    let at = Url::parse("https://example.org/SUMS").unwrap();
+    let mut whole = Lines::new("SUMS", 10, Some(&at));
+    let mut unended = Lines::new("SUMS", 10, Some(&at));
+    let start = longer.len() - 2;
+    Through::piece(&mut unended, &longer.as_bytes()[..start]).unwrap();
+    for error in [
+        read("SUMS", longer.as_bytes(), 10).unwrap_err(),
+        Through::piece(&mut whole, longer.as_bytes()).unwrap_err(),
+        Through::piece(&mut unended, &longer.as_bytes()[start..=start]).unwrap_err(),
+    ] {
+        assert_eq!(
+            error.message,
+            "line 2 of SUMS is longer than 69.0 KiB, the most one line of a list holds"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "a line names one file: data.lock keeps a path of up to 4,096 bytes and a link of up to 64 KiB"
+            )
+        );
+    }
+}
+
+/// a repeated line is found by its hash, then by what it names: two files of one hash are both
+/// kept, and a repeat of either is not.
+#[test]
+fn files_of_one_hash_are_told_apart_by_what_they_name() {
+    let mut seen = Seen::default();
+    let mut entries = Vec::new();
+    let mut kept = Vec::new();
+    for named in [path("a.csv"), path("b.csv"), path("a.csv"), path("b.csv")] {
+        let repeats = seen.repeats_at(7, &entries, &named, sha(SHA));
+        if !repeats {
+            entries.push(Entry {
+                number: entries.len() + 1,
+                named,
+                checksum: sha(SHA),
+            });
+        }
+        kept.push(!repeats);
+    }
+    assert_eq!(kept, [true, true, false, false]);
 }

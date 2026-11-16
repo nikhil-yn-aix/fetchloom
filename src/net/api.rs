@@ -62,6 +62,24 @@ pub(crate) trait Api: Sync {
         self.get(url)
     }
 
+    /// a GET whose answer, when it is a success, goes through `through` a piece at a time as it
+    /// comes, never held whole, and comes back without its body; any other answer comes back
+    /// whole. a test's network may give the whole body as one piece.
+    fn get_through(
+        &self,
+        url: &Url,
+        through: &mut impl Through,
+    ) -> impl Future<Output = Result<Response, Error>> + Send {
+        async move {
+            let response = self.get(url).await?;
+            if (200..300).contains(&response.status) {
+                through.restart();
+                through.piece(&response.body)?;
+            }
+            Ok(response)
+        }
+    }
+
     /// the most files one dataset may list in this run, so memory stays bounded.
     fn most_files(&self) -> usize {
         MOST_FILES
@@ -75,6 +93,20 @@ pub(crate) trait Api: Sync {
     ) -> impl Future<Output = Result<super::Private, Error>> + Send + 'a {
         std::future::ready(Ok(super::Private::Unlisted))
     }
+}
+
+/// what reads an answer a piece at a time, for [`Api::get_through`].
+pub(crate) trait Through: Send {
+    /// forgets every piece so far, as a try that broke partway sends the answer again from its
+    /// start.
+    fn restart(&mut self);
+
+    /// reads the next piece of the answer.
+    ///
+    /// # Errors
+    ///
+    /// what the answer holds so far cannot be read, which ends the request.
+    fn piece(&mut self, bytes: &[u8]) -> Result<(), Error>;
 }
 
 /// headers a request carries besides those the network gives it, by name and value.
@@ -156,6 +188,15 @@ impl Api for Net {
         Box::pin(self.get_for(url, false, headers)).await
     }
 
+    async fn get_through(&self, url: &Url, through: &mut impl Through) -> Result<Response, Error> {
+        let url = self.asking(url)?;
+        self.may_ask(&url, false, None)
+            .map_err(|failure| failure.into_error(Kind::NetworkRefused))?;
+        Box::pin(self.get_unmemoized(&url, false, false, &[], Some(through)))
+            .await
+            .map(|(response, _)| response)
+    }
+
     fn drive_refused<'a>(
         &'a self,
         id: &'a str,
@@ -181,6 +222,7 @@ impl Api for Net {
             false,
             Some(super::Holding::new(&url, &mut permits)),
             &[],
+            None,
         )
         .await
         .map(|(response, _)| response)
@@ -193,7 +235,7 @@ impl Net {
     /// request ask a mirror for.
     pub(crate) async fn mirror_get(&self, url: &Url) -> Result<Response, Error> {
         let url = self.asking(url)?;
-        self.get_unmemoized(&url, true, false, &[])
+        self.get_unmemoized(&url, true, false, &[], None)
             .await
             .map(|(response, _)| response)
     }
@@ -217,7 +259,7 @@ impl Net {
             self.stop.check()?;
             let Some(key) = self.metadata_key(&url, mirror, extra).await? else {
                 return self
-                    .get_unmemoized(&url, mirror, false, extra)
+                    .get_unmemoized(&url, mirror, false, extra, None)
                     .await
                     .map(|(response, _)| response);
             };
@@ -241,7 +283,8 @@ impl Net {
                     }
                 }
                 memo::Found::Fetching(claim) => {
-                    let (response, sent) = self.get_unmemoized(&url, mirror, true, extra).await?;
+                    let (response, sent) =
+                        self.get_unmemoized(&url, mirror, true, extra, None).await?;
                     if let Some(sent) = sent
                         && sent.sent.current(self.wire()?)
                     {
@@ -251,7 +294,7 @@ impl Net {
                 }
                 memo::Found::Unkept => {
                     return self
-                        .get_unmemoized(&url, mirror, false, extra)
+                        .get_unmemoized(&url, mirror, false, extra, None)
                         .await
                         .map(|(response, _)| response);
                 }
@@ -314,12 +357,14 @@ impl Net {
         }))
     }
 
+    /// asks for `url` until it answers, a success's body through `through` when one is given.
     async fn get_unmemoized(
         &self,
         url: &Url,
         mirror: bool,
         memoized: bool,
         extra: Extra,
+        mut through: Option<&mut dyn Through>,
     ) -> Result<(Response, Option<memo::Key>), Error> {
         let mut permits = Some(self.permit(url).await?);
         let mut retry = Retry::new(self, url);
@@ -332,6 +377,7 @@ impl Net {
                     memoized,
                     Some(super::Holding::new(url, &mut permits)),
                     extra,
+                    through.as_deref_mut(),
                 )
                 .await
             {
@@ -380,6 +426,7 @@ impl Net {
         memoized: bool,
         holding: Option<super::Holding<'_>>,
         extra: Extra,
+        through: Option<&mut (dyn Through + '_)>,
     ) -> Result<(Response, Option<memo::Key>), Failure> {
         let mut response = self
             .send_on(
@@ -464,20 +511,32 @@ impl Net {
                 mirror,
             });
         let final_url = response.url().clone();
-        let body = self
-            .read_body(
-                url,
-                &mut response,
-                "the answer",
-                LARGEST,
-                || too_large(url),
-                |bytes| async move {
-                    self.throttle(url, bytes).await?;
-                    Work::add(&self.work.bytes_down, bytes as u64);
-                    Ok(())
-                },
-            )
-            .await?;
+        let each = |bytes: usize| async move {
+            self.throttle(url, bytes).await?;
+            Work::add(&self.work.bytes_down, bytes as u64);
+            Ok(())
+        };
+        let body = match through {
+            Some(through) if status.is_success() => {
+                through.restart();
+                self.read_through(url, &mut response, "the answer", each, |piece| {
+                    through.piece(piece).map_err(Failure::Final)
+                })
+                .await?;
+                Vec::new()
+            }
+            _ => {
+                self.read_body(
+                    url,
+                    &mut response,
+                    "the answer",
+                    LARGEST,
+                    || too_large(url),
+                    each,
+                )
+                .await?
+            }
+        };
         if let Some(answered) = &drive {
             self.drive_heard(answered, status.as_u16(), &body)?;
         }
@@ -509,10 +568,32 @@ impl Net {
         response: &mut reqwest::Response,
         what: &str,
         most: usize,
-        too_large: impl FnOnce() -> Error,
+        too_large: impl Fn() -> Error,
         each: impl Fn(usize) -> Each,
     ) -> Result<Vec<u8>, Failure> {
         let mut body = Vec::new();
+        self.read_through(url, response, what, each, |piece| {
+            if body.len() + piece.len() > most {
+                return Err(Failure::Final(too_large()));
+            }
+            body.extend_from_slice(piece);
+            Ok(())
+        })
+        .await?;
+        Ok(body)
+    }
+
+    /// the body of `response` from `url`, each piece through `each`, then `keep`, as it comes. a
+    /// piece must come within the idle time, and the run's stop ends the read. a connection that
+    /// breaks partway names the body `what`, such as "the answer".
+    async fn read_through<Each: Future<Output = Result<(), Failure>>>(
+        &self,
+        url: &Url,
+        response: &mut reqwest::Response,
+        what: &str,
+        each: impl Fn(usize) -> Each,
+        mut keep: impl FnMut(&[u8]) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
         loop {
             let chunk = tokio::select! {
                 chunk = tokio::time::timeout(self.idle, response.chunk()) => chunk,
@@ -527,13 +608,10 @@ impl Net {
                     )));
                 }
                 Ok(Err(err)) => return Err(failure::broke(url, what, &err)),
-                Ok(Ok(None)) => return Ok(body),
+                Ok(Ok(None)) => return Ok(()),
                 Ok(Ok(Some(chunk))) => {
                     each(chunk.len()).await?;
-                    if body.len() + chunk.len() > most {
-                        return Err(Failure::Final(too_large()));
-                    }
-                    body.extend_from_slice(&chunk);
+                    keep(&chunk)?;
                 }
             }
         }

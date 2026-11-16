@@ -454,3 +454,154 @@ fn get_of_a_checksum_list_fetches_every_file_it_lists() -> Result {
     assert_eq!(fs::read(folder.join("sub").join("tips.csv"))?, TIPS);
     Ok(())
 }
+
+/// comment lines that take a list past `bytes`, each 32 KiB, so a test of a long list needs no
+/// thousands of files.
+fn padding(bytes: usize) -> String {
+    let comment = format!("# {}\n", "-".repeat(32 << 10));
+    comment.repeat(bytes / comment.len() + 1)
+}
+
+/// a list is as long as the files it names, not its bytes: one past 64 MiB pins the files
+/// before and after its long middle, at a link and read from stdin by `get -i -`.
+#[test]
+fn a_list_past_64_mib_is_read_to_its_last_line() -> Result {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let sandbox = Sandbox::new()?;
+    let long = padding(64 << 20);
+    let sums = format!(
+        "{}  iris.csv\n{long}{}  sub/tips.csv\n",
+        sha256_hex(IRIS),
+        sha256_hex(TIPS)
+    );
+    let server = served(&[("SHA256SUMS", sums)])?;
+    let output = sandbox.run(&["add", &format!("{}/data/SHA256SUMS", server.url)])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let work = sandbox.work();
+    assert_eq!(fs::read(work.join("data/data/iris.csv"))?, IRIS);
+    assert_eq!(fs::read(work.join("data/data/sub/tips.csv"))?, TIPS);
+
+    sandbox.allow(&server.url);
+    let links = format!(
+        "{0}/data/iris.csv {1}\n{long}{0}/data/sub/tips.csv {2}\n",
+        server.url,
+        sha256_hex(IRIS),
+        sha256_hex(TIPS)
+    );
+    let mut child = sandbox
+        .command(&["get", "-i", "-", "--dir", "out"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut input = child.stdin.take().ok_or("stdin was not piped")?;
+    let feeding = std::thread::spawn(move || input.write_all(links.as_bytes()));
+    let output = child.wait_with_output()?;
+    let fed = feeding
+        .join()
+        .map_err(|_| "the thread feeding stdin panicked")?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    fed?;
+    let out = work.join("out");
+    assert_eq!(fs::read(out.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(fs::read(out.join("tips").join("tips.csv"))?, TIPS);
+    Ok(())
+}
+
+/// one rule wherever a list is read: past the most files a dataset may hold in this run, a list
+/// at a link, in the project and for `get -i` is refused before any file is asked for, naming
+/// the list, the limit and what to do.
+#[test]
+fn a_list_past_the_most_files_of_a_dataset_is_refused_by_name() -> Result {
+    let sandbox = Sandbox::new()?;
+    let three = format!("{}{}  wine.csv\n", gnu(), sha256_hex(b"wine"));
+    let server = served(&[("SHA256SUMS", three)])?;
+    sandbox.allow(&server.url);
+    let link = format!("{}/data/SHA256SUMS", server.url);
+    fs::create_dir(sandbox.work().join("lists"))?;
+    fs::write(
+        sandbox.work().join("lists/links.txt"),
+        format!(
+            "{0}/data/iris.csv\n{0}/data/sub/tips.csv\n{0}/data/wine.csv\n",
+            server.url
+        ),
+    )?;
+    let raise = "or raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory";
+    for (args, named, instead) in [
+        (
+            vec!["add", link.as_str()],
+            link.as_str(),
+            "use the list of a narrower folder if the site has one",
+        ),
+        (
+            vec!["add", "-i", "lists/links.txt"],
+            "lists/links.txt",
+            "split it into lists of fewer files, each a dataset of its own",
+        ),
+        (
+            vec!["get", "-i", "lists/links.txt", "--dir", "out"],
+            "lists/links.txt",
+            "split it into lists of fewer files, each a dataset of its own",
+        ),
+    ] {
+        let output = sandbox
+            .command(&[&["--json"][..], &args].concat())
+            .env("FETCHLOOM_MOST_FILES", "2")
+            .output()?;
+        assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "source.invalid", "{args:?}");
+        assert_eq!(
+            error["message"],
+            format!("{named} lists more than 2 files, the most this run lists for one dataset"),
+            "{args:?}"
+        );
+        assert_eq!(error["help"], format!("{instead}, {raise}"), "{args:?}");
+    }
+    let asked = server.targets();
+    assert!(
+        asked.iter().all(|target| target == "/data/SHA256SUMS"),
+        "{asked:?}"
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
+
+/// a list whose connection breaks partway is asked for again and read from its start, so the
+/// files it pins are those of its whole text, each once.
+#[test]
+fn a_list_cut_off_partway_is_read_again_from_its_start() -> Result {
+    let sandbox = Sandbox::new()?;
+    let sums = gnu();
+    let server = served(&[("SHA256SUMS", sums.clone())])?;
+    let length = sums.len().to_string();
+    server.turns(
+        "/data/SHA256SUMS",
+        vec![crate::support::reply(
+            "200 OK",
+            &[("Content-Length", &length)],
+            &sums.as_bytes()[..sums.len() - 10],
+        )],
+    );
+    let list = format!("{}/data/SHA256SUMS", server.url);
+    let output = sandbox.run(&["add", &list])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let pinned = pinned(&lock, "data");
+    assert_eq!(pinned.len(), 2, "{lock}");
+    assert!(pinned[0].starts_with("{ path = \"iris.csv\""), "{lock}");
+    assert!(pinned[1].starts_with("{ path = \"sub/tips.csv\""), "{lock}");
+    let asked = server.targets();
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|target| *target == "/data/SHA256SUMS")
+            .count(),
+        2,
+        "{asked:?}"
+    );
+    Ok(())
+}

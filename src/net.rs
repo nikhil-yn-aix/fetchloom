@@ -36,7 +36,7 @@ use url::Url;
 pub(crate) use address::{Allowed, is_private, looks_internal};
 #[cfg(test)]
 pub(crate) use api::too_large as too_large_answer;
-pub(crate) use api::{Api, Extra, MOST_FILES, Response};
+pub(crate) use api::{Api, Extra, MOST_FILES, Response, Through};
 #[cfg(test)]
 pub(crate) use azure::Given;
 #[cfg(debug_assertions)]
