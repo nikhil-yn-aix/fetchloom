@@ -37,6 +37,17 @@ pub(crate) enum Warning {
     CacheForeign,
     /// a run told `--yes` goes on though its downloads take the cache past `cache_budget`.
     CacheOverBudget,
+    /// in a cache its group shares, a folder lets only its owner write to it, or the run's umask
+    /// keeps the group from writing what the run adds, so the group's other members cannot add to
+    /// the cache.
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(
+            dead_code,
+            reason = "only unix gives a folder's group a write of its own"
+        )
+    )]
+    CacheUnshared,
     /// a path in the cache, or the data.lock of a project it keeps files for, could not be read,
     /// or removed.
     CacheUnreadable,
@@ -161,6 +172,7 @@ impl Warning {
             Warning::CacheForeign => "cache.foreign",
             Warning::CacheOverBudget => "cache.over_budget",
             Warning::CacheUnreadable => "cache.unreadable",
+            Warning::CacheUnshared => "cache.unshared",
             Warning::CacheUnregistered => "cache.unregistered",
             Warning::DownloadEncoded => "download.encoded",
             Warning::DownloadUnnamed => "download.unnamed",
@@ -251,6 +263,7 @@ mod tests {
             CacheOverBudget,
             CacheUnreadable,
             CacheUnregistered,
+            CacheUnshared,
             DownloadEncoded,
             DownloadUnnamed,
             DownloadWebPage,

@@ -240,6 +240,54 @@ fn the_cache_report_warns_of_a_file_others_may_write() -> Result {
     Ok(())
 }
 
+/// in a cache a group shares, a setgid folder its group may write as a lab makes it, a folder a
+/// run made without `umask 002` lets only its owner write to it, so the group's other members
+/// cannot add to it: a run that uses the cache says so.
+#[cfg(unix)]
+#[test]
+fn a_folder_the_group_cannot_write_in_a_shared_cache_is_told() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    fs::create_dir_all(sandbox.cache())?;
+    fs::set_permissions(sandbox.cache(), fs::Permissions::from_mode(0o2770))?;
+    let source = sandbox.folder("measured")?;
+    fs::write(source.join("m.csv"), b"measured\n")?;
+    let output = sandbox.run(&["add", &source.display().to_string(), "--as", "meas"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    // every folder as `umask 002` makes it, but one fan as a run with the usual 022 left it
+    for entry in fs::read_dir(sandbox.cache())? {
+        let path = entry?.path();
+        if path.is_dir() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o2770))?;
+        }
+    }
+    let objects = sandbox.cache().join("objects");
+    let fan = fs::read_dir(&objects)?
+        .next()
+        .ok_or("no folder in objects")??
+        .path();
+    fs::set_permissions(&fan, fs::Permissions::from_mode(0o2755))?;
+
+    let output = sandbox.run(&["--json", "sync"])?;
+
+    let document = json(&output)?;
+    let told = document["warnings"]
+        .as_array()
+        .and_then(|warnings| {
+            warnings
+                .iter()
+                .find(|warning| warning["kind"] == "cache.unshared")
+        })
+        .ok_or_else(|| format!("no cache.unshared warning: {document}"))?;
+    assert!(
+        told["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&fan.display().to_string())),
+        "{told}"
+    );
+    Ok(())
+}
+
 /// a changed file imported from a folder comes back from no source, so verify says so, and its
 /// help names what does bring it back rather than promise a download sync cannot make.
 #[test]

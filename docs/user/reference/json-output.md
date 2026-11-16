@@ -155,6 +155,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `cache.foreign` | the cache folder, or a folder fetchloom writes in inside it, such as `objects/` or `tmp/`, when every user may enter the cache folder, belongs to another user, or every user of the machine may write to it, as may a folder in `objects/` or, for `fetchloom cache`, a cached file, or on windows the cache folder is outside your user profile on a drive other than FAT or exFAT, so it takes its permissions from the folders above it; any of them may let others change the files projects place from it |
 | `cache.over_budget` | a run told `--yes` goes on though its downloads take the cache past the `cache_budget` setting; `details` says what would free room |
 | `cache.unreadable` | a path in the cache, or the data.lock of a project it keeps files for, could not be read or removed |
+| `cache.unshared` | in a cache its group shares, a setgid folder the group may write, a folder in it lets only its owner write to it, or on linux the run's umask keeps the group from writing what the run adds, so the group's other members cannot add to the cache |
 | `cache.unregistered` | the project could not join the cache's list of projects, so `cache gc` may delete files it needs |
 | `download.encoded` | a server sent a file compressed with `Content-Encoding`, and it is kept as sent |
 | `download.unnamed` | a server gave no name for a file |

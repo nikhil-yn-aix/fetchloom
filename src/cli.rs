@@ -522,8 +522,42 @@ fn open_cache() -> Result<Cache, Error> {
     })?;
     if let Some(output) = output {
         tell_exposed(output, cache.root());
+        #[cfg(unix)]
+        tell_unshared(output, cache.root());
     }
     Ok(cache)
+}
+
+/// warns once a run when the cache at `root`, which a group shares, stops being one the group may
+/// add to, as what a run with the system's usual umask makes is.
+#[cfg(unix)]
+fn tell_unshared(output: &Output, root: &std::path::Path) {
+    if let Some(unshared) = crate::cache::unshared(root, umask()) {
+        static TOLD: std::sync::Once = std::sync::Once::new();
+        TOLD.call_once(|| {
+            output.warn_with(
+                Warning::CacheUnshared,
+                &unshared,
+                "run `umask 002` before fetchloom in every shell and job that uses the cache, as the clusters guide says; whoever owns a folder the group cannot write gives the group its write with chmod g+w",
+            );
+        });
+    }
+}
+
+/// this process's umask, which linux tells in /proc without changing it, as asking the system for
+/// it would for every thread meanwhile. none elsewhere.
+#[cfg(unix)]
+fn umask() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let line = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Umask:"))?;
+        u32::from_str_radix(line.trim(), 8).ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
 }
 
 /// warns once a run when the cache at `root` is another user's or others may write it.
