@@ -731,9 +731,12 @@ impl Net {
                 "the answer",
                 LARGEST_ANSWER,
                 || {
-                    format!(
-                        "{} sent more than 64 KiB where a token was expected",
-                        host(url)
+                    Error::new(
+                        Kind::SourceInvalid,
+                        format!(
+                            "{} sent more than 64 KiB where a token was expected",
+                            host(url)
+                        ),
                     )
                 },
                 |bytes| async move {

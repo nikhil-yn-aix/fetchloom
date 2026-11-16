@@ -19,6 +19,21 @@ use crate::work::Work;
 /// the largest answer read whole, so a hostile server cannot fill the memory.
 const LARGEST: usize = 64 * 1024 * 1024;
 
+/// the error for an answer from `url` longer than [`LARGEST`], which no setting raises.
+pub(crate) fn too_large(url: &Url) -> Error {
+    Error::new(
+        Kind::SourceInvalid,
+        format!(
+            "{} sent more than 64 MiB where a short answer was expected",
+            host(url)
+        ),
+    )
+    .help(format!(
+        "no setting raises this limit, which keeps one answer from filling the memory. if this source really sends that much about one dataset, please report it at {}",
+        crate::error::ISSUES
+    ))
+}
+
 /// the most files one dataset lists when a run says nothing else, and the least it ever allows.
 /// a run sizes its own from its memory, which its network carries to every listing.
 pub(crate) const MOST_FILES: usize = 100_000;
@@ -455,12 +470,7 @@ impl Net {
                 &mut response,
                 "the answer",
                 LARGEST,
-                || {
-                    format!(
-                        "{} sent more than 64 MiB where a short answer was expected",
-                        host(url)
-                    )
-                },
+                || too_large(url),
                 |bytes| async move {
                     self.throttle(url, bytes).await?;
                     Work::add(&self.work.bytes_down, bytes as u64);
@@ -489,8 +499,8 @@ impl Net {
         ))
     }
 
-    /// the body of `response` from `url`, of at most `most` bytes, past which it fails as
-    /// `too_large` words it. each piece goes through `each` as it comes and must come within the
+    /// the body of `response` from `url`, of at most `most` bytes, past which it fails with the
+    /// error `too_large` gives. each piece goes through `each` as it comes and must come within the
     /// idle time, and the run's stop ends the read. a connection that breaks partway through
     /// names the body `what`, such as "the answer".
     pub(super) async fn read_body<Each: Future<Output = Result<(), Failure>>>(
@@ -499,7 +509,7 @@ impl Net {
         response: &mut reqwest::Response,
         what: &str,
         most: usize,
-        too_large: impl FnOnce() -> String,
+        too_large: impl FnOnce() -> Error,
         each: impl Fn(usize) -> Each,
     ) -> Result<Vec<u8>, Failure> {
         let mut body = Vec::new();
@@ -521,7 +531,7 @@ impl Net {
                 Ok(Ok(Some(chunk))) => {
                     each(chunk.len()).await?;
                     if body.len() + chunk.len() > most {
-                        return Err(Failure::Final(Error::new(Kind::SourceInvalid, too_large())));
+                        return Err(Failure::Final(too_large()));
                     }
                     body.extend_from_slice(&chunk);
                 }
@@ -836,6 +846,9 @@ mod tests {
                 let error = result.unwrap_err();
                 assert_eq!(error.kind, Kind::SourceInvalid);
                 assert!(error.message.contains("64 MiB"));
+                let help = error.help.unwrap_or_default();
+                assert!(help.starts_with("no setting raises this limit"), "{help}");
+                assert!(help.contains(crate::error::ISSUES), "{help}");
             }
             assert_eq!(net.work.counts().requests, 1);
             assert_eq!(net.work.counts().retries, 0);

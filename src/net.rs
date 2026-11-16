@@ -34,6 +34,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
 pub(crate) use address::{Allowed, is_private, looks_internal};
+#[cfg(test)]
+pub(crate) use api::too_large as too_large_answer;
 pub(crate) use api::{Api, Extra, MOST_FILES, Response};
 #[cfg(test)]
 pub(crate) use azure::Given;
@@ -828,7 +830,12 @@ impl Net {
                         self.rules.account_at,
                     ));
                 }
-                let too_large = || format!("{} sent more than a short answer", host(url));
+                let too_large = || {
+                    Error::new(
+                        Kind::SourceInvalid,
+                        format!("{} sent more than a short answer", host(url)),
+                    )
+                };
                 let body = self
                     .read_body(url, &mut response, "the answer", most, too_large, |_| {
                         std::future::ready(Ok(()))

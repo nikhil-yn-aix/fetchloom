@@ -1591,7 +1591,12 @@ impl Net {
                 &mut response,
                 "the page",
                 LARGEST_PAGE,
-                || format!("{} sent a page where the file was expected", host(url)),
+                || {
+                    Error::new(
+                        Kind::SourceInvalid,
+                        format!("{} sent a page where the file was expected", host(url)),
+                    )
+                },
                 |bytes| async move {
                     self.throttle(url, bytes).await?;
                     Work::add(&self.work.bytes_down, bytes as u64);

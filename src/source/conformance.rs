@@ -1244,14 +1244,7 @@ fn rewrite(value: &mut Value, each: &mut dyn FnMut(&mut String)) {
 
 /// the error the network gives for an answer longer than it reads whole.
 fn too_large(url: &str) -> Error {
-    let url = Url::parse(url).unwrap();
-    Error::new(
-        Kind::SourceInvalid,
-        format!(
-            "{} sent more than 64 MiB where a short answer was expected",
-            crate::net::host(&url)
-        ),
-    )
+    crate::net::too_large_answer(&Url::parse(url).unwrap())
 }
 
 /// the error the network gives for a request redirected more times than it follows.

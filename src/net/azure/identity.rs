@@ -126,8 +126,10 @@ impl Net {
                 "the answer",
                 LARGEST_ANSWER,
                 || {
-                    "azure's metadata service sent more than 64 KiB where a token was expected"
-                        .to_owned()
+                    Error::new(
+                        Kind::SourceInvalid,
+                        "azure's metadata service sent more than 64 KiB where a token was expected",
+                    )
                 },
                 |_| async { Ok(()) },
             )

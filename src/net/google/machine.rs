@@ -171,8 +171,10 @@ impl Net {
                 "the answer",
                 LARGEST_ANSWER,
                 || {
-                    "google's metadata server sent more than 64 KiB where a token was expected"
-                        .to_owned()
+                    Error::new(
+                        Kind::SourceInvalid,
+                        "google's metadata server sent more than 64 KiB where a token was expected",
+                    )
                 },
                 |_| async { Ok(()) },
             )
