@@ -1503,3 +1503,62 @@ fn every_key_is_read_by_its_own_source_alone() {
         );
     }
 }
+
+/// links an answer may give for a file that no file may be fetched from.
+const HOSTILE_LINKS: [&str; 6] = [
+    "ftp://example.org/hostile.csv",
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "http://169.254.169.254/latest/meta-data/",
+    "https://user:secret@example.org/hostile.csv",
+    "https://example.org:8443/hostile.csv",
+];
+
+/// (e) a link an answer gives for a file, made one no file may come from, ends in an error with
+/// help, or a listing whose every link is http or https, carries no login and lies where its
+/// source's files are kept.
+#[test]
+fn every_adapter_refuses_a_hostile_link() {
+    let mut found = Found::of("hostile links");
+    for subject in subjects() {
+        for link in subject.recorded.links() {
+            let body = String::from_utf8_lossy(subject.recorded.body(&link)).into_owned();
+            let given: Vec<&str> = subject
+                .listed
+                .files
+                .iter()
+                .map(|file| file.url.as_str())
+                .filter(|url| body.contains(url))
+                .take(2)
+                .collect();
+            for url in given {
+                for hostile in HOSTILE_LINKS {
+                    let changed = body.replace(url, hostile);
+                    let recorded = subject.hostile().answer(&link, 200, changed.into_bytes());
+                    let what = format!("{link} {url} as {hostile}");
+                    let outcome = subject.resolve(&recorded);
+                    if let Some(problem) = misbehaved(&outcome) {
+                        found.add(&subject, &what, &problem);
+                    }
+                    if let Outcome::Listed(listing) = &outcome {
+                        let from = listing.resolved.access();
+                        let written = listing.resolved.written_origin();
+                        if let Some(file) = listing.files.iter().find(|file| {
+                            !matches!(file.url.scheme(), "http" | "https")
+                                || !file.url.username().is_empty()
+                                || file.url.password().is_some()
+                                || !from.files.holds(&file.url, written.as_ref())
+                        }) {
+                            found.add(
+                                &subject,
+                                &what,
+                                &format!("listed {} at {}", file.path, file.url),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    found.none();
+}
