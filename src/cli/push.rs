@@ -500,7 +500,6 @@ fn reached(target: PathBuf) -> PathBuf {
     }
 }
 
-/// the datasets a push sends: `names`, else every dataset in data.toml.
 /// the datasets a push of `names` pushes, every one when it names none: of every one, those
 /// waiting for their lists in `lock` are left out with a warning, as a sync places the rest, while
 /// one named waits, as for every command that needs its files; one not downloaded yet waits too.
@@ -523,6 +522,7 @@ fn pushed(
     Ok(datasets)
 }
 
+/// the datasets a push sends: `names`, else every dataset in data.toml.
 fn selected(manifest: &Manifest, names: &[String]) -> Vec<String> {
     let chosen: BTreeSet<&str> = if names.is_empty() {
         manifest.datasets.keys().map(String::as_str).collect()
