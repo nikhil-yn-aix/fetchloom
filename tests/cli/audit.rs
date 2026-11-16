@@ -395,7 +395,7 @@ fn offline_asks_no_source() -> Result {
 }
 
 /// zenodo's answer for record `id`, a version of concept 100 holding iris.csv.
-fn record(id: u64, license: &str) -> Result<Vec<Part>> {
+pub(crate) fn record(id: u64, license: &str) -> Result<Vec<Part>> {
     let record = serde_json::json!({
         "id": id,
         "conceptrecid": "100",

@@ -4934,37 +4934,64 @@ fn a_push_of_every_dataset_leaves_a_waiting_one_out() -> Result {
     Ok(())
 }
 
-/// `add <link> --as iris`, with or without `--no-sync`, while iris waits for its list stops at
-/// that list before asking its source, rather than resolving it and meeting the check every
-/// data.lock write makes.
+/// `add <ref> --as <name>`, with or without `--no-sync`, while that dataset waits for its list
+/// stops at that list before asking its source, here zenodo for zen, rather than resolving it and
+/// meeting the check every data.lock write makes; without --as the link is resolved first, to
+/// find which dataset it is, and stops there too.
 #[test]
 fn adding_as_a_waiting_dataset_asks_no_source() -> Result {
     let sandbox = Sandbox::new()?;
     let routes = crate::support::Routes::start(vec![
         (PATH.to_owned(), file(IRIS, "\"v1\"")),
-        ("/files/b.csv".to_owned(), file(b"b\n", "\"b1\"")),
+        (
+            "/zenodo.org/api/records/101".to_owned(),
+            crate::audit::record(101, "cc-by-4.0")?,
+        ),
+        (
+            "/zenodo.org/api/records/101/files/iris.csv/content".to_owned(),
+            file(crate::mirrors::IRIS, "\"z1\""),
+        ),
     ])?;
     sandbox.allow(&routes.url);
+    let run_in = |folder: &std::path::Path, args: &[&str]| {
+        sandbox
+            .command_in(folder, args)
+            .env("FETCHLOOM_TEST_INLINE", "0")
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()
+    };
     let link = format!("{}{PATH}", routes.url);
-    for (name, link) in [
-        ("iris", link.clone()),
-        ("b", format!("{}/files/b.csv", routes.url)),
-    ] {
-        let added = listing_in(&sandbox, &sandbox.work(), &["add", &link, "--as", name])?;
+    for (reference, name) in [(link.as_str(), "iris"), ("zenodo:101", "zen")] {
+        let added = run_in(&sandbox.work(), &["add", reference, "--as", name])?;
         assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     }
-    let (clone, part) = clone_without(&sandbox, "iris")?;
+    let (clone, iris) = clone_without(&sandbox, "iris")?;
+    let zen = parts(&sandbox)?
+        .into_iter()
+        .find(|part| part.starts_with("data.lock.d/zen."))
+        .ok_or("no list of zen")?;
+    delete(&clone.join(&zen))?;
     let asked = routes.requests().len();
-    for args in [
-        &["--json", "add", &*link, "--as", "iris", "--no-sync"][..],
-        &["--json", "add", &*link, "--as", "iris"],
+    for (args, name, part) in [
+        (
+            &["--json", "add", &*link, "--as", "iris", "--no-sync"][..],
+            "iris",
+            &iris,
+        ),
+        (&["--json", "add", &*link, "--as", "iris"], "iris", &iris),
+        (
+            &["--json", "add", "zenodo:101", "--as", "zen", "--no-sync"],
+            "zen",
+            &zen,
+        ),
+        (&["--json", "add", "zenodo:101", "--as", "zen"], "zen", &zen),
     ] {
-        let added = listing_in(&sandbox, &clone, args)?;
+        let added = run_in(&clone, args)?;
         let document = json(&added)?;
         assert_eq!(added.status.code(), Some(50), "{args:?}: {document}");
         assert_eq!(
             document["errors"][0]["message"],
-            format!("data.lock names {part}, the file list of iris, which is not there"),
+            format!("data.lock names {part}, the file list of {name}, which is not there"),
             "{args:?}"
         );
         assert_eq!(
@@ -4975,12 +5002,12 @@ fn adding_as_a_waiting_dataset_asks_no_source() -> Result {
         );
     }
     // without --as the link is resolved first, to find which dataset it is
-    let added = listing_in(&sandbox, &clone, &["--json", "add", &link, "--no-sync"])?;
+    let added = run_in(&clone, &["--json", "add", &link, "--no-sync"])?;
     let document = json(&added)?;
     assert_eq!(added.status.code(), Some(50), "{document}");
     assert_eq!(
         document["errors"][0]["message"],
-        format!("data.lock names {part}, the file list of iris, which is not there")
+        format!("data.lock names {iris}, the file list of iris, which is not there")
     );
     Ok(())
 }
