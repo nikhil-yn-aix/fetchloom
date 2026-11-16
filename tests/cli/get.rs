@@ -2968,3 +2968,37 @@ fn a_locked_link_of_another_scheme_fails_at_once() -> Result {
     }
     Ok(())
 }
+
+/// a server may name its file as a repository's metadata, which no project may hold: the file
+/// keeps its bytes under that name with `_` in front, as a name windows reserves does, so `get`
+/// and `add` land it rather than stop after the download.
+#[test]
+fn a_file_its_server_names_as_repository_metadata_gets_a_safe_name() -> Result {
+    for (given, saved) in [
+        (".git", "_.git"),
+        (".HG", "_.HG"),
+        (".fetchloom", "_.fetchloom"),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let named = format!("attachment; filename=\"{given}\"");
+        let length = IRIS.len().to_string();
+        let headers = [
+            ("Content-Length", length.as_str()),
+            ("Content-Disposition", named.as_str()),
+        ];
+        let answers = (0..4).map(|_| reply("200 OK", &headers, IRIS)).collect();
+        let server = Server::start("/x/download", answers)?;
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["get", &server.url, "--dir", "got"])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        assert_eq!(fs::read(sandbox.work().join("got").join(saved))?, IRIS);
+        let output = sandbox.run(&["add", &server.url, "--as", "meta"])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        assert_eq!(
+            fs::read(sandbox.work().join("data/meta").join(saved))?,
+            IRIS,
+            "{given}"
+        );
+    }
+    Ok(())
+}

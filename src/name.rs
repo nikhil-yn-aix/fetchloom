@@ -14,7 +14,8 @@ const LONGEST: usize = 200;
 pub(crate) const DATASET_NAME_MOST: usize = 64;
 
 /// a name a server or a link suggested, made safe to create anywhere: only its last path part,
-/// with the characters windows refuses replaced and the names windows reserves avoided.
+/// with the characters windows refuses replaced, and the names windows reserves and those of a
+/// repository's metadata, which no project holds, avoided.
 pub(crate) fn sanitize(raw: &str) -> Option<String> {
     if raw.contains(is_bidi_control) {
         return None;
@@ -38,11 +39,13 @@ pub(crate) fn sanitize(raw: &str) -> Option<String> {
     if name.is_empty() {
         return None;
     }
-    Some(if is_reserved_on_windows(name) {
-        format!("_{name}")
-    } else {
-        name.to_owned()
-    })
+    Some(
+        if is_reserved_on_windows(name) || metadata(name).is_some() {
+            format!("_{name}")
+        } else {
+            name.to_owned()
+        },
+    )
 }
 
 /// the name of the file a URL points at: its last path segment, decoded.
@@ -719,6 +722,15 @@ mod tests {
         assert_eq!(sanitize("con.csv").as_deref(), Some("_con.csv"));
         assert_eq!(sanitize("COM1").as_deref(), Some("_COM1"));
         assert_eq!(sanitize("com0").as_deref(), Some("com0"));
+        for (given, safe) in [
+            (".git", "_.git"),
+            ("x/.HG", "_.HG"),
+            (".fetchloom.", "_.fetchloom"),
+            ("GIT~1", "_GIT~1"),
+            (".g\u{200c}it", "_.g\u{200c}it"),
+        ] {
+            assert_eq!(sanitize(given).as_deref(), Some(safe), "{given}");
+        }
         assert_eq!(sanitize(".."), None);
         assert_eq!(sanitize(" "), None);
     }

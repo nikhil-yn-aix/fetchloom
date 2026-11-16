@@ -477,6 +477,7 @@ mod tests {
                 "{asked:?} became {safe:?}"
             );
             assert_eq!(crate::name::unstorable(&safe), None, "{asked:?}");
+            assert_eq!(crate::name::metadata(&safe), None, "{asked:?}");
             assert!(!safe.contains(['/', '\\']), "{safe:?}");
             assert!(!safe.ends_with(['.', ' ']), "{asked:?} became {safe:?}");
         });
