@@ -4717,3 +4717,40 @@ fn adding_the_folder_of_a_waiting_import_supplies_it() -> Result {
     }
     Ok(())
 }
+
+/// `add <link>` of iris, which data.toml has and which waits for its list, stops as `sync iris`
+/// does, naming the list it waits for, never saying its archives hold no files.
+#[test]
+fn adding_the_link_of_a_waiting_dataset_says_it_waits() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    let link = format!("{}{PATH}", routes.url);
+    for (name, link) in [
+        ("iris", link.clone()),
+        ("b", format!("{}/files/b.csv", routes.url)),
+    ] {
+        let added = listing_in(&sandbox, &sandbox.work(), &["add", &link, "--as", name])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let (clone, part) = clone_without(&sandbox, "iris")?;
+    let lock = fs::read(clone.join("data.lock"))?;
+    for args in [
+        &["--json", "add", &*link][..],
+        &["--json", "add", &*link, "--as", "iris"],
+    ] {
+        let added = listing_in(&sandbox, &clone, args)?;
+        let document = json(&added)?;
+        assert_eq!(added.status.code(), Some(50), "{args:?}: {document}");
+        assert_eq!(
+            document["errors"][0]["message"],
+            format!("data.lock names {part}, the file list of iris, which is not there"),
+            "{args:?}"
+        );
+        assert_eq!(fs::read(clone.join("data.lock"))?, lock, "{args:?}");
+    }
+    Ok(())
+}

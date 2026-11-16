@@ -1630,6 +1630,10 @@ async fn again(
     let name = present.name;
     let manifest = &adding.manifest;
     same_settings(manifest, present)?;
+    // nothing of it can be placed until its list is back, as `sync <name>` says
+    if let Some(old) = &old {
+        old.refuse_waiting([name])?;
+    }
     if dry_run {
         let outcome = preview_all(work, manifest, old, false, false, Vec::new(), None).await?;
         preview_ignore(work, manifest)?;
