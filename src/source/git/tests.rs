@@ -185,6 +185,26 @@ fn a_ref_with_a_slash_is_found_part_by_part() {
     assert_eq!(recorded.asked().len(), 1, "a commit's id holds no `/`");
 }
 
+/// a folder of 2,000 files takes two requests of github's api, the most a run without a key can
+/// spare: the commit its branch names, then the whole tree in one answer.
+#[test]
+fn a_folder_of_two_thousand_files_takes_two_requests() {
+    let mut entries = vec![subtree("data", "d"), blob("README.md", 9)];
+    entries.extend((0..2000).map(|n| blob(&format!("data/{n:04}.csv"), 2048)));
+    let recorded = Recorded::default()
+        .on(&format!("{API}/commits/main"), 200, COMMIT)
+        .on(
+            &format!("{API}/git/trees/{COMMIT}?recursive=1"),
+            200,
+            tree(&serde_json::Value::from(entries), false),
+        );
+    let link = "https://github.com/lab/survey/tree/main/data";
+    let listing = block_on(folder(link).listing(&recorded, false)).unwrap();
+    assert_eq!(listing.files.len(), 2000);
+    assert_eq!(listing.files[1999].path, "1999.csv");
+    assert_eq!(recorded.asked().len(), 2);
+}
+
 /// a file of at least 1 KiB, too large for a git-lfs pointer, comes from raw.githubusercontent.com
 /// at its stated size; a smaller one from github.com, which sends a file git-lfs keeps on to its
 /// bytes, so its size is the download's to tell.
