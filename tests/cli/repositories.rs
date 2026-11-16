@@ -1335,6 +1335,185 @@ fn an_internet_archive_file_unlike_its_md5_is_refused() -> Result {
     Ok(())
 }
 
+/// zenodo's answer for record 18149369, in zenodo's own form, holding `rows.csv` with its MD5,
+/// and the bytes behind its link.
+fn zenodo_record() -> Result<Routes> {
+    let mut record = fixture("zenodo/cc0.json")?;
+    record["files"] = serde_json::json!([{
+        "key": "rows.csv",
+        "size": ROWS.len(),
+        "checksum": format!("md5:{}", md5_hex(ROWS)),
+    }]);
+    Routes::start(vec![
+        (
+            "/zenodo.org/api/records/18149369".to_owned(),
+            answer(&record)?,
+        ),
+        (
+            "/zenodo.org/api/records/18149369/files/rows.csv/content".to_owned(),
+            file(ROWS, "\"z1\""),
+        ),
+    ])
+}
+
+/// zenodo answers in its own form, so its records pin as they always have: the same resolved
+/// reference, license id, DOI, access and links in data.lock, CC0 as zenodo's `cc-zero`.
+#[test]
+fn a_zenodo_record_pins_as_it_always_has() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = zenodo_record()?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["add", "zenodo:18149369", "--as", "dao"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?
+        .lines()
+        .filter(|line| !line.starts_with("locked = "))
+        .fold(String::new(), |lock, line| lock + line + "\n");
+    assert_eq!(
+        lock,
+        format!(
+            "version = 1\n\n[[dataset]]\nname = \"dao\"\nref = \"zenodo:18149369\"\nspec = \"sha256:711472e85f75f358a75c8c40edeb8f54232359c3d09fe95c26c31d7cf620f8bc\"\nresolved = \"zenodo:18149369\"\ntitle = \"DAO Analyzer dataset\"\nlicense = \"cc-zero\"\ndoi = \"10.5281/zenodo.18149369\"\naccess = \"public\"\nfiles = [\n  {{ path = \"rows.csv\", size = {}, sha256 = \"{}\", md5 = \"{}\", url = \"https://zenodo.org/api/records/18149369/files/rows.csv/content\" }},\n]\n",
+            ROWS.len(),
+            sha256_hex(ROWS),
+            md5_hex(ROWS)
+        )
+    );
+    Ok(())
+}
+
+const RDM_RECORD: &str = "/rdm.example.org/api/records/abcde-12345";
+
+/// an invenioRDM install at rdm.example.org holding record `abcde-12345`, registered as DOI
+/// `10.1234/abcde-12345`, whose one file `rows.csv` has bytes `body` and the MD5 `md5`.
+fn invenio(body: &[u8], md5: &str) -> Result<Routes> {
+    let mut record = fixture("invenio/caltech-record.json")?;
+    record["id"] = "abcde-12345".into();
+    record["pids"]["doi"]["identifier"] = "10.1234/abcde-12345".into();
+    record["files"] = serde_json::json!({
+        "enabled": true,
+        "count": 1,
+        "entries": {
+            "rows.csv": {"key": "rows.csv", "size": body.len(), "checksum": format!("md5:{md5}")},
+        },
+    });
+    let handle = r#"{"responseCode":1,"handle":"10.1234/abcde-12345","values":[{"index":1,"type":"URL","data":{"format":"string","value":"https://rdm.example.org/doi/10.1234/abcde-12345"}}]}"#;
+    Routes::start(vec![
+        (RDM_RECORD.to_owned(), answer(&record)?),
+        (
+            format!("{RDM_RECORD}/files/rows.csv/content"),
+            file(body, "\"r1\""),
+        ),
+        (
+            "/doi.org/api/handles/10.1234%2Fabcde-12345".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                handle.as_bytes(),
+            ),
+        ),
+    ])
+}
+
+/// a record on another invenioRDM install pins with its MD5-checked bytes, and a teammate's sync
+/// reads the lock alone.
+#[test]
+fn a_record_on_another_invenio_install_pins_and_syncs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = invenio(ROWS, &md5_hex(ROWS))?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["add", "invenio:rdm.example.org/abcde-12345", "--as", "rows"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(
+        lock.contains(&format!(
+            "{{ path = \"rows.csv\", size = {}, sha256 = \"{}\", md5 = \"{}\", url = \"https://rdm.example.org/api/records/abcde-12345/files/rows.csv/content\" }}",
+            ROWS.len(),
+            sha256_hex(ROWS),
+            md5_hex(ROWS)
+        )),
+        "{lock}"
+    );
+    let listed = routes.targets().len();
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
+    ok(&synced)?;
+    assert_eq!(fs::read(teammate.join("data/rows/rows.csv"))?, ROWS);
+    assert_eq!(
+        routes.targets()[listed..],
+        [format!("{RDM_RECORD}/files/rows.csv/content")],
+        "the lock alone says what to download"
+    );
+    Ok(())
+}
+
+/// a pasted record page and a DOI the install registered are each known as the record by one
+/// request for it at the install, before its file downloads.
+#[test]
+fn an_invenio_record_page_and_doi_are_known_by_one_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = invenio(ROWS, &md5_hex(ROWS))?;
+    for (reference, name, before) in [
+        (
+            "https://rdm.example.org/records/abcde-12345",
+            "page",
+            vec![],
+        ),
+        (
+            "doi:10.1234/abcde-12345",
+            "doi",
+            vec!["/doi.org/api/handles/10.1234%2Fabcde-12345".to_owned()],
+        ),
+    ] {
+        let asked = routes.targets().len();
+        let output = command(&sandbox, &routes, &["add", reference, "--as", name]).output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        assert!(
+            lock.contains("resolved = \"invenio:rdm.example.org/abcde-12345\""),
+            "{lock}"
+        );
+        let mut wanted = before;
+        wanted.push(RDM_RECORD.to_owned());
+        let targets = routes.targets();
+        let resolving: Vec<&String> = targets[asked..]
+            .iter()
+            .filter(|target| !target.ends_with("/content"))
+            .collect();
+        assert_eq!(resolving, wanted.iter().collect::<Vec<_>>(), "{reference}");
+    }
+    Ok(())
+}
+
+/// bytes unlike the MD5 another install states are refused, and never placed.
+#[test]
+fn an_invenio_file_unlike_its_md5_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = invenio(ROWS, &md5_hex(NOTES))?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &[
+            "--json",
+            "add",
+            "invenio:rdm.example.org/abcde-12345",
+            "--as",
+            "rows",
+        ],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(30), "{}", text(&output.stderr)?);
+    assert_eq!(json(&output)?["errors"][0]["kind"], "integrity.mismatch");
+    assert!(!sandbox.work().join("data/rows/rows.csv").exists());
+    Ok(())
+}
+
 const DANDI_API: &str = "/api.dandiarchive.org/api/dandisets/000027";
 const DANDI_VERSION: &str = "0.210831.2033";
 

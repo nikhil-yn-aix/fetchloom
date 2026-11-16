@@ -1,6 +1,6 @@
 # zenodo
 
-a zenodo reference names a record, and its selected files are pinned by size and SHA-256.
+a zenodo reference names a record, and its selected files are pinned by size and SHA-256. zenodo runs invenioRDM, and [another invenioRDM install](invenio.md) is read the same way; zenodo's api answers in an older form of its own, so its records pin as they always have, as with the license id `cc-zero` for CC0.
 
 ```sh
 fetchloom add zenodo:3608990
@@ -15,7 +15,7 @@ fetchloom add zenodo:3608990 --as flowers --select "*.csv"
 | `zenodo:3608990` | list the record |
 | `https://zenodo.org/records/3608990` | accept a record's page |
 | a link to a file's page on zenodo | select that file, unless `--select` is given |
-| a DOI zenodo registered | list the record it names |
+| a DOI zenodo registered | list the record it names; one registered since zenodo moved to invenioRDM points to `https://zenodo.org/doi/10.5281/zenodo.<id>`, which names the record too |
 
 a record may hold one large archive cut into parts, such as `scans.zip.001` to `scans.zip.003`. they unpack as that one archive when the dataset lists every part; a `--select` that keeps only some of them leaves them packed with a warning, as [split archives](../reference/archives.md#split-archives) explains.
 

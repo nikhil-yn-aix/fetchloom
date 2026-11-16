@@ -16,6 +16,7 @@ fetchloom auth
 | `hf` | gated and private hugging face repositories | `HF_TOKEN` |
 | `kaggle` | competitions | `KAGGLE_API_TOKEN` |
 | `zenodo` | restricted, embargoed and closed records | `ZENODO_TOKEN` |
+| an invenioRDM install's host, with `--token` | restricted records there | none |
 | `figshare` | nothing public; embargoed articles stay refused | `FIGSHARE_TOKEN` |
 | `osf` | private projects | `OSF_TOKEN` |
 | `dryad` | every download | `DRYAD_TOKEN` |

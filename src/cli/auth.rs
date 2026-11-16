@@ -1332,9 +1332,7 @@ pub(super) async fn offer(
     if let (Some(header), Account::Login(host)) = (need.header, account)
         && let Some(key) = crate::account::per_host_key(header)
     {
-        if let Some(named) = named_here(host, need.via.as_deref()) {
-            output.say(&format!("{:>11} that you trust {host}: {named}", "Check"));
-        }
+        tell_chosen(output, host, need.via.as_deref());
         let question = format!("sign in to {} at {host} now?", key.name);
         if !agree(context, &question, false)
             .map_err(|error| error.cancelling(&signing))?
@@ -1348,6 +1346,9 @@ pub(super) async fn offer(
         return Ok(true);
     }
     if need.site {
+        if let Account::Login(host) = account {
+            tell_chosen(output, host, need.via.as_deref());
+        }
         let signed = site::offered(context, account)
             .await
             .map_err(|error| error.cancelling(&signing))?;
@@ -1373,6 +1374,14 @@ pub(super) async fn offer(
     Ok(true)
 }
 
+/// says that this project's data.toml chose `host`, or the DOI `via` that led there, before a
+/// sign-in for it is offered, so a person checks they trust it.
+fn tell_chosen(output: &crate::output::Output, host: &str, via: Option<&str>) {
+    if let Some(named) = named_here(host, via) {
+        output.say(&format!("{:>11} that you trust {host}: {named}", "Check"));
+    }
+}
+
 /// how the data.toml of the project here led to `host`, whose key a refusal offers to save, so
 /// a host a file chose is told apart from one the person typed: it names a dataset there, or the
 /// DOI `via`, which led there. none when it names neither. it asks nothing of the network.
@@ -1391,7 +1400,7 @@ fn named_here(host: &str, via: Option<&str>) -> Option<String> {
         .collect();
     if named
         .iter()
-        .any(|reference| matches!(reference, Reference::Dataverse(dataset) if dataset.key_host() == host))
+        .any(|reference| reference.chosen_host().as_deref() == Some(host))
     {
         return Some("this project's data.toml named it".to_owned());
     }

@@ -73,6 +73,13 @@ fn rows() -> Vec<Row> {
             &[("https://zenodo.org/api/records/3608990", "zenodo/iris.json")],
         ),
         row(
+            "invenio:data.caltech.edu/dt797-nsy79",
+            &[(
+                "https://data.caltech.edu/api/records/dt797-nsy79",
+                "invenio/caltech-record.json",
+            )],
+        ),
+        row(
             "doi:10.5281/zenodo.3608990",
             &[
                 (

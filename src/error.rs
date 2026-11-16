@@ -249,7 +249,7 @@ impl Error {
 
     /// says the DOI `via` led to the host whose key this refusal needs.
     pub(crate) fn via(mut self, via: String) -> Error {
-        if let Some(need) = self.need.as_mut().filter(|need| need.header.is_some()) {
+        if let Some(need) = self.need.as_mut().filter(|need| need.site) {
             need.via = Some(via);
         }
         self

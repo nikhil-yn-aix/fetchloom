@@ -22,7 +22,7 @@
 |---|---|
 | `src/source.rs`, adapter module tests and `tests/fixtures/sources/` | `cargo test --locked --lib source::` |
 | `src/source/search/tests.rs`, `tests/cli/search.rs` | `cargo test --locked --lib source::search::`; `cargo test --locked --test cli search::` |
-| `src/source/zenodo.rs` | `cargo test --locked --lib source::zenodo::` |
+| `src/source/invenio/tests.rs` | `cargo test --locked --lib source::invenio::` |
 | `src/source/dryad/tests.rs`, `src/source/mendeley/tests.rs`, `src/source/github/tests.rs`, `src/source/gitlab/tests.rs`, `src/source/ena/tests.rs`, `src/source/geo/tests.rs`, `src/source/dandi/tests.rs`, `src/source/openneuro/tests.rs`, `tests/cli/repositories.rs` | `cargo test --locked --lib source::dryad::`; `cargo test --locked --lib source::mendeley::`; `cargo test --locked --lib source::github::`; `cargo test --locked --lib source::gitlab::`; `cargo test --locked --lib source::ena::`; `cargo test --locked --lib source::geo::`; `cargo test --locked --lib source::dandi::`; `cargo test --locked --lib source::openneuro::`; `cargo test --locked --test cli repositories::` |
 | `src/source/doi/tests.rs`, `src/source/dataverse/tests.rs` | `cargo test --locked --lib source::doi::`; `cargo test --locked --lib source::dataverse::` |
 | `src/source/drive/folder_tests.rs`, `src/source/osf/walk_tests.rs` | `cargo test --locked --lib source::drive::`; `cargo test --locked --lib source::osf::` |

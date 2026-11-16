@@ -68,7 +68,8 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 
 | source | API | tested against |
 |---|---|---|
-| zenodo | REST API under `/api` | zenodo.org |
+| zenodo | REST API under `/api`, in zenodo's own answer form | zenodo.org |
+| invenioRDM | records API: `/api/records/<id>` in invenioRDM's answer form | data.caltech.edu; researchdata.tuwien.ac.at through recorded answers |
 | figshare | API v2 | api.figshare.com |
 | dataverse | native API: `/api/datasets/:persistentId`, `/api/access/datafile` | dataverse.harvard.edu |
 | dryad | API v2: datasets, versions and files | datadryad.org for listings; downloads, which need an API account, against a local stand-in |

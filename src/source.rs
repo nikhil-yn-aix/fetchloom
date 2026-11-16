@@ -20,6 +20,7 @@ mod github;
 mod gitlab;
 mod hf;
 mod ia;
+mod invenio;
 pub(crate) mod kaggle;
 pub(crate) mod local;
 mod mendeley;
@@ -29,8 +30,6 @@ mod osf;
 pub(crate) mod recorded;
 mod s2;
 pub(crate) mod search;
-
-mod zenodo;
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -149,7 +148,8 @@ fn env(name: &str) -> Option<OsString> {
 pub(crate) enum Reference {
     Url(Url),
     Doi(doi::Doi),
-    Zenodo(zenodo::Record),
+    /// a record of an invenioRDM install, zenodo's among them.
+    Invenio(invenio::Record),
     Dryad(dryad::Dataset),
     Mendeley(mendeley::Dataset),
     GitHub(github::Release),
@@ -367,11 +367,12 @@ pub(crate) struct Remote {
 }
 
 /// the prefixes [`Reference::parse`] reads before a `:`, which a guess at a typo picks from.
-pub(crate) const SCHEMES: [&str; 24] = [
+pub(crate) const SCHEMES: [&str; 25] = [
     "http",
     "https",
     "doi",
     "zenodo",
+    "invenio",
     "dryad",
     "mendeley",
     "github",
@@ -435,7 +436,8 @@ impl Reference {
         match scheme.to_ascii_lowercase().as_str() {
             "http" | "https" => link(text),
             "doi" => whole(Reference::Doi(doi::Doi::parse(rest)?)),
-            "zenodo" => whole(Reference::Zenodo(zenodo::Record::parse(rest)?)),
+            "zenodo" => whole(Reference::Invenio(invenio::Record::zenodo(rest)?)),
+            "invenio" => whole(Reference::Invenio(invenio::Record::parse(rest)?)),
             "dryad" => whole(Reference::Dryad(dryad::Dataset::parse(rest)?)),
             "mendeley" => whole(Reference::Mendeley(mendeley::Dataset::parse(rest)?)),
             "github" => whole(Reference::GitHub(github::Release::parse(rest)?)),
@@ -481,10 +483,23 @@ impl Reference {
         match self {
             Reference::Url(url) => Some(url.origin()),
             Reference::Dataverse(dataset) => dataset.origin(),
+            Reference::Invenio(record) => record.origin(),
             Reference::GitLab(release) => release.origin(),
             Reference::Bucket(prefix) => prefix.written_origin(),
             _ => None,
         }
+    }
+
+    /// the host of the origin this reference names, with its port when that is not https's own,
+    /// as a key for it is saved: a host a person or a project's data.toml chose.
+    pub(crate) fn chosen_host(&self) -> Option<String> {
+        let url::Origin::Tuple(_, host, port) = self.written_origin()? else {
+            return None;
+        };
+        Some(match port {
+            443 => host.to_string(),
+            port => format!("{host}:{port}"),
+        })
     }
 
     /// whether this names a paper, as arXiv's and semantic scholar's do, rather than a dataset.
@@ -571,10 +586,27 @@ impl Reference {
                 Reference::Doi(doi) => {
                     let scoped = access::Scoped::new(api, &access::DOI, None, self.shown());
                     let target = doi.locate(&scoped).await?;
-                    let mut listing = target
-                        .resolve_direct(api, select)
-                        .await
-                        .map_err(|error| error.via(doi.to_string()))?;
+                    let listing = match &target {
+                        // a page another invenioRDM install made for the DOI, which only its
+                        // answer for the record there can confirm
+                        Reference::Url(url) => match invenio::Record::behind(url) {
+                            Some((record, named)) => {
+                                let scoped = access::Scoped::new(
+                                    api,
+                                    &access::INVENIO,
+                                    record.origin(),
+                                    target.shown(),
+                                );
+                                record
+                                    .recognized(&scoped, named.as_deref())
+                                    .await
+                                    .and_then(|listing| listing.ok_or_else(|| doi.not_listed(url)))
+                            }
+                            None => Err(doi.not_listed(url)),
+                        },
+                        other => other.resolve_direct(api, select).await,
+                    };
+                    let mut listing = listing.map_err(|error| error.via(doi.to_string()))?;
                     listing.doi.get_or_insert_with(|| doi.name().to_owned());
                     Ok(listing)
                 }
@@ -597,8 +629,18 @@ impl Reference {
         check(self, listing, api.most_files())
     }
 
-    /// asks this reference's own source, which may ask only the origins its descriptor names.
+    /// asks this reference's own source, which may ask only the origins its descriptor names. a
+    /// link to a record's page on an invenioRDM install is that record once one request for it
+    /// there says so, and otherwise the plain link it is.
     async fn resolve_direct(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
+        if let Reference::Url(url) = self
+            && let Some((record, named)) = invenio::Record::behind(url)
+        {
+            let scoped = access::Scoped::new(api, &access::INVENIO, record.origin(), self.shown());
+            if let Ok(Some(listing)) = record.recognized(&scoped, named.as_deref()).await {
+                return Ok(listing);
+            }
+        }
         let api = &access::Scoped::new(api, self.access(), self.written_origin(), self.shown());
         match self {
             Reference::Url(url) => Ok(single(url)),
@@ -607,7 +649,7 @@ impl Reference {
                 format!("{doi} leads to another DOI, which fetchloom does not follow"),
             )
             .help("open the DOI in a browser and use the dataset page or a direct file link")),
-            Reference::Zenodo(record) => record.resolve(api).await,
+            Reference::Invenio(record) => record.resolve(api).await,
             Reference::Dryad(dataset) => dataset.resolve(api).await,
             Reference::Mendeley(dataset) => dataset.resolve(api).await,
             Reference::GitHub(release) => release.resolve(api).await,
@@ -643,7 +685,7 @@ impl fmt::Display for Reference {
         match self {
             Reference::Url(url) => write!(f, "{url}"),
             Reference::Doi(doi) => write!(f, "{doi}"),
-            Reference::Zenodo(record) => write!(f, "{record}"),
+            Reference::Invenio(record) => write!(f, "{record}"),
             Reference::Dryad(dataset) => write!(f, "{dataset}"),
             Reference::Mendeley(dataset) => write!(f, "{dataset}"),
             Reference::GitHub(release) => write!(f, "{release}"),
@@ -769,7 +811,8 @@ impl Reference {
         match self {
             Reference::Url(_) => &access::LINK,
             Reference::Doi(_) => &access::DOI,
-            Reference::Zenodo(_) => &access::ZENODO,
+            Reference::Invenio(record) if record.is_elsewhere() => &access::INVENIO,
+            Reference::Invenio(_) => &access::ZENODO,
             Reference::Dryad(_) => &access::DRYAD,
             Reference::Mendeley(_) => &access::MENDELEY,
             Reference::GitHub(_) => &access::GITHUB,
@@ -859,8 +902,8 @@ fn link(text: &str) -> Result<Parsed, Error> {
     let routed = doi::Doi::from_link(&url)
         .map(|doi| parsed(Reference::Doi(doi), None))
         .or_else(|| {
-            zenodo::Record::from_link(&url)
-                .map(|(record, file)| parsed(Reference::Zenodo(record), file))
+            invenio::Record::from_link(&url)
+                .map(|(record, file)| parsed(Reference::Invenio(record), file))
         })
         .or_else(|| {
             repository_link(&url).map(|(reference, folder)| Parsed {

@@ -13,6 +13,7 @@ a dataset's page works as well as its id, so you can paste the link from your br
 |---|---|---|---|
 | [URLs and DOIs](urls-and-dois.md) | any file a link serves; a DOI leads to a source below | `https://…/iris.csv`, `doi:10.5281/zenodo.3608990` | a server that asks for a login |
 | [zenodo](zenodo.md) | research data of any field | `zenodo:3608990` | restricted, embargoed and closed records |
+| [invenioRDM](invenio.md) | records on another install of the software zenodo runs, as CaltechDATA | `invenio:data.caltech.edu/dt797-nsy79` | restricted records |
 | [figshare](figshare.md) | research data, also on institutions' own figshare sites | `figshare:34744689@1` | nothing public; embargoed articles are refused |
 | [dataverse](dataverse.md) | datasets on harvard's and other dataverse installations | `dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP` | restricted files |
 | [dryad](dryad.md) | data behind published papers | `dryad:10.5061/dryad.j1fd7` | every download |

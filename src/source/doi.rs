@@ -124,10 +124,11 @@ impl Doi {
             }
         })?;
         match parsed.reference {
-            Reference::Url(url) => Err(Self::unresolved(&format!(
-                "{self} points to {}, which fetchloom cannot list",
-                url.host_str().unwrap_or_default()
-            ))),
+            // a page of a record on an invenioRDM install, which its answer may confirm
+            Reference::Url(url) if super::invenio::Record::behind(&url).is_some() => {
+                Ok(Reference::Url(url))
+            }
+            Reference::Url(url) => Err(self.not_listed(&url)),
             Reference::Doi(_) => Err(Self::unresolved(&format!(
                 "{self} points to another DOI rather than a repository"
             ))),
@@ -138,6 +139,14 @@ impl Doi {
             ))),
             reference => Ok(reference),
         }
+    }
+
+    /// the error for a DOI that points to `url`, a page fetchloom cannot list.
+    pub(super) fn not_listed(&self, url: &Url) -> Error {
+        Self::unresolved(&format!(
+            "{self} points to {}, which fetchloom cannot list",
+            url.host_str().unwrap_or_default()
+        ))
     }
 
     fn unresolved(message: &str) -> Error {

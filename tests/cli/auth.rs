@@ -1081,6 +1081,68 @@ fn a_dataverse_sign_in_for_a_host_a_data_toml_doi_leads_to_says_so() -> Result {
     Ok(())
 }
 
+/// a sign-in offered for an invenioRDM install this project's data.toml names, or a DOI in it
+/// leads to, says so before asking, since a file anyone could have written chose that host.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_invenio_sign_in_for_a_host_data_toml_chose_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let refused = || {
+        reply(
+            "403 Forbidden",
+            &[("Content-Type", "application/json")],
+            br#"{"status": 403, "message": "Permission denied."}"#,
+        )
+    };
+    let handle = r#"{"responseCode":1,"handle":"10.1234/fghij-67890","values":[{"index":1,"type":"URL","data":{"format":"string","value":"https://rdm.example.org/doi/10.1234/fghij-67890"}}]}"#;
+    let routes = Routes::start(vec![
+        (
+            "/rdm.example.org/api/records/abcde-12345".to_owned(),
+            refused(),
+        ),
+        (
+            "/rdm.example.org/api/records/fghij-67890".to_owned(),
+            refused(),
+        ),
+        (
+            "/doi.org/api/handles/10.1234%2Ffghij-67890".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                handle.as_bytes(),
+            ),
+        ),
+    ])?;
+    for (toml, named) in [
+        (
+            "[datasets.x]\nref = \"invenio:rdm.example.org/abcde-12345\"\n",
+            "Check that you trust rdm.example.org: this project's data.toml named it",
+        ),
+        (
+            "[datasets.y]\nref = \"doi:10.1234/fghij-67890\"\n",
+            "Check that you trust rdm.example.org: this project's data.toml named doi:10.1234/fghij-67890, which leads there",
+        ),
+    ] {
+        std::fs::write(sandbox.work().join("data.toml"), toml)?;
+        let mut command = sandbox.command(&["sync"]);
+        command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+        let asked = "sign in to rdm.example.org with";
+        let Some((_, screen)) = crate::support::typed(&sandbox.work(), &command, "", asked, "q")?
+        else {
+            return Ok(());
+        };
+        let screen = screen.replace('\r', "");
+        let told = screen.find(named);
+        let question = screen.find(asked);
+        assert!(
+            told.zip(question)
+                .is_some_and(|(told, question)| told < question),
+            "{screen}"
+        );
+    }
+    Ok(())
+}
+
 /// a dataverse key is saved as its installation's key, in the header dataverse names, once the
 /// installation accepts it; a key it refuses is not saved, and `dataverse` alone names no
 /// installation to sign in to.

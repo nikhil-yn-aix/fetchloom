@@ -108,7 +108,7 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/search.rs` | `search` across public catalogs, its candidates interleaved, and the public dataset of the same owner one typo from a hugging face or kaggle id the source would not show | `search`, `near` | `Candidate`, `Search`, `is_search`, `Near` |
 | `src/source/local.rs` | text that names something on this machine, never searched for or sent; the ref of imported files | `is_path`, `IMPORTED` | `reads_as_path`, `here`, `refused`, `is_imported`, `unlisted`, `changed`, `unpinned`, `no_newer`, `imported_elsewhere`, `several_imported_elsewhere` |
 | `src/source/doi.rs` | DOIs, routed by the host doi.org names, never by their prefix | `Doi::locate` |  |
-| `src/source/zenodo.rs` | zenodo records, with the MD5 zenodo states for every file | `Record` | `Record::resolve` |
+| `src/source/invenio.rs` | invenioRDM records on zenodo.org, read in zenodo's own answer form, or on another install by host and id, with the MD5 each states for every file; a record page or DOI page on another host known by one request for the record there | `Record` | `Record::resolve`, `Record::recognized` |
 | `src/source/figshare.rs` | figshare articles, optionally at a version | `Article` | `Article::resolve` |
 | `src/source/dataverse.rs` | datasets on any dataverse install, by host and persistent id | `Dataset` | `Dataset::resolve` |
 | `src/source/dataverse/version.rs` | published versions and the original files their checksums describe | `Version` | `Answer::listing`, `Version::listing` |

@@ -64,6 +64,7 @@
         - [Google Drive](user/sources/google-drive.md)
         - [Hugging Face](user/sources/hugging-face.md)
         - [Internet Archive](user/sources/internet-archive.md)
+        - [invenioRDM](user/sources/invenio.md)
         - [Kaggle](user/sources/kaggle.md)
         - [Mendeley Data](user/sources/mendeley.md)
         - [OpenNeuro](user/sources/openneuro.md)

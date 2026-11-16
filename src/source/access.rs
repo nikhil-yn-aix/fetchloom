@@ -147,6 +147,19 @@ pub(crate) static ZENODO: Access = Access {
     pace: &[],
 };
 
+/// an invenioRDM install other than zenodo.org, at the origin its reference names. its key is the
+/// token `auth login <host> --token` saves for that host alone, which goes with every request to
+/// it.
+pub(crate) static INVENIO: Access = Access {
+    name: "invenioRDM",
+    api: Origins::Written,
+    files: Origins::Written,
+    key: None,
+    sites: &[],
+    pages: no_page,
+    pace: &[],
+};
+
 pub(crate) static DRYAD: Access = Access {
     name: "dryad",
     api: Origins::Fixed(&["https://datadryad.org"]),
@@ -434,8 +447,9 @@ pub(crate) static LOCAL: Access = Access {
 };
 
 /// every source, in the order a link's page is matched to one.
-pub(super) static ALL: [&Access; 24] = [
+pub(super) static ALL: [&Access; 25] = [
     &ZENODO,
+    &INVENIO,
     &DRYAD,
     &MENDELEY,
     &GEO,

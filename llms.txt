@@ -58,6 +58,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [sources](docs/user/sources/README.md): every source, how to write its references and when it needs an account
 - [URLs and DOIs](docs/user/sources/urls-and-dois.md): direct links, and DOIs that lead to a source below
 - [zenodo](docs/user/sources/zenodo.md): records and record files
+- [invenioRDM](docs/user/sources/invenio.md): records on another install of the software zenodo runs, by host and id, a record's page or a DOI it registered, with a key for that host alone
 - [figshare](docs/user/sources/figshare.md): article versions, on institutions' sites too
 - [dataverse](docs/user/sources/dataverse.md): published dataset and file versions on any installation
 - [dryad](docs/user/sources/dryad.md): published dataset versions, downloaded with an API account's key
