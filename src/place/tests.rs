@@ -2007,14 +2007,19 @@ fn files_in_memory_are_not_read_ahead() {
 }
 
 /// a co-user of a shared cache may set any bit on an object they wrote; a clone keeps none that
-/// would let others run the placed file as the person who placed it.
+/// would let others run the placed file as the person who placed it, or write it.
 #[cfg(unix)]
 #[test]
 fn a_clone_never_takes_the_setuid_setgid_or_sticky_bit() {
     use std::os::unix::fs::PermissionsExt;
     let special = std::fs::Permissions::from_mode(0o7755);
-    assert_eq!(super::clone_mode(special.clone(), false), 0o555);
-    assert_eq!(super::clone_mode(special, true), 0o755);
+    assert_eq!(super::clone_mode(&special, false), 0o555);
+    assert_eq!(super::clone_mode(&special, true), 0o755);
+    let open = std::fs::Permissions::from_mode(0o666);
+    assert_eq!(super::clone_mode(&open, true), 0o644);
+    assert_eq!(super::clone_mode(&open, false), 0o444);
+    let group = std::fs::Permissions::from_mode(0o474);
+    assert_eq!(super::clone_mode(&group, true), 0o654);
 }
 
 /// a macos clone keeps its object's mode, as fclonefileat copies it, so the mode set through the

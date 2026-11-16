@@ -127,7 +127,7 @@ impl Location {
             native::CloneFlags::empty(),
         )?;
         let file = self.open(OFlags::RDONLY)?;
-        if let Err(error) = super::set_file_writable(&file, writable) {
+        if let Err(error) = super::set_clone_writable(&file, writable) {
             let _ = self.remove_file();
             return Err(error);
         }

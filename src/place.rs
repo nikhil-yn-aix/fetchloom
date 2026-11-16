@@ -837,7 +837,7 @@ impl Placer {
     ) -> io::Result<Put<Metadata>> {
         use std::os::unix::fs::PermissionsExt;
         let source = read_unfollowed(object)?;
-        let mode = clone_mode(source.metadata()?.permissions(), writable);
+        let mode = clone_mode(&source.metadata()?.permissions(), writable);
         let seal = |file: &File| {
             if file.metadata()?.permissions().mode() & 0o7777 != mode {
                 file.set_permissions(Permissions::from_mode(mode))?;
@@ -1588,12 +1588,14 @@ fn publish_flushed<T: Send>(
     first.into_iter().chain(rest).collect()
 }
 
-/// the mode a clone of a file of `permissions` gets: its read and run bits, writable as asked,
-/// never the setuid, setgid or sticky bit, which would let others run a placed file as its owner.
+/// the mode a clone of a file of `permissions` gets: its read and run bits, and its owner's write
+/// bit as asked, never the setuid, setgid or sticky bit, which would let others run a placed file
+/// as its owner, nor a write bit for others, which a co-user may have set on an object they wrote.
 #[cfg(unix)]
-fn clone_mode(permissions: Permissions, writable: bool) -> u32 {
+fn clone_mode(permissions: &Permissions, writable: bool) -> u32 {
     use std::os::unix::fs::PermissionsExt;
-    writable_as(permissions, writable).mode() & 0o777
+    let owner = if writable { 0o200 } else { 0 };
+    permissions.mode() & 0o555 | owner
 }
 
 #[cfg(target_os = "macos")]
@@ -1649,26 +1651,54 @@ fn fill(
     set_file_writable(output, writable)
 }
 
-/// sets the placed file `output` writable as asked, through its own handle, and on unix without
-/// the setuid, setgid or sticky bit a macos clone takes from its object.
+/// sets the placed copy `output` writable as asked, through its own handle, and on unix without
+/// the setuid, setgid or sticky bit, keeping the rest of the mode the umask gave it.
 fn set_file_writable(output: &File, writable: bool) -> io::Result<()> {
-    let before = output.metadata()?.permissions();
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = clone_mode(before.clone(), writable);
-        if before.mode() & 0o7777 != mode {
-            output.set_permissions(Permissions::from_mode(mode))?;
-        }
+        set_mode(output, writable, copy_mode)
     }
     #[cfg(not(unix))]
     {
+        let before = output.metadata()?.permissions();
         let after = writable_as(before.clone(), writable);
         if before != after {
             output.set_permissions(after)?;
         }
+        Ok(())
+    }
+}
+
+/// [`set_file_writable`] for a macos clone, which takes its object's mode: as [`clone_mode`]
+/// says, so no bit a co-user set on an object they wrote reaches the placed file.
+#[cfg(target_os = "macos")]
+pub(super) fn set_clone_writable(output: &File, writable: bool) -> io::Result<()> {
+    set_mode(output, writable, clone_mode)
+}
+
+/// sets the mode of `output` to what `mode` makes of it, writable as asked, through its handle.
+#[cfg(unix)]
+fn set_mode(output: &File, writable: bool, mode: fn(&Permissions, bool) -> u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let before = output.metadata()?.permissions();
+    let after = mode(&before, writable);
+    if before.mode() & 0o7777 != after {
+        output.set_permissions(Permissions::from_mode(after))?;
     }
     Ok(())
+}
+
+/// the mode a copy made with `permissions` keeps: the bits the umask gave it, its owner's write bit
+/// as asked, no write bit for anyone when read-only, never the setuid, setgid or sticky bit.
+#[cfg(unix)]
+fn copy_mode(permissions: &Permissions, writable: bool) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = permissions.mode() & 0o777;
+    if writable {
+        mode | 0o200
+    } else {
+        mode & !0o222
+    }
 }
 
 /// [`set_file_writable`] for a file named at `path`, by that name too where windows ignored the
@@ -1781,19 +1811,6 @@ fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()>
 }
 
 /// `permissions` changed to let the file's owner write it, or no one.
-#[cfg(unix)]
-fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mode = permissions.mode();
-    permissions.set_mode(if writable {
-        mode | 0o200
-    } else {
-        mode & !0o222
-    });
-    permissions
-}
-
 #[cfg(not(unix))]
 fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
     permissions.set_readonly(!writable);
