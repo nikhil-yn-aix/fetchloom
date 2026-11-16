@@ -6,7 +6,7 @@ CI checks native behavior, filesystem paths and installed release artifacts befo
 
 `.github/workflows/ci.yml` runs on pushes to main, every pull request, merge groups and manual dispatch. every run is full: there are no path filters or docs-only skips. repository permission is read-only. newer PR commits cancel their predecessors; main and dispatched revisions have separate concurrency groups. matrices do not fail fast.
 
-the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. no step may turn a failed test into success to get this check green.
+the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts, action, r]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. no step may turn a failed test into success to get this check green.
 
 github cannot require a check for a direct push to main: both a ruleset and classic branch protection refused a commit whose `ci` had passed on `stage`. so main moves only to a commit whose `ci` passed on another branch first. push it to `stage`, run `gh workflow run ci.yml --ref stage`, and check that run's `ci` result before pushing the same commit to main. branch protection keeps main's history linear, refuses force pushes and deletion, and applies to admins too.
 
@@ -90,6 +90,12 @@ linux x64 runs the printed `unrar` command, mac arm runs `unar`, and Windows x64
 a separate linux job runs `cargo package --locked --no-verify`, installs from the unpacked `.crate` and exercises that installed program. that release install compiles the packaged sources, so cargo's own verify build would only repeat it. it uses the pinned toolchain, not an additional MSRV matrix. the final inventory requires all six named targets, all required check receipts, the source install, and exactly fourteen package files with matching hashes. it then takes the release sbom from the x86_64 linux wheel with `python/release_sbom.py`, which checks that it is a CycloneDX sbom of this version, and keeps it as the `sbom` artifact. release downloads only `packages-*`; reports cannot leak into published assets. packages stay seven days, as receipts do: the inventory and the release's attestation read them in the same run. [releasing](releasing.md) owns publication.
 
 every apt install in CI and release goes through `.github/scripts/apt-install.sh`, which retries and, when the runner's resolver cannot find Ubuntu's archive, asks public resolvers instead; apt verifies the signed package lists, so the resolver cannot change what installs. an outage of the archive itself still fails provisioning, and the required gate still does not waive that job. each resolver attempt, including update and install together, has a two-minute hard limit and a ten-second forced-stop grace period. both phases and timeout/failure outcomes are logged. a stalled runner-resolver attempt therefore reaches the existing public-resolver fallback without waiting for the whole job timeout; a failed fallback remains red. the CI helper tests use a one-second limit and a deliberately blocked child, without changing this machine's resolver.
+
+## the action and the R package
+
+the `action` job builds fetchloom on `ubuntu-24.04`, `windows-2025` and `macos-15` and runs `action.yml` with that binary twice. `python/ci_action.py` first pins a file a loopback server serves once and pushes it to a folder mirror, so the first run takes it from the mirror with no cache to restore and saves the cache; the second, after the cache folder, the placed data and the mirror are removed and with `FETCHLOOM_OFFLINE=1`, must restore the cache under the same key and place the file from it. the job then checks the placed bytes and both runs' `cache-hit`.
+
+the `r` job builds fetchloom on `ubuntu-24.04`, puts it on PATH and runs `R CMD check --as-cran` on `r/` through r-lib's actions, failing on a warning; its last step fails when a test was skipped, as one is without the binary.
 
 ## documentation site
 
