@@ -207,63 +207,101 @@ pub(crate) fn safe_on_windows(word: &str) -> bool {
     ])
 }
 
-/// `text` with each word [`shell_word`] withheld named by a placeholder, `<file>`, `<folder>` or
-/// `<name>`, in double quotes, so no shell reads it as a redirection from a file of its name, and
-/// `--json`'s fix never offers it, and a line for each saying which name it stands for. marks a
-/// name holds outside a command stay as they are.
+/// `text` with each word [`shell_word`] withheld named by a placeholder, as [`Withheld::place`]
+/// names it, and a line for each saying which name it stands for.
 pub(crate) fn withheld(text: &str) -> (Cow<'_, str>, Vec<String>) {
-    if !text.contains(OPEN) {
-        return (Cow::Borrowed(text), Vec::new());
+    Withheld::default().place(text, &[])
+}
+
+/// the words withheld from the commands of one error, warning or run, with the placeholder that
+/// names each, so all its texts name one word alike and say once which word it stands for.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Withheld {
+    /// each word, its placeholder, and whether a line said which word it stands for yet.
+    named: Vec<(String, String, bool)>,
+}
+
+impl Withheld {
+    /// `text` with each word [`shell_word`] withheld named by a placeholder, `<file>`, `<folder>`
+    /// or `<name>`, in double quotes, so no shell reads it as a redirection from a file of its
+    /// name, and `--json`'s fix never offers it, and a line for each word no line named yet. a
+    /// placeholder `text` or `others`, the other texts of the same error, hold already, as an
+    /// example does, names another word. marks a name holds outside a command stay as they are.
+    pub(crate) fn place<'t>(
+        &mut self,
+        text: &'t str,
+        others: &[&str],
+    ) -> (Cow<'t, str>, Vec<String>) {
+        if !text.contains(OPEN) {
+            return (Cow::Borrowed(text), Vec::new());
+        }
+        let mut shown = String::with_capacity(text.len());
+        let mut lines = Vec::new();
+        let mut rest = text;
+        while let Some(start) = rest.find(OPEN) {
+            shown.push_str(&rest[..start]);
+            let Some(span) = span_at(&rest[start..]) else {
+                shown.push(OPEN);
+                rest = &rest[start + OPEN.len_utf8()..];
+                continue;
+            };
+            let mut marked = span[OPEN.len_utf8()..span.len() - CLOSE.len_utf8()].chars();
+            let base = match marked.next() {
+                Some(FILE) => "file",
+                Some(FOLDER) => "folder",
+                _ => "name",
+            };
+            let word = marked.as_str();
+            let known = self.named.iter().position(|(seen, _, _)| seen == word);
+            let at = known.unwrap_or_else(|| {
+                // each placeholder taken needs a `<` in some text or a word named before, so one
+                // past their count is free
+                let taken = std::iter::once(text)
+                    .chain(others.iter().copied())
+                    .map(|other| other.matches('<').count())
+                    .sum::<usize>()
+                    + self.named.len();
+                let free = |placeholder: &String| {
+                    std::iter::once(text)
+                        .chain(others.iter().copied())
+                        .all(|other| !other.contains(placeholder.as_str()))
+                        && self.named.iter().all(|(_, given, _)| given != placeholder)
+                };
+                let placeholder = (1..=taken + 1)
+                    .map(|count| match count {
+                        1 => format!("<{base}>"),
+                        count => format!("<{base} {count}>"),
+                    })
+                    .find(free)
+                    .unwrap_or_default();
+                self.named.push((word.to_owned(), placeholder, false));
+                self.named.len() - 1
+            });
+            let (word, placeholder, told) = &mut self.named[at];
+            if !*told {
+                lines.push(format!(
+                    "{placeholder} is {word}, which no command here can hold safely"
+                ));
+                *told = true;
+            }
+            let _ = write!(shown, "\"{placeholder}\"");
+            rest = &rest[start + span.len()..];
+        }
+        shown.push_str(rest);
+        (Cow::Owned(shown), lines)
     }
-    let mut shown = String::with_capacity(text.len());
-    let mut named: Vec<(&str, String)> = Vec::new();
-    let mut lines = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find(OPEN) {
-        shown.push_str(&rest[..start]);
-        let Some(span) = span_at(&rest[start..]) else {
-            shown.push(OPEN);
-            rest = &rest[start + OPEN.len_utf8()..];
-            continue;
-        };
-        let after = &rest[start + OPEN.len_utf8()..];
-        let end = span.len() - OPEN.len_utf8() - CLOSE.len_utf8();
-        let mut marked = after[..end].chars();
-        let base = match marked.next() {
-            Some(FILE) => "file",
-            Some(FOLDER) => "folder",
-            _ => "name",
-        };
-        let word = marked.as_str();
-        let seen = named
-            .iter()
-            .find(|(seen, _)| *seen == word)
-            .map(|(_, placeholder)| placeholder.clone());
-        let placeholder = seen.unwrap_or_else(|| {
-            // one the text holds already, as a help told before does, names another word; each
-            // taken one needs a `<`, so one past their count is free
-            let taken = text.matches('<').count() + named.len();
-            let placeholder = (1..=taken + 1)
-                .map(|count| match count {
-                    1 => format!("<{base}>"),
-                    count => format!("<{base} {count}>"),
-                })
-                .find(|placeholder| {
-                    !text.contains(placeholder.as_str())
-                        && named.iter().all(|(_, taken)| taken != placeholder)
-                })
-                .unwrap_or_default();
-            lines.push(format!(
-                "{placeholder} is {word}, which no command here can hold safely"
-            ));
-            named.push((word, placeholder.clone()));
-            placeholder
-        });
-        let _ = write!(shown, "\"{placeholder}\"");
-        rest = &after[end + CLOSE.len_utf8()..];
+
+    /// the same placeholders, each said again in the next text that shows it, as a failure of
+    /// its own needs.
+    pub(crate) fn untold(&self) -> Withheld {
+        Withheld {
+            named: self
+                .named
+                .iter()
+                .map(|(word, placeholder, _)| (word.clone(), placeholder.clone(), false))
+                .collect(),
+        }
     }
-    shown.push_str(rest);
-    (Cow::Owned(shown), lines)
 }
 
 /// `text` with each word [`shell_word`] withheld given back as it is, for a name shown where no

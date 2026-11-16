@@ -1060,7 +1060,7 @@ mod tests {
         let folder = dir.path().join("downloads");
         fs::create_dir(&folder).unwrap();
         let links = ["https://example.org/data/$(id).csv".to_owned()];
-        let error = usage(&folder, &links, false).unwrap_err();
+        let error = usage(&folder, &links, false).unwrap_err().told();
         let file = folder.join("$(id).csv").display().to_string();
         let named = if cfg!(windows) {
             r#"name the file inside it, as in `-o "<file>"`"#.to_owned()
@@ -1468,7 +1468,9 @@ mod tests {
             .unwrap();
         io::Write::write_all(&mut zip, b"a,b\n1,2\n").unwrap();
         let zipped = crate::cache::tests::store(&cache, &zip.finish().unwrap().into_inner());
-        let error = refuse_zipped(&cache, &listed, &zipped.digest).unwrap_err();
+        let error = refuse_zipped(&cache, &listed, &zipped.digest)
+            .unwrap_err()
+            .told();
         let quoted = if cfg!(windows) {
             r#"use `--dir "<folder>"` to unpack it into a folder"#
         } else {

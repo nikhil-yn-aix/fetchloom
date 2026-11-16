@@ -256,14 +256,54 @@ impl Error {
         self
     }
 
-    /// the help, with each name no command here can hold safely given a placeholder, and a
-    /// detail saying which name it stands for.
+    /// the help. a name no command here can hold safely in it gets its placeholder once the
+    /// error is told, as [`Error::told`] gives it.
     pub(crate) fn help(mut self, help: impl Into<String>) -> Error {
-        let help = help.into();
-        let (shown, named) = crate::suggested::withheld(&help);
-        self.help = Some(shown.into_owned().into_boxed_str());
-        self.details.extend(named);
+        self.help = Some(help.into().into_boxed_str());
         self
+    }
+
+    /// the error as it is told, on a terminal and in `--json` alike: each name no command here
+    /// can hold safely given its placeholder in the message, the details and the help, one name
+    /// one placeholder, a detail saying once which name each stands for, and each failure the
+    /// same, with the lines its own placeholders need.
+    pub(crate) fn told(&self) -> Error {
+        let mut told = self.clone();
+        let mut withheld = crate::suggested::Withheld::default();
+        let mut texts: Vec<&str> = vec![&self.message];
+        texts.extend(self.details.iter().map(String::as_str));
+        texts.extend(self.help.as_deref());
+        let mut lines = Vec::new();
+        let place = |withheld: &mut crate::suggested::Withheld, text: &mut String| {
+            let (shown, named) = withheld.place(text, &texts);
+            if let std::borrow::Cow::Owned(shown) = shown {
+                *text = shown;
+            }
+            named
+        };
+        lines.extend(place(&mut withheld, &mut told.message));
+        for detail in &mut told.details {
+            lines.extend(place(&mut withheld, detail));
+        }
+        if let Some(help) = &self.help {
+            let mut help = help.to_string();
+            lines.extend(place(&mut withheld, &mut help));
+            told.help = Some(help.into_boxed_str());
+        }
+        told.details.extend(lines);
+        for failure in &mut told.failures {
+            let mut own = withheld.untold();
+            let mut named = Vec::new();
+            named.extend(place(&mut own, &mut failure.message));
+            for detail in &mut failure.details {
+                named.extend(place(&mut own, detail));
+            }
+            if let Some(help) = &mut failure.help {
+                named.extend(place(&mut own, help));
+            }
+            failure.details.extend(named);
+        }
+        told
     }
 
     /// marks the error as a cancel the person chose, of `what`.

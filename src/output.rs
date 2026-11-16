@@ -97,6 +97,9 @@ pub(crate) struct Output {
     said: Mutex<Vec<String>>,
     /// the width of the terminal stderr goes to, which a line wraps at between words, or none.
     columns: Option<usize>,
+    /// the words withheld from the commands rows on stdout name, so every row of the run gives
+    /// one name one placeholder, said once.
+    withheld: Mutex<crate::suggested::Withheld>,
 }
 
 /// the output while a first ctrl-c is decided and told, from [`Output::alone`]: every other line
@@ -356,6 +359,7 @@ impl Output {
             held: Arc::default(),
             question: Mutex::new(()),
             warnings: Mutex::new(Vec::new()),
+            withheld: Mutex::new(crate::suggested::Withheld::default()),
             failed: Mutex::new(None),
             hints: true,
             progress: false,
@@ -472,23 +476,34 @@ impl Output {
         help: Option<&str>,
         details: impl IntoIterator<Item = impl std::fmt::Display>,
     ) {
-        // a name no command here can hold safely is told on a line of its own
-        let (help, named) = match help.map(crate::suggested::withheld) {
-            Some((help, named)) => (Some(help), named),
-            None => (None, Vec::new()),
+        // a name no command here can hold safely is told on a line of its own, once for the
+        // message, its details and its help, by one placeholder in all of them
+        let details: Vec<String> = details
+            .into_iter()
+            .map(|detail| detail.to_string())
+            .collect();
+        let mut texts: Vec<&str> = vec![text];
+        texts.extend(help);
+        texts.extend(details.iter().map(String::as_str));
+        let mut withheld = crate::suggested::Withheld::default();
+        let mut named = Vec::new();
+        let mut place = |part: &str| {
+            let (shown, lines) = withheld.place(part, &texts);
+            named.extend(lines);
+            shown.into_owned()
         };
+        let text = place(text);
+        let help = help.map(&mut place);
+        let details: Vec<String> = details.iter().map(|detail| place(detail)).collect();
+        let text = text.as_str();
         self.warnings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(Warned {
                 kind: kind.name(),
                 message: text.to_owned(),
-                details: details
-                    .into_iter()
-                    .map(|detail| detail.to_string())
-                    .chain(named.iter().cloned())
-                    .collect(),
-                help: help.as_deref().map(str::to_owned),
+                details: details.into_iter().chain(named.iter().cloned()).collect(),
+                help: help.clone(),
             });
         // a warning is about the data, as a kept edit is, so -q keeps it as it keeps errors
         if self.tells(Level::Quiet) {
@@ -757,14 +772,33 @@ impl Output {
 
     /// the answer on stdout, such as a path a script will read.
     pub(crate) fn answer(&self, text: &str) {
-        if !self.json
-            && let Err(error) = stdout(|out| writeln!(out, "{text}"))
-        {
+        if self.json {
+            return;
+        }
+        let lines = self.answered(text);
+        let written = stdout(|out| {
+            for line in &lines {
+                writeln!(out, "{line}")?;
+            }
+            Ok(())
+        });
+        if let Err(error) = written {
             self.failed
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .get_or_insert(error);
         }
+    }
+
+    /// the lines an answer of `text` takes on stdout: a name no command here can hold safely
+    /// given its placeholder, the same one every row of the run gives it, and the first row that
+    /// shows it followed by a line saying which name it stands for.
+    fn answered(&self, text: &str) -> Vec<String> {
+        let mut withheld = self.withheld.lock().unwrap_or_else(PoisonError::into_inner);
+        let (shown, named) = withheld.place(text, &[]);
+        std::iter::once(shown.into_owned())
+            .chain(named.iter().map(|line| format!("        {line}")))
+            .collect()
     }
 
     /// whether a person watches stderr, so a list there is read rather than logged twice.
@@ -1141,9 +1175,10 @@ impl Output {
                 .take()
                 .map_or(Ok(()), Err);
         }
-        let errors = match outcome {
-            Ok(_) => Vec::new(),
-            Err(error) => vec![Problem {
+        let told = outcome.err().map(Error::told);
+        let errors = match &told {
+            None => Vec::new(),
+            Some(error) => vec![Problem {
                 kind: error.kind.name(),
                 message: &error.message,
                 details: &error.details,
@@ -1746,8 +1781,9 @@ fn verb_line(verb: &str, text: &str, tone: Tone, color: bool) -> String {
     )
 }
 
-/// what [`Output::error`] writes for `error`.
+/// what [`Output::error`] writes for `error`, as it is told.
 fn failure_text(error: &Error, level: Level, color: bool) -> String {
+    let error = &error.told();
     if let Some(what) = &error.cancelled {
         let mut text = verb_line("Cancelled", what, Tone::Warn, color);
         if let Some(help) = &error.help {

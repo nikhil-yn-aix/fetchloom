@@ -1494,3 +1494,97 @@ fn marks_a_name_holds_are_written_out_on_a_line() {
         "{said:?}"
     );
 }
+
+/// a command naming the run's folder, which windows withholds when it holds `&`, as the status
+/// lines do after `-C`.
+fn naming_a_withheld_folder() -> String {
+    let folder = crate::suggested::shell_word_for(r"C:\Users\ada\R&D\proj", true);
+    format!("fetchloom -C {folder} sync")
+}
+
+/// what the placeholder of [`naming_a_withheld_folder`] stands for, as the one line says it.
+const NAMED_FOLDER: &str =
+    r"<name> is C:\Users\ada\R&D\proj, which no command here can hold safely";
+
+/// a warning's message, help and details name a withheld folder by one placeholder, in its text
+/// and in `--json` alike, and one line says which folder it stands for.
+#[test]
+fn a_warning_names_a_withheld_folder_alike_in_each_part() {
+    let output = telling(false);
+    let command = naming_a_withheld_folder();
+    output.warn_detailed(
+        super::Warning::ArchivePacked,
+        &format!("`{command}` places data/iris"),
+        Some(&format!("run `{command}`")),
+        [format!("`{command}` places it")],
+    );
+    let shown = r#"fetchloom -C "<name>" sync"#;
+    let warned = output.warnings.lock().unwrap()[0].clone();
+    assert_eq!(warned.message, format!("`{shown}` places data/iris"));
+    assert_eq!(
+        warned.help.as_deref(),
+        Some(format!("run `{shown}`").as_str())
+    );
+    assert_eq!(
+        warned.details,
+        [format!("`{shown}` places it"), NAMED_FOLDER.to_owned()]
+    );
+    let said = output.said().join("\n");
+    assert!(!said.contains('\u{f8e0}'), "{said}");
+    assert!(!said.contains("<name 2>"), "{said}");
+    assert_eq!(said.matches(NAMED_FOLDER).count(), 1, "{said}");
+}
+
+/// an error's message, details and help name a withheld folder by one placeholder, told and in
+/// `--json` alike, and one line says which folder it stands for; a failure of its own says so
+/// again, since a script reads each failure apart.
+#[test]
+fn an_error_names_a_withheld_folder_alike_in_each_part() {
+    use crate::error::{Error, FileFailure, Kind};
+    let command = naming_a_withheld_folder();
+    let mut error = Error::new(Kind::NotReady, format!("`{command}` cannot finish"))
+        .detail(format!("`{command}` places data/iris"))
+        .help(format!("run `{command}`"));
+    let text = super::failure_text(&error, Level::Normal, false);
+    assert!(!text.contains('\u{f8e0}'), "{text}");
+    assert!(!text.contains("<name 2>"), "{text}");
+    assert_eq!(text.matches(NAMED_FOLDER).count(), 1, "{text}");
+    error.failures = Box::new([FileFailure {
+        file: "data/iris/iris.csv".to_owned(),
+        kind: "network.status",
+        message: "not found".to_owned(),
+        details: Vec::new(),
+        help: Some(format!("run `{command}`")),
+    }]);
+    let told = error.told();
+    let shown = r#"fetchloom -C "<name>" sync"#;
+    assert_eq!(told.message, format!("`{shown}` cannot finish"));
+    assert_eq!(
+        told.help.as_deref(),
+        Some(format!("run `{shown}`").as_str())
+    );
+    assert_eq!(
+        told.details,
+        [
+            format!("`{shown}` places data/iris"),
+            NAMED_FOLDER.to_owned()
+        ]
+    );
+    assert_eq!(told.failures[0].help, Some(format!("run `{shown}`")));
+    assert_eq!(told.failures[0].details, [NAMED_FOLDER]);
+}
+
+/// a row on stdout names a withheld folder by its placeholder too, and the line saying which
+/// folder it stands for comes once in a run, after the first row that shows it.
+#[test]
+fn rows_on_stdout_name_a_withheld_folder_once() {
+    let output = telling(false);
+    let command = naming_a_withheld_folder();
+    let row = format!("    Missing data/iris/iris.csv · `{command}` places it");
+    let shown = r#"    Missing data/iris/iris.csv · `fetchloom -C "<name>" sync` places it"#;
+    assert_eq!(
+        output.answered(&row),
+        [shown.to_owned(), format!("        {NAMED_FOLDER}")]
+    );
+    assert_eq!(output.answered(&row), [shown.to_owned()]);
+}

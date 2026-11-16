@@ -594,7 +594,7 @@ mod tests {
     /// word even where the command line cannot be repeated.
     #[test]
     fn a_guessed_path_is_one_word_for_a_shell() {
-        let error = not_in("iris", "notes (id).csv", &["notes $(id).csv"]);
+        let error = not_in("iris", "notes (id).csv", &["notes $(id).csv"]).told();
         let help = error.help.unwrap_or_default();
         // no command on windows holds `$` safely, so a placeholder stands in for the path there
         if cfg!(windows) {
