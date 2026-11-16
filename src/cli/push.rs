@@ -246,6 +246,9 @@ struct Planned {
     taking: Vec<usize>,
     /// the data folder `taking` comes from.
     folder: DataFolder,
+    /// the archives sent whole, with their datasets, since their lists of files are longer than a
+    /// mirror's reader takes.
+    whole: Vec<(String, Vec<LockedFile>)>,
 }
 
 impl Planned {
@@ -327,7 +330,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
             &manifest,
             &lock,
             &cache,
-            &fetching(&planned),
+            fetching(&planned),
         )
         .map_err(|error| error.with_report(&report(&planned, Outcome::Stopped)))?;
         // what the archives hold is known now, so the push plans again
@@ -504,7 +507,12 @@ fn plan(
     selected: Option<Vec<String>>,
     datasets: Vec<String>,
 ) -> Result<Planned, Error> {
-    let Wanted { needed, unknown } = needed(manifest, lock, cache, &datasets)?;
+    let Wanted {
+        needed,
+        unknown,
+        whole,
+    } = needed(manifest, lock, cache, &datasets)?;
+
     let items: Vec<Item> = needed.iter().map(|needed| needed.item).collect();
     let (state, there) = match &target {
         To::Folder { root, verify } => {
@@ -552,6 +560,7 @@ fn plan(
         unknown,
         taking: Vec::new(),
         folder: DataFolder::default(),
+        whole,
     })
 }
 
@@ -641,34 +650,44 @@ fn settle(
     }
 }
 
-/// the datasets a push downloads first: those with files `planned` lacks or unknown archives.
-fn fetching(planned: &Planned) -> BTreeSet<&str> {
-    planned
+/// what a push downloads first: the datasets with files it lacks or archives of unknown files,
+/// and the archives it sends whole.
+type Fetching<'a> = (BTreeSet<&'a str>, &'a [(String, Vec<LockedFile>)]);
+
+/// [`Fetching`] for `planned`: the datasets with files it lacks or unknown archives.
+fn fetching(planned: &Planned) -> Fetching<'_> {
+    let names = planned
         .lacked
         .iter()
         .map(|at| &planned.needed[*at])
         .filter(|needed| matches!(needed.source, Source::Pinned))
         .map(|needed| needed.dataset.as_str())
         .chain(planned.unknown.iter().map(|(dataset, _)| dataset.as_str()))
-        .collect()
+        .collect();
+    (names, &planned.whole)
 }
 
 /// downloads into the cache what a push lacks of the fetched datasets `names`, as a sync does,
-/// asking the data folder and mirrors first; fails offline or mirror-only for what no mirror holds,
-/// for a failed download, or at a stop.
+/// asking the data folder and mirrors first, then each archive of `whole` it sends whole; fails
+/// offline or mirror-only for what no mirror holds, for a failed download, or at a stop.
 fn fetch(
     context: &Context,
     project: &Project,
     manifest: &Manifest,
     lock: &Lock,
     cache: &Cache,
-    names: &BTreeSet<&str>,
+    (names, whole): Fetching<'_>,
 ) -> Result<(), Error> {
     if names.is_empty() {
         return Ok(());
     }
     let work = Loop::new(context, project, Arc::new(context.net()), cache.clone());
-    waiting(work.ready(manifest, lock, names))
+    waiting(work.ready(manifest, lock, &names))?;
+    let files: Vec<(String, &LockedFile)> = whole
+        .iter()
+        .flat_map(|(dataset, parts)| parts.iter().map(move |file| (dataset.clone(), file)))
+        .collect();
+    waiting(work.ready_files(manifest, lock, &files))
 }
 
 /// the error for a file of `lacked` that `lock` pins at another size than the bytes its SHA-256
@@ -721,8 +740,15 @@ fn take(
         .iter()
         .map(|needed| needed.dataset.as_str())
         .collect();
-    fetch(context, project, manifest, lock, cache, &names)
-        .map_err(|error| error.with_report(&report(planned, Outcome::Stopped)))
+    fetch(
+        context,
+        project,
+        manifest,
+        lock,
+        cache,
+        (names, &planned.whole),
+    )
+    .map_err(|error| error.with_report(&report(planned, Outcome::Stopped)))
 }
 
 /// `needed` as the data folder is asked for it.
@@ -741,10 +767,17 @@ struct Wanted {
     needed: Vec<Needed>,
     /// each archive whose files this machine does not know, with its dataset.
     unknown: Vec<(String, Fetch)>,
+    /// the archives sent whole, with their datasets, since their lists of files are longer than a
+    /// mirror's reader takes: each one's file, or a split one's parts.
+    whole: Vec<(String, Vec<LockedFile>)>,
 }
 
 /// what pushing `datasets` needs on the mirror. an archive's members are the ones its
 /// dataset's members tables keep, as a sync places them, so a member left out is not sent.
+#[expect(
+    clippy::too_many_lines,
+    reason = "an archive's members, its list and the archive sent whole are chosen in one walk"
+)]
 fn needed(
     manifest: &Manifest,
     lock: &Lock,
@@ -753,6 +786,7 @@ fn needed(
 ) -> Result<Wanted, Error> {
     let mut seen = HashMap::new();
     let (mut files, mut lists, mut unknown) = (Vec::new(), Vec::new(), Vec::new());
+    let mut whole = Vec::new();
     let mut add =
         |into: &mut Vec<Needed>, item: Item, label: String, dataset: &str, source, fetch| {
             if seen.contains_key(&(item.folder, item.digest)) {
@@ -774,10 +808,17 @@ fn needed(
         let filters = &entry.source.members;
         // each archive's list of files, as the record that gave its members holds it
         let records = RefCell::new(Vec::new());
+        // archives no mirror's reader takes the list of, which go whole in place of their files
+        let wholes = RefCell::new(Vec::new());
         let members = |archive: &Archive<'_>| {
             let found = archive.recorded(cache)?;
             if let Some(tree) = archive.file.unpacks_to {
                 let size = crate::cache::tree(&found).len() as u64;
+                if size > crate::mirror::largest_tree() {
+                    let parts: Vec<LockedFile> = archive.files().into_iter().cloned().collect();
+                    wholes.borrow_mut().push(parts);
+                    return Some(found);
+                }
                 let item = Item {
                     folder: TREES,
                     digest: tree,
@@ -804,7 +845,28 @@ fn needed(
             size: file.size,
             archive: file.unpacks_to.is_some(),
         };
+        let wholes = wholes.into_inner();
+        let sent_whole: HashSet<Sha256> = wholes.iter().flatten().map(|file| file.sha256).collect();
+        for parts in &wholes {
+            whole.push((name.clone(), parts.clone()));
+            for file in parts {
+                let item = object(file.sha256, file.size);
+                let label = format!("{name}/{}", file.path);
+                add(
+                    &mut files,
+                    item,
+                    label,
+                    name,
+                    Source::Pinned,
+                    Some(fetch(file)),
+                );
+            }
+        }
         for target in &planned.targets {
+            // a member of an archive sent whole comes with it
+            if sent_whole.contains(&target.file.sha256) && target.file.unpacks_to.is_some() {
+                continue;
+            }
             let item = object(target.sha256, target.size);
             let brings = Some(fetch(target.file));
             add(
@@ -831,6 +893,7 @@ fn needed(
     Ok(Wanted {
         needed: files,
         unknown,
+        whole,
     })
 }
 
@@ -1496,6 +1559,14 @@ fn copied(needed: &Needed) -> Copied {
 fn tell(context: &Context, planned: &Planned, report: &Report) {
     let output = &context.output;
     let target = &planned.target;
+    for (dataset, parts) in &planned.whole {
+        if let Some(file) = parts.first() {
+            output.hint(&format!(
+                "{dataset}/{} went whole, since the list of files it holds is longer than a mirror's reader takes",
+                file.path
+            ));
+        }
+    }
     if report.copied > 0 {
         output.step(
             "Pushed",

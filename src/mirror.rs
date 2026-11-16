@@ -30,6 +30,19 @@ fn is_marker(text: &str) -> bool {
 }
 /// the largest tree read from a mirror, about 600,000 files. a bigger archive comes as itself.
 const LARGEST_TREE: u64 = 64 * 1024 * 1024;
+
+/// [`LARGEST_TREE`], which a debug build's test lowers with `FETCHLOOM_TEST_LARGEST_TREE`, so a
+/// small archive stands in for one of 600,000 files.
+pub(crate) fn largest_tree() -> u64 {
+    #[cfg(debug_assertions)]
+    if let Some(most) = std::env::var("FETCHLOOM_TEST_LARGEST_TREE")
+        .ok()
+        .and_then(|text| text.parse().ok())
+    {
+        return most;
+    }
+    LARGEST_TREE
+}
 pub(crate) const OBJECTS: &str = "objects";
 pub(crate) const TREES: &str = "trees";
 

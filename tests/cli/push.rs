@@ -235,6 +235,40 @@ fn a_split_archive_is_pushed_as_its_files() -> Result {
     Ok(())
 }
 
+/// an archive whose list of files is longer than a mirror's reader takes, past 600,000 files,
+/// goes as itself, and push says so: a clone with an empty cache and the source gone places its
+/// files from the mirror alone. a debug build's lower limit stands in for that many files.
+#[cfg(debug_assertions)]
+#[test]
+fn an_archive_whose_list_no_reader_takes_is_pushed_whole() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    let output = sandbox
+        .command(&["--yes", "push", "--to"])
+        .arg(&root)
+        .env("FETCHLOOM_TEST_LARGEST_TREE", "10")
+        .output()?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("dataset/dataset.zip went whole, since the list of files it holds is longer than a mirror's reader takes"),
+        "{stderr}"
+    );
+    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
+    assert!(named(&root, "objects")?.contains(&sha256_hex(&zip)));
+    drop(source);
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    ok(&sandbox
+        .command_in(&folder, &["sync", "--mirror"])
+        .arg(&root)
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_MIRRORS_ONLY", "1")
+        .env("FETCHLOOM_TEST_LARGEST_TREE", "10")
+        .output()?)?;
+    holds_the_project(&folder)
+}
+
 /// the dry run also lists what the push would ask about.
 #[test]
 fn a_dry_run_counts_what_it_would_write_and_writes_nothing() -> Result {

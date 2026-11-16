@@ -26,7 +26,7 @@ fetchloom push [options] [name]...
 
 ## what it writes
 
-push writes the [layout every mirror has](../guides/mirrors.md#a-folder-mirror): the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of its files under `trees/`. a reader takes an archive's files one by one, so push leaves the archive itself out, and every part of a split one; an archive with `extract = false` is a file of its own and is pushed. a member a [members table](../reference/data-toml.md#files-inside-archives) leaves out is not placed, so it is not pushed either. a file several datasets need goes once. push writes nothing else, not data.toml, data.lock or code, and never changes the project.
+push writes the [layout every mirror has](../guides/mirrors.md#a-folder-mirror): the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of its files under `trees/`. a reader takes an archive's files one by one, so push leaves the archive itself out, and every part of a split one, unless its list of files is longer than a reader takes, past about 600,000 files: then the archive, or each part, goes whole in place of its files, and push says so; an archive with `extract = false` is a file of its own and is pushed. a member a [members table](../reference/data-toml.md#files-inside-archives) leaves out is not placed, so it is not pushed either. a file several datasets need goes once. push writes nothing else, not data.toml, data.lock or code, and never changes the project.
 
 from a real run at a terminal, a project with a csv file and a zip that unpacks to five files, with the mirror's path shortened:
 

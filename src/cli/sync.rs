@@ -550,6 +550,46 @@ impl<'a> Loop<'a> {
         self.unpack_locked(manifest, &sources, &unpacking).await
     }
 
+    /// puts in the cache each of `files`, files of fetched datasets downloaded whole, as a push
+    /// needs an archive it sends whole: from the mirrors, else their sources.
+    pub(super) async fn ready_files(
+        &self,
+        manifest: &Manifest,
+        lock: &Lock,
+        files: &[(String, &LockedFile)],
+    ) -> Result<(), Error> {
+        let lacked: Vec<(String, &LockedFile)> = files
+            .iter()
+            .filter(|(_, file)| self.cache.find(&file.sha256, Some(file.size)).is_none())
+            .cloned()
+            .collect();
+        if lacked.is_empty() {
+            return Ok(());
+        }
+        fetch::mirrors::fill(
+            self.context,
+            &self.net,
+            &self.cache,
+            &DataFolder::default(),
+            || {
+                lacked
+                    .iter()
+                    .map(|(dataset, file)| crate::mirror::Wanted {
+                        digest: file.sha256,
+                        size: file.size,
+                        label: format!("{dataset}/{}", file.path),
+                        link: (!file.url.is_empty()).then(|| file.url.clone()),
+                    })
+                    .collect()
+            },
+        )
+        .await
+        .map_err(|error| self.as_left(error))?;
+        self.download_prepared(manifest, lock, &lacked, None)
+            .await
+            .map(drop)
+    }
+
     /// places what [`Loop::prepare`] readied and records `synced`, then says how to unpack each
     /// archive it placed packed, as a clone's first sync places a rar, or that came inside another.
     pub(super) fn apply(

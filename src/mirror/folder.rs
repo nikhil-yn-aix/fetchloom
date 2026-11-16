@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use super::{LARGEST_TREE, MARKER, MARKER_LINE, Wanted, below, is_marker};
+#[cfg(test)]
+use super::LARGEST_TREE;
+use super::{MARKER, MARKER_LINE, Wanted, below, is_marker, largest_tree};
 use crate::cache::{Cache, Copied, Stored};
 use crate::digest::{Block, Hasher, Sha256};
 use crate::place::Placer;
@@ -132,7 +134,7 @@ pub(crate) fn copy_all(
 
 /// the tree whose bytes hash to `tree` on the folder mirror at `root`, opened through the mirror's
 /// real folders as [`check_all`] opens a copy, read a block at a time and never past
-/// [`LARGEST_TREE`]. it fails on a read or a stop.
+/// [`largest_tree`]. it fails on a read or a stop.
 pub(crate) fn read_tree(root: &Path, tree: &Sha256, stop: &Stop) -> io::Result<Tree> {
     let path = place(root, "trees", tree);
     let mut file = match Placer::in_named_folder(root).open_read(&path) {
@@ -155,7 +157,7 @@ pub(crate) fn read_tree(root: &Path, tree: &Sha256, stop: &Stop) -> io::Result<T
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => return Err(err),
         };
-        if (bytes.len() + read) as u64 > LARGEST_TREE {
+        if (bytes.len() + read) as u64 > largest_tree() {
             tracing::debug!(path = %path.display(), "a tree past 64 MiB, so the archive itself is needed");
             return Ok(Tree::Absent);
         }
