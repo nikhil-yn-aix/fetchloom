@@ -730,9 +730,17 @@ fn misbehaved(outcome: &Outcome) -> Option<String> {
     }
 }
 
-/// a size or digest `listing` states for a file that the answers as recorded stated otherwise,
-/// which a malformed answer must never make it trust.
+/// a size or digest `listing` states for a file that the answers as recorded stated otherwise, or
+/// who may read it, which a malformed answer must never make it trust: what it cannot read
+/// stays unstated, and access unknown.
 fn untrusted(subject: &Subject, listing: &Listing) -> Option<String> {
+    if listing.access != subject.listed.access && listing.access != super::Access::Unknown {
+        return Some(format!(
+            "said access is {}, where its answers said {}",
+            listing.access.word(),
+            subject.listed.access.word()
+        ));
+    }
     let before: HashMap<&str, &Remote> = subject
         .listed
         .files
