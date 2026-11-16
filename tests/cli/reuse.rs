@@ -226,6 +226,42 @@ fn a_clone_takes_its_pins_from_the_hugging_face_cache_with_no_request() -> Resul
     Ok(())
 }
 
+/// hugging face keeps a xet file once, in its own blob store, and each repository's blob links
+/// there: a copy `add` takes from that store names the repository's `hf cache rm`, as a copy of
+/// a repository's own blob does.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_copy_from_the_shared_store_names_its_repository() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (api, files) = hub()?;
+    let root = in_home(&sandbox, &[".cache", "huggingface", "hub"])?;
+    let xet = format!("3b{}", "7".repeat(62));
+    fs::create_dir_all(root.join("blobs").join("3b"))?;
+    fs::write(root.join("blobs").join("3b").join(&xet), rows())?;
+    let blobs = root.join("datasets--lab--rows").join("blobs");
+    fs::create_dir_all(&blobs)?;
+    std::os::unix::fs::symlink(
+        format!("../../blobs/3b/{xet}"),
+        blobs.join(sha256_hex(&rows())),
+    )?;
+    let output = sandbox
+        .command(&["add", "hf:datasets/lab/rows"])
+        .env("FETCHLOOM_TEST_HF_API", &api.url)
+        .env("FETCHLOOM_TEST_HOSTS", &files.url)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    if sandbox.links()?.reflink {
+        assert!(stderr.contains("Cloned 1 file"), "{stderr}");
+    } else {
+        assert!(
+            stderr.contains("`hf cache rm dataset/lab/rows` frees it there"),
+            "{stderr}"
+        );
+    }
+    Ok(())
+}
+
 /// a blob named by the pin that holds other bytes is passed over and the file downloaded, and
 /// hugging face's file stays as it was.
 #[cfg(debug_assertions)]

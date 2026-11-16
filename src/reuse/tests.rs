@@ -5,7 +5,7 @@ use super::*;
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 /// no candidate at all.
-const NONE: [PathBuf; 0] = [];
+const NONE: [(PathBuf, PathBuf); 0] = [];
 
 fn digest(bytes: &[u8]) -> Sha256 {
     crate::digest::sha256(bytes)
@@ -174,7 +174,7 @@ fn a_blob_named_by_the_pin_is_found_in_any_repository() {
     let repositories = repositories(&root);
     assert_eq!(repositories, std::slice::from_ref(&repository));
     let found = in_hugging_face(&root, &repositories, &digest(bytes), 5, None);
-    assert_eq!(found, [blob]);
+    assert_eq!(found, [(repository, blob)]);
     // another size is no candidate, whatever its name
     assert_eq!(
         in_hugging_face(&root, &repositories, &digest(bytes), 6, None),
@@ -199,7 +199,7 @@ fn a_plain_snapshot_entry_is_found_for_its_commit_and_path() {
     let size = bytes.len() as u64;
     assert_eq!(
         in_hugging_face(&root, &repositories, &digest(bytes), size, Some(&known)),
-        [entry]
+        [(repository, entry)]
     );
     let other = hugging_face_file(&["data", "b.csv"]);
     assert_eq!(
@@ -231,7 +231,7 @@ fn links_are_read_only_in_the_layout_hugging_face_writes() {
     let known = hugging_face_file(&["data", "a.csv"]);
     assert_eq!(
         in_hugging_face(&root, &repositories, &digest(bytes), size, Some(&known)),
-        std::slice::from_ref(&blob)
+        [(repository.clone(), blob.clone())]
     );
     // a link that climbs past the repository, or to a file by its full path, is no blob
     let outside = folder.path().join("outside.csv");
@@ -272,7 +272,7 @@ fn a_blob_linked_to_the_shared_store_is_found_there() {
     let size = bytes.len() as u64;
     assert_eq!(
         in_hugging_face(&root, &repositories, &digest(bytes), size, None),
-        [store.join(&xet)]
+        [(repository, store.join(&xet))]
     );
     fs::remove_file(&blob).unwrap();
     symlink(format!("../../blobs/cd/{xet}"), &blob).unwrap();

@@ -340,19 +340,23 @@ fn snapshot_bytes(root: &Path, repository: &Path, entry: &Path, size: u64) -> Op
 
 /// where hugging face's cache at `root`, whose repository folders are `repositories`, may hold
 /// the `size` bytes `digest` pins: each repository's blob named by the SHA-256, then for a file
-/// `known` names at a commit, its snapshot entry. each is a plain file of that size; its bytes are
-/// still to be hashed.
+/// `known` names at a commit, its snapshot entry. each is a plain file of that size, with the
+/// repository folder it was found through, which a file in the cache's shared store does not show;
+/// its bytes are still to be hashed.
 pub(crate) fn in_hugging_face(
     root: &Path,
     repositories: &[PathBuf],
     digest: &Sha256,
     size: u64,
     known: Option<&Known>,
-) -> Vec<PathBuf> {
+) -> Vec<(PathBuf, PathBuf)> {
     let hex = digest.hex();
-    let mut found: Vec<PathBuf> = repositories
+    let mut found: Vec<(PathBuf, PathBuf)> = repositories
         .iter()
-        .filter_map(|repository| blob_bytes(root, &repository.join("blobs").join(&hex), size))
+        .filter_map(|repository| {
+            let bytes = blob_bytes(root, &repository.join("blobs").join(&hex), size)?;
+            Some((repository.clone(), bytes))
+        })
         .collect();
     if let Some(Known::HuggingFace {
         folder,
@@ -363,9 +367,9 @@ pub(crate) fn in_hugging_face(
         let repository = root.join(folder);
         let entry = below(&repository.join("snapshots").join(commit), path);
         if let Some(bytes) = snapshot_bytes(root, &repository, &entry, size)
-            && !found.contains(&bytes)
+            && !found.iter().any(|(_, found)| *found == bytes)
         {
-            found.push(bytes);
+            found.push((repository, bytes));
         }
     }
     found

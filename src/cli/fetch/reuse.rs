@@ -41,6 +41,8 @@ pub(in crate::cli) struct Reused {
 struct Taken {
     folder: usize,
     path: PathBuf,
+    /// the hugging face repository folder the file was found through, as a shortcut finds it.
+    repository: Option<PathBuf>,
     sealed: Sealed,
 }
 
@@ -49,6 +51,7 @@ struct Got {
     digest: Sha256,
     folder: usize,
     path: PathBuf,
+    repository: Option<PathBuf>,
     size: u64,
     cloned: bool,
 }
@@ -90,7 +93,7 @@ impl Reused {
     /// the files that may hold `want` by where a tool keeps it, in order: hugging face's blob
     /// named by its SHA-256 in any repository, its snapshot entry for a hugging face pin, then
     /// kagglehub's file of a kaggle pin's version.
-    fn shortcuts(&self, want: &Wanted) -> Vec<(usize, PathBuf)> {
+    fn shortcuts(&self, want: &Wanted) -> Vec<(usize, PathBuf, Option<PathBuf>)> {
         let known = want.link.as_deref().and_then(reuse::known);
         let mut found = Vec::new();
         for (index, folder) in self.folders.iter().enumerate() {
@@ -103,13 +106,17 @@ impl Reused {
                     want.size,
                     known.as_ref(),
                 );
-                found.extend(paths.into_iter().map(|path| (index, path)));
+                found.extend(
+                    paths
+                        .into_iter()
+                        .map(|(repository, path)| (index, path, Some(repository))),
+                );
             }
             if folder.tool == Some(Tool::Kagglehub)
                 && let Some(known) = &known
                 && let Some(path) = reuse::in_kagglehub(&folder.path, known, want.size)
             {
-                found.push((index, path));
+                found.push((index, path, None));
             }
         }
         found
@@ -178,7 +185,7 @@ impl Reused {
                 return Ok(HashSet::new());
             }
             let shortcut = crate::place::run_all(wanted, threads, |want| {
-                for (_, path) in self.shortcuts(want) {
+                for (_, path, _) in self.shortcuts(want) {
                     if hashed(&path, want.size)? == Some(want.digest) {
                         return Ok(true);
                     }
@@ -237,11 +244,12 @@ impl Reused {
         let flush = true;
         let (threads, stop) = (context.threads.at_most(COPIES), &context.stop);
         let shortcut = crate::place::run_all(ask, threads, |want| {
-            for (folder, path) in self.shortcuts(want) {
+            for (folder, path, repository) in self.shortcuts(want) {
                 if let Some(sealed) = sealed(cache, &path, want, flush, stop)? {
                     return Ok(Some(Taken {
                         folder,
                         path,
+                        repository,
                         sealed,
                     }));
                 }
@@ -275,6 +283,7 @@ impl Reused {
                     digest: stored.digest,
                     folder: found.folder,
                     path: found.path,
+                    repository: found.repository,
                     size: stored.size,
                     cloned,
                 })
@@ -329,6 +338,7 @@ impl Reused {
                     return Ok(Some(Taken {
                         folder: *folder,
                         path: path.clone(),
+                        repository: None,
                         sealed,
                     }));
                 }
@@ -343,14 +353,14 @@ impl Reused {
     fn tell(&self, context: &Context, taken: &[Got]) {
         let (mut files, mut bytes) = (0, 0);
         // by folder and by clone or copy: files, bytes and where they were
-        let mut told: HashMap<(usize, bool), (u64, u64, Vec<&Path>)> = HashMap::new();
+        let mut told: HashMap<(usize, bool), (u64, u64, Vec<Found<'_>>)> = HashMap::new();
         for got in taken {
             files += 1;
             bytes += got.size;
             let entry = told.entry((got.folder, got.cloned)).or_default();
             entry.0 += 1;
             entry.1 += got.size;
-            entry.2.push(&got.path);
+            entry.2.push((&got.path, got.repository.as_deref()));
         }
         Work::add(&context.work.reused_objects, files);
         Work::add(&context.work.reused_bytes, bytes);
@@ -381,17 +391,24 @@ impl Reused {
     }
 }
 
+/// a file a copy came from, with the hugging face repository folder it was found through.
+type Found<'a> = (&'a Path, Option<&'a Path>);
+
 /// where the other copy of `bytes` copied from the folder at `root` stays, and how to free it there
-/// once nothing else needs it: `hf cache rm` with each repository for hugging face's cache.
-fn kept_there(root: &Path, tool: Option<Tool>, bytes: u64, paths: &[&Path]) -> String {
+/// once nothing else needs it: `hf cache rm` with each repository for hugging face's cache, the
+/// one each file was found through, else the folder below `root` it is in.
+fn kept_there(root: &Path, tool: Option<Tool>, bytes: u64, paths: &[Found<'_>]) -> String {
     let size = units::size(bytes);
     match tool {
         Some(Tool::HuggingFace) => {
             let repositories: BTreeSet<String> = paths
                 .iter()
-                .filter_map(|path| {
-                    let first = path.strip_prefix(root).ok()?.iter().next()?;
-                    reuse::removable(first)
+                .filter_map(|(path, repository)| {
+                    let folder = match repository {
+                        Some(repository) => repository.file_name()?,
+                        None => path.strip_prefix(root).ok()?.iter().next()?,
+                    };
+                    reuse::removable(folder)
                 })
                 .collect();
             let command = if repositories.is_empty() {
@@ -412,7 +429,7 @@ fn kept_there(root: &Path, tool: Option<Tool>, bytes: u64, paths: &[&Path]) -> S
             root.display()
         ),
         None => {
-            let first = paths.first().map_or(root, |path| path);
+            let first = paths.first().map_or(root, |(path, _)| path);
             format!(
                 "{} keeps its own copy of these {size}, such as {}; delete it there if you no longer need it",
                 root.display(),
