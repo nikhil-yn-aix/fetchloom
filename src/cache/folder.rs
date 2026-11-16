@@ -1,6 +1,7 @@
 //! a folder of the cache held open from the cache's root without following a link, so the files
 //! made, opened, renamed and removed in it stay in it, whatever anyone who can write the cache
-//! puts at its name meanwhile. unix holds a handle; windows reaches the folder by its path.
+//! puts at its name meanwhile. unix holds a handle; windows reaches the folder by its path, with
+//! the folders from the cache's root down to it held, so none is renamed or replaced meanwhile.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -13,8 +14,23 @@ use crate::place::{FolderUse, found_folder};
 pub(super) struct Folder {
     #[cfg(unix)]
     handle: File,
+    #[cfg(windows)]
+    _held: Held,
     root: PathBuf,
     below: PathBuf,
+}
+
+/// on windows, the folders from the cache's root down to a [`Folder`], held while it lives.
+#[cfg(windows)]
+struct Held {
+    _folders: Box<dyn std::any::Any + Send + Sync>,
+}
+
+#[cfg(windows)]
+impl std::fmt::Debug for Held {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Held")
+    }
 }
 
 impl Folder {
@@ -30,12 +46,20 @@ impl Folder {
     }
 
     fn reach(root: &Path, below: &Path, make: bool) -> io::Result<Folder> {
+        #[cfg(unix)]
+        let handle = walk(root, below, make)?;
+        #[cfg(not(unix))]
+        checked(root, below, make)?;
         Ok(Folder {
             #[cfg(unix)]
-            handle: walk(root, below, make)?,
-            #[cfg(not(unix))]
-            below: checked(root, below, make)?,
-            #[cfg(unix)]
+            handle,
+            #[cfg(windows)]
+            _held: Held {
+                _folders: Box::new(crate::place::hold_below(
+                    root,
+                    &root.join(below).join("member"),
+                )?),
+            },
             below: below.to_path_buf(),
             root: root.to_path_buf(),
         })
@@ -69,7 +93,7 @@ impl Folder {
             ))
         }
         #[cfg(not(unix))]
-        checked(&self.root, &self.below, false).map(drop)
+        checked(&self.root, &self.below, false)
     }
 
     /// makes the file `name`, to read and write, failing when one is there.
@@ -89,14 +113,22 @@ impl Folder {
             .open(self.join(name))
     }
 
-    /// opens the plain file `name` to read and write, never through a link.
+    /// opens the plain file `name` to read and write, never through a link nor when it has another
+    /// name.
     pub(super) fn open_file(&self, name: &str) -> io::Result<File> {
         #[cfg(unix)]
         {
             self.open_plain(name, rustix::fs::OFlags::RDWR)
         }
         #[cfg(not(unix))]
-        crate::volume::open_unfollowed(&self.join(name), false)
+        {
+            let file = crate::volume::open_unfollowed(&self.join(name), false)?;
+            #[cfg(windows)]
+            if winapi_util::file::information(&file)?.number_of_links() > 1 {
+                return Err(linked(&self.join(name)));
+            }
+            Ok(file)
+        }
     }
 
     /// [`Folder::open_file`] of `name`, making it where it is missing, in two steps that writers
@@ -214,16 +246,22 @@ impl Folder {
         }
         // where anyone may link any file, a co-user's hardlink would take the writes elsewhere
         if flags.contains(OFlags::RDWR) && found.nlink() > 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "{} has another name, as a hardlink to a file elsewhere does, so fetchloom never writes it",
-                    self.join(name).display()
-                ),
-            ));
+            return Err(linked(&self.join(name)));
         }
         Ok(file)
     }
+}
+
+/// the refusal to write the file at `path`, which has another name.
+#[cfg(any(unix, windows))]
+fn linked(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "{} has another name, as a hardlink to a file elsewhere does, so fetchloom never writes it",
+            path.display()
+        ),
+    )
 }
 
 /// opens a file with `open`, or where it is missing makes it with `make`, which must refuse a
@@ -304,10 +342,10 @@ pub(super) fn walk(root: &Path, below: &Path, make: bool) -> io::Result<File> {
     Ok(folder)
 }
 
-/// `below`, once each folder from `root` down to it is seen to be a real one, made where missing
+/// checks that each folder from `root` down to `below` is a real one, making one where missing
 /// when `make` says so.
 #[cfg(not(unix))]
-fn checked(root: &Path, below: &Path, make: bool) -> io::Result<PathBuf> {
+fn checked(root: &Path, below: &Path, make: bool) -> io::Result<()> {
     let mut path = root.to_path_buf();
     for part in below.components() {
         let Component::Normal(name) = part else {
@@ -323,7 +361,7 @@ fn checked(root: &Path, below: &Path, make: bool) -> io::Result<PathBuf> {
             found_folder(&path, &std::fs::symlink_metadata(&path)?, FolderUse::Cache)?;
         }
     }
-    Ok(below.to_path_buf())
+    Ok(())
 }
 
 #[cfg(test)]
@@ -334,16 +372,17 @@ mod tests {
     use super::*;
 
     /// a record file with a second name, as a co-user's hardlink to someone's own file would give
-    /// where the system lets anyone link any file, is never opened to write, so no record lands in
-    /// that file; reading it is harmless.
-    #[cfg(unix)]
+    /// where the system lets anyone link any file, as windows does, is never opened to write, so
+    /// no record lands in that file; reading it is harmless.
     #[test]
     fn a_record_with_a_second_name_is_never_written() {
         let dir = tempfile::tempdir().unwrap();
         let urls = Folder::open(dir.path(), Path::new("urls")).unwrap();
         let theirs = dir.path().join(".bashrc");
         std::fs::write(&theirs, b"someone's own file\n").unwrap();
-        std::fs::hard_link(&theirs, urls.join("0.log")).unwrap();
+        if std::fs::hard_link(&theirs, urls.join("0.log")).is_err() {
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+        }
 
         let opened = urls.open_or_make("0.log");
 
@@ -353,6 +392,24 @@ mod tests {
         );
         assert_eq!(std::fs::read(&theirs).unwrap(), b"someone's own file\n");
         assert!(urls.read_file("0.log").is_ok());
+    }
+
+    /// on windows, where the cache's folders are reached by path, the folders from the cache's root
+    /// down to a folder of it stay held while it is open, so no one renames one and puts a junction
+    /// in its place.
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_of_the_cache_cannot_be_swapped_while_it_is_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let shard = Folder::open(dir.path(), Path::new("partial/ab")).unwrap();
+        let aside = dir.path().join("aside");
+
+        for held in [shard.path(), dir.path().join("partial")] {
+            let renamed = std::fs::rename(&held, &aside);
+            assert!(renamed.is_err(), "{} was renamed", held.display());
+        }
+        drop(shard);
+        std::fs::rename(dir.path().join("partial"), &aside).unwrap();
     }
 
     /// a writer that finds the file missing, and is refused making it because another writer made
