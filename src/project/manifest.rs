@@ -260,6 +260,20 @@ impl Manifest {
         }
         Ok(Manifest { data_dir, datasets })
     }
+
+    /// the datasets `names` taken out of this manifest into one of their own, with the same data
+    /// folder. what stays is what [`Manifest::parse`] reads of data.toml without them, but for
+    /// the lines each entry cites, which still count the lines of the text read.
+    pub(crate) fn take(&mut self, names: &[String]) -> Manifest {
+        let datasets = names
+            .iter()
+            .filter_map(|name| self.datasets.remove_entry(name))
+            .collect();
+        Manifest {
+            data_dir: self.data_dir.clone(),
+            datasets,
+        }
+    }
 }
 
 /// data.toml as a settled sync reads it, when it holds only what `add` writes for a dataset of

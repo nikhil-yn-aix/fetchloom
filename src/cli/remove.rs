@@ -34,18 +34,20 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     } else {
         Some(hold(context, &project, "remove").await?)
     };
-    let (text, manifest) = project.manifest()?;
-    named(&manifest, &names)?;
+    let (text, mut kept) = project.manifest()?;
+    named(&kept, &names)?;
     // one edit of data.toml for every name, which a stop between names ends with nothing written
     let updated = manifest::without_datasets(&text, &names, |at| {
         stop_for_tests(&context.stop, at);
         context.stop.check()
     })?;
-    let new_manifest = Manifest::parse(&updated)?;
+    // what stays is planned from the entries read, whose lines are those data.toml holds until
+    // the removal writes it
+    let gone = kept.take(&names);
     let mut lock = project.lock()?.unwrap_or_default();
     let imported: Vec<Sha256> = names
         .iter()
-        .filter(|name| manifest.datasets[name.as_str()].is_import())
+        .filter(|name| gone.datasets[name.as_str()].is_import())
         .filter_map(|name| lock.get(name))
         .flat_map(|locked| locked.files.iter().map(|file| file.sha256))
         .collect();
@@ -64,19 +66,11 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         open_cache()?
     };
     let stop = &context.stop;
-    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads, stop)?;
-    let unrecorded = unrecorded(&survey, &manifest, &names);
-    let placing = place::Placing::new(
-        &project,
-        &new_manifest,
-        &lock,
-        &cache,
-        false,
-        &Scope::All,
-        survey,
-    )?;
+    let survey = Survey::read(&project, &kept.data_dir, context.threads, stop)?;
+    let unrecorded = unrecorded(&survey, &gone, &names);
+    let placing = place::Placing::new(&project, &kept, &lock, &cache, false, &Scope::All, survey)?;
     if dry_run {
-        let outcome = previewed(context, &placing, &new_manifest, &listed, &unrecorded);
+        let outcome = previewed(context, &placing, &kept, &listed, &unrecorded);
         return Ok(Report::dry(project.root, names, outcome));
     }
     // a stop asked while the data folder was read leaves the project as it was; once the files

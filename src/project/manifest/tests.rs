@@ -812,6 +812,42 @@ fn a_stop_between_names_ends_the_edit_there() {
     assert_eq!(asked, [0, 1]);
 }
 
+/// taking removed datasets out of the manifest read leaves what parsing the edited text reads,
+/// every value of every entry but the lines they cite, which count the lines of the text read.
+#[test]
+fn taking_datasets_out_leaves_what_parsing_without_them_reads() {
+    let text = "[project]\ndata_dir = \"inputs\"\n\n# the eeg\n[datasets.eeg]\nref = \"osf:abc12\"\nselect = [\"**/*.edf\"]\nexclude = \"**/derivatives/**\"\n\n[datasets.pets]\nref = \"https://example.org/pets.zip\"\n\n[datasets.pets.members.\"pets.zip\"]\nselect = \"*.csv\"\n\n[datasets.page]\nref = \"https://example.org/page.html\"\nweb_page = true\n\n[datasets.weights]\nref = \"https://example.org/w.bin\"\nextract = false\ncopy = true\npath = \"models/w\"\n";
+    let whole = parse(text);
+    for names in [
+        vec!["eeg"],
+        vec!["weights", "eeg"],
+        vec!["pets", "page"],
+        vec!["page", "weights", "eeg", "pets"],
+    ] {
+        let names: Vec<String> = names.into_iter().map(str::to_owned).collect();
+        let updated = without_datasets(text, &names, |_| Ok(())).unwrap();
+        let fresh = parse(&updated);
+        let mut kept = whole.clone();
+        let gone = kept.take(&names);
+        assert_eq!(stated(&kept), stated(&fresh), "{names:?}");
+        let others = |manifest: &Manifest| {
+            manifest
+                .datasets
+                .iter()
+                .map(|(name, entry)| (name.clone(), entry.source.web_page, entry.place))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(others(&kept), others(&fresh), "{names:?}");
+        assert_eq!(gone.data_dir, "inputs");
+        assert_eq!(
+            gone.datasets
+                .keys()
+                .collect::<std::collections::BTreeSet<_>>(),
+            names.iter().collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+}
+
 /// what data.toml states: the data folder, and each dataset's values without their lines.
 type Stated = (String, BTreeMap<String, Values>);
 type Values = (Fetched, bool, Option<String>);
