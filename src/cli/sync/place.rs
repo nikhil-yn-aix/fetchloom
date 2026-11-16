@@ -2398,11 +2398,19 @@ fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache, checked: u6
     }
 }
 
+/// whether the file at `path`, seen as `look`, holds the target's bytes, or why it could not be
+/// read; only a file of the target's size is read.
+pub(crate) fn reads_as_target(target: &Target, look: &Look, path: &Path) -> std::io::Result<bool> {
+    if look.size != target.size {
+        return Ok(false);
+    }
+    hash_plain(path, Block::sized(look.size.saturating_add(1)))
+        .map(|digest| digest == target.sha256)
+}
+
 /// whether the file at `path` holds the target's bytes; only a readable file of its size is hashed.
 pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
-    look.size == target.size
-        && hash_plain(path, Block::sized(look.size.saturating_add(1)))
-            .is_ok_and(|digest| digest == target.sha256)
+    reads_as_target(target, look, path).unwrap_or(false)
 }
 
 /// what a file fetchloom placed holds once it no longer looks as placed.

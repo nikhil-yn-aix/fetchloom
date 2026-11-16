@@ -59,7 +59,7 @@ fn folders_refuse_files(sandbox: &Sandbox) -> Result<bool> {
 /// whether a file no one may read refuses its own owner here, as on every disk but exfat on macos,
 /// which takes a chmod and keeps the file readable.
 #[cfg(unix)]
-fn files_refuse_reads(sandbox: &Sandbox) -> Result<bool> {
+pub(crate) fn files_refuse_reads(sandbox: &Sandbox) -> Result<bool> {
     use std::os::unix::fs::PermissionsExt;
     let folder = sandbox.folder(".unreadable")?;
     let probe = folder.join("probe");

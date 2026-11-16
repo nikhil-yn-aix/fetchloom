@@ -20,6 +20,8 @@ pub(in crate::cli) enum Unready {
     Kept { path: String, placed: bool },
     /// something else stands where a file data.lock places belongs.
     Blocked(String),
+    /// a file at a path data.lock places that this account cannot read, which no sync reads either.
+    Unreadable(String),
     /// a file data.lock places that is not there, as in a fresh clone.
     Missing(String),
     /// a file placed for an older data.lock, which sync replaces.
@@ -59,6 +61,10 @@ impl Unready {
             }
             Unready::Blocked(path) => format!(
                 "{path} is not in place, since something else is where it belongs: move that, then `{}` places it",
+                command("sync")
+            ),
+            Unready::Unreadable(path) => format!(
+                "{path} cannot be read, so what it holds is unknown: check its permissions, then run `{}`",
                 command("sync")
             ),
             Unready::Missing(path) => format!("{path} is missing: `{}` places it", command("sync")),
@@ -213,6 +219,7 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
         path: path.clone(),
         placed: false,
     }));
+    unready.extend(each(&status.unreadable, Unready::Unreadable));
     unready.extend(each(&status.outdated, Unready::Outdated));
     unready.extend(each(&status.not_unpacked, Unready::Unpacked));
     unready.extend(

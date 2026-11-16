@@ -44,6 +44,9 @@ pub(super) struct Status {
     /// files fetchloom did not place that hold the pinned bytes, as in a copy of the project: no
     /// difference, since `sync` records them as placed.
     adoptable: Vec<String>,
+    /// files fetchloom did not place at paths the lock places, of the pinned size, that this
+    /// account cannot read, so what they hold is unknown: a sync cannot read them either.
+    unreadable: Vec<String>,
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
@@ -199,6 +202,22 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
             output.hint(&format!(
                 "save any changes you need, then use `{}` to replace edited or conflicting files at paths in data.lock",
                 super::project::command("sync --force")
+            ));
+        }
+        if !status.unreadable.is_empty() {
+            let (files, its) = match status.unreadable.len() {
+                1 => ("1 file at a path data.lock places".to_owned(), "its"),
+                count => (
+                    format!(
+                        "{} files at paths data.lock places",
+                        units::grouped(count as u64)
+                    ),
+                    "their",
+                ),
+            };
+            output.hint(&format!(
+                "this account cannot read {files}: check {its} permissions, then run `{}`",
+                super::project::command("sync")
             ));
         }
     }
@@ -760,17 +779,7 @@ fn compare(
                     &mut status.edited
                 }
             },
-            // sync adopts it, and takes its bytes into the cache from here as from a placed file,
-            // but replaces a read-only one where the dataset asks for writable copies
-            (Some(seen), None) if place::holds_target(target, seen, &file) => {
-                if target.copy && !place::now_writable(&file) {
-                    &mut status.outdated
-                } else {
-                    status.holding.insert(target.sha256);
-                    &mut status.adoptable
-                }
-            }
-            (Some(_), None) => &mut status.untracked,
+            (Some(seen), None) => unrecorded(status, target, seen, &file),
         };
         list.push(target.path.clone());
     }
@@ -795,6 +804,27 @@ fn compare(
     status.kept_copies = kept_copies(&status.extra, &wanted);
     status.set_aside = set_aside(&status.extra, survey);
     Ok(())
+}
+
+/// the list of `status` for a file fetchloom did not place at `target`'s path, seen as `seen`, as
+/// a sync would take it: one it adopts, as in a copy of the project, taking its bytes into the
+/// cache from there as from a placed file, one it replaces, read-only where the dataset asks for
+/// writable copies, one with other bytes it keeps, or one no one here can read.
+fn unrecorded<'s>(
+    status: &'s mut Status,
+    target: &plan::Target<'_>,
+    seen: &crate::project::state::Look,
+    file: &std::path::Path,
+) -> &'s mut Vec<String> {
+    match place::reads_as_target(target, seen, file) {
+        Ok(true) if target.copy && !place::now_writable(file) => &mut status.outdated,
+        Ok(true) => {
+            status.holding.insert(target.sha256);
+            &mut status.adoptable
+        }
+        Ok(false) => &mut status.untracked,
+        Err(_) => &mut status.unreadable,
+    }
 }
 
 /// the folders, each ending in `/`, where an archive of `unknown` unpacks for a dataset of which
@@ -909,7 +939,7 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 
 impl Status {
     /// each kind of file difference with its verb and what follows each path, if anything.
-    fn lists(&self) -> [(&'static str, &Vec<String>, Option<String>); 6] {
+    fn lists(&self) -> [(&'static str, &Vec<String>, Option<String>); 7] {
         [
             ("Missing", &self.missing, None),
             ("Edited", &self.edited, None),
@@ -917,6 +947,11 @@ impl Status {
                 "Untracked",
                 &self.untracked,
                 Some("holds other bytes than data.lock pins".to_owned()),
+            ),
+            (
+                "Unreadable",
+                &self.unreadable,
+                Some("this account cannot read it, so what it holds is unknown".to_owned()),
             ),
             ("Outdated", &self.outdated, None),
             ("Extra", &self.extra, None),
@@ -941,6 +976,7 @@ impl Status {
         self.needs_sync()
             && !self.lockless
             && self.imports.is_empty()
+            && self.unreadable.is_empty()
             && self.edited.is_empty()
             && self.untracked.is_empty()
             && self.extra.is_empty()

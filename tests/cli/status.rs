@@ -183,3 +183,56 @@ fn a_read_only_copy_nothing_recorded_is_outdated() -> Result {
     ok(&sandbox.run(&["status", "--check"])?)?;
     Ok(())
 }
+
+/// a file at a pinned path that this account cannot read may hold any bytes, the pinned ones
+/// too: status says it cannot be read, never that it holds other bytes, and offers no
+/// `sync --force`, which cannot read it either. once it can be read, a sync takes it in.
+#[cfg(unix)]
+#[test]
+fn a_file_no_one_can_read_is_unreadable_not_untracked() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    if !crate::placing::files_refuse_reads(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no file from being read");
+    }
+    let (_source, placed) = copied_without_a_state(&sandbox)?;
+    fs::set_permissions(&placed, fs::Permissions::from_mode(0o000))?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let result = &document["result"];
+    assert_eq!(
+        (
+            &result["unreadable"],
+            &result["untracked"],
+            &result["adoptable"]
+        ),
+        (
+            &serde_json::json!(["data/iris/iris.csv"]),
+            &serde_json::json!([]),
+            &serde_json::json!([])
+        ),
+        "{document}"
+    );
+    let output = sandbox.run(&["status"])?;
+    ok(&output)?;
+    assert_eq!(
+        text(&output.stdout)?,
+        " Unreadable data/iris/iris.csv · this account cannot read it, so what it holds is unknown\n"
+    );
+    let stderr = text(&output.stderr)?;
+    assert!(!stderr.contains("--force"), "{stderr}");
+    let steps = "check its permissions, then run `fetchloom sync`";
+    assert!(stderr.contains(steps), "{stderr}");
+    let check = sandbox.run(&["--json", "status", "--check"])?;
+    assert_eq!(check.status.code(), Some(1), "{}", text(&check.stderr)?);
+    assert_eq!(
+        json(&check)?["errors"][0]["details"],
+        serde_json::json!([format!(
+            "data/iris/iris.csv cannot be read, so what it holds is unknown: {steps}"
+        )])
+    );
+    // what the steps say
+    fs::set_permissions(&placed, fs::Permissions::from_mode(0o644))?;
+    ok(&sandbox.run(&["sync"])?)?;
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
