@@ -29,9 +29,13 @@ pub(in crate::cli) enum Unready {
     Damaged { path: String, hashed: bool },
     /// an archive this machine never unpacked, so none of its files is in place.
     Unpacked(String),
-    /// a fetched dataset data.lock does not pin as data.toml asks, or every dataset when there
-    /// is no data.lock.
-    Unpinned(Option<String>),
+    /// a fetched dataset data.lock does not pin as data.toml asks.
+    Unpinned(String),
+    /// every dataset, since there is no data.lock, with what pins them.
+    Lockless(String),
+    /// an import no sync pins, since no source lists its files: one whose entry changed since
+    /// data.lock `pinned` it, or one data.lock holds no pin of.
+    Import { name: String, pinned: bool },
     /// a dataset its source's digests pin, `by` naming them, that no sync has downloaded yet.
     NotDownloaded { name: String, by: &'static str },
     /// a dataset whose file list, which data.lock names, is not beside it.
@@ -70,18 +74,28 @@ impl Unready {
                 "{archive} is not unpacked on this machine, so its files are not in place: `{}` unpacks it",
                 command("sync")
             ),
-            Unready::Unpinned(Some(name)) => format!(
+            Unready::Unpinned(name) => format!(
                 "{name} is not pinned as data.toml asks: `{}` pins and places it",
                 command("sync")
             ),
+            Unready::Import { name, pinned } => {
+                let refused = if *pinned {
+                    crate::source::local::changed(name)
+                } else {
+                    crate::source::local::unpinned(name)
+                };
+                match refused.help {
+                    Some(help) => format!("{}: {help}", refused.message),
+                    None => refused.message,
+                }
+            }
             Unready::NotDownloaded { name, by } => format!(
                 "{name} is pinned by its source's {by}, not downloaded yet: `{}` downloads and checks it",
                 command(&format!("sync {name}"))
             ),
-            Unready::Unpinned(None) => format!(
-                "there is no data.lock, so nothing pins the files yet: ask whoever shares the project to commit it, or `{}` pins what the sources serve today",
-                command("sync")
-            ),
+            Unready::Lockless(pins) => {
+                format!("there is no data.lock, so nothing pins the files yet: {pins}")
+            }
             Unready::Waiting(waiting) => format!(
                 "{} waits for its file list {}, which is not there: commit data.lock.d where it was pinned",
                 waiting.name, waiting.part
@@ -156,14 +170,20 @@ pub(in crate::cli) fn after_sync(
 pub(super) fn of_status(status: &Status) -> Vec<Unready> {
     let mut unready = Vec::new();
     if status.lockless {
-        unready.push(Unready::Unpinned(None));
+        unready.push(Unready::Lockless(status.pins_lockless.clone()));
     } else {
         unready.extend(
             status
                 .unlocked
                 .iter()
                 .filter(|name| !status.waiting.contains_key(*name))
-                .map(|name| Unready::Unpinned(Some(name.clone()))),
+                .map(|name| match status.imports.get(name) {
+                    Some(&pinned) => Unready::Import {
+                        name: name.clone(),
+                        pinned,
+                    },
+                    None => Unready::Unpinned(name.clone()),
+                }),
         );
     }
     unready.extend(

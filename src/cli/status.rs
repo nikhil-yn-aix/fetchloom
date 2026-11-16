@@ -96,6 +96,9 @@ pub(super) struct Status {
     /// whether the project has no data.lock, so nothing pins its files yet.
     #[serde(skip)]
     lockless: bool,
+    /// for a project with no data.lock, what pins its files' bytes, as the hint and `--check` say.
+    #[serde(skip)]
+    pins_lockless: String,
     /// damaged files linked to the cache's changed copy, for the reason the terminal gives.
     #[serde(skip)]
     linked: HashSet<String>,
@@ -119,6 +122,10 @@ pub(super) struct Status {
     /// data.lock.d brings back.
     #[serde(skip)]
     waiting: BTreeMap<String, Waiting>,
+    /// the imports among `unlocked` that no sync pins, since no source lists their files, each
+    /// with whether data.lock pins it, so its entry in data.toml changed since.
+    #[serde(skip)]
+    imports: BTreeMap<String, bool>,
     /// the objects of the files in place with the bytes data.lock pins there, which a sync takes
     /// into the cache from the data folder when it lacks them.
     #[serde(skip)]
@@ -157,9 +164,12 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         if status.lockless && !manifest.datasets.is_empty() {
             output.hint(&format!(
                 "nothing pins the files' bytes yet: {}",
-                super::project::unpinned()
+                status.pins_lockless
             ));
-        } else if status.needs_sync() {
+        } else {
+            tell_imports(output, &status.imports);
+        }
+        if !status.lockless && status.needs_sync() {
             let does = match (status.places(), status.unneeded.is_empty()) {
                 (false, false) => "removes the files fetchloom placed that no dataset needs now",
                 (true, false) => {
@@ -167,7 +177,16 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
                 }
                 (_, true) => "places missing or updated files and reports any conflicts it keeps",
             };
-            output.hint(&format!("`{}` {does}", super::project::command("sync")));
+            // a sync refuses while an import waits for the steps above
+            let then = if status.imports.is_empty() {
+                ""
+            } else {
+                "then "
+            };
+            output.hint(&format!(
+                "{then}`{}` {does}",
+                super::project::command("sync")
+            ));
         }
         tell_imported_elsewhere(output, &status.imported_elsewhere);
         if !status.hashed_only.is_empty() {
@@ -199,6 +218,21 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         ready::ready(&ready::of_status(&status)).map_err(|error| error.with_report(&status))?;
     }
     Ok(status)
+}
+
+/// how to pin each import of `imports`, which no sync pins, by the words a sync refuses it with:
+/// an import whose entry changed since data.lock pinned it, or one data.lock holds no pin of.
+fn tell_imports(output: &Output, imports: &BTreeMap<String, bool>) {
+    for (name, pinned) in imports {
+        let refused = if *pinned {
+            crate::source::local::changed(name)
+        } else {
+            crate::source::local::unpinned(name)
+        };
+        if let Some(help) = refused.help {
+            output.hint(&help);
+        }
+    }
 }
 
 /// how to bring the missing files of each import of `lacking`, which no sync fetches.
@@ -453,6 +487,17 @@ fn check(
     unlocked.sort();
     unlocked.dedup();
     let (not_downloaded, pinned_by) = not_downloaded(&manifest, &lock, &unlocked);
+    let imports = unlocked
+        .iter()
+        .filter(|name| !lockless && !waiting.contains_key(*name) && !renamed.contains_key(*name))
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(manifest::Entry::is_import)
+        })
+        .map(|name| (name.clone(), lock.get(name).is_some()))
+        .collect();
     let mut status = Status {
         project: project.root.clone(),
         verified: verify.is_some(),
@@ -463,6 +508,12 @@ fn check(
         pinned_by,
         renamed,
         waiting,
+        imports,
+        pins_lockless: if lockless {
+            super::project::unpinned(&manifest)
+        } else {
+            String::new()
+        },
         ..Status::default()
     };
     let cache = super::peek_cache()?;
@@ -884,6 +935,7 @@ impl Status {
     fn sync_repairs_all(&self) -> bool {
         self.needs_sync()
             && !self.lockless
+            && self.imports.is_empty()
             && self.edited.is_empty()
             && self.untracked.is_empty()
             && self.extra.is_empty()
@@ -901,7 +953,7 @@ impl Status {
             || self
                 .unlocked
                 .iter()
-                .any(|name| !self.waiting.contains_key(name))
+                .any(|name| !self.waiting.contains_key(name) && !self.imports.contains_key(name))
             || self.missing.iter().any(|path| {
                 !self
                     .imported_elsewhere
@@ -1019,12 +1071,19 @@ fn tell_unlocked(output: &Output, status: &Status) {
             );
             continue;
         }
-        let reason = match status.renamed.get(name) {
-            Some(old) => format!(
+        let reason = match (status.renamed.get(name), status.imports.get(name)) {
+            (Some(old), _) => format!(
                 "data.lock pins it as {old}, which data.toml does not have, and `{}` keeps that pin under this name without asking the source",
                 super::project::command("sync")
             ),
-            None => unpinned.to_owned(),
+            (None, Some(true)) => {
+                "imported from files, so a change to its entry in data.toml cannot pin other files"
+                    .to_owned()
+            }
+            (None, Some(false)) => {
+                "imported from files, and data.lock holds no pin of them".to_owned()
+            }
+            (None, None) => unpinned.to_owned(),
         };
         output.report("Unlocked", &format!("{name} · {reason}"));
     }

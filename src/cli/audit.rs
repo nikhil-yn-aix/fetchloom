@@ -44,6 +44,9 @@ pub(super) struct Report {
     /// whether the project has no data.lock, so nothing pins its files yet.
     #[serde(skip)]
     lockless: bool,
+    /// for a project with no data.lock, what pins its files' bytes.
+    #[serde(skip)]
+    pins_lockless: String,
 }
 
 /// one dataset: where its files are served, and what its source says of it now.
@@ -272,6 +275,7 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
     }
     let Some(lock) = lock else {
         report.lockless = true;
+        report.pins_lockless = super::project::unpinned(&manifest);
         tell(output, &report);
         if args.check {
             ready(&report).map_err(|error| error.with_report(&report))?;
@@ -539,7 +543,7 @@ fn tell(output: &Output, report: &Report) {
         );
         output.hint(&format!(
             "nothing pins the files' bytes yet: {}",
-            super::project::unpinned()
+            report.pins_lockless
         ));
         return;
     }
@@ -786,7 +790,7 @@ pub(super) fn ready(report: &Report) -> Result<(), Error> {
             Kind::NotReady,
             "there is no data.lock, so nothing pins files to audit",
         )
-        .help(super::project::unpinned()));
+        .help(report.pins_lockless.clone()));
     }
     let behind: Vec<String> = report.datasets.iter().flat_map(Dataset::behind).collect();
     let files: Vec<String> = report.unserved().map(Unserved::said).collect();

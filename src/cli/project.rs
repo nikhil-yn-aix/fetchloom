@@ -1058,12 +1058,36 @@ async fn preview_lock(
     })
 }
 
-/// the help for a project without data.lock, such as a clone whose owner never committed it.
-pub(super) fn unpinned() -> String {
-    format!(
-        "ask whoever shares the project to commit data.lock, or run `{}` to pin what the sources serve today",
+/// the help for a project without data.lock, such as a clone whose owner never committed it. no
+/// source lists an import's files, so `lock` pins the rest only once each import of `manifest` is
+/// imported again.
+pub(super) fn unpinned(manifest: &Manifest) -> String {
+    let imports: Vec<&str> = manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| entry.is_import())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let lock = format!(
+        "run `{}` to pin what the sources serve today",
         command("lock")
-    )
+    );
+    let again = match imports.as_slice() {
+        [] => return format!("ask whoever shares the project to commit data.lock, or {lock}"),
+        [one] => format!(
+            "import {one}'s files again with `{}` where they are",
+            command(&format!("add <folder> --as {one}"))
+        ),
+        _ => format!(
+            "import each one's files again with `{}` where they are",
+            command("add <folder> --as <name>")
+        ),
+    };
+    if imports.len() < manifest.datasets.len() {
+        format!("ask whoever shares the project to commit data.lock, or {again}, then {lock}")
+    } else {
+        format!("ask whoever shares the project to commit data.lock, or {again}")
+    }
 }
 
 /// what `--locked` asks: data.lock is there and up to date with data.toml for `scope`. `instead`
@@ -1080,7 +1104,7 @@ pub(super) fn locked(
             Kind::Outdated,
             "there is no data.lock, so nothing pins the files' bytes yet",
         )
-        .help(unpinned()));
+        .help(unpinned(manifest)));
     };
     let help = format!(
         "run `{}` and commit data.lock, or {instead}",

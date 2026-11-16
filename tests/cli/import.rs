@@ -1044,3 +1044,96 @@ fn status_says_how_to_bring_an_import_no_sync_can_get() -> Result {
     );
     Ok(())
 }
+
+/// an import data.toml names that data.lock holds no pin of, as a stop between the two writes of
+/// an add leaves one, and an import whose entry changed, are told as what they are, with the steps
+/// that pin them: status never sends a person to a sync, which refuses both.
+#[test]
+fn status_says_what_pins_an_import_no_sync_can_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    flowers(&sandbox)?;
+    crate::support::ok(&sandbox.run(&["add", "../flowers", "--as", "alpha"])?)?;
+    let work = sandbox.work();
+    let manifest = work.join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!("{written}\n[datasets.big]\nref = \"local\"\n"),
+    )?;
+    // a placed file is read-only, which windows refuses to delete as it is
+    crate::support::delete(&work.join("data/alpha/sepals.csv"))?;
+    let refused = sandbox.run(&["--json", "sync"])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(10),
+        "{}",
+        text(&refused.stderr)?
+    );
+    let steps = "give it back its old name if you renamed it in data.toml, restore data.lock from git, or import the files again with `fetchloom add <folder> --as big` where they are";
+    assert_eq!(json(&refused)?["errors"][0]["help"], steps);
+    let status = sandbox.run(&["status"])?;
+    let (stdout, stderr) = (text(&status.stdout)?, text(&status.stderr)?);
+    assert!(
+        stdout.contains(
+            "   Unlocked big · imported from files, and data.lock holds no pin of them\n"
+        ),
+        "{stdout}"
+    );
+    assert!(stderr.contains(&format!("hint: {steps}\n")), "{stderr}");
+    // a sync works once big is pinned, and not before
+    assert!(
+        stderr.contains("hint: then `fetchloom sync` places missing or updated files"),
+        "{stderr}"
+    );
+    let bare = sandbox.run(&[])?;
+    assert!(
+        text(&bare.stderr)?.contains("`fetchloom status` lists what differs"),
+        "{}",
+        text(&bare.stderr)?
+    );
+    let check = sandbox.run(&["--json", "status", "--check"])?;
+    assert_eq!(check.status.code(), Some(1), "{}", text(&check.stderr)?);
+    let error = &json(&check)?["errors"][0];
+    assert_eq!(
+        error["details"][0],
+        format!("big was imported from files, and data.lock holds no pin of them: {steps}")
+    );
+    assert_eq!(error["help"], "each line says what makes it ready");
+    // what the steps say pins it, after which a sync puts back the rest
+    crate::support::ok(&sandbox.run(&["add", "../flowers", "--as", "big"])?)?;
+    crate::support::ok(&sandbox.run(&["sync"])?)?;
+    crate::support::ok(&sandbox.run(&["status", "--check"])?)?;
+    let pinned = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        pinned.replace(
+            "[datasets.alpha]\nref = \"local\"\n",
+            "[datasets.alpha]\nref = \"local\"\nselect = [\"*.csv\"]\n",
+        ),
+    )?;
+    let status = sandbox.run(&["status"])?;
+    let (stdout, stderr) = (text(&status.stdout)?, text(&status.stderr)?);
+    assert!(
+        stdout.contains("   Unlocked alpha · imported from files, so a change to its entry in data.toml cannot pin other files\n"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("hint: put datasets.alpha back as it was, or run `fetchloom remove alpha`, then `fetchloom add <folder> --as alpha` where the files are\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("`fetchloom sync`"), "{stderr}");
+    fs::write(&manifest, pinned)?;
+    crate::support::ok(&sandbox.run(&["status", "--check"])?)?;
+    // with no data.lock, nothing pins an import but importing its files again
+    fs::remove_file(work.join("data.lock"))?;
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    assert!(!stderr.contains("`fetchloom lock`"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "import each one's files again with `fetchloom add <folder> --as <name>` where they are"
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
