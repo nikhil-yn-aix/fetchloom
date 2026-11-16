@@ -23,7 +23,7 @@ use crate::suggested::shell_word_for;
 pub(crate) use detect::Format;
 pub(crate) use detect::{Detected, detect};
 pub(crate) use input::Input;
-pub(crate) use shards::{Shards, shards};
+pub(crate) use shards::{Shards, shards, toml_key};
 
 use guard::{Guard, Meter};
 

@@ -1083,23 +1083,25 @@ fn inside(
     let select = toml_edit::Value::from(glob.as_str());
     match (shards, patterns) {
         (None, Patterns::OnCommandLine) => format!(
-            "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [{select}] under [datasets.<name>.members.\"{archive}\"] in data.toml, or `{}` leaves files out",
+            "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [{select}] under [datasets.<name>.members.{}] in data.toml, or `{}` leaves files out",
+            archive::toml_key(archive),
             crate::cli::project::command("exclude <path>")
         ),
         (None, Patterns::InDataToml) => format!(
-            "select chooses among the files the source lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [{select}] under [datasets.{name}.members.\"{archive}\"], or leave files out with `{}`",
+            "select chooses among the files the source lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [{select}] under [datasets.{name}.members.{}], or leave files out with `{}`",
+            archive::toml_key(archive),
             crate::cli::project::command("exclude <path>")
         ),
         (Some(shards), Patterns::OnCommandLine) => format!(
-            "--select chooses among the files the link lists, and its {} are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [{select}] under [datasets.<name>.members.\"{}\"] in data.toml, or `{}` leaves files out",
+            "--select chooses among the files the link lists, and its {} are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [{select}] under [datasets.<name>.members.{}] in data.toml, or `{}` leaves files out",
             shards.told(),
-            shards.key(),
+            archive::toml_key(&shards.key()),
             crate::cli::project::command("exclude <path>")
         ),
         (Some(shards), Patterns::InDataToml) => format!(
-            "select chooses among the files the source lists, and its {} are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [{select}] under [datasets.{name}.members.\"{}\"], or leave files out with `{}`",
+            "select chooses among the files the source lists, and its {} are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [{select}] under [datasets.{name}.members.{}], or leave files out with `{}`",
             shards.told(),
-            shards.key(),
+            archive::toml_key(&shards.key()),
             crate::cli::project::command("exclude <path>")
         ),
     }
@@ -1135,6 +1137,22 @@ mod tests {
             ),
             "--select chooses among the files the link lists, and its 8 numbered .tar shards in wds are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [\"*.data\"] under [datasets.<name>.members.\"wds/shard-*.tar\"] in data.toml, or `fetchloom exclude <path>` leaves files out"
         );
+        // the table it names reads as TOML, with the archive's own name as its key
+        let quoted = "v \"2\"\\iris.zip";
+        let advice = inside("uci", &glob, quoted, None, Patterns::InDataToml);
+        let table = advice
+            .split_once(" under ")
+            .and_then(|(_, rest)| rest.split_once("], ").map(|(table, _)| format!("{table}]")))
+            .unwrap();
+        let parsed: toml::Table =
+            toml::from_str(&table).unwrap_or_else(|err| panic!("{table}: {err}"));
+        let members = parsed
+            .get("datasets")
+            .and_then(|datasets| datasets.get("uci"))
+            .and_then(|uci| uci.get("members"))
+            .and_then(toml::Value::as_table)
+            .unwrap();
+        assert_eq!(members.keys().collect::<Vec<_>>(), [quoted], "{table}");
     }
     use crate::cache::tests::store;
     use crate::digest::{self, Md5};

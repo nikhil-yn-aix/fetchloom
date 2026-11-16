@@ -33,8 +33,8 @@ impl Shards<'_> {
         );
         match dataset {
             Some(dataset) => format!(
-                "{packed}. to unpack them and keep only some files of each, write one members table, [datasets.{dataset}.members.\"{}\"]",
-                self.key()
+                "{packed}. to unpack them and keep only some files of each, write one members table, [datasets.{dataset}.members.{}]",
+                toml_key(&self.key())
             ),
             None => packed,
         }
@@ -60,6 +60,11 @@ impl Shards<'_> {
         let ending = self.ending.map(glob::escape).unwrap_or_default();
         format!("{folder}{}*{ending}", glob::escape(self.prefix))
     }
+}
+
+/// `key` as a key of data.toml, in the quotes TOML reads back as `key` whatever it holds.
+pub(crate) fn toml_key(key: &str) -> String {
+    toml_edit::Key::new(key).to_string()
 }
 
 /// the shards seen so far of one folder, prefix and digit width.
@@ -223,5 +228,30 @@ mod tests {
             inside.hint("s3://bucket/", "--no-extract", None),
             "s3://bucket/ holds 8 numbered .tar shards in wds/train, which webdataset loaders read packed. keep them packed with --no-extract"
         );
+    }
+
+    /// the members table a hint names is valid TOML whose key is the shards' own, whatever their
+    /// folder or prefix holds, as a quote or a backslash.
+    #[test]
+    fn the_hint_s_members_table_reads_as_toml() {
+        for (folder, prefix) in [("wds/", "shard-"), ("v \"2\"/", "s'"), ("", "c:\\data\\")] {
+            let paths = numbered(folder, prefix, ".tar", 8);
+            let shards = found(&paths).unwrap();
+            let hint = shards.hint("x", "--no-extract", Some("raw"));
+            let table = hint.rsplit_once("members table, ").unwrap().1;
+            let parsed: toml::Table =
+                toml::from_str(table).unwrap_or_else(|err| panic!("{table}: {err}"));
+            let members = parsed
+                .get("datasets")
+                .and_then(|datasets| datasets.get("raw"))
+                .and_then(|raw| raw.get("members"))
+                .and_then(toml::Value::as_table)
+                .unwrap();
+            assert_eq!(
+                members.keys().collect::<Vec<_>>(),
+                [&shards.key()],
+                "{table}"
+            );
+        }
     }
 }
