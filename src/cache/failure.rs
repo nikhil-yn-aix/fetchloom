@@ -16,6 +16,9 @@ pub(crate) struct Failure {
     message: String,
     #[serde(skip)]
     cause: io::ErrorKind,
+    /// the failure in fetchloom's words, without the system's error number.
+    #[serde(skip)]
+    said: String,
 }
 
 impl Failure {
@@ -26,11 +29,12 @@ impl Failure {
             os_code: error.raw_os_error(),
             message: error.to_string(),
             cause: error.kind(),
+            said: crate::error::said(error),
         }
     }
 
     pub(crate) fn description(&self) -> String {
-        format!("{}: {}", self.path.display(), self.message)
+        format!("{}: {}", self.path.display(), self.said)
     }
 
     pub(crate) fn advice(&self) -> &'static str {
@@ -94,6 +98,20 @@ mod tests {
             assert!(error.message.contains(message));
             assert!(error.help.unwrap().contains(advice));
         }
+    }
+
+    /// a failure reads in fetchloom's words, without the system's error number, as other
+    /// commands say the same failure.
+    #[test]
+    fn a_failure_is_described_without_the_systems_number() {
+        // a file another program holds open: busy on unix, a sharing violation on windows
+        let code = if cfg!(windows) { 32 } else { 16 };
+        let failure = Failure::new(Path::new("object"), &io::Error::from_raw_os_error(code));
+        let description = failure.description();
+        assert!(!description.contains("os error"), "{description}");
+        // the system's own words differ between its libraries and languages
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        assert_eq!(description, "object: device or resource busy");
     }
 
     #[cfg(unix)]

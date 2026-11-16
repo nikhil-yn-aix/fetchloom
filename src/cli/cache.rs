@@ -531,16 +531,14 @@ fn tell_swept(
     }
     tell_removed(output, "Removed", &swept);
     if !freed.not_removed.is_empty() {
-        let error = with_failures(
-            Error::new(
-                Kind::LocalIo,
-                format!(
-                    "{} in the cache could not be read or removed",
-                    units::count(freed.not_removed.len() as u64, "item", "items")
-                ),
+        let error = Error::new(
+            Kind::LocalIo,
+            format!(
+                "{} in the cache could not be read or removed",
+                units::count(freed.not_removed.len() as u64, "item", "items")
             ),
-            &freed.not_removed,
-        );
+        )
+        .help(FAILED_ABOVE);
         return Err(error.with_report(&collected(swept, inputs)));
     }
     let needs = if projects == 1 { "needs" } else { "need" };
@@ -737,16 +735,14 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
             output.done("Verified", &format!("{what}, every one is intact"));
             return Ok(());
         }
-        return Err(with_failures(
-            Error::new(
-                Kind::LocalIo,
-                format!(
-                    "checked {what}. {} could not be read",
-                    units::count(checked.unreadable.len() as u64, "path", "paths")
-                ),
+        return Err(Error::new(
+            Kind::LocalIo,
+            format!(
+                "checked {what}. {} could not be read",
+                units::count(checked.unreadable.len() as u64, "path", "paths")
             ),
-            &checked.unreadable,
-        ));
+        )
+        .help(FAILED_ABOVE));
     }
     // a file imported from a folder comes back from no source, only from a mirror or its folder
     let imported = cache.imported();
@@ -812,12 +808,9 @@ fn warn_failure(output: &Output, action: &str, failure: &Failure) {
     );
 }
 
-fn with_failures(mut error: Error, failures: &[Failure]) -> Error {
-    for failure in failures {
-        error = error.detail(format!("{}; {}", failure.description(), failure.advice()));
-    }
-    error.help("address the filesystem errors above, then run the command again")
-}
+/// the help of an error about paths gc or verify could not read or remove, which a warning above
+/// names each of with what to do for it, so the error does not name them again.
+const FAILED_ABOVE: &str = "address the filesystem errors above, then run the command again";
 
 const REMIND_EVERY: std::time::Duration = std::time::Duration::from_hours(24 * 7);
 const REMIND_FROM: u64 = 1 << 30;
@@ -1632,6 +1625,8 @@ mod tests {
             error.message,
             "1 item in the cache could not be read or removed"
         );
+        // each item's warning names it and what to do, so the error says it once more for none
+        assert_eq!(error.details, Vec::<String>::new());
     }
 
     /// a lock pinning set.zip, cached and unpacked to a.txt and b.txt, and the three as stored.
