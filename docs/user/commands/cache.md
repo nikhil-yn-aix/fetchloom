@@ -50,16 +50,21 @@ downloads a run stopped before they finished keep their bytes under `partial/`, 
 
 ### copies and backups
 
-a project copied without keeping hardlinks, as `rsync -a` without `-H` copies a project with its cache, or `cp -a` copies a project alone, holds a file of its own for every file that was linked to the cache, so its bytes take room twice. `status` and `sync` there find nothing wrong, but `fetchloom cache` counts them. the end of its stderr after `rsync -a` copied a project and its cache, holding one 3.0 MiB file, and `fetchloom sync` ran in the copy with `FETCHLOOM_CACHE` naming the copied cache:
+a project copied without keeping hardlinks, as `rsync -a` without `-H` copies a project with its cache, or `cp -a` copies a project alone, holds a file of its own for every file that was linked to the cache, so its bytes take room twice. `fetchloom cache` counts them, and a sync in the project links them to the cache again, as [copies of cached files](sync.md#copies-of-cached-files) describes. the end of the stderr of `fetchloom cache`, then of `fetchloom sync`, from a real run after `rsync -a` put back a project's data folder holding one 3.0 MiB file:
 
 ```text
-     Needed 3.0 MiB by 2 projects
+     Needed 3.0 MiB by 1 project
      Copies 3.0 MiB in 1 project are separate copies of cached files; all of it was linked when placed, as `rsync -a` without -H or `cp -a` leaves it
          Ok every cached file is needed by a project
-  hint: to link those files to the cache again, delete their project's data folder, if it holds nothing else you need, and run `fetchloom sync` there
+  hint: `fetchloom sync` in a project links its copies to the cache again
 ```
 
-deleting the copy's `data/` and running `fetchloom sync` there brought it from `6.3M` back to `3.3M` in `du -sh`. `rsync -aH` keeps the links; [backups and copies](../guides/clusters.md#backups-and-copies) has more.
+```text
+     Linked data/iris · 1 copy of a cached file is now linked to the cache, freeing 3.0 MiB
+     Synced 1 dataset into data
+```
+
+that sync brought the project and its cache from `6.2M` back to `3.2M` in `du -sh --total`. `rsync -aH` keeps the links; [backups and copies](../guides/clusters.md#backups-and-copies) has more.
 
 ### moving a project to another machine
 
@@ -72,7 +77,7 @@ a project copied with its data folder to a machine whose cache never held its fi
          Ok every file iris and twin need is on the mirror
 ```
 
-with `--json`, `work.data_folder_objects` and `work.data_folder_bytes` count those files.
+with `--json`, `work.data_folder_objects` and `work.data_folder_bytes` count those files. the data folder and the cache then each hold a copy, so the next sync links the data folder's to the cache's, as [copies of cached files](sync.md#copies-of-cached-files) describes.
 
 ## gc
 

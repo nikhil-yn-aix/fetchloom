@@ -6,7 +6,7 @@ what is left to do, from features deferred past 0.1.0 to publishing the first re
 
 every feature planned for 0.1.0 has landed. a new one gets a line here, which goes in the same change that documents it in the [user guide](../user/README.md).
 
-deferred until a need shows: a data root on another disk, FTP for a host that serves files over ftp alone, split archives beyond plain byte splits and relinking copies to the cache.
+deferred until a need shows: a data root on another disk, FTP for a host that serves files over ftp alone and split archives beyond plain byte splits.
 
 ## speed after 0.1.0
 

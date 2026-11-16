@@ -79,7 +79,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/sync/draft.rs` | a dataset on its way into data.lock: selected files whose pins are still being learned, with hashes no source states filled in from earlier locks or the bytes | `Draft` | `jobs`, `learn`, `unknown_archives`, `finish`, `filter` |
 | `src/cli/sync/rename.rs` | a dataset renamed in data.toml, which takes over the old name's pin when the match is unique, asking no source | `carry` | `Rename`, `forecast`, `pairs_by_key` |
 | `src/cli/sync/disk.rs` | the survey of the data folder, read once per command: racy files hashed, aliases, hardlinks someone edited, and what a removal leaves | `Survey`, `audit` | `read_within`, `hash_racy`, `check_doubted`, `retarget`, `smudge_edited`, `retired`, `left_behind` |
-| `src/cli/sync/place.rs` | the action for each destination: place, replace, remove, adopt, or leave alone a file someone changed; previews and state updates | `Placing`, `decide` | `Action`, `Reason`, `Placement`, `Preview`, `Changes`, `Seen`, `untouched`, `apply`, `settle`, `unblock`, `settle_aside`, `remove_unwanted`, `adoption`, `link_adopted`, `keep_aside` |
+| `src/cli/sync/place.rs` | the action for each destination: place, replace, remove, adopt, or leave alone a file someone changed; previews and state updates | `Placing`, `decide` | `Action`, `Reason`, `Placement`, `Preview`, `Changes`, `Seen`, `untouched`, `apply`, `settle`, `unblock`, `settle_aside`, `remove_unwanted`, `adoption`, `link_copies`, `links_copies`, `keep_aside` |
 | `src/cli/sync/place/put.rs` | many files placed at once, their tally, and how each looked right after | `put_all`, `Tally` |  |
 | `src/cli/sync/place/tell.rs` | the lines placement prints: costs, removals, and each file left alone or put back, with its reason | `tell` | `tell_preview` |
 | `src/cli/sync/unpack.rs` | archives unpacked a few at a time, checked against data.lock, then dropped from the cache unless still needed | `unpack_all`, `drop_archives` | `Unpack`, `unpack_drafts`, `unpack_locked` |
@@ -277,7 +277,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | file | owns | start at | other items |
 |---|---|---|---|
 | `src/plan.rs` | where every pinned file lands: destinations expanded, clashes found before anything is written, names compared as a disk that ignores case does | `Plan`, `Target` | `Patterns`, `folder`, `from_cache`, `inputs`, `foresee`, `expand`, `unpacked_paths`, `check` |
-| `src/place.rs` | the filesystem work that fills destinations: reflink, else hardlink, else copy, and copies made durable | `Placer`, `Method` | `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_coarse`, `run_hashes` |
+| `src/place.rs` | the filesystem work that fills destinations: reflink, else hardlink, else copy, and copies made durable | `Placer`, `Method` | `Order`, `Unlinked`, `place_all`, `relink_all`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_coarse`, `run_hashes` |
 | `src/place/parents.rs` | on unix, directory handles that keep later path swaps out of placement | `Parents` |  |
 | `src/place/parents_windows.rs` | the windows twin: folder handles that deny deletion while placement uses their paths | `Parents` |  |
 | `src/place/schedule.rs` | a cap on concurrent changes to one folder's entries, apart from the worker ceiling | `Folders` |  |

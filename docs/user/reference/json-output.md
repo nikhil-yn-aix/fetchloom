@@ -225,7 +225,7 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 | `resumes` | accepted nonzero range starts |
 | `objects_written` | new objects counted after successful downloads, copies from a mirror or the data folder, and archive unpacking |
 | `downloads_skipped` | downloads not made because the cache already held the bytes, as the link's earlier record or a stated MD5 showed; a download placing already knows the cache holds is never started, so it is not counted here |
-| `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements |
+| `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements, and files a sync linked to the cache in their place, as copies of cached files and files already in place |
 | `mirror_objects`, `mirror_bytes` | pinned files a [mirror](../guides/mirrors.md) gave this run, now in the cache, and their bytes. a file the cache already held is never asked for |
 | `reused_objects`, `reused_bytes` | pinned files the cache lacked that this run cloned or copied in from hugging face's cache, kagglehub's or a folder `reuse` names, each after its bytes hashed to its pin, and their bytes: [reusing other caches](../guides/other-tools.md#reusing-other-caches) |
 | `data_folder_objects`, `data_folder_bytes` | pinned files the cache lacked that this run copied in from the project's data folder, at paths data.lock places them at, each after its bytes hashed to its pin, and their bytes, as [moving a project](../commands/cache.md#moving-a-project-to-another-machine) describes. a mirror is asked only for what the data folder did not give |

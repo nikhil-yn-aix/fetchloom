@@ -74,7 +74,7 @@ a settled `sync small` looks at small alone, so it costs what small holds, and J
 
 ## already in place
 
-a file someone put at a pinned path, such as one downloaded by hand, is adopted when it holds the pinned bytes: sync takes it as placed and downloads nothing for it when the SHA-256 is known. when the cache holds the bytes and the drive makes hardlinks, sync then replaces the file with a link to the cache's copy in one rename, so one copy stays on disk. stderr, matching a test:
+a file someone put at a pinned path, such as one downloaded by hand, is adopted when it holds the pinned bytes: sync takes it as placed and downloads nothing for it when the SHA-256 is known. when the cache holds the bytes and the drive links, sync then replaces the file with a link to the cache's copy in one rename, a clone or a hardlink as it places a new file, so one copy stays on disk. stderr on a drive that makes hardlinks, matching a test; on one that clones, the line ends `so it is now cloned from the cache`:
 
 ```text
     Adopted data/iris · 1 file already held the pinned bytes, so it is now linked to the cache
@@ -90,6 +90,16 @@ a file whose bytes the cache lacks can also come from another file in the data f
     Adopted data/iris · 1 file already held the pinned bytes, so it is now linked to the cache
      Synced 2 datasets into data
 ```
+
+## copies of cached files
+
+a file fetchloom placed by link can become a file of its own: `rsync -a` without `-H` or `cp -a` copied the data folder, a push took the files of a project [moved to another machine](cache.md#moving-a-project-to-another-machine) into its cache, or the files were copied while the cache was on another drive and the cache moved to the project's. its bytes then take room twice, once in the data folder and once in the cache. sync links each such copy to the cache's copy, as it links a new file, and says how much that frees. stderr on a drive that makes hardlinks, matching a test:
+
+```text
+     Linked data/iris · 1 copy of a cached file is now linked to the cache, freeing 32 B
+```
+
+sync reads each copy first, unless the same run just read it, and links only one that holds the pinned bytes and still looks as placed: the link takes the copy's name in one rename, so a program reading the copy keeps reading the bytes it opened. a file with other bytes, or one the drive refuses to link, stays as it is, and no later sync reads it again. sync looks for copies only where the data folder and the cache share a drive that links, so a project on FAT or exFAT, or one whose cache is on another drive, pays nothing for them. a dataset with `copy = true` keeps its copies. a clone, as fetchloom places on APFS, Btrfs or XFS, shares the cache's blocks, and its size and time do not tell it from a copy, so a copy that took a clone's place stays. on windows, a copy another program holds open without sharing stays until a sync after it is closed.
 
 ## folders left behind
 
