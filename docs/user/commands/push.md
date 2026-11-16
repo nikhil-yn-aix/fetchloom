@@ -60,7 +60,7 @@ a copy of another size, or a link or anything else that is no file in a file's p
 
 one look cannot see a copy of the right size with other bytes. a reader never uses it, since it checks every file, and `sync` warns that the mirror holds a damaged copy; delete that file, and the next push writes it again.
 
-two pushes into one mirror at once need no lock. each holds a lock of its own in the mirror's `tmp/` while it writes, so a later push removes at once what a stopped one left; on a disk that gives no locks, as lustre mounted with noflock, a push writes without one, and what a stopped push left goes once it is a day old. a link someone planted inside the mirror is refused, never written through, though the top folder itself may be a link. new folders take the permissions mask of the account that makes them, so a lab folder with the setgid bit and `umask 002` lets the whole group push, as a [shared cache](../guides/clusters.md#the-cache-on-a-shared-disk) does.
+two pushes into one mirror at once need no lock. each holds a lock of its own in the mirror's `tmp/` while it writes, so a later push removes at once what a stopped one left, and never what one still writing wrote, however long it writes; on a disk that gives no locks, as lustre mounted with noflock, a push writes without one, and what a stopped push left goes once it is a day old. a link someone planted inside the mirror is refused, never written through, though the top folder itself may be a link. new folders take the permissions mask of the account that makes them, so a lab folder with the setgid bit and `umask 002` lets the whole group push, as a [shared cache](../guides/clusters.md#the-cache-on-a-shared-disk) does.
 
 ## where it writes
 

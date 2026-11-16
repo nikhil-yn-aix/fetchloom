@@ -865,32 +865,48 @@ impl Target {
     }
 
     /// removes the unfinished files pushes left in `tmp/` and the folders below it: at once those
-    /// of a push whose lock nobody holds now, which stopped, and any other a day older than `now`.
-    /// a link in place of such a folder is never followed. says how many went, and their bytes.
+    /// of a push whose lock nobody holds now, which stopped, and any other a day older than `now`
+    /// but those of a push whose lock is held, which is still writing. a link in place of such a
+    /// folder is never followed. says how many went, and their bytes.
     pub(crate) fn sweep(&self, now: SystemTime) -> (u64, u64) {
         let Ok(entries) = fs::read_dir(self.root.join(TMP)) else {
             return (0, 0);
         };
         let entries: Vec<fs::DirEntry> = entries.flatten().collect();
-        let stopped: Vec<(String, PathBuf)> = entries
-            .iter()
-            .filter_map(|entry| {
-                let name = entry.file_name();
-                let id = name.to_str()?.strip_prefix('.')?.strip_suffix(LOCK)?;
-                let free = is_id(id) && id != self.id && unlocked(&entry.path());
-                free.then(|| (id.to_owned(), entry.path()))
-            })
-            .collect();
+        let mut stopped: Vec<(String, PathBuf)> = Vec::new();
+        let mut writing = Vec::new();
+        for entry in &entries {
+            let name = entry.file_name();
+            let Some(id) = name
+                .to_str()
+                .and_then(|name| name.strip_prefix('.')?.strip_suffix(LOCK))
+                .filter(|id| is_id(id) && *id != self.id)
+            else {
+                continue;
+            };
+            if unlocked(&entry.path()) {
+                stopped.push((id.to_owned(), entry.path()));
+            } else {
+                writing.push(id.to_owned());
+            }
+        }
         let ids: Vec<&str> = stopped.iter().map(|(id, _)| id.as_str()).collect();
-        let mut swept = (0, 0);
+        let writing: Vec<&str> = writing.iter().map(String::as_str).collect();
+        let (mut swept, writers) = (
+            (0, 0),
+            Writers {
+                stopped: &ids,
+                writing: &writing,
+            },
+        );
         for entry in &entries {
             let shard = entry.file_name().to_str().is_some_and(is_shard)
                 && entry.file_type().is_ok_and(|kind| kind.is_dir());
             if !shard {
-                self.sweep_one(entry, now, &ids, &mut swept);
+                self.sweep_one(entry, now, &writers, &mut swept);
             } else if let Ok(inner) = fs::read_dir(entry.path()) {
                 for entry in inner.flatten() {
-                    self.sweep_one(&entry, now, &ids, &mut swept);
+                    self.sweep_one(&entry, now, &writers, &mut swept);
                 }
             }
         }
@@ -900,13 +916,13 @@ impl Target {
         swept
     }
 
-    /// removes `entry` when it is an unfinished file of a push among `stopped`, or a day older
-    /// than `now`, adding it to `swept`.
+    /// removes `entry` when it is an unfinished file of a push `writers` found stopped, or a day
+    /// older than `now` and of no push they found writing, adding it to `swept`.
     fn sweep_one(
         &self,
         entry: &fs::DirEntry,
         now: SystemTime,
-        stopped: &[&str],
+        writers: &Writers<'_>,
         swept: &mut (u64, u64),
     ) {
         let name = entry.file_name();
@@ -916,10 +932,14 @@ impl Target {
         let Ok(found) = entry.metadata() else {
             return;
         };
+        let id = writer(name);
+        if id.is_some_and(|id| writers.writing.contains(&id)) {
+            return;
+        }
         let old = found
             .modified()
             .is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age > STALE));
-        let orphan = writer(name).is_some_and(|id| stopped.contains(&id));
+        let orphan = id.is_some_and(|id| writers.stopped.contains(&id));
         if (old || orphan) && self.placer.delete_file(&entry.path()).is_ok() {
             swept.0 += 1;
             swept.1 += found.len();
@@ -1034,6 +1054,12 @@ fn push_id() -> String {
 
 fn is_id(text: &str) -> bool {
     text.len() == 16 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// the pushes whose locks a sweep found in `tmp/`: stopped, their lock free, or still writing.
+struct Writers<'a> {
+    stopped: &'a [&'a str],
+    writing: &'a [&'a str],
 }
 
 /// whether nobody holds the lock at `path`, so the push that took it stopped without removing it.
@@ -1946,6 +1972,32 @@ pub(crate) mod tests {
                 ".fedcba9876543210.lock",
             ]
         );
+        drop(held);
+    }
+
+    /// a push still writing, its lock held, keeps every file it wrote, however long ago: a push of
+    /// a few terabytes to a usb disk writes for more than a day, and a second push meanwhile must
+    /// not take its files away.
+    #[test]
+    fn a_running_pushs_files_stay_however_old() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        let (mut target, _) = Target::open(&root, std::sync::Arc::default()).unwrap();
+        target.prepare(&[]).unwrap();
+        let tmp = root.join(TMP);
+        let running = "fedcba9876543210";
+        let held = File::create(tmp.join(format!(".{running}{LOCK}"))).unwrap();
+        held.try_lock().unwrap();
+        let part = tmp.join(format!(".{running}-00000000000000bb.part"));
+        fs::write(&part, b"written a day ago").unwrap();
+        File::options()
+            .write(true)
+            .open(&part)
+            .unwrap()
+            .set_modified(SystemTime::now() - STALE * 2)
+            .unwrap();
+        assert_eq!(target.sweep(SystemTime::now()), (0, 0));
+        assert!(part.exists());
         drop(held);
     }
 
