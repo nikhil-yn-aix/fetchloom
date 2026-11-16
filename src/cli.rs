@@ -299,7 +299,10 @@ fn caution(
                 "other users of this machine can open {}, which holds logins",
                 path.display()
             ),
-            &format!("limit it to yourself with `chmod 600 {}`", path.display()),
+            &format!(
+                "limit it to yourself with `chmod 600 {}`",
+                crate::suggested::shell_word(&path.display().to_string())
+            ),
         );
     }
     if let Some(error) = crate::auth::store::unreadable(&crate::machine::env) {

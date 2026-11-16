@@ -356,6 +356,44 @@ fn a_sign_in_says_when_another_key_still_wins() -> Result {
     Ok(())
 }
 
+/// a `.netrc` other users can open is named in the help's chmod as one word, whatever its folder
+/// is called, so the pasted line limits that file and no other.
+#[cfg(unix)]
+#[test]
+fn a_readable_netrc_is_one_word_in_its_chmod() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = home(&sandbox).join("my files");
+    std::fs::create_dir_all(&folder)?;
+    let netrc = folder.join(".netrc");
+    std::fs::write(&netrc, "machine other.example login x password y\n")?;
+    std::fs::set_permissions(&netrc, std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
+    // `auth` checks it, and so does a download that looks for a key to send
+    let server = Server::start("/iris.csv", vec![reply("200 OK", &[], b"a,b\n")])?;
+    for args in [
+        &["--json", "--offline", "auth"][..],
+        &["--json", "get", &server.url, "-o", "iris.csv"],
+    ] {
+        let output = sandbox.command(args).env("NETRC", &netrc).output()?;
+        let document = json(&output)?;
+        let warning = document["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|warning| warning["kind"] == "auth.readable")
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            warning["help"],
+            format!(
+                "limit it to yourself with `chmod 600 \"{}\"`",
+                netrc.display()
+            ),
+            "{args:?}: {document}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn a_login_lands_in_netrc_for_curl_and_wget_too() -> Result {
     let sandbox = Sandbox::new()?;

@@ -111,7 +111,10 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                 "other users of this machine can open {}, which holds logins",
                 path.display()
             ),
-            &format!("limit it to yourself with `chmod 600 {}`", path.display()),
+            &format!(
+                "limit it to yourself with `chmod 600 {}`",
+                crate::suggested::shell_word(&path.display().to_string())
+            ),
         );
     }
     if let Some(error) = store::unreadable(&crate::machine::env) {
