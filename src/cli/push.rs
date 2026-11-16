@@ -412,14 +412,31 @@ fn target(context: &Context, args: &args::Push) -> Result<Location, Error> {
         return Ok(Location::Folder(to.clone()));
     };
     let shown = crate::shown::mask_typed(text);
+    let scheme = text
+        .split_once("://")
+        .map(|(scheme, _)| scheme.to_ascii_lowercase());
     match Location::parse(text, None) {
         Ok(Location::Web(_)) => Err(web_refused(text)),
         Ok(location) => Ok(location),
-        Err(refusal) => Err(Error::new(
-            Kind::Usage,
-            format!("--to {shown} is no folder or S3 bucket: {}", refusal.reason),
-        )
-        .help(refusal.instead)),
+        // a web address with a login or a query is one all the same
+        Err(_) if matches!(scheme.as_deref(), Some("http" | "https")) => Err(web_refused(text)),
+        Err(refusal) => {
+            // a bucket's or a file:// address's refusal says what to write instead, while one of
+            // another scheme offers a web address too, which push writes to none of
+            let bucket = text
+                .get(..3)
+                .is_some_and(|start| start.eq_ignore_ascii_case("s3:"));
+            let instead = if bucket || scheme.as_deref() == Some("file") {
+                refusal.instead
+            } else {
+                "give --to a folder, or a bucket such as s3://lab-data/fetchloom".to_owned()
+            };
+            Err(Error::new(
+                Kind::Usage,
+                format!("--to {shown} is no folder or S3 bucket: {}", refusal.reason),
+            )
+            .help(instead))
+        }
     }
 }
 

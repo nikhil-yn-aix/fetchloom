@@ -556,6 +556,30 @@ fn a_push_needs_a_folder_and_never_a_web_address() -> Result {
         error["message"],
         "--to https://data.lab.example/fetchloom is a web address, and push writes to folders and S3 buckets"
     );
+    // another scheme gets the targets push writes, never a web address it would refuse next
+    let output = sandbox.run(&["--json", "--yes", "push", "--to", "gs://lab-data/fetchloom"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["help"], "give --to a folder, or a bucket such as s3://lab-data/fetchloom",
+        "{error}"
+    );
+    // a web address holding a login is a web address all the same, its login never shown
+    let output = sandbox.run(&[
+        "--json",
+        "--yes",
+        "push",
+        "--to",
+        "https://ada:hunter2@data.lab.example/fetchloom",
+    ])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.ends_with(" is a web address, and push writes to folders and S3 buckets")
+            && !message.contains("hunter2"),
+        "{error}"
+    );
     Ok(())
 }
 
