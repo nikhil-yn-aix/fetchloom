@@ -135,7 +135,7 @@ class WorkflowTests(unittest.TestCase):
         audit = jobs("deep.yml")["workflows"]
         self.assertIn("if: github.event_name == 'schedule' ||", audit)
         self.assertIn("GH_TOKEN: ${{ github.token }}", audit)
-        self.assertRegex(audit, r"\n        run: zizmor --strict-collection \.github\n")
+        self.assertRegex(audit, r"\n        run: zizmor --strict-collection \.github action\.yml\n")
 
 
     def test_dependabot_updates_every_lockfile_a_week_after_each_release(self):

@@ -230,7 +230,7 @@ jobs:
       - name: audit the workflows online
         env:
           GH_TOKEN: ${{ github.token }}
-        run: zizmor --strict-collection .github
+        run: zizmor --strict-collection .github action.yml
 
   mutants:
     if: github.event_name == 'workflow_dispatch' && inputs.check == 'mutants'

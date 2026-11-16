@@ -4,32 +4,29 @@ a CI job can restore a project's data without downloading it on every run: keep 
 
 ## github actions
 
-after checkout, with fetchloom [installed](../start/install.md):
+the fetchloom action installs fetchloom, restores its cache keyed on `data.lock`, runs `fetchloom sync --locked --yes` and saves the cache when `data.lock` changed. after checkout:
 
 ```yaml
-env:
-  FETCHLOOM_CACHE: ${{ github.workspace }}/.fetchloom-cache
-
 steps:
-  - uses: actions/cache@v6
+  - uses: actions/checkout@v7
+  - uses: nikhil-yn-aix/fetchloom@v0.1.0
     with:
-      path: .fetchloom-cache
-      key: data-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('data.lock') }}
-      restore-keys: |
-        data-${{ runner.os }}-${{ runner.arch }}-
-  - name: restore research inputs
-    shell: bash
-    run: fetchloom sync --locked --yes
-  - name: keep only what this lock needs
-    shell: bash
-    run: fetchloom cache gc --now
+      version: 0.1.0
 ```
 
+| input | meaning |
+|---|---|
+| `version` | the release to install, such as `0.1.0`; empty takes the latest |
+| `binary` | a fetchloom program already on the runner, used instead of a release |
+| `project` | the project folder, `.` by default |
+| `mirrors` | [mirrors](mirrors.md) to try before each source, as `FETCHLOOM_MIRRORS` takes them |
+
+its `cache-hit` output is `true` when the cache came back from a run with the same `data.lock`. the cache it keeps is fetchloom's own [cache folder](../reference/cache-folder.md), as `fetchloom settings` shows it, and its key holds the runner's system and processor, so linux and windows jobs keep caches of their own.
+
 - the exact key hits when `data.lock` is unchanged. every file is then in the cache, and sync places them without using the network.
-- after a change to `data.lock`, `restore-keys` brings back the last cache, so only the files that changed download.
-- `cache gc --now` drops the files the new lock no longer needs before the cache is saved, so it does not grow with every change.
+- after a change to `data.lock`, the last cache comes back, so only the files that changed download, and `cache gc --now --yes` drops the files the new lock no longer needs before the cache is saved, so it does not grow with every change.
 - `--locked` fails with `lock.outdated`, exit 1, when `data.toml` and `data.lock` disagree, instead of changing the lock in CI. no error a `--locked` run ends with has a JSON `fix` that would change data.lock, so a job that runs `fix` never undoes it.
-- without `--yes`, a download larger than 10 GiB, or the size `FETCHLOOM_ASK_ABOVE` sets, or one the cache's disk has no room for, fails the job with `unconfirmed`, exit 1, instead of starting.
+- `--yes` answers the question a download larger than 10 GiB, or the size `FETCHLOOM_ASK_ABOVE` sets, or one the cache's disk has no room for, would ask.
 
 ## gitlab ci
 

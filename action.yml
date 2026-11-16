@@ -1,0 +1,166 @@
+name: fetchloom sync
+description: install fetchloom and place a project's pinned data, keeping fetchloom's cache between runs keyed by data.lock
+branding:
+  icon: download
+  color: blue
+
+inputs:
+  version:
+    description: the fetchloom release to install, such as 0.1.0. empty takes the latest release
+    required: false
+    default: ''
+  binary:
+    description: a fetchloom program already on the runner, used instead of a release
+    required: false
+    default: ''
+  project:
+    description: the project folder, which holds data.toml and data.lock
+    required: false
+    default: .
+  mirrors:
+    description: mirrors to try before each source, as FETCHLOOM_MIRRORS takes them
+    required: false
+    default: ''
+
+outputs:
+  cache-hit:
+    description: true when the cache came back from a run with the same data.lock
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    # every input reaches a script through the environment, never pasted into it. the folder added
+    # to PATH is the action's own, under RUNNER_TEMP
+    - name: install fetchloom
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        BINARY: ${{ inputs.binary }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: | # zizmor: ignore[github-env]
+        set -eu
+        if [ -n "$BINARY" ] && [ -n "$VERSION" ]; then
+          echo "::error::give the fetchloom action a version or a binary, not both"
+          exit 1
+        fi
+        tools="$RUNNER_TEMP/fetchloom-action"
+        if [ -n "$BINARY" ]; then
+          if [ ! -f "$BINARY" ]; then
+            echo "::error::the binary input names $BINARY, which is not a file"
+            exit 1
+          fi
+          bin="$tools/bin"
+          mkdir -p "$bin"
+          cp "$BINARY" "$bin/fetchloom"
+          chmod +x "$bin/fetchloom"
+        else
+          # the installer puts fetchloom in ~/.local/bin; a home of its own keeps the runner's as it was
+          HOME="$tools" FETCHLOOM_VERSION="$VERSION" FETCHLOOM_NO_MODIFY_PATH=1 sh "$ACTION_PATH/install.sh"
+          bin="$tools/.local/bin"
+        fi
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/fetchloom" --version
+    - name: install fetchloom
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        VERSION: ${{ inputs.version }}
+        BINARY: ${{ inputs.binary }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: | # zizmor: ignore[github-env]
+        $ErrorActionPreference = 'Stop'
+        if ($env:BINARY -and $env:VERSION) { throw 'give the fetchloom action a version or a binary, not both' }
+        $tools = Join-Path $env:RUNNER_TEMP 'fetchloom-action'
+        if ($env:BINARY) {
+          if (-not (Test-Path -LiteralPath $env:BINARY -PathType Leaf)) { throw "the binary input names $env:BINARY, which is not a file" }
+          $bin = Join-Path $tools 'bin'
+          New-Item -ItemType Directory -Force $bin | Out-Null
+          Copy-Item -LiteralPath $env:BINARY -Destination (Join-Path $bin 'fetchloom.exe') -Force
+        } else {
+          # the installer puts fetchloom under LOCALAPPDATA; a folder of its own keeps the runner's as it was
+          $env:LOCALAPPDATA = $tools
+          $env:FETCHLOOM_VERSION = $env:VERSION
+          $env:FETCHLOOM_NO_MODIFY_PATH = '1'
+          & (Join-Path $env:ACTION_PATH 'install.ps1')
+          $bin = Join-Path $tools 'Programs\fetchloom\bin'
+        }
+        Add-Content -LiteralPath $env:GITHUB_PATH -Value $bin -Encoding utf8
+        & (Join-Path $bin 'fetchloom.exe') --version
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    - name: name the cache after data.lock
+      id: key
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+      run: |
+        set -eu
+        if [ ! -d "$PROJECT" ]; then
+          echo "::error::the project input names $PROJECT, which is not a folder"
+          exit 1
+        fi
+        if command -v sha256sum > /dev/null; then
+          digest() { sha256sum | cut -c 1-64; }
+        else
+          digest() { shasum -a 256 | cut -c 1-64; }
+        fi
+        # data.lock.d holds the file lists of large datasets, which data.lock names
+        lock=$(cd "$PROJECT" && {
+          cat data.lock 2> /dev/null || true
+          if [ -d data.lock.d ]; then
+            find data.lock.d -type f | LC_ALL=C sort | while IFS= read -r file; do
+              printf '%s\n' "$file"
+              cat "$file"
+            done
+          fi
+        } | digest)
+        # fetchloom's own cache folder, as FETCHLOOM_CACHE, the settings file or its default names it
+        cache=$(fetchloom -C="$PROJECT" --json settings |
+          sed -n 's/.*{"name":"cache","value":"\([^"]*\)".*/\1/p' | sed 's/\\\\/\\/g')
+        case $cache in
+          '')
+            echo "::error::fetchloom did not say where its cache folder is"
+            exit 1
+            ;;
+          /* | \\* | [A-Za-z]:*) ;;
+          # fetchloom reads a relative cache folder from the project, the cache action from here
+          *) cache="$PROJECT/$cache" ;;
+        esac
+        {
+          echo "cache=$cache"
+          echo "prefix=fetchloom-$RUNNER_OS-$RUNNER_ARCH-"
+          echo "key=fetchloom-$RUNNER_OS-$RUNNER_ARCH-$lock"
+        } >> "$GITHUB_OUTPUT"
+    # after a change to data.lock, the last cache comes back, so only the files that changed download
+    - name: restore the cache
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.key.outputs.cache }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - name: place the project's data
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+        MIRRORS: ${{ inputs.mirrors }}
+      run: |
+        set -eu
+        if [ -n "$MIRRORS" ]; then
+          export FETCHLOOM_MIRRORS="$MIRRORS"
+        fi
+        fetchloom -C="$PROJECT" sync --locked --yes
+    # gc drops what the new data.lock no longer needs, so the saved cache does not grow with every change
+    - name: keep only what this data.lock needs
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+      run: fetchloom -C="$PROJECT" cache gc --now --yes
+    - name: save the cache
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.key.outputs.cache }}
+        key: ${{ steps.key.outputs.key }}
