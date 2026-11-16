@@ -1,9 +1,9 @@
 //! GEO, NCBI's gene expression omnibus: the files of a series, a sample or a platform, as NCBI's
-//! file server indexes list them. NCBI states no hashes and its indexes round sizes, so the lock's
-//! SHA-256 names the bytes, and only a series' `suppl/filelist.txt` states sizes, its tars'; GEO
-//! remakes a series' SOFT, `MINiML` and matrix files, so a pin can go stale. NCBI refuses a
-//! program the listing of its folders at times while it serves their files, so a refused folder
-//! is listed by the names GEO gives every accession's files.
+//! file server indexes list them. NCBI states no hashes and its indexes round sizes from 973 bytes
+//! up, so the lock's SHA-256 names the bytes, and only a series' `suppl/filelist.txt` states other
+//! sizes, its tars'; GEO remakes a series' SOFT, `MINiML` and matrix files, so a pin can go stale.
+//! NCBI refuses a program the listing of its folders at times while it serves their files, so a
+//! refused folder is listed by the names GEO gives every accession's files.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -183,7 +183,7 @@ impl Accession {
                     "it sent a page that is no index of its folder",
                 ));
             };
-            for entry in found {
+            for (entry, size) in found {
                 let (name, folder) = match entry.strip_suffix('/') {
                     Some(name) => (name, true),
                     None => (entry.as_str(), false),
@@ -220,7 +220,10 @@ impl Accession {
                     folders.push_back((at, link));
                     continue;
                 }
-                files.push(remote(at, link));
+                files.push(Remote {
+                    size,
+                    ..remote(at, link)
+                });
                 if files.len() > api.most_files() {
                     return Err(self.too_many(api, top));
                 }
@@ -431,8 +434,10 @@ fn remote(path: String, url: Url) -> Remote {
 /// `/`: those inside its `<pre>` block, past the link to the folder above, `parent`, read as html
 /// writes them, so `a&amp;b.csv` links to `a&b.csv`. a link with a raw `?` or `#` names none; any
 /// other is an entry for the listing's checks to judge, so a name no file may have is refused
-/// rather than left out. none for a page that is no such index.
-fn entries(html: &str, parent: &str) -> Option<Vec<String>> {
+/// rather than left out. each goes with the size its row ends with when that is in bytes, as NCBI
+/// writes a file's under 973 bytes, rounding any other, as `1.3M`. none for a page that is no
+/// such index.
+fn entries(html: &str, parent: &str) -> Option<Vec<(String, Option<u64>)>> {
     let (_, block) = html.split_once("<pre>")?;
     let (block, _) = block.split_once("</pre>")?;
     let mut links = Vec::new();
@@ -440,16 +445,24 @@ fn entries(html: &str, parent: &str) -> Option<Vec<String>> {
     while let Some(at) = rest.find("<a href=\"") {
         rest = &rest[at + "<a href=\"".len()..];
         let end = rest.find('"')?;
-        links.push(unescape(&rest[..end]));
+        let link = unescape(&rest[..end]);
         rest = &rest[end..];
+        let size = rest
+            .find('<')
+            .and_then(|at| rest[at..].strip_prefix("</a>"))
+            .map(|row| &row[..row.find(['<', '\n']).unwrap_or(row.len())])
+            .and_then(|row| row.trim_end().rsplit(' ').next())
+            .filter(|size| size.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|size| size.parse().ok());
+        links.push((link, size));
     }
-    if !links.iter().any(|link| link == parent) {
+    if !links.iter().any(|(link, _)| link == parent) {
         return None;
     }
     Some(
         links
             .into_iter()
-            .filter(|link| link != parent && !link.contains(['?', '#']))
+            .filter(|(link, _)| link != parent && !link.contains(['?', '#']))
             .collect(),
     )
 }

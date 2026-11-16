@@ -90,15 +90,17 @@ fn index(folder: &str, entries: &[&str]) -> Vec<u8> {
     .into_bytes()
 }
 
-/// each file goes by its path below the series' folder, in index order. NCBI's indexes round sizes,
-/// as `1.3M`, so a file's size comes from `suppl/filelist.txt`, which states the tar of every
-/// sample's files exactly, or is left for its download to tell, as the filelist's own is.
+/// each file goes by its path below the series' folder, in index order. NCBI's indexes round sizes
+/// from 973 bytes up, as `1.3M`, so a file's size comes from `suppl/filelist.txt`, which states the
+/// tar of every sample's files exactly, or from an index that states it in bytes, as the
+/// filelist's own `621`; any other is left for its download to tell.
 #[test]
 fn lists_a_series_files_with_the_sizes_its_filelist_states() {
     let recorded = series();
     let listing = block_on(accession("GSE1000").resolve(&recorded)).unwrap();
     assert_eq!(listing.resolved.to_string(), "geo:GSE1000");
     assert_eq!(listing.access, Access::Public);
+    let filelist = fixture_bytes("geo/filelist.txt").len() as u64;
     assert_eq!(
         sizes(&listing),
         [
@@ -106,7 +108,7 @@ fn lists_a_series_files_with_the_sizes_its_filelist_states() {
             ("miniml/GSE1000_family.xml.tgz", None),
             ("soft/GSE1000_family.soft.gz", None),
             ("suppl/GSE1000_RAW.tar", Some(RAW_TAR)),
-            ("suppl/filelist.txt", None),
+            ("suppl/filelist.txt", Some(filelist)),
         ]
     );
     assert_eq!(
@@ -142,7 +144,13 @@ fn lists_a_series_files_with_the_sizes_its_filelist_states() {
 fn a_refused_listing_lists_the_files_geo_names_for_every_series() {
     let recorded = refused_series();
     let listing = block_on(accession("GSE1000").resolve(&recorded)).unwrap();
-    let listed = block_on(accession("GSE1000").resolve(&series())).unwrap();
+    let mut listed = block_on(accession("GSE1000").resolve(&series())).unwrap();
+    // only the index NCBI refused states the filelist's own size
+    for file in &mut listed.files {
+        if file.path == FILELIST {
+            file.size = None;
+        }
+    }
     assert_eq!(listing.files, listed.files);
     assert_eq!(listing.access, Access::Public);
     assert_eq!(
@@ -448,7 +456,10 @@ fn the_entries_of_an_index_are_the_links_in_its_listing() {
 <a href="https://www.hhs.gov/vulnerability-disclosure-policy/index.html">HHS</a>"#;
     assert_eq!(
         entries(html, parent),
-        Some(vec!["../GSE1001/".to_owned(), "data.txt".to_owned()])
+        Some(vec![
+            ("../GSE1001/".to_owned(), None),
+            ("data.txt".to_owned(), None)
+        ])
     );
     for page in [
         html.replace(parent, "/elsewhere/"),
@@ -463,7 +474,26 @@ fn the_entries_of_an_index_are_the_links_in_its_listing() {
 #[test]
 fn a_link_with_a_query_or_fragment_is_no_entry() {
     let html = r#"<pre><a href="/p/">Parent Directory</a><a href="a?b.txt">a?b.txt</a><a href="c#d.txt">c#d.txt</a><a href="a%3Fb.txt">a?b.txt</a></pre>"#;
-    assert_eq!(entries(html, "/p/"), Some(vec!["a%3Fb.txt".to_owned()]));
+    assert_eq!(
+        entries(html, "/p/"),
+        Some(vec![("a%3Fb.txt".to_owned(), None)])
+    );
+}
+
+/// an index row ends with the size of its file, in bytes under 973 bytes and rounded from there,
+/// as `34M`, so only a size in bytes is the file's own; a folder's row states none.
+#[test]
+fn an_index_row_states_a_size_in_bytes_alone() {
+    let html = "<pre><a href=\"/p/\">Parent Directory</a>   -\n<a href=\"filelist.txt\">filelist.txt</a>  2013-01-17 13:28  621   \n<a href=\"a.tar\">a.tar</a>  2013-01-17 13:28   34M  \n<a href=\"b.gz\">b.gz</a>  2013-01-17 13:28  1.0K  \n<a href=\"suppl/\">suppl/</a>  2014-06-02 17:34    -   \n</pre>";
+    assert_eq!(
+        entries(html, "/p/"),
+        Some(vec![
+            ("filelist.txt".to_owned(), Some(621)),
+            ("a.tar".to_owned(), None),
+            ("b.gz".to_owned(), None),
+            ("suppl/".to_owned(), None),
+        ])
+    );
 }
 
 /// an index writes `&`, `<`, `>` and quotes in a link as html does, so `a&amp;b.csv` is the file
