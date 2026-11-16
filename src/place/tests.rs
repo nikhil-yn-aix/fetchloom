@@ -745,7 +745,7 @@ fn a_reflink_the_volume_refuses_leaves_no_hidden_file() {
 }
 
 /// three copies of the cached object staged in `folder`, writable and not yet named.
-fn staged_copies(folder: &Path, object: &Path) -> (Vec<PathBuf>, Vec<(usize, Staged)>) {
+fn staged_copies(folder: &Path, object: &Path) -> (Vec<PathBuf>, Vec<(usize, Method, Staged)>) {
     let destinations: Vec<PathBuf> = (0..3)
         .map(|index| folder.join(format!("{index}.csv")))
         .collect();
@@ -761,7 +761,7 @@ fn staged_copies(folder: &Path, object: &Path) -> (Vec<PathBuf>, Vec<(usize, Sta
                 &Stop::default(),
             )
             .unwrap();
-            (index, staged)
+            (index, Method::Copy, staged)
         })
         .collect();
     (destinations, staged)
@@ -844,6 +844,54 @@ fn only_a_placement_of_many_copies_waits_for_one_flush() {
             assert!(failed.to_string().contains("could not flush"), "{failed}");
         } else {
             assert_eq!(flushed_alone, files, "{results:?}");
+        }
+    }
+}
+
+/// a crash can empty a clone whose blocks are not on disk yet, so a clone takes its name only once
+/// they are, as a copy does: in a placement of many files it waits for the one flush, which names
+/// none when it fails, and in a placement of a few it is flushed on its own.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_clone_waits_for_the_flush_as_a_copy_does() {
+    use crate::volume::MOST_FLUSHED_ALONE;
+    use rustix::fs::{Mode, OFlags};
+
+    let (folder, object) = cache(true);
+    for files in [MOST_FLUSHED_ALONE, MOST_FLUSHED_ALONE + 1] {
+        let root = folder.path().join(format!("data-{files}"));
+        let mut placer = Placer::starting_at(root.clone(), Method::Reflink, None);
+        // the test's disk may clone nothing, so its clone writes the bytes instead
+        placer.clone_with = Some(|file, source| io::copy(&mut &*source, &mut &*file).map(drop));
+        // syncfs rejects an O_PATH handle, so a placement that waits for one flush fails
+        let handle = rustix::fs::open(folder.path(), OFlags::PATH | OFlags::CLOEXEC, Mode::empty());
+        placer.batch.set(Some(File::from(handle.unwrap()))).unwrap();
+        let destinations: Vec<PathBuf> = (0..files)
+            .map(|index| root.join(format!("{index}.csv")))
+            .collect();
+
+        let results = placer.place_all(
+            files,
+            |index| Order {
+                object: object.clone(),
+                destination: destinations[index].clone(),
+                writable: false,
+                size: CONTENTS.len() as u64,
+            },
+            Metadata::len,
+        );
+
+        if files > MOST_FLUSHED_ALONE {
+            for result in &results {
+                let failed = result.as_ref().unwrap_err();
+                assert!(failed.to_string().contains("could not flush"), "{failed}");
+            }
+            assert!(destinations.iter().all(|path| !path.exists()));
+        } else {
+            for result in &results {
+                assert_eq!(result.as_ref().unwrap().0, Method::Reflink, "{results:?}");
+            }
+            assert_eq!(fs::read_to_string(&destinations[0]).unwrap(), CONTENTS);
         }
     }
 }

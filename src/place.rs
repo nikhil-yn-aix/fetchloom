@@ -82,6 +82,9 @@ pub(crate) struct Placer {
     /// what every hardlink fails with instead, as a disk would refuse it.
     #[cfg(test)]
     link_refusal: Option<fn() -> io::Error>,
+    /// what every clone does instead of asking the filesystem, as a disk that clones would.
+    #[cfg(all(test, target_os = "linux"))]
+    clone_with: Option<fn(&File, &File) -> io::Result<()>>,
     /// on linux 5.8 and later, the root's filesystem, opened before the first copy so one syncfs
     /// flushes every copy and reports a write-back that failed since. a flush per copy cost 33
     /// times the placing of 10,000 small copies.
@@ -119,15 +122,15 @@ pub(crate) struct Order {
 enum Put<T> {
     /// placed it by a method, with what was kept of its metadata.
     Placed(Method, T),
-    /// copied it under a hidden name, which it trades for its own once the batch is flushed.
-    Waiting(Staged),
+    /// copied or cloned it under a hidden name, which it trades for its own once the batch is
+    /// flushed.
+    Waiting(Method, Staged),
 }
 
 impl<T> Put<T> {
     fn method(&self) -> Method {
         match self {
-            Put::Placed(method, _) => *method,
-            Put::Waiting(_) => Method::Copy,
+            Put::Placed(method, _) | Put::Waiting(method, _) => *method,
         }
     }
 }
@@ -240,6 +243,8 @@ impl Placer {
             observed: None,
             #[cfg(test)]
             link_refusal: None,
+            #[cfg(all(test, target_os = "linux"))]
+            clone_with: None,
             threads: Threads::default(),
             stop: Arc::default(),
             root,
@@ -311,7 +316,7 @@ impl Placer {
         self.check_folders(destination, true)?;
         match self.put(object, destination, writable, false)? {
             Put::Placed(method, _) => Ok(method),
-            Put::Waiting(staged) => staged.publish().map(|_| Method::Copy),
+            Put::Waiting(method, staged) => staged.publish().map(|_| method),
         }
     }
 
@@ -376,7 +381,7 @@ impl Placer {
                 .put(&order.object, &order.destination, order.writable, batch)
                 .map(|put| match put {
                     Put::Placed(method, metadata) => Put::Placed(method, observe(&metadata)),
-                    Put::Waiting(staged) => Put::Waiting(staged),
+                    Put::Waiting(method, staged) => Put::Waiting(method, staged),
                 });
             (*index, placed)
         };
@@ -397,7 +402,7 @@ impl Placer {
         for (index, placed) in done {
             match placed {
                 Ok(Put::Placed(method, seen)) => results.push((index, Ok((method, seen)))),
-                Ok(Put::Waiting(staged)) => waiting.push((index, staged)),
+                Ok(Put::Waiting(method, staged)) => waiting.push((index, method, staged)),
                 Err(err) => results.push((index, Err(err))),
             }
         }
@@ -436,8 +441,17 @@ impl Placer {
         }
         if self.can_reflink.load(Ordering::Relaxed) {
             check_object(object)?;
-            match reflink(object, &location, writable) {
-                Ok(sealed) => return Ok(Put::Placed(Method::Reflink, sealed?)),
+            #[cfg(target_os = "linux")]
+            let cloned = {
+                let flush = self.flushes_alone(&location, batch);
+                self.clone_at(object, &location, writable, batch && !flush, flush)
+                    .map(Ok)
+            };
+            #[cfg(not(target_os = "linux"))]
+            let cloned = reflink(object, &location, writable)
+                .map(|sealed| sealed.map(|metadata| Put::Placed(Method::Reflink, metadata)));
+            match cloned {
+                Ok(placed) => return placed,
                 Err(error) => self.learn(Method::Reflink, error, object)?,
             }
         }
@@ -453,11 +467,7 @@ impl Placer {
                 Err(error) => self.learn(Method::Hardlink, error, object)?,
             }
         }
-        // outside a batch a copy flushes on its own, as on a nested mount, which the root
-        // filesystem's batch flush does not cover
-        let flush = self.durable && !batch;
-        #[cfg(unix)]
-        let flush = flush || (self.durable && location.other_device());
+        let flush = self.flushes_alone(&location, batch);
         let put = if batch && !flush {
             let (staged, file) =
                 stage_copy_at(object, &location, writable, self.threads, &self.stop)?;
@@ -473,7 +483,7 @@ impl Placer {
                 }
             }
             drop(file);
-            Put::Waiting(staged)
+            Put::Waiting(Method::Copy, staged)
         } else {
             let metadata = copy_at(object, &location, writable, self.threads, flush, &self.stop)?;
             Put::Placed(Method::Copy, metadata)
@@ -483,6 +493,20 @@ impl Placer {
             self.unflushed.store(true, Ordering::Relaxed);
         }
         Ok(put)
+    }
+
+    /// whether a file placed at `location` flushes on its own rather than in `batch`'s one flush,
+    /// as outside a batch, or on a nested mount, which the root filesystem's batch flush does not
+    /// cover.
+    fn flushes_alone(&self, location: &Location, batch: bool) -> bool {
+        #[cfg(unix)]
+        let nested = || location.other_device();
+        #[cfg(not(unix))]
+        let nested = || {
+            let _ = location;
+            false
+        };
+        self.durable && (!batch || nested())
     }
 
     /// whether copies may skip their own flush, because [`Placer::flush_copies`] flushes them all.
@@ -738,7 +762,13 @@ impl Placer {
         self.check_parent(from)?;
         let location = Arc::new(self.location(to, false)?);
         if self.can_reflink.load(Ordering::Relaxed) {
-            match reflink(from, &location, writable) {
+            #[cfg(target_os = "linux")]
+            let cloned = self
+                .clone_at(from, &location, writable, false, true)
+                .map(Ok);
+            #[cfg(not(target_os = "linux"))]
+            let cloned = reflink(from, &location, writable);
+            match cloned {
                 Ok(sealed) => return sealed.map(|_| Method::Reflink),
                 Err(error) => self.learn(Method::Reflink, error, from)?,
             }
@@ -790,6 +820,55 @@ impl Placer {
     pub(crate) fn delete_folder(&self, path: &Path) -> io::Result<()> {
         self.stop.check_io()?;
         self.location(path, false)?.remove_dir()
+    }
+
+    /// clones `object` to `location`, failing when a file is there, under a hidden name with its
+    /// final mode, as an interrupted clone would leave an empty file. a crash can empty a clone
+    /// whose blocks are not on disk yet, so it takes its name only once they are, as a copy does:
+    /// with `batch` it waits for [`Placer::flush_copies`], else `flush` flushes it on its own.
+    #[cfg(target_os = "linux")]
+    fn clone_at(
+        &self,
+        object: &Path,
+        location: &Arc<Location>,
+        writable: bool,
+        batch: bool,
+        flush: bool,
+    ) -> io::Result<Put<Metadata>> {
+        use std::os::unix::fs::PermissionsExt;
+        let source = read_unfollowed(object)?;
+        let mode = clone_mode(source.metadata()?.permissions(), writable);
+        let seal = |file: &File| {
+            if file.metadata()?.permissions().mode() & 0o7777 != mode {
+                file.set_permissions(Permissions::from_mode(mode))?;
+            }
+            self.clone_into(file, &source)
+        };
+        if batch {
+            let (staged, file) = location.create(mode, false)?;
+            seal(&file)?;
+            self.unflushed.store(true, Ordering::Relaxed);
+            return Ok(Put::Waiting(Method::Reflink, staged));
+        }
+        let metadata = publish_new(location, mode, |file| {
+            seal(file)?;
+            if flush { file.sync_all() } else { Ok(()) }
+        })?;
+        Ok(Put::Placed(Method::Reflink, metadata))
+    }
+
+    /// clones the blocks of `source` into `file`, or does what a test asks instead.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(test),
+        expect(clippy::unused_self, reason = "tests clone through the placer")
+    )]
+    fn clone_into(&self, file: &File, source: &File) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(clone) = self.clone_with {
+            return clone(file, source);
+        }
+        rustix::fs::ioctl_ficlone(file, source).map_err(io::Error::from)
     }
 
     /// links `object` at `location` as [`link_object`] does.
@@ -1449,7 +1528,7 @@ fn publish_new(
 /// holds bytes a crash could still lose, and reads what `seen` keeps of each. the first is named
 /// alone, as in placing. when the flush fails none is named, and their hidden files go.
 fn publish_flushed<T: Send>(
-    waiting: Vec<(usize, Staged)>,
+    waiting: Vec<(usize, Method, Staged)>,
     flush: impl FnOnce() -> io::Result<()>,
     threads: Threads,
     seen: &(impl Fn(&Metadata) -> T + Sync),
@@ -1462,45 +1541,24 @@ fn publish_flushed<T: Send>(
     if let Err(err) = stop.check_io().and_then(|()| flush()) {
         return waiting
             .into_iter()
-            .map(|(index, _)| {
+            .map(|(index, ..)| {
                 let message = format!("could not flush the copied files to disk: {err}");
                 (index, Err(io::Error::new(err.kind(), message)))
             })
             .collect();
     }
-    let publish = &|(index, staged): (usize, Staged)| {
+    let publish = &|(index, method, staged): (usize, Method, Staged)| {
         let _permit = grouped.enter(index);
         let named = stop
             .check_io()
             .and_then(|()| staged.publish())
-            .map(|metadata| (Method::Copy, seen(&metadata)));
+            .map(|metadata| (method, seen(&metadata)));
         (index, named)
     };
     let mut waiting = waiting.into_iter();
     let first = waiting.next().map(publish);
     let rest = run_owned(waiting.collect(), threads, publish);
     first.into_iter().chain(rest).collect()
-}
-
-/// clones `object` to `location`, failing when a file is there, under a hidden name with its final
-/// mode, named once complete, as an interrupted clone would leave an empty file. the outer result
-/// says whether the clone was made, the inner whether its mode was then set as asked.
-#[cfg(target_os = "linux")]
-fn reflink(
-    object: &Path,
-    location: &Arc<Location>,
-    writable: bool,
-) -> io::Result<io::Result<Metadata>> {
-    use std::os::unix::fs::PermissionsExt;
-    let source = read_unfollowed(object)?;
-    let mode = clone_mode(source.metadata()?.permissions(), writable);
-    let metadata = publish_new(location, mode, |file| {
-        if file.metadata()?.permissions().mode() & 0o7777 != mode {
-            file.set_permissions(Permissions::from_mode(mode))?;
-        }
-        rustix::fs::ioctl_ficlone(file, &source).map_err(io::Error::from)
-    })?;
-    Ok(Ok(metadata))
 }
 
 /// the mode a clone of a file of `permissions` gets: its read and run bits, writable as asked,
