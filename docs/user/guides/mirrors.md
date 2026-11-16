@@ -111,7 +111,7 @@ then no request goes anywhere but to the mirrors: not to a source, not to a sear
 ```text
 error: 1 file data.lock names is on no mirror, and mirrors_only lets fetchloom ask its mirrors alone
   iris/iris.csv: not there on https://data.corp.internal/fetchloom
-  help: ask whoever keeps the mirrors to add what is missing, or set mirrors_only = false in the settings file to ask sources too
+  help: ask whoever keeps the mirrors to add what is missing, or run `fetchloom settings unset mirrors_only` to ask sources too
 ```
 
 | command | in mirror-only mode |
