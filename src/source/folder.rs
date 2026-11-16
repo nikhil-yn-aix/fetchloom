@@ -127,10 +127,18 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
     };
     // a page may show lists above its listing, as a notice or a trail of the folders above, so
     // the listing is the list with the most entries, then one that links the folder above
+    let linked = lists.iter().filter(|links| !links.is_empty()).count();
     let chosen = lists
         .iter()
         .enumerate()
-        .max_by_key(|(at, links)| (entries(links), links.iter().any(above), Reverse(*at)))
+        .max_by_key(|(at, links)| {
+            let count = if linked > 1 {
+                entries(links)
+            } else {
+                links.len()
+            };
+            (count, links.iter().any(above), Reverse(*at))
+        })
         .map(|(at, _)| at)
         .ok_or(Unread::NoListing)?;
     let listing = &lists[chosen];
@@ -317,49 +325,46 @@ struct Anchor {
 /// each link in `list`, a list written as the element `tag`, in order; `lower` is the list in
 /// lowercase. a row's size is its own when a table heads a column "Size", or in a `<pre>` list
 /// whose first line heads no description and none of whose rows ends in words, as apache's
-/// descriptions, which may end in a number too, would end them.
+/// descriptions, which may end in a number too, would end them. one pass reads the list.
 fn links(list: &str, lower: &str, tag: &str) -> Vec<Anchor> {
-    let rows = if tag == "table" {
-        sized_rows(list, lower)
-    } else {
-        Vec::new()
-    };
-    let mut row = 0;
     let mut described =
         tag == "pre" && lower[..lower.find('\n').unwrap_or(lower.len())].contains("description");
+    let mut rows = (tag == "table").then(Rows::default);
     let mut found = Vec::new();
     let mut at = 0;
-    while let Some(open) = opening(lower, at, "a") {
+    while let Some(open) = next_byte(lower, b'<', at, lower.len()) {
+        if !starts_tag(lower, open, "a") {
+            if let Some(rows) = &mut rows {
+                rows.tag(list, lower, open, &mut found);
+            }
+            at = open + 1;
+            continue;
+        }
         let (href, end) = href(list, lower, open + 2);
         if let Some(href) = href {
-            let text = words(&unescape(&text(list, lower, end)));
-            let size = match tag {
-                "pre" => match ending(&lower[end..]) {
-                    Ending::Bytes(bytes) => Some(bytes),
-                    Ending::Words => {
-                        described = true;
-                        None
-                    }
-                    Ending::Other => None,
-                },
-                "table" => {
-                    while rows.get(row + 1).is_some_and(|(start, _)| *start <= open) {
-                        row += 1;
-                    }
-                    rows.get(row)
-                        .filter(|(start, _)| *start <= open)
-                        .and_then(|(_, size)| *size)
+            // where the link's text ends, when no tag sits in it, as in most
+            let close = next_byte(lower, b'<', end, lower.len())
+                .filter(|&close| starts_tag(lower, close, "/a"));
+            let (names_folder, names_parent) = text_says(list, lower, end, close);
+            let size = match (tag == "pre").then(|| ending(lower, close)) {
+                Some(Ending::Bytes(bytes)) => Some(bytes),
+                Some(Ending::Words) => {
+                    described = true;
+                    None
                 }
                 _ => None,
             };
             found.push(Anchor {
                 href: unescape(href),
-                names_folder: text.ends_with('/'),
-                names_parent: text.eq_ignore_ascii_case("parent directory"),
+                names_folder,
+                names_parent,
                 size,
             });
         }
         at = end;
+    }
+    if let Some(rows) = &mut rows {
+        rows.end(list, lower, lower.len(), &mut found);
     }
     if described {
         for anchor in &mut found {
@@ -367,6 +372,94 @@ fn links(list: &str, lower: &str, tag: &str) -> Vec<Anchor> {
         }
     }
     found
+}
+
+/// a table's rows as [`links`] reads them, in its pass: the column the table heads "Size", as
+/// apache, lighttpd, rclone and caddy head theirs, once its heading is read, and the row being
+/// read. a cell there that is a whole number, as `3659`, is the size of the row's links; any
+/// other, as `9.3K`, `20 B` or `-`, states none, and so do rows above the heading.
+#[derive(Default)]
+struct Rows {
+    column: Option<usize>,
+    /// where the row's cells open, while no heading was read.
+    cells: Vec<usize>,
+    /// how many of the row's cells opened so far.
+    opened: usize,
+    /// where the row's cell in the size column opens, until it ends, and the size it holds.
+    sized: Option<usize>,
+    size: Option<u64>,
+    /// the row's first link among those found.
+    first: usize,
+}
+
+impl Rows {
+    /// takes in the tag that opens at `open` of the lowercase table `lower`: a row's or a cell's.
+    fn tag(&mut self, list: &str, lower: &str, open: usize, found: &mut [Anchor]) {
+        // most tags of a row close something, as `</td>`, so one byte rules them out
+        if lower.as_bytes().get(open + 1) != Some(&b't') {
+            return;
+        }
+        if starts_tag(lower, open, "tr") {
+            self.end(list, lower, open, found);
+        } else if starts_tag(lower, open, "td") || starts_tag(lower, open, "th") {
+            self.close(lower, open);
+            if self.column.is_none() {
+                self.cells.push(open);
+            } else if self.column == Some(self.opened) {
+                self.sized = Some(open);
+            }
+            self.opened += 1;
+        }
+    }
+
+    /// ends the row at `end`, giving its links its size, or reading the heading in it, and starts
+    /// the next row there.
+    fn end(&mut self, list: &str, lower: &str, end: usize, found: &mut [Anchor]) {
+        self.close(lower, end);
+        if let Some(size) = self.size.take() {
+            for anchor in &mut found[self.first..] {
+                anchor.size = Some(size);
+            }
+        }
+        if self.column.is_none() {
+            let cells = &self.cells;
+            self.column = (0..cells.len()).find(|&index| {
+                let (start, stop) = (cells[index], cells.get(index + 1).copied().unwrap_or(end));
+                starts_tag(lower, start, "th")
+                    && stripped(list, lower, start, stop)
+                        .trim_end_matches(':')
+                        .eq_ignore_ascii_case("size")
+            });
+        }
+        self.cells.clear();
+        self.opened = 0;
+        self.first = found.len();
+    }
+
+    /// ends the size column's cell at `end`, if it is open, reading the size it holds.
+    fn close(&mut self, lower: &str, end: usize) {
+        if let Some(start) = self.sized.take() {
+            self.size = number(lower, start, end);
+        }
+    }
+}
+
+/// whether the text of the link whose tag ends at `at` in `list` ends in `/`, as a folder's name
+/// does, and whether it reads "Parent Directory", as apache's link to the folder above does;
+/// `lower` is the list in lowercase. a text that `close`s with no tag in it and holds no
+/// character reference, as most do, is read where it is.
+fn text_says(list: &str, lower: &str, at: usize, close: Option<usize>) -> (bool, bool) {
+    if let Some(close) = close {
+        let plain = list[at..close].trim_ascii();
+        if !plain.contains('&') && !plain.starts_with(['p', 'P']) {
+            return (plain.ends_with('/'), false);
+        }
+    }
+    let text = words(&unescape(&text(list, lower, at)));
+    (
+        text.ends_with('/'),
+        text.eq_ignore_ascii_case("parent directory"),
+    )
 }
 
 /// the text of the link whose tag ends at `at` in `list`, without the tags inside it, up to where
@@ -400,15 +493,16 @@ enum Ending {
     Other,
 }
 
-/// what the row `row`, a link's text and the rest of its row, ends with.
-fn ending(row: &str) -> Ending {
-    let rest = row
-        .find('<')
-        .and_then(|close| row[close..].strip_prefix("</a>"));
-    let Some(rest) = rest else {
+/// what the row of the lowercase list `lower` whose link's text `close`s with no tag in it ends
+/// with; a link whose text holds a tag states none.
+fn ending(lower: &str, close: Option<usize>) -> Ending {
+    let Some(rest) = close.and_then(|close| lower[close..].strip_prefix("</a>")) else {
         return Ending::Other;
     };
-    let words = &rest[..rest.find(['<', '\n']).unwrap_or(rest.len())];
+    let words = &rest[..rest
+        .bytes()
+        .position(|byte| byte == b'<' || byte == b'\n')
+        .unwrap_or(rest.len())];
     let Some(last) = words.split_ascii_whitespace().next_back() else {
         return Ending::Other;
     };
@@ -457,61 +551,32 @@ fn rounded(word: &str) -> bool {
         )
 }
 
-/// where each row of the table `list` starts, with the size in bytes it states in the column the
-/// table heads "Size", as apache, lighttpd, rclone and caddy head theirs: a cell that is a whole
-/// number, as `3659`; any other, as `9.3K`, `20 B` or `-`, states none. rows above that heading
-/// state none; `lower` is the table in lowercase.
-fn sized_rows(list: &str, lower: &str) -> Vec<(usize, Option<u64>)> {
-    let mut rows = Vec::new();
-    let mut column = None;
-    let mut at = 0;
-    while let Some(open) = opening(lower, at, "tr") {
-        let end = opening(lower, open + 1, "tr").unwrap_or(lower.len());
-        let cells = cells(lower, open, end);
-        match column {
-            None => {
-                column = cells.iter().position(|&(start, stop)| {
-                    starts_tag(lower, start, "th")
-                        && cell_text(list, lower, start, stop)
-                            .trim_end_matches(':')
-                            .eq_ignore_ascii_case("size")
-                });
+/// the whole number a cell that opens at `open` and ends by `to` holds as its one text, as
+/// `3659`; `lower` is the table in lowercase.
+fn number(lower: &str, open: usize, to: usize) -> Option<u64> {
+    let mut at = next_byte(lower, b'>', open, to).map_or(to, |end| end + 1);
+    let mut found = None;
+    while at < to {
+        let next = next_byte(lower, b'<', at, to).unwrap_or(to);
+        let text = lower[at..next].trim_ascii();
+        if !text.is_empty() {
+            if found.is_some() {
+                return None;
             }
-            Some(column) => {
-                let size = cells
-                    .get(column)
-                    .and_then(|&(start, stop)| whole(&cell_text(list, lower, start, stop)));
-                rows.push((open, size));
-            }
+            found = Some(whole(text)?);
         }
-        at = end;
+        at = next_byte(lower, b'>', next, to).map_or(to, |close| close + 1);
     }
-    rows
+    found
 }
 
-/// where each cell of the row between `from` and `to` of the lowercase table `lower` opens, and
-/// where the next one does.
-fn cells(lower: &str, from: usize, to: usize) -> Vec<(usize, usize)> {
-    let mut opens = Vec::new();
-    let mut at = from;
-    while let Some(offset) = lower[at..to].find('<') {
-        let open = at + offset;
-        if starts_tag(lower, open, "td") || starts_tag(lower, open, "th") {
-            opens.push(open);
-        }
-        at = open + 1;
-    }
-    opens
+/// where the next `byte` of `lower` is, from `at` up to `to`. tags sit a few bytes apart in a
+/// listing, closer than a search that skips ahead in long strides gains on.
+fn next_byte(lower: &str, byte: u8, at: usize, to: usize) -> Option<usize> {
+    lower.as_bytes()[at..to]
         .iter()
-        .enumerate()
-        .map(|(index, &open)| (open, opens.get(index + 1).copied().unwrap_or(to)))
-        .collect()
-}
-
-/// the text of the cell that opens at `open` and ends by `to`, as [`stripped`] gives it.
-fn cell_text(list: &str, lower: &str, open: usize, to: usize) -> String {
-    let start = lower[open..to].find('>').map_or(to, |end| open + end + 1);
-    stripped(list, lower, start, to)
+        .position(|&each| each == byte)
+        .map(|offset| at + offset)
 }
 
 /// the `href` the tag whose attributes start at `at` has, and where the tag ends. a value is in
