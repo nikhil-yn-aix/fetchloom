@@ -59,10 +59,18 @@ on disk: writes data.lock and may add files to the cache. after a git merge, it 
     pub(super) const STATUS: &str = "examples:
   fetchloom status
   fetchloom status --verify
-  fetchloom status --sources --check    # for ci: fail if a source lost a file
+  fetchloom status --check    # for scripts: fail while the data is not ready
   fetchloom status --json
 
-on disk: nothing. it reads data.toml, data.lock and data/. --sources also asks each mirror and source over the network, one small request a file";
+on disk: nothing. it reads data.toml, data.lock and data/, and asks no server";
+
+    pub(super) const AUDIT: &str = "examples:
+  fetchloom audit
+  fetchloom audit iris
+  fetchloom audit --check    # for ci: fail if a source lost a file or changed
+  fetchloom audit --json
+
+on disk: nothing. it reads data.toml and data.lock and asks each source and mirror over the network: one small request a file, and one or two a dataset";
 
     pub(super) const DIFF: &str = "examples:
   fetchloom diff    # data.lock now against HEAD's, file lists too
@@ -574,6 +582,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
     Status(Status),
 
+    /// ask the sources if data.lock's files are still served or changed
+    #[command(override_usage = "fetchloom audit [options] [name]...", help_template = TEMPLATE, after_help = examples::AUDIT)]
+    Audit(Audit),
+
     /// show what data.lock and its file lists changed between commits
     #[command(override_usage = "fetchloom diff [options] [from] [to]", help_template = TEMPLATE, after_help = examples::DIFF)]
     Diff(Diff),
@@ -634,6 +646,7 @@ impl Command {
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
             Command::Status(_) => "status",
+            Command::Audit(_) => "audit",
             Command::Diff(_) => "diff",
             Command::List(_) => "list",
             Command::Export(_) => "export",
@@ -695,6 +708,7 @@ impl Command {
     pub(crate) fn harmless(&self) -> bool {
         match self {
             Command::Status(_)
+            | Command::Audit(_)
             | Command::Diff(_)
             | Command::List(_)
             | Command::Settings(Settings { action: None })
@@ -1022,12 +1036,20 @@ pub(crate) struct Status {
     /// sync --strict does, for scripts. it still changes nothing
     #[arg(long, help_heading = "options")]
     pub(crate) check: bool,
+}
 
-    /// also ask whether a mirror or its source still serves each file in data.lock, by asking for
-    /// its first byte, so nothing is downloaded. with --check, fail when a file is served nowhere
-    /// or could not be checked, so ci can run it on a fresh clone
+/// ask the sources if data.lock's files are still served or changed
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Audit {
+    /// the datasets to audit, by their names in data.toml; all of them when none is named
+    #[arg(value_name = "name", help_heading = "arguments")]
+    pub(crate) names: Vec<String>,
+
+    /// fail when a source no longer serves a file data.lock lists, lists a newer version, or
+    /// changed a dataset's title, license or access, naming each, so ci can run it on a fresh
+    /// clone
     #[arg(long, help_heading = "options")]
-    pub(crate) sources: bool,
+    pub(crate) check: bool,
 }
 
 /// bring data.lock in line with data.toml

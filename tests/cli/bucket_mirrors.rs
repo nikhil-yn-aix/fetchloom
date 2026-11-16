@@ -205,10 +205,10 @@ fn a_refused_key_names_what_the_bucket_must_grant() -> Result {
     Ok(())
 }
 
-/// `status --sources` asks a bucket mirror for each file's first byte, so a file its source lost
-/// still counts as had, named as one only the mirror serves now.
+/// `audit` asks a bucket mirror for each file's first byte, so a file its source lost still counts
+/// as had, named as one only the mirror serves now.
 #[test]
-fn a_bucket_mirror_counts_for_status_sources() -> Result {
+fn a_bucket_mirror_counts_for_audit() -> Result {
     let sandbox = Sandbox::new()?;
     let source = Routes::start(vec![("/files/iris.csv".to_owned(), file(IRIS, "\"i\""))])?;
     sandbox.allow(&source.url);
@@ -227,12 +227,7 @@ fn a_bucket_mirror_counts_for_status_sources() -> Result {
     )]);
     let asked = source.requests().len();
     let status = |mirror: Option<&str>| {
-        let mut command = keyed(
-            &sandbox,
-            &s3,
-            "AKIALABPUSHWXYZ",
-            &["--json", "status", "--sources"],
-        );
+        let mut command = keyed(&sandbox, &s3, "AKIALABPUSHWXYZ", &["--json", "audit"]);
         if let Some(mirror) = mirror {
             command.arg("--mirror").arg(mirror);
         }
@@ -241,7 +236,7 @@ fn a_bucket_mirror_counts_for_status_sources() -> Result {
     let output = status(Some(MIRROR))?;
     ok(&output)?;
     let document = json(&output)?;
-    let iris = &document["result"]["sources"]["datasets"][0];
+    let iris = &document["result"]["datasets"][0];
     assert_eq!(iris["name"], "iris", "{document}");
     assert_eq!(iris["on_mirrors"], 1, "{iris}");
     assert_eq!(iris["lost_at_source"][0]["outcome"], "gone", "{iris}");
@@ -260,7 +255,7 @@ fn a_bucket_mirror_counts_for_status_sources() -> Result {
     // without the mirror, the lost file counts against its source
     let output = status(None)?;
     ok(&output)?;
-    let iris = &json(&output)?["result"]["sources"]["datasets"][0];
+    let iris = &json(&output)?["result"]["datasets"][0];
     assert_eq!(iris["on_mirrors"], 0, "{iris}");
     Ok(())
 }

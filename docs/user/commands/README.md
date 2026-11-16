@@ -12,6 +12,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`push`](push.md) | copy the pinned files from the cache into a folder mirror | share a project's data through a lab disk or a usb drive |
 | [`search`](search.md) | find datasets on hugging face, kaggle, zenodo and other sites | choose a reference from plain words |
 | [`status`](status.md) | list missing, edited and extra files; `--check` fails while the data is not ready | check local inputs without downloads |
+| [`audit`](audit.md) | ask the sources whether they still serve each pinned file, list a newer version or changed a license | check in CI that a project's data can still be had |
 | [`path`](path.md) | return an absolute dataset or file path | locate an input from a script or notebook |
 | [`remove`](remove.md) | remove an entry and unchanged managed files | stop using a dataset |
 | [`drop`](drop.md) | free a pinned dataset's space on this machine, keeping it pinned | make room while you do not need a dataset |

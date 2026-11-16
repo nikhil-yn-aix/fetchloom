@@ -39,7 +39,6 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/path.rs` | `path`: where a dataset or file is, syncing that dataset alone first when its files are missing | `path` | `ready_path`, `planned_path`, `hold_path` |
 | `src/cli/status.rs` | `status`: how the data folder differs from data.lock, hashing only files their size and time cannot vouch for | `run`, `Status` | `brief` |
 | `src/cli/status/ready.rs` | the readiness rule `status --check` and `sync --strict` share, and its `data.not_ready` error | `of_status` | `Unready`, `ready`, `after_sync` |
-| `src/cli/status/sources.rs` | `status --sources`: a line a dataset saying whether a mirror or its source still serves each file data.lock pins, its `--json` result, and the check `--check` makes of it | `check` | `Sources`, `tell`, `ready` |
 | `src/cli/list.rs` | `list`: each dataset's source, size and destination, from data.toml and data.lock alone, and its tables | `run` | `Report`, `Listed`, `listed`, `table`, `columns` |
 | `src/cli/export.rs` | `export`: checksums of placed files or links of downloaded ones, for `sha256sum -c`, a link list or aria2c, checked and written whole | `run` | `Report`, `inventory`, `sources`, `link`, `complete`, `render`, `publish` |
 | `src/cli/push.rs` | `push`: pinned files copied from the cache into a folder mirror, with the file lists of their archives | `run` | `Report` |
@@ -53,6 +52,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/search.rs` | `search`, its candidate rows, and the choice among candidates that `add` and `get` offer | `run`, `pick` | `Report`, `find` |
 | `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache and the weekly size reminder | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `needed_for_drop` |
 | `src/cli/cache/usage.rs` | where the cache's space goes, for `fetchloom cache` and the weekly reminder alike | `Usage::measure` | `Usage` |
+| `src/cli/audit.rs` | `audit`: whether a mirror or its source still serves each file data.lock pins, whether the source lists a newer version or changed a title, license or access, its `--json` result, and the check `--check` makes | `run` | `Report`, `listings`, `changes`, `tell`, `ready` |
 | `src/cli/auth.rs` | `auth`: signed-in accounts, signing in and out, and the offer to sign in after a refused download | `run`, `offer` | `Report` |
 | `src/cli/auth/site.rs` | `auth login <host>` with a website's own token, header or cookies from a file or a browser, its line in `auth` and its `auth logout` | `sign_in`, `listed`, `sign_out` | `keep`, `agrees`, `from_file`, `from_browser`, `tell` |
 | `src/cli/diff.rs` | `diff`: what changed in data.lock, its lists included, between two git commits or a commit and the project folder, read through `project::git` within the limits of any lock read | `run`, `Report` | `compared`, `summary`, `line` |

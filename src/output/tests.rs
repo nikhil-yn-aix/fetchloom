@@ -351,8 +351,7 @@ fn a_fix_is_only_a_command_this_run_wrote() {
         super::fix(&help, false, judged, crate::suggested::is_written),
         Some(written.as_str())
     );
-    let spelled =
-        format!("bring x`fetchloom status --sources`y back; `{written}` shows what it pins");
+    let spelled = format!("bring x`fetchloom audit --check`y back; `{written}` shows what it pins");
     assert_eq!(
         super::fix(&spelled, false, judged, crate::suggested::is_written),
         None
@@ -538,7 +537,8 @@ fn a_fix_is_only_a_command_the_table_allows() {
         ("drop", false, &["--dry-run"]),
         ("sync", false, &["--dry-run"]),
         ("lock", false, &["--check", "--dry-run"]),
-        ("status", true, &["--verify", "--check", "--sources"]),
+        ("status", true, &["--verify", "--check"]),
+        ("audit", true, &["--check"]),
         ("diff", true, &[]),
         ("list", true, &[]),
         ("export", true, &["--format"]),

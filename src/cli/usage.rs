@@ -565,7 +565,7 @@ fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
         }
     }
     // after a command that lacks it, the place was right and the command was not, unless the
-    // command has an option of a near spelling, as status has --sources for --source
+    // command has an option of a near spelling
     if let Some(parent) = parent.filter(|parent| !names.contains(parent)) {
         if let Some(meant) = option_meant(argument, Some(parent)) {
             return Some(format!("did you mean `{meant}`?"));
@@ -900,7 +900,6 @@ mod tests {
             (&["fetchloom", "sync", "--Dry-Run"], "--dry-run"),
             (&["fetchloom", "--verison"], "--version"),
             (&["fetchloom", "add", "--name", "x", "iris"], "--as"),
-            (&["fetchloom", "status", "--source"], "--sources"),
         ] {
             let error = problem(arguments)?;
             assert_eq!(

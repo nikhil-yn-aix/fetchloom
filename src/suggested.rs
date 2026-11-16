@@ -857,9 +857,9 @@ pub(crate) mod tests {
     /// command's name alone, an example of a link, `--help`.
     #[test]
     fn helps_name_this_projects_commands_through_command() {
-        const PROJECT: [&str; 12] = [
-            "add", "remove", "exclude", "drop", "sync", "lock", "status", "diff", "list", "export",
-            "push", "path",
+        const PROJECT: [&str; 13] = [
+            "add", "remove", "exclude", "drop", "sync", "lock", "status", "audit", "diff", "list",
+            "export", "push", "path",
         ];
         let elsewhere = [
             ("src/cli/add.rs", "fetchloom sync"),

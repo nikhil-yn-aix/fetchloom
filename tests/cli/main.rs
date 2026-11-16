@@ -2,6 +2,7 @@
 
 mod add;
 mod archives;
+mod audit;
 mod auth;
 mod azure;
 mod azurite;
@@ -43,7 +44,6 @@ mod scope;
 mod search;
 mod secrets;
 mod sites;
-mod sources;
 mod split;
 mod status;
 mod support;

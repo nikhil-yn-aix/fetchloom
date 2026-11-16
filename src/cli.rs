@@ -2,6 +2,7 @@
 
 mod add;
 mod args;
+mod audit;
 mod auth;
 mod cache;
 mod completions;
@@ -1041,6 +1042,7 @@ fn spends(command: &args::Command) -> bool {
             | args::Command::Sync(_)
             | args::Command::Lock(_)
             | args::Command::Status(_)
+            | args::Command::Audit(_)
             | args::Command::Path(_)
             | args::Command::Push(_)
             | args::Command::Get(_)
@@ -1050,6 +1052,7 @@ fn spends(command: &args::Command) -> bool {
     )
 }
 
+#[expect(clippy::too_many_lines, reason = "an arm for each command")]
 fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) -> ExitCode {
     let name = Some(command.name());
     if command.locked() {
@@ -1085,8 +1088,12 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Status(args) => {
             let outcome = blocking(context, Effect::Reads, move |context| {
-                status::run(context, args.verify, args.check, args.sources)
+                status::run(context, args.verify, args.check)
             });
+            finish(context, name, outcome, started)
+        }
+        args::Command::Audit(args) => {
+            let outcome = block_on(context, audit::run(context, args));
             finish(context, name, outcome, started)
         }
         args::Command::Path(args) => {

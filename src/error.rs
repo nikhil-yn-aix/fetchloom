@@ -36,11 +36,13 @@ pub(crate) enum Kind {
     ProjectInvalid,
     /// data.toml or data.lock changed while a command that writes them ran, so it wrote neither.
     ProjectChanged,
-    /// a check found data.lock out of date with data.toml.
+    /// a check found data.lock out of date with data.toml, or `audit --check` found a source that
+    /// lists a newer version or changed a dataset's title, license or access.
     Outdated,
     /// a strict check found data the run asked for not ready: a file with other bytes than
-    /// data.lock pins, one not in place yet, or a dataset not pinned as data.toml asks; or `status --sources --check` found a file data.lock pins that no
-    /// mirror or source serves.
+    /// data.lock pins, one not in place yet, or a dataset not pinned as data.toml asks; or `audit
+    /// --check` found a file data.lock pins that no mirror or source serves, or a dataset its
+    /// source no longer lists.
     NotReady,
     Interrupted,
 }

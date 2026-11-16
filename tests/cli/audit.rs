@@ -1,9 +1,10 @@
-//! `status --sources`: whether a mirror or its source still serves each file data.lock pins, asked
-//! for each file's first byte, so nothing is downloaded.
+//! `audit`: whether a mirror or its source still serves each file data.lock pins, asked for each
+//! file's first byte, so nothing is downloaded, and whether a source moved on since the pin.
 
 use crate::mirrors::{IRIS, cold, mirror_of, project, web_mirror_of};
 use crate::support::{
-    Ranged, Result, Routes, Sandbox, file, json, ok, reply, sha256_hex, text, workspace,
+    Part, Ranged, Result, Routes, Sandbox, file, json, md5_hex, ok, reply, sha256_hex, text,
+    workspace,
 };
 
 /// each of `targets` on `source` added as a dataset of its own, named for its file.
@@ -15,9 +16,9 @@ fn pinned(sandbox: &Sandbox, source: &Routes, targets: &[&str]) -> Result {
     Ok(())
 }
 
-/// the result `--sources` gave for the dataset `name`.
+/// the result `audit` gave for the dataset `name`.
 fn dataset<'d>(document: &'d serde_json::Value, name: &str) -> Result<&'d serde_json::Value> {
-    document["result"]["sources"]["datasets"]
+    document["result"]["datasets"]
         .as_array()
         .into_iter()
         .flatten()
@@ -65,10 +66,10 @@ fn each_pinned_file_is_served_or_says_why_not() -> Result {
         ),
     ]);
     let (asked, parted) = (source.requests().len(), parts.requests().len());
-    let output = sandbox.run(&["--json", "status", "--sources"])?;
+    let output = sandbox.run(&["--json", "audit"])?;
     ok(&output)?;
     let document = json(&output)?;
-    let sources = &document["result"]["sources"];
+    let sources = &document["result"];
     assert_eq!(
         (&sources["files"], &sources["served"], &sources["unchecked"]),
         (&5.into(), &2.into(), &1.into()),
@@ -115,7 +116,7 @@ fn the_files_no_place_serves_are_rows_under_their_dataset() -> Result {
     ])?;
     pinned(&sandbox, &source, &["/files/iris.csv", "/files/moved.csv"])?;
     source.change(vec![("/files/moved.csv".to_owned(), missing())]);
-    let output = sandbox.run(&["status", "--sources"])?;
+    let output = sandbox.run(&["audit"])?;
     ok(&output)?;
     let port = source.url.rsplit(':').next().unwrap_or_default();
     assert_eq!(
@@ -151,9 +152,9 @@ fn a_clone_checks_its_sources_and_a_mirror_stands_in_for_a_lost_one() -> Result 
         command.output()
     };
     assert_eq!(run(&["status", "--check"], None)?.status.code(), Some(1));
-    ok(&run(&["status", "--sources", "--check"], None)?)?;
+    ok(&run(&["audit", "--check"], None)?)?;
     source.change(vec![("/files/iris.csv".to_owned(), missing())]);
-    let output = run(&["--json", "status", "--sources", "--check"], None)?;
+    let output = run(&["--json", "audit", "--check"], None)?;
     assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(error["kind"], "data.not_ready");
@@ -176,7 +177,7 @@ fn a_clone_checks_its_sources_and_a_mirror_stands_in_for_a_lost_one() -> Result 
         format!("{}/m", web.url),
     );
     for mirror in [&folder_mirror, &at] {
-        let output = run(&["--json", "status", "--sources", "--check"], Some(mirror))?;
+        let output = run(&["--json", "audit", "--check"], Some(mirror))?;
         ok(&output)?;
         let document = json(&output)?;
         let iris = dataset(&document, "iris")?;
@@ -185,7 +186,7 @@ fn a_clone_checks_its_sources_and_a_mirror_stands_in_for_a_lost_one() -> Result 
         assert_eq!(iris["lost_at_source"][0]["outcome"], "gone", "{iris}");
     }
     assert_eq!(source.requests().len(), asked + 2);
-    let output = run(&["status", "--sources"], Some(&folder_mirror))?;
+    let output = run(&["audit"], Some(&folder_mirror))?;
     ok(&output)?;
     let rows = text(&output.stdout)?;
     assert!(
@@ -227,7 +228,7 @@ fn a_host_that_gives_no_answer_is_asked_no_more() -> Result {
     );
     let asked = source.requests().len();
     let output = sandbox
-        .command(&["--json", "status", "--sources"])
+        .command(&["--json", "audit"])
         .env("FETCHLOOM_RETRIES", "0")
         .env("FETCHLOOM_JOBS", "1")
         .output()?;
@@ -257,7 +258,7 @@ fn a_file_not_checked_is_never_called_lost() -> Result {
     pinned(&sandbox, &source, &["/files/iris.csv"])?;
     let check = || {
         sandbox
-            .command(&["--json", "status", "--sources", "--check"])
+            .command(&["--json", "audit", "--check"])
             .env("FETCHLOOM_RETRIES", "0")
             .output()
     };
@@ -274,7 +275,7 @@ fn a_file_not_checked_is_never_called_lost() -> Result {
         (&1.into(), &1.into()),
         "{iris}"
     );
-    let told = text(&sandbox.run(&["status", "--sources"])?.stderr)?;
+    let told = text(&sandbox.run(&["audit"])?.stderr)?;
     assert!(
         told.contains("Served iris · 1 file · 1 answered without a size"),
         "{told}"
@@ -318,17 +319,17 @@ fn a_file_not_downloaded_yet_is_asked_about_too() -> Result {
         pins.replacen("files = [", "downloaded = false\nfiles = [", 1),
     )?;
     let asked = source.requests().len();
-    let output = sandbox.run(&["--json", "status", "--sources"])?;
+    let output = sandbox.run(&["--json", "audit"])?;
     ok(&output)?;
     let document = json(&output)?;
-    assert_eq!(document["result"]["sources"]["files"], 1, "{document}");
+    assert_eq!(document["result"]["files"], 1, "{document}");
     assert_eq!(dataset(&document, "iris")?["served"], 1);
     assert_eq!(source.requests().len(), asked + 1);
     source.change(vec![(
         "/files/iris.csv".to_owned(),
         file(b"a,b\n", "\"j\""),
     )]);
-    let output = sandbox.run(&["--json", "status", "--sources"])?;
+    let output = sandbox.run(&["--json", "audit"])?;
     ok(&output)?;
     let document = json(&output)?;
     let changed = &dataset(&document, "iris")?["not_served"][0];
@@ -365,7 +366,7 @@ fn a_mirror_keeping_an_archives_files_serves_it() -> Result {
         format!("{}/m", web.url),
     ] {
         let output = sandbox
-            .command(&["--json", "status", "--sources", "--check"])
+            .command(&["--json", "audit", "--check"])
             .arg("--mirror")
             .arg(&mirror)
             .output()?;
@@ -381,10 +382,163 @@ fn a_mirror_keeping_an_archives_files_serves_it() -> Result {
 #[test]
 fn offline_asks_no_source() -> Result {
     let sandbox = Sandbox::new()?;
-    let output = sandbox.run(&["--json", "--offline", "status", "--sources"])?;
-    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    let source = Routes::start(vec![("/files/iris.csv".to_owned(), file(IRIS, "\"i\""))])?;
+    pinned(&sandbox, &source, &["/files/iris.csv"])?;
+    let asked = source.requests().len();
+    let output = sandbox.run(&["--json", "--offline", "audit"])?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
     let error = &json(&output)?["errors"][0];
-    assert_eq!(error["kind"], "usage");
+    assert_eq!(error["kind"], "offline.missing");
     assert_eq!(error["help"], "run it again without --offline");
+    assert_eq!(source.requests().len(), asked);
+    Ok(())
+}
+
+/// zenodo's answer for record `id`, a version of concept 100 holding iris.csv.
+fn record(id: u64, license: &str) -> Result<Vec<Part>> {
+    let record = serde_json::json!({
+        "id": id,
+        "conceptrecid": "100",
+        "doi": format!("10.5281/zenodo.{id}"),
+        "metadata": {
+            "title": "DatasetIris",
+            "license": { "id": license },
+            "access_right": "open",
+        },
+        "files": [{ "key": "iris.csv", "size": IRIS.len(), "checksum": format!("md5:{}", md5_hex(IRIS)) }],
+    });
+    Ok(reply(
+        "200 OK",
+        &[("Content-Type", "application/json")],
+        &serde_json::to_vec(&record)?,
+    ))
+}
+
+/// a dataset pinned through zenodo's concept id: once zenodo publishes a newer version, audit
+/// names it with the upgrade that takes it, and a license changed on the pinned version shows too;
+/// `--check` fails as data.lock out of date, naming the dataset and what moved.
+#[test]
+fn a_newer_zenodo_version_is_reported_with_the_upgrade_that_takes_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let content = "/zenodo.org/api/records/101/files/iris.csv/content";
+    let routes = Routes::start(vec![
+        (
+            "/zenodo.org/api/records/100".to_owned(),
+            record(101, "cc-by-4.0")?,
+        ),
+        (
+            "/zenodo.org/api/records/101".to_owned(),
+            record(101, "cc-by-4.0")?,
+        ),
+        (content.to_owned(), file(IRIS, "\"i\"")),
+    ])?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()
+    };
+    ok(&run(&["add", "zenodo:100", "--as", "iris"])?)?;
+    let output = run(&["audit"])?;
+    ok(&output)?;
+    assert_eq!(text(&output.stdout)?, "");
+    assert!(
+        text(&output.stderr)?
+            .contains("Ok the file in data.lock is still served, and its source changed nothing"),
+        "{}",
+        text(&output.stderr)?
+    );
+    routes.change(vec![
+        (
+            "/zenodo.org/api/records/100".to_owned(),
+            record(102, "cc-by-4.0")?,
+        ),
+        (
+            "/zenodo.org/api/records/101".to_owned(),
+            record(101, "cc0-1.0")?,
+        ),
+        (
+            "/zenodo.org/api/records/102".to_owned(),
+            record(102, "cc-by-4.0")?,
+        ),
+    ]);
+    let output = run(&["audit"])?;
+    ok(&output)?;
+    assert_eq!(
+        text(&output.stdout)?,
+        "      Newer iris · zenodo:102, where data.lock pins zenodo:101\n    Changed iris · license cc-by-4.0 → cc0-1.0\n"
+    );
+    let stderr = text(&output.stderr)?;
+    for line in [
+        "     Served iris · 1 file\n",
+        "      Found 1 dataset with a newer version or a change at their source\n",
+        "`fetchloom lock --upgrade iris` pins what their sources list now",
+    ] {
+        assert!(stderr.contains(line), "{line} in\n{stderr}");
+    }
+    let output = run(&["--json", "audit", "--check"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let iris = dataset(&document, "iris")?;
+    assert_eq!(iris["newer"], "zenodo:102", "{iris}");
+    assert_eq!(
+        iris["changed"],
+        serde_json::json!([{ "field": "license", "pinned": "cc-by-4.0", "now": "cc0-1.0" }])
+    );
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "lock.outdated", "{error}");
+    assert_eq!(
+        error["details"],
+        serde_json::json!([
+            "iris · newer version zenodo:102, where data.lock pins zenodo:101",
+            "iris · license cc-by-4.0 → cc0-1.0"
+        ])
+    );
+    Ok(())
+}
+
+/// a record its source deleted is named as gone, and fails the check with the dataset named.
+#[test]
+fn a_dataset_its_source_deleted_fails_the_check() -> Result {
+    let sandbox = Sandbox::new()?;
+    let content = "/zenodo.org/api/records/101/files/iris.csv/content";
+    let routes = Routes::start(vec![
+        (
+            "/zenodo.org/api/records/101".to_owned(),
+            record(101, "cc-by-4.0")?,
+        ),
+        (content.to_owned(), file(IRIS, "\"i\"")),
+    ])?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()
+    };
+    ok(&run(&["add", "zenodo:101", "--as", "iris"])?)?;
+    routes.change(vec![
+        ("/zenodo.org/api/records/101".to_owned(), missing()),
+        (content.to_owned(), missing()),
+    ]);
+    let output = run(&["--json", "audit", "--check"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(dataset(&document, "iris")?["unlisted"]["outcome"], "gone");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "data.not_ready", "{error}");
+    let details: Vec<&str> = error["details"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(
+        details[0].starts_with("iris/iris.csv · gone: "),
+        "{details:?}"
+    );
+    assert_eq!(
+        details[1],
+        "iris · gone: zenodo:101 does not exist, or is not public"
+    );
     Ok(())
 }

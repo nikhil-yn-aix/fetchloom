@@ -23,7 +23,6 @@ use crate::threads::Threads;
 use crate::units;
 
 pub(super) mod ready;
-mod sources;
 
 /// the most rows of each kind a terminal shows; a pipe, a file and `--json` get them all.
 const SHOWN: usize = 20;
@@ -80,9 +79,6 @@ pub(super) struct Status {
     damaged: Vec<String>,
     /// what a sync would download for the files it places, with about how long it takes.
     to_download: crate::net::estimate::Total,
-    /// with `--sources`, whether a mirror or source still serves each file data.lock pins.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sources: Option<sources::Sources>,
     /// those downloads by the link each starts at, and its size.
     #[serde(skip)]
     downloads: Vec<(url::Url, Option<u64>)>,
@@ -133,19 +129,9 @@ pub(super) struct Status {
     gone: HashMap<String, String>,
 }
 
-/// `status`, hashing every placed file for `verify`, as `--verify` asks, asking each mirror and
-/// source whether it still serves each pinned file for `sources`, and failing with
-/// `data.not_ready` for `strict`, as `--check` asks, when the data is not ready to use, or with
-/// `sources` when a pinned file is served nowhere.
-pub(super) fn run(
-    context: &Context,
-    verify: bool,
-    strict: bool,
-    sources: bool,
-) -> Result<Status, Error> {
-    if sources {
-        sources::askable(context)?;
-    }
+/// `status`, hashing every placed file for `verify`, as `--verify` asks, and failing with
+/// `data.not_ready` for `strict`, as `--check` asks, when the data is not ready to use.
+pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Status, Error> {
     let project = super::project::find(&context.output)?;
     let (mut status, manifest, lock) = check(
         &project,
@@ -204,26 +190,10 @@ pub(super) fn run(
             super::project::command("sync")
         ));
     }
-    if sources && !status.lockless {
-        let found = sources::check(context, &project)?;
-        sources::tell(output, &found);
-        status.sources = Some(found);
-    }
     if strict {
-        checked(&status, sources).map_err(|error| error.with_report(&status))?;
+        ready::ready(&ready::of_status(&status)).map_err(|error| error.with_report(&status))?;
     }
     Ok(status)
-}
-
-/// fails with `data.not_ready` as `--check` asks: when the data is not ready to use, or with
-/// `sources` when no mirror or source serves a file data.lock pins, or nothing pins any.
-fn checked(status: &Status, sources: bool) -> Result<(), Error> {
-    // a clone checks its sources before it downloads, so the data folder is no part of it
-    match &status.sources {
-        Some(found) => sources::ready(found),
-        None if sources => ready::ready(&[ready::Unready::Unpinned(None)]),
-        None => ready::ready(&ready::of_status(status)),
-    }
 }
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.

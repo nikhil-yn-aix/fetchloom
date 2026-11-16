@@ -31,6 +31,7 @@
     - [Commands](user/commands/README.md)
         - [Global options](user/commands/global-options.md)
         - [add](user/commands/add.md)
+        - [audit](user/commands/audit.md)
         - [auth](user/commands/auth.md)
         - [cache](user/commands/cache.md)
         - [completions](user/commands/completions.md)

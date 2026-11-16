@@ -227,7 +227,7 @@ fn sized(size: u64, other: u64) -> String {
 /// which places [`find`] asks, in what order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::cli) enum Ask {
-    /// as `status --sources` asks: each file's source, then for a file its source does not serve
+    /// as `audit` asks: each file's source, then for a file its source does not serve
     /// at its size, the mirrors, a folder mirror's copy by its size and an unpacked archive by the
     /// list of its files a mirror keeps, as push leaves it.
     Sources,

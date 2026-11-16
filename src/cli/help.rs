@@ -196,9 +196,10 @@ more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment/";
 const EXIT_CODES: &str = "fetchloom exit codes
 
     0  success, even when sync kept edited files; status shows them
-    1  unconfirmed or lock.outdated: say yes with --yes, or run fetchloom lock.
+    1  unconfirmed or lock.outdated: say yes with --yes, or run fetchloom lock;
+       from audit --check, a source lists a newer version or changed.
        data.not_ready: sync --strict or status --check found data not ready,
-       or status --sources --check found a pinned file served nowhere
+       or audit --check found a pinned file served nowhere
     2  usage: a mistake on the command line
    10  reference.*, source.invalid: the link or id is wrong, or names nothing.
        network.refused: the link leads where fetchloom will not go
