@@ -136,8 +136,8 @@ const ENVIRONMENT: &str = "fetchloom environment
 a settings file keeps cache, resources, jobs, host_jobs, retries, timeout,
 ask_above, memory, most_files, the archive_ settings, allowed_origins,
 s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors,
-mirrors_only, push_to and cache_budget for every run, one per line, as
-jobs = 16. a variable wins over the file.
+mirrors_only, push_to, cache_budget and rate for every run, one per line,
+as jobs = 16. a variable wins over the file.
 fetchloom settings shows each value and where it came from, and
 fetchloom settings set jobs 16 saves one.
 

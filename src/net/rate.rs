@@ -1,6 +1,5 @@
 //! one byte budget shared by every response in a run.
 
-use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +9,6 @@ use url::Url;
 
 use super::Net;
 use super::failure::{self, Failure};
-use crate::error::{Error, Kind};
 use crate::stop::Stop;
 
 const NANOS: u128 = 1_000_000_000;
@@ -28,36 +26,9 @@ struct Bucket {
 }
 
 impl Rate {
-    pub(crate) fn read(var: &dyn Fn(&str) -> Option<OsString>) -> Result<Option<Arc<Rate>>, Error> {
-        let Some(value) = var("FETCHLOOM_RATE").filter(|value| !value.is_empty()) else {
-            return Ok(None);
-        };
-        value
-            .to_str()
-            .and_then(crate::units::bytes)
-            .map(|rate| Some(Arc::new(Self::new(rate))))
-            .ok_or_else(|| {
-                Error::new(
-                    Kind::Usage,
-                    format!(
-                        "FETCHLOOM_RATE is \"{}\", which is not a positive byte rate",
-                        value.display()
-                    ),
-                )
-                .help(
-                    "unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M",
-                )
-            })
-    }
-
-    /// the bytes a second the run may receive.
-    pub(crate) fn per_second(&self) -> u64 {
-        self.per_second
-    }
-
     /// a cap of `per_second` from the first byte on, which lets through at most a second's
     /// bytes at once after a pause.
-    fn new(per_second: u64) -> Rate {
+    pub(crate) fn new(per_second: u64) -> Rate {
         Rate {
             per_second,
             capacity: per_second,
@@ -125,79 +96,42 @@ impl Net {
 mod tests {
     use super::*;
 
-    #[test]
-    fn rate_values_use_binary_units() {
-        for (text, expected) in [
-            ("1", 1),
-            ("10M", 10 * 1024 * 1024),
-            ("500K", 500 * 1024),
-            ("2.5M", 2_621_440),
-            (" 2G ", 2 * 1024 * 1024 * 1024),
-            ("1T", 1024_u64.pow(4)),
-            ("0.1K", 102),
-            ("18446744073709551615", u64::MAX),
-        ] {
-            assert_eq!(crate::units::bytes(text), Some(expected), "{text}");
-        }
-        assert!(Rate::read(&|_| None).unwrap().is_none());
-        assert!(Rate::read(&|_| Some("".into())).unwrap().is_none());
-        assert!(Rate::read(&|_| Some("2.5M".into())).unwrap().is_some());
-    }
-
-    #[test]
-    fn fractional_precision_does_not_change_the_rounded_rate() {
-        let zeros = "0".repeat(128);
-        let nines = "9".repeat(128);
-        for (text, expected) in [
-            (format!("1.{zeros}"), Some(1)),
-            (format!("1.{nines}"), Some(1)),
-            (format!("0.0009765625{zeros}K"), Some(1)),
-            (format!("0.0009765624{nines}K"), None),
-            (format!("0.0009765625{zeros}1K"), Some(1)),
-            (format!("0.{nines}T"), Some((1 << 40) - 1)),
-            (format!("16777215.{nines}T"), Some(u64::MAX)),
-            (format!("18446744073709551615.{nines}"), Some(u64::MAX)),
-            (format!("16777216.{zeros}T"), None),
-            (format!("18446744073709551616.{zeros}"), None),
-            (format!("{zeros}1.{zeros}M"), Some(1 << 20)),
-        ] {
-            assert_eq!(crate::units::bytes(&text), expected, "{text}");
-        }
-    }
-
-    #[test]
-    fn invalid_rate_values_are_settings_errors() {
-        for text in [
-            " ",
-            "0",
-            "0M",
-            "0.1",
-            "-1",
-            "+1",
-            "NaN",
-            "inf",
-            "1e3",
-            "10MB",
-            "10m",
-            ".5M",
-            "1.M",
-            "1..5M",
-            "1 M",
-            "M",
-            "18446744073709551616",
-            "18446744073709551615T",
-        ] {
-            assert_eq!(crate::units::bytes(text), None, "{text}");
-            let error = Rate::read(&|_| Some(text.into())).err().unwrap();
-            assert_eq!(error.kind, crate::error::Kind::Usage);
-            assert_eq!(error.kind.exit_code(), 2);
-            assert!(error.message.contains("FETCHLOOM_RATE"));
-            assert!(error.help.is_some());
-        }
-    }
-
     fn poll<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
         future.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    }
+
+    /// `rate = "500K"` in the settings file caps a run as `FETCHLOOM_RATE=500K` does: the same
+    /// budget, which lets 500 KiB through after a second and not before.
+    #[tokio::test(start_paused = true)]
+    async fn the_settings_files_rate_caps_as_the_variable_does() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("settings.toml");
+        std::fs::write(&path, "rate = \"500K\"\n").unwrap();
+        let read = |variable: Option<&str>| {
+            let var = |name: &str| match name {
+                "FETCHLOOM_SETTINGS" => Some(path.clone().into_os_string()),
+                "FETCHLOOM_RATE" => variable.map(Into::into),
+                _ => None,
+            };
+            let file = crate::settings::File::read(&var).unwrap();
+            let settings =
+                crate::settings::Settings::read(&var, file, crate::machine::Machine::default())
+                    .unwrap();
+            Rate::new(settings.rate.value.unwrap())
+        };
+        let stop = Stop::default();
+        let (from_file, from_variable) = (read(None), read(Some("500K")));
+        let mut capped = std::pin::pin!(async {
+            tokio::join!(
+                from_file.take(500 << 10, &stop),
+                from_variable.take(500 << 10, &stop)
+            )
+        });
+        assert!(poll(capped.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(999)).await;
+        assert!(poll(capped.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(poll(capped.as_mut()), std::task::Poll::Ready((true, true)));
     }
 
     /// the first bytes wait their share too, so a cap holds from the start rather than after a

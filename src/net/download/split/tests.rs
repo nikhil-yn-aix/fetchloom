@@ -654,7 +654,7 @@ fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
     for when in [Splitting::Always, Splitting::WhenSlow] {
         let body = body(MIB);
         let server = serve(body.clone(), SERVING);
-        let rate = Rate::read(&|_| Some("1M".into())).unwrap();
+        let rate = Some(std::sync::Arc::new(Rate::new(1 << 20)));
         let mut net = net(&server.url, 8).with_rate(rate);
         net.split.when = when;
         let (_folder, cache) = cache();

@@ -36,6 +36,53 @@ fn file(text: &str) -> Result<File, Error> {
     })
 }
 
+/// the settings file keeps the rate cap, a variable wins over it, and a value that is no rate
+/// names the key and how to have no cap.
+#[test]
+fn the_rate_is_bytes_a_second_or_no_cap() {
+    assert_eq!(read(&[], None).unwrap().rate, Set::default(None));
+    let filed = Settings::read(&env(&[]), file("rate = \"500K\"\n").unwrap(), machine(None));
+    assert_eq!(
+        filed.unwrap().rate,
+        Set {
+            value: Some(500 << 10),
+            origin: Origin::File
+        }
+    );
+    let both = Settings::read(
+        &env(&[("FETCHLOOM_RATE", "2.5M")]),
+        file("rate = \"500K\"\n").unwrap(),
+        machine(None),
+    );
+    assert_eq!(
+        both.unwrap().rate,
+        Set {
+            value: Some(2_621_440),
+            origin: Origin::Environment
+        }
+    );
+    for (text, why) in [
+        ("0", "a size is at least 1 byte"),
+        ("500", "a size needs its unit"),
+        ("fast", "which is not a size"),
+    ] {
+        let error = read(&[("FETCHLOOM_RATE", text)], None).unwrap_err();
+        assert_eq!(error.kind, Kind::Usage, "{text}");
+        assert!(
+            error.message.starts_with("FETCHLOOM_RATE is"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains(why), "{}", error.message);
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "unset FETCHLOOM_RATE for no cap, or set it to bytes a second such as 500K or 2.5M"
+            )
+        );
+    }
+}
+
 #[test]
 fn a_size_reads_as_fetchloom_prints_it() {
     let gib = 1 << 30;
@@ -371,7 +418,7 @@ fn a_mistyped_key_is_told_the_setting_it_is_near() {
     assert_eq!(
         unknown.help.as_deref(),
         Some(
-            "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to, cache_budget, each a number or text"
+            "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to, cache_budget, rate, each a number or text"
         )
     );
 }

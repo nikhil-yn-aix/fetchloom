@@ -1421,6 +1421,33 @@ fn a_stated_md5_lets_a_download_without_validators_resume() {
     assert_eq!(stored, b"aaaabbbb");
 }
 
+/// a cap on the run's rate leaves retries as they are: a body cut short under the cap is tried
+/// again from where it broke, and the file is whole.
+#[test]
+fn a_body_cut_short_under_a_rate_cap_resumes_on_its_retry() {
+    let cut =
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nETag: \"v1\"\r\nContent-Length: 8\r\n\r\naaaa";
+    let (url, asked) = serve(vec![
+        cut.as_bytes().to_vec(),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"v1\"")],
+            b"bbbb",
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let net = net(&url).with_rate(Some(Arc::new(crate::net::Rate::new(1 << 20))));
+    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        b"aaaabbbb"
+    );
+    let heads = asked.lock().unwrap();
+    assert!(heads[1].contains("range: bytes=4-"), "{heads:?}");
+    assert_eq!(net.work.counts().retries, 1);
+}
+
 #[test]
 fn bidi_controls_are_refused_in_server_names() {
     for disposition in [
@@ -2120,7 +2147,7 @@ fn an_md5_checked_for_one_link_proves_nothing_for_another() {
 #[tokio::test(start_paused = true)]
 async fn waiting_for_the_rate_cap_is_no_network_silence() {
     let url = Url::parse("https://example.org/file").unwrap();
-    let rate = crate::net::Rate::read(&|_| Some("8K".into())).unwrap();
+    let rate = Some(std::sync::Arc::new(crate::net::Rate::new(8 << 10)));
     let mut net = net(&url).with_rate(rate);
     net.idle = std::time::Duration::from_millis(100);
     let (source, mut chunks) = tokio::sync::mpsc::channel(16);

@@ -44,17 +44,13 @@ the variables win over the system's settings, and fetchloom reaches a proxy on a
 
 ## slow or metered links
 
-`FETCHLOOM_RATE` caps the bytes fetchloom receives, all downloads together, such as `500K` for 500 KiB a second; [environment](../reference/environment.md) gives the units. the settings file has no key for it, so to keep a cap in every session, set it in your shell's profile: `~/.bashrc` for bash, `~/.zshrc` for zsh, or the file `$PROFILE` names in powershell.
+the `rate` setting caps the bytes fetchloom receives, all downloads together, such as `500K` for 500 KiB a second; [environment](../reference/environment.md) gives the units. save it once to keep the cap in every session:
 
 ```sh
-export FETCHLOOM_RATE=500K
+fetchloom settings set rate 500K
 ```
 
-```powershell
-$env:FETCHLOOM_RATE = '500K'
-```
-
-in a new terminal, `fetchloom settings` shows the `rate` row coming from the environment.
+`FETCHLOOM_RATE=500K` sets it for one run instead, and wins over the settings file. `fetchloom settings` shows the `rate` row and where it came from.
 
 ## project recovery
 

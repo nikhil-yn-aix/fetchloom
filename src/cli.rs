@@ -137,6 +137,10 @@ impl Context {
             self.threads = self.threads.at_most(threads.value);
         }
         share(&settings);
+        self.rate = settings
+            .rate
+            .value
+            .map(|per_second| Arc::new(net::Rate::new(per_second)));
         self.hashing = crate::cache::Hashing::new(
             settings.hash_batches(),
             self.threads.limit(settings.hash_workers()),
@@ -921,10 +925,6 @@ pub(crate) fn run() -> ExitCode {
     if let Err(error) = read_mirrors(&mut context, &global.mirror, &var) {
         return finish::<()>(&context, name, Err(error), started);
     }
-    match net::Rate::read(&var) {
-        Ok(rate) => context.rate = rate,
-        Err(error) => return finish::<()>(&context, name, Err(error), started),
-    }
     execute(context, Some(command), started)
 }
 
@@ -1674,6 +1674,20 @@ mod tests {
             json,
             false,
         ))
+    }
+
+    /// a rate the settings give becomes the one byte budget the run's networks share.
+    #[test]
+    fn the_settings_rate_is_the_runs_cap() {
+        let mut context = quiet(false);
+        assert!(context.rate.is_none());
+        let mut settings = Settings::defaults(Machine::default());
+        settings.rate = crate::settings::Set {
+            value: Some(500 << 10),
+            origin: crate::settings::Origin::File,
+        };
+        context.take_settings(settings);
+        assert!(context.rate.is_some());
     }
 
     /// a stop asked after the command marked its work finished leaves it finished, and one asked

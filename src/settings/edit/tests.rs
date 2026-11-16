@@ -321,15 +321,15 @@ fn an_unknown_key_names_the_nearest_setting() {
         }
     }
     // a key only a variable sets is set, or unset, where that variable is
-    let message = "rate is set by FETCHLOOM_RATE, not the settings file";
+    let message = "split is set by FETCHLOOM_SPLIT, not the settings file";
     for (error, help) in [
         (
-            set(&var, "rate", &values(&["1M"]), None, FINE).unwrap_err(),
-            "set FETCHLOOM_RATE where fetchloom runs, as in your shell's profile",
+            set(&var, "split", &values(&["true"]), None, FINE).unwrap_err(),
+            "set FETCHLOOM_SPLIT where fetchloom runs, as in your shell's profile",
         ),
         (
-            unset(&var, "rate", FINE).unwrap_err(),
-            "unset FETCHLOOM_RATE where it is set, as in your shell's profile",
+            unset(&var, "split", FINE).unwrap_err(),
+            "unset FETCHLOOM_SPLIT where it is set, as in your shell's profile",
         ),
     ] {
         assert_eq!(error.message, message);

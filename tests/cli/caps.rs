@@ -537,8 +537,8 @@ fn bad_settings_in_the_environment_are_usage_errors() -> Result {
         (
             "FETCHLOOM_RATE",
             "fast",
-            "FETCHLOOM_RATE is \"fast\", which is not a positive byte rate",
-            "unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M",
+            "FETCHLOOM_RATE is \"fast\", which is not a size such as 512M or 4G",
+            "unset FETCHLOOM_RATE for no cap, or set it to bytes a second such as 500K or 2.5M",
         ),
         (
             "FETCHLOOM_THREADS",
@@ -782,7 +782,8 @@ fn a_system_without_certificates_still_downloads() -> Result {
     Ok(())
 }
 
-/// a rate cap shows in `settings`, in bytes a second for scripts and readable for a person.
+/// a rate cap shows in `settings`, in bytes a second for scripts and readable for a person. the
+/// settings file keeps one for every run, and the variable wins over it.
 #[test]
 fn settings_show_the_rate_cap() -> Result {
     let sandbox = Sandbox::new()?;
@@ -803,6 +804,16 @@ fn settings_show_the_rate_cap() -> Result {
         .find(|line| line.starts_with("rate "))
         .ok_or("no rate row")?;
     assert!(row.contains(" 2.0 MiB/s "), "{row}");
+    let path = settings_file(&sandbox)?;
+    let set = sandbox.run(&["settings", "set", "rate", "500K"])?;
+    assert_eq!(set.status.code(), Some(0), "{}", text(&set.stderr)?);
+    assert_eq!(std::fs::read_to_string(&path)?, "rate = \"500K\"\n");
+    let document = json(&sandbox.run(&["--json", "settings"])?)?;
+    assert_eq!(shown(&document, "rate")["value"], 512_000, "{document}");
+    assert_eq!(shown(&document, "rate")["origin"], "file", "{document}");
+    let document = json(&run(true)?)?;
+    assert_eq!(shown(&document, "rate")["value"], 2_097_152, "{document}");
+    assert_eq!(shown(&document, "rate")["origin"], "environment");
     Ok(())
 }
 

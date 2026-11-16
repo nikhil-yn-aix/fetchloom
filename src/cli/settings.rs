@@ -531,11 +531,12 @@ fn rows(context: &Context) -> Vec<Shown> {
         only_variable: false,
     });
     shown.push(optional_size("cache_budget", settings.cache_budget));
+    shown.push(rate(settings.rate));
     shown.extend(variables(context));
     shown
 }
 
-/// the settings only a variable sets: threads, rate, split and accessible.
+/// the settings only a variable sets: threads, split and accessible.
 fn variables(context: &Context) -> Vec<Shown> {
     let settings = &context.settings;
     let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
@@ -558,20 +559,6 @@ fn variables(context: &Context) -> Vec<Shown> {
         }],
         variable: "FETCHLOOM_THREADS",
         said: threads.to_string(),
-        only_variable: true,
-    });
-    shown.push(Shown {
-        name: "rate",
-        value: context
-            .rate
-            .as_ref()
-            .map_or(Value::Null, |rate| json!(rate.per_second())),
-        origin: vec![from_env("FETCHLOOM_RATE")],
-        variable: "FETCHLOOM_RATE",
-        said: context.rate.as_ref().map_or_else(
-            || "no limit".to_owned(),
-            |rate| format!("{}/s", units::size(rate.per_second())),
-        ),
         only_variable: true,
     });
     let (mode, said) = match context.split {
@@ -681,6 +668,21 @@ fn optional_size(name: &'static str, set: Set<Option<u64>>) -> Shown {
         origin: vec![set.origin],
         variable: crate::settings::variable(name),
         said: set.value.map_or_else(|| "no limit".to_owned(), units::size),
+        only_variable: false,
+    }
+}
+
+/// the rate cap in bytes a second, readable as a speed.
+fn rate(set: Set<Option<u64>>) -> Shown {
+    Shown {
+        name: "rate",
+        value: set.value.map_or(Value::Null, |rate| json!(rate)),
+        origin: vec![set.origin],
+        variable: crate::settings::variable("rate"),
+        said: set.value.map_or_else(
+            || "no limit".to_owned(),
+            |rate| format!("{}/s", units::size(rate)),
+        ),
         only_variable: false,
     }
 }
@@ -877,7 +879,7 @@ mod tests {
                 origin: vec![Origin::Environment],
                 variable: "FETCHLOOM_RATE",
                 said: "1.0 KiB/s".to_owned(),
-                only_variable: true,
+                only_variable: false,
             },
         ];
         assert_eq!(

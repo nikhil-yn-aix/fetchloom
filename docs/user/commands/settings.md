@@ -40,10 +40,10 @@ memory            4.0 GiB                  this machine   FETCHLOOM_MEMORY
 | `this machine` | sized from this machine: its processors or the memory it has available |
 | `default` | fetchloom's own default |
 | `resources = lean`, `resources = max` | the [resources level](../guides/speed-and-memory.md), for a setting no variable or settings file key sets. the `resources` row shows the level and where it came from |
-| `variable only` | `threads`, `rate`, `split` and `accessible`, which only their variables set, never the settings file, when no variable sets them. a variable that does shows as `environment` |
+| `variable only` | `threads`, `split` and `accessible`, which only their variables set, never the settings file, when no variable sets them. a variable that does shows as `environment` |
 | `command line` | `--mirror`, for the mirrors it names. a run asks them before those of the setting, so with a setting that names others the `mirrors` row shows both, as `command line, settings file` |
 
-the [environment](../reference/environment.md) page explains each setting. `threads`, `rate`, `split` and `accessible` come from their variables only, and the settings file refuses them by their variable's name: `threads is set by FETCHLOOM_THREADS, not the settings file`. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is none yet.
+the [environment](../reference/environment.md) page explains each setting. `threads`, `split` and `accessible` come from their variables only, and the settings file refuses them by their variable's name: `threads is set by FETCHLOOM_THREADS, not the settings file`. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is none yet.
 
 a variable one typo from one fetchloom reads changes nothing, so every command but `help` and `completions` warns about it, naming the variable it is near and never its value. other unknown names are left alone, since a wrapper or another version of fetchloom may read them. `FETCHLOOM_ACCESSIBLE` and `FETCHLOOM_NO_HINTS` change only what you see, so a value in either that is neither true nor false leaves it off with a warning instead of stopping the command.
 

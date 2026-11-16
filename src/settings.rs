@@ -36,7 +36,7 @@ const FILE: &str = "settings.toml";
 /// the most a settings file may hold: its few lines need far less, and a run reads it whole.
 const MOST_BYTES: u64 = 1 << 20;
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 21] = [
+const KEYS: [(&str, &str); 22] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("resources", "FETCHLOOM_RESOURCES"),
     ("jobs", "FETCHLOOM_JOBS"),
@@ -58,6 +58,7 @@ const KEYS: [(&str, &str); 21] = [
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
     ("push_to", "FETCHLOOM_PUSH_TO"),
     ("cache_budget", "FETCHLOOM_CACHE_BUDGET"),
+    ("rate", "FETCHLOOM_RATE"),
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
@@ -84,11 +85,10 @@ const CLEARED: [&str; 8] = [
     "push_to",
 ];
 /// the variables fetchloom reads besides those of the settings file's keys.
-const OTHERS: [&str; 12] = [
+const OTHERS: [&str; 11] = [
     "FETCHLOOM_SETTINGS",
     "FETCHLOOM_NO_CONFIG",
     "FETCHLOOM_OFFLINE",
-    "FETCHLOOM_RATE",
     "FETCHLOOM_THREADS",
     "FETCHLOOM_SPLIT",
     "FETCHLOOM_LOG",
@@ -490,6 +490,8 @@ pub(crate) struct Settings {
     /// the most bytes the cache's files may hold before a run that downloads more asks first, or
     /// none for no budget. nothing is ever deleted to keep within it.
     pub(crate) cache_budget: Set<Option<u64>>,
+    /// the most bytes a second every response of a run together may take, or none for no cap.
+    pub(crate) rate: Set<Option<u64>>,
 }
 
 impl Settings {
@@ -518,6 +520,7 @@ impl Settings {
             mirrors_only: Set::default(false),
             push_to: Set::default(None),
             cache_budget: Set::default(None),
+            rate: Set::default(None),
             memory,
             steady_memory: memory.value,
             threads: None,
@@ -610,6 +613,7 @@ impl Settings {
             mirrors_only: boolean(&given, "mirrors_only", false)?,
             push_to: push_target(&given, "push_to")?,
             cache_budget: optional_size(&given, "cache_budget", "for no budget")?,
+            rate: rate(&given)?,
             memory,
             steady_memory: steady.value,
             threads,
@@ -954,6 +958,24 @@ fn optional_size(given: &Given<'_>, key: &str, unset: &str) -> Result<Set<Option
             Error::new(Kind::Usage, message).help(format!(
                 "{} {unset}, or set it to a size such as 512M or 4G",
                 undo(origin, key)
+            ))
+        })
+}
+
+/// the bytes a second `rate` holds, such as `500K`, or none for no cap.
+fn rate(given: &Given<'_>) -> Result<Set<Option<u64>>, Error> {
+    let Some((text, origin, named)) = given.get("rate") else {
+        return Ok(Set::default(None));
+    };
+    sized(&named, &text)
+        .map(|value| Set {
+            value: Some(value),
+            origin,
+        })
+        .map_err(|message| {
+            Error::new(Kind::Usage, message).help(format!(
+                "{} for no cap, or set it to bytes a second such as 500K or 2.5M",
+                undo(origin, "rate")
             ))
         })
 }
