@@ -904,6 +904,44 @@ fn a_last_byte_of_no_stated_length_finishes_a_part_of_the_same_version() {
     }
 }
 
+/// a file its server named, whose every byte came before the run died, keeps that name when a
+/// later run finishes it with no byte more: the bytes' record keeps it, as no answer to a request
+/// past them, a 416, names the file.
+#[test]
+fn a_file_finished_from_bytes_kept_keeps_the_name_its_server_gave() {
+    let body = b"every byte of a file sent without a length".to_vec();
+    let mut first = b"HTTP/1.1 200 OK\r\nConnection: close\r\nETag: \"v1\"\r\nContent-Disposition: attachment; filename=\"named.bin\"\r\n\r\n".to_vec();
+    first.extend_from_slice(&body);
+    let refused = format!("bytes */{}", body.len());
+    let (url, asked) = serve(vec![
+        first,
+        reply(
+            "416 Range Not Satisfiable",
+            &[("Content-Range", &refused), ("ETag", "\"v1\"")],
+            b"",
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = Fetch {
+        named: true,
+        ..Fetch::new(url.clone())
+    };
+    // the run dies once every byte is in, before the file takes its name
+    let dies = |event: Event| match event {
+        Event::Arrived => Err(Error::new(Kind::Interrupted, "killed")),
+        _ => Ok(()),
+    };
+    let killed = block_on(net(&url).download(&fetch, &cache, &dies)).unwrap_err();
+    assert_eq!(killed.kind, Kind::Interrupted);
+    let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(&body));
+    assert_eq!(
+        (fetched.name.as_deref(), fetched.moved, lines(&asked).len()),
+        (Some("named.bin"), 0, 2)
+    );
+}
+
 /// a server that says nothing lies past the bytes kept, and that the file is that long, says
 /// they are all of it, even where no earlier answer stated the length.
 #[test]

@@ -815,8 +815,11 @@ impl Net {
         };
         loop {
             let answer = if let Some(kept) = whole.take() {
-                self.finish_kept(fetch, partial, kept, Told::default(), &watched)
-                    .await
+                let told = Told {
+                    name: partial.named(),
+                    page: false,
+                };
+                self.finish_kept(fetch, partial, kept, told, &watched).await
             } else {
                 self.keep_permit(&fetch.from, &mut state.permits).await?;
                 self.attempt(
@@ -1040,12 +1043,13 @@ impl Net {
         {
             // a refusal's headers tell of the refusal, not of the file
             let describes = status != StatusCode::RANGE_NOT_SATISFIABLE;
+            let named = if describes {
+                describe_response(&response, &fetch.url, on)?
+            } else {
+                None
+            };
             let told = Told {
-                name: if describes {
-                    describe_response(&response, &fetch.url, on)?
-                } else {
-                    None
-                },
+                name: named.or_else(|| partial.named()),
                 page: describes && headers::is_html(&head),
             };
             refuse_other_length(fetch, Some(size))?;
@@ -1119,10 +1123,13 @@ impl Net {
         if offset == 0 {
             self.started(on, total, 0, resumable)?;
         }
-        let Some(writer) = open(partial, body).await? else {
+        let Some(mut writer) = open(partial, body).await? else {
             on(Event::Spoiled).map_err(Failure::Final)?;
             return Ok(Answer::StartOver);
         };
+        if let Some(name) = &told.name {
+            writer.name(name);
+        }
         let kept = writer.kept();
         if offset > 0 {
             self.started(on, total, offset + kept, resumable)?;

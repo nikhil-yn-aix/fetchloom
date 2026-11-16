@@ -91,6 +91,10 @@ struct Record {
     validators: Validators,
     /// what the streams of a split download finished past the prefix.
     ranges: Vec<Range>,
+    /// the file name the server gave the bytes, which an answer that brings none of them, as a
+    /// 416 past them, does not give again. records from before it was kept have none.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// bytes written past the prefix, from `start` up to `end`, and their SHA-256, which a resume
@@ -297,6 +301,11 @@ impl Partial {
         self.kept()?.length
     }
 
+    /// the file name the server gave the bytes an earlier run kept, when it gave one.
+    pub(crate) fn named(&self) -> Option<String> {
+        self.kept()?.name
+    }
+
     /// the bytes an earlier run kept past the prefix [`Partial::resumable`] counts, in the ranges
     /// a split download finished there that the part still reaches. a resume checks each one
     /// again before it keeps it.
@@ -488,6 +497,7 @@ impl Partial {
                 length,
                 validators,
                 ranges: Vec::new(),
+                name: recorded.as_ref().and_then(|record| record.name.clone()),
             },
         };
         if keep && let Some(record) = recorded {
@@ -665,6 +675,12 @@ impl PartialWriter {
             vec![0; usize::try_from(self.prefix).map_or(most, |prefix| prefix.min(most))];
         read_exact_at(&self.file, 0, &mut head)?;
         Ok(head)
+    }
+
+    /// records `name`, the file name the server gave the bytes, for a later run that finishes
+    /// them with no answer naming the file.
+    pub(crate) fn name(&mut self, name: &str) {
+        self.record.name = Some(name.to_owned());
     }
 
     /// how many bytes past the prefix are written.
