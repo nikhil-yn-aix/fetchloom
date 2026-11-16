@@ -466,6 +466,33 @@ fn a_link_with_a_query_or_fragment_is_no_entry() {
     assert_eq!(entries(html, "/p/"), Some(vec!["a%3Fb.txt".to_owned()]));
 }
 
+/// an index writes `&`, `<`, `>` and quotes in a link as html does, so `a&amp;b.csv` is the file
+/// `a&b.csv`, by its name and its link alike, and `&#63;` is a `?` like any other.
+#[test]
+fn a_link_is_read_with_its_character_references_undone() {
+    let folder = "https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM2666nnn/GSM2666939/";
+    let recorded = Recorded::default()
+        .on(folder, 200, index(folder, &["suppl/"]))
+        .on(
+            &format!("{folder}suppl/"),
+            200,
+            index(
+                &format!("{folder}suppl/"),
+                &["a&amp;b.csv", "&lt;c&gt;&#39;d&#x27;.csv", "e&#63;f.csv"],
+            ),
+        );
+    let listing = block_on(accession("GSM2666939").resolve(&recorded)).unwrap();
+    assert_eq!(paths(&listing), ["suppl/<c>'d'.csv", "suppl/a&b.csv"]);
+    assert_eq!(
+        listing.files[0].url.as_str(),
+        format!("{folder}suppl/%3Cc%3E'd'.csv")
+    );
+    assert_eq!(
+        listing.files[1].url.as_str(),
+        format!("{folder}suppl/a&b.csv")
+    );
+}
+
 #[test]
 fn more_folders_than_a_listing_reads_are_refused() {
     let names: Vec<String> = (0..MOST_FOLDERS).map(|n| format!("f{n}/")).collect();

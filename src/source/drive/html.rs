@@ -1,5 +1,5 @@
 //! the little HTML drive's pages need read: the text between two markers, an attribute of a tag,
-//! and text with its tags and character references undone.
+//! and text with its tags and character references undone, which GEO's folder indexes need too.
 
 // unicode scalars need at most six hex digits or seven decimal digits
 const LONGEST_REFERENCE: usize = 10;
@@ -32,7 +32,7 @@ pub(super) fn text(fragment: &str) -> String {
 
 /// text with its character references, such as `&amp;` and `&#39;`, replaced by what they stand
 /// for.
-pub(super) fn unescape(text: &str) -> String {
+pub(in crate::source) fn unescape(text: &str) -> String {
     let mut plain = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find('&') {

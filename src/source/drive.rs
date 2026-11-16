@@ -3,7 +3,7 @@
 //! goes through drive's api, once refused without a token, when `drive_folders` names it.
 
 mod folder;
-mod html;
+pub(super) mod html;
 mod link;
 mod page;
 mod private;

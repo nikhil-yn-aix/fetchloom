@@ -12,6 +12,7 @@ use std::time::Duration;
 use percent_encoding::percent_decode_str;
 use url::Url;
 
+use super::drive::html::unescape;
 use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Extra, Response};
@@ -427,9 +428,10 @@ fn remote(path: String, url: Url) -> Remote {
 }
 
 /// the links of an index of GEO's file server that name its entries, files and folders ending in
-/// `/`: those inside its `<pre>` block, past the link to the folder above, `parent`. a link with
-/// a raw `?` or `#` names none; any other is an entry for the listing's checks to judge, so a
-/// name no file may have is refused rather than left out. none for a page that is no such index.
+/// `/`: those inside its `<pre>` block, past the link to the folder above, `parent`, read as html
+/// writes them, so `a&amp;b.csv` links to `a&b.csv`. a link with a raw `?` or `#` names none; any
+/// other is an entry for the listing's checks to judge, so a name no file may have is refused
+/// rather than left out. none for a page that is no such index.
 fn entries(html: &str, parent: &str) -> Option<Vec<String>> {
     let (_, block) = html.split_once("<pre>")?;
     let (block, _) = block.split_once("</pre>")?;
@@ -438,17 +440,16 @@ fn entries(html: &str, parent: &str) -> Option<Vec<String>> {
     while let Some(at) = rest.find("<a href=\"") {
         rest = &rest[at + "<a href=\"".len()..];
         let end = rest.find('"')?;
-        links.push(&rest[..end]);
+        links.push(unescape(&rest[..end]));
         rest = &rest[end..];
     }
-    if !links.contains(&parent) {
+    if !links.iter().any(|link| link == parent) {
         return None;
     }
     Some(
         links
             .into_iter()
-            .filter(|link| *link != parent && !link.contains(['?', '#']))
-            .map(str::to_owned)
+            .filter(|link| link != parent && !link.contains(['?', '#']))
             .collect(),
     )
 }

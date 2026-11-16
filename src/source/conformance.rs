@@ -661,15 +661,7 @@ fn subjects() -> Vec<Subject> {
 /// findings in sources other builders are changing, handed to them: the property, the row, a
 /// part of the change and the start of the problem. a fix deletes its line, which the property
 /// then holds; a line no finding matches fails, so it cannot outlive its fix.
-const HANDED_OFF: [(&str, &str, &str, &str); 1] = [
-    // geo reads an index's links without its html entities, so `a&amp;b` names another file
-    (
-        "hostile names",
-        "geo:GSE1000",
-        " as hostile<x>.csv in its links",
-        "listed",
-    ),
-];
+const HANDED_OFF: [(&str, &str, &str, &str); 0] = [];
 
 /// what a property found wrong, one line each, told together so one run shows them all.
 struct Found {

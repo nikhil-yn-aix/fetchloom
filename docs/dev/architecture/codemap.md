@@ -147,7 +147,7 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/drive/link.rs` | an open link, found to be a file or a folder by drive's redirect | `Item::opened` |  |
 | `src/source/drive/folder.rs` | shared folders, read from the page drive embeds them in, one request per subfolder | `list` |  |
 | `src/source/drive/page.rs` | the pages drive sends instead of a file: the virus-scan confirmation and its refusals | `divert` |  |
-| `src/source/drive/html.rs` | the little HTML reading drive's pages need | `between`, `text` | `attribute`, `unescape` |
+| `src/source/drive/html.rs` | the little HTML reading drive's pages need, and the character references GEO's folder indexes write | `between`, `text` | `attribute`, `unescape` |
 | `src/source/drive/private.rs` | items shared with an account, read through drive's api once a page refused them | `refused`, `list` | `opened`, `search`, `about`, `file` |
 | `src/source/dropbox.rs` | dropbox shared links, fetched with `dl=1`; a shared folder arrives as one zip | `Link` | `Link::listing`, `fetch_plan` |
 | `src/source/bucket.rs` | S3, S3-compatible, google cloud storage and azure buckets and prefixes, unsigned until a listed bucket refuses; refusal messages and version links | `Bucket`, `Prefix` | `Store`, `Bucket::resolve`, `with_version`, `unversioned` |
