@@ -4669,3 +4669,51 @@ fn list_of_a_waiting_dataset_says_it_waits() -> Result {
     );
     Ok(())
 }
+
+/// `add <folder>` of the files of big, an import that waits for its list, supplies big as `add
+/// <folder> --as big` does: its own files pin it again to the same list, which comes back, and
+/// other files are refused with the list it waits for, never told that big pins other files with
+/// help to remove it.
+#[test]
+fn adding_the_folder_of_a_waiting_import_supplies_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (clone, part) = clone_without_big(&sandbox)?;
+    let lock = fs::read_to_string(clone.join("data.lock"))?;
+    let other = sandbox.folder("elsewhere")?.join("big");
+    fs::create_dir(&other)?;
+    fs::write(other.join("a.csv"), "other bytes")?;
+    let own = sandbox.folder("big")?;
+    for (folder, code) in [(&other, 50), (&own, 0)] {
+        let folder = folder.to_string_lossy();
+        for args in [
+            &["--json", "add", &*folder][..],
+            &["--json", "add", &*folder, "--as", "big"],
+        ] {
+            delete(&clone.join(&part)).ok();
+            let added = listing_in(&sandbox, &clone, args)?;
+            let document = json(&added)?;
+            assert_eq!(added.status.code(), Some(code), "{args:?}: {document}");
+            // a pin made again takes the time it was made
+            let pins = |lock: &str| -> String {
+                lock.lines()
+                    .filter(|line| !line.starts_with("locked = "))
+                    .collect()
+            };
+            let written = fs::read_to_string(clone.join("data.lock"))?;
+            assert_eq!(pins(&written), pins(&lock), "{args:?}");
+            if code == 0 {
+                assert!(clone.join(&part).is_file(), "{args:?}: {document}");
+                continue;
+            }
+            assert_eq!(written, lock, "{args:?}");
+            let error = &document["errors"][0];
+            assert_eq!(error["kind"], "project.invalid", "{args:?}: {document}");
+            assert_eq!(
+                error["message"],
+                format!("data.lock names {part}, the file list of big, which is not there"),
+                "{args:?}"
+            );
+        }
+    }
+    Ok(())
+}

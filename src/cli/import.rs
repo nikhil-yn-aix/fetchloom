@@ -62,7 +62,9 @@ pub(super) async fn import_held(
         cache.root(),
         here,
     )?;
-    let (supplied, source, walked) = walk_import(context, manifest, args, &start, shown)?;
+    let waiting = waiting_import(args, &start, old.as_ref());
+    let (supplied, source, walked) =
+        walk_import(context, manifest, args, (&start, shown), waiting.as_deref())?;
     let pinned = supplied
         .as_ref()
         .and_then(|name| current(old.as_ref(), name, &manifest.datasets[name.as_str()]));
@@ -562,18 +564,31 @@ fn preview_import(
     }
 }
 
-/// the import `--as` names that `start`'s files supply, if any, their source and the walk's files.
-/// before any copy it says what the walk left out, and may hint keeping numbered tar shards packed.
+/// the name the files at `start` take without `--as`, when `old` has an import of it that waits
+/// for its list: those files supply it as `--as` does, since only its list can tell other files
+/// from its own, and writing other files' list in its place is refused.
+fn waiting_import(args: &Add, start: &Path, old: Option<&Lock>) -> Option<String> {
+    let own = args
+        .name
+        .is_none()
+        .then(|| dataset_name(start, start.is_file()))??;
+    old?.waits(&own).map(|_| own)
+}
+
+/// the import `--as` names, or else `waiting`, that `start`'s files supply, if any, their source
+/// and the walk's files. before any copy it says what the walk left out, and may hint keeping
+/// numbered tar shards packed.
 fn walk_import(
     context: &Context,
     manifest: &Manifest,
     args: &Add,
-    start: &Path,
-    shown: &str,
+    (start, shown): (&Path, &str),
+    waiting: Option<&str>,
 ) -> Result<(Option<String>, Source, Walked), Error> {
     let supplied = args
         .name
         .as_deref()
+        .or(waiting)
         .filter(|name| {
             manifest
                 .datasets
