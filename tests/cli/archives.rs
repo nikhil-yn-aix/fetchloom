@@ -864,9 +864,9 @@ fn next_step(path: &str, stop: &str) -> String {
 fn next_step_into(path: &str, folder: &str, stop: &str) -> String {
     if cfg!(windows) {
         format!(
-            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -o{}`. {stop} stops this warning"#,
+            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} {}`. {stop} stops this warning"#,
             path.replace('/', "\\"),
-            folder.replace('/', "\\")
+            seven_zip_out(folder)
         )
     } else if cfg!(target_os = "macos") {
         format!(
@@ -876,6 +876,17 @@ fn next_step_into(path: &str, folder: &str, stop: &str) -> String {
         format!(
             "unpack it with unrar from your package manager: `unrar x {path} {folder}/`. {stop} stops this warning"
         )
+    }
+}
+
+/// 7-Zip's `-o` word for `folder` as a windows help writes it: quoted when it holds a dot, since
+/// powershell splits a word starting with one `-` at its first dot.
+fn seven_zip_out(folder: &str) -> String {
+    let word = format!("-o{}", folder.replace('/', "\\"));
+    if word.contains('.') {
+        format!("\"{word}\"")
+    } else {
+        word
     }
 }
 
@@ -1577,9 +1588,9 @@ mod split {
     fn join_step(path: &str, name: &str) -> String {
         if cfg!(windows) {
             format!(
-                r#"unpack it with 7-Zip, which reads its parts: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -o{}-unpacked`. extract = false stops this warning"#,
+                r#"unpack it with 7-Zip, which reads its parts: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} {}`. extract = false stops this warning"#,
                 path.replace('/', "\\"),
-                name.replace('/', "\\")
+                super::seven_zip_out(&format!("{name}-unpacked"))
             )
         } else {
             let zip = if cfg!(target_os = "macos") {
