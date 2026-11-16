@@ -34,6 +34,7 @@ a dataset's page works as well as its id, so you can paste the link from your br
 | [dropbox](dropbox.md) | shared files and folders | a shared link | nothing |
 | [cloud buckets](buckets.md) | S3, services that speak its API, and google cloud storage | `s3://<bucket>/<prefix>/`, `gs://<bucket>/<prefix>/` | private buckets |
 | [azure blob storage](azure.md) | azure containers | `azure:<account>/<container>/<prefix>/` | private containers |
+| [a list of files](../commands/add.md#a-list-of-files) | the files a `SHA256SUMS`, an `MD5SUMS`, a pooch registry or a list of links names, as one dataset | `https://…/SHA256SUMS`, `list:https://…/registry.txt`, `list:links.txt` for a list in the project | what each file's host asks |
 
 [signing in](../guides/sign-in.md) says how to give fetchloom a key. accepting a reference does not promise access or a download: hosts move and remove files, and [locked URL recovery](../concepts/offline-and-recovery.md#recovery) can find a file's new link while keeping its pinned hashes.
 

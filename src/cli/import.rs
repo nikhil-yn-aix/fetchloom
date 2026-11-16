@@ -349,7 +349,7 @@ async fn already_imported(
 ) -> Result<Report, Error> {
     let manifest = &adding.manifest;
     let names = [name.to_owned()];
-    let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
+    let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new())).await?;
     work.context
         .output
         .step("Imported", &format!("{name} · {told}"));
@@ -404,7 +404,6 @@ async fn import_new(
         Some(&updated),
         old,
         (&names, vec![Given::Locked(pinned)]),
-        &[],
     )
     .await?;
     // said once the files are in place, so an add that fails never claims them
@@ -485,7 +484,7 @@ async fn supply(
     let pins = !given.is_empty();
     let output = &work.context.output;
     let names = [name.to_owned()];
-    let outcome = sync_add(work, adding, manifest, None, old, (&names, given), &[]).await?;
+    let outcome = sync_add(work, adding, manifest, None, old, (&names, given)).await?;
     // said once the files are in place, so a sync that fails never claims them
     output.step("Supplied", &format!("{name} · {told}"));
     ignore_data(work, manifest, false)?;

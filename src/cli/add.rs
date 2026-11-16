@@ -1,7 +1,7 @@
 //! `fetchloom add`: a dataset into data.toml, pinned in data.lock and placed. every byte is cached
 //! before either file is written, and a failure after that puts back what the add wrote.
 
-mod list;
+mod several;
 mod stated;
 
 use std::collections::{BTreeMap, HashMap};
@@ -13,7 +13,7 @@ use tracing::Instrument as _;
 
 use super::args::Add;
 use super::import::import_held;
-use super::links::{self, Line};
+use super::links;
 use super::project::{
     Outcome, Report, committed, dry_run_done, hold, ignore_data, preview_all, preview_ignore,
     register,
@@ -34,7 +34,7 @@ use crate::project::state::Synced;
 use crate::project::{Held, Project};
 use crate::source::{Listing, Parsed, Reference, Remote, local};
 use crate::units;
-use list::add_list_held;
+use several::add_several_held;
 
 pub(super) struct AddProject {
     pub(super) project: Project,
@@ -198,61 +198,32 @@ impl Drop for BeforeAdd<'_> {
     }
 }
 
-/// what an add adds: what one link or search words name, a dataset for each link of a list or of
-/// several typed together, or the files at a path on this machine, as typed.
+/// what an add adds: what one link or search words name, the files a list in the project names,
+/// a dataset for each of several links typed together, or the files at a path on this machine.
 enum Request {
     Link(String),
-    List(List),
+    /// the list `-i` reads, by its path as typed, until the project it must be in is known.
+    ListFile(PathBuf),
+    Several(Several),
     Path(String),
 }
 
-/// a list of links `add -i` read, or several typed on the command line, each line checked.
-struct List {
-    /// the name messages give the list, such as `links.txt`, or none for links typed on the
-    /// command line, which messages name by their links.
-    name: Option<String>,
-    lines: Vec<(Line, Parsed)>,
-}
-
-impl List {
-    /// how messages name `line`, as `line 2 of links.txt`; none for a typed link.
-    fn at(&self, line: &Line) -> Option<String> {
-        self.name.as_deref().map(|name| line.named(name))
-    }
-
-    /// `line` as a message's subject: where it is in its list, or its link, masked.
-    fn subject(&self, line: &Line) -> String {
-        self.at(line)
-            .unwrap_or_else(|| crate::shown::mask_query(&line.link).into_owned())
-    }
-
-    /// lets `net` reach the origin of each link typed on the command line, as for one typed link.
-    /// a list is a file anyone could have written, as data.toml is, so no host it names is trusted.
-    fn trust_typed(&self, net: &Net) {
-        if self.name.is_none() {
-            for (_, parsed) in &self.lines {
-                net.trust(parsed.reference.written_origin());
-            }
-        }
-    }
-
-    /// what a dry run says when data.toml has every link already.
-    fn nothing_new(&self) -> String {
-        match &self.name {
-            Some(name) => format!("each link of {name} is in data.toml already"),
-            None => "each link is in data.toml already".to_owned(),
-        }
-    }
+/// several links typed for one add, each checked, with what it reads as.
+struct Several {
+    links: Vec<(String, Parsed)>,
 }
 
 pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
     let dry_run = args.dry.dry_run;
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    let mut request = request(context, &mut args).await?;
+    let mut request = request(&mut args)?;
     let found = Project::find(&here);
     let starting = found.is_none();
     let project = found.unwrap_or_else(|| Project { root: here.clone() });
+    if let Request::ListFile(path) = &request {
+        request = Request::Link(list_in_project(path, &project.root, &here)?);
+    }
     if project.root != here {
         context
             .output
@@ -298,12 +269,13 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         (Ok(()), Request::Link(link)) => {
             add_held(context, &mut adding, args, &link, &here, starting).await
         }
-        (Ok(()), Request::List(list)) => {
-            add_list_held(context, &mut adding, &args, list, &here, starting).await
+        (Ok(()), Request::Several(several)) => {
+            add_several_held(context, &mut adding, &args, several, &here, starting).await
         }
         (Ok(()), Request::Path(typed)) => {
             import_held(context, &mut adding, &args, &typed, &here, starting).await
         }
+        (Ok(()), Request::ListFile(_)) => unreachable!("a list file is named by its link first"),
         (Err(error), _) => Err(error),
     };
     added.map_err(|error| {
@@ -317,14 +289,9 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
 
 /// what `args` ask to add: a list of links read or typed, checked whole before any request, a path,
 /// or one link or search words, refused when they name something on this machine.
-async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
+fn request(args: &mut Add) -> Result<Request, Error> {
     if let Some(path) = args.input_file.take() {
-        let (name, text) = links::read(&path, &context.output, &context.stop).await?;
-        let lines = links::checked(&name, links::parse(&name, &text)?, true)?;
-        return Ok(Request::List(List {
-            name: Some(name),
-            lines,
-        }));
+        return Ok(Request::ListFile(path));
     }
     let mut typed = std::mem::take(&mut args.links);
     if let Some(asked) = args.name.as_deref() {
@@ -337,7 +304,7 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
         if args.no_sync {
             return Err(stated::refused_several());
         }
-        return several(args, typed).map(Request::List);
+        return several(args, typed).map(Request::Several);
     }
     let Some(link) = typed.pop() else {
         return Err(
@@ -360,6 +327,49 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     }
     super::search::refuse_local(&link, true)?;
     Ok(Request::Link(link))
+}
+
+/// the reference data.toml gives the list at `path`, typed in `here`: `list:` and its path in the
+/// project at `root`, where whoever clones the project finds it again. a list from stdin or from
+/// outside the project could not be found again, so it is refused.
+fn list_in_project(path: &Path, root: &Path, here: &Path) -> Result<String, Error> {
+    let typed = path.display().to_string();
+    let elsewhere = |what: String| {
+        Error::new(Kind::Usage, what).help(format!(
+            "put the list in the project folder, {}, then run `{}`, so data.toml can name it for whoever clones the project",
+            units::path(root),
+            super::project::command("add -i <file> --as <name>")
+        ))
+    };
+    if path == Path::new("-") {
+        return Err(elsewhere(
+            "add -i reads a list from a file in the project, and stdin is none".to_owned(),
+        ));
+    }
+    let found = std::fs::canonicalize(here.join(path))
+        .map_err(|err| Error::io(format_args!("could not read {typed}"), &err))?;
+    if !found.is_file() {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("{typed} is not a file, and -i reads a list of files from one"),
+        ));
+    }
+    let inside = std::fs::canonicalize(root)
+        .ok()
+        .and_then(|root| found.strip_prefix(root).ok().map(Path::to_path_buf));
+    let Some(inside) = inside else {
+        return Err(elsewhere(format!("{typed} is outside the project folder")));
+    };
+    let parts: Option<Vec<&str>> = inside
+        .components()
+        .map(|part| match part {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+    let reference = format!("list:{}", parts.unwrap_or_default().join("/"));
+    Reference::parse(&reference)?;
+    Ok(reference)
 }
 
 /// refuses an `--as` name no dataset can have before anything is searched or fetched. a link
@@ -401,9 +411,9 @@ pub(super) fn one_search(typed: &[String], pins: bool) -> Result<Option<String>,
     Ok(Some(typed.join(" ")))
 }
 
-/// the links typed for one add, `links`, which add a dataset each, as the lines of a list do:
-/// `--as` and the patterns that choose files are each for one dataset, so they are refused.
-fn several(args: &Add, links: Vec<String>) -> Result<List, Error> {
+/// the links typed for one add, `links`, which add a dataset each: `--as` and the patterns that
+/// choose files are each for one dataset, so they are refused.
+fn several(args: &Add, links: Vec<String>) -> Result<Several, Error> {
     let count = units::grouped(links.len() as u64);
     let what = units::count(links.len() as u64, "link", "links");
     if args.name.is_some() {
@@ -428,9 +438,8 @@ fn several(args: &Add, links: Vec<String>) -> Result<List, Error> {
             super::project::command("add <link> --select \"*.csv\"")
         )));
     }
-    Ok(List {
-        name: None,
-        lines: links::typed(links)?,
+    Ok(Several {
+        links: links::typed(links)?,
     })
 }
 
@@ -546,14 +555,14 @@ async fn resolve_typed(
     net: &Net,
     args: &Add,
     (link, parsed): (&str, &Parsed),
-    manifest: &Manifest,
+    (manifest, root): (&Manifest, &Path),
 ) -> Result<Addition, Error> {
     let reference = stored_reference(link, parsed);
     let known = manifest
         .datasets
         .values()
         .any(|entry| entry.source.reference == reference);
-    match resolve_add(context, net, args, link, parsed).await {
+    match resolve_add(context, net, args, (link, parsed), root).await {
         Ok(addition) => Ok(addition),
         Err(error) if known => Err(error),
         Err(error) => Err(near_miss(context, net, link, parsed, typed(error, false)).await),
@@ -649,7 +658,14 @@ async fn add_held(
     } else {
         open_cache()?
     };
-    let mut addition = resolve_typed(context, &net, &args, (link, &parsed), manifest).await?;
+    let mut addition = resolve_typed(
+        context,
+        &net,
+        &args,
+        (link, &parsed),
+        (manifest, &project.root),
+    )
+    .await?;
     // a name --as gives that data.toml has got this far only for the same link
     let present = match &args.name {
         Some(asked) => manifest.datasets.contains_key(asked).then(|| asked.clone()),
@@ -709,7 +725,6 @@ async fn add_held(
     }
     let names = [name];
     let typed_line = FromLine {
-        at: None,
         shown: parsed.reference.shown(),
         dataset: Some(names[0].clone()),
     };
@@ -724,11 +739,13 @@ async fn add_held(
             &names,
             vec![Given::Listing(names[0].clone(), addition.listing)],
         ),
-        &[],
     )
     .await
     .map_err(|error| page_by_flag(some_missing(error, &names[0], kept), &names[0]))
-    .map_err(|error| on_lines(error, None, std::slice::from_ref(&typed_line)))?;
+    .map_err(|error| match &parsed.reference {
+        Reference::List(list) => moved_in(error, list),
+        _ => on_lines(error, std::slice::from_ref(&typed_line)),
+    })?;
     let [name] = names;
     let private = private_origins(&work, [&parsed.reference]);
     let has_files = outcome.placed.planned.contains(&name);
@@ -769,45 +786,25 @@ fn new_name(
     }
 }
 
-/// where a line of a list or a typed link came from, as messages name it, and the dataset it
-/// became, so a failure met later says which line or link to fix.
+/// a typed link as messages name it, and the dataset it became, so a failure met later says which
+/// link to fix.
 struct FromLine {
-    at: Option<String>,
     shown: String,
     dataset: Option<String>,
 }
 
 impl FromLine {
-    /// each line of `list`, before any became a dataset.
-    fn each(list: &List) -> Vec<FromLine> {
-        list.lines
+    /// each link of `several`, before any became a dataset.
+    fn each(several: &Several) -> Vec<FromLine> {
+        several
+            .links
             .iter()
-            .map(|(line, parsed)| FromLine {
-                at: list.at(line),
+            .map(|(_, parsed)| FromLine {
                 shown: parsed.reference.shown(),
                 dataset: None,
             })
             .collect()
     }
-}
-
-/// `error`, about the link on `at`, saying so. a link with nothing at it is fixed on that line, as
-/// data.toml has no entry for it yet, or for a typed link on the command line, as [`typed`] says.
-fn on_line(error: Error, at: Option<&str>, several: bool) -> Error {
-    let Some(at) = at else {
-        return typed(error, several);
-    };
-    let moved = error.help.as_deref() == Some(crate::net::MOVED_HELP);
-    let error = links::on_line(error, at);
-    if moved {
-        error.help(moved_on(at))
-    } else {
-        error
-    }
-}
-
-fn moved_on(at: &str) -> String {
-    format!("check the link on {at} in a browser. if it moved, put the new link there")
 }
 
 /// how many files of `listing` the new dataset `name` keeps, after its select and exclude.
@@ -861,11 +858,30 @@ fn some_missing(mut error: Error, name: &str, kept: usize) -> Error {
 /// the most `--exclude` flags a help spells out.
 const MOST_FLAGS: usize = 5;
 
-/// the help for links of the list `list_name` that moved, each fixed on its own line of it.
-fn moved_in(list_name: &str) -> String {
-    format!(
-        "check each link in a browser. if it moved, put the new link on its line of {list_name}"
-    )
+/// `error` from downloading the files `list` names, with help that fixes a file with nothing at its
+/// link where the link is: on its line of a list in the project, or with the owner of one at a link.
+fn moved_in(mut error: Error, list: &crate::source::list::List) -> Error {
+    let help = match list.in_project() {
+        Some(path) => format!(
+            "check each link in a browser. if it moved, put the new link on its line of {path}"
+        ),
+        None => "check each link in a browser. the list may name files its folder no longer holds, which only its owner can fix".to_owned(),
+    };
+    let moved = format!("help: {}", crate::net::MOVED_HELP);
+    for detail in &mut error.details {
+        if *detail == moved {
+            *detail = format!("help: {help}");
+        }
+    }
+    for failure in &mut error.failures {
+        if failure.help.as_deref() == Some(crate::net::MOVED_HELP) {
+            failure.help = Some(help.clone());
+        }
+    }
+    if error.help.as_deref() == Some(crate::net::MOVED_HELP) {
+        error = error.help(help);
+    }
+    error
 }
 
 /// `error`, about a link or id typed for a new dataset, `several` with others, with help in the
@@ -936,9 +952,9 @@ fn typed_help(help: &str, several: bool) -> Option<String> {
     })
 }
 
-/// `error` from downloading what the lines of `list_name` name, each failure with the line whose
-/// link or dataset it is about. a typed link's gets [`typed`]'s help; one of no line stays as is.
-fn on_lines(mut error: Error, list_name: Option<&str>, lines: &[FromLine]) -> Error {
+/// `error` from downloading what the typed links of `lines` name, each failure of a link's dataset
+/// with [`typed`]'s help; one of no typed link stays as is.
+fn on_lines(mut error: Error, lines: &[FromLine]) -> Error {
     let from = |file: &str, message: &str| {
         lines.iter().find(|line| {
             message.contains(&line.shown)
@@ -948,27 +964,16 @@ fn on_lines(mut error: Error, list_name: Option<&str>, lines: &[FromLine]) -> Er
                 })
         })
     };
-    let mut ats: Vec<&str> = Vec::new();
     for failure in &mut error.failures {
-        let Some(line) = from(&failure.file, &failure.message) else {
+        if from(&failure.file, &failure.message).is_none() {
             continue;
-        };
-        let Some(at) = line.at.as_deref() else {
-            if let Some(help) = failure
-                .help
-                .as_deref()
-                .and_then(|help| typed_help(help, lines.len() > 1))
-            {
-                failure.help = Some(help);
-            }
-            continue;
-        };
-        failure.message = format!("{at}: {}", failure.message);
-        if failure.help.as_deref() == Some(crate::net::MOVED_HELP) {
-            failure.help = Some(moved_on(at));
         }
-        if !ats.contains(&at) {
-            ats.push(at);
+        if let Some(help) = failure
+            .help
+            .as_deref()
+            .and_then(|help| typed_help(help, lines.len() > 1))
+        {
+            failure.help = Some(help);
         }
     }
     match &*error.failures {
@@ -978,81 +983,10 @@ fn on_lines(mut error: Error, list_name: Option<&str>, lines: &[FromLine]) -> Er
             error.help = failure.help.as_deref().map(Into::into);
             error
         }
-        [] => match from("", &error.message) {
-            Some(line) => on_line(error, line.at.as_deref(), lines.len() > 1),
-            None => error,
-        },
-        _ => {
-            // failures of typed links and of datasets data.toml has may share a help, which then
-            // stays as it is
-            let Some(list_name) = list_name else {
-                return error;
-            };
-            let moved = format!("help: {}", crate::net::MOVED_HELP);
-            for detail in &mut error.details {
-                if *detail == moved {
-                    *detail = format!("help: {}", moved_in(list_name));
-                }
-            }
-            if error.help.as_deref() == Some(crate::net::MOVED_HELP) {
-                error.help = Some(moved_in(list_name).into());
-            }
-            match ats.as_slice() {
-                [] => error,
-                [only] => error.detail(format!("the link on {only} failed")),
-                many => error.detail(format!(
-                    "the links on {} failed",
-                    units::listed(many, "and")
-                )),
-            }
-        }
-    }
-}
-
-/// a SHA-256 a line of a list gave for its dataset's one file, checked once relocking knows the
-/// bytes and before anything is written.
-pub(super) struct Promised {
-    dataset: String,
-    sha256: Sha256,
-    /// the line that gave it, as `line 2 of links.txt`.
-    line: String,
-}
-
-impl Promised {
-    /// refuses `lock` when it pins other bytes for the dataset than the hash names.
-    fn kept(&self, lock: &Lock) -> Result<(), Error> {
-        let files = lock
-            .get(&self.dataset)
-            .map_or(&[][..], |locked| locked.files.as_slice());
-        match files {
-            [file] if file.sha256 == self.sha256 => Ok(()),
-            [file] => Err(Error::new(
-                Kind::IntegrityMismatch,
-                format!(
-                    "{}/{} does not match the SHA-256 on {}",
-                    self.dataset, file.path, self.line
-                ),
-            )
-            .detail(format!(
-                "expected sha256 {}, got {}",
-                self.sha256.hex(),
-                file.sha256.hex()
-            ))
-            .help(format!(
-                "check the hash on {}, or ask the file's owner which bytes are right",
-                self.line
-            ))),
-            files => Err(Error::new(
-                Kind::Usage,
-                format!(
-                    "the SHA-256 on {} checks one file, and {} has {}",
-                    self.line,
-                    self.dataset,
-                    units::count(files.len() as u64, "file", "files")
-                ),
-            )
-            .help("list a link to one file there, or leave its SHA-256 off")),
-        }
+        [] if from("", &error.message).is_some() => typed(error, lines.len() > 1),
+        // failures of typed links and of datasets data.toml has may share a help, which then
+        // stays as it is
+        _ => error,
     }
 }
 
@@ -1082,12 +1016,14 @@ fn validate_add(
     Ok(parsed)
 }
 
+/// resolves `link`, which reads as `parsed`, as an add of it chooses files; a list in the project
+/// at `root` is read there.
 async fn resolve_add(
     context: &Context,
     net: &Net,
     args: &Add,
-    link: &str,
-    parsed: &Parsed,
+    (link, parsed): (&str, &Parsed),
+    root: &Path,
 ) -> Result<Addition, Error> {
     let select = if args.filter.select.is_empty() {
         parsed.select()
@@ -1095,7 +1031,12 @@ async fn resolve_add(
         args.filter.select.clone()
     };
     let patterns = crate::glob::patterns_of(&select);
-    let listing = engine::resolve(&context.output, &parsed.reference, net, &patterns).await?;
+    let listing = match &parsed.reference {
+        Reference::List(list) if list.in_project().is_some() => {
+            list.read_in(root, crate::net::Api::most_files(net))?
+        }
+        reference => engine::resolve(&context.output, reference, net, &patterns).await?,
+    };
     let reference = stored_reference(link, parsed);
     // patterns from the command line are checked before any byte moves, and no line of
     // data.toml is to blame for them
@@ -1214,7 +1155,6 @@ pub(super) async fn sync_add(
     updated: Option<&str>,
     old: Option<Lock>,
     datasets: (&[String], Vec<Given>),
-    promised: &[Promised],
 ) -> Result<Outcome<Placement>, Error> {
     let (names, given) = datasets;
     let project = work.project;
@@ -1236,9 +1176,6 @@ pub(super) async fn sync_add(
         .instrument(tracing::debug_span!("relock"))
         .await?;
     work.tell_versions_kept(manifest, &before, &lock, &Upgrade::Nothing);
-    for promise in promised {
-        promise.kept(&lock)?;
-    }
     // a lock whose files cannot all land is refused before anything is written, so data.lock
     // never pins what no sync can place
     let placed = super::drop::placed_adding(manifest, names, &survey);
@@ -1692,7 +1629,7 @@ async fn again(
     }
     let names = [name.to_owned()];
     let back = work.project.dropped().contains(name);
-    let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
+    let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new())).await?;
     // a project that became a git repository after its first add gets its ignore rule now
     ignore_data(work, manifest, false)?;
     let contents = if outcome.placed.planned.contains(name) {
@@ -2036,19 +1973,32 @@ mod tests {
         );
     }
 
-    /// a link with nothing at it, read from a list, is fixed on its own line of that list.
+    /// a file with nothing at its link is fixed where its link is: on its line of a list in the
+    /// project, or by the owner of a list at a link.
     #[test]
-    fn a_moved_link_of_a_list_is_fixed_on_its_line() {
-        let error = Error::new(
-            Kind::ReferenceUnresolved,
-            "https://example.org/gone.csv has nothing at it",
-        )
-        .help(crate::net::MOVED_HELP);
-        let fixed = on_line(error, Some("links.txt:3"), false);
-        assert_eq!(
-            fixed.help.as_deref(),
-            Some("check the link on links.txt:3 in a browser. if it moved, put the new link there")
-        );
+    fn a_moved_link_of_a_list_is_fixed_in_the_list() {
+        let moved = || {
+            Error::new(
+                Kind::ReferenceUnresolved,
+                "example.org has nothing at https://example.org/gone.csv (404)",
+            )
+            .help(crate::net::MOVED_HELP)
+        };
+        for (list, help) in [
+            (
+                "list:lists/links.txt",
+                "check each link in a browser. if it moved, put the new link on its line of lists/links.txt",
+            ),
+            (
+                "https://example.org/SHA256SUMS",
+                "check each link in a browser. the list may name files its folder no longer holds, which only its owner can fix",
+            ),
+        ] {
+            let Reference::List(list) = Reference::parse(list).unwrap().reference else {
+                panic!("{list} is no list");
+            };
+            assert_eq!(moved_in(moved(), &list).help.as_deref(), Some(help));
+        }
     }
 
     /// a named point of an add, and an edit made in the project folder there.
@@ -2411,7 +2361,6 @@ mod tests {
             Some(&updated),
             old,
             (&names, vec![Given::Listing("b".to_owned(), listing)]),
-            &[],
         ));
         EDIT_AT.set(None);
         drop(work);
@@ -2558,7 +2507,6 @@ mod tests {
             Some(&updated),
             old,
             (&names, vec![Given::Listing("b".to_owned(), listing)]),
-            &[],
         ))
         .unwrap();
         EDIT_AT.set(None);

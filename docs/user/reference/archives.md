@@ -57,7 +57,7 @@ parts belong together only inside one dataset and one folder, after the name of 
    Unpacked zipped/headers.zip.00 · 300 files · 2.2 MiB in 522 ms
 ```
 
-what stays packed gets one warning with what to do. stderr from `fetchloom add` of a folder missing `headers.zip.01`, of a folder of rar volumes and a zip spanned over `.z01` files, and of `add -i` with one link for each part:
+what stays packed gets one warning with what to do. stderr from `fetchloom add` of a folder missing `headers.zip.01`, of a folder of rar volumes and a zip spanned over `.z01` files, and of `add` with one link for each part:
 
 ```text
 warning: gap/headers.zip.01 is missing, so the parts of headers.zip stay as they are
@@ -70,7 +70,7 @@ warning: headers-zip/headers.zip.00 stays packed, since it does not unpack on it
   help: it may be the first part of an archive split into several files, which fetchloom joins only inside one dataset, such as a folder or a record that lists every part
 ```
 
-with a part missing, the other parts are placed as plain files. rar volumes and spanned zips are not cuts of the bytes, so only their own tools join them. a first part alone, as `add -i` makes each link a dataset of its own, is unpacked when its bytes are a whole archive, and otherwise stays packed with the last warning above. `extract = false` and `--no-extract` keep the parts packed, and turning `extract` back on unpacks them from the cache with no request.
+with a part missing, the other parts are placed as plain files. rar volumes and spanned zips are not cuts of the bytes, so only their own tools join them. a first part alone, as several links typed for one `add` make each link a dataset of its own, is unpacked when its bytes are a whole archive, and otherwise stays packed with the last warning above. `extract = false` and `--no-extract` keep the parts packed, and turning `extract` back on unpacks them from the cache with no request.
 
 an archive cut into parts is pinned as its parts, each an ordinary file, with `unpacks_to` on the first part alone: the tree of the archive the parts make read in order. no field says which files are parts; their names do, so a reader or `export` finds them again:
 

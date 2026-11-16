@@ -1,6 +1,6 @@
-//! a list of links, as `add -i` and `get -i` read it: one link a line, and after a link, where
-//! the line gives one, the SHA-256 its one file must have. a list is a file anyone could have
-//! written, so the whole list is checked before any request.
+//! links for one command: the list `get -i` reads, in the one form every list takes, and several
+//! links typed for one `add` or `get`. a list is a file anyone could have written, so the whole
+//! list is checked before any request.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -10,12 +10,10 @@ use std::path::Path;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::Output;
+use crate::source::list::{self, Checksum, Named};
 use crate::source::search::is_search;
 use crate::source::{Parsed, Reference, local};
 use crate::stop::Stop;
-
-/// what a line holds, for messages that cannot read it.
-const FORM: &str = "a line is a link, or a link and its SHA-256: 64 hex digits, or sha256: and 64 hex digits. blank lines and lines starting with # are skipped";
 
 /// the keys that end what a terminal's stdin gives.
 #[cfg(not(windows))]
@@ -23,21 +21,13 @@ const ENDS: &str = "ctrl-d ends";
 #[cfg(windows)]
 const ENDS: &str = "ctrl-z, then enter, ends";
 
-/// one link of a list.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Line {
-    /// where the line is in its list, counting from 1.
-    pub(super) number: usize,
+/// a link of a list `get -i` read, and the hash its line states for its one file.
+#[derive(Debug)]
+pub(super) struct Listed {
     pub(super) link: String,
-    /// the SHA-256 the line gives for the link's one file.
-    pub(super) sha256: Option<Sha256>,
-}
-
-impl Line {
-    /// how messages name the line, as `line 2 of links.txt`.
-    pub(super) fn named(&self, list: &str) -> String {
-        format!("line {} of {list}", self.number)
-    }
+    /// where the line is in its list, as `line 2 of links.txt`.
+    pub(super) at: String,
+    pub(super) checksum: Option<Checksum>,
 }
 
 /// the text of the list at `path`, or of stdin for `-`, and the name messages give it.
@@ -51,7 +41,7 @@ pub(super) async fn read(
         output.awaiting(&format!("reading links from stdin, one per line; {ENDS}"));
     }
     let path = path.to_path_buf();
-    let reading = tokio::task::spawn_blocking(move || read_text(&path));
+    let reading = tokio::task::spawn_blocking(move || read_text(&path, list::MOST_BYTES));
     tokio::select! {
         biased;
         () = stop.asked() => Err(Stop::stopped()),
@@ -62,64 +52,99 @@ pub(super) async fn read(
     }
 }
 
-fn read_text(path: &Path) -> Result<(String, String), Error> {
-    let mut text = String::new();
-    if path == Path::new("-") {
-        std::io::stdin()
-            .read_to_string(&mut text)
-            .map_err(|err| Error::io("could not read links from stdin", &err))?;
-        return Ok(("stdin".to_owned(), text));
-    }
-    let name = path.display().to_string();
-    std::fs::File::open(path)
-        .and_then(|mut file| file.read_to_string(&mut text))
+/// the list at `path`, or stdin for `-`, read up to `most` bytes, as a list may be no longer.
+fn read_text(path: &Path, most: u64) -> Result<(String, String), Error> {
+    let (name, reading): (String, Box<dyn std::io::Read>) = if path == Path::new("-") {
+        ("stdin".to_owned(), Box::new(std::io::stdin()))
+    } else {
+        let name = path.display().to_string();
+        let file = std::fs::File::open(path)
+            .map_err(|err| Error::io(format_args!("could not read {name}"), &err))?;
+        (name, Box::new(file))
+    };
+    let mut bytes = Vec::new();
+    reading
+        .take(most + 1)
+        .read_to_end(&mut bytes)
         .map_err(|err| Error::io(format_args!("could not read {name}"), &err))?;
+    if bytes.len() as u64 > most {
+        return Err(list::too_big(&name, most));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        Error::new(Kind::Usage, format!("{name} is not UTF-8 text"))
+            .help("save the list as UTF-8, then run the command again")
+    })?;
     Ok((name, text))
 }
 
-/// the links the list `name` holds in `text`, each with the SHA-256 its line gives. a line of
-/// search words is refused here, since its second word is no hash.
-pub(super) fn parse(name: &str, text: &str) -> Result<Vec<Line>, Error> {
-    let mut lines = Vec::new();
-    for (index, written) in text.trim_start_matches('\u{feff}').lines().enumerate() {
-        let number = index + 1;
-        let written = written.trim();
-        if written.is_empty() || written.starts_with('#') {
-            continue;
+/// the links the list `name` holds in `text`, at most `most`, each with the hash its line states:
+/// none on this machine, and no two naming the same data. a path below a folder is refused, as a
+/// list on this machine has no folder.
+pub(super) fn listed(name: &str, text: &str, most: usize) -> Result<Vec<Listed>, Error> {
+    let entries = list::read(name, text, most)?;
+    if entries.is_empty() {
+        return Err(
+            Error::new(Kind::Usage, format!("{name} lists no links")).help(
+                "put one link per line in it. blank lines and lines starting with # are skipped",
+            ),
+        );
+    }
+    let mut seen: HashMap<(String, Option<String>, Option<String>), usize> = HashMap::new();
+    let mut listed = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let at = entry.at(name);
+        let link = match &entry.named {
+            Named::Link(link)
+            | Named::Path {
+                link: Some(link), ..
+            } => link.clone(),
+            Named::Path { path, link: None } => {
+                // the line as written, since a path on this machine lost its `./` as a path
+                let written = text
+                    .trim_start_matches('\u{feff}')
+                    .lines()
+                    .nth(entry.number - 1)
+                    .and_then(|line| line.split_whitespace().next())
+                    .unwrap_or(path);
+                if local::is_path(written) {
+                    return Err(on_this_machine(&at, written));
+                }
+                return Err(list::no_folder(name, &entry, path));
+            }
+        };
+        if local::is_path(&link) {
+            return Err(on_this_machine(&at, &link));
         }
-        let mut words = written.split_whitespace();
-        let link = words.next().unwrap_or(written);
-        if is_search(link) {
-            return Err(not_a_link(name, number, written));
+        let parsed = Reference::parse(&link).map_err(|error| on_line(error, &at))?;
+        match seen.entry(same_data(&parsed)) {
+            Entry::Occupied(first) => {
+                return Err(Error::new(
+                    Kind::Usage,
+                    format!("{at} names the same data as line {}", first.get()),
+                )
+                .help("keep one of the two lines"));
+            }
+            Entry::Vacant(free) => {
+                free.insert(entry.number);
+            }
         }
-        let given = words.next();
-        let sha256 = given.map(sha256).transpose();
-        let at = format!("line {number} of {name}");
-        if words.next().is_some() {
-            return Err(Error::new(
-                Kind::Usage,
-                format!("{at} holds more than a link and its SHA-256"),
-            )
-            .help(FORM));
-        }
-        let sha256 = sha256.map_err(|why| {
-            Error::new(
-                Kind::Usage,
-                format!(
-                    "\"{}\" on {at} is not a SHA-256",
-                    crate::shown::mask_query(given.unwrap_or_default()).escape_debug()
-                ),
-            )
-            .detail(why)
-            .help(FORM)
-        })?;
-        lines.push(Line {
-            number,
-            link: link.to_owned(),
-            sha256,
+        listed.push(Listed {
+            link,
+            at,
+            checksum: entry.checksum,
         });
     }
-    Ok(lines)
+    Ok(listed)
+}
+
+/// the refusal of `written`, the path on this machine the line `at` names.
+fn on_this_machine(at: &str, written: &str) -> Error {
+    Error::new(
+        Kind::ReferenceInvalid,
+        format!("{at} is a path on this machine, and a list holds links, DOIs and ids"),
+    )
+    .detail(crate::shown::mask_query(written).into_owned())
+    .help("give the link, DOI or id where the data is published, such as https://zenodo.org/records/3608990")
 }
 
 /// reads a SHA-256 as sites and lists write one, bare or after `sha256:`. otherwise it says why,
@@ -150,67 +175,12 @@ pub(super) fn sha256(text: &str) -> Result<Sha256, String> {
     })
 }
 
-/// `lines` with their references once every one names data to fetch: no path on this machine,
-/// no two naming the same data and, `for_project`, no secret data.toml and data.lock would keep.
-pub(super) fn checked(
-    name: &str,
-    lines: Vec<Line>,
-    for_project: bool,
-) -> Result<Vec<(Line, Parsed)>, Error> {
-    if lines.is_empty() {
-        return Err(
-            Error::new(Kind::Usage, format!("{name} lists no links")).help(
-                "put one link per line in it. blank lines and lines starting with # are skipped",
-            ),
-        );
-    }
-    let mut seen: HashMap<(String, Option<String>, Option<String>), usize> = HashMap::new();
-    let mut checked = Vec::with_capacity(lines.len());
-    for line in lines {
-        let at = line.named(name);
-        if local::is_path(&line.link) {
-            let help = if for_project {
-                one_at_a_time()
-            } else {
-                "give the link, DOI or id where the data is published, such as https://zenodo.org/records/3608990".to_owned()
-            };
-            return Err(Error::new(
-                Kind::ReferenceInvalid,
-                format!("{at} is a path on this machine, and a list holds links, DOIs and ids"),
-            )
-            .detail(crate::shown::mask_query(&line.link).into_owned())
-            .help(help));
-        }
-        let parsed = Reference::parse(&line.link).map_err(|error| on_line(error, &at))?;
-        if for_project {
-            parsed
-                .check_shareable()
-                .map_err(|error| on_line(error, &at))?;
-        }
-        let key = same_data(&parsed);
-        match seen.entry(key) {
-            Entry::Occupied(first) => {
-                return Err(Error::new(
-                    Kind::Usage,
-                    format!("{at} names the same data as line {}", first.get()),
-                )
-                .help("keep one of the two lines"));
-            }
-            Entry::Vacant(free) => {
-                free.insert(line.number);
-            }
-        }
-        checked.push((line, parsed));
-    }
-    Ok(checked)
-}
-
 pub(super) fn on_line(mut error: Error, at: &str) -> Error {
     error.message = format!("{at}: {}", error.message);
     error
 }
 
-/// how to add files on this machine, which a list or several links cannot.
+/// how to add files on this machine, which several links cannot.
 fn one_at_a_time() -> String {
     format!(
         "add files on this machine one file or folder at a time, as in `{}`",
@@ -218,9 +188,9 @@ fn one_at_a_time() -> String {
     )
 }
 
-/// links typed for one add, checked as a list's lines are, each named by its own link: search
-/// words go alone, and a path on this machine is added one at a time.
-pub(super) fn typed(links: Vec<String>) -> Result<Vec<(Line, Parsed)>, Error> {
+/// links typed for one add, each named by its own link: search words go alone, and a path on
+/// this machine is added one at a time.
+pub(super) fn typed(links: Vec<String>) -> Result<Vec<(String, Parsed)>, Error> {
     if let Some(word) = links.iter().find(|link| is_search(link)) {
         let example = if links.iter().all(|link| is_search(link)) {
             links.join(" ")
@@ -239,7 +209,7 @@ pub(super) fn typed(links: Vec<String>) -> Result<Vec<(Line, Parsed)>, Error> {
     }
     let mut seen: HashMap<(String, Option<String>, Option<String>), String> = HashMap::new();
     let mut checked = Vec::with_capacity(links.len());
-    for (index, link) in links.into_iter().enumerate() {
+    for link in links {
         let shown = crate::shown::mask_query(&link).into_owned();
         if local::is_path(&link) {
             return Err(Error::new(
@@ -267,12 +237,7 @@ pub(super) fn typed(links: Vec<String>) -> Result<Vec<(Line, Parsed)>, Error> {
                 free.insert(shown);
             }
         }
-        let line = Line {
-            number: index + 1,
-            link,
-            sha256: None,
-        };
-        checked.push((line, parsed));
+        checked.push((link, parsed));
     }
     Ok(checked)
 }
@@ -284,23 +249,6 @@ fn same_data(parsed: &Parsed) -> (String, Option<String>, Option<String>) {
         parsed.file.clone(),
         parsed.folder.clone(),
     )
-}
-
-fn not_a_link(name: &str, number: usize, line: &str) -> Error {
-    let line = crate::shown::mask_query(line);
-    let words: Vec<String> = line
-        .split_whitespace()
-        .map(|word| super::shell_word(word).into_owned())
-        .collect();
-    Error::new(
-        Kind::Usage,
-        format!("line {number} of {name} is not a link, a DOI or an id"),
-    )
-    .detail(line.clone().into_owned())
-    .help(format!(
-        "find its id with `{}`, then list that instead",
-        crate::suggested::anywhere(&format!("search {}", words.join(" ")))
-    ))
 }
 
 #[cfg(test)]
@@ -343,58 +291,62 @@ mod tests {
         }
     }
 
-    fn line(number: usize, link: &str, sha256: Option<&str>) -> Line {
-        Line {
-            number,
-            link: link.to_owned(),
-            sha256: sha256.and_then(Sha256::from_hex),
-        }
-    }
-
+    /// a list for `get -i` gives each link with the MD5 or SHA-256 its line states, in any of the
+    /// forms a list takes.
     #[test]
-    fn a_line_takes_a_link_and_an_optional_sha256() {
+    fn a_list_gives_links_with_their_hashes() {
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
         let text = format!(
-            "\u{feff}# measurements to compare\r\n\r\nzenodo:3608990\n  https://example.org/iris.csv   {IRIS}  \nhf:datasets/scikit-learn/iris SHA256:{}\n10.5281/zenodo.1 {IRIS}\n# done\n",
-            IRIS.to_uppercase()
+            "\u{feff}# measurements to compare\r\n\r\nzenodo:3608990\n  https://example.org/iris.csv   {IRIS}  \nhttps://example.org/tips.csv md5:{md5}\n{IRIS}  https://example.org/wine.csv\nnames.csv sha256:{IRIS} https://elsewhere.org/names.csv\n# done\n",
         );
+        let got: Vec<(String, String, Option<Checksum>)> = listed("links.txt", &text, 10)
+            .unwrap()
+            .into_iter()
+            .map(|listed| (listed.link, listed.at, listed.checksum))
+            .collect();
+        let sha = Sha256::from_hex(IRIS).map(Checksum::Sha256);
         assert_eq!(
-            parse("links.txt", &text).unwrap(),
+            got,
             [
-                line(3, "zenodo:3608990", None),
-                line(4, "https://example.org/iris.csv", Some(IRIS)),
-                line(5, "hf:datasets/scikit-learn/iris", Some(IRIS)),
-                line(6, "10.5281/zenodo.1", Some(IRIS)),
+                (
+                    "zenodo:3608990".to_owned(),
+                    "line 3 of links.txt".to_owned(),
+                    None
+                ),
+                (
+                    "https://example.org/iris.csv".to_owned(),
+                    "line 4 of links.txt".to_owned(),
+                    sha
+                ),
+                (
+                    "https://example.org/tips.csv".to_owned(),
+                    "line 5 of links.txt".to_owned(),
+                    crate::digest::Md5::from_hex(md5).map(Checksum::Md5)
+                ),
+                (
+                    "https://example.org/wine.csv".to_owned(),
+                    "line 6 of links.txt".to_owned(),
+                    sha
+                ),
+                (
+                    "https://elsewhere.org/names.csv".to_owned(),
+                    "line 7 of links.txt".to_owned(),
+                    sha
+                ),
             ]
         );
-        for (text, message) in [
-            (
-                "zenodo:1 abc".to_owned(),
-                "\"abc\" on line 1 of links.txt is not a SHA-256",
-            ),
-            (
-                format!("zenodo:1 {IRIS} zenodo:2"),
-                "line 1 of links.txt holds more than a link and its SHA-256",
-            ),
-            (
-                format!("\nfashion mnist\nzenodo:1 {IRIS}"),
-                "line 2 of links.txt is not a link, a DOI or an id",
-            ),
-            (
-                format!("iris {IRIS}"),
-                "line 1 of links.txt is not a link, a DOI or an id",
-            ),
-        ] {
-            let error = parse("links.txt", &text).unwrap_err();
-            assert_eq!(error.kind, Kind::Usage, "{text}");
-            assert_eq!(error.message, message, "{text}");
-        }
+        let error = listed("links.txt", &format!("{IRIS}  iris.csv\n"), 10).unwrap_err();
+        assert_eq!(
+            error.message,
+            "line 1 of links.txt names \"iris.csv\", a path, and only a list at a link has a folder to read it below"
+        );
     }
 
     /// anyone could have written the list, so the search its help names keeps each word of the
     /// line one literal word for a shell.
     #[test]
     fn a_line_of_search_words_names_a_search_a_shell_reads_as_written() {
-        let error = parse("links.txt", "iris $(id) a;b&c it's\n")
+        let error = listed("links.txt", "iris $(id) a;b&c it's\n", 10)
             .unwrap_err()
             .told();
         let help = error.help.as_deref().unwrap_or_default();
@@ -428,29 +380,17 @@ mod tests {
         );
     }
 
-    /// a secret is refused only in a list for a project, whose data.toml would keep it, so a
-    /// list for get is refused at its next bad line instead.
+    /// a list for get may hold a secret, which it masks, and is refused at its first bad line.
     #[test]
     fn a_list_is_refused_at_its_first_unusable_line_with_any_secret_masked() {
-        let lines = parse(
-            "links.txt",
-            "https://example.org/iris.csv\nhttps://example.org/wine.csv?token=hunter2\nzenodo:not-a-number\n",
-        )
-        .unwrap();
-        let shared = checked("links.txt", lines.clone(), true).unwrap_err();
-        assert_eq!(shared.kind, Kind::ReferenceInvalid);
-        assert_eq!(
-            shared.message,
-            "line 2 of links.txt: this link carries token, a secret that data.toml and data.lock would keep and share"
-        );
-        let whole = format!("{shared:?}");
-        assert!(!whole.contains("hunter2"), "{whole}");
-        let once = checked("links.txt", lines, false).unwrap_err();
-        assert_eq!(once.kind, Kind::ReferenceInvalid);
+        let text = "https://example.org/iris.csv\nhttps://example.org/wine.csv?token=hunter2\nzenodo:not-a-number\n";
+        let error = listed("links.txt", text, 10).unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceInvalid);
         assert!(
-            once.message.starts_with("line 3 of links.txt: "),
-            "{once:?}"
+            error.message.starts_with("line 3 of links.txt: "),
+            "{error:?}"
         );
+        assert!(!format!("{error:?}").contains("hunter2"), "{error:?}");
         for (text, kind, message) in [
             (
                 "zenodo:3608990\nhttps://zenodo.org/records/3608990\n",
@@ -459,7 +399,7 @@ mod tests {
             ),
             ("# nothing yet\n\n", Kind::Usage, "links.txt lists no links"),
         ] {
-            let error = checked("links.txt", parse("links.txt", text).unwrap(), true).unwrap_err();
+            let error = listed("links.txt", text, 10).unwrap_err();
             assert_eq!(
                 (error.kind, error.message.as_str()),
                 (kind, message),
@@ -469,9 +409,7 @@ mod tests {
         let files =
             "https://zenodo.org/records/1/files/a.csv\nhttps://zenodo.org/records/1/files/b.csv\n";
         assert_eq!(
-            checked("links.txt", parse("links.txt", files).unwrap(), true)
-                .unwrap()
-                .len(),
+            listed("links.txt", files, 10).unwrap().len(),
             2,
             "two files of one record are two links"
         );
@@ -530,45 +468,50 @@ mod tests {
                 "{links:?}"
             );
         }
-        let lines = typed(&["zenodo:1", "https://example.org/x.csv"]).unwrap();
+        let links = typed(&["zenodo:1", "https://example.org/x.csv"]).unwrap();
         assert_eq!(
-            lines
+            links
                 .iter()
-                .map(|(line, _)| (line.number, line.link.as_str()))
+                .map(|(link, _)| link.as_str())
                 .collect::<Vec<_>>(),
-            [(1, "zenodo:1"), (2, "https://example.org/x.csv")]
+            ["zenodo:1", "https://example.org/x.csv"]
         );
     }
 
     #[test]
     fn local_paths_and_file_links_are_refused_in_lists() {
-        for (link, for_project, help) in [
-            (
-                "./flowers",
-                true,
-                "add files on this machine one file or folder at a time, as in `fetchloom add ./flowers`",
-            ),
-            (
-                "file:///etc/hostname",
-                true,
-                "add files on this machine one file or folder at a time, as in `fetchloom add ./flowers`",
-            ),
-            (
-                "~/flowers.csv",
-                false,
-                "give the link, DOI or id where the data is published, such as https://zenodo.org/records/3608990",
-            ),
-        ] {
+        for link in ["./flowers", "file:///etc/hostname", "~/flowers.csv"] {
             let text = format!("zenodo:1\n{link}\n");
-            let error =
-                checked("links.txt", parse("links.txt", &text).unwrap(), for_project).unwrap_err();
+            let error = listed("links.txt", &text, 10).unwrap_err();
             assert_eq!(error.kind, Kind::ReferenceInvalid, "{link}");
             assert_eq!(
                 error.message,
                 "line 2 of links.txt is a path on this machine, and a list holds links, DOIs and ids"
             );
             assert_eq!(error.details, [link]);
-            assert_eq!(error.help.as_deref(), Some(help), "{link}");
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "give the link, DOI or id where the data is published, such as https://zenodo.org/records/3608990"
+                ),
+                "{link}"
+            );
         }
+    }
+
+    /// a list longer than a list may be is refused before it is read whole.
+    #[test]
+    fn a_list_past_its_size_limit_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("links.txt");
+        std::fs::write(&path, "https://example.org/iris.csv\n").unwrap();
+        let error = read_text(&path, 10).unwrap_err();
+        assert!(
+            error
+                .message
+                .ends_with("is larger than 10 B, the most fetchloom reads of a list"),
+            "{error:?}"
+        );
+        assert!(read_text(&path, 100).is_ok());
     }
 }

@@ -9,7 +9,8 @@ fetchloom add https://zenodo.org/records/3608990 --as flowers
 fetchloom add hf:datasets/scikit-learn/iris --select "*.csv" --dry-run
 fetchloom add ./flowers    # files on this machine, pinned by their bytes
 fetchloom add zenodo:3608990 hf:datasets/scikit-learn/iris    # a dataset for each link
-fetchloom add -i links.txt    # a dataset for each link in a list
+fetchloom add https://physionet.org/files/mitdb/1.0.0/SHA256SUMS.txt    # every file a checksum list names, one dataset
+fetchloom add -i links.txt --as era5    # the files a list in the project names, one dataset
 ```
 
 ## usage
@@ -28,7 +29,7 @@ fetchloom add [options] -i <file>
 | `--no-extract` | keep archives packed and record `extract = false`; webdataset loaders read `.tar` shards packed |
 | `--web-page` | pin the web page a link answers with as the data and record `web_page = true`; without it such a page is refused, see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) |
 | `--no-sync` | download nothing: data.lock records each file by the size and SHA-256 or MD5 its source states, and a later `fetchloom sync` downloads and checks it. a link data.toml has already is pinned the same way when data.lock does not pin it as data.toml asks, and data.toml stays as it is; a pin data.lock holds under the name the dataset was [renamed](../reference/data-toml.md#dataset-names) from counts, as sync carries it, and the add says `Ok flowers is already in data.toml, and data.lock pins it as iris`. refused when the source states neither for some file, and for a path on this machine |
-| `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
+| `-i <file>`, `--input-file <file>` | add the files a list in the project names as one dataset, a file's link a line with its MD5 or SHA-256 if known, as [a list of files](#a-list-of-files) says; data.toml names the list by its path |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
 [global options](global-options.md) also apply, and [sources](../sources/README.md) lists the links and references `add` reads. plain words [search](search.md#choosing-a-dataset) hugging face, kaggle, zenodo, GEO and openneuro; several are one search, quoted or not, as in `fetchloom add fashion mnist`, when none is a link, an id, a DOI or a path. for ENA or dandi, find the reference with `fetchloom search <words> --source ena` or `--source dandi`. data.toml records the id you chose, not the search words.
@@ -155,25 +156,36 @@ error: a-very-long-dataset-name-for-testing and tiny were imported from files, a
 
 a supply takes the patterns and `extract` data.toml gives, so `--select`, `--exclude` and `--no-extract` are refused with it. when data.lock holds no pin of the import, as after a lost data.lock, a supply pins the files again.
 
-## a list of links
+## a list of files
 
-`-i <file>` adds a dataset for each link in a list, as `get -i` reads one: one link a line, blank lines and lines starting with `#` skipped, and after a link, optionally, the SHA-256 of its one file, as 64 hex digits or `sha256:` and 64 hex digits:
+a list of files is one dataset: a checksum list such as `SHA256SUMS` or `MD5SUMS`, a pooch registry, or a list of links, such as earthaccess or ESGF tools write. one reader takes every line form, told apart by which field is a hash:
+
+| form | a line | the file |
+|---|---|---|
+| GNU, as `sha256sum` writes | `<hash>  <path>`, or `<hash> *<path>` | `<path>` below the list's folder |
+| BSD, as `md5` and `sha256sum --tag` write | `SHA256 (<path>) = <hash>`, `MD5 (<path>) = <hash>` | `<path>` below the list's folder |
+| pooch registry | `<path> <hash>`, or `<path> <hash> <link>` | its link when the line gives one, else `<path>` below the list's folder |
+| a list of links | `<link>`, or `<link> <hash>` | its link, named by its last part |
+
+a hash is an MD5 or a SHA-256, bare, where its length tells which, or after `md5:` or `sha256:`. a stated MD5 is checked on the first download, and data.lock pins the SHA-256 that download has. any other hash is refused by its name, as `line 1 of SHA1SUMS gives a SHA-1 hash, and fetchloom checks only MD5 and SHA-256`. blank lines and lines starting with `#` are skipped.
+
+a link to a list whose name says it holds checksums, as `SHA256SUMS`, `MD5SUMS`, `SHA256SUMS.txt` or `md5sums.txt` do, adds every file it lists, each at the list's folder plus its path. `list:` and a link adds a list of any other name, as `fetchloom add list:https://example.org/data/registry.txt`. the dataset is named after the list's folder for a checksum list, as `mitdb-1-0-0` for physionet's, and after the list for any other.
+
+`-i <file>` adds a list in the project, which gives each file's link, since a list on this machine has no folder for a path below it:
 
 ```text
 # inputs for the paper
 https://example.org/iris.csv sha256:d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d
-zenodo:3608990
+https://example.org/tips.csv md5:4c29e6fc9e1a9a9aa4a0e6b3b5a0fb36
 ```
 
-`-i -` reads the list from stdin. at a terminal, it says so on stderr before it waits: `reading links from stdin, one per line; ctrl-d ends`. on windows, ctrl-z, then enter, ends the list.
+data.toml names the list by its path in the project, as `ref = "list:links.txt"`, never by copying it, so commit the list with data.toml: a clone syncs from data.lock alone, and reads the list again only when the dataset is locked again, as after an edit of its `select` or a `lock --upgrade`. a list from stdin or from outside the project could not be found again, so it is refused with `usage`, exit 2. `--as`, `--select` and `--exclude` apply as to any dataset, and the name is the list's own without its type, as `links` for `links.txt`.
 
-the whole list is checked before any request. a line of search words, a path on this machine, a line naming the same data as an earlier one, a link fetchloom cannot read, or a link carrying a secret data.toml would keep, stops the add, naming the line with the secret masked. then the links resolve and download together, and each dataset gets a name as a single add would. a line with a SHA-256 must keep one file with that hash, or the add stops with `integrity.mismatch`, exit 30. a link data.toml has already stays as it is.
-
-a link that fails while its file downloads is named by its line too, in the error and in each of the JSON `failures`, as in `line 3 of links.txt: 127.0.0.1 has nothing at http://127.0.0.1:43121/files/missing.csv (404)`. data.toml and data.lock are each written once, and any failure leaves both as they were. the add ends with one `Added` line for each dataset; `-v` adds what each one pinned and where its files went. hosts in a list are not trusted as typed ones are, so a server on this machine or your network needs the [`allowed_origins` setting](../reference/environment.md#settings-file) first. `--as`, `--select` and `--exclude` are usage errors with `-i`; `--no-extract` applies to every dataset.
+a list is text anyone could have written, so it is read whole and checked before any file is asked for: a line in no form above, a path that climbs out of the list's folder or starts at the root of a disk, a link carrying a secret data.lock would keep, or a list larger than 64 MiB, stops the add, naming the line. a list in the project is read only from a real file there, never through a link. the hosts a list names are trusted no more than data.toml's, so a server on this machine or your network needs the [`allowed_origins` setting](../reference/environment.md#settings-file) first; the link of a list typed on the command line reaches its own origin for that run, as any typed link does. a file with nothing at its link fails the add, whose help leaves it out with `--exclude` while the other files arrived, and otherwise says to fix its line.
 
 ### several links at once
 
-several links on the command line add a dataset each, as the lines of a list do, but each is trusted as a typed link is, so a lab server on a private address gets the warning above. search words go alone, all of them one search, and a path on this machine is added one at a time. `--as`, `--select` and `--exclude` are each for one dataset, so with several links they are usage errors, exit 2:
+several links on the command line add a dataset each, each trusted as a typed link is, so a lab server on a private address gets the warning above. search words go alone, all of them one search, and a path on this machine is added one at a time. `--as`, `--select` and `--exclude` are each for one dataset, so with several links they are usage errors, exit 2:
 
 ```text
 error: --as names one dataset, and 2 links add 2
@@ -209,7 +221,7 @@ the plan covers the datasets the add adds, as the real addition does. a file who
 
 ## generated names
 
-the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a name from a file, title or reference and handle collisions; `--as` chooses your own. `-i` takes no `--as`, so when a line's name is taken its warning says to rename the dataset's table in data.toml afterwards, and the next sync moves its pin to the new name.
+the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a name from a file, title or reference and handle collisions; `--as` chooses your own. several links take no `--as`, so when a link's name is taken its warning says to rename the dataset's table in data.toml afterwards, and the next sync moves its pin to the new name.
 
 ## exit codes
 

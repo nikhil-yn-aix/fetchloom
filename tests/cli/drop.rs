@@ -192,19 +192,24 @@ fn a_drop_cut_short_before_it_frees_the_cache_is_never_told_freed() -> Result {
     Ok(())
 }
 
-/// a line of a list naming a dropped dataset brings it back too, as the same link typed does.
+/// a link typed with others that names a dropped dataset brings it back too, as the same link
+/// typed alone does.
 #[test]
-fn a_list_line_naming_a_dropped_dataset_brings_it_back() -> Result {
+fn a_link_among_several_naming_a_dropped_dataset_brings_it_back() -> Result {
     let sandbox = Sandbox::new()?;
     let source = iris(&sandbox)?;
+    source.change(vec![(
+        "/files/wine.csv".to_owned(),
+        file(b"wine\n", "\"w\""),
+    )]);
     let placed = sandbox.work().join("data/iris/iris.csv");
     ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
     assert!(!placed.exists());
-    fs::write(
-        sandbox.work().join("links.txt"),
-        format!("{}/files/iris.csv\n", source.url),
-    )?;
-    let output = sandbox.run(&["add", "-i", "links.txt"])?;
+    let output = sandbox.run(&[
+        "add",
+        &format!("{}/files/iris.csv", source.url),
+        &format!("{}/files/wine.csv", source.url),
+    ])?;
     ok(&output)?;
     let told = text(&output.stderr)?;
     assert!(

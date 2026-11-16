@@ -1,5 +1,5 @@
-//! `add -i` and several links typed at once: a dataset for each line, resolved, downloaded and
-//! placed in one add.
+//! several links typed for one add: a dataset for each link, resolved, downloaded and placed in
+//! one add.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -8,12 +8,10 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use super::{
-    AddProject, FromLine, List, Promised, RENAME, Sources, choose_name, close, from_here,
-    learn_names, on_line, on_lines, preview_add, private_origins, stored_reference, sync_add,
-    tell_started,
+    AddProject, FromLine, RENAME, Several, Sources, choose_name, close, from_here, learn_names,
+    on_lines, preview_add, private_origins, stored_reference, sync_add, tell_started, typed,
 };
 use crate::cli::args::Add;
-use crate::cli::links::{self, Line};
 use crate::cli::project::{Report, ignore_data};
 use crate::cli::sync::{self as engine, Given, Loop};
 use crate::cli::{Context, open_cache, peek_cache};
@@ -26,17 +24,17 @@ use crate::project::manifest::{self, Manifest};
 use crate::source::{Listing, Parsed};
 use crate::units;
 
-/// `add -i`, or several links typed: a dataset for each, resolved, downloaded and placed together,
-/// with data.toml and data.lock each written once. a link data.toml has stays as it is.
+/// several links typed: a dataset for each, resolved, downloaded and placed together, with
+/// data.toml and data.lock each written once. a link data.toml has stays as it is.
 #[expect(
     clippy::too_many_lines,
     reason = "every link is resolved before data.toml and data.lock are written once"
 )]
-pub(super) async fn add_list_held(
+pub(super) async fn add_several_held(
     context: &Context,
     adding: &mut AddProject,
     args: &Add,
-    list: List,
+    several: Several,
     here: &Path,
     starting: bool,
 ) -> Result<Report, Error> {
@@ -49,22 +47,23 @@ pub(super) async fn add_list_held(
     }
     let extract = !args.no_extract;
     let net = Arc::new(context.net());
-    list.trust_typed(&net);
+    // each origin typed is trusted for this run, as one typed alone is
+    for (_, parsed) in &several.links {
+        net.trust(parsed.reference.written_origin());
+    }
     let cache = if dry_run {
         peek_cache()?
     } else {
         open_cache()?
     };
-    let mut listings = resolve_lines(context, &net, &list).await?;
-    let entries = list
-        .lines
+    let mut listings = resolve_links(context, &net, &several).await?;
+    let entries = several
+        .links
         .iter()
         .zip(&listings)
-        .map(|((line, parsed), listing)| {
-            listed_entry(list.at(line).as_deref(), line, parsed, listing, extract)
-        })
+        .map(|((link, parsed), listing)| listed_entry(link, parsed, listing, extract))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut lines = FromLine::each(&list);
+    let mut lines = FromLine::each(&several);
     if dry_run {
         super::foresee_names(
             context,
@@ -75,7 +74,7 @@ pub(super) async fn add_list_held(
             true,
         )
         .await
-        .map_err(|error| on_lines(error, list.name.as_deref(), &lines))?;
+        .map_err(|error| on_lines(error, &lines))?;
     } else {
         learn_names(
             context,
@@ -85,7 +84,7 @@ pub(super) async fn add_list_held(
             (extract, args.web_page),
         )
         .await
-        .map_err(|error| on_lines(error, list.name.as_deref(), &lines))?;
+        .map_err(|error| on_lines(error, &lines))?;
     }
     let found = listings.into_iter().zip(entries).collect();
     let NewDatasets {
@@ -93,13 +92,12 @@ pub(super) async fn add_list_held(
         manifest,
         names,
         given,
-        promised,
         already,
     } = new_datasets(
         &context.output,
         adding,
         old.as_ref(),
-        &list,
+        &several,
         found,
         &mut lines,
         (extract, args.web_page),
@@ -118,33 +116,26 @@ pub(super) async fn add_list_held(
         |work, name| work.adding(name),
     );
     if dry_run {
-        let nothing = list.nothing_new();
-        return preview_add(&work, &manifest, old, (names, given), here, Some(&nothing)).await;
+        let nothing = "each link is in data.toml already";
+        return preview_add(&work, &manifest, old, (names, given), here, Some(nothing)).await;
     }
     let updated = (!names.is_empty()).then_some(text.as_str());
-    let outcome = sync_add(
-        &work,
-        adding,
-        &manifest,
-        updated,
-        old,
-        (&placing, given),
-        &promised,
-    )
-    .await
-    .map_err(|error| on_lines(error, list.name.as_deref(), &lines))?;
+    let outcome = sync_add(&work, adding, &manifest, updated, old, (&placing, given))
+        .await
+        .map_err(|error| on_lines(error, &lines))?;
     tell_started(&work, starting);
     ignore_data(&work, &manifest, starting || adding.begins())?;
     let private = private_origins(
         &work,
-        list.lines
+        several
+            .links
             .iter()
             .zip(&lines)
             .filter(|(_, from)| from.dataset.is_some())
             .map(|((_, parsed), _)| &parsed.reference),
     );
     let added = (names.as_slice(), &outcome.placed.planned);
-    tell_list(&work, &manifest, added, (&already, &back), here, &private);
+    tell_several(&work, &manifest, added, (&already, &back), here, &private);
     Ok(Report {
         project: project.root.clone(),
         datasets: names,
@@ -154,24 +145,23 @@ pub(super) async fn add_list_held(
     })
 }
 
-/// what the lines of a list add to data.toml: its text and datasets with them, each new dataset
-/// with its listing and any SHA-256 its line gave, and the datasets it has already.
+/// what several links add to data.toml: its text and datasets with them, each new dataset with
+/// its listing, and the datasets it has already.
 struct NewDatasets {
     text: String,
     manifest: Manifest,
     names: Vec<String>,
     given: Vec<Given>,
-    promised: Vec<Promised>,
     already: Vec<String>,
 }
 
-/// the datasets the lines of `list` add: one data.toml has stays, and each other gets a name apart
-/// from every other, noted in `lines`. data.toml's text is written once however long the list.
+/// the datasets the links of `several` add: one data.toml has stays, and each other gets a name
+/// apart from every other, noted in `lines`. data.toml's text is written once however many links.
 fn new_datasets(
     output: &Output,
     adding: &AddProject,
     old: Option<&Lock>,
-    list: &List,
+    several: &Several,
     found: Vec<(Listing, Listed)>,
     lines: &mut [FromLine],
     (extract, web_page): (bool, bool),
@@ -179,10 +169,9 @@ fn new_datasets(
     let sources = Sources::new(&adding.manifest, old);
     let mut taken: HashSet<String> = adding.manifest.datasets.keys().cloned().collect();
     let mut written = Vec::new();
-    let (mut names, mut given, mut promised, mut already) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for (((line, parsed), (listing, listed)), from) in list.lines.iter().zip(found).zip(lines) {
-        let at = list.subject(line);
+    let (mut names, mut given, mut already) = (Vec::new(), Vec::new(), Vec::new());
+    for (((link, parsed), (listing, listed)), from) in several.links.iter().zip(found).zip(lines) {
+        let at = crate::shown::mask_query(link);
         if let Some(name) = sources.present(&listed.entry, &listing) {
             same_settings(&adding.manifest.datasets[&name], &listed.entry, &name, &at)?;
             already.push(name);
@@ -196,13 +185,6 @@ fn new_datasets(
             RENAME,
         )?;
         taken.insert(name.clone());
-        if let Some(sha256) = line.sha256 {
-            promised.push(Promised {
-                dataset: name.clone(),
-                sha256,
-                line: at,
-            });
-        }
         written.push((name.clone(), listed));
         given.push(Given::Listing(name.clone(), listing));
         from.dataset = Some(name.clone());
@@ -232,12 +214,11 @@ fn new_datasets(
         manifest,
         names,
         given,
-        promised,
         already,
     })
 }
 
-/// a dataset a line of a list names, as data.toml records it.
+/// a dataset a typed link names, as data.toml records it.
 struct Listed {
     reference: String,
     select: Vec<String>,
@@ -245,17 +226,16 @@ struct Listed {
     entry: manifest::Entry,
 }
 
-/// how data.toml records what `line`, `at` in its list, names: the file or folder its link points
-/// at is selected, and a SHA-256 on the line needs one file left, whose stated hash must match.
+/// how data.toml records what `link`, which reads as `parsed`, names: the file or folder the link
+/// points at is selected.
 fn listed_entry(
-    at: Option<&str>,
-    line: &Line,
+    link: &str,
     parsed: &Parsed,
     listing: &Listing,
     extract: bool,
 ) -> Result<Listed, Error> {
     let select = parsed.select();
-    let reference = stored_reference(&line.link, parsed);
+    let reference = stored_reference(link, parsed);
     let alone = Manifest::parse(&manifest::with_dataset(
         "",
         "new",
@@ -266,38 +246,7 @@ fn listed_entry(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
-    let files =
-        engine::filter(&parsed.reference.shown(), &entry, listing).map_err(|error| match at {
-            Some(at) => links::on_line(error, at),
-            None => error,
-        })?;
-    if let (Some(sha256), Some(at)) = (line.sha256, at) {
-        let [file] = files.as_slice() else {
-            return Err(Error::new(
-                Kind::Usage,
-                format!(
-                    "the SHA-256 on {at} checks one file, and {} has {}",
-                    parsed.reference.shown(),
-                    units::count(files.len() as u64, "file", "files")
-                ),
-            )
-            .help("list a link to one file there, or leave its SHA-256 off"));
-        };
-        if let Some(stated) = file.sha256.filter(|stated| *stated != sha256) {
-            return Err(Error::new(
-                Kind::IntegrityMismatch,
-                format!("{} is not the file the SHA-256 on {at} names", file.path),
-            )
-            .detail(format!(
-                "expected sha256 {}, the source states {}",
-                sha256.hex(),
-                stated.hex()
-            ))
-            .help(format!(
-                "check the hash on {at}, or ask the file's owner which bytes are right"
-            )));
-        }
-    }
+    engine::filter(&parsed.reference.shown(), &entry, listing)?;
     Ok(Listed {
         reference,
         select,
@@ -305,8 +254,8 @@ fn listed_entry(
     })
 }
 
-/// refuses a line of a list, `at`, that names `name`, a dataset data.toml has already, with other
-/// settings than the line's own: adding it again would place the same data twice.
+/// refuses a typed link, `at`, that names `name`, a dataset data.toml has already, with other
+/// settings than the link's own: adding it again would place the same data twice.
 fn same_settings(
     existing: &manifest::Entry,
     wanted: &manifest::Entry,
@@ -327,17 +276,17 @@ fn same_settings(
     .help("leave it out, or add its link on its own with --as <name> to have it twice"))
 }
 
-/// resolves every line of `list` at once, within the network's limits, in the lines' order. the
-/// first line that fails stops the add, so a list adds all its datasets or none.
-async fn resolve_lines(
+/// resolves every link of `several` at once, within the network's limits, in the order typed. the
+/// first link that fails stops the add, so it adds all its datasets or none.
+async fn resolve_links(
     context: &Context,
     net: &Arc<Net>,
-    list: &List,
+    several: &Several,
 ) -> Result<Vec<Listing>, Error> {
     let mut tasks = JoinSet::new();
     let mut asked = 0_u64;
-    for (index, (line, parsed)) in list.lines.iter().enumerate() {
-        engine::tell_raw(&context.output, &line.link, &parsed.reference);
+    for (index, (link, parsed)) in several.links.iter().enumerate() {
+        engine::tell_raw(&context.output, link, &parsed.reference);
         if !engine::resolves_locally(&parsed.reference) {
             asked += 1;
         }
@@ -354,7 +303,7 @@ async fn resolve_lines(
             .output
             .wait("Resolving", units::count(asked, "link", "links"))
     });
-    let mut listings: Vec<Option<Listing>> = list.lines.iter().map(|_| None).collect();
+    let mut listings: Vec<Option<Listing>> = several.links.iter().map(|_| None).collect();
     let mut failed: Option<(usize, Error)> = None;
     while let Some(joined) = tasks.join_next().await {
         let (index, listing) = joined.map_err(|err| {
@@ -379,16 +328,16 @@ async fn resolve_lines(
             }
         }
     }
-    if let Some((index, error)) = failed {
-        let at = list.at(&list.lines[index].0);
-        return Err(on_line(error, at.as_deref(), true));
+    if let Some((_, error)) = failed {
+        return Err(typed(error, true));
     }
     Ok(listings.into_iter().flatten().collect())
 }
 
-/// the last lines of `add -i`: each added dataset and where its files are, or that it has none,
-/// then each one data.toml had already, counted past a few dozen, then the `private` origins.
-fn tell_list(
+/// the last lines of an add of several links: each added dataset and where its files are, or that
+/// it has none, then each one data.toml had already, counted past a few dozen, then the `private`
+/// origins.
+fn tell_several(
     work: &Loop<'_>,
     manifest: &Manifest,
     (names, placed): (&[String], &std::collections::BTreeSet<String>),
@@ -454,17 +403,16 @@ fn tell_list(
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Write as _;
     use std::sync::atomic::AtomicBool;
 
     use super::*;
     use crate::cli::project::tests::{listed, offline_context, stated};
     use crate::project::Project;
 
-    /// a list line naming a dataset data.toml has with other settings is refused by its line; the
+    /// a typed link naming a dataset data.toml has with other settings is refused by its link; the
     /// same settings are no change.
     #[test]
-    fn a_known_dataset_with_other_settings_on_a_list_line_is_refused() {
+    fn a_known_dataset_with_other_settings_is_refused() {
         let entry = |select: &str| {
             let text = format!("[datasets.iris]\nref = \"https://example.org/iris.zip\"\n{select}");
             Manifest::parse(&text)
@@ -474,53 +422,42 @@ mod tests {
                 .unwrap()
         };
         let plain = entry("");
-        assert!(same_settings(&plain, &entry(""), "iris", "links.txt:2").is_ok());
-        let error = same_settings(
-            &plain,
-            &entry("select = [\"*.csv\"]\n"),
-            "iris",
-            "links.txt:2",
-        )
-        .unwrap_err();
+        let at = "https://example.org/iris.zip";
+        assert!(same_settings(&plain, &entry(""), "iris", at).is_ok());
+        let error =
+            same_settings(&plain, &entry("select = [\"*.csv\"]\n"), "iris", at).unwrap_err();
         assert_eq!(error.kind, Kind::Usage);
         assert_eq!(
             error.message,
-            "links.txt:2 names iris, which data.toml has already with other settings"
+            "https://example.org/iris.zip names iris, which data.toml has already with other settings"
         );
     }
 
-    /// `count` links in links.txt, each to one file whose hash its source states, as `add -i` has
-    /// them once every line resolved.
-    fn resolved_list(count: usize) -> (List, Vec<(Listing, Listed)>) {
-        let text = (0..count).fold(String::new(), |mut text, index| {
-            let _ = writeln!(text, "https://example.org/f{index:05}.bin");
-            text
-        });
-        let lines = links::parse("links.txt", &text).unwrap();
-        let list = List {
-            name: Some("links.txt".to_owned()),
-            lines: links::checked("links.txt", lines, true).unwrap(),
+    /// `count` typed links, each to one file whose hash its source states, as an add has them once
+    /// every link resolved.
+    fn resolved_links(count: usize) -> (Several, Vec<(Listing, Listed)>) {
+        let links = (0..count)
+            .map(|index| format!("https://example.org/f{index:05}.bin"))
+            .collect();
+        let several = Several {
+            links: crate::cli::links::typed(links).unwrap(),
         };
-        let found = list
-            .lines
+        let found = several
+            .links
             .iter()
-            .map(|(line, parsed)| {
-                let file = line.link.rsplit('/').next().unwrap();
-                let listing = listed(
-                    &line.link,
-                    vec![stated(file, &line.link, line.link.as_bytes())],
-                );
-                let entry =
-                    listed_entry(list.at(line).as_deref(), line, parsed, &listing, true).unwrap();
+            .map(|(link, parsed)| {
+                let file = link.rsplit('/').next().unwrap();
+                let listing = listed(link, vec![stated(file, link, link.as_bytes())]);
+                let entry = listed_entry(link, parsed, &listing, true).unwrap();
                 (listing, entry)
             })
             .collect();
-        (list, found)
+        (several, found)
     }
 
     /// reading data.toml again for each link made 4,000 links take a minute.
     #[test]
-    fn a_list_reads_data_toml_as_often_however_many_links_it_holds() {
+    fn several_links_read_data_toml_as_often_however_many_they_are() {
         let dir = tempfile::tempdir().unwrap();
         let adding = AddProject {
             project: Project {
@@ -535,14 +472,14 @@ mod tests {
         };
         let context = offline_context();
         let reads = |count| {
-            let (list, found) = resolved_list(count);
-            let mut lines = FromLine::each(&list);
+            let (several, found) = resolved_links(count);
+            let mut lines = FromLine::each(&several);
             let before = manifest::tests::reads();
             let new = new_datasets(
                 &context.output,
                 &adding,
                 None,
-                &list,
+                &several,
                 found,
                 &mut lines,
                 (true, false),

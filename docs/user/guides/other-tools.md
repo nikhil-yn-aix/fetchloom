@@ -9,7 +9,8 @@ each row is a command people run to fetch dataset files, and what does that job 
 | you run | with fetchloom | notes |
 |---|---|---|
 | `curl -LO <link>`, then `sha256sum -c` | `fetchloom add <link>`, or once: `fetchloom get <link> -o <file> --sha256 <hash>` | `get` checks the hash before the file takes its name |
-| `wget -i links.txt`, `aria2c -i links.txt` | `fetchloom add -i links.txt` | a dataset for each link, as [below](#a-list-of-files-and-their-hashes) |
+| `wget -i links.txt`, `aria2c -i links.txt` | `fetchloom add -i links.txt --as <name>` | the listed files as one dataset, as [below](#a-list-of-files-and-their-hashes) |
+| `wget` of each file in a `SHA256SUMS` or `MD5SUMS`, then `sha256sum -c` or `md5sum -c` | `fetchloom add <link to the SHA256SUMS>` | every file it lists, each checked, as [below](#a-list-of-files-and-their-hashes) |
 | `gdown <id>`, `gdown --folder <link>` | `fetchloom add drive:<id>`, or the shared link | [google drive](../sources/google-drive.md) |
 | `zenodo_get 3608990` | `fetchloom add zenodo:3608990` | [zenodo](../sources/zenodo.md) |
 | `osf -p 3eunr clone` | `fetchloom add osf:3eunr` | [OSF](../sources/osf.md) |
@@ -26,58 +27,16 @@ each row is a command people run to fetch dataset files, and what does that job 
 | `openneuro-py download --dataset=ds000001` | `fetchloom add openneuro:ds000001` | pins the newest snapshot; [OpenNeuro](../sources/openneuro.md) |
 | `dvc import-url <link> data/<file>` | `fetchloom add <link>` | as [below](#dvc-import-url) |
 | `pooch.retrieve(link, known_hash="sha256:<hash>")` | `fetchloom.get(link, "<file>", sha256="<hash>")` | the [python helper](../reference/python-helper.md) |
+| a pooch registry with its `base_url` | `fetchloom add list:<base_url>/registry.txt --as <name>` | the registry read at its link, as [below](#a-list-of-files-and-their-hashes) |
 | `kagglehub.dataset_download("uciml/breast-cancer-wisconsin-data")` | once `fetchloom add kaggle:uciml/breast-cancer-wisconsin-data --as cancer`, then `fetchloom.path("cancer")` | the files are in `data/cancer` |
 
 ### a list of files and their hashes
 
-a readme often gives a base link and a `SHA256SUMS` file, with the hash before each name. `add -i` reads a link, then its SHA-256, so one `awk` line turns one into the other; it drops the `*` that `sha256sum -b` writes before a name. from a real run at a terminal against files on github, in a new folder `~/paper`, with stderr shown:
-
-```sh
-$ cat SHA256SUMS
-9cc1c345c71bcc9b486b74cbf6063fa66f4bb5e0f603a4b3c3471ec2e5e8e355  iris.csv
-e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b0  tips.csv
-$ awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ 'NF {sub(/^\*/, "", $2); print base $2, $1}' SHA256SUMS > links.txt
-$ fetchloom add -i links.txt
- Downloaded 2 files · 13.3 KiB in 108 ms
-    Started a project in ~/paper
-    Ignored data/ in .gitignore, since its files come from data.lock
-      Added iris, its files are in data/iris
-      Added tips, its files are in data/tips
-  hint: scripts can find each with `fetchloom path <name>`
-  next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
-```
-
-a pooch registry gives the name first, then the hash, which may be `md5:`, and may give a file its own link third. a list for `add -i` takes only a SHA-256, and any other hash stops the add, naming the line:
-
-```text
-error: "md5:0123456789abcdef0123456789abcdef" on line 2 of links.txt is not a SHA-256
-  this looks like an MD5, which has 32 hex digits. give the file's SHA-256, which has 64
-  help: a line is a link, or a link and its SHA-256: 64 hex digits, or sha256: and 64 hex digits. blank lines and lines starting with # are skipped
-```
-
-so leave such hashes out of the list, take a file's own link where the registry gives one, and check the md5 hashes once the files are in place, so a file that changed since the registry was written is not pinned unseen. `add -i` names each dataset and file after its link, not after the registry, so the check looks for each registry md5 among the files `fetchloom export` lists, wherever they were placed:
-
-```sh
-awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ '!/^#/ && NF {print ($3 != "" ? $3 : base $1), ($2 ~ /^md5:/ ? "" : $2)}' registry.txt > links.txt
-fetchloom add -i links.txt
-fetchloom export | cut -c67- | tr '\n' '\0' | xargs -0 md5sum > placed.md5
-awk 'NR == FNR {at[$1] = substr($0, 35); next} !/^#/ && $2 ~ /^md5:/ {md5 = substr($2, 5); if (md5 in at) print $1 ": OK, " at[md5]; else {print $1 ": no file add placed has this md5"; bad = 1}} END {exit bad}' placed.md5 registry.txt
-```
-
-stdout of the last line from a real run against a server on this machine, for a registry naming `sub/measurements.csv`, `Measurements.csv`, `field.csv` with its own link to `elsewhere.csv`, and `tips.csv`, which the server changed after the registry was written:
-
-```text
-sub/measurements.csv: OK, data/measurements/measurements.csv
-Measurements.csv: OK, data/measurements-2/Measurements.csv
-field.csv: OK, data/elsewhere/elsewhere.csv
-tips.csv: no file add placed has this md5
-```
-
-a name with no file is one whose link served other bytes than the registry lists, and the line then exits 1. leave data.lock uncommitted: `fetchloom list` shows the dataset each link made, `fetchloom remove <name>` drops one, and whoever keeps the registry knows which bytes are right. md5sum names on stderr a placed file it cannot read; `fetchloom sync` puts it back. an archive is unpacked as it is added, so no placed file holds its own md5 and it shows as having none too; check one against its link, as `curl -sL <link> | md5sum`.
+a readme often gives a `SHA256SUMS` or `MD5SUMS` file beside the data, with the hash before each name. `fetchloom add` of the list's link pins every file it lists, each at the list's folder plus its path, as one dataset: an MD5 is checked as the file arrives and data.lock pins its SHA-256. a pooch registry, `path hash` or `path hash link` a line, with `md5:` or `sha256:` before a hash, is added by `list:` and its link, and a BSD list, `SHA256 (path) = hash`, by its link or `list:`, and each pins the same files as the GNU form. a list of links on this machine, such as earthaccess or ESGF tools write, is `fetchloom add -i <list> --as <name>`, kept in the project. a SHA-1 or any hash other than MD5 and SHA-256 is refused by its name. [a list of files](../commands/add.md#a-list-of-files) has every form and rule.
 
 ### files in one folder
 
-each link is its own dataset in its own folder. code that reads every file from one folder gets them there through `path` in data.toml, which datasets may share while no two files clash:
+the files of one list are one dataset in one folder. datasets of several links each get a folder of their own, and code that reads every file from one folder gets them there through `path` in data.toml, which datasets may share while no two files clash:
 
 ```toml
 [datasets.iris]
@@ -89,7 +48,7 @@ ref = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/tips.csv"
 path = "raw"
 ```
 
-`fetchloom sync` then moves them, stderr from the same run:
+`fetchloom sync` then moves them; stderr from a real run:
 
 ```text
      Placed data/raw · 2 files linked to the cache

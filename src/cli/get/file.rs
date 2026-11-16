@@ -317,8 +317,10 @@ async fn put(
             } else {
                 Some(claimed(context, cache, remote, false).await?.0)
             };
-            if let Some(expected) = &expected {
-                matches_sha256(&remote.path, &fetched.digest, expected)?;
+            if let Some(expected) = &expected
+                && let Some(sha256) = expected.sha256()
+            {
+                matches_sha256(&remote.path, &fetched.digest, &sha256, expected)?;
             }
             refuse_zipped(cache, remote, &fetched.digest)?;
             settle(

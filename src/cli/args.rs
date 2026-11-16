@@ -919,15 +919,9 @@ pub(crate) struct Add {
     #[arg(long = "as", value_name = "name", help_heading = "options")]
     pub(crate) name: Option<String>,
 
-    /// add a dataset for each link in <file>, one per line, or in stdin for -. a SHA-256
-    /// after a link checks its one file. blank lines and lines starting with # are skipped
-    #[arg(
-        short,
-        long,
-        value_name = "file",
-        conflicts_with_all = ["name", "select", "exclude"],
-        help_heading = "options"
-    )]
+    /// add the files the list in <file> names as one dataset: a file's link a line, then its
+    /// MD5 or SHA-256 if known. the list stays in the project, where data.toml names it
+    #[arg(short, long, value_name = "file", help_heading = "options")]
     pub(crate) input_file: Option<PathBuf>,
 
     #[command(flatten)]
@@ -1291,8 +1285,8 @@ pub(crate) struct Get {
     #[arg(short, long, value_name = "folder", help_heading = "options")]
     pub(crate) dir: Option<PathBuf>,
 
-    /// read links from <file>, one per line, or from stdin for -. a SHA-256 after a link
-    /// checks its one file. blank lines and lines starting with # are skipped
+    /// read links from <file>, one per line, or from stdin for -. an MD5 or SHA-256 after a
+    /// link checks its one file. blank lines and lines starting with # are skipped
     #[arg(short, long, value_name = "file", help_heading = "options")]
     pub(crate) input_file: Option<PathBuf>,
 

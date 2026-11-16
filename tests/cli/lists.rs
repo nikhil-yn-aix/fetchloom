@@ -211,3 +211,186 @@ fn every_list_form_pins_the_same_files() -> Result {
     assert_eq!(pooch, gnu, "{lock}");
     Ok(())
 }
+
+/// `add -i` adds the files a list on this machine names as one dataset, its `md5:` line checked.
+/// data.toml names the list by its path in the project, so a clone without data.lock reads it
+/// again, and `--exclude` chooses among its files as among any dataset's.
+#[test]
+fn a_list_in_the_project_is_one_dataset_a_clone_locks_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(&[])?;
+    // the hosts come from a file, so a person allows them as data.toml's would be
+    sandbox.allow(&server.url);
+    let work = sandbox.work();
+    fs::create_dir(work.join("lists"))?;
+    let list = format!(
+        "# inputs\n{0}/data/iris.csv md5:{1}\n{0}/data/sub/tips.csv sha256:{2}\n",
+        server.url,
+        md5_hex(IRIS),
+        sha256_hex(TIPS)
+    );
+    fs::write(work.join("lists/links.txt"), &list)?;
+    let output = sandbox.run(&["--json", "add", "-i", "lists/links.txt", "--as", "flowers"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["result"]["datasets"],
+        serde_json::json!(["flowers"])
+    );
+    assert_eq!(
+        fs::read_to_string(work.join("data.toml"))?,
+        "[datasets.flowers]\nref = \"list:lists/links.txt\"\n"
+    );
+    assert_eq!(fs::read(work.join("data/flowers/iris.csv"))?, IRIS);
+    assert_eq!(fs::read(work.join("data/flowers/tips.csv"))?, TIPS);
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    let pins = pinned(&lock, "flowers");
+    assert_eq!(pins.len(), 2, "{lock}");
+    assert!(pins[0].contains(&md5_hex(IRIS)), "{lock}");
+
+    let clone = sandbox.folder("clone")?;
+    fs::create_dir(clone.join("lists"))?;
+    fs::copy(work.join("data.toml"), clone.join("data.toml"))?;
+    fs::write(clone.join("lists/links.txt"), &list)?;
+    let synced = sandbox
+        .command_in(&clone, &["sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("clone-cache")?)
+        .output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(clone.join("data/flowers/tips.csv"))?, TIPS);
+    let relocked = fs::read_to_string(clone.join("data.lock"))?;
+    assert_eq!(pinned(&relocked, "flowers"), pins, "{relocked}");
+
+    let output = sandbox.run(&[
+        "add",
+        "-i",
+        "lists/links.txt",
+        "--as",
+        "tips",
+        "--exclude",
+        "iris.csv",
+    ])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert_eq!(pinned(&lock, "tips"), pins[1..], "{lock}");
+    Ok(())
+}
+
+/// a list must stay where data.toml can name it for whoever clones the project: one from stdin or
+/// from outside the project is refused before anything changes.
+#[test]
+fn a_list_outside_the_project_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    fs::write(elsewhere.join("links.txt"), "https://example.org/x.csv\n")?;
+    for (list, message) in [
+        (
+            "../elsewhere/links.txt",
+            "../elsewhere/links.txt is outside the project folder",
+        ),
+        (
+            "-",
+            "add -i reads a list from a file in the project, and stdin is none",
+        ),
+    ] {
+        let output = sandbox.run(&["--json", "add", "-i", list])?;
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+        assert_eq!(json(&output)?["errors"][0]["message"], message);
+        assert!(!sandbox.work().join("data.toml").exists());
+        assert!(!sandbox.work().join(".fetchloom").exists());
+    }
+    Ok(())
+}
+
+/// a list line that would leave a secret in data.lock stops the add before any request.
+#[test]
+fn a_list_with_a_secret_makes_no_request_and_changes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(&[])?;
+    sandbox.allow(&server.url);
+    let work = sandbox.work();
+    fs::write(
+        work.join("links.txt"),
+        format!(
+            "{0}/data/iris.csv\n{0}/data/sub/tips.csv?token=hunter2\n",
+            server.url
+        ),
+    )?;
+    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(
+        document["errors"][0]["message"],
+        "line 2 of links.txt: this link carries token, a secret that data.lock would keep and share"
+    );
+    assert!(!document.to_string().contains("hunter2"), "{document}");
+    assert_eq!(server.targets(), Vec::<String>::new());
+    assert!(!work.join("data.toml").exists());
+    assert!(!work.join(".fetchloom").exists());
+    Ok(())
+}
+
+/// a file of a list with nothing at its link is fixed in the list: while others arrived, the help
+/// leaves it out by its path, and when none did, it says to fix each link on its line.
+#[test]
+fn a_file_of_a_list_with_nothing_at_its_link_is_fixed_in_the_list() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(&[])?;
+    sandbox.allow(&server.url);
+    let work = sandbox.work();
+    for (missing, help) in [
+        (
+            "iris.csv\nmissing.csv",
+            "the other files are in the cache. to add links without it, run the add again with --exclude \"missing.csv\"",
+        ),
+        (
+            "gone.csv\nmissing.csv",
+            "check each link in a browser. if it moved, put the new link on its line of links.txt",
+        ),
+    ] {
+        let lines: Vec<String> = missing
+            .lines()
+            .map(|file| format!("{}/data/{file}", server.url))
+            .collect();
+        fs::write(work.join("links.txt"), lines.join("\n"))?;
+        let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
+        assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        assert_eq!(document["errors"][0]["help"], help, "{document}");
+        assert!(!work.join("data.toml").exists());
+    }
+    Ok(())
+}
+
+/// `get -i` reads its list with the same reader, and a line's MD5 is checked as the bytes arrive:
+/// other bytes keep their file out, naming the line.
+#[test]
+fn get_checks_the_md5_a_list_line_states() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(&[])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("links.txt"),
+        format!(
+            "{0}/data/iris.csv md5:{1}\n{1}  {0}/data/sub/tips.csv\n",
+            server.url,
+            md5_hex(IRIS)
+        ),
+    )?;
+    let output = sandbox.run(&["--json", "get", "-i", "links.txt", "--dir", "out"])?;
+    assert_eq!(output.status.code(), Some(30), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let items = &document["result"]["items"];
+    assert_eq!(items[0]["status"], "ok", "{items}");
+    assert_eq!(items[1]["error"]["kind"], "integrity.mismatch", "{items}");
+    assert_eq!(
+        items[1]["error"]["message"],
+        "tips.csv does not match the MD5 on line 2 of links.txt"
+    );
+    let out = sandbox.work().join("out");
+    assert_eq!(fs::read(out.join("iris").join("iris.csv"))?, IRIS);
+    assert!(
+        !out.join("tips").exists(),
+        "a wrong hash keeps its file out"
+    );
+    Ok(())
+}

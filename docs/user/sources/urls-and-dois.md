@@ -38,7 +38,7 @@ a link's file is named after the last part of its path, decoded. a character win
 | `back%5Cslash.txt` | `slash` | `data/slash/slash.txt` |
 | `Data%20Set.CSV` | `data-set` | `data/data-set/Data Set.CSV` |
 
-`--as` names the dataset; with `add -i`, rename the table in data.toml afterwards, and the next sync moves its pin to the new name. a link to a folder is refused as [above](#accepted-references), while its archive makes one dataset. stderr from real runs against a server on this machine that `allowed_origins` names:
+`--as` names the dataset; with several links, rename the table in data.toml afterwards, and the next sync moves its pin to the new name. a link to a folder is refused as [above](#accepted-references), while its archive makes one dataset. stderr from real runs against a server on this machine that `allowed_origins` names:
 
 ```sh
 $ fetchloom add http://127.0.0.1:19353/many/

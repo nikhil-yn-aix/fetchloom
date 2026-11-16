@@ -1897,9 +1897,9 @@ mod split {
             sandbox.allow(&server.url);
             servers.push(server);
         }
-        let links: Vec<&str> = servers.iter().map(|server| server.url.as_str()).collect();
-        fs::write(sandbox.work().join("links.txt"), links.join("\n"))?;
-        let added = sandbox.run(&["add", "-i", "links.txt"])?;
+        let mut args = vec!["add"];
+        args.extend(servers.iter().map(|server| server.url.as_str()));
+        let added = sandbox.run(&args)?;
         ok(&added)?;
         let stderr = text(&added.stderr)?;
         for start in ["scans.zip.00", "scans.zip.01"] {

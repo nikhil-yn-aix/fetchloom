@@ -91,7 +91,8 @@ a `status` that finds differences and a `sync` that keeps edits both exit 0, so 
 
 | task | run |
 |---|---|
-| several datasets at once | `fetchloom add <ref> <ref> --json`, or `fetchloom add -i links.txt --json`, one link a line with an optional SHA-256 of its one file. any failure writes nothing. `--as`, `--select` and `--exclude` are for one dataset |
+| several datasets at once | `fetchloom add <ref> <ref> --json`. any failure writes nothing. `--as`, `--select` and `--exclude` are for one dataset |
+| the files a list names, as one dataset | `fetchloom add <link to a SHA256SUMS or MD5SUMS> --json`, `fetchloom add list:<link> --json` for a list of another name, or `fetchloom add -i links.txt --as <name> --json` for a list in the project, a file's link a line with an optional MD5 or SHA-256. data.toml names it `list:links.txt`, so commit the list |
 | choose a dataset's files and name | `fetchloom add <ref> --as <name> --select "**/*.csv" --exclude "raw/**" --no-extract --dry-run --json`; `--dry-run` (`-n`) lists the changes in `result.changes`. a link that answers with a web page exits 10 unless the user wants the page itself, which `add <link> --web-page` pins. the same add again exits 0 and changes nothing; a name the project has for another link exits 2 |
 | pin a dataset too big to download here | `fetchloom add <ref> --no-sync --json` writes data.toml and data.lock from the size and SHA-256 or MD5 its source states, downloading nothing; `fetchloom sync <name>` where the data can download completes the pin. a source that states neither for some file exits 2 |
 | files only on this machine | `fetchloom add ./folder --json` pins them with `ref = "local"`. a clone whose cache lacks them exits 10 with `reference.unresolved`; ask the user where they are, then `fetchloom add <folder> --as <name> --json` checks them against data.lock |

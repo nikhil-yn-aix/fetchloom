@@ -35,7 +35,7 @@ use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest, Source};
 use crate::project::state::Synced;
 use crate::project::{Project, native};
-use crate::source::{self, Listing, Reference, Remote, local};
+use crate::source::{self, Listing, Parsed, Reference, Remote, local};
 use crate::units;
 
 /// the most of a title the `Resolved` line shows.
@@ -1092,6 +1092,24 @@ impl<'a> Loop<'a> {
                 listings.push((name, listing));
                 continue;
             }
+            let entry = &manifest.datasets[&name];
+            // a list in the project is read from its file there, which needs no network
+            if let Ok(Parsed {
+                reference: Reference::List(list),
+                ..
+            }) = Reference::parse(&text)
+                && list.in_project().is_some()
+            {
+                let listing = list
+                    .read_in(&self.project.root, crate::net::Api::most_files(&*self.net))
+                    .map_err(|err| cite_place(err, entry, "ref"))?;
+                match filter(&name, entry, &listing) {
+                    Ok(kept) => tell_kept(&self.context.output, &listing, &kept),
+                    Err(_) => tell_resolved(&self.context.output, &listing),
+                }
+                listings.push((name, listing));
+                continue;
+            }
             if self.net.offline().enabled() {
                 return Err(Error::new(
                     Kind::OfflineMissing,
@@ -1102,7 +1120,6 @@ impl<'a> Loop<'a> {
                     self.net.offline().retry()
                 )));
             }
-            let entry = &manifest.datasets[&name];
             let select = &entry.source.select;
             let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
             if self.context.mirrors.mirrors.only

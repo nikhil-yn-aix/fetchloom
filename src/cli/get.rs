@@ -33,6 +33,7 @@ use crate::place::Method;
 use crate::plan::{self, Patterns, Plan};
 use crate::project::lock::LockedFile;
 use crate::project::manifest::{self, Manifest};
+use crate::source::list::Checksum;
 use crate::source::search::is_search;
 use crate::source::{Listing, Parsed, Reference, Remote};
 use crate::units;
@@ -198,11 +199,11 @@ async fn run_links(context: &Context, args: Get) -> Result<Report, Error> {
             )));
         };
         if let Some(listed) = &one.expected
-            && listed.sha256 != sha256
+            && listed.checksum != Checksum::Sha256(sha256)
         {
             return Err(Error::new(
                 Kind::Usage,
-                format!("--sha256 and {} give two SHA-256s", listed.named()),
+                format!("--sha256 and {} give two hashes", listed.named()),
             )
             .help("leave out --sha256, or give the hash the file has"));
         }
@@ -256,10 +257,10 @@ struct Asked {
     expected: Option<Expected>,
 }
 
-/// the SHA-256 a file must have, and where it was given.
+/// the SHA-256 or MD5 a file must have, and where it was given.
 #[derive(Clone)]
 struct Expected {
-    sha256: Sha256,
+    checksum: Checksum,
     /// the line of a list that gave it, as `line 2 of links.txt`, or none for `--sha256`.
     line: Option<String>,
 }
@@ -267,15 +268,40 @@ struct Expected {
 impl Expected {
     /// the hash `--sha256` gives.
     fn flag(sha256: Sha256) -> Expected {
-        Expected { sha256, line: None }
+        Expected {
+            checksum: Checksum::Sha256(sha256),
+            line: None,
+        }
     }
 
-    /// how messages name the hash: `--sha256`, or the SHA-256 on a line of a list.
+    /// the SHA-256 the file must have, when that is the hash given.
+    fn sha256(&self) -> Option<Sha256> {
+        match self.checksum {
+            Checksum::Sha256(sha256) => Some(sha256),
+            Checksum::Md5(_) => None,
+        }
+    }
+
+    /// how messages name the hash: `--sha256`, or the SHA-256 or MD5 on a line of a list.
     fn named(&self) -> String {
+        let function = match self.checksum {
+            Checksum::Sha256(_) => "SHA-256",
+            Checksum::Md5(_) => "MD5",
+        };
         match &self.line {
             None => "--sha256".to_owned(),
-            Some(line) => format!("the SHA-256 on {line}"),
+            Some(line) => format!("the {function} on {line}"),
         }
+    }
+
+    /// `error`, a download whose bytes have another MD5 than the one given, in words that name
+    /// the file and where its MD5 was given; any other error as it is.
+    fn reworded(&self, path: &str, mut error: Error) -> Error {
+        if matches!(self.checksum, Checksum::Md5(_)) && error.kind == Kind::IntegrityMismatch {
+            error.message = format!("{path} does not match {}", self.named());
+            error = error.help(self.help());
+        }
+        error
     }
 
     /// what to do about bytes other than the hash names.
@@ -335,13 +361,13 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
         return Ok(asked);
     };
     let (name, text) = links::read(path, &context.output, &context.stop).await?;
-    let listed = links::checked(&name, links::parse(&name, &text)?, false)?;
-    asked.extend(listed.into_iter().map(|(line, _)| Asked {
-        expected: line.sha256.map(|sha256| Expected {
-            sha256,
-            line: Some(line.named(&name)),
+    let listed = links::listed(&name, &text, context.settings.most_files.value)?;
+    asked.extend(listed.into_iter().map(|listed| Asked {
+        expected: listed.checksum.map(|checksum| Expected {
+            checksum,
+            line: Some(listed.at),
         }),
-        link: line.link,
+        link: listed.link,
     }));
     Ok(asked)
 }
@@ -396,7 +422,11 @@ async fn one_link(
     let remembered = offline
         .and_then(|key| cache.url_record(key))
         .and_then(|kept| {
-            remembered::listing(&parsed, &kept, asked.expected.as_ref().map(|e| e.sha256))
+            remembered::listing(
+                &parsed,
+                &kept,
+                asked.expected.as_ref().and_then(Expected::sha256),
+            )
         });
     let (listing, files) = if let Some(listing) = remembered {
         let files = selected(args, &parsed, &listing)?;
@@ -699,6 +729,15 @@ fn prepare(
         .map(|(remote, name)| {
             let mut job = fetch::listed_job(remote, name, extract);
             job.fetch.page = args.web_page;
+            // a line's MD5 is checked as the bytes arrive, as a source's is
+            if let Some(Expected {
+                checksum: Checksum::Md5(md5),
+                ..
+            }) = &expected
+            {
+                job.fetch.expect.md5 = Some(*md5);
+                job.fetch.revalidate = false;
+            }
             let placed = lone
                 .as_deref()
                 .filter(|_| !job.fetch.unpack)
@@ -757,7 +796,7 @@ fn one_file(files: &[Remote], expected: &Expected, parsed: &Parsed) -> Result<()
     let [file] = files else {
         let help = match &expected.line {
             None => "keep one file with --select, or leave out --sha256".to_owned(),
-            Some(line) => format!("list a link to one file on {line}, or leave its SHA-256 off"),
+            Some(line) => format!("list a link to one file on {line}, or leave its hash off"),
         };
         return Err(Error::new(
             Kind::Usage,
@@ -770,18 +809,26 @@ fn one_file(files: &[Remote], expected: &Expected, parsed: &Parsed) -> Result<()
         )
         .help(help));
     };
-    match file.sha256 {
-        Some(stated) if stated != expected.sha256 => Err(Error::new(
+    let differs = match expected.checksum {
+        Checksum::Sha256(sha256) => file
+            .sha256
+            .filter(|stated| *stated != sha256)
+            .map(|stated| ("sha256", sha256.hex(), stated.hex())),
+        Checksum::Md5(md5) => file
+            .md5
+            .filter(|stated| *stated != md5)
+            .map(|stated| ("md5", md5.hex(), stated.hex())),
+    };
+    match differs {
+        Some((function, given, stated)) => Err(Error::new(
             Kind::IntegrityMismatch,
             format!("{} is not the file {} names", file.path, expected.named()),
         )
         .detail(format!(
-            "expected sha256 {}, the source states {}",
-            expected.sha256.hex(),
-            stated.hex()
+            "expected {function} {given}, the source states {stated}"
         ))
         .help(expected.help())),
-        _ => Ok(()),
+        None => Ok(()),
     }
 }
 
@@ -803,7 +850,10 @@ async fn settle(
         }
     }
     if let Some(error) = fetch::together(&labels, failed) {
-        return Err(error);
+        return Err(match (&wanted.expected, labels.as_slice()) {
+            (Some(expected), [path]) => expected.reworded(path, error),
+            _ => error,
+        });
     }
     finish(context, cache, wanted, found, None, taken).await
 }
@@ -926,8 +976,10 @@ fn vouch(
     expected: Option<&Expected>,
     taken: &mut Taken,
 ) -> Result<(), Error> {
-    if let ([path], [found], Some(expected)) = (paths, fetched, expected) {
-        matches_sha256(path, &found.digest, expected)?;
+    if let ([path], [found], Some(expected)) = (paths, fetched, expected)
+        && let Some(sha256) = expected.sha256()
+    {
+        matches_sha256(path, &found.digest, &sha256, expected)?;
     }
     // a folder another link filled could hold files of the same name, which its bytes in the
     // cache would let this link replace
@@ -944,8 +996,13 @@ fn vouch(
     Ok(())
 }
 
-fn matches_sha256(path: &str, digest: &Sha256, expected: &Expected) -> Result<(), Error> {
-    if expected.sha256 == *digest {
+fn matches_sha256(
+    path: &str,
+    digest: &Sha256,
+    sha256: &Sha256,
+    expected: &Expected,
+) -> Result<(), Error> {
+    if sha256 == digest {
         return Ok(());
     }
     Err(Error::new(
@@ -954,7 +1011,7 @@ fn matches_sha256(path: &str, digest: &Sha256, expected: &Expected) -> Result<()
     )
     .detail(format!(
         "expected sha256 {}, got {}",
-        expected.sha256.hex(),
+        sha256.hex(),
         digest.hex()
     ))
     .help(expected.help()))

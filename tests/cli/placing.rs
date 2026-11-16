@@ -3057,18 +3057,13 @@ fn a_rolled_back_list_takes_the_files_it_placed_with_it() -> Result {
     let bytes = zip_of(&[("a.csv", b"first"), ("sub/b.csv", b"other")])?;
     let archive = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
     let plain = Server::start("/files/c.csv", vec![file(b"c\n", "\"c1\"")])?;
-    sandbox.allow(&archive.url);
-    sandbox.allow(&plain.url);
-    fs::write(
-        sandbox.work().join("links.txt"),
-        format!("{}\n{}\n", plain.url, archive.url),
-    )?;
+
     // a folder the second dataset needs that refuses new files, so its second file cannot be placed
     let refusing = sandbox.work().join("data").join("files").join("sub");
     fs::create_dir_all(&refusing)?;
     fs::set_permissions(&refusing, fs::Permissions::from_mode(0o555))?;
 
-    let added = sandbox.run(&["add", "-i", "links.txt"]);
+    let added = sandbox.run(&["add", &plain.url, &archive.url]);
     fs::set_permissions(&refusing, fs::Permissions::from_mode(0o755))?;
     let added = added?;
 

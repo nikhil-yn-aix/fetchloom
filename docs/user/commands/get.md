@@ -24,7 +24,7 @@ fetchloom get [options] <link>...
 | `-o <file>`, `--output <file>` | write the one downloaded file at exactly `<file>`, as it came, never unpacked; see [one file](#one-file) |
 | `--force` | with `-o`, replace a file at `<file>` that holds other bytes |
 | `-d <folder>`, `--dir <folder>` | choose the output folder; with several links, the folder that holds one folder for each |
-| `-i <file>`, `--input-file <file>` | read links from a file, one per line, each with an optional SHA-256, or from stdin for `-` |
+| `-i <file>`, `--input-file <file>` | read links from a file, one per line, each with an optional MD5 or SHA-256, or from stdin for `-` |
 | `--sha256 <hex>` | check the one downloaded file against this SHA-256 before it takes its name or goes in the folder |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
@@ -163,7 +163,7 @@ an interruption, a refused question about the total size or a cache that cannot 
 
 ## link lists
 
-`-i <file>` reads one link a line, after any links on the command line. blank lines and lines starting with `#` are skipped, and spaces around a link are ignored. a link may be followed by the SHA-256 of its one file, as 64 hex digits or `sha256:` and 64 hex digits, which is checked as `--sha256` checks it:
+`-i <file>` reads one link a line, after any links on the command line, with the reader every list goes through, as [a list of files](add.md#a-list-of-files) shows. blank lines and lines starting with `#` are skipped, and spaces around a link are ignored. a link may be followed by the MD5 or SHA-256 of its one file, bare or after `md5:` or `sha256:`, or come after it as a checksum line has it: a SHA-256 is checked as `--sha256` checks it, and an MD5 as the bytes arrive. a line may also name a DOI or an id, each fetched as a link is, and a list holds at most 64 MiB:
 
 ```text
 # measurements to compare
@@ -179,7 +179,7 @@ fetchloom get -i - < links.txt
 
 at a terminal, it says so on stderr before it waits: `reading links from stdin, one per line; ctrl-d ends`. on windows, ctrl-z, then enter, ends the list.
 
-a list always runs as several links, even when it holds one, so `--dir` names the folder that holds each link's folder. the whole list is checked before any request: a line of search words, a path on this machine, a line naming the same data as an earlier one, a line that is no link, or a list with no links, stops the run naming the line. a line whose hash names other bytes fails that link alone with `integrity.mismatch`, naming the line, as `wine.csv does not match the SHA-256 on line 2 of links.txt`.
+a list always runs as several links, even when it holds one, so `--dir` names the folder that holds each link's folder. the whole list is checked before any request: a line of search words, a path on this machine, a line naming the same data as an earlier one, a line that is no link, or a list with no links, stops the run naming the line, and so does a hash other than an MD5 or a SHA-256, by its name, and a path below a folder, which a list on this machine does not have. a line whose hash names other bytes fails that link alone with `integrity.mismatch`, naming the line, as `wine.csv does not match the SHA-256 on line 2 of links.txt`.
 
 ## checking a hash
 

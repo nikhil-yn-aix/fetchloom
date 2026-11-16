@@ -108,6 +108,7 @@ sync drops an archive's own bytes once its files are in the cache, unless anothe
 | source | `resolved` | file `url` |
 |---|---|---|
 | [imported files](data-toml.md#imported-files) | `local` | empty |
+| [a list of files](data-toml.md#lists-of-files) | the `list:` reference | each file's link: the list's folder plus its path, or the link its line gives |
 
 an import records no path of the machine it came from, and no link: its bytes are in the caches of the machines that imported or were given them. a machine whose cache lacks them stops before any download with `reference.unresolved`, exit 10. files copied to the dataset's folder are adopted when they hold the pinned bytes, and `fetchloom add <folder> --as <name>` checks a folder against the pins before it copies anything in. an import leaves out `access`, which is then unknown.
 

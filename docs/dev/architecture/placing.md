@@ -108,7 +108,7 @@ copies are written and flushed through their original handles, without reopening
 
 sync and get share the command's stop signal with the placer. a requested stop prevents new folder changes, removals and placements. copies check the signal between at most 1 MiB blocks, including the capped and non-linux copy paths. a filesystem call already in progress may finish before the stop is observed.
 
-staged copies check again before flushing and before publication. a cancelled batch drops unpublished staging files; it never names unflushed bytes. sync records completed placements with incomplete state before returning interruption. the next run can resume missing files. the worker count and method order do not change. an add is rolled back instead, so when its placing fails or stops, `undo` removes the files it placed for the added datasets, every one of an `add -i` list, unless they changed since, with a placer that ignores the stop, and drops their records and those of files it took as placed.
+staged copies check again before flushing and before publication. a cancelled batch drops unpublished staging files; it never names unflushed bytes. sync records completed placements with incomplete state before returning interruption. the next run can resume missing files. the worker count and method order do not change. an add is rolled back instead, so when its placing fails or stops, `undo` removes the files it placed for the added datasets, every one of several typed links, unless they changed since, with a placer that ignores the stop, and drops their records and those of files it took as placed.
 
 ### changed hardlinks and aliases
 

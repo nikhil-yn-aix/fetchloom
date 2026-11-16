@@ -2217,7 +2217,7 @@ fn one_failed_link_leaves_the_others_and_fails_the_run() -> Result {
 }
 
 /// the cause and its help come once, with each link once, while `--json` keeps every link's own
-/// failure; `add -i` tells the cause once too.
+/// failure; an add of the same links tells the cause once too.
 #[test]
 fn links_that_fail_alike_are_told_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2252,7 +2252,9 @@ fn links_that_fail_alike_are_told_once() -> Result {
         assert!(message.contains(link.as_str()), "{document}");
     }
 
-    let added = sandbox.run(&["add", "-i", "links.txt"])?;
+    let mut args = vec!["add"];
+    args.extend(links.iter().map(String::as_str));
+    let added = sandbox.run(&args)?;
     let stderr = text(&added.stderr)?;
     assert_eq!(added.status.code(), Some(10), "{stderr}");
     assert_eq!(stderr.matches("has nothing at").count(), 1, "{stderr}");

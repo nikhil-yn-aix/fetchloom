@@ -1318,112 +1318,9 @@ fn a_cancelled_download_of_an_add_says_nothing_changed() -> Result {
 
 const WINE: &[u8] = b"alcohol,class\n14.23,1\n";
 
+/// past a few dozen datasets an add of several links counts them on one line.
 #[test]
-fn a_list_adds_one_dataset_per_line_and_checks_hashes() -> Result {
-    let sandbox = Sandbox::new()?;
-    let iris = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
-    let wine = Server::start("/wine.csv", vec![file(WINE, "\"w1\"")])?;
-    // the hosts come from a file, so a person allows them as data.toml's would be
-    sandbox.allow(&iris.url);
-    sandbox.allow(&wine.url);
-    let work = sandbox.work();
-    fs::write(
-        work.join("links.txt"),
-        format!(
-            "# inputs\n{} sha256:{}\n\n{}\n",
-            iris.url,
-            sha256_hex(IRIS),
-            wine.url
-        ),
-    )?;
-    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
-    assert_eq!(
-        json(&output)?["result"]["datasets"],
-        serde_json::json!(["iris", "wine"])
-    );
-    assert_eq!(
-        fs::read_to_string(work.join("data.toml"))?,
-        format!(
-            "[datasets.iris]\nref = \"{}\"\n\n[datasets.wine]\nref = \"{}\"\n",
-            iris.url, wine.url
-        )
-    );
-    let lock = fs::read_to_string(work.join("data.lock"))?;
-    assert!(lock.contains(&sha256_hex(IRIS)), "{lock}");
-    assert!(lock.contains(&sha256_hex(WINE)), "{lock}");
-    assert_eq!(fs::read(work.join("data/iris/iris.csv"))?, IRIS);
-    assert_eq!(fs::read(work.join("data/wine/wine.csv"))?, WINE);
-
-    let other = Server::start("/other.csv", vec![file(b"other\n", "\"o1\"")])?;
-    sandbox.allow(&other.url);
-    fs::write(
-        work.join("more.txt"),
-        format!("{} {}\n", other.url, sha256_hex(IRIS)),
-    )?;
-    let (manifest, pins) = (fs::read(work.join("data.toml"))?, lock.into_bytes());
-    let wrong = sandbox.run(&["--json", "add", "-i", "more.txt"])?;
-    assert_eq!(wrong.status.code(), Some(30), "{}", text(&wrong.stdout)?);
-    assert_eq!(
-        json(&wrong)?["errors"][0]["message"],
-        "other/other.csv does not match the SHA-256 on line 1 of more.txt"
-    );
-    assert_eq!(fs::read(work.join("data.toml"))?, manifest);
-    assert_eq!(fs::read(work.join("data.lock"))?, pins);
-    assert!(!work.join("data/other").exists());
-    Ok(())
-}
-
-/// `-v` adds what each dataset pinned and where its files were placed.
-#[test]
-fn a_list_tells_one_line_for_each_dataset_it_adds() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Routes::start(vec![
-        (PATH.to_owned(), file(IRIS, "\"v1\"")),
-        ("/files/wine.csv".to_owned(), file(WINE, "\"w1\"")),
-    ])?;
-    sandbox.allow(&server.url);
-    let links = format!("{0}{PATH}\n{0}/files/wine.csv\n", server.url);
-    let verbose = sandbox.folder("verbose")?;
-    for folder in [sandbox.work(), verbose.clone()] {
-        fs::write(folder.join("links.txt"), &links)?;
-    }
-    let output = sandbox.run(&["add", "-i", "links.txt"])?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    let dataset_lines: Vec<&str> = stderr
-        .lines()
-        .filter(|line| line.contains("iris") || line.contains("wine"))
-        .collect();
-    assert_eq!(
-        dataset_lines,
-        [
-            "      Added iris, its files are in data/iris",
-            "      Added wine, its files are in data/wine"
-        ],
-        "{stderr}"
-    );
-    let output = sandbox
-        .command_in(&verbose, &["-v", "add", "-i", "links.txt"])
-        .output()?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    for told in [
-        format!(
-            "     Pinned iris, new in data.lock: {}{PATH} · 1 file · 32 B",
-            server.url
-        ),
-        "     Placed data/wine · 1 file".to_owned(),
-        "      Added wine, its files are in data/wine".to_owned(),
-    ] {
-        assert!(stderr.contains(&told), "{told}: {stderr}");
-    }
-    Ok(())
-}
-
-/// past a few dozen datasets a list's add counts them on one line.
-#[test]
-fn a_long_list_counts_the_datasets_it_adds() -> Result {
+fn many_links_count_the_datasets_they_add() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Routes::start(
         (0..41)
@@ -1436,13 +1333,12 @@ fn a_long_list_counts_the_datasets_it_adds() -> Result {
             })
             .collect(),
     )?;
-    sandbox.allow(&server.url);
-    let links = (0..41)
+    let links: Vec<String> = (0..41)
         .map(|number| format!("{}/files/f{number:02}.csv", server.url))
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs::write(sandbox.work().join("links.txt"), &links)?;
-    let output = sandbox.run(&["add", "-i", "links.txt"])?;
+        .collect();
+    let mut args = vec!["add"];
+    args.extend(links.iter().map(String::as_str));
+    let output = sandbox.run(&args)?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     let added: Vec<&str> = stderr
@@ -1457,8 +1353,8 @@ fn a_long_list_counts_the_datasets_it_adds() -> Result {
     Ok(())
 }
 
-/// a list typed at a terminal says where it is read and how to end it, so `add -i -` and
-/// `get -i -` never wait there in silence.
+/// a list typed at a terminal says where it is read and how to end it, so `get -i -` never waits
+/// there in silence.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_list_typed_at_a_terminal_says_how_to_end_it() -> Result {
@@ -1467,19 +1363,13 @@ fn a_list_typed_at_a_terminal_says_how_to_end_it() -> Result {
     sandbox.allow(&server.url);
     let told = "reading links from stdin, one per line; ctrl-d ends";
     let loose = sandbox.folder("loose")?;
-    for (folder, args, made) in [
-        (sandbox.work(), ["add", "-i", "-"], "data/iris/iris.csv"),
-        (loose, ["get", "-i", "-"], "iris/iris.csv"),
-    ] {
-        let command = sandbox.command_in(&folder, &args);
-        let keys = format!("{}{PATH}\r\u{4}", server.url);
-        let Some((code, screen)) = crate::support::typed(&folder, &command, "", told, &keys)?
-        else {
-            return Ok(());
-        };
-        assert_eq!(code, Some(0), "{screen}");
-        assert_eq!(fs::read(folder.join(made))?, IRIS, "{screen}");
-    }
+    let command = sandbox.command_in(&loose, &["get", "-i", "-"]);
+    let keys = format!("{}{PATH}\r\u{4}", server.url);
+    let Some((code, screen)) = crate::support::typed(&loose, &command, "", told, &keys)? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert_eq!(fs::read(loose.join("iris/iris.csv"))?, IRIS, "{screen}");
     Ok(())
 }
 
@@ -1517,17 +1407,16 @@ fn several_typed_links_add_a_dataset_each() -> Result {
     Ok(())
 }
 
-/// a list takes no --as, so the help points at data.toml, where a rename keeps the pin.
+/// several links take no --as, so the help points at data.toml, where a rename keeps the pin.
 #[test]
-fn a_list_line_whose_name_is_taken_says_how_to_rename_it() -> Result {
+fn a_link_whose_name_is_taken_among_several_says_how_to_rename_it() -> Result {
     let sandbox = Sandbox::new()?;
     let first = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
     let second = Server::start("/iris.csv", vec![file(WINE, "\"w1\"")])?;
+    // listed origins leave only the warning about the name
     sandbox.allow(&first.url);
     sandbox.allow(&second.url);
-    let links = format!("{}\n{}\n", first.url, second.url);
-    fs::write(sandbox.work().join("links.txt"), links)?;
-    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
+    let output = sandbox.run(&["--json", "add", &first.url, &second.url])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     let warnings = warned(&json(&output)?);
     assert_eq!(
@@ -1536,33 +1425,6 @@ fn a_list_line_whose_name_is_taken_says_how_to_rename_it() -> Result {
             "iris was taken, so this one is iris-2; to name it yourself, rename its table in data.toml, and the next sync moves its pin to the new name"
         ]
     );
-    Ok(())
-}
-
-#[test]
-fn a_list_with_a_secret_makes_no_request_and_changes_nothing() -> Result {
-    let sandbox = Sandbox::new()?;
-    let iris = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
-    sandbox.allow(&iris.url);
-    let work = sandbox.work();
-    fs::write(
-        work.join("links.txt"),
-        format!("{}\n{}?token=hunter2\n", iris.url, iris.url),
-    )?;
-    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
-    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
-    let document = json(&output)?;
-    assert_eq!(
-        document["errors"][0]["message"],
-        "line 2 of links.txt: this link carries token, a secret that data.toml and data.lock would keep and share"
-    );
-    assert!(!document.to_string().contains("hunter2"), "{document}");
-    assert_eq!(document["work"]["requests"], 0);
-    assert_eq!(iris.requests(), Vec::<String>::new());
-    assert!(!work.join("data.toml").exists());
-    assert!(!work.join(".fetchloom").exists());
-    let named = sandbox.run(&["add", "-i", "links.txt", "--as", "flowers"])?;
-    assert_eq!(named.status.code(), Some(2), "--as names one dataset");
     Ok(())
 }
 
@@ -1994,76 +1856,6 @@ fn a_list_of_datasets_that_fails_is_asked_once() -> Result {
     Ok(())
 }
 
-/// text and json both name line 3, and the help fixes the line, as data.toml has no entry yet.
-#[test]
-fn a_missing_link_in_a_list_names_its_line() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Routes::start(vec![("/files/a.csv".to_owned(), file(b"a\n1\n", "\"a1\""))])?;
-    sandbox.allow(&server.url);
-    fs::write(
-        sandbox.work().join("links.txt"),
-        format!(
-            "# inputs\n{0}/files/a.csv\n{0}/files/missing.csv\n",
-            server.url
-        ),
-    )?;
-    let at = "line 3 of links.txt";
-    let message = format!(
-        "{at}: 127.0.0.1 has nothing at {}/files/missing.csv (404)",
-        server.url
-    );
-    let help = format!("check the link on {at} in a browser. if it moved, put the new link there");
-    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
-    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
-    let error = &json(&output)?["errors"][0];
-    assert_eq!(error["message"], message);
-    assert_eq!(error["help"], help);
-    assert_eq!(error["failures"][0]["message"], message);
-    let story = text(&sandbox.run(&["add", "-i", "links.txt"])?.stderr)?;
-    assert!(
-        story.contains(&format!("error: {message}\n  help: {help}")),
-        "{story}"
-    );
-    assert!(!sandbox.work().join("data.toml").exists());
-    Ok(())
-}
-
-/// the help never sends them to the command line or data.toml, whether they failed alike or not.
-#[test]
-fn links_of_a_list_that_fail_are_fixed_on_their_lines() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Routes::start(vec![
-        ("/files/a.csv".to_owned(), file(b"a\n1\n", "\"a1\"")),
-        (
-            "/files/denied.csv".to_owned(),
-            reply("403 Forbidden", &[("Content-Length", "0")], b""),
-        ),
-    ])?;
-    sandbox.allow(&server.url);
-    let help =
-        "check each link in a browser. if it moved, put the new link on its line of links.txt";
-    for (lines, shared) in [
-        (["gone-1.csv", "a.csv", "gone-2.csv"], true),
-        (["gone-1.csv", "denied.csv", "gone-2.csv"], false),
-    ] {
-        let list: Vec<String> = lines
-            .iter()
-            .map(|file| format!("{}/files/{file}", server.url))
-            .collect();
-        fs::write(sandbox.work().join("links.txt"), list.join("\n"))?;
-        let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
-        let document = json(&output)?;
-        assert_eq!(output.status.code(), Some(10), "{document}");
-        if shared {
-            assert_eq!(document["errors"][0]["help"], help, "{document}");
-        }
-        let story = text(&sandbox.run(&["add", "-i", "links.txt"])?.stderr)?;
-        assert!(story.contains(&format!("help: {help}\n")), "{story}");
-        assert!(!story.contains("on the command line"), "{story}");
-    }
-    Ok(())
-}
-
 /// a hugging face dataset whose hub states only one file's SHA-256 downloads the other first, yet
 /// tells both as one total before and after, as a sync of the entry on a fresh machine does.
 #[cfg(debug_assertions)]
@@ -2225,7 +2017,7 @@ fn a_hugging_face_gitattributes_is_left_out_until_selected() -> Result {
     Ok(())
 }
 
-/// a dry run of links data.toml has already says so, naming the list they came from, if any.
+/// a dry run of links data.toml has already says so.
 #[test]
 fn a_dry_run_add_of_links_already_there_says_so() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2233,30 +2025,17 @@ fn a_dry_run_add_of_links_already_there_says_so() -> Result {
         (PATH.to_owned(), file(IRIS, "\"v1\"")),
         ("/files/wine.csv".to_owned(), file(WINE, "\"w1\"")),
     ])?;
-    sandbox.allow(&server.url);
     let (iris, wine) = (
         format!("{}{PATH}", server.url),
         format!("{}/files/wine.csv", server.url),
     );
-    fs::write(
-        sandbox.work().join("links.txt"),
-        format!("{iris}\n{wine}\n"),
-    )?;
-    ok(&sandbox.run(&["add", "-i", "links.txt"])?)?;
-    for (args, said) in [
-        (
-            &["add", "-i", "links.txt", "--dry-run"][..],
-            "Ok each link of links.txt is in data.toml already; dry run, nothing was changed",
-        ),
-        (
-            &["add", &iris, &wine, "--dry-run"],
-            "Ok each link is in data.toml already; dry run, nothing was changed",
-        ),
-    ] {
-        let output = sandbox.run(args)?;
-        let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(0), "{stderr}");
-        assert!(stderr.contains(said), "{args:?}: {stderr}");
-    }
+    ok(&sandbox.run(&["add", &iris, &wine])?)?;
+    let output = sandbox.run(&["add", &iris, &wine, "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok each link is in data.toml already; dry run, nothing was changed"),
+        "{stderr}"
+    );
     Ok(())
 }
