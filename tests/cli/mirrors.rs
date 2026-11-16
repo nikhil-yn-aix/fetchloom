@@ -717,6 +717,65 @@ fn a_dead_web_mirror_is_asked_once_then_skipped() -> Result {
     Ok(())
 }
 
+/// a mirror that answered was reached, so the warning that skips it says what it answered and
+/// never "could not reach": a server error of its marker or of an archive's list of files points
+/// at whoever keeps the mirror, and a refused list names the sign-in by host and port, as a
+/// refused file does.
+#[test]
+fn a_mirror_that_answered_is_told_by_its_answer() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = project(&sandbox)?;
+    let record = fs::read_dir(sandbox.cache().join("unpacked"))?
+        .next()
+        .ok_or("no archive unpacked")??;
+    let hex = sha256_hex(&fs::read(record.path())?);
+    let tree = format!("/m/trees/{}/{}", &hex[..2], &hex[2..]);
+    let keeper = "ask whoever keeps the mirror, or try again later";
+    let mirror = web_mirror_of(&sandbox)?;
+    let base = format!("{}/m", mirror.url);
+    for (target, answer, case) in [
+        (tree.as_str(), "503 Service Unavailable", "tree"),
+        (tree.as_str(), "401 Unauthorized", "refused tree"),
+        ("/m/fetchloom-mirror", "503 Service Unavailable", "marker"),
+    ] {
+        mirror.change(vec![(
+            target.to_owned(),
+            reply(answer, &[("Content-Length", "0")], b""),
+        )]);
+        let (folder, cache) = cold(&sandbox, &case.replace(' ', "-"))?;
+        let output = sandbox
+            .command_in(&folder, &["--json", "sync", "--mirror", &base])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_RETRIES", "0")
+            .output()?;
+        ok(&output)?;
+        let document = json(&output)?;
+        let skipped = warning(&document, "mirror.skipped");
+        let said = skipped["message"].as_str().unwrap_or_default();
+        let help = skipped["help"].as_str().unwrap_or_default();
+        let status = &answer[..3];
+        assert!(
+            !said.contains("could not reach") && said.contains(status),
+            "{case}: {document}"
+        );
+        if status == "401" {
+            let host = mirror.url.trim_start_matches("http://");
+            assert_eq!(
+                help,
+                format!("if it needs a login, sign in with `fetchloom auth login {host}`"),
+                "{case}"
+            );
+        } else {
+            assert!(
+                said.starts_with(&format!("the mirror {base} failed: ")),
+                "{case}: {said}"
+            );
+            assert_eq!(help, keeper, "{case}");
+        }
+    }
+    Ok(())
+}
+
 /// a mirror that asks to wait an hour answered, so it is called busy, not unreachable, and the run
 /// goes to the sources at once.
 #[test]

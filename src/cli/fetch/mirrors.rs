@@ -309,9 +309,9 @@ fn web_missing(location: &Location, look: web::Look) -> Option<Skip> {
 }
 
 /// the warning and help for the mirror at `location`, skipped once a request to it ended with
-/// `error`, as `otherwise` words it. a mirror that answered is never told to check its address:
-/// one that asked to wait is busy, one that refused names its sign-in, and a server error points
-/// at whoever keeps it.
+/// `error`; `otherwise` words one no answer came from. a mirror that answered is never told to
+/// check its address or called unreachable: one that asked to wait is busy, one that refused
+/// names its sign-in, and a server error points at whoever keeps it.
 fn skip_warning(
     location: &Location,
     error: &Error,
@@ -333,7 +333,10 @@ fn skip_warning(
             refused_help(location, 401, None),
         ),
         Kind::NetworkStatus => (
-            otherwise(),
+            format!(
+                "the mirror {location} failed: {}, so this run skips it",
+                error.message
+            ),
             "ask whoever keeps the mirror, or try again later".to_owned(),
         ),
         _ => (
@@ -847,8 +850,8 @@ enum Got {
     /// is not there.
     Unlisted,
     Damaged,
-    /// the mirror failed, with its answer in short.
-    Trouble(String),
+    /// the mirror failed, with what it answered, if anything.
+    Trouble(Error),
 }
 
 /// asks each mirror in order for the tree `tree` of `archive` in `dataset`, recording the first
@@ -878,7 +881,7 @@ async fn tree_from_mirrors(
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
                         return Err(Stop::stopped());
                     }
-                    Err(err) => Got::Trouble(crate::error::said(&err)),
+                    Err(err) => Got::Trouble(Error::new(Kind::LocalIo, crate::error::said(&err))),
                 }
             }
             Location::Web(_) | Location::S3(_) => {
@@ -891,8 +894,14 @@ async fn tree_from_mirrors(
                     web::Tree::Answered(403) if matches!(location, Location::S3(_)) => {
                         Got::Unlisted
                     }
-                    web::Tree::Answered(status) => Got::Trouble(format!("answered {status}")),
-                    web::Tree::Failed(error) => Got::Trouble(error.message),
+                    web::Tree::Answered(status) => {
+                        let kind = match status {
+                            401 | 403 => Kind::AuthRequired,
+                            _ => Kind::NetworkStatus,
+                        };
+                        Got::Trouble(Error::new(kind, format!("answered {status}")))
+                    }
+                    web::Tree::Failed(error) => Got::Trouble(error),
                 }
             }
         };
@@ -908,17 +917,27 @@ async fn tree_from_mirrors(
                 continue;
             }
             Got::Damaged => Vec::new(),
-            Got::Trouble(said) => {
-                mirrored.lacked(index, tree, said.clone());
+            Got::Trouble(error) => {
+                let failed = || {
+                    format!(
+                        "the mirror {location} failed: {}, so this run skips it",
+                        error.message
+                    )
+                };
+                let warning = match location {
+                    Location::Folder(_) => (
+                        failed(),
+                        "check the mirror, and that this machine can reach it".to_owned(),
+                    ),
+                    Location::Web(_) | Location::S3(_) => skip_warning(location, &error, failed),
+                };
+                mirrored.lacked(index, tree, error.message.clone());
                 mirrored.skip(
                     context,
                     index,
                     Skip {
-                        warning: Some((
-                            format!("the mirror {location} failed: {said}, so this run skips it"),
-                            "check the mirror, and that this machine can reach it".to_owned(),
-                        )),
-                        said,
+                        warning: Some(warning),
+                        said: error.message,
                     },
                 );
                 continue;
