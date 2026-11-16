@@ -1302,7 +1302,7 @@ impl Net {
         {
             return Err(Failure::Final(lfs_pointer(
                 &fetch.url,
-                (self.rules.lfs_link)(&fetch.url),
+                (self.rules.lfs_help)(&fetch.url),
             )));
         }
         Ok(())
@@ -1939,24 +1939,19 @@ fn is_lfs_pointer(head: &[u8]) -> bool {
     head.starts_with(LFS_POINTER)
 }
 
-/// the error for `url`, which answered with a git-lfs pointer rather than the file, with `link`,
-/// where its site serves the file itself, when its source knows.
-fn lfs_pointer(url: &Url, link: Option<String>) -> Error {
-    let error = Error::new(
+/// the error for `url`, which answered with a git-lfs pointer rather than the file, with `help`,
+/// its source's words for what to do, when its source knows.
+fn lfs_pointer(url: &Url, help: Option<String>) -> Error {
+    Error::new(
         Kind::SourceInvalid,
         format!(
             "{} sent a git-lfs pointer, not the file it stands for",
             crate::shown::Shown(url)
         ),
-    );
-    match link {
-        Some(link) => error.help(format!(
-            "git-lfs keeps that file apart from the repository: use {link} instead"
-        )),
-        None => error.help(
-            "git-lfs keeps that file apart from the repository: use the link its site gives to download the file itself",
-        ),
-    }
+    )
+    .help(help.unwrap_or_else(|| {
+        "git-lfs keeps that file apart from the repository: use the link its site gives to download the file itself".to_owned()
+    }))
 }
 
 /// a pinned size bounds the download, so an answer stating another length is refused unread.

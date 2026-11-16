@@ -293,17 +293,17 @@ impl Folder {
     }
 
     /// [`Folder::resolve`], where `signed_in` says whether a key goes with the requests to the
-    /// host's api.
+    /// host's api. github shows a key whether it keeps the repository private, whose files then
+    /// download from its api, with the key.
     async fn listing(&self, api: &impl Api, signed_in: bool) -> Result<Listing, Error> {
-        if let Host::GitHub(repo) = &self.host
-            && signed_in
-        {
-            repo.public(api).await?;
-        }
+        let private = match &self.host {
+            Host::GitHub(repo) if signed_in => repo.private(api).await?,
+            _ => false,
+        };
         let (reference, commit, folder) = self.commit(api, signed_in).await?;
-        let listed = match &self.host {
+        let (listed, remaining) = match &self.host {
             Host::GitHub(repo) => repo.tree(api, &commit, &folder, signed_in).await?,
-            Host::GitLab(project) => project.tree(api, &commit, &folder).await?,
+            Host::GitLab(project) => (project.tree(api, &commit, &folder).await?, None),
         };
         let entries = match listed {
             Listed::Entries(entries) => entries,
@@ -316,11 +316,8 @@ impl Folder {
         for Entry { path, held } in entries {
             match held {
                 Held::File(size, id) => {
-                    let blob = id.map(|id| Blob {
-                        repository: Arc::clone(&repository),
-                        id,
-                    });
-                    files.push(self.remote(&commit, &folder, path, size, blob));
+                    let file = (path, size, id);
+                    files.push(self.remote(&commit, &folder, file, &repository, private)?);
                 }
                 Held::Folder(_) => {}
                 Held::Link => left.push((path, "symbolic link")),
@@ -330,6 +327,16 @@ impl Folder {
         left.sort();
         if files.is_empty() {
             return Err(self.only_links(&left));
+        }
+        let mut warnings: Vec<String> = self.left_out(&left).into_iter().collect();
+        if let Some(remaining) =
+            remaining.filter(|remaining| private && *remaining < files.len() as u64)
+        {
+            warnings.push(format!(
+                "each file of a private repository takes one of github's api requests, and this key has {} left this hour for the folder's {}: the rest wait for github's limit to start over",
+                crate::units::grouped(remaining),
+                crate::units::count(files.len() as u64, "file", "files")
+            ));
         }
         let rest = std::iter::once(commit)
             .chain(
@@ -342,13 +349,14 @@ impl Folder {
         Ok(Listing {
             within: Vec::new(),
             // a key may have gone to gitlab's server, and a private project's files with it;
-            // github's are listed only for a repository anyone may read
+            // github says which of its repositories it keeps private
             access: match &self.host {
+                Host::GitHub(_) if private => super::Access::Login,
                 Host::GitLab(_) if signed_in => super::Access::Unknown,
                 _ => super::Access::Public,
             },
             unavailable: Vec::new(),
-            warnings: self.left_out(&left).into_iter().collect(),
+            warnings,
             resolved: Reference::GitFolder(Folder {
                 host: self.host.clone(),
                 rest,
@@ -418,25 +426,37 @@ impl Folder {
         }
     }
 
-    /// a file of the folder at `path` inside it, of `size` when the host states one, and of `blob`.
+    /// a file of the folder at `path` inside it, of `size` when the host states one, and of the
+    /// blob `id` in `repository`, whose bytes github's api serves for a `private` one: a blob's
+    /// size is the size of those bytes.
     fn remote(
         &self,
         commit: &str,
         folder: &str,
-        path: String,
-        size: Option<u64>,
-        blob: Option<Blob>,
-    ) -> Remote {
+        (path, size, id): (String, Option<u64>, Option<BlobId>),
+        repository: &Arc<str>,
+        private: bool,
+    ) -> Result<Remote, Error> {
         let whole = if folder.is_empty() {
             path.clone()
         } else {
             format!("{folder}/{path}")
         };
-        let (url, size) = match &self.host {
-            Host::GitHub(repo) => repo.file(commit, &whole, size),
-            Host::GitLab(project) => (project.file(commit, &whole), None),
+        let (url, size) = match (&self.host, id) {
+            (Host::GitHub(repo), Some(id)) if private => (repo.blob(&id), size),
+            (Host::GitHub(_), None) if private => {
+                return Err(super::invalid(
+                    self,
+                    &format!(
+                        "it gives \"{}\" no blob id its api serves the file by",
+                        whole.escape_debug()
+                    ),
+                ));
+            }
+            (Host::GitHub(repo), _) => repo.file(commit, &whole, size),
+            (Host::GitLab(project), _) => (project.file(commit, &whole), None),
         };
-        Remote {
+        Ok(Remote {
             path,
             size,
             sha256: None,
@@ -444,8 +464,11 @@ impl Folder {
             url,
             named_by_server: false,
             etag: None,
-            blob,
-        }
+            blob: id.map(|id| Blob {
+                repository: Arc::clone(repository),
+                id,
+            }),
+        })
     }
 
     /// the one line that names the entries git keeps as links rather than files, `left` with

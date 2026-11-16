@@ -475,59 +475,412 @@ fn an_upgrade_moves_a_branch_folder_to_its_newer_commit_and_a_commit_stays() -> 
     Ok(())
 }
 
-/// github shows a private repository to a key that can read it, but serves its files only where
-/// fetchloom sends no key, so the folder is refused before anything is pinned; without a key,
-/// github shows no such repository at all.
-#[test]
-fn a_private_github_repository_is_refused_and_says_why() -> Result {
-    let sandbox = Sandbox::new()?;
-    let routes = Routes::start(vec![
-        (
-            "/api.github.com/repos/lab/secret".to_owned(),
-            answer(
-                &serde_json::json!({"full_name": "lab/secret", "private": true, "visibility": "private"}),
-            )?,
+const SECRET_API: &str = "/api.github.com/repos/lab/secret";
+/// a github key, which reads lab/secret.
+const KEY: &str = "ghp_test_key_that_is_never_printed";
+
+/// the line of a request's head, lowercased, that carries [`KEY`].
+fn key_line() -> String {
+    format!("authorization: bearer {}", KEY.to_ascii_lowercase())
+}
+
+/// whether the request `head`, lowercased, holds the header line `line`.
+fn holds(head: &str, line: &str) -> bool {
+    head.lines().any(|held| held.trim() == line)
+}
+
+/// the target of the request `head`.
+fn target(head: &str) -> &str {
+    head.split(' ').nth(1).unwrap_or_default()
+}
+
+/// github's answers for the private repository lab/secret with `main` at the first commit, whose
+/// tree holds `held`, all at its api, which answers them only to a request with [`KEY`]: the
+/// repository, which says it is private, the commit, the tree, and each file's blob, which git
+/// holds, a pointer for a file git-lfs keeps. github.com and its storage serve nothing of it.
+fn secret(held: &[(&str, Held)]) -> Result<Routes> {
+    let paths: Vec<&str> = held.iter().map(|(path, _)| *path).collect();
+    let mut tree: Vec<serde_json::Value> = folders(&paths)
+        .into_iter()
+        .map(|folder| serde_json::json!({"path": folder, "mode": "040000", "type": "tree", "sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"}))
+        .collect();
+    let mut routes = Vec::new();
+    for (path, kind) in held {
+        let stored = match kind {
+            Held::File(bytes) => bytes.to_vec(),
+            Held::Lfs(bytes) => pointer(bytes),
+            Held::Link(_) | Held::Submodule => continue,
+        };
+        let id = blob_id(&stored);
+        tree.push(serde_json::json!({"path": path, "mode": "100644", "type": "blob", "sha": id, "size": stored.len()}));
+        routes.push((
+            format!("{SECRET_API}/git/blobs/{id}"),
+            file(&stored, "W/\"blob\""),
+        ));
+    }
+    routes.push((
+        SECRET_API.to_owned(),
+        answer(
+            &serde_json::json!({"full_name": "lab/secret", "private": true, "visibility": "private"}),
+        )?,
+    ));
+    routes.push((
+        format!("{SECRET_API}/commits/main"),
+        reply(
+            "200 OK",
+            &[("Content-Type", "application/vnd.github.sha; charset=utf-8")],
+            FIRST.as_bytes(),
         ),
-        (
-            "/api.github.com/repos/lab/secret/commits/main".to_owned(),
-            reply(
-                "404 Not Found",
-                &[("Content-Type", "application/json")],
-                br#"{"message":"Not Found","status":"404"}"#,
-            ),
-        ),
-    ])?;
-    let link = "https://github.com/lab/secret/tree/main/data";
+    ));
+    routes.push((
+        format!("{SECRET_API}/git/trees/{FIRST}?recursive=1"),
+        answer(&serde_json::json!({"sha": FIRST, "tree": tree, "truncated": false}))?,
+    ));
+    let routes = Routes::start(routes)?;
+    routes.keyed(SECRET_API, &key_line());
+    Ok(routes)
+}
+
+/// the files of lab/secret's folder `data`, at their paths inside it.
+fn secret_files(big: &[u8]) -> [(&'static str, Vec<u8>); 3] {
+    [
+        ("rows.csv", ROWS.to_vec()),
+        ("2020/field notes.txt", NOTES.to_vec()),
+        ("big.bin", big.to_vec()),
+    ]
+}
+
+/// lab/secret, whose folder `data` holds [`secret_files`], added in the sandbox's work folder as
+/// `secret` with [`KEY`].
+fn added_secret(sandbox: &Sandbox, big: &[u8]) -> Result<Routes> {
+    let files = secret_files(big);
+    let held: Vec<(String, Held)> = files
+        .iter()
+        .map(|(path, bytes)| (format!("data/{path}"), Held::File(bytes)))
+        .collect();
+    let held: Vec<(&str, Held)> = held
+        .iter()
+        .map(|(path, kind)| (path.as_str(), *kind))
+        .collect();
+    let routes = secret(&held)?;
     let output = sandbox
-        .command(&["--json", "add", link])
+        .command(&[
+            "add",
+            "https://github.com/lab/secret/tree/main/data",
+            "--as",
+            "secret",
+        ])
         .env("FETCHLOOM_TEST_HOSTS", &routes.url)
-        .env("GH_TOKEN", "ghp_test_key_that_is_never_printed")
+        .env("GH_TOKEN", KEY)
+        .output()?;
+    ok(&output)?;
+    let said = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+    assert!(!said.contains(KEY), "{said}");
+    Ok(routes)
+}
+
+/// a key that reads a private repository pins its folder's files at github's api, each by its
+/// blob and in its raw bytes, with the access github states, and the key goes to the api alone; a
+/// key that cannot read the repository is told so.
+#[test]
+fn a_private_github_folder_pins_at_the_api_and_the_key_goes_there_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let routes = added_secret(&sandbox, &big)?;
+    let work = sandbox.work();
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(lock.contains("access = \"login\"\n"), "{lock}");
+    for (path, bytes) in secret_files(&big) {
+        assert!(
+            lock.contains(&format!(
+                "{{ path = \"{path}\", size = {}, sha256 = \"{}\", url = \"https://api.github.com/repos/lab/secret/git/blobs/{}\" }}",
+                bytes.len(),
+                sha256_hex(&bytes),
+                blob_id(&bytes)
+            )),
+            "{path}: {lock}"
+        );
+        assert_eq!(
+            fs::read(work.join("data/secret").join(path))?,
+            bytes,
+            "{path}"
+        );
+    }
+    let heads = routes.requests();
+    for head in &heads {
+        assert!(target(head).starts_with(SECRET_API), "{head}");
+        assert!(holds(head, &key_line()), "{head}");
+    }
+    let blobs: Vec<&String> = heads
+        .iter()
+        .filter(|head| target(head).contains("/git/blobs/"))
+        .collect();
+    assert_eq!(blobs.len(), 3, "{heads:?}");
+    for head in blobs {
+        assert!(
+            holds(head, "accept: application/vnd.github.raw+json"),
+            "{head}"
+        );
+    }
+
+    let other = sandbox.folder("other")?;
+    let output = sandbox
+        .command_in(
+            &other,
+            &[
+                "--json",
+                "add",
+                "https://github.com/lab/secret/tree/main/data",
+            ],
+        )
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("GH_TOKEN", "ghp_another_key_that_cannot_read_it")
         .output()?;
     assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
-    let error = &json(&output)?["errors"][0];
-    assert_eq!(error["kind"], "auth.required", "{error}");
     assert_eq!(
-        error["message"],
-        "github keeps lab/secret private, and fetchloom downloads the files of public repositories alone"
+        json(&output)?["errors"][0]["message"],
+        "github has no repository lab/secret, or this key cannot see it"
     );
-    assert_eq!(
-        error["help"],
-        "github serves a private repository's files only with a key, and fetchloom sends a github key to api.github.com alone. clone the repository with git, then pin the folder from your clone with `fetchloom add <folder> --as <name>`"
-    );
-    assert_eq!(routes.targets(), ["/api.github.com/repos/lab/secret"]);
-    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
 
-    let output = run(&sandbox, &routes, &["--json", "add", link])?;
-    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+/// a teammate without a github key is told which key a private repository's files take, before
+/// any request for one goes out, and one whose key cannot read the repository is told that; with
+/// the key, the files come from github's api.
+#[test]
+fn a_teammate_without_the_key_is_told_which_before_any_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let routes = added_secret(&sandbox, &big)?;
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    let sync = |cache: &str, key: Option<&str>| -> Result<std::process::Output> {
+        let mut command = sandbox.command_in(&teammate, &["sync", "--locked"]);
+        command
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .env("FETCHLOOM_CACHE", sandbox.folder(cache)?);
+        if let Some(key) = key {
+            command.env("GH_TOKEN", key);
+        }
+        Ok(command.output()?)
+    };
+    let asked = routes.requests().len();
+    let refused = sync("keyless-cache", None)?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(40), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: github serves the files of the private repository lab/secret only to a key that can read it\n"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: set GH_TOKEN or GITHUB_TOKEN to a github token that can read it, or sign in with `fetchloom auth login github`"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("404"), "{stderr}");
+    assert_eq!(
+        routes.requests().len(),
+        asked,
+        "no request went without the key"
+    );
+
+    let unread = sync("unread-cache", Some("ghp_another_key_that_cannot_read_it"))?;
+    let stderr = text(&unread.stderr)?;
+    assert_eq!(unread.status.code(), Some(40), "{stderr}");
+    assert!(
+        stderr.contains("error: github has no repository lab/secret, or this key cannot see it\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: check the name at https://github.com/lab/secret\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("if it moved"), "{stderr}");
+
+    let asked = routes.requests().len();
+    ok(&sync("teammate-cache", Some(KEY))?)?;
+    assert_eq!(fs::read(teammate.join("data/secret/big.bin"))?, big);
+    let synced = &routes.requests()[asked..];
+    assert_eq!(synced.len(), 3, "{synced:?}");
+    for head in synced {
+        assert!(
+            target(head).starts_with(&format!("{SECRET_API}/git/blobs/")),
+            "{head}"
+        );
+        assert!(holds(head, &key_line()), "{head}");
+    }
+    Ok(())
+}
+
+/// a private repository's release pins its assets at github's api by their ids; the api sends a
+/// download on to github's storage, and the key never goes along that redirect.
+#[test]
+fn a_private_release_downloads_through_the_api_and_its_redirect_carries_no_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let storage = "/release-assets.githubusercontent.com/github-production-release-asset/42?sig=signed&se=2099";
+    let routes = Routes::start(vec![
+        (
+            SECRET_API.to_owned(),
+            answer(&serde_json::json!({"full_name": "lab/secret", "private": true}))?,
+        ),
+        (
+            format!("{SECRET_API}/releases/tags/v1"),
+            answer(&serde_json::json!({
+                "tag_name": "v1",
+                "name": "v1",
+                "assets": [{
+                    "id": 42,
+                    "name": "rows.csv",
+                    "size": ROWS.len(),
+                    "state": "uploaded",
+                    "digest": format!("sha256:{}", sha256_hex(ROWS)),
+                    "browser_download_url": "https://github.com/lab/secret/releases/download/v1/rows.csv",
+                }],
+            }))?,
+        ),
+        (
+            format!("{SECRET_API}/releases/assets/42"),
+            moved(&format!("https:/{storage}")),
+        ),
+        (storage.to_owned(), file(ROWS, "\"asset\"")),
+    ])?;
+    routes.keyed(SECRET_API, &key_line());
+    let output = sandbox
+        .command(&["add", "github:lab/secret@v1", "--as", "release"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("GH_TOKEN", KEY)
+        .output()?;
+    ok(&output)?;
+    let work = sandbox.work();
+    assert_eq!(fs::read(work.join("data/release/rows.csv"))?, ROWS);
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains("url = \"https://api.github.com/repos/lab/secret/releases/assets/42\""),
+        "{lock}"
+    );
+    assert!(lock.contains("access = \"login\"\n"), "{lock}");
+    assert!(
+        !lock.contains("signed") && !lock.contains("release-assets"),
+        "{lock}"
+    );
+    let heads = routes.requests();
+    let asset = heads
+        .iter()
+        .find(|head| target(head) == format!("{SECRET_API}/releases/assets/42"))
+        .ok_or("the asset was never asked for")?;
+    assert!(holds(asset, &key_line()), "{asset}");
+    assert!(holds(asset, "accept: application/octet-stream"), "{asset}");
+    let stored = heads
+        .iter()
+        .find(|head| target(head) == storage)
+        .ok_or("the storage was never asked")?;
+    assert!(!stored.contains("authorization"), "{stored}");
+    for head in &heads {
+        assert_eq!(
+            holds(head, &key_line()),
+            target(head).starts_with("/api.github.com/"),
+            "{head}"
+        );
+    }
+    Ok(())
+}
+
+/// github serves the files git-lfs keeps for a private repository only through github.com, where
+/// fetchloom sends no github key, so such a file is named with the reason and left out by its
+/// pattern, and the folder's other files pin.
+#[test]
+fn a_git_lfs_file_of_a_private_repository_is_refused_by_name() -> Result {
+    let sandbox = Sandbox::new()?;
+    let model = large().repeat(3);
+    let routes = secret(&[
+        ("data/rows.csv", Held::File(ROWS)),
+        ("data/model.bin", Held::Lfs(&model)),
+    ])?;
+    let link = "https://github.com/lab/secret/tree/main/data";
+    let add = |extra: &[&str]| {
+        let args = [&["--json", "add", link, "--as", "secret"][..], extra].concat();
+        sandbox
+            .command(&args)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .env("GH_TOKEN", KEY)
+            .output()
+    };
+    let output = add(&[])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(
-        error["message"],
-        "github has no repository lab/secret, or it is private"
-    );
-    assert_eq!(
         error["help"],
-        "check the name at https://github.com/lab/secret. fetchloom downloads the folders of public repositories alone, since it sends a github key to api.github.com and nowhere else"
+        "git-lfs keeps model.bin, and github serves the files git-lfs keeps for a private repository only through github.com, where fetchloom sends no github key. the other files are in the cache. to add secret without it, run the add again with --exclude \"model.bin\""
     );
+    ok(&add(&["--exclude", "model.bin"])?)?;
+    assert_eq!(fs::read(sandbox.work().join("data/secret/rows.csv"))?, ROWS);
+    assert!(!sandbox.work().join("data/secret/model.bin").exists());
+    assert!(
+        routes
+            .requests()
+            .iter()
+            .all(|head| target(head).starts_with(SECRET_API)),
+        "{:?}",
+        routes.requests()
+    );
+    Ok(())
+}
+
+/// a key that reads a public repository changes nothing about its files: they come from github's
+/// storage, which takes no key, as without one, and the access is public, as github says.
+#[test]
+fn a_public_repository_keeps_its_raw_links_with_a_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let mut served = github(
+        "main",
+        FIRST,
+        &[
+            ("data/rows.csv", Held::File(ROWS)),
+            ("data/big.bin", Held::File(&big)),
+        ],
+    )?;
+    served.push((
+        GITHUB_API.to_owned(),
+        answer(&serde_json::json!({"full_name": "lab/survey", "private": false}))?,
+    ));
+    let routes = Routes::start(served)?;
+    let output = sandbox
+        .command(&[
+            "add",
+            "https://github.com/lab/survey/tree/main/data",
+            "--as",
+            "survey",
+        ])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("GH_TOKEN", KEY)
+        .output()?;
+    ok(&output)?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains("access = \"public\"\n"), "{lock}");
+    assert!(
+        lock.contains(&format!(
+            "url = \"https://github.com/lab/survey/raw/{FIRST}/data/rows.csv\""
+        )),
+        "{lock}"
+    );
+    assert!(
+        lock.contains(&format!(
+            "url = \"https://raw.githubusercontent.com/lab/survey/{FIRST}/data/big.bin\""
+        )),
+        "{lock}"
+    );
+    assert!(!lock.contains("api.github.com"), "{lock}");
+    for head in routes.requests() {
+        assert_eq!(
+            holds(&head, &key_line()),
+            target(&head).starts_with("/api.github.com/"),
+            "{head}"
+        );
+    }
     Ok(())
 }
 

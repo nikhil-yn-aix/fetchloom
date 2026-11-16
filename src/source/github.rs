@@ -1,7 +1,10 @@
 //! github: a release's files, at a tag or the newest, with the SHA-256 github states, and the
 //! commits and trees a folder of a repository is listed from. a tag or a branch can move, so the
 //! lock's SHA-256 names the bytes. a key goes to api.github.com only, so a private repository's
-//! files are not downloaded.
+//! files are pinned at its api, which serves them to a key that can read it: each file by its
+//! blob, which no push changes, and each release asset by its id, whose download github sends on
+//! to its storage without the key. a public repository's files come from github.com and its
+//! storage, which take no key.
 
 use std::fmt;
 
@@ -75,7 +78,13 @@ impl Release {
     /// lists the release's files: at the tag, or of the release github calls the latest, which
     /// pins its tag.
     pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
-        let signed_in = signed_in();
+        self.listing(api, signed_in()).await
+    }
+
+    /// [`Release::resolve`], where `signed_in` says whether a key goes with the requests to
+    /// github's api, which then asks whether the repository is private: its assets are pinned at
+    /// the api, which serves them to the key.
+    async fn listing(&self, api: &impl Api, signed_in: bool) -> Result<Listing, Error> {
         let url = match &self.tag {
             Some(tag) => self.url(&["releases", "tags", tag])?,
             None => self.url(&["releases", "latest"])?,
@@ -105,6 +114,7 @@ impl Release {
                 "download the files you need from the release's page one at a time",
             ));
         }
+        let private = signed_in && self.repo.private(api).await?;
         let mut files = Vec::new();
         let mut unavailable = Vec::new();
         for asset in answer.assets {
@@ -115,11 +125,15 @@ impl Release {
                 });
                 continue;
             }
-            files.push(asset.remote(self)?);
+            files.push(asset.remote(self, private)?);
         }
         Ok(Listing {
             within: Vec::new(),
-            access: Access::Unknown,
+            access: match (signed_in, private) {
+                (false, _) => Access::Unknown,
+                (true, false) => Access::Public,
+                (true, true) => Access::Login,
+            },
             unavailable,
             warnings: Vec::new(),
             resolved: Reference::GitHub(Release {
@@ -257,7 +271,7 @@ impl Repo {
     }
 
     /// github's answer that it shows no repository of this name, which may be private: a key
-    /// would show a private one, but its folders' files stay where fetchloom sends no key.
+    /// that can read it would show it.
     fn hidden(&self, signed_in: bool) -> Error {
         let page = self.page();
         if signed_in {
@@ -273,31 +287,20 @@ impl Repo {
             format!("github has no repository {self}, or it is private"),
         )
         .help(format!(
-            "check the name at {page}. fetchloom downloads the folders of public repositories alone, since it sends a github key to api.github.com and nowhere else"
+            "check the name at {page}. a private repository's files need a key that can read it: set GH_TOKEN or GITHUB_TOKEN, or sign in with `fetchloom auth login github`"
         ))
-        .unseen()
+        .needs_or_missing(Account::GitHub, page)
     }
 
-    /// refuses a private repository before its folder is listed: github shows one to a key that
-    /// can read it, but serves its files only where fetchloom sends no key.
-    pub(super) async fn public(&self, api: &impl Api) -> Result<(), Error> {
+    /// whether github keeps the repository private, as it answers a key that can read it.
+    pub(super) async fn private(&self, api: &impl Api) -> Result<bool, Error> {
         let url = self.url(&[]).map_err(|reason| invalid(self, reason))?;
         let response = get(api, &url, &[], true).await?;
         if response.status == 404 {
             return Err(self.hidden(true));
         }
         let answer: Visibility = super::json(self, &response)?;
-        if answer.private {
-            return Err(Error::new(
-                Kind::AuthRequired,
-                format!("github keeps {self} private, and fetchloom downloads the files of public repositories alone"),
-            )
-            .help(format!(
-                "github serves a private repository's files only with a key, and fetchloom sends a github key to api.github.com alone. clone the repository with git, then pin the folder from your clone with `{}`",
-                crate::suggested::command("add <folder> --as <name>")
-            )));
-        }
-        Ok(())
+        Ok(answer.private)
     }
 
     /// the commit `reference`, a branch, a tag or a commit, names in the repository, or none when
@@ -328,20 +331,22 @@ impl Repo {
 
     /// what the tree at `commit` holds in `folder`: the whole tree in one answer, or, where github
     /// cuts that short, the folders on the way to `folder` one by one, then each of its subtrees
-    /// whole where github allows.
+    /// whole where github allows; and the requests github's rate limit left after the last
+    /// answer, when it said.
     pub(super) async fn tree(
         &self,
         api: &impl Api,
         commit: &str,
         folder: &str,
         signed_in: bool,
-    ) -> Result<Listed, Error> {
+    ) -> Result<(Listed, Option<u64>), Error> {
         let mut pages = super::Pages::most(api.most_files());
         let whole = self
             .listed(api, (commit, ""), true, signed_in, &mut pages, 0)
             .await?;
+        let mut remaining = whole.remaining;
         if !whole.truncated {
-            return Ok(super::git::inside(whole.entries, folder));
+            return Ok((super::git::inside(whole.entries, folder), remaining));
         }
         // the folders still to list, by their tree's id and path, and whether to ask for one
         // whole first, which the top folder no longer needs
@@ -359,6 +364,7 @@ impl Repo {
                         entries.len(),
                     )
                     .await?;
+                remaining = listed.remaining.or(remaining);
                 if !listed.truncated {
                     entries.extend(listed.entries);
                     continue;
@@ -374,6 +380,7 @@ impl Repo {
                     entries.len(),
                 )
                 .await?;
+            remaining = listed.remaining.or(remaining);
             if listed.truncated {
                 let named = if path.is_empty() {
                     "the top folder".to_owned()
@@ -404,7 +411,7 @@ impl Repo {
                 ));
             }
         }
-        Ok(super::git::inside(entries, folder))
+        Ok((super::git::inside(entries, folder), remaining))
     }
 
     /// one answer of the trees api: the tree `tree` names, at `path` in the repository, with every
@@ -455,7 +462,15 @@ impl Repo {
         Ok(Tree {
             entries,
             truncated: answer.truncated,
+            remaining: response.remaining,
         })
+    }
+
+    /// where a file of a private repository downloads from: github's api, which serves the bytes
+    /// of the blob `id` to a key that can read the repository. no push changes a blob.
+    pub(super) fn blob(&self, id: &BlobId) -> Url {
+        self.url(&["git", "blobs", &id.hex()])
+            .unwrap_or_else(|_| unreachable!("a repository's api link is a link"))
     }
 
     /// where a file of the repository at `commit` downloads from, and its size when that is sure:
@@ -478,6 +493,79 @@ impl Repo {
         }
         (url, large)
     }
+}
+
+/// what github's api serves at a link fetchloom pins a private repository's file at: a blob's
+/// bytes, or a release asset's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Served {
+    Blob,
+    Asset,
+}
+
+/// what github's api serves at `url`, and the repository its path names as `<owner>/<name>`: a
+/// renamed repository's api sends the request on by its number, which names none.
+fn served(url: &Url) -> Option<(Served, Option<String>)> {
+    if url.scheme() != "https"
+        || url.host_str() != Some("api.github.com")
+        || url.port().is_some()
+        || url.query().is_some()
+    {
+        return None;
+    }
+    let parts: Vec<&str> = url.path_segments()?.collect();
+    let (repository, rest) = match parts.as_slice() {
+        ["repos", owner, name, rest @ ..] => (Some(format!("{owner}/{name}")), rest),
+        ["repositories", number, rest @ ..]
+            if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            (None, rest)
+        }
+        _ => return None,
+    };
+    let served = match rest {
+        ["git", "blobs", id] if BlobId::from_hex(id).is_some() => Served::Blob,
+        ["releases", "assets", id] if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) => {
+            Served::Asset
+        }
+        _ => return None,
+    };
+    Some((served, repository))
+}
+
+/// the media type github's api serves a file's bytes in at `url`: a blob's raw bytes, or a
+/// release asset's, which it answers with json about them otherwise.
+pub(super) fn accept(url: &Url) -> Option<&'static str> {
+    Some(match served(url)?.0 {
+        Served::Blob => "application/vnd.github.raw+json",
+        Served::Asset => "application/octet-stream",
+    })
+}
+
+/// why a private repository's file that git-lfs keeps cannot be downloaded.
+pub(crate) const PRIVATE_LFS: &str = "github serves the files git-lfs keeps for a private repository only through github.com, where fetchloom sends no github key";
+
+/// what to do about the git-lfs pointer `url`, a private repository's blob at github's api,
+/// answered with, which its own bytes are: nothing downloads the file it stands for.
+pub(super) fn lfs_help(url: &Url) -> Option<String> {
+    (served(url)?.0 == Served::Blob)
+        .then(|| format!("{PRIVATE_LFS}: leave the file out to pin the others"))
+}
+
+/// the refusal of `url`, a private repository's file at github's api, for a run whose requests
+/// go without a github key: github answers 404 to them, as for a repository it has not.
+pub(super) fn keyless(url: &Url) -> Option<Error> {
+    let repository = served(url)?.1?;
+    Some(
+        Error::new(
+            Kind::AuthRequired,
+            format!(
+                "github serves the files of the private repository {repository} only to a key that can read it"
+            ),
+        )
+        .help("set GH_TOKEN or GITHUB_TOKEN to a github token that can read it, or sign in with `fetchloom auth login github`, then run the same command again")
+        .needs(Account::GitHub, None),
+    )
 }
 
 /// whether a github key is on this machine and can go with a request.
@@ -585,10 +673,12 @@ impl TreeEntry {
     }
 }
 
-/// a tree's entries, at their paths in the repository, and whether github left some out.
+/// a tree's entries, at their paths in the repository, whether github left some out, and the
+/// requests its rate limit left.
 struct Tree {
     entries: Vec<Entry>,
     truncated: bool,
+    remaining: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -600,6 +690,7 @@ struct Answer {
 
 #[derive(Deserialize)]
 struct Asset {
+    id: Option<u64>,
     name: String,
     size: Option<u64>,
     state: String,
@@ -608,23 +699,35 @@ struct Asset {
 }
 
 impl Asset {
-    fn remote(self, release: &Release) -> Result<Remote, Error> {
+    /// the file of the asset: at its download link on github.com, or for a `private` repository
+    /// at the api, by its id, which serves it to a key that can read the repository.
+    fn remote(self, release: &Release, private: bool) -> Result<Remote, Error> {
         let quoted = self.name.escape_debug().to_string();
-        let url = Url::parse(&self.browser_download_url)
-            .ok()
-            .filter(|url| {
-                url.scheme() == "https"
-                    && url.host_str() == Some("github.com")
-                    && url.port().is_none()
-                    && url.query().is_none()
-                    && url.path().contains("/releases/download/")
-            })
-            .ok_or_else(|| {
+        let url = if private {
+            let id = self.id.ok_or_else(|| {
                 invalid(
                     release,
-                    &format!("the download link of \"{quoted}\" is not on github.com"),
+                    &format!("it gives \"{quoted}\" no id to download it by"),
                 )
             })?;
+            release.url(&["releases", "assets", &id.to_string()])?
+        } else {
+            Url::parse(&self.browser_download_url)
+                .ok()
+                .filter(|url| {
+                    url.scheme() == "https"
+                        && url.host_str() == Some("github.com")
+                        && url.port().is_none()
+                        && url.query().is_none()
+                        && url.path().contains("/releases/download/")
+                })
+                .ok_or_else(|| {
+                    invalid(
+                        release,
+                        &format!("the download link of \"{quoted}\" is not on github.com"),
+                    )
+                })?
+        };
         let sha256 = match self.digest.as_deref() {
             None => None,
             Some(digest) => match digest.split_once(':') {

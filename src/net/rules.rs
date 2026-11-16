@@ -36,9 +36,9 @@ pub(crate) struct Rules {
     /// a source's own error for a download it refused with a status, when it says more than the
     /// status does.
     pub(crate) refused_download: fn(&Url, u16) -> Option<Error>,
-    /// where a source serves the file a git-lfs pointer stands for, for a link that answered with
-    /// one.
-    pub(crate) lfs_link: fn(&Url) -> Option<String>,
+    /// what to do about the git-lfs pointer a link answered with, in its source's words: where it
+    /// serves the file the pointer stands for, or why fetchloom cannot download that file.
+    pub(crate) lfs_help: fn(&Url) -> Option<String>,
     /// lists a folder `drive_folders` names through drive's api with a token, so the network
     /// hears which items it holds.
     pub(crate) drive_search: for<'a> fn(&'a Net, &'a DriveId) -> Asking<'a, ()>,
@@ -50,6 +50,12 @@ pub(crate) struct Rules {
     /// key that lifts it, as gitlab's for its servers, which limit requests without one by
     /// address.
     pub(crate) keyless_limit: fn(&Url, Error) -> Error,
+    /// the media type a source serves a link's bytes in, which every request for the link asks
+    /// for: github's api answers a blob or a release asset with json about it otherwise.
+    pub(crate) accept: fn(&Url) -> Option<&'static str>,
+    /// a source's refusal of a link it serves only with its key, given before any request for it
+    /// goes out without one, as github's api shows a private repository's files to a key alone.
+    pub(crate) keyless: fn(&Url) -> Option<Error>,
 }
 
 /// a file a source links only for a while, by the stable link data.lock keeps: the request that
@@ -79,11 +85,13 @@ impl Default for Rules {
             relink: |_| None,
             link_expired: |_, _| false,
             refused_download: |_, _| None,
-            lfs_link: |_| None,
+            lfs_help: |_| None,
             drive_search: unsearched,
             drive_name: unnamed,
             account_at: |_| None,
             keyless_limit: |_, error| error,
+            accept: |_| None,
+            keyless: |_| None,
         }
     }
 }

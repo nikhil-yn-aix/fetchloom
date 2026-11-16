@@ -884,8 +884,12 @@ impl Net {
         let container = self.azure.locate(url);
         // judged on the link as written too, before a test server stands in for it
         let in_the_clear = (!self.carries(url)).then(|| s3::in_the_clear(url));
-        // stored keys and the origin they stay on are judged on each hop as written, before a
-        // test server stands in for it, as on the host itself
+        // a link its source serves only with a key goes nowhere without one
+        if let Some(refusal) = (self.rules.keyless)(url).filter(|_| !self.sends_key(url)) {
+            return Err(Failure::Final(refusal));
+        }
+        // stored keys, the origin they stay on and a source's media type are judged on each hop
+        // as written, before a test server stands in for it, as on the host itself
         let written = url;
         #[cfg(debug_assertions)]
         let local = api::stand_in(url).inspect(|local| self.typed(local));
@@ -1102,7 +1106,8 @@ impl Net {
 
     /// the request for `hop`, as `shape` makes it: signed by `signer`, or else with the stored
     /// credential of its host as `written` names it while on the `first_origin`, a google token
-    /// and an azure credential, and whether any credential of this machine goes with it.
+    /// and an azure credential, and in the media type its source serves the link's bytes in, and
+    /// whether any credential of this machine goes with it.
     fn hop_request(
         &self,
         client: &reqwest::Client,
@@ -1128,6 +1133,13 @@ impl Net {
         let request = shape(request)
             .headers(tokened.headers())
             .headers(blobbed.headers());
+        let request = match (self.rules.accept)(written) {
+            Some(accept) => request.headers(header::HeaderMap::from_iter([(
+                header::ACCEPT,
+                HeaderValue::from_static(accept),
+            )])),
+            None => request,
+        };
         let request = blobbed
             .signed(request, SystemTime::now())
             .map_err(Failure::Final)?;

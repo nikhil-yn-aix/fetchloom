@@ -2731,22 +2731,18 @@ fn the_transfer_time_leaves_out_the_wait_for_an_answer() {
     assert_eq!(took(&[fetched(9, 1), fetched(3, 0)]), (8, 9));
 }
 
-/// a link that answered with a git-lfs pointer is told where its site serves the file, when its
-/// source knows, and the error never repeats the link's query.
+/// a link that answered with a git-lfs pointer is told what its source says to do, when it says,
+/// and the error never repeats the link's query.
 #[test]
 fn a_git_lfs_pointer_names_the_link_that_serves_its_file() {
     let raw = "https://raw.githubusercontent.com/lab/scans/main/data/model.bin";
+    let help = "git-lfs keeps that file apart from the repository: use https://media.githubusercontent.com/media/lab/scans/main/data/model.bin instead";
     let served = lfs_pointer(
         &Url::parse(&format!("{raw}?token=abc")).unwrap(),
-        Some("https://media.githubusercontent.com/media/lab/scans/main/data/model.bin".to_owned()),
+        Some(help.to_owned()),
     );
     assert_eq!(served.kind, Kind::SourceInvalid);
-    assert_eq!(
-        served.help.as_deref(),
-        Some(
-            "git-lfs keeps that file apart from the repository: use https://media.githubusercontent.com/media/lab/scans/main/data/model.bin instead"
-        )
-    );
+    assert_eq!(served.help.as_deref(), Some(help));
     assert!(!format!("{served:?}").contains("abc"));
     let unknown = lfs_pointer(&Url::parse("https://example.org/model.bin").unwrap(), None);
     assert_eq!(

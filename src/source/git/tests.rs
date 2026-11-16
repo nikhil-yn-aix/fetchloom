@@ -600,16 +600,71 @@ fn a_folder_missing_a_file_or_links_alone_say_which() {
     }
 }
 
-/// github shows a private repository to a key that can read it, so a run with a key asks first,
-/// and refuses one before its tree is asked; without a key, github shows no such repository.
+/// github shows a private repository to a key that can read it, so a run with a key asks first:
+/// its files then pin at github's api by their blobs, which no push changes, each of the size the
+/// tree states, as the access github states; a public one keeps its raw links, whose bytes come
+/// from github's storage without the key. without a key github shows no such repository, and a
+/// key that can read it is what the error offers.
 #[test]
-fn a_private_repository_is_refused_before_its_tree_is_asked() {
+fn private_repository_files_pin_at_githubs_api_by_their_blobs() {
     let link = "https://github.com/lab/survey/tree/main/data";
-    let recorded = Recorded::default().on(API, 200, r#"{"full_name":"lab/survey","private":true}"#);
-    let error = block_on(folder(link).listing(&recorded, true)).unwrap_err();
-    assert_eq!(error.kind, Kind::AuthRequired);
-    assert!(error.need.is_none(), "no sign-in lifts it");
-    assert_eq!(recorded.asked(), [API]);
+    let listed = |private: bool| {
+        Recorded::default()
+            .on(
+                API,
+                200,
+                serde_json::json!({"full_name": "lab/survey", "private": private}).to_string(),
+            )
+            .on(&format!("{API}/commits/main"), 200, COMMIT)
+            .on(
+                &format!("{API}/git/trees/{COMMIT}?recursive=1"),
+                200,
+                tree(
+                    &serde_json::json!([
+                        subtree("data", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+                        blob("data/rows.csv", 19),
+                        blob("data/big.bin", 2048)
+                    ]),
+                    false,
+                ),
+            )
+    };
+    let recorded = listed(true);
+    let listing = block_on(folder(link).listing(&recorded, true)).unwrap();
+    assert_eq!(listing.access, crate::source::Access::Login);
+    let pinned: Vec<(&str, Option<u64>, &str)> = listing
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.size, file.url.as_str()))
+        .collect();
+    let at_api = format!("{API}/git/blobs/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+    assert_eq!(
+        pinned,
+        [
+            ("rows.csv", Some(19), at_api.as_str()),
+            ("big.bin", Some(2048), at_api.as_str())
+        ]
+    );
+    assert!(listing.files.iter().all(|file| file.blob.is_some()));
+    assert_eq!(
+        recorded.asked(),
+        [
+            API.to_owned(),
+            format!("{API}/commits/main accept: application/vnd.github.sha"),
+            format!("{API}/git/trees/{COMMIT}?recursive=1")
+        ]
+    );
+
+    let public = block_on(folder(link).listing(&listed(false), true)).unwrap();
+    assert_eq!(public.access, crate::source::Access::Public);
+    assert_eq!(
+        public.files[0].url.as_str(),
+        format!("https://github.com/lab/survey/raw/{COMMIT}/data/rows.csv")
+    );
+    assert_eq!(
+        public.files[0].size, None,
+        "a small file may be a git-lfs pointer"
+    );
 
     let recorded = Recorded::default().on(
         &format!("{API}/commits/main"),
@@ -622,12 +677,69 @@ fn a_private_repository_is_refused_before_its_tree_is_asked() {
         error.message,
         "github has no repository lab/survey, or it is private"
     );
-    assert!(error.need.is_none(), "a key would not get its files");
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "check the name at https://github.com/lab/survey. a private repository's files need a key that can read it: set GH_TOKEN or GITHUB_TOKEN, or sign in with `fetchloom auth login github`"
+        )
+    );
+    assert_eq!(error.need.unwrap().account, crate::account::Account::GitHub);
     let recorded = Recorded::default().on(API, 404, r#"{"message":"Not Found"}"#);
     let error = block_on(folder(link).listing(&recorded, true)).unwrap_err();
     assert_eq!(
         error.message,
         "github has no repository lab/survey, or this key cannot see it"
+    );
+    assert!(error.need.is_none(), "a key went already");
+}
+
+/// a private repository's folder takes one api request a file, so one larger than the requests
+/// the key has left says so before the first download; a blob id github's api cannot serve a
+/// file by is refused, never asked for.
+#[test]
+fn a_private_folder_past_the_keys_requests_says_so() {
+    let link = "https://github.com/lab/survey/tree/main/data";
+    let trees = format!("{API}/git/trees/{COMMIT}?recursive=1");
+    let recorded = |entries: serde_json::Value| {
+        Recorded::default()
+            .on(API, 200, r#"{"full_name":"lab/survey","private":true}"#)
+            .on(&format!("{API}/commits/main"), 200, COMMIT)
+            .on(&trees, 200, tree(&entries, false))
+            .remaining(&trees, 1)
+    };
+    let two = serde_json::json!([
+        subtree("data", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+        blob("data/rows.csv", 19),
+        blob("data/notes.txt", 18)
+    ]);
+    let listing = block_on(folder(link).listing(&recorded(two), true)).unwrap();
+    assert_eq!(
+        listing.warnings,
+        [
+            "each file of a private repository takes one of github's api requests, and this key has 1 left this hour for the folder's 2 files: the rest wait for github's limit to start over"
+        ]
+    );
+    let one = serde_json::json!([
+        subtree("data", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+        blob("data/rows.csv", 19)
+    ]);
+    let listing = block_on(folder(link).listing(&recorded(one), true)).unwrap();
+    assert!(listing.warnings.is_empty(), "{:?}", listing.warnings);
+
+    let mut unserved = blob("data/rows.csv", 19);
+    unserved["sha"] = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391e69de29bb2d1d6434b8b29ae".into();
+    let entries = serde_json::json!([
+        subtree("data", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+        unserved
+    ]);
+    let error = block_on(folder(link).listing(&recorded(entries), true)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert!(
+        error
+            .message
+            .contains("\"data/rows.csv\" no blob id its api serves the file by"),
+        "{}",
+        error.message
     );
 }
 

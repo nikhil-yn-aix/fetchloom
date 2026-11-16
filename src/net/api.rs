@@ -152,6 +152,9 @@ pub(crate) struct Response {
     pub(crate) signed: Option<super::site::Sent>,
     /// the mirror `HF_ENDPOINT` names, when the request for huggingface.co went there.
     pub(crate) endpoint: Option<super::Endpoint>,
+    /// the requests the host's rate limit allows before it starts over, as its
+    /// `x-ratelimit-remaining` says.
+    pub(crate) remaining: Option<u64>,
     pub(crate) body: Arc<Vec<u8>>,
 }
 
@@ -493,6 +496,8 @@ impl Net {
         };
         let total = text(header::CONTENT_RANGE).as_deref().and_then(items_total);
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
+        let remaining = text(header::HeaderName::from_static("x-ratelimit-remaining"))
+            .and_then(|value| value.trim().parse().ok());
         let keyed = response.extensions().get::<super::s3::Keyed>().cloned();
         let authorized = response.extensions().get::<super::Authorized>().cloned();
         let drive = response.extensions().get::<super::DriveAnswered>().cloned();
@@ -554,6 +559,7 @@ impl Net {
                 drive,
                 signed,
                 endpoint,
+                remaining,
                 body: Arc::new(body),
             },
             sent,

@@ -17,11 +17,19 @@ use super::{Listing, Reference, Remote};
 use crate::account::Account;
 use crate::error::{Error, Kind};
 
-/// a row: a source's network, as one of its tests recorded it, with the reference it resolves.
+/// a row: a source's network, as one of its tests recorded it, with the reference it resolves and
+/// the variables of the run that resolves it, as a key it signs in with.
 struct Row {
     reference: &'static str,
     recorded: Recorded,
+    keys: Keys,
 }
+
+/// variables a run has, by name and value.
+type Keys = &'static [(&'static str, &'static str)];
+
+/// a github key, which shows a private repository to a run.
+const GITHUB_KEY: Keys = &[("GH_TOKEN", "ghp_conformance_key")];
 
 fn row(reference: &'static str, answers: &[(&str, &str)]) -> Row {
     let recorded = answers
@@ -32,6 +40,24 @@ fn row(reference: &'static str, answers: &[(&str, &str)]) -> Row {
     Row {
         reference,
         recorded,
+        keys: &[],
+    }
+}
+
+/// gives the sources on this thread `keys` until it is dropped, even by a panic.
+struct Keyed;
+
+fn keyed(keys: Keys) -> Keyed {
+    super::TEST_VARIABLES.with_borrow_mut(|set| {
+        set.clear();
+        set.extend_from_slice(keys);
+    });
+    Keyed
+}
+
+impl Drop for Keyed {
+    fn drop(&mut self) {
+        super::TEST_VARIABLES.with_borrow_mut(Vec::clear);
     }
 }
 
@@ -305,22 +331,47 @@ fn rows() -> Vec<Row> {
     rows.push(Row {
         reference: "kaggle:competitions/titanic",
         recorded: competition,
+        keys: &[],
     });
     let seaborn = "https://api.github.com/repos/mwaskom/seaborn-data";
+    let seaborn_tree = Recorded::default()
+        .on(
+            &format!("{seaborn}/commits/master"),
+            200,
+            "71e2436a092d714350de0fc409ca8a8714e7e78f",
+        )
+        .fixture(
+            &format!("{seaborn}/git/trees/71e2436a092d714350de0fc409ca8a8714e7e78f?recursive=1"),
+            "github/seaborn-tree.json",
+        );
     rows.push(Row {
         reference: "https://github.com/mwaskom/seaborn-data/tree/master/raw",
+        recorded: seaborn_tree.clone(),
+        keys: &[],
+    });
+    // a private repository, which a key reads: its files pin at github's api, which takes the key
+    rows.push(Row {
+        reference: "https://github.com/mwaskom/seaborn-data/tree/master/process",
+        recorded: seaborn_tree.on(
+            seaborn,
+            200,
+            r#"{"full_name":"mwaskom/seaborn-data","private":true}"#,
+        ),
+        keys: GITHUB_KEY,
+    });
+    rows.push(Row {
+        reference: "https://github.com/jqlang/jq/releases/tag/jq-1.8.2",
         recorded: Recorded::default()
-            .on(
-                &format!("{seaborn}/commits/master"),
-                200,
-                "71e2436a092d714350de0fc409ca8a8714e7e78f",
-            )
             .fixture(
-                &format!(
-                    "{seaborn}/git/trees/71e2436a092d714350de0fc409ca8a8714e7e78f?recursive=1"
-                ),
-                "github/seaborn-tree.json",
+                "https://api.github.com/repos/jqlang/jq/releases/tags/jq-1.8.2",
+                "github/release.json",
+            )
+            .on(
+                "https://api.github.com/repos/jqlang/jq",
+                200,
+                r#"{"full_name":"jqlang/jq","private":true}"#,
             ),
+        keys: GITHUB_KEY,
     });
     let open = "https://drive.google.com/open?id=1cKSdgtWrPgvEsBGmjWALOH33taGyVXKb";
     rows.push(Row {
@@ -331,6 +382,7 @@ fn rows() -> Vec<Row> {
                 open,
                 "https://drive.google.com/file/d/1cKSdgtWrPgvEsBGmjWALOH33taGyVXKb/view",
             ),
+        keys: &[],
     });
     for row in &mut rows {
         if row.reference.contains("1706.03762") {
@@ -347,6 +399,7 @@ fn rows() -> Vec<Row> {
             .fixture(&format!("{mendeley}/folders/2"), "mendeley/folders.json")
             .fixture(&root, "mendeley/files.json")
             .total(&root, 3),
+        keys: &[],
     });
     let s3 =
         "https://s3.amazonaws.com/openneuro.org/?list-type=2&prefix=ds000001%2F&encoding-type=url";
@@ -382,6 +435,7 @@ fn rows() -> Vec<Row> {
             200,
             "e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b0  tips.csv\nSHA256 (sub/iris.csv) = 9cc1c345c71bcc9b486b74cbf6063fa66f4bb5e0f603a4b3c3471ec2e5e8e355\n",
         ),
+        keys: &[],
     });
     rows.push(row(
         "https://example.org/data/",
@@ -509,6 +563,7 @@ fn walks() -> Vec<Row> {
                 200,
                 held(&["00001v1", "00002v1", "00002v2"]),
             ),
+            keys: &[],
         },
         Row {
             reference: "arxiv:cs.LG/2401",
@@ -517,6 +572,7 @@ fn walks() -> Vec<Row> {
                 200,
                 held(&["00001v1", "00002v1"]),
             ),
+            keys: &[],
         },
     ]
 }
@@ -567,8 +623,11 @@ fn every_adapter_asks_and_links_only_inside_its_descriptor() {
     }
     for row in rows {
         let reference = Reference::parse(row.reference).unwrap().reference;
-        let listing = block_on(reference.resolve(&row.recorded))
-            .unwrap_or_else(|error| panic!("{}: {}", row.reference, error.message));
+        let listing = {
+            let _keyed = keyed(row.keys);
+            block_on(reference.resolve(&row.recorded))
+        }
+        .unwrap_or_else(|error| panic!("{}: {}", row.reference, error.message));
         assert!(!listing.files.is_empty(), "{}", row.reference);
         for asked in row.recorded.asked() {
             let url = Url::parse(asked.split(' ').next().unwrap()).unwrap();
@@ -587,6 +646,34 @@ fn every_adapter_asks_and_links_only_inside_its_descriptor() {
                 row.reference
             );
         }
+    }
+}
+
+/// a row with keys resolves as a run that has them: github's private repository, read by a key,
+/// pins every file at its api, which takes the key, so the properties hold that path too.
+#[test]
+fn rows_with_keys_resolve_as_runs_with_keys() {
+    let keyed_rows: Vec<Row> = rows()
+        .into_iter()
+        .filter(|row| !row.keys.is_empty())
+        .collect();
+    assert!(!keyed_rows.is_empty());
+    for row in keyed_rows {
+        let reference = Reference::parse(row.reference).unwrap().reference;
+        let listing = {
+            let _keyed = keyed(row.keys);
+            block_on(reference.resolve(&row.recorded))
+        }
+        .unwrap_or_else(|error| panic!("{}: {}", row.reference, error.message));
+        assert_eq!(listing.access, super::Access::Login, "{}", row.reference);
+        assert!(
+            listing
+                .files
+                .iter()
+                .all(|file| file.url.host_str() == Some("api.github.com")),
+            "{}",
+            row.reference
+        );
     }
 }
 
@@ -632,6 +719,7 @@ struct Subject {
     text: &'static str,
     reference: Reference,
     recorded: Recorded,
+    keys: Keys,
     listed: Listing,
     /// the requests the listing took.
     asks: usize,
@@ -641,12 +729,16 @@ impl Subject {
     fn of(row: Row) -> Subject {
         let reference = Reference::parse(row.reference).unwrap().reference;
         let recorded = row.recorded.clone();
-        let listed = block_on(reference.resolve(&recorded))
-            .unwrap_or_else(|error| panic!("{}: {}", row.reference, error.message));
+        let listed = {
+            let _keyed = keyed(row.keys);
+            block_on(reference.resolve(&recorded))
+        }
+        .unwrap_or_else(|error| panic!("{}: {}", row.reference, error.message));
         Subject {
             text: row.reference,
             reference,
             recorded: row.recorded,
+            keys: row.keys,
             listed,
             asks: recorded.asked().len(),
         }
@@ -668,6 +760,7 @@ impl Subject {
     }
 
     fn resolve(&self, recorded: &Recorded) -> Outcome {
+        let _keyed = keyed(self.keys);
         let resolved = catch_unwind(AssertUnwindSafe(|| {
             block_on(self.reference.resolve(recorded))
         }));

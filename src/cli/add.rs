@@ -851,16 +851,37 @@ fn kept_files(manifest: &Manifest, name: &str, listing: &Listing) -> usize {
 /// at their links, the link did not move: the help leaves those files out, each by its pattern.
 /// `tree` is a git folder at its commit, whose tree just listed them: its own commit links cannot
 /// have moved, so the help says its server has no bytes for them, whether or not others are left.
+/// a private repository's files git-lfs keeps cannot be downloaded at all, which it says alike.
 fn some_missing(mut error: Error, name: &str, kept: usize, tree: Option<&str>) -> Error {
     let prefix = format!("{name}/");
-    let missing: Vec<&str> = error
-        .failures
-        .iter()
-        .filter(|failure| failure.help.as_deref() == Some(crate::net::MOVED_HELP))
-        .filter_map(|failure| failure.file.strip_prefix(&prefix))
-        .collect();
+    let failed = |kind: fn(&str) -> bool| -> Vec<&str> {
+        error
+            .failures
+            .iter()
+            .filter(|failure| failure.help.as_deref().is_some_and(kind))
+            .filter_map(|failure| failure.file.strip_prefix(&prefix))
+            .collect()
+    };
+    let moved = failed(is_moved);
+    let private = failed(is_private_lfs);
+    let missing: Vec<&str> = moved.iter().chain(&private).copied().collect();
     let alone = missing.len() == error.failures.len();
-    if missing.is_empty() || (tree.is_none() && (!alone || missing.len() >= kept)) {
+    let mut why = Vec::new();
+    if let Some(tree) = tree.filter(|_| !moved.is_empty()) {
+        why.push(format!(
+            "{tree} lists {}, but its server has no bytes for {}, as for a git-lfs file whose object was never uploaded",
+            units::some_of(&moved, MOST_FLAGS),
+            if moved.len() == 1 { "it" } else { "them" }
+        ));
+    }
+    if !private.is_empty() {
+        why.push(format!(
+            "git-lfs keeps {}, and {}",
+            units::some_of(&private, MOST_FLAGS),
+            crate::source::PRIVATE_LFS
+        ));
+    }
+    if missing.is_empty() || (why.is_empty() && (!alone || missing.len() >= kept)) {
         return error;
     }
     let them = if missing.len() == 1 { "it" } else { "them" };
@@ -879,36 +900,38 @@ fn some_missing(mut error: Error, name: &str, kept: usize, tree: Option<&str>) -
             "the other files are in the cache. to add {name} without {them}, run the add again with {flags}"
         )
     });
-    let help = match (tree, leave) {
-        (Some(tree), leave) => {
-            let why = format!(
-                "{tree} lists {}, but its server has no bytes for {them}, as for a git-lfs file whose object was never uploaded",
-                units::some_of(&missing, MOST_FLAGS)
-            );
-            match leave {
-                Some(leave) => format!("{why}. {leave}"),
-                None if alone => format!("{why}, and no other file is left to pin"),
-                None => why,
-            }
-        }
-        (None, Some(leave)) => leave,
-        (None, None) => return error,
+    let why = why.join(". ");
+    let help = match leave {
+        Some(leave) if why.is_empty() => leave,
+        Some(leave) => format!("{why}. {leave}"),
+        None if alone => format!("{why}, and no other file is left to pin"),
+        None => why,
     };
-    let moved = format!("help: {}", crate::net::MOVED_HELP);
+    let left = |said: &str| is_moved(said) || is_private_lfs(said);
     for detail in &mut error.details {
-        if *detail == moved {
+        if detail.strip_prefix("help: ").is_some_and(left) {
             *detail = format!("help: {help}");
         }
     }
     for failure in &mut error.failures {
-        if alone || failure.help.as_deref() == Some(crate::net::MOVED_HELP) {
+        if alone || failure.help.as_deref().is_some_and(left) {
             failure.help = Some(help.clone());
         }
     }
-    if alone || error.help.as_deref() == Some(crate::net::MOVED_HELP) {
+    if alone || error.help.as_deref().is_some_and(left) {
         error = error.help(help);
     }
     error
+}
+
+/// whether `help` is a download's for a link with nothing at it.
+fn is_moved(help: &str) -> bool {
+    help == crate::net::MOVED_HELP
+}
+
+/// whether `help` is a download's for a private repository's file git-lfs keeps.
+fn is_private_lfs(help: &str) -> bool {
+    help.starts_with(crate::source::PRIVATE_LFS)
 }
 
 /// the most `--exclude` flags a help spells out.

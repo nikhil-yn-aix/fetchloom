@@ -70,6 +70,7 @@ impl Recorded {
             drive: None,
             signed: None,
             endpoint: None,
+            remaining: None,
             body: std::sync::Arc::new(body.into()),
         };
         self.answers.insert(parsed.to_string(), response);
@@ -84,6 +85,17 @@ impl Recorded {
             .get_mut(&key)
             .unwrap_or_else(|| panic!("record {url} before its region"));
         answer.region = Some(region.to_owned());
+        self
+    }
+
+    /// says the answer for `url` left `remaining` requests in its host's rate limit.
+    pub(crate) fn remaining(mut self, url: &str, remaining: u64) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        let answer = self
+            .answers
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("record {url} before its rate limit"));
+        answer.remaining = Some(remaining);
         self
     }
 

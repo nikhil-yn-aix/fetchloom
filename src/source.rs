@@ -50,6 +50,7 @@ use crate::name;
 use crate::net::{self, Api, Fetch, Response};
 
 pub(crate) use git::Blob;
+pub(crate) use github::PRIVATE_LFS;
 
 /// about the memory one listed file takes while a run works, from its listing to its placing,
 /// which sizes the most files a dataset may list from the memory a run may use.
@@ -139,14 +140,29 @@ pub(crate) fn too_many(subject: impl fmt::Display, most: usize, instead: &str) -
     ))
 }
 
-/// the environment a source reads to tell whether its requests go signed in. unit tests read an
-/// empty one, so a key saved on the machine running them changes nothing.
+/// the environment a source reads to tell whether its requests go signed in. unit tests read the
+/// variables their own thread sets in `TEST_VARIABLES`, none unless one does, so a key saved on
+/// the machine running them changes nothing.
 fn env(name: &str) -> Option<OsString> {
-    if cfg!(test) {
-        None
-    } else {
+    #[cfg(test)]
+    {
+        TEST_VARIABLES.with_borrow(|set| {
+            set.iter()
+                .find(|(set_name, _)| *set_name == name)
+                .map(|(_, value)| OsString::from(value))
+        })
+    }
+    #[cfg(not(test))]
+    {
         crate::machine::env(name)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// the variables a unit test gives the sources on its own thread, as a key a run has.
+    pub(crate) static TEST_VARIABLES: std::cell::RefCell<Vec<(&'static str, &'static str)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// where a dataset comes from, parsed once where it enters.
@@ -876,7 +892,7 @@ pub(crate) fn rules() -> net::Rules {
         relink,
         link_expired,
         refused_download,
-        lfs_link,
+        lfs_help,
         drive_search: |net, root| {
             Box::pin(async move {
                 let net = access::Scoped::new(net, &access::DRIVE, None, root.to_string());
@@ -891,6 +907,8 @@ pub(crate) fn rules() -> net::Rules {
         },
         account_at: access::account_at,
         keyless_limit: gitlab::keyless_limit,
+        accept: github::accept,
+        keyless: github::keyless,
     }
 }
 
@@ -1173,6 +1191,16 @@ fn raw_link(url: &Url) -> Option<Url> {
     parts[marker + 1] = "raw";
     raw.set_path(&format!("/{}", parts.join("/")));
     Some(raw)
+}
+
+/// what to do about the git-lfs pointer `url` answered with: a private github repository's file
+/// cannot be downloaded, and a raw repository link's is served at [`lfs_link`].
+fn lfs_help(url: &Url) -> Option<String> {
+    github::lfs_help(url).or_else(|| {
+        lfs_link(url).map(|link| {
+            format!("git-lfs keeps that file apart from the repository: use {link} instead")
+        })
+    })
 }
 
 /// the link that serves the file git-lfs keeps for a raw repository link: github's media host,
@@ -2329,6 +2357,7 @@ mod tests {
                 drive: None,
                 signed: None,
                 endpoint: None,
+                remaining: None,
                 body: std::sync::Arc::new(b"not json".to_vec()),
             };
             let error = json::<serde_json::Value>(&reference, &response).unwrap_err();

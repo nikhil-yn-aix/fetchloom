@@ -190,6 +190,120 @@ fn a_repository_github_does_not_show_may_be_private() {
     assert!(error.need.is_none(), "a key went already");
 }
 
+/// a key that can read a private repository gets its release's assets at github's api, by their
+/// ids, which github sends on to its storage without the key; a public repository's stay on
+/// github.com. the access is what github states, and none is stated without a key.
+#[test]
+fn a_private_repository_release_pins_its_assets_at_the_api() {
+    let recorded = |private: bool| {
+        Recorded::default()
+            .fixture(RELEASE, "github/release.json")
+            .on(
+                REPOSITORY,
+                200,
+                serde_json::json!({"full_name": "jqlang/jq", "private": private}).to_string(),
+            )
+    };
+    let reference = release("jqlang/jq@jq-1.8.2");
+    let private = recorded(true);
+    let listing = block_on(reference.listing(&private, true)).unwrap();
+    assert_eq!(listing.access, Access::Login);
+    assert_eq!(
+        listing.files[0].url.as_str(),
+        "https://api.github.com/repos/jqlang/jq/releases/assets/453012753"
+    );
+    assert!(listing.files.iter().all(|file| {
+        file.url
+            .as_str()
+            .starts_with("https://api.github.com/repos/jqlang/jq/releases/assets/")
+    }));
+    assert_eq!(listing.files[0].size, Some(1_959_950));
+    assert!(listing.files[0].sha256.is_some());
+    assert_eq!(private.asked(), [RELEASE, REPOSITORY]);
+
+    let public = block_on(reference.listing(&recorded(false), true)).unwrap();
+    assert_eq!(public.access, Access::Public);
+    assert_eq!(
+        public.files[0].url.as_str(),
+        "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-1.8.2.tar.gz"
+    );
+    let anonymous = recorded(true);
+    let listing = block_on(reference.listing(&anonymous, false)).unwrap();
+    assert_eq!(listing.access, Access::Unknown);
+    assert_eq!(anonymous.asked(), [RELEASE]);
+
+    let body = changed(|value| value["assets"][0]["id"] = serde_json::Value::Null);
+    let without =
+        Recorded::default()
+            .on(RELEASE, 200, body)
+            .on(REPOSITORY, 200, r#"{"private":true}"#);
+    let error = block_on(reference.listing(&without, true)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert!(
+        error.message.contains("no id to download it by"),
+        "{}",
+        error.message
+    );
+}
+
+/// github's api serves a blob's bytes, and a release asset's, only in the media type asked for,
+/// and a private repository's only to a key: a run without one is refused before the request,
+/// in words naming the key and the repository. any other link, of github's or another host, is
+/// asked as it is.
+#[test]
+fn githubs_api_links_to_files_ask_for_their_bytes_and_a_key() {
+    let blob = "https://api.github.com/repos/lab/secret/git/blobs/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+    let asset = "https://api.github.com/repos/lab/secret/releases/assets/268981502";
+    let moved =
+        "https://api.github.com/repositories/7/git/blobs/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+    for (link, accepted) in [
+        (blob, "application/vnd.github.raw+json"),
+        (asset, "application/octet-stream"),
+        (moved, "application/vnd.github.raw+json"),
+    ] {
+        assert_eq!(accept(&Url::parse(link).unwrap()), Some(accepted), "{link}");
+    }
+    let error = keyless(&Url::parse(blob).unwrap()).unwrap();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        error.message,
+        "github serves the files of the private repository lab/secret only to a key that can read it"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "set GH_TOKEN or GITHUB_TOKEN to a github token that can read it, or sign in with `fetchloom auth login github`, then run the same command again"
+        )
+    );
+    assert_eq!(error.need.unwrap().account, Account::GitHub);
+    assert_eq!(
+        keyless(&Url::parse(asset).unwrap()).unwrap().message,
+        error.message,
+        "one message for every file, which a run says once"
+    );
+    for link in [
+        "https://api.github.com/repos/lab/secret",
+        "https://api.github.com/repos/lab/secret/git/trees/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "https://api.github.com/repos/lab/secret/git/blobs/e69de29b",
+        "https://api.github.com/repos/lab/secret/git/blobs/../../../user",
+        "https://api.github.com/repos/lab/secret/releases/assets/12a",
+        "https://api.github.com/repos/lab/secret/git/blobs/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391?ref=main",
+        "https://api.github.com:8443/repos/lab/secret/git/blobs/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "http://api.github.com/repos/lab/secret/git/blobs/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+        "https://raw.githubusercontent.com/lab/secret/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391/a.csv",
+        "https://github.com/lab/secret/releases/download/v1/a.csv",
+        "https://example.org/repos/lab/secret/git/blobs/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+    ] {
+        let url = Url::parse(link).unwrap();
+        assert_eq!(accept(&url), None, "{link}");
+        assert!(keyless(&url).is_none(), "{link}");
+    }
+    assert!(
+        keyless(&Url::parse(moved).unwrap()).is_none(),
+        "a redirect's hop names no repository"
+    );
+}
+
 /// github answers 403 or 429 once its 60 requests an hour without a key are used up.
 #[test]
 fn the_rate_limit_says_what_a_key_allows() {

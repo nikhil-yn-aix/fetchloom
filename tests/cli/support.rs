@@ -1251,6 +1251,8 @@ pub(crate) struct Routes {
     turns: Arc<Mutex<std::collections::HashMap<String, std::collections::VecDeque<Vec<u8>>>>>,
     /// targets none of which is answered before each of them was asked.
     together: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// the start of targets answered only to a request whose head holds a line, lowercased.
+    keyed: Arc<Mutex<Vec<(String, String)>>>,
     _running: ServerTask,
 }
 
@@ -1261,6 +1263,7 @@ impl Routes {
         let answers = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let turns = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let together = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let keyed: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -1268,6 +1271,7 @@ impl Routes {
         let known = answers.clone();
         let queued = turns.clone();
         let gated = together.clone();
+        let locked = keyed.clone();
         let running = ServerTask::start(listener, move |listener, stop| {
             let missing = head("404 Not Found", &[("Content-Length", "0")]);
             // what was asked of the targets answered together, and the connections that wait
@@ -1283,6 +1287,21 @@ impl Routes {
                     .to_owned();
                 if let Ok(mut seen) = seen.lock() {
                     seen.push(asked.clone());
+                }
+                let lines = asked.to_ascii_lowercase();
+                let unkeyed = locked
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .iter()
+                    .any(|(start, line)| {
+                        target.starts_with(start.as_str())
+                            && !lines.lines().any(|held| held.trim() == line)
+                    });
+                if unkeyed {
+                    let _ = stream.write_all(&missing);
+                    let _ = stream.flush();
+                    drop(connection);
+                    continue;
                 }
                 let turn = queued
                     .lock()
@@ -1321,6 +1340,7 @@ impl Routes {
             answers,
             turns,
             together,
+            keyed,
             _running: running,
         };
         served.change(routes);
@@ -1370,6 +1390,16 @@ impl Routes {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(target.to_owned(), queue);
+    }
+
+    /// answers each target that starts with `start` only to a request whose head holds the line
+    /// `header`, as `authorization: bearer <key>`, and with 404 any other, as a service shows a
+    /// private repository to a key that can read it alone.
+    pub(crate) fn keyed(&self, start: &str, header: &str) {
+        self.keyed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((start.to_owned(), header.to_ascii_lowercase()));
     }
 
     /// the head of every request so far, lowercased.
