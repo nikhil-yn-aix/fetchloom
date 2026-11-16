@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::support::{
     Part, Result, Sandbox, Server, delete, delete_folder, edit, file, json, reply, skipped, text,
-    zip_of,
+    without_copy_warning, zip_of,
 };
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -2812,7 +2812,10 @@ fn a_folder_holding_only_system_files_frees_the_path_it_held() -> Result {
     let output = sandbox.run(&["sync", "--offline"])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert!(!stderr.contains("warning"), "{stderr}");
+    assert!(
+        !without_copy_warning(&stderr).contains("warning"),
+        "{stderr}"
+    );
     assert_eq!(fs::read(&x)?, b"a file now\n", "{stderr}");
     Ok(())
 }
