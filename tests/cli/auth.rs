@@ -261,10 +261,15 @@ fn a_source_keys_byte_order_mark_is_left_out_and_other_unicode_refused() -> Resu
     };
     let saved = login("\u{feff}zenodo-key")?;
     assert!(saved.status.success(), "{}", text(&saved.stderr)?);
-    let file = home(&sandbox)
-        .join(".config")
-        .join("fetchloom")
-        .join("credentials.json");
+    let profile = home(&sandbox);
+    let file = if cfg!(windows) {
+        profile.join("fetchloom")
+    } else if cfg!(target_os = "macos") {
+        profile.join("Library/Application Support/fetchloom")
+    } else {
+        profile.join(".config/fetchloom")
+    }
+    .join("credentials.json");
     let keys: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file)?)?;
     assert_eq!(keys["zenodo"], "zenodo-key");
     for typed in ["zenodo\u{2028}key", "zenodo\u{85}key", "z\u{e9}nodo"] {
