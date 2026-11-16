@@ -507,6 +507,75 @@ fn a_cached_archive_swapped_once_judged_is_never_read() {
     assert!(err.contains("is not the file fetchloom checked"), "{err}");
 }
 
+/// archives unpacking at once share the room the cache's disk had free, so together they never
+/// fill it: the one whose files would pass it is refused, whichever takes its room last.
+#[test]
+fn archives_unpacking_at_once_share_the_room_the_disk_had_free() {
+    let scratch = Scratch::new();
+    let block = 4 << 10;
+    let first = crate::cache::tests::store(&scratch.cache, &tar_of(&[("a.bin", &[1; 3 << 12])]));
+    let second = crate::cache::tests::store(&scratch.cache, &tar_of(&[("b.bin", &[2; 3 << 12])]));
+    let cache = scratch.cache.clone().with_free_room(5 * block);
+    let limits = Limits::default();
+    let inner = std::cell::RefCell::new(None);
+    // the second archive unpacks whole while the first, begun, holds its part of the room
+    let watch = |_| {
+        if inner.borrow().is_none() {
+            let (digest, size) = (&second.digest, second.size);
+            let unpacked =
+                super::unpack_cached(&cache, digest, size, None, &limits, &|_| false, Some(0));
+            *inner.borrow_mut() = Some(unpacked);
+        }
+        false
+    };
+    let (digest, size) = (&first.digest, first.size);
+    let outer = super::unpack_cached(&cache, digest, size, None, &limits, &watch, Some(0));
+    let inner = inner.into_inner().unwrap();
+    let refused: Vec<String> = [outer, inner]
+        .into_iter()
+        .filter_map(Result::err)
+        .map(|err| err.message)
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(
+        refused[0].starts_with("the archive unpacks to more than the 20.0 KiB"),
+        "{refused:?}"
+    );
+}
+
+/// an archive refused part way gives back what it took of the room, as its files are removed, so
+/// the archives unpacking beside it still have it.
+#[test]
+fn an_archive_refused_part_way_gives_its_room_back() {
+    let scratch = Scratch::new();
+    let block = 4 << 10;
+    let first = crate::cache::tests::store(&scratch.cache, &tar_of(&[("a.bin", &[1; 3 << 12])]));
+    let whole = tar_of(&[("b.bin", &[2; 3 << 12]), ("c.bin", &[3; 1 << 12])]);
+    // cut in the middle of c.bin, once b.bin is written whole
+    let cut = &whole[..512 + (3 << 12) + 512 + (1 << 11)];
+    let second = crate::cache::tests::store(&scratch.cache, cut);
+    let cache = scratch.cache.clone().with_free_room(5 * block);
+    let limits = Limits::default();
+    let inner = std::cell::RefCell::new(None);
+    let watch = |_| {
+        if inner.borrow().is_none() {
+            let (digest, size) = (&second.digest, second.size);
+            let unpacked =
+                super::unpack_cached(&cache, digest, size, None, &limits, &|_| false, Some(0));
+            *inner.borrow_mut() = Some(unpacked);
+        }
+        false
+    };
+    let (digest, size) = (&first.digest, first.size);
+    let outer = super::unpack_cached(&cache, digest, size, None, &limits, &watch, Some(0));
+    let inner = inner.into_inner().unwrap();
+    assert!(
+        inner.is_err_and(|err| err.message.contains("ends in the middle of")),
+        "the second archive is damaged"
+    );
+    assert!(outer.is_ok(), "{:?}", outer.err().map(|err| err.message));
+}
+
 /// a tar has no checksum of its files, so changed cached bytes unpack to another tree silently.
 #[test]
 fn unpacking_again_never_replaces_the_tree_data_lock_pins() {

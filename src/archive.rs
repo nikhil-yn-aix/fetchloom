@@ -299,9 +299,10 @@ pub(crate) fn unpack(
 ) -> Result<Unpacked, Error> {
     let meter = Meter::default();
     let filesystem = crate::space::Filesystem::of(&cache.root().join("tmp"));
+    let room = cache.share_room();
     let mut guard = Guard::new(limits, watch, &meter)
         .writing_to(cache.root(), filesystem)
-        .with_room(cache.root(), crate::space::free(cache.root()));
+        .with_room(cache.root(), &room);
     let (mut members, added) = store::store_all(cache, writers, |writers| {
         let mut buffer = vec![0; BUFFER];
         let mut keep = |guard: &mut Guard<'_>, path: String, size: u64, from: &mut dyn Read| {
@@ -317,6 +318,7 @@ pub(crate) fn unpack(
         meter.read_to_end();
         guard.check_stopped()
     })?;
+    room.keep();
     members.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     let links = guard.links();
     if !links.is_empty() {

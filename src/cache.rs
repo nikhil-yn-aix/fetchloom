@@ -518,6 +518,118 @@ pub(crate) fn swapped() -> bool {
     MEANWHILE.with_borrow(Option::is_none)
 }
 
+/// the room the cache's disk had free as the archives this run unpacks at once began, which they
+/// share, so archives unpacking together never each count on all of it.
+#[derive(Debug, Default)]
+pub(crate) struct Room {
+    state: std::sync::Mutex<Rooms>,
+    /// what a test says the disk has free.
+    #[cfg(test)]
+    said: Option<u64>,
+}
+
+/// the unpacks running at once, the room the disk had free as the first began, and the whole
+/// blocks they took of it.
+#[derive(Debug, Default)]
+struct Rooms {
+    running: usize,
+    free: Option<u64>,
+    taken: u64,
+}
+
+impl Room {
+    /// a part of the room for one unpack, measured by `free` when no other unpack is running.
+    pub(crate) fn share(&self, free: impl FnOnce() -> Option<u64>) -> Share<'_> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(test)]
+        let said = self.said;
+        #[cfg(not(test))]
+        let said = None;
+        if state.running == 0 {
+            state.free = said.or_else(free);
+            state.taken = 0;
+        }
+        state.running += 1;
+        Share {
+            room: self,
+            free: state.free,
+            own: std::cell::Cell::new(0),
+            kept: std::cell::Cell::new(false),
+        }
+    }
+}
+
+/// one unpack's part of a [`Room`]: what it took is given back unless [`Share::keep`] says its
+/// files were kept.
+#[derive(Debug)]
+pub(crate) struct Share<'r> {
+    room: &'r Room,
+    free: Option<u64>,
+    own: std::cell::Cell<u64>,
+    kept: std::cell::Cell<bool>,
+}
+
+impl Share<'_> {
+    /// what the disk had free as the first of the unpacks running at once began, none unknown.
+    pub(crate) fn free(&self) -> Option<u64> {
+        self.free
+    }
+
+    /// takes `more` bytes of the room; false, with them taken still, once the unpacks running at
+    /// once took more than the disk had free, and whether others took any of it.
+    pub(crate) fn take(&self, more: u64) -> (bool, bool) {
+        let mut state = self
+            .room
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.taken = state.taken.saturating_add(more);
+        self.own.set(self.own.get().saturating_add(more));
+        let fits = self.free.is_none_or(|free| state.taken <= free);
+        (fits, state.taken > self.own.get())
+    }
+
+    /// keeps what this unpack took counted, as the files it wrote stay in the cache.
+    pub(crate) fn keep(&self) {
+        self.kept.set(true);
+    }
+}
+
+impl Drop for Share<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .room
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.running = state.running.saturating_sub(1);
+        if !self.kept.get() {
+            state.taken = state.taken.saturating_sub(self.own.get());
+        }
+    }
+}
+
+impl Cache {
+    /// a part of the room the cache's disk has for one unpack, which archives this run unpacks at
+    /// once share.
+    pub(crate) fn share_room(&self) -> Share<'_> {
+        self.room.share(|| crate::space::free(&self.root))
+    }
+
+    /// this cache, as if its disk had `free` bytes free for unpacking.
+    #[cfg(test)]
+    pub(crate) fn with_free_room(self, free: u64) -> Cache {
+        let room = Arc::new(Room {
+            said: Some(free),
+            ..Room::default()
+        });
+        Cache { room, ..self }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Cache {
     root: PathBuf,
@@ -530,6 +642,8 @@ pub(crate) struct Cache {
     held: Option<Arc<File>>,
     /// the url records as this run read them, shared by every clone.
     urls: Arc<urls::Shards>,
+    /// the room the cache's disk had free for the archives this run unpacks at once.
+    room: Arc<Room>,
     /// on windows, what removes the cache's files, shared by every clone.
     #[cfg(not(unix))]
     remover: Arc<Remover>,
@@ -700,6 +814,7 @@ impl Cache {
             deferred: Arc::default(),
             held: None,
             urls: Arc::default(),
+            room: Arc::default(),
             #[cfg(not(unix))]
             remover: Arc::default(),
             #[cfg(test)]
@@ -736,6 +851,7 @@ impl Cache {
             deferred: Arc::default(),
             held: None,
             urls: Arc::default(),
+            room: Arc::default(),
             #[cfg(not(unix))]
             remover: Arc::default(),
             #[cfg(test)]

@@ -8,6 +8,7 @@ use std::path::Path;
 use super::names::{Named, Names};
 use super::tar::unreadable_stream;
 use super::{Limits, REFUSED_HELP, Skipped, not_written, past};
+use crate::cache::Share;
 use crate::error::{Error, Kind};
 use crate::space::Filesystem;
 use crate::units;
@@ -63,10 +64,13 @@ pub(super) struct Guard<'a> {
     links: Vec<(String, String)>,
     /// the cache the members are written to, and the most bytes one file holds on its disk.
     disk: Option<(&'a Path, u64)>,
-    /// the cache the members are written to, and what its disk had free as unpacking began.
-    room: Option<(&'a Path, u64)>,
+    /// the cache the members are written to, and its part of the room its disk had free as the
+    /// archives unpacking at once began.
+    room: Option<(&'a Path, &'a Share<'a>)>,
     /// the whole blocks the members written so far take on that disk.
     taken: u64,
+    /// the blocks taken of the room so far, the member being written's included.
+    took: u64,
 }
 
 impl<'a> Guard<'a> {
@@ -88,6 +92,7 @@ impl<'a> Guard<'a> {
             disk: None,
             room: None,
             taken: 0,
+            took: 0,
         }
     }
 
@@ -96,10 +101,11 @@ impl<'a> Guard<'a> {
         self
     }
 
-    /// stops the archive before its members take more than the `free` bytes the disk holding
-    /// `cache` had as unpacking began, as a download of no stated size stops at that room.
-    pub(super) fn with_room(mut self, cache: &'a Path, free: Option<u64>) -> Self {
-        self.room = free.map(|free| (cache, free));
+    /// stops the archive before its members, with those of the archives unpacking beside it,
+    /// take more than the room `share` is part of, what the disk holding `cache` had free as the
+    /// first of them began, as a download of no stated size stops at that room.
+    pub(super) fn with_room(mut self, cache: &'a Path, share: &'a Share<'a>) -> Self {
+        self.room = Some((cache, share));
         self
     }
 
@@ -262,19 +268,30 @@ impl<'a> Guard<'a> {
     }
 
     /// refuses the archive once the members before, with the `member` bytes of the one being
-    /// written, would take more than the room its disk had free, before those bytes are written.
-    fn check_room(&self, member: u64) -> Result<(), Error> {
-        let Some((cache, free)) = self.room else {
+    /// written, would take more than its part of the room its disk had free, before those bytes
+    /// are written.
+    fn check_room(&mut self, member: u64) -> Result<(), Error> {
+        let Some((cache, share)) = self.room else {
+            return Ok(());
+        };
+        let Some(free) = share.free() else {
             return Ok(());
         };
         let needed = self.taken.saturating_add(blocks(member));
-        if crate::space::short(needed, Some(free)).is_none() {
+        let (fits, beside) = share.take(needed.saturating_sub(self.took));
+        self.took = self.took.max(needed);
+        if fits {
             return Ok(());
         }
+        let beside = if beside {
+            ", with the archives unpacked at the same time"
+        } else {
+            ""
+        };
         Err(Error::new(
             Kind::LocalIo,
             format!(
-                "the archive unpacks to more than the {} the disk holding the cache at {} had free",
+                "the archive unpacks to more than the {} the disk holding the cache at {} had free{beside}",
                 units::size(free),
                 units::path(cache)
             ),
@@ -347,9 +364,10 @@ mod tests {
         let limits = Limits::default();
         let meter = Meter::default();
         let never = |_: u64| false;
-        let room = Some(3 * BLOCK);
         let block = usize::try_from(BLOCK).unwrap();
-        let mut guard = Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), room);
+        let room = crate::cache::Room::default();
+        let share = room.share(|| Some(3 * BLOCK));
+        let mut guard = Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), &share);
         assert_eq!(copy(&mut guard, b"a").unwrap(), b"a");
         assert_eq!(copy(&mut guard, b"b").unwrap(), b"b");
         let whole = vec![7; block];
@@ -371,14 +389,20 @@ mod tests {
             )
         );
 
-        let mut guard = Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), room);
+        drop(guard);
+        drop(share);
+        let share = room.share(|| Some(3 * BLOCK));
+        let mut guard = Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), &share);
         let large = vec![7; 4 * block];
         let mut out = Vec::new();
         let err = guard.copy("large", &mut &large[..], &mut out, &mut [0; 1024]);
         assert_eq!(err.unwrap_err().kind, Kind::LocalIo);
         assert_eq!(out.len(), 3 * block);
 
-        let mut unknown = Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), None);
+        let unknown = crate::cache::Room::default();
+        let unknown = unknown.share(|| None);
+        let mut unknown =
+            Guard::new(&limits, &never, &meter).with_room(Path::new("/cache"), &unknown);
         assert_eq!(copy(&mut unknown, &large).unwrap(), large);
     }
 
