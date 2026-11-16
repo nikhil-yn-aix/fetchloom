@@ -854,8 +854,7 @@ pub(crate) mod tests {
     /// the folder the run worked in: a literal one, as "run `fetchloom sync`", sends a person who
     /// pasted it from the folder they ran in to another project or none. the ones below are run
     /// elsewhere or are no line to run: by another person or in another project or clone, a
-    /// command's name alone, an example of a link, `--help`. clap's help and the usage errors,
-    /// which come before `-C` moves anything, are left out.
+    /// command's name alone, an example of a link, `--help`.
     #[test]
     fn helps_name_this_projects_commands_through_command() {
         const PROJECT: [&str; 13] = [
@@ -896,6 +895,70 @@ pub(crate) mod tests {
             ("src/source/drive/folder.rs", "fetchloom add"),
             ("src/source/drive/private.rs", "fetchloom add"),
         ];
+        let found: Vec<(String, String)> = literal("fetchloom")
+            .into_iter()
+            .filter(|(_, command)| {
+                let word = command["fetchloom ".len()..].split(' ').next();
+                word.is_some_and(|word| PROJECT.contains(&word))
+            })
+            .collect();
+        assert_eq!(
+            found,
+            sorted(&elsewhere),
+            "route new ones through suggested::command"
+        );
+    }
+
+    /// a git command a help gives for this project goes through [`git`], so after `-C` it names
+    /// the project's folder. the ones below are names in a sentence, run in another clone, or
+    /// built where the project's folder is not known.
+    #[test]
+    fn helps_give_git_commands_through_git() {
+        let elsewhere = [
+            ("src/cli/build.rs", "git restore {}"),
+            ("src/cli/diff.rs", "git commit -a"),
+            ("src/cli/project.rs", "git add -f"),
+            ("src/cli/project.rs", "git commit -a"),
+            ("src/cli/status.rs", "git rm"),
+            ("src/project/lock/lists.rs", "git add {FOLDER}"),
+            ("src/project/lock/lists.rs", "git checkout -- {FOLDER}"),
+            ("src/project/lock/lists.rs", "git commit -a"),
+            ("src/project/lock/merge.rs", "git add"),
+            ("src/project/lock/merge.rs", "git add"),
+            ("src/project/lock/merge.rs", "git checkout HEAD -- {part}"),
+            (
+                "src/project/lock/merge.rs",
+                "git checkout MERGE_HEAD -- {part}",
+            ),
+            (
+                "src/project/lock/merge.rs",
+                "git checkout REBASE_HEAD -- {part}",
+            ),
+            (
+                "src/project/lock/merge.rs",
+                "git config merge.conflictStyle zdiff3",
+            ),
+        ];
+        assert_eq!(
+            literal("git"),
+            sorted(&elsewhere),
+            "route new ones through suggested::git"
+        );
+    }
+
+    fn sorted(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(file, command)| ((*file).to_owned(), (*command).to_owned()))
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    /// each `` `program …` `` the code below src/ writes outside comments and tests, with its
+    /// file, sorted. clap's help and the usage errors, which come before `-C` moves anything, are
+    /// left out.
+    fn literal(program: &str) -> Vec<(String, String)> {
         let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
         let mut folders = vec![crate_root.join("src")];
@@ -924,8 +987,8 @@ pub(crate) mod tests {
             let text = std::fs::read_to_string(&path).unwrap();
             // a file's own tests come last, in a module of their own
             let tests = [
-                "\n#[cfg(test)]\nmod tests",
-                "\n#[cfg(test)]\npub(crate) mod tests",
+                "\n#[cfg(test)]\nmod tests {",
+                "\n#[cfg(test)]\npub(crate) mod tests {",
             ]
             .iter()
             .filter_map(|start| text.find(start))
@@ -936,29 +999,17 @@ pub(crate) mod tests {
                 .lines()
                 .filter(|line| !line.trim_start().starts_with("//"))
             {
-                for (at, _) in line.match_indices("`fetchloom ") {
+                for (at, _) in line.match_indices(&format!("`{program} ")) {
                     let quoted = &line[at + 1..];
                     let Some(end) = quoted.find('`') else {
                         continue;
                     };
-                    let command = &quoted[..end];
-                    let word = command["fetchloom ".len()..].split(' ').next();
-                    if word.is_some_and(|word| PROJECT.contains(&word)) {
-                        found.push((relative.clone(), command.to_owned()));
-                    }
+                    found.push((relative.clone(), quoted[..end].to_owned()));
                 }
             }
         }
         found.sort();
-        let mut elsewhere: Vec<(String, String)> = elsewhere
-            .iter()
-            .map(|(file, command)| ((*file).to_owned(), (*command).to_owned()))
-            .collect();
-        elsewhere.sort();
-        assert_eq!(
-            found, elsewhere,
-            "route new ones through suggested::command"
-        );
+        found
     }
 
     #[test]

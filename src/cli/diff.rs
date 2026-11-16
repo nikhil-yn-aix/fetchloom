@@ -182,7 +182,7 @@ fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
     again.push("-v".to_owned());
     let again = super::project::command(&again.join(" "));
     tell(context, &datasets, (&plain(from), &to_shown), &again);
-    tell_sides(context, &before, &after, &plain(from), &to_shown);
+    tell_sides(context, root, &before, &after, &plain(from), &to_shown);
     if to_commit.is_none() {
         tell_unpinned(context, &project, &after.lock);
     }
@@ -204,7 +204,7 @@ fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
 
 /// says when a side has no data.lock, so every dataset counts as added or removed, and when a
 /// commit lacks the file list of a dataset, which a commit made with `git commit -a` leaves out.
-fn tell_sides(context: &Context, before: &Read, after: &Read, from: &str, to: &str) {
+fn tell_sides(context: &Context, root: &Path, before: &Read, after: &Read, from: &str, to: &str) {
     let output = &context.output;
     let lock = lock::FILE;
     if !before.found && after.found {
@@ -222,9 +222,9 @@ fn tell_sides(context: &Context, before: &Read, after: &Read, from: &str, to: &s
     }
     if !(before.unlisted.is_empty() && after.unlisted.is_empty()) {
         output.hint(&format!(
-            "`git commit -a` leaves out new files, as the lists in {}: `git add {}` before committing keeps them",
+            "`git commit -a` leaves out new files, as the lists in {}: `{}` before committing keeps them",
             lists::FOLDER,
-            lists::FOLDER
+            crate::suggested::git(root, &format!("add {}", lists::FOLDER))
         ));
     }
 }
@@ -276,7 +276,10 @@ fn commit(git: &Path, root: &Path, revision: &str) -> Result<String, Error> {
                 root.display()
             ),
         )
-        .help("run it in a project git keeps; `git status` there says whether git reads the repository, which it refuses to while another user owns it"),
+        .help(format!(
+            "run it in a project git keeps; `{}` says whether git reads the repository, which it refuses to while another user owns it",
+            crate::suggested::git(root, "status")
+        )),
         Unnamed::NoCommit => {
             let error = Error::new(
                 Kind::Usage,
@@ -296,7 +299,11 @@ fn commit(git: &Path, root: &Path, revision: &str) -> Result<String, Error> {
                 ));
             }
             if git::shallow(git, root) {
-                return error.help("this clone is shallow, so it has only the latest commits: `git fetch --deepen=1` brings in one more, `git fetch --unshallow` all of them");
+                return error.help(format!(
+                    "this clone is shallow, so it has only the latest commits: `{}` brings in one more, `{}` all of them",
+                    crate::suggested::git(root, "fetch --deepen=1"),
+                    crate::suggested::git(root, "fetch --unshallow")
+                ));
             }
             error.help("name a commit, a branch or a tag, such as HEAD~1 or main; a repository with no commit yet has no HEAD")
         }
@@ -314,8 +321,11 @@ fn at(git: &Path, root: &Path, commit: &str, revision: &str, taken: u64) -> Resu
             format!("git could not give data.lock and its lists as {shown} has them"),
         )
         .help(format!(
-            "a partial clone lacks the files of old commits, and fetchloom never fetches them: check that `git show {}` works here",
-            shell_word(&format!("{revision}:./{}", lock::FILE))
+            "a partial clone lacks the files of old commits, and fetchloom never fetches them: check that `{}` works here",
+            crate::suggested::git(
+                root,
+                &format!("show {}", shell_word(&format!("{revision}:./{}", lock::FILE)))
+            )
         ))
     };
     let blobs = git::blobs(git, root, commit, &[lock::FILE, lists::FOLDER]).ok_or_else(unread)?;

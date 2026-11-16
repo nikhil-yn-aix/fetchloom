@@ -252,16 +252,20 @@ fn warn_in_git(output: &Output, root: &Path, (start, shown): (&Path, &str)) {
     }
     let ignore = format!("add {pattern} to .gitignore");
     let (said, help) = if !known.tracked.is_empty() {
-        let named = if shown.starts_with('~') || shown.contains(':') {
-            start.display().to_string()
-        } else {
-            shown.to_owned()
-        };
+        let named =
+            if shown.starts_with('~') || shown.contains(':') || crate::suggested::ran_elsewhere() {
+                start.display().to_string()
+            } else {
+                shown.to_owned()
+            };
         (
             format!("git tracks {shown}, so a commit keeps its files in the repository"),
             format!(
-                "run `git rm -r --cached {}`, then delete it or {ignore}",
-                super::shell_word(&named)
+                "run `{}`, then delete it or {ignore}",
+                crate::suggested::git(
+                    &root,
+                    &format!("rm -r --cached {}", super::shell_word(&named))
+                )
             ),
         )
     } else if !known.untracked.is_empty() {

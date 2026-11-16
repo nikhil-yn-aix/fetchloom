@@ -157,15 +157,18 @@ pub(super) fn remind_lists(context: &Context) {
     } else {
         ""
     };
+    let add = crate::suggested::git(root, "add data.lock.d");
     if output.shows_next() {
         output.next(&format!(
-            "run `git add data.lock.d` before you commit: git does not have {named}{since}"
+            "run `{add}` before you commit: git does not have {named}{since}"
         ));
     } else {
         output.warn_detailed(
             Warning::GitLockPartUntracked,
             &format!("git does not have {named}{since}"),
-            Some("run `git add data.lock.d` before you commit, since `git commit -a` leaves new files out"),
+            Some(&format!(
+                "run `{add}` before you commit, since `git commit -a` leaves new files out"
+            )),
             &missing,
         );
     }
@@ -275,7 +278,7 @@ pub(super) fn warn_recipe_code(output: &Output, project: &Project, manifest: &Ma
         .filter(|file| !in_git(&known.tracked, &file.file, ""))
         .partition(|file| in_git(&known.untracked, &file.file, "/"));
     for (files, ignored) in [(untracked, false), (ignored, true)] {
-        let Some((said, help)) = uncommitted(&files, ignored) else {
+        let Some((said, help)) = uncommitted(&project.root, &files, ignored) else {
             continue;
         };
         output.warn_detailed(
@@ -301,7 +304,7 @@ fn in_git(listed: &std::collections::HashSet<String>, file: &str, end: &str) -> 
             .any(|(at, _)| listed.contains(&format!("{}{end}", &file[..at])))
 }
 
-fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, String)> {
+fn uncommitted(root: &Path, files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, String)> {
     let first = files.first()?;
     let mut recipes: Vec<&str> = files
         .iter()
@@ -327,16 +330,20 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
         words.join(" ")
     };
     let since = format!("a clone without {it} cannot build {recipes} from the same code");
+    let git = |words: String| crate::suggested::git(root, &words);
     if ignored {
         let add = if files.len() <= NAMED_CODE {
             format!(
-                "`git add -f {}`",
-                words(&mut files.iter().map(|file| &*file.file))
+                "`{}`",
+                git(format!(
+                    "add -f {}",
+                    words(&mut files.iter().map(|file| &*file.file))
+                ))
             )
         } else {
             format!(
-                "`git add -f`, as `git add -f {}`",
-                super::shell_word(&first.file)
+                "`git add -f`, as `{}`",
+                git(format!("add -f {}", super::shell_word(&first.file)))
             )
         };
         return Some((
@@ -351,7 +358,10 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
     };
     Some((
         format!("git does not have {what}"),
-        format!("run `git add {add}`, then commit {it}, since {since}"),
+        format!(
+            "run `{}`, then commit {it}, since {since}",
+            git(format!("add {add}"))
+        ),
     ))
 }
 

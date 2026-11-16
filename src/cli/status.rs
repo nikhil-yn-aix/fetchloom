@@ -421,11 +421,12 @@ fn warn_unnamed(output: &Output, project: &Project, lock: Option<&str>) {
                 "them",
             ),
         };
+        let rm = |words: &str| crate::suggested::git(&project.root, &format!("rm {words}"));
         let help = match (is_tracked, parts.len() <= NAMED_LISTS) {
-            (true, true) => format!("run `git rm {}`, then commit", words(&parts)),
+            (true, true) => format!("run `{}`, then commit", rm(&words(&parts))),
             (true, false) => format!(
-                "run `git rm` with their paths, as `git rm {}`, then commit",
-                super::shell_word(first)
+                "run `git rm` with their paths, as `{}`, then commit",
+                rm(&super::shell_word(first))
             ),
             (false, true) => format!("delete {}", parts.join(", ")),
             (false, false) => format!(
@@ -468,7 +469,8 @@ fn warn_untracked(output: &Output, project: &Project) {
         Warning::GitLockPartUntracked,
         &said,
         Some(&format!(
-            "run `git add data.lock.d`, then commit {them} with data.lock, since a clone without {them} cannot read data.lock"
+            "run `{}`, then commit {them} with data.lock, since a clone without {them} cannot read data.lock",
+            crate::suggested::git(&project.root, "add data.lock.d")
         )),
         &missing,
     );

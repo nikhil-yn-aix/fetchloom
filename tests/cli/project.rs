@@ -496,6 +496,74 @@ fn helps_after_a_run_with_c_reach_the_project_from_where_it_ran() -> Result {
     Ok(())
 }
 
+/// after `-C`, a git command a warning gives names the project's folder, so pasted as printed in
+/// the folder the person ran fetchloom in it reaches the project's repository.
+#[cfg(target_os = "linux")]
+#[test]
+fn git_commands_after_a_run_with_c_reach_the_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let typed = work.to_string_lossy().into_owned();
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let run = |args: &[&str]| -> Result<Vec<String>> {
+        let mut command = sandbox.command_in(
+            &elsewhere,
+            &[&["-C", typed.as_str(), "--json"][..], args].concat(),
+        );
+        command.env("FETCHLOOM_TEST_INLINE", "0");
+        for name in crate::merge::git_variables() {
+            command.env_remove(name);
+        }
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        Ok(crate::support::warned(&json(&output)?))
+    };
+    // the one warning that says to run `command`, which then runs as printed where fetchloom ran
+    let paste = |warnings: &[String], command: &str| -> Result {
+        let giving: Vec<&String> = warnings
+            .iter()
+            .filter(|warning| warning.contains(&format!("run `{command}`")))
+            .collect();
+        assert_eq!(giving.len(), 1, "{command} in {warnings:?}");
+        let words: Vec<&str> = command.split(' ').skip(1).collect();
+        let output = crate::merge::git(&sandbox, &elsewhere, &words)?.ok_or("no git")?;
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            text(&output.stderr)?
+        );
+        Ok(())
+    };
+    let added = run(&["add", &server.url])?;
+    paste(&added, &format!("git -C {typed} add data.lock.d"))?;
+    assert_eq!(
+        git_warnings(&json(&sandbox.run(&["--json", "status"])?)?),
+        Vec::<String>::new()
+    );
+    crate::merge::ok(&sandbox, &["commit", "-qam", "added"])?;
+    let stale = "data.lock.d/iris.0123456789ab.tsv.zst";
+    fs::write(work.join(stale), b"a list of another data.lock")?;
+    crate::merge::ok(&sandbox, &["add", stale])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "stale"])?;
+    paste(&run(&["status"])?, &format!("git -C {typed} rm {stale}"))?;
+    assert!(!work.join(stale).exists(), "git rm deletes it");
+    fs::create_dir_all(work.join("tracked"))?;
+    fs::write(work.join("tracked/petals.csv"), b"length\n1.4\n")?;
+    crate::merge::ok(&sandbox, &["add", "tracked"])?;
+    paste(
+        &run(&["add", "./tracked"])?,
+        &format!("git -C {typed} rm -r --cached {typed}/tracked"),
+    )?;
+    let listed = crate::merge::git(&sandbox, &work, &["ls-files", "tracked"])?.ok_or("no git")?;
+    assert_eq!(text(&listed.stdout)?, "", "git no longer tracks it");
+    Ok(())
+}
+
 /// the folder the last `fetchloom -C <folder> ...` before `then` in `told` names, unquoted.
 fn folder_before(told: &str, then: &str) -> Option<std::path::PathBuf> {
     let (before, _) = told.split_once(then)?;
