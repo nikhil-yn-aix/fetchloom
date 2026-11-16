@@ -422,6 +422,7 @@ async fn sign_in(
         guide(context, account);
         ask(context, account)?
     };
+    plain_key(account, &secret)?;
     let found = Found {
         origin: Origin::Keyring,
         secret: secret.clone(),
@@ -480,6 +481,23 @@ async fn sign_in(
         user,
         saved_to,
     })
+}
+
+/// refuses `secret`, a key for `account`, when it holds a character outside plain ASCII: a key
+/// goes in a header, which carries it only as typed there. kaggle.json is read as a file.
+fn plain_key(account: &Account, secret: &str) -> Result<(), Error> {
+    let json = *account == Account::Kaggle && secret.starts_with('{');
+    if account.secret() == Secret::Password
+        || json
+        || secret.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+    {
+        return Ok(());
+    }
+    Err(Error::new(
+        Kind::Usage,
+        "the key holds a character no request header can carry, such as a line break",
+    )
+    .help("copy the key alone, with nothing else around it"))
 }
 
 /// what runs use instead of the key a sign-in just saved to `saved_to`, and how to make the saved
@@ -633,7 +651,11 @@ fn ask(context: &Context, account: &Account) -> Result<(String, Option<String>),
 
 /// a pasted key, or for kaggle the contents of a `kaggle.json` whose path was pasted.
 fn token_from(account: &Account, pasted: &str) -> (String, Option<String>) {
-    let pasted = pasted.trim().trim_matches('"');
+    let pasted = pasted
+        .trim()
+        .trim_start_matches('\u{feff}')
+        .trim()
+        .trim_matches('"');
     if *account == Account::Kaggle {
         let path = std::path::Path::new(pasted);
         if path.is_file()
@@ -663,8 +685,12 @@ fn read_stdin(
             .map_err(|err| Error::io("could not read the key from stdin", &err))?;
         text
     };
-    // only the line ending a pipe adds goes; a password may start or end with a space
-    let text = text.trim_end_matches(['\r', '\n']).to_owned();
+    // only the line ending a pipe adds goes, and the byte order mark a file a windows editor
+    // saved as UTF-8 starts with; a password may start or end with a space
+    let text = text
+        .trim_end_matches(['\r', '\n'])
+        .trim_start_matches('\u{feff}')
+        .to_owned();
     if text.trim().is_empty() {
         return Err(
             Error::new(Kind::Usage, "--with-token read nothing from stdin").help(format!(

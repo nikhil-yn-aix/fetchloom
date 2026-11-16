@@ -247,6 +247,43 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     Ok(())
 }
 
+/// a key file a windows editor saved as UTF-8 starts with a byte order mark, which is no part of
+/// a source's key: it is left out, and a key holding another character outside plain ASCII, as a
+/// line separator, is refused rather than saved and sent.
+#[test]
+fn a_source_keys_byte_order_mark_is_left_out_and_other_unicode_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let login = |key: &str| {
+        with_stdin(
+            sandbox.command(&["auth", "login", "zenodo", "--with-token", "--offline"]),
+            &format!("{key}\n"),
+        )
+    };
+    let saved = login("\u{feff}zenodo-key")?;
+    assert!(saved.status.success(), "{}", text(&saved.stderr)?);
+    let file = home(&sandbox)
+        .join(".config")
+        .join("fetchloom")
+        .join("credentials.json");
+    let keys: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file)?)?;
+    assert_eq!(keys["zenodo"], "zenodo-key");
+    for typed in ["zenodo\u{2028}key", "zenodo\u{85}key", "z\u{e9}nodo"] {
+        let refused = login(typed)?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(2), "{typed:?}: {stderr}");
+        assert!(
+            stderr.contains("the key holds a character no request header can carry"),
+            "{stderr}"
+        );
+    }
+    let keys: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file)?)?;
+    assert_eq!(
+        keys["zenodo"], "zenodo-key",
+        "a refused key replaced the saved one"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_key_without_a_home_of_its_own_needs_the_store_or_a_warning() -> Result {
     let sandbox = Sandbox::new()?;
