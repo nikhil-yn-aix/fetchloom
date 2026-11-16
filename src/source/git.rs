@@ -331,6 +331,18 @@ impl Folder {
         ))
     }
 
+    /// the folder's link as messages show it, a full commit cut to its first 7 digits, as git and
+    /// the hosts' pages show one.
+    pub(crate) fn shown_short(&self) -> String {
+        let mut short = self.clone();
+        if let Some(first) = short.rest.first_mut()
+            && commit_id(first).is_some()
+        {
+            first.truncate(7);
+        }
+        short.to_string()
+    }
+
     /// the repository's page.
     fn page(&self) -> String {
         match &self.host {

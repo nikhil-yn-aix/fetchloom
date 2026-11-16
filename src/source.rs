@@ -602,6 +602,21 @@ impl Reference {
         }
     }
 
+    /// [`Reference::shown`] with a full commit cut to its first 7 digits, as git shows one; data.lock
+    /// keeps it whole.
+    pub(crate) fn shown_short(&self) -> String {
+        if let Reference::GitFolder(folder) = self {
+            return folder.shown_short();
+        }
+        let shown = self.shown();
+        match shown.rsplit_once('@') {
+            Some((head, revision)) if git::commit_id(revision).is_some() => {
+                format!("{head}@{}", &revision[..7])
+            }
+            _ => shown,
+        }
+    }
+
     /// asks the source what the dataset holds: at the exact version this reference names, or at
     /// the newest one when it names none.
     pub(crate) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
@@ -1653,6 +1668,36 @@ mod tests {
                 served,
                 "{link}"
             );
+        }
+    }
+
+    #[test]
+    fn a_full_commit_is_shown_short_and_anything_else_as_it_is() {
+        let full = "0bda0ce801be0fa2f464ff845a9d5ceae99aad7d";
+        for (text, shown) in [
+            (
+                format!("hf:datasets/scikit-learn/iris@{full}"),
+                "hf:datasets/scikit-learn/iris@0bda0ce",
+            ),
+            (
+                format!("https://github.com/lab/survey/tree/{full}/data"),
+                "https://github.com/lab/survey/tree/0bda0ce/data",
+            ),
+            (
+                format!("https://gitlab.com/lab/tools/-/tree/{full}"),
+                "https://gitlab.com/lab/tools/-/tree/0bda0ce",
+            ),
+        ] {
+            assert_eq!(parse(&text).reference.shown_short(), shown);
+        }
+        for kept in [
+            "zenodo:3608990",
+            "figshare:34744689@1",
+            "hf:datasets/a/b@main",
+            "kaggle:uciml/iris@2",
+            "https://github.com/lab/survey/tree/main/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d",
+        ] {
+            assert_eq!(parse(kept).reference.shown_short(), kept);
         }
     }
 

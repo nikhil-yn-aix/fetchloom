@@ -560,7 +560,10 @@ impl<'a> Loop<'a> {
                 self.context.output.hint(&format!(
                     "data.toml names no version of {}, so it stays at {}, as data.lock pins it; `{}` takes the newest",
                     dataset.name,
-                    short_revision(dataset.resolved.clone()),
+                    Reference::parse(&dataset.resolved).map_or_else(
+                        |_| dataset.resolved.clone(),
+                        |parsed| parsed.reference.shown_short()
+                    ),
                     super::project::command(&format!("lock --upgrade {}", dataset.name))
                 ));
             }
@@ -2384,7 +2387,7 @@ fn lock_lines(
 fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> String {
     let resolved = Reference::parse(&locked.resolved).map_or_else(
         |_| locked.resolved.clone(),
-        |parsed| short_revision(parsed.reference.shown()),
+        |parsed| parsed.reference.shown_short(),
     );
     let mut facts = vec![resolved];
     facts.extend(
@@ -2636,18 +2639,6 @@ pub(super) fn tell_raw(output: &Output, typed: &str, parsed: &Reference) {
     }
 }
 
-/// a reference pinned to a 40-digit commit, shown cut to 7 digits as git does; data.lock keeps 40.
-fn short_revision(reference: String) -> String {
-    match reference.rsplit_once('@') {
-        Some((head, revision))
-            if revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
-        {
-            format!("{head}@{}", &revision[..7])
-        }
-        _ => reference,
-    }
-}
-
 /// prints what a reference resolved to, before any file downloads, then its source's warnings.
 pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
     tell_kept(output, listing, &listing.files);
@@ -2667,7 +2658,7 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
     if matches!(listing.resolved, Reference::Url(_)) {
         return;
     }
-    let mut facts = vec![short_revision(listing.resolved.shown())];
+    let mut facts = vec![listing.resolved.shown_short()];
     facts.extend(
         listing
             .title
@@ -2830,23 +2821,6 @@ mod tests {
         assert_eq!(budget(jobs.iter()), (MB + MB / 2, 2 * MB + MB / 2));
         let huge = [job(Some(u64::MAX), true)];
         assert_eq!(budget(huge.iter()), (u64::MAX, u64::MAX));
-    }
-
-    #[test]
-    fn a_full_commit_is_shown_short_and_anything_else_as_it_is() {
-        let full = "0bda0ce801be0fa2f464ff845a9d5ceae99aad7d";
-        assert_eq!(
-            short_revision(format!("hf:datasets/scikit-learn/iris@{full}")),
-            "hf:datasets/scikit-learn/iris@0bda0ce"
-        );
-        for kept in [
-            "zenodo:3608990",
-            "figshare:34744689@1",
-            "hf:datasets/a/b@main",
-            "kaggle:uciml/iris@2",
-        ] {
-            assert_eq!(short_revision(kept.to_owned()), kept);
-        }
     }
 
     fn context() -> Context {
