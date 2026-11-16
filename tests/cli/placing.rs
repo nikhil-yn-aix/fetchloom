@@ -2536,6 +2536,40 @@ fn a_file_force_kept_aside_stays_named_when_the_last_state_write_fails() -> Resu
     Ok(())
 }
 
+/// a read-only file of a person's own that `sync --force` replaces goes once the pinned file is
+/// in place, though windows refuses to remove a read-only file, rather than staying hidden.
+#[cfg(windows)]
+#[test]
+fn force_discards_a_read_only_file_it_replaced() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    edit(&placed, b"my own notes\n")?;
+    let mut sealed = fs::metadata(&placed)?.permissions();
+    sealed.set_readonly(true);
+    fs::set_permissions(&placed, sealed)?;
+
+    let forced = sandbox.run(&["sync", "--force", "--offline"])?;
+
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
+    let folder = placed.parent().ok_or("a file has a folder")?;
+    let hidden: Vec<String> = fs::read_dir(folder)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|name| name.starts_with(".fetchloom-"))
+        .collect();
+    assert!(hidden.is_empty(), "{hidden:?} {stderr}");
+    assert!(
+        !stderr.contains("place.set_aside") && !stderr.contains("kept as"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a `sync --force` cut off at once after it moved a person's edit aside leaves the edit's name on
 /// record: status names it, and the next sync puts it back and blames no one.
 #[test]

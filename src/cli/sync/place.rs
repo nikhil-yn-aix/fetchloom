@@ -1533,7 +1533,7 @@ fn settle_aside(
         let done = if back {
             placer.move_back(&set.aside, &native(&project.root, &set.path))
         } else {
-            placer.remove(&set.aside, false, None)
+            remove_set_aside(&mut placer, &set.aside)
         };
         if let Err(err) = done {
             tracing::debug!(path = %set.path, %err, "a file --force moved aside stays where it was moved");
@@ -1548,6 +1548,32 @@ fn settle_aside(
         }
     }
     stays
+}
+
+/// removes the person's file `--force` set aside at `aside` once what replaces it is in place.
+/// windows refuses to remove a read-only file, so its flag is cleared first, unless the file has
+/// another name, whose flag that would clear too.
+fn remove_set_aside(placer: &mut Placer, aside: &Path) -> std::io::Result<()> {
+    let refused = match placer.remove(aside, false, None) {
+        Err(refused) if cfg!(windows) && refused.kind() == std::io::ErrorKind::PermissionDenied => {
+            refused
+        }
+        removed => return removed,
+    };
+    let Ok(found) = fs::symlink_metadata(aside) else {
+        return Err(refused);
+    };
+    let mut permissions = found.permissions();
+    if !found.is_file() || !permissions.readonly() || place::has_other_names(aside) {
+        return Err(refused);
+    }
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "windows keeps a read-only file from being removed"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(aside, permissions)?;
+    placer.remove(aside, false, None)
 }
 
 /// records in `state` the files of `stays` that `--force` kept aside, and forgets each kept aside
