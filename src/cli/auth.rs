@@ -176,7 +176,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
             expires: None,
         });
     }
-    accounts.extend(site::listed(output));
+    accounts.extend(site::listed(context).await);
     accounts.extend(aws_keys(output, &mut missing));
     accounts.push(google_credentials(output, &mut missing));
     accounts.extend(azure_credentials(

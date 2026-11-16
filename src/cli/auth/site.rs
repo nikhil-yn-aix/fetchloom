@@ -164,15 +164,45 @@ async fn checked(
     secret: &str,
     chosen: bool,
 ) -> Result<(), Error> {
-    if context.offline.enabled() || context.mirrors.mirrors.only {
-        return Ok(());
+    let output = &context.output;
+    match asked(context, host, key, secret, chosen).await {
+        None => Ok(()),
+        Some((_, Some(false))) => Err(Error::new(
+            Kind::AuthRequired,
+            format!("{} at {host} did not accept this key", key.name),
+        )
+        .help("check that you copied all of it and that it has not expired, then sign in again")),
+        Some((user, Some(true))) => {
+            let who = user.map_or_else(String::new, |user| format!(" for {user}"));
+            output.step("Checked", &format!("the key works{who}"));
+            Ok(())
+        }
+        Some((_, None)) => {
+            output.hint(&format!(
+                "{host} gave no answer, so the key was not checked"
+            ));
+            Ok(())
+        }
     }
-    let Some(url) = key
+}
+
+/// what `host` answers when asked whether `secret` works as the key of one installation that
+/// `key` shapes: whose it is and whether it was accepted, each none without an answer. nothing
+/// is asked offline, with mirrors alone, or of a source without a check. `chosen` says the
+/// person typed `host`, which may then be on a private network.
+async fn asked(
+    context: &Arc<Context>,
+    host: &str,
+    key: &'static crate::account::KeyShape,
+    secret: &str,
+    chosen: bool,
+) -> Option<(Option<String>, Option<bool>)> {
+    if context.offline.enabled() || context.mirrors.mirrors.only {
+        return None;
+    }
+    let url = key
         .check
-        .and_then(|path| url::Url::parse(&format!("https://{host}{path}")).ok())
-    else {
-        return Ok(());
-    };
+        .and_then(|path| url::Url::parse(&format!("https://{host}{path}")).ok())?;
     let check = auth::Check { url, who: key.who };
     let credential = auth::Credential {
         host: host.to_owned(),
@@ -183,25 +213,7 @@ async fn checked(
     };
     let access = crate::source::access::of_key(key);
     let origin = chosen.then(|| check.url.origin());
-    let output = &context.output;
-    match super::asked_check(context, &check, credential, access, origin).await {
-        (_, Some(false)) => Err(Error::new(
-            Kind::AuthRequired,
-            format!("{} at {host} did not accept this key", key.name),
-        )
-        .help("check that you copied all of it and that it has not expired, then sign in again")),
-        (user, Some(true)) => {
-            let who = user.map_or_else(String::new, |user| format!(" for {user}"));
-            output.step("Checked", &format!("the key works{who}"));
-            Ok(())
-        }
-        (_, None) => {
-            output.hint(&format!(
-                "{host} gave no answer, so the key was not checked"
-            ));
-            Ok(())
-        }
-    }
+    Some(super::asked_check(context, &check, credential, access, origin).await)
 }
 
 /// the ways a website may let a person in, as a refusal's sign-in offers them: the word a
@@ -847,22 +859,27 @@ fn expiring(saved: &Saved, now: SystemTime) -> String {
 
 /// a line for each website with a saved credential: its host, the kind, where it is kept and,
 /// for cookies, when the soonest expires; cookies past it are marked expired with how to save
-/// new ones, and their row is not valid.
-pub(super) fn listed(output: &Output) -> Vec<State> {
+/// new ones, and their row is not valid. an installation's key is checked there, as a source's
+/// key is, and a refused one is marked with how to replace it.
+pub(super) async fn listed(context: &Arc<Context>) -> Vec<State> {
     let var = &crate::machine::env;
+    let output = &context.output;
     let now = SystemTime::now();
     let mut rows = Vec::new();
     for (host, saved, name) in site::from_variables(var) {
-        output.step(
-            "Signed in",
-            &format!("to {host} with {} \u{b7} {name}", described(&saved)),
+        let answer = answered(context, &host, &saved).await;
+        // a variable wins over a saved key, as a source's does
+        let fix = format!(
+            "set {name} to a current key, or unset {name} to use the key `{}` saves",
+            saved.command(&host)
         );
+        let (user, valid) = told(output, &host, &saved, "", name, answer, &fix);
         rows.push(State {
             account: format!("site:{host}"),
             signed_in: true,
             from: Some(name.to_owned()),
-            user: None,
-            valid: None,
+            user,
+            valid,
             kind: Some(saved.kind()),
             expires: None,
         });
@@ -874,7 +891,7 @@ pub(super) fn listed(output: &Output) -> Vec<State> {
         let soonest = saved.soonest();
         let when = expiring(&saved, now);
         let expired = soonest.is_some_and(|soonest| moment(soonest) <= now);
-        if expired {
+        let (user, valid) = if expired {
             output.mark(
                 "Expired",
                 &format!(
@@ -883,28 +900,77 @@ pub(super) fn listed(output: &Output) -> Vec<State> {
                     saved.again(&host)
                 ),
             );
+            // cookies past their expiry are refused without asking the site
+            (None, Some(false))
         } else {
-            output.step(
-                "Signed in",
-                &format!(
-                    "to {host} with {}{when} \u{b7} {}",
-                    described(&saved),
-                    origin.shown()
-                ),
-            );
-        }
+            let answer = answered(context, &host, &saved).await;
+            let fix = saved.again(&host);
+            told(output, &host, &saved, &when, &origin.shown(), answer, &fix)
+        };
         rows.push(State {
             account: format!("site:{host}"),
             signed_in: true,
             from: Some(origin.to_string()),
-            user: None,
-            // cookies past their expiry are refused without asking the site
-            valid: expired.then_some(false),
+            user,
+            valid,
             kind: Some(saved.kind()),
             expires: soonest.map(|soonest| crate::units::timestamp(moment(soonest))),
         });
     }
     rows
+}
+
+/// what the installation at `host` answers of `saved` when it is the key of one installation,
+/// in the header its source names; none for any other credential, or when nothing is asked.
+async fn answered(
+    context: &Arc<Context>,
+    host: &str,
+    saved: &Saved,
+) -> Option<(Option<String>, Option<bool>)> {
+    let Saved::Header { name, value } = saved else {
+        return None;
+    };
+    let key = crate::account::per_host_key(name)?;
+    // the person signed in to this host or set it in a variable, so it may be on a private network
+    asked(context, host, key, value, true).await
+}
+
+/// tells how the credential `saved` for `host`, kept in `from`, stands as `answer` says, and
+/// gives whose it is and whether it was accepted: refused, with `fix`, or signed in.
+fn told(
+    output: &Output,
+    host: &str,
+    saved: &Saved,
+    when: &str,
+    from: &str,
+    answer: Option<(Option<String>, Option<bool>)>,
+    fix: &str,
+) -> (Option<String>, Option<bool>) {
+    let unanswered = matches!(answer, Some((_, None)));
+    let (user, valid) = answer.unwrap_or_default();
+    if valid == Some(false) {
+        output.mark(
+            "Refused",
+            &format!("{} for {host}; {fix}", described(saved)),
+        );
+        return (user, valid);
+    }
+    let who = user
+        .as_ref()
+        .map_or_else(String::new, |user| format!(" as {user}"));
+    let unchecked = if unanswered {
+        format!(", not checked, as {host} gave no answer")
+    } else {
+        String::new()
+    };
+    output.step(
+        "Signed in",
+        &format!(
+            "to {host}{who} with {}{when} \u{b7} {from}{unchecked}",
+            described(saved)
+        ),
+    );
+    (user, valid)
 }
 
 /// removes a website's saved credential for the host `logout` names. none when it names an

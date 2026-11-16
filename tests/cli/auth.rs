@@ -1161,6 +1161,73 @@ fn a_dataverse_key_is_checked_and_saved_as_its_installations_key() -> Result {
     Ok(())
 }
 
+/// `auth` asks a dataverse installation about the key kept for it, as it asks a source about
+/// its key: whose it is, or that the installation now refuses it.
+#[test]
+fn auth_asks_a_dataverse_installation_about_its_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let check = "/dv.example.org/api/users/:me".to_owned();
+    let routes = Routes::start(vec![(
+        check.clone(),
+        reply(
+            "200 OK",
+            &[("Content-Type", "application/json")],
+            br#"{"status":"OK","data":{"displayName":"Ada Lovelace"}}"#,
+        ),
+    )])?;
+    let mut login = sandbox.command(&[
+        "auth",
+        "login",
+        "dv.example.org",
+        "--header",
+        "x-dataverse-key",
+        "--with-token",
+    ]);
+    login.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+    let signed = with_stdin(login, "dv-key\n")?;
+    assert_eq!(signed.status.code(), Some(0), "{}", text(&signed.stderr)?);
+    let listed = |screen_too: bool| -> Result<(String, serde_json::Value)> {
+        let run = |args: &[&str]| {
+            let mut command = sandbox.command(args);
+            command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+            command.output()
+        };
+        let row = json(&run(&["--json", "auth"])?)?["result"]["accounts"]
+            .as_array()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|row| row["account"] == "site:dv.example.org")
+            })
+            .cloned()
+            .unwrap_or_default();
+        let screen = if screen_too {
+            text(&run(&["auth"])?.stderr)?
+        } else {
+            String::new()
+        };
+        Ok((screen, row))
+    };
+    let (_, row) = listed(false)?;
+    assert_eq!(
+        (&row["user"], &row["valid"]),
+        (&"Ada Lovelace".into(), &true.into()),
+        "{row}"
+    );
+    routes.change(vec![(
+        check,
+        reply("401 Unauthorized", &[("Content-Length", "0")], b""),
+    )]);
+    let (screen, row) = listed(true)?;
+    assert_eq!(row["valid"], false, "{row}");
+    assert!(
+        screen.contains(
+            "Refused the x-dataverse-key header for dv.example.org; save a current one with"
+        ),
+        "{screen}"
+    );
+    Ok(())
+}
+
 /// a sign-in offered for a dataverse host the person typed asks doi.org nothing before the
 /// question, whatever DOIs data.toml names: the run that was refused already knows how it got
 /// there, and a project of many DOIs would otherwise wait on doi.org once for each.
