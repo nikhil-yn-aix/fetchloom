@@ -61,15 +61,21 @@ pub(super) async fn accept(
         lock_changed: true,
         ..Built::default()
     };
-    for (step, candidate) in accepted {
-        report.steps.push(take(&work, &mut lock, &step, candidate)?);
+    for (step, candidate) in &accepted {
+        report.steps.push(take(&work, &mut lock, step, candidate));
     }
+    // so a CLI test can stop the accept between its last pin and its last look for a stop
+    #[cfg(debug_assertions)]
+    crate::stop::hold("FETCHLOOM_TEST_HOLD_ACCEPT");
     // the last look for a stop: once data.lock changes, the accept runs to its end
     if context.stop.is_asked() {
         return Err(super::stopped());
     }
     context.stop.finish();
     let written = work.write_rendered(&before, &lock, lock.render())?;
+    for (step, candidate) in &accepted {
+        record(&work.cache, step, candidate);
+    }
     work.project.sweep_lists(&lock);
     forget(project, &wanted)?;
     let seen = Seen {
@@ -144,23 +150,9 @@ fn checked<'s>(
     Ok((step, candidate))
 }
 
-/// pins `candidate` in `lock` as the result of `step`, and records it in the cache as the newest
-/// result of its key, the one a later build reuses.
-fn take(
-    work: &Loop<'_>,
-    lock: &mut Lock,
-    step: &Step,
-    candidate: &Candidate,
-) -> Result<Done, Error> {
+/// pins `candidate` in `lock` as the result of `step`.
+fn take(work: &Loop<'_>, lock: &mut Lock, step: &Step, candidate: &Candidate) -> Done {
     let name = &step.name;
-    work.cache
-        .record_result(&candidate.key, &candidate.files)
-        .map_err(|err| {
-            Error::io(
-                format_args!("could not record the accepted result of {name} in the cache"),
-                &err,
-            )
-        })?;
     work.context.output.step(
         "Accepted",
         &format!(
@@ -175,13 +167,23 @@ fn take(
         candidate.tree,
         candidate.files.clone(),
     );
-    Ok(done(
+    done(
         Did::Accepted,
         name,
         candidate.key,
         candidate.tree,
         &candidate.files,
-    ))
+    )
+}
+
+/// records `candidate`, which data.lock now pins as the result of `step`, in `cache` as the newest
+/// result of its key, the one a build elsewhere with no pin reuses: only once data.lock pins it,
+/// so an accept stopped or failed before never makes a rebuild no one accepted that result. the
+/// project's own pin needs no record, so one that cannot be written is only logged.
+fn record(cache: &Cache, step: &Step, candidate: &Candidate) {
+    if let Err(err) = cache.record_result(&candidate.key, &candidate.files) {
+        tracing::debug!(%err, recipe = step.name, "could not record an accepted result in the cache");
+    }
 }
 
 /// the closing lines of an accept of `accepted`: what it pinned, the recipes made from them that

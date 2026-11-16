@@ -2479,6 +2479,53 @@ fn a_term_after_accept_marks_its_work_lets_it_finish() -> Result {
     Ok(())
 }
 
+/// an accept stopped before it writes data.lock leaves the cache as it was: the kept rebuild is
+/// not recorded as its key's newest result, which a build with no pin, as in another clone, would
+/// take though no one accepted it.
+#[cfg(unix)]
+#[test]
+fn a_stopped_accept_records_no_result() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["random"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let checked = json(&build(&sandbox, &["--json", "build", "--check"])?)?;
+    let step = &checked["result"]["steps"][0];
+    let hex = |field: &Value| {
+        field
+            .as_str()
+            .and_then(|text| text.strip_prefix("sha256:"))
+            .map(str::to_owned)
+            .ok_or_else(|| format!("no sha256 in {step}"))
+    };
+    let record = sandbox
+        .cache()
+        .join("builds")
+        .join(hex(&step["key"])?)
+        .join(hex(&step["candidate"])?);
+    let pinned = pins(&sandbox.work())?;
+    let release = sandbox.folder("hold")?.join("release");
+    let mut command = building_in(&sandbox, &sandbox.work(), &["build", "--accept"])?;
+    command.env("FETCHLOOM_TEST_HOLD_ACCEPT", &release);
+    let running = Running::start(&mut command)?;
+    let mut held = release.as_os_str().to_owned();
+    held.push(".held");
+    wait_until("the accept to pin the rebuild", || {
+        Ok(Path::new(&held).exists())
+    })?;
+
+    running.signal("-TERM")?;
+    running.wait_for("Stopping")?;
+    fs::write(&release, b"")?;
+
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    assert!(!record.exists(), "{} was recorded", record.display());
+    Ok(())
+}
+
 /// under `--json` a SIGTERM's error has the kind every stop has, `interrupted`.
 #[cfg(unix)]
 #[test]
