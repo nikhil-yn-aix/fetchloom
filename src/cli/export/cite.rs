@@ -659,12 +659,15 @@ pub(super) struct Stated<'a> {
     pub(super) imported: bool,
     /// data.lock's link for it, when it has one a reader can open.
     pub(super) link: Option<String>,
-    /// its files, by their path in it, with their SHA-256.
+    /// its files, by their path in it, with their SHA-256, or the MD5 its source states.
     pub(super) files: Vec<(&'a str, String)>,
+    /// what pins `files` while no sync downloaded it, as
+    /// [`crate::project::lock::Stated::digests`] says it.
+    pub(super) by_source: Option<&'static str>,
 }
 
 /// a data availability statement for a paper: each of `datasets` with its DOI or link and the
-/// SHA-256 of each of its files, as data.lock pins them.
+/// SHA-256 of each of its files, as data.lock pins them, or the MD5 its source states.
 pub(super) fn statement(datasets: &[Stated<'_>]) -> String {
     let mut text = String::from("Data availability\n\n");
     let (count, each) = match datasets.len() {
@@ -674,9 +677,19 @@ pub(super) fn statement(datasets: &[Stated<'_>]) -> String {
             "Each is",
         ),
     };
+    let md5 = datasets.iter().any(|dataset| {
+        dataset
+            .by_source
+            .is_some_and(|digests| digests.contains("MD5"))
+    });
+    let md5 = if md5 {
+        ", or for a file not downloaded yet the MD5 its source states"
+    } else {
+        ""
+    };
     let _ = writeln!(
         text,
-        "This work uses {count}. {each} listed below with its DOI or link and the SHA-256 checksum of every file used, so that readers can check that their copies are identical.\n"
+        "This work uses {count}. {each} listed below with its DOI or link and the SHA-256 checksum of every file used{md5}, so that readers can check that their copies are identical.\n"
     );
     for dataset in datasets {
         let locked = dataset.locked;
@@ -710,9 +723,14 @@ pub(super) fn statement(datasets: &[Stated<'_>]) -> String {
             said.push(format!("{written} (no DOI or web link is recorded)"));
         }
         said.push(units::count(dataset.files.len() as u64, "file", "files"));
+        if let Some(digests) = dataset.by_source {
+            said.push(format!(
+                "not downloaded yet, so by the {digests} its source states"
+            ));
+        }
         let _ = writeln!(text, "{}: {}:", words(&locked.name), said.join(", "));
-        for (path, sha256) in &dataset.files {
-            let _ = writeln!(text, "{sha256}  {}", words(path));
+        for (path, checksum) in &dataset.files {
+            let _ = writeln!(text, "{checksum}  {}", words(path));
         }
         text.push('\n');
     }

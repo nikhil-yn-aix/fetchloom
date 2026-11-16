@@ -621,3 +621,53 @@ fn offline_citations_come_from_the_lock_and_say_doi_org_was_not_asked() -> Resul
     assert_eq!(routes.requests().len(), asked, "offline asks nothing");
     Ok(())
 }
+
+/// a dataset its source's MD5 pins, which no sync downloaded yet, is cited as any other, as a
+/// citation needs no SHA-256, and the statement gives that MD5 and says why.
+#[test]
+fn citations_take_a_dataset_pinned_by_its_md5_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![
+        ("/zenodo.org/api/records/101".to_owned(), record(101)?),
+        (
+            "/zenodo.org/api/records/101/files/iris.csv/content".to_owned(),
+            file(IRIS, "\"i\""),
+        ),
+        ("/zenodo.org/api/records/303".to_owned(), record(303)?),
+    ])?;
+    for (args, name) in [
+        (&["add", "zenodo:101", "--as", "iris"][..], "iris"),
+        (&["add", "zenodo:303", "--as", "late", "--no-sync"], "late"),
+    ] {
+        let added = sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()?;
+        assert_eq!(
+            added.status.code(),
+            Some(0),
+            "{name}: {}",
+            text(&added.stderr)?
+        );
+    }
+    let output = sandbox.run(&["--offline", "export", "--format", "bibtex"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let bib = text(&output.stdout)?;
+    for key in ["@misc{iris,", "@misc{late,"] {
+        assert!(bib.contains(key), "{key} in\n{bib}");
+    }
+    assert!(bib.contains("doi = {10.5281/zenodo.303}"), "{bib}");
+    let output = sandbox.run(&["--offline", "export", "--format", "statement"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let statement = text(&output.stdout)?;
+    for line in [
+        "the SHA-256 checksum of every file used, or for a file not downloaded yet the MD5 its source states, so that".to_owned(),
+        format!("{}  iris.csv\n", sha256_hex(IRIS)),
+        "late: DatasetIris, https://doi.org/10.5281/zenodo.303, 1 file, not downloaded yet, so by the MD5 its source states:\n".to_owned(),
+        format!("{}  iris.csv\n", crate::support::md5_hex(IRIS)),
+    ] {
+        assert!(statement.contains(&line), "{line} in\n{statement}");
+    }
+    Ok(())
+}

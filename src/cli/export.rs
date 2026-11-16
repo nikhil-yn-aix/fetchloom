@@ -115,14 +115,21 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
             .map(|(lock, _)| lock)
     }
     .unwrap_or_default();
+    // a citation and the statement need no SHA-256, which a dataset its source's MD5 pins lacks
+    let checksums = !args.format.cites() && args.format != Format::Statement;
     if args.names.is_empty() {
-        lock.refuse_stated(manifest.datasets.keys().map(String::as_str))?;
+        if checksums {
+            lock.refuse_stated(manifest.datasets.keys().map(String::as_str))?;
+        }
     } else {
         lock.refuse_waiting(args.names.iter().map(String::as_str))?;
-        lock.refuse_stated(args.names.iter().map(String::as_str))?;
+        if checksums {
+            lock.refuse_stated(args.names.iter().map(String::as_str))?;
+        }
     }
     let waiting: Vec<Waiting> = lock.still_waiting().cloned().collect();
     let pins = pins(&lock, &manifest, args);
+    let unfetched = lock.stated.clone();
     let dropped = project.dropped();
     // the data folder as this machine holds it: a dataset dropped here has no files there, and
     // one waiting for its file list has none known
@@ -154,7 +161,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
             (text, report.citations.len() as u64)
         }
         Format::Statement => {
-            let stated = stated(&manifest, &pins, &report);
+            let stated = stated(&manifest, (&pins, &unfetched), &report);
             (cite::statement(&stated), stated.len() as u64)
         }
         format => render(&report, format),
@@ -300,7 +307,10 @@ fn inventory(
         if !wanted(name) {
             continue;
         }
-        let stale = match lock.get(name).map(|locked| locked.drift(entry)) {
+        let pinned = lock
+            .get(name)
+            .or_else(|| lock.stated(name).map(|stated| &stated.pin));
+        let stale = match pinned.map(|locked| locked.drift(entry)) {
             None => format!("{name} is not in data.lock yet"),
             Some(Some(lock::Drift::Spec)) => format!("{name} changed in data.toml"),
             Some(Some(lock::Drift::Extract)) => format!("{name} changed extract in data.toml"),
@@ -390,11 +400,16 @@ fn pins(lock: &Lock, manifest: &Manifest, args: &args::Export) -> Vec<Locked> {
         return Vec::new();
     }
     let wanted = |name: &str| args.names.is_empty() || args.names.iter().any(|named| named == name);
-    lock.datasets
+    let stated = lock.stated.iter().map(|stated| &stated.pin);
+    let mut pins: Vec<Locked> = lock
+        .datasets
         .iter()
+        .chain(stated)
         .filter(|locked| wanted(&locked.name) && manifest.datasets.contains_key(&locked.name))
         .cloned()
-        .collect()
+        .collect();
+    pins.sort_by(|a, b| a.name.cmp(&b.name));
+    pins
 }
 
 /// the pins of `pins` a citation names: those `report` does not leave out, but for imports, which
@@ -430,22 +445,41 @@ fn link_of(locked: &Locked) -> Option<String> {
 /// availability statement.
 fn stated<'a>(
     manifest: &Manifest,
-    pins: &'a [Locked],
+    (pins, unfetched): (&'a [Locked], &'a [lock::Stated]),
     report: &'a Report,
 ) -> Vec<cite::Stated<'a>> {
     pins.iter()
         .filter(|locked| !report.unlocked.contains(&locked.name))
-        .map(|locked| cite::Stated {
-            locked,
-            imported: imported(manifest, locked),
-            link: link_of(locked),
-            files: locked
-                .files
-                .iter()
-                .map(|file| (file.path.as_str(), file.sha256.to_string()))
-                .collect(),
+        .map(|locked| {
+            let unfetched = unfetched.iter().find(|stated| stated.name() == locked.name);
+            let (files, by_source) = if let Some(stated) = unfetched {
+                let files = stated.files.iter();
+                let files = files.map(|file| (file.path.as_str(), stated_checksum(file)));
+                (files.collect(), Some(stated.digests()))
+            } else {
+                let files = locked.files.iter();
+                let files = files.map(|file| (file.path.as_str(), file.sha256.to_string()));
+                (files.collect(), None)
+            };
+            cite::Stated {
+                locked,
+                imported: imported(manifest, locked),
+                link: link_of(locked),
+                files,
+                by_source,
+            }
         })
         .collect()
+}
+
+/// what pins `file` while no sync downloaded it: the SHA-256 its source states, else its MD5.
+/// data.lock gives each such file one or both.
+fn stated_checksum(file: &lock::StatedFile) -> String {
+    match (file.sha256, file.md5) {
+        (Some(sha256), _) => sha256.to_string(),
+        (None, Some(md5)) => md5.to_string(),
+        (None, None) => String::new(),
+    }
 }
 
 /// `text` as export and list write a link, or why not: fetchloom never pins a link with a login
