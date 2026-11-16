@@ -467,28 +467,6 @@ pub(crate) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
     open_plain(path, &mut options)
 }
 
-#[cfg(all(test, unix))]
-thread_local! {
-    /// whether [`try_lock`] acts as nfs and smb do, whose flock locks byte ranges and so refuses
-    /// an exclusive lock through a handle open only to read.
-    pub(crate) static LOCKS_NEED_A_WRITER: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
-}
-
-/// takes an exclusive lock on `lock` at once, as [`File::try_lock`] does.
-#[cfg(unix)]
-pub(crate) fn try_lock(lock: &File) -> Result<(), std::fs::TryLockError> {
-    #[cfg(test)]
-    if LOCKS_NEED_A_WRITER.get()
-        && rustix::fs::fcntl_getfl(lock).is_ok_and(|flags| {
-            !flags.intersects(rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::RDWR)
-        })
-    {
-        return Err(std::fs::TryLockError::Error(rustix::io::Errno::BADF.into()));
-    }
-    lock.try_lock()
-}
-
 /// shares the no-follow checks so reading an object never needs write access to its bytes.
 pub(crate) fn read_unfollowed(path: &Path) -> io::Result<File> {
     open_plain(path, OpenOptions::new().read(true))

@@ -1,34 +1,34 @@
 //! a project copied with its data folder to a machine whose cache never held its files: the data
-//! folder's bytes, once checked, go back into the cache, so push, build and sync need no request.
+//! folder's bytes, once checked, go back into the cache, so push and sync need no request.
 
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::build::{build, building_in, runs};
 use crate::project::{IRIS, PATH, added};
 use crate::support::{Result, Sandbox, Server, delete, edit, file, json, sha256_hex, text};
-
-/// a recipe that makes `clean` by copying iris, so the data folder holds iris's bytes twice.
-const CLEAN: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n";
 
 /// iris with one byte changed: the size data.lock pins, other bytes.
 const EDITED: &[u8] = b"sepal_length,species\n5.2,setosa\n";
 
-/// a project in the work folder whose data folder is `inputs`, with iris added from `server`
-/// and, with `recipe`, [`CLEAN`] built from it: one object at two paths.
-fn project(sandbox: &Sandbox, server: &Server, recipe: bool) -> Result {
+/// a project in the work folder whose data folder is `inputs`, with iris added from `server`.
+fn project(sandbox: &Sandbox, server: &Server) -> Result {
     let manifest = sandbox.work().join("data.toml");
     fs::write(&manifest, "[project]\ndata_dir = \"inputs\"\n")?;
     added(sandbox, server)?;
-    if recipe {
-        let written = fs::read_to_string(&manifest)?;
-        fs::write(&manifest, format!("{written}{CLEAN}"))?;
-        let built = build(sandbox, &["build"])?;
-        assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
-    }
     Ok(())
+}
+
+/// [`project`] with twin added after iris from the server it returns, which holds iris's bytes
+/// too: one object at two paths.
+fn twice(sandbox: &Sandbox, server: &Server) -> Result<Server> {
+    project(sandbox, server)?;
+    let twin = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&twin.url);
+    let output = sandbox.run(&["add", &twin.url, "--as", "twin"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(twin)
 }
 
 /// the work folder copied to `name` as `cp -a` copies it, data folder, data.lock.d and
@@ -99,7 +99,7 @@ fn unlinked(path: &Path, cache: &Path) -> Result {
 fn a_copied_project_pushes_from_its_data_folder_with_no_request() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    project(&sandbox, &server, true)?;
+    let twin = twice(&sandbox, &server)?;
     let asked = server.requests().len();
     let (two, cache) = copied(&sandbox, "two")?;
     let placed = two.join("inputs").join("iris").join("iris.csv");
@@ -134,31 +134,10 @@ fn a_copied_project_pushes_from_its_data_folder_with_no_request() -> Result {
     );
     assert_eq!(fs::read(object(&mirror, IRIS))?, IRIS);
     assert_eq!(server.requests().len(), asked, "the source is never asked");
+    assert_eq!(twin.requests().len(), 1, "only the add asked twin's source");
     assert_eq!(look(&placed)?, before);
     unlinked(&placed, &cache)?;
-    unlinked(&two.join("inputs").join("clean").join("iris.csv"), &cache)?;
-    Ok(())
-}
-
-/// a check runs every step from the inputs data.lock pins, which the data folder holds.
-#[test]
-fn an_offline_check_of_a_copied_project_reads_its_data_folder() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    project(&sandbox, &server, true)?;
-    let (two, cache) = copied(&sandbox, "two")?;
-    let ran = runs(&two)?;
-    let output = building_in(&sandbox, &two, &["--offline", "build", "--check"])?
-        .env("FETCHLOOM_CACHE", &cache)
-        .output()?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    let said = format!(
-        "Copied 1 file · {} B from inputs into the cache",
-        IRIS.len()
-    );
-    assert!(stderr.contains(&said), "{stderr}");
-    assert_eq!(runs(&two)?, ran + 1);
+    unlinked(&two.join("inputs").join("twin").join("iris.csv"), &cache)?;
     Ok(())
 }
 
@@ -168,7 +147,7 @@ fn an_offline_check_of_a_copied_project_reads_its_data_folder() -> Result {
 fn a_copied_project_differs_in_nothing_until_a_sync_records_it() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    project(&sandbox, &server, false)?;
+    project(&sandbox, &server)?;
     let (two, cache) = copied(&sandbox, "two")?;
     let run = |args: &[&str]| {
         sandbox
@@ -198,33 +177,12 @@ fn a_copied_project_differs_in_nothing_until_a_sync_records_it() -> Result {
     Ok(())
 }
 
-#[test]
-fn an_offline_build_runs_a_recipe_whose_input_is_only_in_the_data_folder() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    project(&sandbox, &server, false)?;
-    let (two, cache) = copied(&sandbox, "two")?;
-    let manifest = two.join("data.toml");
-    let written = fs::read_to_string(&manifest)?;
-    fs::write(&manifest, format!("{written}{CLEAN}"))?;
-    let output = building_in(&sandbox, &two, &["--offline", "build"])?
-        .env("FETCHLOOM_CACHE", &cache)
-        .output()?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    assert_eq!(runs(&two)?, 1);
-    assert_eq!(
-        fs::read(two.join("inputs").join("clean").join("iris.csv"))?,
-        IRIS
-    );
-    Ok(())
-}
-
 /// the push leaves the edit as it is and downloads the pinned bytes, as with no file there.
 #[test]
 fn an_edit_of_the_same_size_is_never_taken() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
-    project(&sandbox, &server, false)?;
+    project(&sandbox, &server)?;
     let (two, cache) = copied(&sandbox, "two")?;
     let placed = two.join("inputs").join("iris").join("iris.csv");
     delete(&placed)?;
@@ -252,11 +210,11 @@ fn an_edit_of_the_same_size_is_never_taken() -> Result {
 fn a_dry_run_promises_no_copy_of_an_edit_two_names_share() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
-    project(&sandbox, &server, true)?;
+    let _twin = twice(&sandbox, &server)?;
     let (two, cache) = copied(&sandbox, "two")?;
     let (raw, made) = (
         two.join("inputs").join("iris").join("iris.csv"),
-        two.join("inputs").join("clean").join("iris.csv"),
+        two.join("inputs").join("twin").join("iris.csv"),
     );
     // a drive without hardlinks, as fat, gets the edit at both names instead
     if sandbox.links()?.hardlink {
@@ -294,15 +252,15 @@ fn a_dry_run_promises_no_copy_of_an_edit_two_names_share() -> Result {
     Ok(())
 }
 
-/// the data folder is asked before any mirror, and a result found there needs no build: status
-/// calls it missing, not unbuilt, and a dry run and sync place it offline.
+/// the data folder is asked before any mirror: status calls the file missing, and a dry run and
+/// sync place it offline from the other path that holds its bytes.
 #[test]
 fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    project(&sandbox, &server, true)?;
+    let _twin = twice(&sandbox, &server)?;
     let (two, cache) = copied(&sandbox, "two")?;
-    let made = two.join("inputs").join("clean").join("iris.csv");
+    let made = two.join("inputs").join("twin").join("iris.csv");
     delete(&made)?;
     let mirror = sandbox.folder("mirror")?;
     fs::write(mirror.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
@@ -321,9 +279,8 @@ fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
     let status = run(&["--json", "status"])?;
     assert_eq!(
         status["result"]["missing"],
-        serde_json::json!(["inputs/clean/iris.csv"])
+        serde_json::json!(["inputs/twin/iris.csv"])
     );
-    assert_eq!(status["result"]["unbuilt"], serde_json::json!([]));
     let dry = run(&["--json", "--offline", "sync", "--dry-run"])?;
     assert_eq!(dry["result"]["placement"]["placed"], 1, "{dry}");
     assert_eq!(dry["result"]["changes"]["download"], serde_json::json!([]));
@@ -538,40 +495,6 @@ fn an_offline_push_says_to_run_it_online() -> Result {
     assert!(error["fix"].is_null(), "{error}");
     assert_eq!(server.requests().len(), 1, "only the add downloaded");
     assert!(!mirror.exists());
-    Ok(())
-}
-
-/// iris has `place = false`, so a copy has it nowhere on this machine; `push --inputs` downloads
-/// it and pushes it with the result the data folder holds.
-#[test]
-fn push_inputs_fetches_an_input_no_sync_places() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
-    added(&sandbox, &server)?;
-    let manifest = sandbox.work().join("data.toml");
-    let written = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        format!(
-            "{}\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{{iris}}\", \"{{out}}\"]\n",
-            written.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1)
-        ),
-    )?;
-    let built = build(&sandbox, &["build"])?;
-    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
-    assert!(!sandbox.work().join("data").join("iris").exists());
-    let (two, cache) = copied(&sandbox, "two")?;
-    let mirror = sandbox.folder("lab")?.join("mirror");
-    let pushed = sandbox
-        .command_in(&two, &["--json", "--yes", "push", "--inputs", "--to"])
-        .arg(&mirror)
-        .env("FETCHLOOM_CACHE", &cache)
-        .output()?;
-    let document = json(&pushed)?;
-    assert_eq!(pushed.status.code(), Some(0), "{document}");
-    assert_eq!(document["work"]["requests"], 1, "{document}");
-    assert_eq!(fs::read(object(&mirror, IRIS))?, IRIS);
-    assert_eq!(fs::read(object(&mirror, b"done"))?, b"done");
     Ok(())
 }
 

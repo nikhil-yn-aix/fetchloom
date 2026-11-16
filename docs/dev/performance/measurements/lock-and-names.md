@@ -38,7 +38,7 @@ placing in sync now grows about in step with the datasets, and the time saved is
 
 ## commands that name a dataset, 2026-11-12
 
-`path <name>` cost what the whole project costs. in a settled project of three imported datasets of 3, 1,000 and 10,000 files, `path` of the 3-file one took 47 ms on the glibc build, and a trace put 6.7 ms in reading data.lock, 7.5 ms in planning, 12.2 ms in reading the state and 14.9 ms in listing the data folder, each for every dataset. beside one dataset of 100,000 files, whose list data.lock keeps in data.lock.d, it took 0.47 s. the changes below make `path` and a settled `sync <name>` read only the pins of the named datasets, of what their recipes read and, for `path`, of datasets whose folders meet theirs, which a clash with their files could involve; only the state's records inside their folders; and only a listing of those folders. `list <name>` and `export <name>` read only the named pins.
+`path <name>` cost what the whole project costs. in a settled project of three imported datasets of 3, 1,000 and 10,000 files, `path` of the 3-file one took 47 ms on the glibc build, and a trace put 6.7 ms in reading data.lock, 7.5 ms in planning, 12.2 ms in reading the state and 14.9 ms in listing the data folder, each for every dataset. beside one dataset of 100,000 files, whose list data.lock keeps in data.lock.d, it took 0.47 s. the changes below make `path` and a settled `sync <name>` read only the pins of the named datasets and, for `path`, of datasets whose folders meet theirs, which a clash with their files could involve; only the state's records inside their folders; and only a listing of those folders. `list <name>` and `export <name>` read only the named pins.
 
 both projects were git repositories on ext4 over nvme, settled before the runs. each change ran behind a switch in one release build, each arm adding one change to those before it, every arm once a round in a seeded shuffled order, 12 to 30 measured rounds a case; then the release builds of b3b182a and of the changes. a ratio is the median of new over old with its 95% paired bootstrap interval from `bench/ab.py`. a change stayed if an interval where it aimed ended below 0.97 and no case's interval for time or peak memory started above 1.02; batches that ran under a burst of other load ran again. the static musl build comes first, glibc after the semicolon.
 
@@ -139,7 +139,7 @@ at 1 and 10, the 32 cases on both builds came out between 0.99 and 1.05 at the m
 
 ## indexing pin membership and renames, 2026-11-12
 
-kept. pin membership now searches the already name-sorted pin vectors. rename matching groups each source's spec and `extract`, or each recipe's input names, run words, code paths and variables, once. a signature must belong to exactly one old and one eligible new name. moved pins are moved rather than cloned; named runs still copy out-of-scope pins. no persisted state changes.
+kept. pin membership now searches the already name-sorted pin vectors. rename matching groups each source's spec and `extract` once. a signature must belong to exactly one old and one eligible new name. moved pins are moved rather than cloned; named runs still copy out-of-scope pins. no persisted state changes.
 
 one release executable per libc, built from 27811da3 with `FETCHLOOM_EXP_PIN_INDEX` read once, compared the old and new paths. the flag and old paths were then removed. rustc 1.99.1, glibc 2.39 and the default musl allocator, ext4 nvme, offline JSON commands with warm data: `status` and settled `lock` at 1, 10, 1,000 and 40,000 datasets, unique rename forecasts at 1, 10, 600 and 1,000, and a 100,000-file ordinary status control. every row uses the same binary and input on both sides. output equality was checked separately.
 
@@ -209,7 +209,7 @@ an allocator diagnostic changed only `MIMALLOC_PURGE_DELAY` to 0: the 1,000-rena
 | glibc | status, files control | 100,000 | 2000.476 to 2000.509 | 10 | 5 |
 | musl | status, files control | 100,000 | 2474.830 to 2475.101 | 12 | 0 |
 
-characterizations passed before the rewrite. the new cases are `fetched_renames_keep_bytes_and_report_new_name_order`, `named_rename_copies_the_pin_and_excludes_other_new_names`, `fetched_matches_require_unique_specs_and_the_same_extraction`, `given_and_upgraded_names_are_not_rename_candidates`, `recipe_renames_match_the_ordered_recipe_not_its_old_hashes` and `recipe_renames_refuse_ambiguous_old_or_new_shapes`. disabling the duplicate-new guard made the ambiguity cases fail; restoring it passed. the existing real-CLI fetched and recipe rename cases also passed. fixtures, experiment binaries, raw rounds, native RSS and mutation evidence remain with the sweep outside the repository.
+characterizations passed before the rewrite. the new cases are `fetched_renames_keep_bytes_and_report_new_name_order`, `named_rename_copies_the_pin_and_excludes_other_new_names`, `fetched_matches_require_unique_specs_and_the_same_extraction` and `given_and_upgraded_names_are_not_rename_candidates`. disabling the duplicate-new guard made the ambiguity cases fail; restoring it passed. the existing real-CLI fetched rename cases also passed. fixtures, experiment binaries, raw rounds, native RSS and mutation evidence remain with the sweep outside the repository.
 
 ## indexing export selection, 2026-11-12
 

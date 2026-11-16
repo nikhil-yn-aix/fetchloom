@@ -30,7 +30,7 @@ fn a_full_manifest_reads_with_defaults() {
     );
     assert_eq!(manifest.data_dir, "inputs");
     let eeg = &manifest.datasets["eeg"];
-    let source = eeg.source().unwrap();
+    let source = &eeg.source;
     assert_eq!(source.reference, "osf:abc12");
     assert_eq!(
         source.select.iter().map(Glob::as_str).collect::<Vec<_>>(),
@@ -43,11 +43,8 @@ fn a_full_manifest_reads_with_defaults() {
         "data.toml:6   select = [\"**/*.edf\", \"participants.tsv\"]"
     );
     let weights = &manifest.datasets["weights"];
-    assert_eq!(
-        weights.source().unwrap().reference,
-        "https://example.org/w.bin"
-    );
-    assert!(!weights.source().unwrap().extract && weights.copy);
+    assert_eq!(weights.source.reference, "https://example.org/w.bin");
+    assert!(!weights.source.extract && weights.copy);
     assert_eq!(weights.path.as_deref(), Some("models/w"));
     assert_eq!(parse("").data_dir, "data");
     assert!(parse("").datasets.is_empty());
@@ -67,7 +64,7 @@ fn members_tables_choose_files_inside_each_archive() {
     let manifest = parse(&format!(
         "{PETS}\n[datasets.pets.members.\"pets.zip\"]\nexclude = [\"pets-v1/images/dog_010.png\", \"pets-v1/**/*.tmp\"]\n\n[datasets.pets.members.\"raw/b.tar.gz\"]\nselect = \"**/*.csv\"\nexclude = \"old/**\"\n"
     ));
-    let members = &manifest.datasets["pets"].source().unwrap().members;
+    let members = &manifest.datasets["pets"].source.members;
     assert_eq!(
         members.iter().map(|(key, _)| key).collect::<Vec<_>>(),
         ["pets.zip", "raw/b.tar.gz"]
@@ -95,14 +92,13 @@ fn members_tables_choose_files_inside_each_archive() {
         format!("{PETS}members.\"pets.zip\".exclude = \"a/x.png\"\n"),
     ] {
         let manifest = parse(&written);
-        let members = &manifest.datasets["pets"].source().unwrap().members;
+        let members = &manifest.datasets["pets"].source.members;
         let zip = members.get("pets.zip").unwrap();
         assert!(!zip.keeps("a/x.png") && zip.keeps("a/y.png"), "{written}");
     }
     assert!(
         parse(PETS).datasets["pets"]
-            .source()
-            .unwrap()
+            .source
             .members
             .iter()
             .next()
@@ -117,9 +113,7 @@ fn member_filters_stay_out_of_the_spec() {
     let filtered = parse(&format!(
         "{PETS}[datasets.pets.members.\"pets.zip\"]\nexclude = [\"a/x.png\"]\n"
     ));
-    let spec = |manifest: &Manifest| {
-        crate::project::lock::spec(manifest.datasets["pets"].source().unwrap())
-    };
+    let spec = |manifest: &Manifest| crate::project::lock::spec(&manifest.datasets["pets"].source);
     assert_eq!(spec(&plain), spec(&filtered));
 }
 
@@ -159,13 +153,6 @@ fn members_tables_refuse_what_cannot_apply() {
         assert_eq!(error.message, message, "{text}");
         assert_eq!(error.details, [line], "{text}");
     }
-    let made = fails(&format!(
-        "{PETS}[datasets.b]\nfrom = [\"pets\"]\nrun = [\"t\", \"{{pets}}\", \"{{out}}\"]\n[datasets.b.members.\"x.zip\"]\nexclude = \"a\"\n"
-    ));
-    assert_eq!(
-        made.message,
-        "members is for a dataset fetched from a source, and datasets.b is made by a recipe"
-    );
 }
 
 #[test]
@@ -430,8 +417,7 @@ fn a_link_to_one_file_selects_that_file_unless_select_is_given() {
     .unwrap();
     let select = |name: &str| {
         manifest.datasets[name]
-            .source()
-            .unwrap()
+            .source
             .select
             .iter()
             .map(|glob| glob.as_str().to_owned())
@@ -449,8 +435,7 @@ fn a_link_to_one_folder_selects_that_folder_unless_select_is_given() {
     .unwrap();
     let select = |name: &str| {
         manifest.datasets[name]
-            .source()
-            .unwrap()
+            .source
             .select
             .iter()
             .map(|glob| glob.as_str().to_owned())
@@ -687,7 +672,7 @@ fn an_exclusion_is_added_once_keeping_comments() {
         "# pets for the study\n[datasets.pets]\nref = \"https://example.org/pets.zip\" # v1\n\n[datasets.pets.members.\"pets.zip\"]\nexclude = [\n  \"pets-v1/images/dog_010.png\",\n  \"pets-v1/images/blurry_011.png\",\n]\n\n[datasets.zoo]\nref = \"zenodo:1\"\nexclude = \"*.tmp\" # scratch\n"
     );
     let read = parse(&twice);
-    let members = &read.datasets["pets"].source().unwrap().members;
+    let members = &read.datasets["pets"].source.members;
     let zip = members.get("pets.zip").unwrap();
     assert!(!zip.keeps(&blurry) && zip.keeps("pets-v1/images/cat.png"));
     let listed = with_exclusions(text, "zoo", None, &["b[[]1].csv".to_owned()]).unwrap();
@@ -780,18 +765,11 @@ fn a_stop_between_names_ends_the_edit_there() {
 
 /// what data.toml states: the data folder, and each dataset's values without their lines.
 type Stated = (String, BTreeMap<String, Values>);
-type Values = (Option<Fetched>, Option<Made>, bool, Option<String>);
+type Values = (Fetched, bool, Option<String>);
 /// a source's ref, select, exclude, extract and member filters.
 type Fetched = (String, Vec<String>, Vec<String>, bool, Vec<Filtered>);
 /// an archive's path, and the select and exclude patterns of its members table.
 type Filtered = (String, Vec<String>, Vec<String>);
-/// a recipe's from, run, code and env.
-type Made = (
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    BTreeMap<String, String>,
-);
 
 fn patterns(globs: &[Glob]) -> Vec<String> {
     globs.iter().map(|glob| glob.as_str().to_owned()).collect()
@@ -799,41 +777,25 @@ fn patterns(globs: &[Glob]) -> Vec<String> {
 
 fn stated(manifest: &Manifest) -> Stated {
     let datasets = manifest.datasets.iter().map(|(dataset, entry)| {
-        let fetched = entry.source().map(|source| {
-            (
-                source.reference.clone(),
-                patterns(&source.select),
-                patterns(&source.exclude),
-                source.extract,
-                source
-                    .members
-                    .iter()
-                    .map(|(archive, filter)| {
-                        (
-                            archive.clone(),
-                            patterns(filter.select.globs()),
-                            patterns(filter.exclude.globs()),
-                        )
-                    })
-                    .collect(),
-            )
-        });
-        let made = entry.recipe().map(|recipe| {
-            (
-                recipe.from.clone(),
-                recipe
-                    .run
-                    .iter()
-                    .map(|word| word.text().to_owned())
-                    .collect(),
-                recipe.code.clone(),
-                recipe.env.clone(),
-            )
-        });
-        (
-            dataset.clone(),
-            (fetched, made, entry.copy, entry.path.clone()),
-        )
+        let source = &entry.source;
+        let fetched = (
+            source.reference.clone(),
+            patterns(&source.select),
+            patterns(&source.exclude),
+            source.extract,
+            source
+                .members
+                .iter()
+                .map(|(archive, filter)| {
+                    (
+                        archive.clone(),
+                        patterns(filter.select.globs()),
+                        patterns(filter.exclude.globs()),
+                    )
+                })
+                .collect(),
+        );
+        (dataset.clone(), (fetched, entry.copy, entry.path.clone()))
     });
     (manifest.data_dir.clone(), datasets.collect())
 }
@@ -854,10 +816,9 @@ fn fuzz_manifest() {
         let before = stated(&manifest);
         for (dataset, entry) in &manifest.datasets {
             assert!(name::is_dataset_name(dataset), "{dataset:?}");
-            if let Some(source) = entry.source() {
-                assert!(!source.reference.is_empty(), "{dataset:?}");
-                assert_eq!(source.reference.trim(), source.reference);
-            }
+            let source = &entry.source;
+            assert!(!source.reference.is_empty(), "{dataset:?}");
+            assert_eq!(source.reference.trim(), source.reference);
             if let Some(path) = entry
                 .path
                 .as_deref()
@@ -871,22 +832,9 @@ fn fuzz_manifest() {
             let mut expected = before.clone();
             expected.1.remove(dataset);
             let after = Manifest::parse(&removed).map(|manifest| stated(&manifest));
-            // a recipe cannot read a dataset data.toml no longer has
-            let read = manifest.datasets.values().any(|entry| {
-                entry
-                    .recipe()
-                    .is_some_and(|recipe| recipe.from.contains(dataset))
-            });
-            if read {
-                assert!(after.is_err(), "{removed:?}");
-            } else {
-                assert_eq!(after.ok(), Some(expected), "{removed:?}");
-            }
+            assert_eq!(after.ok(), Some(expected), "{removed:?}");
 
             let copy = format!("{dataset}-2");
-            let Some(source) = entry.source() else {
-                continue;
-            };
             if !name::is_dataset_name(&copy) || manifest.datasets.contains_key(&copy) {
                 continue;
             }
@@ -905,447 +853,15 @@ fn fuzz_manifest() {
                 }
             };
             let mut expected = before.clone();
-            let (fetched, _, _, _) = before.1[dataset].clone();
+            let (fetched, _, _) = before.1[dataset].clone();
             // a dataset is added without member filters, which only a person writes
-            let fetched = fetched.map(|(reference, select, exclude, extract, _)| {
-                (reference, select, exclude, extract, Vec::new())
-            });
-            expected.1.insert(copy, (fetched, None, false, None));
+            let (reference, select, exclude, extract, _) = fetched;
+            let fetched = (reference, select, exclude, extract, Vec::new());
+            expected.1.insert(copy, (fetched, false, None));
             let after = Manifest::parse(&added).map(|manifest| stated(&manifest));
             assert_eq!(after.ok(), Some(expected), "{added:?}");
         }
     });
-}
-
-const RAW: &str = "[datasets.raw]\nref = \"zenodo:1\"\n\n";
-const CLEAN: &str =
-    "[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n";
-
-/// a dataset is fetched from a source or made by a recipe, never both, and a recipe needs run.
-#[test]
-fn a_recipe_needs_run_and_no_ref() {
-    let manifest = parse(&format!(
-        "{RAW}{CLEAN}code = [\"clean.py\", \"lib/\"]\nenv = {{ SEED = \"1\" }}\ncopy = true\n"
-    ));
-    let entry = &manifest.datasets["clean"];
-    let recipe = entry.recipe().unwrap();
-    assert_eq!(recipe.from, ["raw"]);
-    let words: Vec<&str> = recipe.run.iter().map(Template::text).collect();
-    assert_eq!(words, ["python3", "clean.py", "{raw}", "{out}"]);
-    assert_eq!(recipe.code, ["clean.py", "lib"]);
-    assert_eq!(
-        recipe.env,
-        BTreeMap::from([("SEED".to_owned(), "1".to_owned())])
-    );
-    assert!(entry.copy && entry.source().is_none());
-    assert!(manifest.datasets["raw"].recipe().is_none());
-    let run = "run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n";
-    for (table, message, help) in [
-        (
-            "from = [\"raw\"]\n".to_owned(),
-            "datasets.clean has from but no run, so nothing makes it",
-            "add run, the program and arguments that make it, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
-        ),
-        (
-            "code = [\"clean.py\"]\n".to_owned(),
-            "datasets.clean has code but no run, so nothing makes it",
-            "add run, the program and arguments that make it, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
-        ),
-        (
-            format!("ref = \"zenodo:2\"\nfrom = [\"raw\"]\n{run}"),
-            "datasets.clean has both ref and from, but a dataset is fetched from a source or made by a recipe, not both",
-            "keep ref to fetch it, or remove ref to make it by a recipe",
-        ),
-        (
-            "ref = \"zenodo:2\"\nenv = { SEED = \"1\" }\n".to_owned(),
-            "datasets.clean has both ref and env, but a dataset is fetched from a source or made by a recipe, not both",
-            "keep ref to fetch it, or remove ref to make it by a recipe",
-        ),
-        (
-            format!("from = [\"raw\"]\n{run}select = \"*.csv\"\n"),
-            "select is for a dataset fetched from a source, and datasets.clean is made by a recipe",
-            "remove select, and choose files inside the step instead",
-        ),
-        (
-            format!("from = [\"raw\"]\n{run}extract = false\n"),
-            "extract is for a dataset fetched from a source, and datasets.clean is made by a recipe",
-            "remove extract, and choose files inside the step instead",
-        ),
-        (
-            format!("from = []\n{run}"),
-            "run in datasets.clean names {raw}, which is not a dataset it is made from",
-            "a name in braces is one of from, or out",
-        ),
-        (
-            format!("from = \"raw\"\n{run}"),
-            "from in data.toml must be a list of dataset names",
-            "write it as from = [\"raw\"]",
-        ),
-        (
-            format!("from = [\"raw\", \"raw\"]\n{run}"),
-            "datasets.clean is made from raw twice",
-            "name each dataset once in from",
-        ),
-        (
-            "from = [\"raw\"]\nrun = \"python3 clean.py {raw} {out}\"\n".to_owned(),
-            "run in data.toml must be a list of words, since no shell reads it",
-            "write the program and each argument as a word of their own, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
-        ),
-        (
-            "from = [\"raw\"]\nrun = []\n".to_owned(),
-            "run in datasets.clean is empty, so there is no program to start",
-            "write the program and each argument as a word of their own, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
-        ),
-        (
-            format!("from = [\"raw\"]\n{run}code = \"clean.py\"\n"),
-            "code in data.toml must be a list of files and folders in the project",
-            "write it as code = [\"clean.py\"]",
-        ),
-        (
-            format!("from = [\"raw\"]\n{run}env = {{ SEED = 1 }}\n"),
-            "every value in env must be a string in quotes",
-            "write it as SEED = \"1\"",
-        ),
-    ] {
-        let error = fails(&format!("{RAW}[datasets.clean]\n{table}"));
-        assert_eq!(error.kind, Kind::ProjectInvalid, "{table}");
-        assert_eq!(error.message, message, "{table}");
-        assert_eq!(error.help.as_deref(), Some(help), "{table}");
-        assert_eq!(error.details.len(), 1, "{table}: {:?}", error.details);
-        assert!(error.details[0].starts_with("data.toml:"), "{table}");
-    }
-}
-
-/// a step such as a seeded simulation makes its result from its command and code alone, with
-/// from empty or left out, and a recipe may read its result like any dataset.
-#[test]
-fn a_recipe_may_read_no_dataset() {
-    let sim =
-        "run = [\"python3\", \"sim.py\", \"{out}\"]\ncode = [\"sim.py\"]\nenv = { SEED = \"7\" }\n";
-    let reader = "\n[datasets.stats]\nfrom = [\"sim\"]\nrun = [\"python3\", \"stats.py\", \"{sim}\", \"{out}\"]\n";
-    for from in ["", "from = []\n"] {
-        let manifest = parse(&format!("[datasets.sim]\n{from}{sim}{reader}"));
-        let recipe = manifest.datasets["sim"].recipe().unwrap();
-        assert!(recipe.from.is_empty(), "{from:?}");
-        let words: Vec<&str> = recipe.run.iter().map(Template::text).collect();
-        assert_eq!(words, ["python3", "sim.py", "{out}"]);
-        assert_eq!(recipe.code, ["sim.py"]);
-        assert_eq!(recipes::order(&manifest.datasets), Ok(vec!["sim", "stats"]));
-    }
-}
-
-/// `place = false` keeps a dataset out of the data folder; only true or false is read.
-#[test]
-fn place_reads_on_both_kinds() {
-    let manifest = parse(&format!(
-        "{RAW}place = false\n\n{CLEAN}place = false\n\n[datasets.kept]\nref = \"zenodo:2\"\n"
-    ));
-    assert!(!manifest.datasets["raw"].place);
-    assert!(!manifest.datasets["clean"].place);
-    assert!(
-        manifest.datasets["kept"].place,
-        "placed unless data.toml says not"
-    );
-    assert_eq!(
-        manifest.datasets["raw"].lines["place"],
-        "data.toml:4   place = false"
-    );
-    let error = fails(&format!("{RAW}place = \"no\"\n"));
-    assert_eq!(error.kind, Kind::ProjectInvalid);
-    assert_eq!(error.message, "place in data.toml must be true or false");
-    assert_eq!(error.details, ["data.toml:4   place = \"no\""]);
-}
-
-/// `{name}` is the folder of a dataset a step reads and `{out}` the result's; a word naming
-/// anything else, or a step missing an input or its result, is refused before anything runs.
-#[test]
-fn templates_name_inputs_and_out() {
-    let recipe = |run: &str| format!("{RAW}[datasets.clean]\nfrom = [\"raw\"]\nrun = {run}\n");
-    let manifest = parse(&recipe(
-        "[\"tool\", \"--in={raw}/x\", \"{{literal}}\", \"{out}\"]",
-    ));
-    assert_eq!(manifest.datasets["clean"].recipe().unwrap().run.len(), 4);
-    for (run, message, help) in [
-        (
-            "[\"python3\", \"clean.py\", \"{raw}\"]",
-            "run in datasets.clean never names {out}, so the step has nowhere to write",
-            "put {out} where the step takes the folder to write the result in",
-        ),
-        (
-            "[\"python3\", \"clean.py\", \"{out}\"]",
-            "run in datasets.clean never names {raw}, so the step cannot find raw",
-            "put {raw} where the step takes the folder holding the files of raw",
-        ),
-        (
-            "[\"python3\", \"{rwa}\", \"{raw}\", \"{out}\"]",
-            "run in datasets.clean names {rwa}, which is not a dataset it is made from",
-            "did you mean {raw}? a name in braces is one of from, or out",
-        ),
-        (
-            "[\"python3\", \"{Raw}\", \"{raw}\", \"{out}\"]",
-            "run in datasets.clean names {Raw}, which is not a dataset it is made from",
-            "did you mean {raw}? a name in braces is one of from, or out",
-        ),
-        (
-            "[\"python3\", \"{raw\", \"{out}\"]",
-            "a word of run in datasets.clean has a { with no } after it",
-            "write {{ and }} for a brace of its own, and {name} for the folder of a dataset it reads",
-        ),
-        (
-            "[\"\", \"{raw}\", \"{out}\"]",
-            "the program in run of datasets.clean is empty",
-            "make the first word the program to start, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
-        ),
-        (
-            "[\"python3\\n\", \"{raw}\", \"{out}\"]",
-            "a word of run in datasets.clean holds a control character",
-            "take the control character, such as a tab, a line break or an escape code, out of that word",
-        ),
-    ] {
-        let error = fails(&recipe(run));
-        assert_eq!(error.kind, Kind::ProjectInvalid, "{run}");
-        assert_eq!(error.message, message, "{run}");
-        assert_eq!(error.help.as_deref(), Some(help), "{run}");
-        assert_eq!(error.details.len(), 1, "{run}");
-        assert!(error.details[0].starts_with("data.toml:6"), "{run}");
-    }
-    let out = fails(
-        "[datasets.out]\nref = \"zenodo:1\"\n\n[datasets.clean]\nfrom = [\"out\"]\nrun = [\"tool\", \"{out}\"]\n",
-    );
-    assert_eq!(
-        out.message,
-        "datasets.clean is made from out, the name run keeps for the result's folder"
-    );
-    assert_eq!(
-        out.help.as_deref(),
-        Some("rename the dataset out in data.toml")
-    );
-}
-
-/// no order of steps could make recipes made from each other; a cycle names its path.
-#[test]
-fn from_names_exist_and_form_no_cycle() {
-    let recipe = |name: &str, from: &[&str]| {
-        let names: Vec<String> = from.iter().map(|input| format!("\"{input}\"")).collect();
-        let folders: Vec<String> = from
-            .iter()
-            .map(|input| format!("\"{{{input}}}\""))
-            .collect();
-        format!(
-            "\n[datasets.{name}]\nfrom = [{}]\nrun = [\"tool\", {}, \"{{out}}\"]\n",
-            names.join(", "),
-            folders.join(", ")
-        )
-    };
-    let chain = format!("{RAW}{}{}", recipe("b", &["a"]), recipe("a", &["raw"]));
-    assert_eq!(parse(&chain).datasets.len(), 3);
-    let typo = fails(&format!("{RAW}{}", recipe("clean", &["rwa"])));
-    assert_eq!(typo.kind, Kind::ProjectInvalid);
-    assert_eq!(
-        typo.message,
-        "datasets.clean is made from rwa, which data.toml does not have"
-    );
-    assert_eq!(typo.help.as_deref(), Some("did you mean raw?"));
-    assert_eq!(typo.details, ["data.toml:6   from = [\"rwa\"]"]);
-    for (text, message) in [
-        (
-            format!("{RAW}{}{}", recipe("a", &["b"]), recipe("b", &["a"])),
-            "datasets a and b are made from each other: a \u{2192} b \u{2192} a",
-        ),
-        (
-            format!(
-                "{RAW}{}{}{}",
-                recipe("c", &["raw", "a"]),
-                recipe("b", &["c"]),
-                recipe("a", &["b"])
-            ),
-            "datasets a, b and c are made from each other: a \u{2192} b \u{2192} c \u{2192} a",
-        ),
-        (
-            format!("{RAW}{}", recipe("a", &["a"])),
-            "datasets.a is made from itself",
-        ),
-    ] {
-        let error = fails(&text);
-        assert_eq!(error.kind, Kind::ProjectInvalid, "{text}");
-        assert_eq!(error.message, message, "{text}");
-        assert_eq!(
-            error.help.as_deref(),
-            Some(
-                "a recipe can read only datasets made before it; take one of them out of the other's from"
-            ),
-        );
-        assert_eq!(error.details.len(), 1, "{text}");
-    }
-}
-
-/// code's bytes enter the key, so it stays out of what fetchloom writes, the data folder,
-/// data.lock and data.lock.d, and out of repository metadata.
-#[test]
-fn code_stays_in_the_project_and_out_of_the_data_folder() {
-    let recipe = |data_dir: &str, code: &str| {
-        format!("[project]\ndata_dir = \"{data_dir}\"\n\n{RAW}{CLEAN}code = [{code}]\n")
-    };
-    let manifest = parse(&recipe(
-        "data",
-        "\"clean.py\", \"lib/\", \"data.toml\", \"database\"",
-    ));
-    assert_eq!(
-        manifest.datasets["clean"].recipe().unwrap().code,
-        ["clean.py", "lib", "data.toml", "database"]
-    );
-    for (data_dir, code, message, help) in [
-        (
-            "data",
-            "\"../shared/clean.py\"",
-            "code \"../shared/clean.py\" in datasets.clean is refused because it climbs out of its folder",
-            "name a file or folder inside the project, with / between folders",
-        ),
-        (
-            "data",
-            "\"/etc/passwd\"",
-            "code \"/etc/passwd\" in datasets.clean is refused because it starts at the root of the disk",
-            "name a file or folder inside the project, with / between folders",
-        ),
-        (
-            "data",
-            "\"lib\\\\clean.py\"",
-            "code \"lib\\clean.py\" in datasets.clean is refused because it has a \\, which windows reads as a folder separator",
-            "name a file or folder inside the project, with / between folders",
-        ),
-        (
-            "data",
-            "\".\"",
-            "code \".\" in datasets.clean is refused because it has . as a folder name",
-            "name a file or folder inside the project, with / between folders",
-        ),
-        (
-            "data",
-            "\".git/hooks\"",
-            "code \".git/hooks\" in datasets.clean is refused because it names repository metadata",
-            "name the project's own files, such as scripts and their settings",
-        ),
-        (
-            "data",
-            "\"Data.Lock\"",
-            "code \"Data.Lock\" in datasets.clean is refused because fetchloom writes it",
-            "name the project's own files, such as scripts and their settings",
-        ),
-        (
-            "data",
-            "\"data.lock.d/clean.tsv.zst\"",
-            "code \"data.lock.d/clean.tsv.zst\" in datasets.clean is refused because fetchloom writes it",
-            "name the project's own files, such as scripts and their settings",
-        ),
-        (
-            "data",
-            "\"data/raw/x.csv\"",
-            "code \"data/raw/x.csv\" in datasets.clean is refused because it is inside the data folder, which fetchloom fills",
-            "name the project's own files, such as scripts and their settings",
-        ),
-        (
-            "work/data",
-            "\"WORK\"",
-            "code \"WORK\" in datasets.clean is refused because it holds the data folder, which fetchloom fills",
-            "name the project's own files, such as scripts and their settings",
-        ),
-        (
-            "data",
-            "\"clean.py\", \"clean.py/\"",
-            "datasets.clean names the code \"clean.py\" twice",
-            "name each file or folder once in code",
-        ),
-    ] {
-        let error = fails(&recipe(data_dir, code));
-        assert_eq!(error.kind, Kind::ProjectInvalid, "{code}");
-        assert_eq!(error.message, message, "{code}");
-        assert_eq!(error.help.as_deref(), Some(help), "{code}");
-        assert_eq!(error.details.len(), 1, "{code}");
-        assert!(error.details[0].starts_with("data.toml:10"), "{code}");
-    }
-}
-
-/// data.toml and data.lock are shared, and the step inherits the environment of whoever
-/// builds, so env sets plain settings: never fetchloom's own variables or a secret.
-#[test]
-fn env_refuses_fetchloom_and_secret_names() {
-    let recipe = |env: &str| format!("{RAW}{CLEAN}env = {{ {env} }}\n");
-    let manifest = parse(&recipe(
-        "SEED = \"1\", OMP_NUM_THREADS = \"4\", http_proxy = \"\", TOKENIZERS_PARALLELISM = \"false\", MAX_TOKENS = \"512\"",
-    ));
-    assert_eq!(manifest.datasets["clean"].recipe().unwrap().env.len(), 5);
-    for (env, message, help) in [
-        (
-            "FETCHLOOM_CACHE = \"/tmp/c\"",
-            "env in datasets.clean sets FETCHLOOM_CACHE, one of fetchloom's own variables",
-            "set fetchloom's variables in your shell or its settings file, never in data.toml",
-        ),
-        (
-            "fetchloom_jobs = \"1\"",
-            "env in datasets.clean sets fetchloom_jobs, one of fetchloom's own variables",
-            "set fetchloom's variables in your shell or its settings file, never in data.toml",
-        ),
-        (
-            "HF_TOKEN = \"hf_abc\"",
-            "env in datasets.clean sets HF_TOKEN, which looks like a secret",
-            "data.toml and data.lock are shared, and the step inherits your environment, so set HF_TOKEN there",
-        ),
-        (
-            "aws_secret_access_key = \"x\"",
-            "env in datasets.clean sets aws_secret_access_key, which looks like a secret",
-            "data.toml and data.lock are shared, and the step inherits your environment, so set aws_secret_access_key there",
-        ),
-        (
-            "DB_PASSWD = \"x\"",
-            "env in datasets.clean sets DB_PASSWD, which looks like a secret",
-            "data.toml and data.lock are shared, and the step inherits your environment, so set DB_PASSWD there",
-        ),
-        (
-            "OPENAI_API_KEY = \"x\"",
-            "env in datasets.clean sets OPENAI_API_KEY, which looks like a secret",
-            "data.toml and data.lock are shared, and the step inherits your environment, so set OPENAI_API_KEY there",
-        ),
-        (
-            "GITHUBTOKEN = \"x\"",
-            "env in datasets.clean sets GITHUBTOKEN, which looks like a secret",
-            "data.toml and data.lock are shared, and the step inherits your environment, so set GITHUBTOKEN there",
-        ),
-        (
-            "\"MY VAR\" = \"1\"",
-            "env in datasets.clean sets \"MY VAR\", which is not a variable name every system takes",
-            "name variables with letters, digits and _, not starting with a digit",
-        ),
-        (
-            "\"1SEED\" = \"1\"",
-            "env in datasets.clean sets \"1SEED\", which is not a variable name every system takes",
-            "name variables with letters, digits and _, not starting with a digit",
-        ),
-        (
-            "SEED = \"a\\u0000b\"",
-            "env in datasets.clean gives SEED a value with a NUL character, which no program can be given",
-            "remove the NUL character from the value",
-        ),
-    ] {
-        let error = fails(&recipe(env));
-        assert_eq!(error.kind, Kind::ProjectInvalid, "{env}");
-        assert_eq!(error.message, message, "{env}");
-        assert_eq!(error.help.as_deref(), Some(help), "{env}");
-        assert_eq!(error.details.len(), 1, "{env}");
-        assert!(error.details[0].starts_with("data.toml:7"), "{env}");
-        assert!(!error.details[0].contains("hf_abc"), "{env}");
-    }
-}
-
-/// a CRLF checkout's variable reads with LF, so a recipe's key is the same on every system.
-#[test]
-fn a_multi_line_variable_reads_alike_in_a_crlf_checkout() {
-    let text = format!("{RAW}{CLEAN}env = {{ HEADER = \"\"\"id\nname\"\"\", TAB = \"a\\tb\" }}\n");
-    for written in [text.clone(), text.replace('\n', "\r\n")] {
-        let manifest = parse(&written);
-        let env = &manifest.datasets["clean"].recipe().unwrap().env;
-        assert_eq!(env["HEADER"], "id\nname", "{written:?}");
-        assert_eq!(env["TAB"], "a\tb");
-    }
 }
 
 #[test]
@@ -1364,7 +880,7 @@ fn unknown_keys_are_rejected_at_each_table_level() {
         (
             "[datasets.x]\nref = 'zenodo:1'\nunknown_setting = true\n",
             "data.toml:3   unknown_setting = true",
-            "the keys here are ref, select, exclude, extract, members, web_page, copy, path, place, from, run, code, env",
+            "the keys here are ref, select, exclude, extract, members, web_page, copy, path",
         ),
         (
             "[datasets.x]\nref = 'zenodo:1'\n[datasets.x.members.'x.zip']\nexculde = ['a/b.csv']\n",
@@ -1607,7 +1123,7 @@ fn removing_and_readding_preserves_other_datasets_and_all_requested_options() {
     )
     .unwrap();
     let manifest = parse(&added);
-    let replacement = manifest.datasets["replace"].source().unwrap();
+    let replacement = &manifest.datasets["replace"].source;
     assert_eq!(manifest.data_dir, "inputs");
     assert_eq!(manifest.datasets.len(), 2);
     assert_eq!(replacement.reference, "zenodo:3");
@@ -1631,19 +1147,13 @@ fn removing_an_inline_entry_and_editing_bom_text_round_trip() {
     let removed = without_dataset(text, "a").unwrap();
     let manifest = parse(&removed);
     assert_eq!(manifest.datasets.len(), 1);
-    assert_eq!(
-        manifest.datasets["b"].source().unwrap().reference,
-        "zenodo:2"
-    );
+    assert_eq!(manifest.datasets["b"].source.reference, "zenodo:2");
     let removed = without_dataset(&removed, "b").unwrap();
     assert_eq!(parse(&removed).datasets.len(), 0);
     let added = with_dataset("\u{feff}# notes\n", "a", "zenodo:1", &[], &[], true).unwrap();
     assert!(!added.starts_with('\u{feff}'));
     assert!(added.contains("# notes"));
-    assert_eq!(
-        parse(&added).datasets["a"].source().unwrap().reference,
-        "zenodo:1"
-    );
+    assert_eq!(parse(&added).datasets["a"].source.reference, "zenodo:1");
 }
 
 /// a seeded walk through data.toml layouts, to compare two ways of editing each.
@@ -1896,17 +1406,15 @@ fn exclude_changes_at_once_write_what_changes_one_at_a_time_write() {
 
 /// what [`a_plain_data_toml_reads_as_the_parser_reads_it`] joins: names, lines, near misses.
 const PLAIN_NAMES: [&str; 4] = ["iris", "mnist-2_b", "a", "iris"];
-const PLAIN_LINES: [&str; 8] = [
+const PLAIN_LINES: [&str; 6] = [
     "ref = \"https://example.org/iris.csv\"",
     "ref = \"zenodo:3608990\"",
     "ref = \" arxiv:2401.00001 \"",
     "ref = \"https://example.org/a b?token=x#y\"",
-    "place = false",
-    "place = true",
     "# a note, with \"quotes\" and = signs",
     "  \t",
 ];
-const NEAR_MISSES: [&str; 33] = [
+const NEAR_MISSES: [&str; 28] = [
     "[datasets.Iris]",
     "[datasets.\"iris\"]",
     "[datasets.a.b]",
@@ -1924,12 +1432,7 @@ const NEAR_MISSES: [&str; 33] = [
     "ref = \"zenodo:1\" # a note",
     "ref=\"zenodo:1\"",
     "ref = \"zenodo:1\"\"",
-    "place = False",
-    "place = \"false\"",
-    "place = 0",
     "select = [\"*.csv\"]",
-    "from = [\"iris\"]",
-    "run = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]",
     "copy = true",
     "ref = \"a\u{7f}b\"",
     "# a \u{7f} note",
@@ -1942,9 +1445,9 @@ const NEAR_MISSES: [&str; 33] = [
     "\r",
 ];
 
-/// [`read_plain`] reads a data.toml only as [`Manifest::parse`] reads it: the data folder, each
-/// dataset's name, ref and place, and no recipe. tables `add` writes, some lines swapped for near
-/// misses, check it; what it declines goes to the parser.
+/// [`read_plain`] reads a data.toml only as [`Manifest::parse`] reads it: the data folder and each
+/// dataset's name and ref. tables `add` writes, some lines swapped for near misses, check it; what
+/// it declines goes to the parser.
 #[test]
 fn a_plain_data_toml_reads_as_the_parser_reads_it() {
     let mut rng = fastrand::Rng::with_seed(4);
@@ -1982,12 +1485,7 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
         assert_eq!(names(&plain), names(&whole), "{text:?}");
         for (name, entry) in &whole.datasets {
             let read = &plain.datasets[name];
-            assert!(entry.recipe().is_none(), "{text:?}");
-            assert_eq!(
-                (&read.source().unwrap().reference, read.place),
-                (&entry.source().unwrap().reference, entry.place),
-                "{text:?}"
-            );
+            assert_eq!(read.source.reference, entry.source.reference, "{text:?}");
         }
     }
     // a run that read nothing plain would prove nothing

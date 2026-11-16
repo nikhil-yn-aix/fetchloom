@@ -56,17 +56,6 @@ on disk: updates the data folder from data.lock, writing data.lock first if need
 
 on disk: writes data.lock and may add files to the cache. after a git merge, it merges data.toml and data.lock without downloading. --check and --dry-run write nothing";
 
-    pub(super) const BUILD: &str = "examples:
-  fetchloom build --dry-run    # which steps would run
-  fetchloom build    # run them and record the results in data.lock
-  fetchloom build --check --json    # run every step again and compare
-  fetchloom build --accept clean    # record the rebuild of clean a check kept
-
-`fetchloom build` and recipes are experimental: later versions may change them.
-to write a recipe in data.toml, see `fetchloom help recipes`
-
-on disk: runs each step that needs it in a folder of its own in the cache, writes data.lock and data.lock.d and places the results in data/. --dry-run writes nothing";
-
     pub(super) const STATUS: &str = "examples:
   fetchloom status
   fetchloom status --verify
@@ -101,7 +90,6 @@ on disk: nothing, or the one file -o names, which it never replaces without --fo
   fetchloom push --to /mnt/lab/fetchloom
   fetchloom push --to s3://lab-data/fetchloom
   fetchloom push iris --dry-run
-  fetchloom push --inputs clean
 
 on disk: copies the files data.lock lists from the cache into the mirror, which it starts in a folder that is new or empty, or a bucket prefix with no fetchloom-mirror file. what the cache lacks it takes from the data folder or downloads first. it never changes the project. --dry-run writes nothing
 
@@ -148,9 +136,8 @@ on disk: `cache` reports usage, against the cache_budget setting when one is set
   fetchloom cache gc
   fetchloom cache gc --now
   fetchloom cache gc --now --dry-run
-  fetchloom cache gc --inputs --dry-run --mirror /mnt/lab/fetchloom
 
-on disk: deletes cached files no project needs once they are a day old, or at once with --now. --inputs also deletes the cache's copy of raw data only built recipes read, once a folder mirror's copy of it hashes right, after a yes. data/ stays as it is. --dry-run deletes nothing";
+on disk: deletes cached files no project needs once they are a day old, or at once with --now. data/ stays as it is. --dry-run deletes nothing";
 
     pub(super) const VERIFY: &str = "examples:
   fetchloom cache verify
@@ -198,7 +185,6 @@ on disk: removes the saved key. asks first when other tools read it too";
     pub(super) const HELP: &str = "examples:
   fetchloom help concepts
   fetchloom help agents
-  fetchloom help recipes
   fetchloom help cache gc
 
 on disk: nothing";
@@ -459,7 +445,7 @@ fn linked(root: clap::Command) -> clap::Command {
     let mut root = append(
         root,
         format!(
-            "help topics: `fetchloom help concepts`, `recipes`, `environment` or `exit-codes`\n\
+            "help topics: `fetchloom help concepts`, `environment` or `exit-codes`\n\
              for agents and scripts: `fetchloom help agents`, what --json and exit codes say\n\
              docs: {SITE}\nreport a bug: {}",
             crate::error::ISSUES
@@ -584,10 +570,6 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom lock [options]", help_template = TEMPLATE, after_help = examples::LOCK)]
     Lock(Lock),
 
-    /// run recipes and record their results in data.lock (experimental)
-    #[command(override_usage = "fetchloom build [options] [name]...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(BUILD_DRY_RUN)), after_help = examples::BUILD)]
-    Build(Build),
-
     /// list files that are missing, changed locally or extra
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
     Status(Status),
@@ -651,7 +633,6 @@ impl Command {
             Command::Drop(_) => "drop",
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
-            Command::Build(_) => "build",
             Command::Status(_) => "status",
             Command::Diff(_) => "diff",
             Command::List(_) => "list",
@@ -691,7 +672,6 @@ impl Command {
         match self {
             Command::Sync(sync) => sync.locked,
             Command::Path(path) => path.locked,
-            Command::Build(build) => build.locked,
             _ => false,
         }
     }
@@ -702,9 +682,6 @@ impl Command {
             Command::Lock(lock) => !lock.check && !lock.dry.dry_run,
             Command::Sync(sync) => !sync.locked && !sync.dry.dry_run,
             Command::Path(path) => !path.locked,
-            Command::Build(build) => {
-                !build.locked && !build.check && !build.prepare && !build.dry.dry_run
-            }
             Command::Add(add) => !add.dry.dry_run,
             Command::Remove(remove) => !remove.dry.dry_run,
             Command::Exclude(exclude) => !exclude.dry.dry_run,
@@ -714,7 +691,7 @@ impl Command {
 
     /// whether a script may run the command a help names next, with no person to choose: not one
     /// that downloads into place, writes outside the project or publishes, nor one that deletes,
-    /// overwrites or repins what a person keeps, runs code or signs in, unless a dry run.
+    /// overwrites or repins what a person keeps or signs in, unless a dry run.
     pub(crate) fn harmless(&self) -> bool {
         match self {
             Command::Status(_)
@@ -739,7 +716,6 @@ impl Command {
             | Command::Remove(Remove { dry, .. })
             | Command::Exclude(Exclude { dry, .. })
             | Command::Drop(Drop { dry, .. })
-            | Command::Build(Build { dry, .. })
             | Command::Cache(Cache {
                 action: Some(CacheAction::Gc(Gc { dry, .. })),
             }) => dry.dry_run,
@@ -778,11 +754,6 @@ pub(crate) struct Gc {
     /// today. downloads still running keep what they have so far
     #[arg(long, help_heading = "options")]
     pub(crate) now: bool,
-
-    /// also free raw data that only built recipes read, where a folder mirror
-    /// holds a copy that hashes right now; asks first
-    #[arg(long, help_heading = "options")]
-    pub(crate) inputs: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,
@@ -913,10 +884,6 @@ const LOCAL_DRY_RUN: &str = "show what would change on disk without changing it"
 const DROP_DRY_RUN: &str =
     "ask where each file is found and show what would be freed, deleting nothing";
 
-/// `--dry-run` help for `build`, which says what would run.
-const BUILD_DRY_RUN: &str =
-    "say what each step would run, what it reads and where its result goes; run nothing";
-
 /// `--dry-run` help for `push`, which writes the mirror and the cache.
 const PUSH_DRY_RUN: &str =
     "say what would be downloaded, what would be copied and what is there already; change nothing";
@@ -1005,8 +972,8 @@ pub(crate) struct Exclude {
 pub(crate) struct Drop {
     /// the datasets' names in data.toml. each is freed only once every one of its files is
     /// found elsewhere: on a folder mirror whose copy still hashes right, or with --yes at a web
-    /// or S3 mirror or its source at its size; a recipe's result, or a dataset added from a
-    /// folder, only on a folder mirror
+    /// or S3 mirror or its source at its size; a dataset added from a folder only on a folder
+    /// mirror
     #[arg(value_name = "name", required = true, help_heading = "arguments")]
     pub(crate) names: Vec<String>,
 
@@ -1032,8 +999,7 @@ pub(crate) struct Sync {
     pub(crate) force: bool,
 
     /// fail instead of updating data.lock when it is out of date with data.toml, for CI. add
-    /// --strict to fail as well while the data is not ready, as when no mirror holds a recipe's
-    /// result
+    /// --strict to fail as well while the data is not ready, as when sync keeps an edited file
     #[arg(long, help_heading = "options")]
     pub(crate) locked: bool,
 
@@ -1091,43 +1057,6 @@ pub(crate) struct Lock {
     /// the same, keeping their side. repeat it for more
     #[arg(long, value_name = "name", conflicts_with_all = ["check", "upgrade"], help_heading = "options")]
     pub(crate) theirs: Vec<String>,
-
-    #[command(flatten)]
-    pub(crate) dry: DryRun,
-}
-
-/// run the recipes and record their results in data.lock
-#[derive(Clone, Debug, clap::Args)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "each flag is a yes or no on the command line"
-)]
-pub(crate) struct Build {
-    /// the recipes to build, by their names in data.toml, with the recipes they are made from;
-    /// all of them when none is named
-    #[arg(value_name = "name", help_heading = "arguments")]
-    pub(crate) names: Vec<String>,
-
-    /// run every step again from the inputs data.lock has, and compare what each makes with
-    /// data.lock file by file. data.lock and the data folder stay as they are, and the files
-    /// of a step that makes others are kept for --accept
-    #[arg(long, conflicts_with_all = ["dry_run", "accept"], help_heading = "options")]
-    pub(crate) check: bool,
-
-    /// record in data.lock the files a build kept because they differ from the ones
-    /// data.lock has for the same inputs, command and code. it runs nothing
-    #[arg(long, conflicts_with = "dry_run", help_heading = "options")]
-    pub(crate) accept: bool,
-
-    /// fail instead of changing data.lock when it is out of date with data.toml or a recipe,
-    /// for CI
-    #[arg(long, conflicts_with = "accept", help_heading = "options")]
-    pub(crate) locked: bool,
-
-    /// fetch everything the build, or with --check the check, needs, from a mirror first,
-    /// and run nothing, as on a login node before a job builds without the network
-    #[arg(long, conflicts_with_all = ["dry_run", "accept"], help_heading = "options")]
-    pub(crate) prepare: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,
@@ -1257,11 +1186,6 @@ pub(crate) struct Push {
     #[arg(long, value_name = "mirror", help_heading = "options")]
     pub(crate) to: Option<PathBuf>,
 
-    /// also push the datasets the named recipes are made from, and what those are made from,
-    /// so a rebuild on another machine finds them on the mirror
-    #[arg(long, help_heading = "options")]
-    pub(crate) inputs: bool,
-
     /// read back each copy already on a folder mirror and replace one whose bytes are not the
     /// ones data.lock lists. without it a copy of the right size counts as there
     #[arg(long, help_heading = "options")]
@@ -1386,7 +1310,7 @@ pub(crate) struct Completions {
 /// explain the ideas behind fetchloom, or one command
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Help {
-    /// agents, concepts, recipes, environment, exit-codes, or a command such as add or cache gc
+    /// agents, concepts, environment, exit-codes, or a command such as add or cache gc
     #[arg(value_name = "topic", help_heading = "arguments")]
     pub(crate) topic: Vec<String>,
 }

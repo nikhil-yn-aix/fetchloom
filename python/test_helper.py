@@ -123,25 +123,29 @@ class HelperOptions(unittest.TestCase):
                 )
 
     def test_strict_sync_fails_as_sync_strict_does(self):
-        # fetchloom's answers in a project whose recipe clean was never built: sync succeeds,
-        # and only sync --strict fails
+        # fetchloom's answers in a project whose iris.csv was edited: sync succeeds, keeping the
+        # edit, and only sync --strict fails
+        kept = {"path": "data/iris/iris.csv", "reason": "changed"}
         result = {
             "project": "/work/p",
             "selected": None,
             "datasets": [],
             "lock_changed": False,
-            "placement": {"placed": 0, "replaced": 0, "removed": 0, "unchanged": 1, "kept": [], "unbuilt": []},
+            "placement": {"placed": 0, "replaced": 0, "removed": 0, "unchanged": 1, "kept": [kept]},
         }
         warning = {
-            "kind": "build.unbuilt",
-            "message": "clean is not built yet",
+            "kind": "place.kept",
+            "message": "data/iris/iris.csv has changed, so it stays",
             "details": [],
-            "help": "run `fetchloom build clean` to make it, then commit data.lock and data.lock.d",
+            "help": "`fetchloom sync --force` replaces it",
         }
         error = {
             "kind": "data.not_ready",
             "message": "the data is not ready to use",
-            "details": ["clean needs a build (not built yet): `fetchloom build clean` makes it"],
+            "details": [
+                "data/iris/iris.csv changed since fetchloom placed it: save what you need, then "
+                "`fetchloom sync --force` replaces it"
+            ],
             "help": "each line says what makes it ready",
             "fix": None,
         }
@@ -340,13 +344,13 @@ class Errors(unittest.TestCase):
         cases = [
             (
                 lambda: fetchloom.sync(strict=True),
-                "`fetchloom -C /work/study build clean` makes it",
-                "`fetchloom build clean` makes it",
+                "`fetchloom -C /work/study sync --force` replaces it",
+                "`fetchloom sync --force` replaces it",
             ),
             (
                 lambda: fetchloom.sync("/work/study", strict=True),
-                "`fetchloom -C /work/study build clean` makes it",
-                "`fetchloom -C /work/study build clean` makes it",
+                "`fetchloom -C /work/study sync --force` replaces it",
+                "`fetchloom -C /work/study sync --force` replaces it",
             ),
             (
                 lambda: fetchloom.path("iris", "analysis"),
@@ -368,7 +372,7 @@ class Errors(unittest.TestCase):
             answer = {
                 "status": "error",
                 "errors": [{"kind": "usage", "message": "refused", "details": [said], "help": said}],
-                "warnings": [{"kind": "build.unbuilt", "message": "refused", "details": [], "help": said}],
+                "warnings": [{"kind": "place.kept", "message": "refused", "details": [], "help": said}],
             }
             response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
             # as fetchloom says them on linux and macos: on windows it quotes "-C=."
@@ -443,13 +447,13 @@ class Errors(unittest.TestCase):
     def test_the_working_folder_leaves_a_command_on_windows_as_fetchloom_shows_it(self):
         for cwd, shown, named in self.FOLDERS:
             with self.subTest(cwd=cwd):
-                said = f"`fetchloom -C {shown} build clean` makes it"
+                said = f"`fetchloom -C {shown} sync --force` replaces it"
                 raised = self.run_on_windows(
                     lambda: fetchloom.sync(strict=True),
-                    {"kind": "build.unbuilt", "message": "refused", "details": named, "help": said},
+                    {"kind": "place.kept", "message": "refused", "details": named, "help": said},
                     cwd,
                 )
-                self.assertEqual((raised.help, raised.details), ("`fetchloom build clean` makes it", []))
+                self.assertEqual((raised.help, raised.details), ("`fetchloom sync --force` replaces it", []))
 
     # the -C=<folder> word the helper gives fetchloom, as fetchloom retypes it on windows
     GIVEN = [
@@ -525,20 +529,20 @@ class Errors(unittest.TestCase):
         # in a warning too, and with a flag the helper sets left in the name as it is
         folder = r"C:\data\R&D -C"
         named = rf"<folder> is {folder}, which no command here can hold safely"
-        refused = {"kind": "build.unbuilt", "message": "clean is not built yet", "details": [named],
-                   "help": 'run `fetchloom -C "<folder>" build clean`'}
+        refused = {"kind": "place.kept", "message": "data/iris/iris.csv has changed, so it stays", "details": [named],
+                   "help": 'run `fetchloom -C "<folder>" sync --force`'}
         answer = {"status": "error", "errors": [refused], "warnings": [refused]}
         response = subprocess.CompletedProcess([], 1, json.dumps(answer), "")
         for project, cwd, help, details in [
-            (folder, r"C:\work", 'run `fetchloom -C "<folder>" build clean`', [named]),
-            (".", folder, "run `fetchloom build clean`", []),
+            (folder, r"C:\work", 'run `fetchloom -C "<folder>" sync --force`', [named]),
+            (".", folder, "run `fetchloom sync --force`", []),
         ]:
             with self.subTest(project=project):
                 with patch.object(fetchloom, "_WINDOWS", True), patch.object(fetchloom, "_program", return_value="fetchloom"), \
                      patch.object(fetchloom, "_call", return_value=response), patch.object(fetchloom.os, "getcwd", return_value=cwd):
                     with self.assertWarns(UserWarning) as warned, self.assertRaises(fetchloom.Error) as raised:
                         fetchloom.sync(project, strict=True)
-                self.assertEqual(str(warned.warning), "; ".join(["clean is not built yet", *details, help]))
+                self.assertEqual(str(warned.warning), "; ".join(["data/iris/iris.csv has changed, so it stays", *details, help]))
                 self.assertEqual((raised.exception.details, raised.exception.help), (details, help))
 
     def test_a_script_outside_its_project_is_told_to_pass_project(self):

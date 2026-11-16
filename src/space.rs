@@ -228,72 +228,6 @@ fn disk(_: &Path) -> Option<u64> {
     None
 }
 
-/// the total bytes of the disk holding `path`, which must exist; none when the system does not say.
-pub(crate) fn total(path: &Path) -> Option<u64> {
-    sized(path)
-}
-
-#[cfg(unix)]
-fn sized(path: &Path) -> Option<u64> {
-    let stat = rustix::fs::statvfs(path).ok()?;
-    stat.f_blocks.checked_mul(stat.f_frsize)
-}
-
-#[cfg(windows)]
-fn sized(path: &Path) -> Option<u64> {
-    let storage = sysinfo::DiskRefreshKind::nothing().with_storage();
-    holding(path, storage, sysinfo::Disk::total_space)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn sized(_: &Path) -> Option<u64> {
-    None
-}
-
-/// the least free space a step may leave on a disk of `total` bytes: `set`, as the `build_floor`
-/// setting gives it, else the larger of 1 GiB and 1% of the disk.
-pub(crate) fn floor(set: Option<u64>, total: Option<u64>) -> u64 {
-    set.unwrap_or_else(|| (1 << 30).max(total.unwrap_or(0) / 100))
-}
-
-/// what one step of a build may take on the disk holding the cache, as far as fetchloom can tell
-/// before it runs.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Needs {
-    /// the files it reads that the cache lacks, as their downloads bring them, with what an
-    /// archive among them unpacks to, or its size again while that is not known.
-    pub(crate) downloads: u64,
-    /// the files it reads, which its private copies take where the disk does not clone files.
-    pub(crate) inputs: u64,
-    /// the result data.lock pinned for it last, none when it was never built.
-    pub(crate) result: Option<u64>,
-}
-
-/// the most a build of `steps` may take on the cache's disk: every download and result stays, while
-/// only the largest step's copies count, and only where the disk does not clone files.
-pub(crate) fn peak(steps: &[Needs], clones: bool) -> u64 {
-    let stays = steps
-        .iter()
-        .map(|step| step.downloads.saturating_add(step.result.unwrap_or(0)))
-        .fold(0, u64::saturating_add);
-    let copies = if clones {
-        0
-    } else {
-        steps.iter().map(|step| step.inputs).max().unwrap_or(0)
-    };
-    stays.saturating_add(copies)
-}
-
-/// the most one step of a build of `steps` may take on another disk than the cache's, where its
-/// folder is: its copies of what it reads, which no disk clones from another, and its result.
-pub(crate) fn step_peak(steps: &[Needs]) -> u64 {
-    steps
-        .iter()
-        .map(|step| step.inputs.saturating_add(step.result.unwrap_or(0)))
-        .max()
-        .unwrap_or(0)
-}
-
 /// how far `needed` bytes pass what a disk has `free`, none when they fit or the disk does not say.
 pub(crate) fn short(needed: u64, free: Option<u64>) -> Option<u64> {
     free.and_then(|free| needed.checked_sub(free))
@@ -344,39 +278,6 @@ mod tests {
         }
     }
 
-    /// downloads and results add up, while copies count once, for the step that reads most.
-    #[test]
-    fn the_estimate_counts_copies_only_without_clones() {
-        let steps = [
-            Needs {
-                downloads: 50,
-                inputs: 100,
-                result: Some(20),
-            },
-            Needs {
-                downloads: 5,
-                inputs: 300,
-                result: None,
-            },
-        ];
-        assert_eq!(peak(&steps, true), 75);
-        assert_eq!(peak(&steps, false), 375);
-        assert_eq!(peak(&[], false), 0);
-        // on another disk only the step that runs there takes room: its copies and its result
-        assert_eq!(step_peak(&steps), 300);
-        assert_eq!(step_peak(&steps[..1]), 120);
-        assert_eq!(step_peak(&[]), 0);
-    }
-
-    /// a floor set is kept as it is; otherwise it is 1% of the disk, never under 1 GiB.
-    #[test]
-    fn the_floor_is_the_setting_or_a_share_of_the_disk() {
-        assert_eq!(floor(Some(5), Some(1 << 40)), 5);
-        assert_eq!(floor(None, Some(1 << 40)), (1 << 40) / 100);
-        assert_eq!(floor(None, Some(10 << 30)), 1 << 30);
-        assert_eq!(floor(None, None), 1 << 30);
-    }
-
     #[test]
     fn only_bytes_past_what_is_free_fall_short() {
         assert_eq!(short(10, Some(4)), Some(6));
@@ -392,7 +293,5 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         assert!(measured(folder.path()).is_some_and(|free| free > 0));
         assert_eq!(measured(&folder.path().join("missing")), None);
-        let free = measured(folder.path()).unwrap_or_default();
-        assert!(sized(folder.path()).is_some_and(|total| total >= free));
     }
 }

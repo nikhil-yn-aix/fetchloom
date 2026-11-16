@@ -209,7 +209,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::plan::Holder;
     use crate::project::lock::LockedFile;
 
     /// names of the form windows gives as short names are told apart from others.
@@ -311,7 +310,7 @@ mod tests {
                 sha256: locked.sha256,
                 size: locked.size,
                 copy: false,
-                holder: Holder::File(locked),
+                file: locked,
             })
             .collect();
         let todo: Vec<&Target> = targets.iter().collect();
@@ -348,7 +347,7 @@ mod tests {
                 sha256: stored.digest,
                 size: bytes.len() as u64,
                 copy: true,
-                holder: Holder::File(&locked),
+                file: &locked,
             })
             .collect();
         let todo: Vec<&Target> = targets.iter().collect();
@@ -425,7 +424,7 @@ mod tests {
             sha256: stored.digest,
             size: stored.size,
             copy: false,
-            holder: Holder::File(&locked),
+            file: &locked,
         };
         let project = Project {
             root: dir.path().join("project"),

@@ -442,7 +442,6 @@ fn rows(context: &Context) -> Vec<Shown> {
     let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
     let mut shown = Vec::new();
     let cache = super::cache_folder();
-    let build_floor = floor(settings, cache.as_deref());
     shown.push(level(settings.resources));
     shown.push(Shown {
         name: "cache",
@@ -531,33 +530,9 @@ fn rows(context: &Context) -> Vec<Shown> {
         said: push_to.map_or_else(|| "none".to_owned(), ToString::to_string),
         only_variable: false,
     });
-    shown.push(build_floor);
     shown.push(optional_size("cache_budget", settings.cache_budget));
     shown.extend(variables(context));
     shown
-}
-
-/// `build_floor`: as set, else the larger of 1 GiB and 1% of the disk holding `cache`, sized from
-/// this machine when that disk's share is the larger.
-fn floor(settings: &crate::settings::Settings, cache: Option<&std::path::Path>) -> Shown {
-    let set = settings.build_floor;
-    let total = cache
-        .filter(|cache| cache.exists())
-        .and_then(crate::space::total);
-    let value = crate::space::floor(set.value, total);
-    let origin = match set.value {
-        Some(_) => set.origin,
-        None if value > crate::space::floor(None, None) => Origin::Machine,
-        None => Origin::Default,
-    };
-    Shown {
-        name: "build_floor",
-        value: json!(value),
-        origin: vec![origin],
-        variable: crate::settings::variable("build_floor"),
-        said: units::size(value),
-        only_variable: false,
-    }
 }
 
 /// the settings only a variable sets: threads, rate, split and accessible.

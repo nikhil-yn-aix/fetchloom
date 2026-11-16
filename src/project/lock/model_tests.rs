@@ -1,8 +1,6 @@
 //! generated valid locks exercise both readers instead of mostly rejecting random text.
 
-use super::derived::{Code, Input};
 use super::*;
-use crate::cache::Member;
 
 struct Tape<'a> {
     bytes: &'a [u8],
@@ -105,66 +103,10 @@ fn generated(bytes: &[u8]) -> Lock {
             files,
         });
     }
-    let derived = (0..input.byte() % 3)
-        .map(|index| recipe(&mut input, index))
-        .collect();
     Lock {
         datasets,
-        derived,
         stated: Vec::new(),
         waiting: Vec::new(),
-    }
-}
-
-/// a recipe's result with names, arguments and variables of every awkward kind, which a program
-/// could still be given, so the readers check their form rather than refusing them.
-fn recipe(input: &mut Tape, index: u8) -> Derived {
-    let given = |text: String| text.replace('\0', "");
-    let from = (0..=input.byte() % 2)
-        .map(|place| Input {
-            name: format!("set{place}{}", input.text()),
-            content: digest::sha256(input.text().as_bytes()),
-        })
-        .collect();
-    let run = (0..=input.byte() % 3)
-        .map(|place| given(format!("{place}{}", input.text())))
-        .collect();
-    let code = (0..input.byte() % 3)
-        .map(|place| Code {
-            path: format!(
-                "code/{place}/{}.py",
-                ["a", "名", "quote\"", "é"][usize::from(input.byte()) % 4]
-            ),
-            sha256: digest::sha256(input.text().as_bytes()),
-            folder: input.byte() & 1 != 0,
-        })
-        .collect();
-    let env = (0..input.byte() % 3)
-        .map(|_| {
-            let name = ["SEED", "two words", "é", "a-b_c"][usize::from(input.byte()) % 4];
-            (name.to_owned(), given(input.text()))
-        })
-        .collect();
-    let files: Vec<Member> = (0..input.byte() % 4)
-        .map(|place| Member {
-            path: format!(
-                "out/{place}/{}",
-                ["x.csv", "café.csv", "名.csv"][usize::from(input.byte()) % 3]
-            ),
-            size: input.number() & i64::MAX.unsigned_abs(),
-            sha256: digest::sha256(input.text().as_bytes()),
-        })
-        .collect();
-    Derived {
-        name: format!("result{index}"),
-        from,
-        run,
-        code,
-        env,
-        key: digest::sha256(input.text().as_bytes()),
-        timestamp: input.text(),
-        tree: crate::cache::tree_hash(&files),
-        files,
     }
 }
 
@@ -202,11 +144,6 @@ fn compare(lock: &Lock) {
     shuffled.datasets.reverse();
     for dataset in &mut shuffled.datasets {
         dataset.files.reverse();
-    }
-    shuffled.derived.reverse();
-    for derived in &mut shuffled.derived {
-        derived.code.reverse();
-        derived.files.reverse();
     }
     assert_eq!(shuffled.render_with(INLINE), rendered);
 }

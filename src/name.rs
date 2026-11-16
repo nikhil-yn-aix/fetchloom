@@ -553,7 +553,7 @@ pub(crate) fn abridged(text: &str) -> Cow<'_, str> {
 }
 
 /// why some disk fetchloom supports cannot store `path`, whatever this machine is: a name past 255
-/// bytes or one windows refuses. results are checked by it, so a linux-made file places on windows.
+/// bytes or one windows refuses, so a name taken on linux never stops a sync on windows.
 pub(crate) fn unportable(path: &str) -> Option<String> {
     for part in path.split('/') {
         if part.len() > 255 {
@@ -863,7 +863,8 @@ mod tests {
         assert_eq!(unstorable("notes. ").is_some(), cfg!(windows));
     }
 
-    /// a name refused on one system is refused on all, so a result made on one places on all.
+    /// a name refused on one system is refused on all, so a project that places on one places on
+    /// all.
     #[test]
     fn unportable_names_are_refused_everywhere() {
         assert_eq!(unportable("data/train.csv"), None);

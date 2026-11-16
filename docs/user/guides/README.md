@@ -7,7 +7,6 @@
 | [Choose which files to keep](choose-files.md) | |
 | [Edit input files](edit-input-files.md) | the files fetchloom places in the data folder are the raw inputs: pinned in data.lock, read-only, and put back by every sync. |
 | [Free disk space and delete data](free-space.md) | |
-| [Make a dataset with a recipe](recipes.md) | a recipe makes a dataset from other datasets with a command of yours, such as a script that cleans a raw table. |
 | [Resolve a Git merge conflict](merge-conflicts.md) | |
 | [Use fetchloom in scripts](scripts.md) | `--json` gives scripts a versioned result, error kinds and work counters without terminal progress. |
 | [Sign in to a source](sign-in.md) | most data is public and needs no account. |

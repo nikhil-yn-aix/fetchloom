@@ -3,7 +3,6 @@
 mod add;
 mod args;
 mod auth;
-mod build;
 mod cache;
 mod completions;
 mod diff;
@@ -77,9 +76,6 @@ struct Context {
     cautioned: Arc<std::sync::atomic::AtomicBool>,
     /// the mirrors asked for pinned files before their sources, and what they answered.
     mirrors: fetch::mirrors::Mirrored,
-    /// the project whose `fetchloom build` runs this one inside a step, from
-    /// `FETCHLOOM_BUILDING`, which may not wait for that project's lock the build holds.
-    building: Option<std::path::PathBuf>,
     /// the parts of file lists this run wrote anew into a project's data.lock.d, with the
     /// project's folder, so the run can end by naming those git does not have.
     lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
@@ -123,7 +119,6 @@ impl Context {
             unsaved: std::sync::Mutex::default(),
             cautioned: Arc::default(),
             mirrors: fetch::mirrors::Mirrored::default(),
-            building: None,
             lists: std::sync::Mutex::default(),
             speeds: net::speeds::Speeds::default(),
             projectless: false,
@@ -845,9 +840,6 @@ pub(crate) fn run() -> ExitCode {
     context.yes = global.yes;
     context.projectless = matches!(args.command, Some(args::Command::Get(_)));
     context.speeds = net::speeds::Speeds::at(crate::machine::state_folder(&var));
-    context.building = var("FETCHLOOM_BUILDING")
-        .filter(|value| !value.is_empty())
-        .map(std::path::PathBuf::from);
     if args.version {
         let mut text = format!("fetchloom {}", env!("CARGO_PKG_VERSION"));
         // what a bug report needs: which build, on which system
@@ -1029,7 +1021,6 @@ fn spends(command: &args::Command) -> bool {
             | args::Command::Drop(_)
             | args::Command::Sync(_)
             | args::Command::Lock(_)
-            | args::Command::Build(_)
             | args::Command::Status(_)
             | args::Command::Path(_)
             | args::Command::Push(_)
@@ -1040,7 +1031,6 @@ fn spends(command: &args::Command) -> bool {
     )
 }
 
-#[expect(clippy::too_many_lines, reason = "an arm for each command")]
 fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) -> ExitCode {
     let name = Some(command.name());
     if command.locked() {
@@ -1072,10 +1062,6 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Lock(args) => {
             let outcome = block_on(context, project::lock(context, args));
-            finish(context, name, outcome, started)
-        }
-        args::Command::Build(args) => {
-            let outcome = block_on(context, build::run(context, &args));
             finish(context, name, outcome, started)
         }
         args::Command::Status(args) => {
@@ -1118,7 +1104,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         args::Command::Cache(args::Cache {
             action: Some(args::CacheAction::Gc(gc)),
         }) => {
-            let outcome = cache::gc(context, gc.now, gc.inputs, gc.dry.dry_run);
+            let outcome = cache::gc(context, gc.now, gc.dry.dry_run);
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
@@ -1374,16 +1360,9 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
     runtime.spawn(interrupts(
         interrupted,
         move |interrupt| {
-            let heard = heard_first(&stopping.stop, &stopping.output, interrupt);
-            // ctrl-c at a terminal reaches a step's process group too, while a SIGTERM reaches
-            // fetchloom alone, and the SIGKILL a scheduler sends after it would leave the step
-            if interrupt == Interrupt::Terminate && heard == Heard::Stop {
-                crate::build::step::end_running();
-            }
+            heard_first(&stopping.stop, &stopping.output, interrupt);
         },
         move || {
-            // a step's process group ends with fetchloom, so nothing it started runs on
-            crate::build::step::end_running();
             quitting.output.quit();
             quitting.stop.quitting();
             std::process::exit(130);

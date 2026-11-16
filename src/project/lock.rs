@@ -1,15 +1,13 @@
-//! `data.lock`: what each dataset resolved to and the files it pins, or what a recipe made it
-//! from. only fetchloom writes it, in a fixed order, so the same inputs give the same bytes.
+//! `data.lock`: what each dataset resolved to and the files it pins. only fetchloom writes it, in
+//! a fixed order, so the same inputs give the same bytes.
 
 pub(crate) mod archives;
 mod canonical;
-pub(crate) mod derived;
 pub(crate) mod lists;
 pub(crate) mod merge;
 #[cfg(test)]
 mod model_tests;
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -18,7 +16,6 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 use url::Url;
 
-use self::derived::Derived;
 use super::manifest::{Entry, Source};
 use crate::digest::{self, Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -195,8 +192,6 @@ pub(crate) fn recovery() -> String {
 pub(crate) struct Lock {
     /// the datasets fetched from a source, sorted by name.
     pub(crate) datasets: Vec<Locked>,
-    /// the datasets a recipe made, sorted by name. no name is in both lists.
-    pub(crate) derived: Vec<Derived>,
     /// the datasets pinned by what their sources state, not downloaded yet, sorted by name. no
     /// name is in two lists.
     pub(crate) stated: Vec<Stated>,
@@ -245,69 +240,33 @@ pub(crate) struct Waiting {
     pub(crate) name: String,
     /// the first part of its list that is not there, by its path below the project.
     pub(crate) part: String,
-    /// its entry as read, with no files and the list that holds them.
-    entry: Unread,
-}
-
-/// the entry of a dataset that waits for its list, which holds its files.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Unread {
-    Source(Locked, lists::Listed),
-    Derived(Derived, lists::Listed),
-}
-
-impl Unread {
-    fn name(&self) -> &str {
-        match self {
-            Unread::Source(dataset, _) => &dataset.name,
-            Unread::Derived(derived, _) => &derived.name,
-        }
-    }
-
-    fn listed(&self) -> &lists::Listed {
-        match self {
-            Unread::Source(_, listed) | Unread::Derived(_, listed) => listed,
-        }
-    }
+    /// its pin as data.lock gives it, without its files.
+    pin: Locked,
+    /// the list that holds its files.
+    listed: lists::Listed,
 }
 
 impl Waiting {
-    /// whether a recipe made it, so a build can make it again here.
-    pub(crate) fn made(&self) -> bool {
-        matches!(self.entry, Unread::Derived(..))
-    }
-
     /// what a command that needs it says: the part that is not there, and how to bring it back.
     pub(crate) fn error(&self) -> Error {
-        lists::not_there(&self.name, &self.part, self.made())
+        lists::not_there(&self.name, &self.part)
     }
 
-    /// the result a recipe made, as data.lock pins it, without its files.
-    pub(crate) fn result(&self) -> Option<&Derived> {
-        match &self.entry {
-            Unread::Derived(derived, _) => Some(derived),
-            Unread::Source(..) => None,
-        }
-    }
-
-    /// the pin of a fetched dataset, as data.lock gives it, without its files.
-    pub(crate) fn pin(&self) -> Option<&Locked> {
-        match &self.entry {
-            Unread::Source(locked, _) => Some(locked),
-            Unread::Derived(..) => None,
-        }
+    /// its pin, as data.lock gives it, without its files.
+    pub(crate) fn pin(&self) -> &Locked {
+        &self.pin
     }
 
     /// the parts of its list, each a path below the project, the missing ones among them.
     pub(crate) fn parts(&self) -> &[String] {
-        &self.entry.listed().parts
+        &self.listed.parts
     }
 }
 
 /// the datasets whose list data.lock's `text` names as fetchloom writes it and the project at
-/// `root` lacks a part of, by name, with the first such part and whether a recipe made each. none
-/// if it does not read; a list's lines are not read.
-pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<(String, String, bool)> {
+/// `root` lacks a part of, by name, with the first such part. none if it does not read; a list's
+/// lines are not read.
+pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<(String, String)> {
     // no list, nothing to miss, without parsing a lock of only inline files
     if !text.contains("files_in") {
         return Vec::new();
@@ -316,12 +275,12 @@ pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<(String, String, boo
         .unwrap_or_default()
         .iter()
         .filter_map(|parsed| {
-            let (listed, made) = parsed.written()?;
-            let part = listed
+            let part = parsed
+                .written()?
                 .parts
                 .iter()
                 .find(|part| lists::missing(root, part))?;
-            Some((parsed.name().to_owned(), part.clone(), made))
+            Some((parsed.name().to_owned(), part.clone()))
         })
         .collect()
 }
@@ -335,7 +294,7 @@ pub(crate) fn named_lists(text: &str) -> std::collections::HashSet<Sha256> {
     parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX))
         .unwrap_or_default()
         .iter()
-        .filter_map(|parsed| parsed.written().map(|(listed, _)| listed.sha256))
+        .filter_map(|parsed| parsed.written().map(|listed| listed.sha256))
         .collect()
 }
 
@@ -429,12 +388,9 @@ pub(crate) enum Drift {
 }
 
 impl Locked {
-    /// what changed in `entry` since this pin was made, or nothing when it still answers it. a
-    /// dataset a recipe now makes is no longer the one fetched.
+    /// what changed in `entry` since this pin was made, or nothing when it still answers it.
     pub(crate) fn drift(&self, entry: &Entry) -> Option<Drift> {
-        let Some(source) = entry.source() else {
-            return Some(Drift::Spec);
-        };
+        let source = &entry.source;
         if self.spec != spec(source) {
             Some(Drift::Spec)
         } else if self.extract != source.extract {
@@ -463,8 +419,6 @@ pub(crate) struct LockedFile {
 enum Parsed {
     /// a fetched dataset with its files, or with none yet and the list that holds them.
     Source(Locked, Option<lists::Listed>),
-    /// a dataset a recipe made, with none of its files yet and the list that holds them.
-    Derived(Derived, lists::Listed),
     /// a dataset pinned by what its source states, its files always in data.lock.
     Stated(Stated),
 }
@@ -474,7 +428,7 @@ impl Parsed {
     fn files(&self) -> u64 {
         match self {
             Parsed::Source(locked, None) => locked.files.len() as u64,
-            Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed) => listed.count,
+            Parsed::Source(_, Some(listed)) => listed.count,
             Parsed::Stated(stated) => stated.files.len() as u64,
         }
     }
@@ -483,23 +437,19 @@ impl Parsed {
     fn listed(&self) -> Option<&lists::Listed> {
         match self {
             Parsed::Source(_, listed) => listed.as_ref(),
-            Parsed::Derived(_, listed) => Some(listed),
             Parsed::Stated(_) => None,
         }
     }
 
-    /// [`Parsed::listed`] when data.lock names its parts as fetchloom writes them, with whether a
-    /// recipe made it.
-    fn written(&self) -> Option<(&lists::Listed, bool)> {
+    /// [`Parsed::listed`] when data.lock names its parts as fetchloom writes them.
+    fn written(&self) -> Option<&lists::Listed> {
         let listed = self.listed()?;
-        let made = matches!(self, Parsed::Derived(..));
-        lists::named_as_written(self.name(), listed).then_some((listed, made))
+        lists::named_as_written(self.name(), listed).then_some(listed)
     }
 
     fn name(&self) -> &str {
         match self {
             Parsed::Source(locked, _) => &locked.name,
-            Parsed::Derived(derived, _) => &derived.name,
             Parsed::Stated(stated) => stated.name(),
         }
     }
@@ -513,7 +463,8 @@ struct Stored {
     dataset: Vec<StoredDataset>,
 }
 
-/// one `[[dataset]]` table, a source's or a recipe's, so each key only one kind has is optional.
+/// one `[[dataset]]` table, a downloaded dataset's or one its source's digests pin, so each key
+/// only one kind has is optional.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredDataset {
@@ -528,15 +479,9 @@ struct StoredDataset {
     license: Option<String>,
     doi: Option<String>,
     access: Option<Access>,
-    from: Option<Vec<StoredInput>>,
-    run: Option<Vec<String>>,
-    code: Option<Vec<StoredCode>>,
-    env: Option<BTreeMap<String, String>>,
-    key: Option<String>,
     #[serde(rename = "locked")]
     timestamp: String,
     downloaded: Option<bool>,
-    tree: Option<String>,
     files: Option<Vec<StoredFile>>,
     files_in: Option<Vec<String>>,
     file_count: Option<u64>,
@@ -558,40 +503,15 @@ struct StoredFile {
     unpacks_to: Option<Sha256>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredInput {
-    name: String,
-    content: String,
-}
-
-/// a file of code with its hash, or a folder with its tree.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredCode {
-    path: String,
-    sha256: Option<Sha256>,
-    tree: Option<String>,
-}
-
 impl StoredDataset {
     fn parsed(mut self) -> Result<Parsed, Error> {
         let listed = self.listed()?;
-        let recipe = self.from.is_some()
-            || self.run.is_some()
-            || self.code.is_some()
-            || self.env.is_some()
-            || self.key.is_some()
-            || self.tree.is_some();
-        if recipe {
-            return self.derived(listed);
-        }
         let name = self.name;
         let (Some(reference), Some(spec), Some(resolved)) =
             (self.reference, self.spec, self.resolved)
         else {
             return Err(broken(format!(
-                "data.lock gives {name} neither ref, spec and resolved, nor the from, run, key and tree of a recipe"
+                "data.lock lacks the ref, spec or resolved of {name}"
             )));
         };
         let stated = self.downloaded == Some(false);
@@ -688,100 +608,6 @@ impl StoredDataset {
                 self.name
             ))),
         }
-    }
-
-    /// the dataset a recipe made, refused with a key only a fetched one has, `files` among them.
-    fn derived(self, listed: Option<lists::Listed>) -> Result<Parsed, Error> {
-        let name = self.name;
-        let fetched = [
-            ("ref", self.reference.is_some()),
-            ("spec", self.spec.is_some()),
-            ("extract", self.extract.is_some()),
-            ("web_page", self.web_page.is_some()),
-            ("resolved", self.resolved.is_some()),
-            ("title", self.title.is_some()),
-            ("license", self.license.is_some()),
-            ("doi", self.doi.is_some()),
-            ("access", self.access.is_some()),
-            ("downloaded", self.downloaded.is_some()),
-            ("files", self.files.is_some()),
-        ];
-        if let Some((key, _)) = fetched.iter().find(|(_, set)| *set) {
-            return Err(broken(format!(
-                "data.lock gives {name} the {key} of a fetched dataset beside the keys of a recipe"
-            )));
-        }
-        let missing = |key: &str| {
-            broken(format!(
-                "data.lock gives {name}, made by a recipe, no {key}"
-            ))
-        };
-        let hash = |key: &str, text: &str| {
-            prefixed(text).ok_or_else(|| {
-                broken(format!(
-                    "data.lock gives {name} a {key} that is not sha256: and 64 hex digits"
-                ))
-            })
-        };
-        let from = self
-            .from
-            .ok_or_else(|| missing("from"))?
-            .into_iter()
-            .map(|input| {
-                Ok(derived::Input {
-                    content: hash("content", &input.content)?,
-                    name: input.name,
-                })
-            })
-            .collect::<Result<_, Error>>()?;
-        let run = self.run.ok_or_else(|| missing("run"))?;
-        let key = hash("key", &self.key.ok_or_else(|| missing("key"))?)?;
-        let tree = hash("tree", &self.tree.ok_or_else(|| missing("tree"))?)?;
-        let listed = listed.ok_or_else(|| missing("files_in"))?;
-        let code = self
-            .code
-            .unwrap_or_default()
-            .into_iter()
-            .map(|code| {
-                let path = quoted(&code.path);
-                let (sha256, folder) = match (code.sha256, code.tree) {
-                    (Some(sha256), None) => (sha256, false),
-                    (None, Some(tree)) => (
-                        prefixed(&tree).ok_or_else(|| {
-                            broken(format!("data.lock gives {name} a tree for the code {path} that is not sha256: and 64 hex digits"))
-                        })?,
-                        true,
-                    ),
-                    (sha256, _) => {
-                        let what = if sha256.is_some() {
-                            "both a sha256 and a tree"
-                        } else {
-                            "neither a sha256 nor a tree"
-                        };
-                        return Err(broken(format!(
-                            "data.lock gives the code {path} of {name} with {what}"
-                        )));
-                    }
-                };
-                Ok(derived::Code {
-                    path: code.path,
-                    sha256,
-                    folder,
-                })
-            })
-            .collect::<Result<_, Error>>()?;
-        let derived = Derived {
-            name,
-            from,
-            run,
-            code,
-            env: self.env.unwrap_or_default(),
-            key,
-            timestamp: self.timestamp,
-            tree,
-            files: Vec::new(),
-        };
-        Ok(Parsed::Derived(derived, listed))
     }
 }
 
@@ -892,12 +718,6 @@ impl Lock {
                     .partition_point(|known| known.name < dataset.name);
                 self.datasets.insert(at, dataset);
             }
-            Parsed::Derived(derived, _) => {
-                let at = self
-                    .derived
-                    .partition_point(|known| known.name < derived.name);
-                self.derived.insert(at, derived);
-            }
             Parsed::Stated(_) => {}
         }
     }
@@ -910,10 +730,7 @@ impl Lock {
         for waiting in waiting {
             if !self.pins(&waiting.name) {
                 names.push(waiting.name);
-                self.put_unlisted(match waiting.entry {
-                    Unread::Source(dataset, listed) => Parsed::Source(dataset, Some(listed)),
-                    Unread::Derived(derived, listed) => Parsed::Derived(derived, listed),
-                });
+                self.put_unlisted(Parsed::Source(waiting.pin, Some(waiting.listed)));
             }
         }
         names
@@ -925,7 +742,6 @@ impl Lock {
             .datasets
             .iter()
             .map(|locked| locked.files.len())
-            .chain(self.derived.iter().map(|derived| derived.files.len()))
             .chain(self.stated.iter().map(|stated| stated.files.len()))
             .map(|count| count as u64)
             .fold(0, u64::saturating_add);
@@ -963,29 +779,26 @@ impl Lock {
         let mut waiting = Vec::new();
         let mut listed = Vec::with_capacity(parsed.len());
         for entry in parsed {
-            let missing = entry.written().and_then(|(listed, _)| {
+            let missing = entry.written().and_then(|listed| {
                 listed
                     .parts
                     .iter()
                     .find(|part| lists::missing(root, part))
                     .cloned()
             });
-            let (part, entry) = match (missing, entry) {
+            match (missing, entry) {
                 // written back as read, so its link is held to what any read allows
-                (Some(part), Parsed::Source(dataset, Some(list))) => {
-                    check_resolved(&dataset)?;
-                    (part, Unread::Source(dataset, list))
+                (Some(part), Parsed::Source(pin, Some(list))) => {
+                    check_resolved(&pin)?;
+                    waiting.push(Waiting {
+                        name: pin.name.clone(),
+                        part,
+                        pin,
+                        listed: list,
+                    });
                 }
-                (Some(part), Parsed::Derived(derived, list)) => {
-                    (part, Unread::Derived(derived, list))
-                }
-                (_, entry) => {
-                    listed.push(entry);
-                    continue;
-                }
-            };
-            let name = entry.name().to_owned();
-            waiting.push(Waiting { name, part, entry });
+                (_, entry) => listed.push(entry),
+            }
         }
         let mut budget = Budget::of(&listed, memory)?;
         let mut lock = resolve_from(listed, Some(lists::Parts::Folder(root)), &mut budget)?;
@@ -1023,7 +836,7 @@ impl Lock {
 
     /// whether a list other than [`Lock::waiting`] pins `name`.
     fn pins(&self, name: &str) -> bool {
-        self.get(name).is_some() || self.result(name).is_some() || self.stated(name).is_some()
+        self.get(name).is_some() || self.stated(name).is_some()
     }
 
     /// the dataset named `name`, found by halving, since every lock keeps its datasets sorted by
@@ -1034,15 +847,6 @@ impl Lock {
             .binary_search_by(|dataset| dataset.name.as_str().cmp(name))
             .ok()?;
         self.datasets.get(index)
-    }
-
-    /// the result of the recipe named `name`, found by halving as [`Lock::get`] is.
-    pub(crate) fn result(&self, name: &str) -> Option<&Derived> {
-        let index = self
-            .derived
-            .binary_search_by(|derived| derived.name.as_str().cmp(name))
-            .ok()?;
-        self.derived.get(index)
     }
 
     /// the dataset named `name` that its source's digests pin before a sync downloads it.
@@ -1103,7 +907,7 @@ pub(crate) fn stated_error(found: &[&Stated]) -> Option<Error> {
 
 impl Lock {
     /// the lock's text, the same bytes for the same contents. a source past [`lists::INLINE`]
-    /// files, and every recipe result, names its list from [`Lock::lists`] instead of its files.
+    /// files names its list from [`Lock::lists`] instead of its files.
     pub(crate) fn render(&self) -> String {
         self.render_with(lists::inline())
     }
@@ -1112,19 +916,13 @@ impl Lock {
     fn render_with(&self, inline: usize) -> String {
         enum Table<'a> {
             Source(&'a Locked),
-            Derived(&'a Derived),
             Stated(&'a Stated),
-            Waiting(&'a Unread),
+            Waiting(&'a Waiting),
         }
         let mut tables: Vec<(&str, Table)> = self
             .datasets
             .iter()
             .map(|dataset| (dataset.name.as_str(), Table::Source(dataset)))
-            .chain(
-                self.derived
-                    .iter()
-                    .map(|derived| (derived.name.as_str(), Table::Derived(derived))),
-            )
             .chain(
                 self.stated
                     .iter()
@@ -1132,7 +930,7 @@ impl Lock {
             )
             .chain(
                 self.still_waiting()
-                    .map(|waiting| (waiting.name.as_str(), Table::Waiting(&waiting.entry))),
+                    .map(|waiting| (waiting.name.as_str(), Table::Waiting(waiting))),
             )
             .collect();
         tables.sort_by(|a, b| a.0.cmp(b.0));
@@ -1140,14 +938,10 @@ impl Lock {
         for (_, table) in tables {
             match table {
                 Table::Source(dataset) => write_source(&mut out, dataset, inline),
-                Table::Derived(derived) => derived::write(&mut out, derived),
                 Table::Stated(stated) => write_stated(&mut out, stated),
-                Table::Waiting(Unread::Source(dataset, listed)) => {
-                    write_head(&mut out, dataset);
-                    write_listed(&mut out, listed);
-                }
-                Table::Waiting(Unread::Derived(derived, listed)) => {
-                    derived::write_listed(&mut out, derived, listed);
+                Table::Waiting(waiting) => {
+                    write_head(&mut out, &waiting.pin);
+                    write_listed(&mut out, &waiting.listed);
                 }
             }
         }
@@ -1297,10 +1091,6 @@ impl Lock {
                 ))
             })?;
         }
-        for derived in &self.derived {
-            lists::listable(&derived.name, &derived.files)
-                .map_err(|error| error.help("make the step write that file at a shorter path"))?;
-        }
         Ok(())
     }
 
@@ -1334,9 +1124,6 @@ impl Lock {
                     .map(|(part, text)| (part, text, sha256)),
             );
         }
-        for derived in &self.derived {
-            parts.extend(derived::parts(derived));
-        }
         parts
     }
 }
@@ -1349,7 +1136,6 @@ pub(crate) fn parts(text: &str) -> Vec<String> {
         .into_iter()
         .flat_map(|parsed| match parsed {
             Parsed::Source(locked, Some(listed)) => written(&locked.name, listed),
-            Parsed::Derived(derived, listed) => written(&derived.name, listed),
             Parsed::Source(_, None) | Parsed::Stated(_) => Vec::new(),
         })
         .collect()
@@ -1409,7 +1195,7 @@ fn parse_only(text: &str, keep: &dyn Fn(&str) -> bool) -> Result<Vec<Parsed>, Er
     // a part holds one file at least, but the one part of an empty list, so more parts are no
     // list fetchloom wrote, and comparing their names would first make as many again
     for entry in &parsed {
-        let (Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed)) = entry else {
+        let Parsed::Source(_, Some(listed)) = entry else {
             continue;
         };
         let most = listed.count.max(1).min(most_files() as u64);
@@ -1493,10 +1279,6 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
                 }
                 check_paths(&dataset.name, dataset.files.iter().map(|file| &file.path))?;
             }
-            Parsed::Derived(derived, _) => {
-                derived.code.sort_by(|a, b| a.path.cmp(&b.path));
-                derived::check(derived)?;
-            }
             Parsed::Stated(stated) => {
                 stated.files.sort_by(|a, b| a.path.cmp(&b.path));
                 if let Some(pair) = stated
@@ -1547,12 +1329,6 @@ fn resolve_from(
                 let links = dataset.files.iter().map(|file| (&file.path, &file.url));
                 check_links(&dataset.name, links, is_listed)?;
                 lock.datasets.push(dataset);
-            }
-            Parsed::Derived(mut derived, listed) => {
-                let parts = project(parts, &derived.name)?;
-                derived.files = lists::read(parts, &derived.name, &listed, budget)?;
-                derived::check_files(&derived)?;
-                lock.derived.push(derived);
             }
             Parsed::Stated(stated) => {
                 check_resolved(&stated.pin)?;
@@ -1890,25 +1666,13 @@ fn tree<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Sha256>, D:
 
 #[cfg(test)]
 impl Lock {
-    /// the datasets as a reader gives them when every source lists its files inline: by name,
-    /// each recipe's result without its files and with the list that holds them.
+    /// the datasets as a reader gives them when every source lists its files inline, by name.
     fn parsed(&self) -> Vec<Parsed> {
         let mut parsed: Vec<Parsed> = self
             .datasets
             .iter()
             .map(|dataset| Parsed::Source(dataset.clone(), None))
             .collect();
-        for derived in &self.derived {
-            let mut files = derived.files.clone();
-            files.sort_by(|a, b| a.path.cmp(&b.path));
-            let texts = lists::texts(&files);
-            let listed = lists::listed(&derived.name, &files, &texts);
-            let unread = Derived {
-                files: Vec::new(),
-                ..derived.clone()
-            };
-            parsed.push(Parsed::Derived(unread, listed));
-        }
         parsed.sort_by(|a, b| a.name().cmp(b.name()));
         parsed
     }
@@ -1917,7 +1681,6 @@ impl Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::Member;
     use crate::project::manifest::Manifest;
 
     fn sample() -> Lock {
@@ -2400,45 +2163,6 @@ mod tests {
         }
     }
 
-    /// the result `clean` of a recipe made from `iris`, holding two files.
-    fn clean() -> Derived {
-        let files = vec![
-            Member {
-                path: "iris.csv".to_owned(),
-                size: 3,
-                sha256: digest::sha256(b"abc"),
-            },
-            Member {
-                path: "notes/read me.txt".to_owned(),
-                size: 1,
-                sha256: digest::sha256(b"x"),
-            },
-        ];
-        Derived {
-            name: "clean".to_owned(),
-            from: vec![derived::Input {
-                name: "iris".to_owned(),
-                content: digest::sha256(b"iris"),
-            }],
-            run: vec![
-                "python3".to_owned(),
-                "clean.py".to_owned(),
-                "{iris}".to_owned(),
-                "{out}".to_owned(),
-            ],
-            code: vec![derived::Code {
-                path: "clean.py".to_owned(),
-                sha256: digest::sha256(b"print()"),
-                folder: false,
-            }],
-            env: BTreeMap::from([("SOURCE_DATE_EPOCH".to_owned(), "315532800".to_owned())]),
-            key: digest::sha256(b"key"),
-            timestamp: "2026-11-10T00:00:00Z".to_owned(),
-            tree: crate::cache::tree_hash(&files),
-            files,
-        }
-    }
-
     /// `lock` written into a new project folder, its lists beside it, and its text.
     fn written(lock: &Lock) -> (tempfile::TempDir, String) {
         let root = tempfile::tempdir().unwrap();
@@ -2450,53 +2174,13 @@ mod tests {
         (root, text)
     }
 
-    /// a file under the name a new list gets, as a clone can plant for a result a recipe will
-    /// make, or a damaged one, is written over, so data.lock never names other bytes, even where
-    /// data.lock on disk names a list of that name with another hash; a part that holds the list
-    /// stays as it is.
-    #[test]
-    fn a_file_under_the_name_of_a_new_list_is_written_over() {
-        let lock = Lock {
-            derived: vec![clean()],
-            ..Lock::default()
-        };
-        let root = tempfile::tempdir().unwrap();
-        let project = crate::project::Project {
-            root: root.path().to_path_buf(),
-        };
-        std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
-        let (part, _) = lock.lists().remove(0);
-        let other = lists::compress(&lists::texts::<Member>(&[]).remove(0)).unwrap();
-        let rendered = lock.render();
-        // the same part's name, for a list whose hash ends otherwise
-        let hash = lock.hashed_lists()[0].2.hex();
-        let last = if hash.ends_with('0') { '1' } else { '0' };
-        let another = rendered.replace(&hash, &format!("{}{last}", &hash[..63]));
-        for on_disk in [None, Some(&another)] {
-            if let Some(text) = on_disk {
-                std::fs::write(root.path().join(FILE), text).unwrap();
-            }
-            std::fs::write(root.path().join(&part), &other).unwrap();
-            assert_eq!(
-                project.write_lists(&lock).unwrap(),
-                std::slice::from_ref(&part),
-                "{on_disk:?}"
-            );
-            assert_eq!(Lock::read(&rendered, root.path()).unwrap(), lock);
-            assert_eq!(project.write_lists(&lock).unwrap(), Vec::<String>::new());
-        }
-    }
-
     /// data.lock as a git commit holds it is text anyone may have written: a part it names that
     /// fetchloom would not write is refused before anything is read for it.
     #[test]
     fn a_lock_read_elsewhere_reads_only_the_parts_fetchloom_writes() {
-        let lock = Lock {
-            derived: vec![clean()],
-            ..Lock::default()
-        };
-        let text = lock.render();
-        let parts = lock.lists();
+        let lock = sample_sorted();
+        let text = lock.render_with(1);
+        let parts = lock.lists_with(1);
         let asked = std::cell::RefCell::new(Vec::new());
         let given = |path: &str| -> Result<Vec<u8>, Error> {
             asked.borrow_mut().push(path.to_owned());
@@ -2525,23 +2209,20 @@ mod tests {
     /// such, and the rest of the lock is read; a lock read beside another fits the room with it.
     #[test]
     fn a_lock_read_elsewhere_keeps_a_dataset_whose_list_is_missing() {
-        let lock = Lock {
-            derived: vec![clean()],
-            ..sample()
-        };
-        let text = lock.render();
-        let parts = lock.lists();
+        let lock = sample_sorted();
+        let text = lock.render_with(1);
+        let parts = lock.lists_with(1);
         let given = |path: &str| -> Result<Vec<u8>, Error> {
             let (_, part) = parts.iter().find(|(part, _)| part == path).unwrap();
             Ok(lists::compress(part).unwrap())
         };
         let (whole, _) = Lock::read_with(&text, &given, &|_| true, 0).unwrap();
         let (read, unlisted) = Lock::read_with(&text, &given, &|_| false, 0).unwrap();
-        assert_eq!(unlisted, ["clean"]);
-        let kept = read.result("clean").unwrap();
+        assert_eq!(unlisted, ["iris"]);
+        let kept = read.get("iris").unwrap();
         assert_eq!(kept.files, []);
-        assert_eq!(kept.key, clean().key);
-        assert_eq!(read.datasets, whole.datasets);
+        assert_eq!(kept.resolved, whole.get("iris").unwrap().resolved);
+        assert_eq!(read.get("zeta"), whole.get("zeta"));
         let error = Lock::read_with(&text, &given, &|_| true, u64::MAX).unwrap_err();
         assert!(
             error.details[0].starts_with("the other data.lock, read already, takes about "),
@@ -2553,13 +2234,10 @@ mod tests {
     /// could hide a line of the lock.
     #[test]
     fn a_read_of_some_datasets_reads_them_as_a_whole_read_does() {
-        let mut lock = Lock {
-            derived: vec![clean()],
-            ..sample()
-        };
+        let mut lock = sample();
         let (root, text) = written(&lock);
         let whole = Lock::read(&text, root.path()).unwrap();
-        for keep in [&["iris"][..], &["zeta", "clean"], &[]] {
+        for keep in [&["iris"][..], &["zeta"], &[]] {
             let read =
                 Lock::read_waiting(&text, root.path(), &|name| keep.contains(&name)).unwrap();
             assert_eq!(read.waiting, []);
@@ -2569,7 +2247,6 @@ mod tests {
                 .filter(|dataset| keep.contains(&dataset.name.as_str()))
                 .collect();
             assert_eq!(read.datasets.iter().collect::<Vec<_>>(), kept);
-            assert_eq!(read.derived.len(), usize::from(keep.contains(&"clean")));
         }
         let files = |text: &str, name: &str| {
             canonical::read_only(text, false, &|kept| kept == "iris")
@@ -2599,198 +2276,6 @@ mod tests {
             files(&text, "zeta"),
             2,
             "a quote could start a string, so it is read"
-        );
-    }
-
-    #[test]
-    fn a_derived_entry_round_trips_through_both_readers() {
-        let lock = Lock {
-            derived: vec![clean()],
-            ..sample()
-        };
-        let (root, text) = written(&lock);
-        let parts = lock.lists();
-        assert_eq!(parts.len(), 1, "a result's files always live in a list");
-        assert!(
-            parts[0].1.starts_with("path\tsize\tsha256\n"),
-            "{}",
-            parts[0].1
-        );
-        let expected = format!(
-            "\n[[dataset]]\nname = \"clean\"\nfrom = [\n  {{ name = \"iris\", content = \"sha256:{}\" }},\n]\nrun = [\"python3\", \"clean.py\", \"{{iris}}\", \"{{out}}\"]\ncode = [\n  {{ path = \"clean.py\", sha256 = \"{}\" }},\n]\nenv = {{ SOURCE_DATE_EPOCH = \"315532800\" }}\nkey = \"sha256:{}\"\nlocked = \"2026-11-10T00:00:00Z\"\ntree = \"sha256:{}\"\nfiles_in = [\"{}\"]\nfile_count = 2\nfile_bytes = 4\nfiles_sha256 = \"sha256:",
-            digest::sha256(b"iris"),
-            digest::sha256(b"print()"),
-            digest::sha256(b"key"),
-            clean().tree,
-            parts[0].0
-        );
-        assert!(text.contains(&expected), "{text}");
-        assert!(
-            text.find("name = \"clean\"") < text.find("name = \"iris\""),
-            "tables of both kinds go by name"
-        );
-        let mut sorted = sample_sorted();
-        sorted.derived = vec![clean()];
-        assert_eq!(Lock::read(&text, root.path()).unwrap(), sorted);
-        assert_eq!(canonical::read(&text, false), Some(sorted.parsed()));
-        assert_eq!(parse_toml(&text).unwrap(), sorted.parsed());
-        let error = Lock::parse(&text).unwrap_err();
-        assert!(error.message.contains("which only a project can read"));
-    }
-
-    /// data.lock keeps the tree prefixed, as every tree hash, beside a file's plain hash.
-    #[test]
-    fn a_code_folder_is_pinned_by_its_tree() {
-        let mut result = clean();
-        result.code.push(derived::Code {
-            path: "lib".to_owned(),
-            sha256: digest::sha256(b"tree of lib"),
-            folder: true,
-        });
-        let lock = Lock {
-            derived: vec![result.clone()],
-            ..Lock::default()
-        };
-        let (root, text) = written(&lock);
-        let lines = format!(
-            "code = [\n  {{ path = \"clean.py\", sha256 = \"{}\" }},\n  {{ path = \"lib\", tree = \"sha256:{}\" }},\n]\n",
-            digest::sha256(b"print()"),
-            digest::sha256(b"tree of lib")
-        );
-        assert!(text.contains(&lines), "{text}");
-        assert_eq!(Lock::read(&text, root.path()).unwrap(), lock);
-        assert_eq!(canonical::read(&text, false), Some(lock.parsed()));
-        assert_eq!(parse_toml(&text).unwrap(), lock.parsed());
-        let tree = format!("tree = \"sha256:{}\"", digest::sha256(b"tree of lib"));
-        for (changed, says) in [
-            (
-                text.replacen(
-                    &tree,
-                    &format!("{tree}, sha256 = \"{}\"", digest::sha256(b"x")),
-                    1,
-                ),
-                "the code \"lib\" of clean with both a sha256 and a tree",
-            ),
-            (
-                text.replacen(&format!(", {tree}"), "", 1),
-                "the code \"lib\" of clean with neither a sha256 nor a tree",
-            ),
-            (
-                text.replacen("tree = \"sha256:", "tree = \"", 1),
-                "a tree for the code \"lib\" that is not sha256: and 64 hex digits",
-            ),
-        ] {
-            let error = Lock::read(&changed, root.path()).unwrap_err();
-            assert_eq!(error.kind, Kind::ProjectInvalid, "{changed}");
-            assert!(error.message.contains(says), "{says}: {}", error.message);
-            assert_eq!(canonical::read(&changed, false), None, "{changed}");
-        }
-    }
-
-    #[test]
-    fn a_derived_tree_must_match_its_listing() {
-        let mut lock = Lock {
-            derived: vec![clean()],
-            ..Lock::default()
-        };
-        let (root, _) = written(&lock);
-        lock.derived[0].tree = digest::sha256(b"another tree");
-        let error = Lock::read(&lock.render(), root.path()).unwrap_err();
-        assert_eq!(error.kind, Kind::ProjectInvalid);
-        assert_eq!(
-            error.message,
-            "the files of clean in data.lock.d are not the tree data.lock records"
-        );
-        assert!(error.help.unwrap().contains("data.lock.d from git"));
-    }
-
-    #[test]
-    fn a_malformed_derived_entry_is_refused() {
-        let lock = Lock {
-            derived: vec![clean()],
-            ..Lock::default()
-        };
-        let (root, text) = written(&lock);
-        let content = format!("content = \"sha256:{}\"", digest::sha256(b"iris"));
-        let code = format!("sha256 = \"{}\"", digest::sha256(b"print()"));
-        for (changed, says) in [
-            (
-                text.replacen("from = [", "ref = \"zenodo:1\"\nfrom = [", 1),
-                "the ref of a fetched dataset beside the keys of a recipe",
-            ),
-            (
-                text.replacen("files_in = [", "files = []\nfiles_in = [", 1),
-                "the files of a fetched dataset beside the keys of a recipe",
-            ),
-            (
-                text.replacen("key = \"sha256:", "key = \"", 1),
-                "a key that is not sha256: and 64 hex digits",
-            ),
-            (
-                text.replacen("content = \"sha256:", "content = \"", 1),
-                "a content that is not sha256: and 64 hex digits",
-            ),
-            (
-                text.replacen("\ntree = ", "\nwhatever = 1\ntree = ", 1),
-                "unknown field `whatever`",
-            ),
-            (text.replacen("tree = ", "branch = ", 1), "unknown field"),
-            (
-                text.replacen("\nkey = ", "\nkey_was = ", 1),
-                "unknown field",
-            ),
-            (
-                text.replacen("name = \"iris\"", "name = \"clean\"", 1),
-                "the input \"clean\" twice, as itself or with no name",
-            ),
-            (
-                text.replacen("run = [\"python3\"", "run = [\"\"", 1),
-                "no program to run",
-            ),
-            (
-                text.replacen("path = \"clean.py\"", "path = \"../clean.py\"", 1),
-                "the code \"../clean.py\" of clean, which fetchloom refuses",
-            ),
-            (
-                text.replacen(
-                    &format!("  {{ path = \"clean.py\", {code} }},\n"),
-                    &format!("  {{ path = \"clean.py\", {code} }},\n  {{ path = \"clean.py\", {code} }},\n"),
-                    1,
-                ),
-                "the code \"clean.py\" of clean twice",
-            ),
-            (
-                text.replacen("SOURCE_DATE_EPOCH =", "\"A=B\" =", 1),
-                "the variable \"A=B\", which no program can be given",
-            ),
-            (
-                text.replacen("\nfiles_in = ", "\nfiles_listed = ", 1),
-                "unknown field",
-            ),
-        ] {
-            let error = Lock::read(&changed, root.path()).unwrap_err();
-            assert_eq!(error.kind, Kind::ProjectInvalid, "{changed}");
-            // the toml reader's own words follow as a detail
-            let said = format!("{} {}", error.message, error.details.join(" "));
-            assert!(said.contains(says), "{says}: {said}");
-            assert_eq!(canonical::read(&changed, false), None, "{changed}");
-        }
-        let unlisted = text
-            .lines()
-            .filter(|line| !line.starts_with("file"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let error = Lock::read(&unlisted, root.path()).unwrap_err();
-        assert!(
-            error.message.ends_with("made by a recipe, no files_in"),
-            "{}",
-            error.message
-        );
-        // a recipe may read no dataset, as a seeded simulation, so an empty from is no mistake
-        let unread = text.replacen(&format!("  {{ name = \"iris\", {content} }},\n"), "", 1);
-        assert_eq!(
-            Lock::read(&unread, root.path()).unwrap().derived[0].from,
-            []
         );
     }
 
@@ -2936,32 +2421,6 @@ mod tests {
         assert_eq!(read(counted + (1 << 20)).unwrap().datasets, lock.datasets);
     }
 
-    /// a lock whose list would hold a path longer than a list keeps is refused before any part
-    /// is written, so fetchloom never writes a list it would refuse to read.
-    #[test]
-    fn a_list_fetchloom_would_refuse_is_never_written() {
-        let mut long = clean();
-        long.files[1].path = format!("notes/{}", "p".repeat(lists::LONGEST_PATH));
-        let lock = Lock {
-            derived: vec![long],
-            ..Lock::default()
-        };
-        let root = tempfile::tempdir().unwrap();
-        let project = crate::project::Project {
-            root: root.path().to_path_buf(),
-        };
-        let error = project.write_lists(&lock).unwrap_err();
-        assert_eq!(error.kind, Kind::ProjectInvalid);
-        assert!(
-            error.message.ends_with(
-                "cannot be pinned: its path is longer than 4,096 bytes, the most data.lock.d keeps"
-            ),
-            "{}",
-            error.message
-        );
-        assert!(!root.path().join(lists::FOLDER).exists());
-    }
-
     #[test]
     fn a_version_1_lock_reads_a_big_dataset_from_its_parts() {
         let root = tempfile::tempdir().unwrap();
@@ -2994,10 +2453,7 @@ mod tests {
     /// link still stop the read.
     #[test]
     fn a_dataset_whose_list_is_not_there_waits_alone() {
-        let lock = Lock {
-            derived: vec![clean()],
-            ..sample()
-        };
+        let lock = sample();
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
         let parts = lock.lists_with(0);
@@ -3015,28 +2471,19 @@ mod tests {
                 .unwrap()
         };
         let part = part_of(&gone);
-        for missing in [&part, &part_of("clean")] {
-            std::fs::remove_file(root.path().join(missing)).unwrap();
-        }
+        std::fs::remove_file(root.path().join(&part)).unwrap();
         let read = Lock::read_waiting(&text, root.path(), &|_| true).unwrap();
-        let waiting: Vec<(&str, &str, bool)> = read
+        let waiting: Vec<(&str, &str)> = read
             .waiting
             .iter()
-            .map(|waiting| (waiting.name.as_str(), waiting.part.as_str(), waiting.made()))
+            .map(|waiting| (waiting.name.as_str(), waiting.part.as_str()))
             .collect();
-        assert_eq!(
-            waiting,
-            [
-                ("clean", part_of("clean").as_str(), true),
-                (gone.as_str(), part.as_str(), false)
-            ]
-        );
+        assert_eq!(waiting, [(gone.as_str(), part.as_str())]);
         assert_eq!(read.render_with(0), text);
         assert_eq!(
-            read.waits("clean").unwrap().result().unwrap().tree,
-            clean().tree
+            read.waits(&gone).unwrap().pin().resolved,
+            lock.datasets[1].resolved
         );
-        assert!(read.result("clean").is_none());
         let names = |lock: &Lock| -> Vec<String> {
             lock.datasets
                 .iter()
@@ -3048,8 +2495,9 @@ mod tests {
         assert_eq!(names(&read), names(&lock));
         // a pin made again is written in place of the entry that waited
         let mut pinned = read.clone();
-        pinned.derived.push(clean());
-        assert!(pinned.waits("clean").is_none());
+        let at = pinned.datasets.partition_point(|known| known.name < gone);
+        pinned.datasets.insert(at, lock.datasets[1].clone());
+        assert!(pinned.waits(&gone).is_none());
         assert_eq!(pinned.render_with(0), text);
         let renamed = text.replace(part.as_str(), &format!("{}/{gone}.tsv.zst", lists::FOLDER));
         let error = Lock::read_waiting(&renamed, root.path(), &|_| true).unwrap_err();
@@ -3307,20 +2755,16 @@ mod tests {
                 .datasets["x"]
                 .clone()
         };
-        let plain = spec(entry("").source().unwrap());
+        let plain = spec(&entry("").source);
         assert_eq!(
             plain,
-            spec(
-                entry("copy = true\npath = \"elsewhere\"\n")
-                    .source()
-                    .unwrap()
-            ),
+            spec(&entry("copy = true\npath = \"elsewhere\"\n").source),
             "copy and path do not change what is downloaded"
         );
-        assert_ne!(plain, spec(entry("select = \"*.csv\"\n").source().unwrap()));
+        assert_ne!(plain, spec(&entry("select = \"*.csv\"\n").source));
         assert_eq!(
             plain,
-            spec(entry("extract = false\n").source().unwrap()),
+            spec(&entry("extract = false\n").source),
             "extract is compared on its own, so a switch keeps the files"
         );
         assert!(plain.starts_with("sha256:") && plain.len() == 71);
@@ -3372,7 +2816,7 @@ mod tests {
                 .clone()
         };
         let locked = Locked {
-            spec: spec(entry("").source().unwrap()),
+            spec: spec(&entry("").source),
             extract: true,
             web_page: false,
             ..sample().datasets[1].clone()
@@ -3403,7 +2847,7 @@ mod tests {
                 .clone()
         };
         let plain = entry("select = \"*\"\n");
-        let plain = plain.source().unwrap();
+        let plain = &plain.source;
         assert_eq!(
             spec(plain),
             format!(
@@ -3412,7 +2856,7 @@ mod tests {
             )
         );
         let asked = entry("select = \"*\"\nweb_page = true\n");
-        let asked = asked.source().unwrap();
+        let asked = &asked.source;
         let pinned = |source: &Source| Locked {
             spec: spec(source),
             web_page: source.web_page,
@@ -3441,7 +2885,7 @@ mod tests {
         };
         let asked = entry("web_page = true\n");
         let mut pinned = Locked {
-            spec: spec(asked.source().unwrap()),
+            spec: spec(&asked.source),
             web_page: true,
             ..sample().datasets[1].clone()
         };
@@ -3449,12 +2893,12 @@ mod tests {
         for unasked in ["", "exclude = \"*.csv\"\n", "select = \"notes\"\n"] {
             let unasked = entry(unasked);
             assert!(
-                page_no_longer_asked(&pinned, unasked.source().unwrap()),
+                page_no_longer_asked(&pinned, &unasked.source),
                 "{unasked:?}"
             );
         }
         let still = entry("web_page = true\nexclude = \"*.csv\"\n");
-        assert!(!page_no_longer_asked(&pinned, still.source().unwrap()));
+        assert!(!page_no_longer_asked(&pinned, &still.source));
         let lock = Lock {
             datasets: vec![pinned.clone()],
             ..sample()

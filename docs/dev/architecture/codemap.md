@@ -37,25 +37,20 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/drop.rs` | `drop`: a pinned dataset's bytes freed on this machine once a mirror or source has each of its files, its unchanged files out of the data folder and its cache files nothing else needs out of the cache, marked dropped in the state; what a sync of every dataset leaves out, and what a sync naming one brings back | `run` | `Report`, `unfound`, `free`, `placed_by`, `brought_back`, `kept_here` |
 | `src/cli/exclude.rs` | `exclude`: files left out for good, by patterns in data.toml, out of data.lock and, when unchanged, the data folder, asking no server | `run` | `Report`, `in_data_folder`, `asked`, `edits`, `refuse_what_breaks`, `written` |
 | `src/cli/path.rs` | `path`: where a dataset or file is, syncing that dataset alone first when its files are missing | `path` | `ready_path`, `planned_path`, `hold_path` |
-| `src/cli/status.rs` | `status`: how the data folder differs from data.lock, hashing only files their size and time cannot vouch for, and `unbuilt_here`, the pinned results nothing on this machine holds, with the inputs the cache lacks | `run`, `Status` | `brief`, `unbuilt_here` |
+| `src/cli/status.rs` | `status`: how the data folder differs from data.lock, hashing only files their size and time cannot vouch for | `run`, `Status` | `brief` |
 | `src/cli/status/ready.rs` | the readiness rule `status --check` and `sync --strict` share, and its `data.not_ready` error | `of_status` | `Unready`, `ready`, `after_sync` |
 | `src/cli/status/sources.rs` | `status --sources`: a line a dataset saying whether a mirror or its source still serves each file data.lock pins, its `--json` result, and the check `--check` makes of it | `check` | `Sources`, `tell`, `ready` |
 | `src/cli/list.rs` | `list`: each dataset's source, size and destination, from data.toml and data.lock alone, and its tables | `run` | `Report`, `Listed`, `listed`, `table`, `columns` |
 | `src/cli/export.rs` | `export`: checksums of placed files or links of downloaded ones, for `sha256sum -c`, a link list or aria2c, checked and written whole | `run` | `Report`, `inventory`, `sources`, `link`, `complete`, `render`, `publish` |
 | `src/cli/push.rs` | `push`: pinned files copied from the cache into a folder mirror, with the file lists of their archives | `run` | `Report` |
 | `src/cli/probe.rs` | where each pinned file can still be had, downloading none: a mirror holding it at its size, else its source answering for its first byte at its size, asked a few at a time by host; or why nowhere, as changed, gone, refused, unknown or imported | `find` | `Pinned`, `Found`, `Lack`, `judged` |
-| `src/cli/build.rs` | `build`, with `--prepare` and `--check`: recipes selected and run in order, each step's course decided, results pinned and placed, data.lock written once after the last step | `run`, `course` | `Built` |
-| `src/cli/build/preview.rs` | `build --dry-run`: each step decided by `course` against the cache as the build would find it, and the command of each that would or may run, running and fetching nothing | `preview` |  |
-| `src/cli/build/room.rs` | the disk room the steps may take, said before the first runs, with a question below `build_floor` | `fits` |  |
-| `src/cli/build/accept.rs` | `build --accept`: the checks a kept rebuild must pass, then its pin and its placing, running nothing | `accept` |  |
 | `src/cli/get.rs` | `get`: datasets or files into new folders, once, through the cache projects share; a failed link lets the rest finish | `run` | `Report`, `many` |
 | `src/cli/get/folder.rs` | the folder `get` fills, refused when it holds someone else's files, then filled by reflink, hardlink or copy | `check`, `put_all` | `Outcome` |
 | `src/cli/get/file.rs` | `get -o`: one file at exactly that path, never unpacked: what to do about a file already there, a one-off moved out of the cache, and publication that replaces another file only with `--force` | `one`, `decide` | `usage`, `foreseen`, `Existing`, `Step`, `one_off`, `take`, `publish`, `forget` |
 | `src/cli/get/preview.rs` | `get --dry-run`: what a get would fetch and where it would land, planned from the listings and the cache, writing nothing, not even the cache folder | `run` |  |
 | `src/cli/get/remembered.rs` | what an earlier `get` kept of a link only its source can list, which stands in for the listing offline | `keep`, `listing` |  |
 | `src/cli/search.rs` | `search`, its candidate rows, and the choice among candidates that `add` and `get` offer | `run`, `pick` | `Report`, `find` |
-| `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache, the weekly size reminder, and `Readers`, the objects of a project only builds read, for `fetchloom cache` and `cache gc --inputs` | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `needed_for_drop`, `Readers` |
-| `src/cli/cache/inputs.rs` | `cache gc --inputs`: raw data only built recipes read, freed where a folder mirror holds a copy | `gc` |  |
+| `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache and the weekly size reminder | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `needed_for_drop` |
 | `src/cli/cache/usage.rs` | where the cache's space goes, for `fetchloom cache` and the weekly reminder alike | `Usage::measure` | `Usage` |
 | `src/cli/auth.rs` | `auth`: signed-in accounts, signing in and out, and the offer to sign in after a refused download | `run`, `offer` | `Report` |
 | `src/cli/auth/site.rs` | `auth login <host>` with a website's own token, header or cookies from a file or a browser, its line in `auth` and its `auth logout` | `sign_in`, `listed`, `sign_out` | `keep`, `agrees`, `from_file`, `from_browser`, `tell` |
@@ -73,11 +68,11 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 
 | file | owns | start at | other items |
 |---|---|---|---|
-| `src/cli/sync.rs` | the loop: resolve what data.toml changed, learn every file's hash, fetch what the new lock names, write data.lock, then place; also `tell_stale`, the warning for a recipe not built yet or changed since its build, and `Loop::ready`, which fetches what a step reads | `Loop`, `Loop::relock` | `Scope`, `Upgrade`, `Loop::relock_dry`, `Loop::preview`, `Loop::write_lock`, `Loop::place`, `pinned` |
+| `src/cli/sync.rs` | the loop: resolve what data.toml changed, learn every file's hash, fetch what the new lock names, write data.lock, then place; also `Loop::ready`, which puts in the cache what a push needs | `Loop`, `Loop::relock` | `Scope`, `Upgrade`, `Loop::relock_dry`, `Loop::preview`, `Loop::write_lock`, `Loop::place`, `pinned` |
 | `src/cli/sync/cache_budget.rs` | the `cache_budget` setting: whether a run's downloads take the cache past it, and the question, refusal or warning that says what frees room | `weigh`, `ask` | `Past`, `Over`, `largest` |
 | `src/cli/sync/fill.rs` | datasets pinned by their sources' digests as relocking meets them: a sync downloads and checks them and pins them whole, other runs carry them | `Loop::stated`, `Carried` | `fill`, `listing`, `jobs` |
 | `src/cli/sync/draft.rs` | a dataset on its way into data.lock: selected files whose pins are still being learned, with hashes no source states filled in from earlier locks or the bytes | `Draft` | `jobs`, `learn`, `unknown_archives`, `finish`, `filter` |
-| `src/cli/sync/rename.rs` | a source or recipe renamed in data.toml, which takes over the old name's pin when the match is unique, asking no source | `carry` | `Rename`, `forecast`, `results`, `pairs_by_key` |
+| `src/cli/sync/rename.rs` | a dataset renamed in data.toml, which takes over the old name's pin when the match is unique, asking no source | `carry` | `Rename`, `forecast`, `pairs_by_key` |
 | `src/cli/sync/disk.rs` | the survey of the data folder, read once per command: racy files hashed, aliases, hardlinks someone edited, and what a removal leaves | `Survey`, `audit` | `read_within`, `hash_racy`, `check_doubted`, `retarget`, `smudge_edited`, `retired`, `left_behind` |
 | `src/cli/sync/place.rs` | the action for each destination: place, replace, remove, adopt, or leave alone a file someone changed; previews and state updates | `Placing`, `decide` | `Action`, `Reason`, `Placement`, `Preview`, `Changes`, `Seen`, `untouched`, `apply`, `settle`, `unblock`, `settle_aside`, `remove_unwanted`, `adoption`, `link_adopted`, `keep_aside` |
 | `src/cli/sync/place/put.rs` | many files placed at once, their tally, and how each looked right after | `put_all`, `Tally` |  |
@@ -91,32 +86,15 @@ data.toml holds what a person asked for, data.lock what it resolved to, and `.fe
 | file | owns | start at | other items |
 |---|---|---|---|
 | `src/project.rs` | the project folder: finding it, `Held`, the lock a command holds while it changes the project, and atomic writes | `Project`, `Held` | `Hold`, `Owner`, `find`, `hold`, `write`, `write_state`, `data_dir` |
-| `src/project/manifest.rs` | data.toml: each dataset's `Origin`, a source with `ref`, `select`, `exclude` and `extract`, or a recipe with `from`, `run`, `code` and `env`; every check of those keys and of `place`; edits that keep comments, order and spacing, a new dataset in name order | `Manifest`, `Entry`, `Origin` | `Reader`, `parse`, `with_dataset`, `without_dataset`, `with_dataset_from`, `tables`, `outside` |
-| `src/project/manifest/recipes.rs` | a recipe dataset as data.toml writes it: each word of its `run` (`Template`), parsed and expanded, and the order its inputs give every dataset, which refuses a cycle | `Template`, `order` | `Slot`, `OUT` |
+| `src/project/manifest.rs` | data.toml: each dataset's `Source`, with `ref`, `select`, `exclude` and `extract`, and every check of those keys; edits that keep comments, order and spacing, a new dataset in name order | `Manifest`, `Entry`, `Source` | `Reader`, `parse`, `with_dataset`, `without_dataset`, `with_dataset_from`, `tables`, `outside` |
 | `src/project/lock.rs` | data.lock: each resolved dataset (`Locked`) and the immutable byte pins of its files (`LockedFile`), their checks, and the fixed-order writer that gives the same bytes for the same inputs | `Lock`, `Locked`, `LockedFile` | `Drift`, `parse`, `render`, `spec`, `timestamp` |
 | `src/project/lock/canonical.rs` | a fast reader for data.lock as fetchloom writes it; any other TOML goes to the general reader and its exact errors | `read` |  |
 | `src/project/lock/archives.rs` | the archives among a dataset's pins, a split archive with its parts | `pinned` | `Archive`, `Pinned`, `archive`, `of` |
-| `src/project/lock/derived.rs` | a recipe's result as data.lock pins it: inputs (`Input`), command, code (`Code`), variables, key and tree | `Derived` | `check`, `check_files`, `write` |
-| `src/project/lock/lists.rs` | the compressed file lists in `data.lock.d`, never a link, for sources past 50,000 files and every recipe result, each typed by its header line | `Listed`, `read` | `Row`, `texts`, `listed`, `compress`, `is_part`, `inline`, `folder` |
+| `src/project/lock/lists.rs` | the compressed file lists in `data.lock.d`, never a link, for sources past 50,000 files | `Listed`, `read` | `texts`, `listed`, `compress`, `is_part`, `inline`, `folder` |
 | `src/project/lock/merge.rs` | data.toml and data.lock merged a dataset at a time after a git merge, with the choices a person made | `merge` | `Merged`, `Summary`, `Side`, `Choices`, `decide`, `decide_removals`, `kept`, `reads` |
 | `src/project/lock/merge/markers.rs` | each side, and the base, read back from git's conflict lines without the tables a conflict cuts, beside the sides whole from git | `split` | `Sides`, `first` |
-| `src/project/state.rs` | `.fetchloom/state`, one JSON document with an index of its records: each placed file's size and time (`Look`), the last sync's inputs (`Synced`), and each rebuild of a recipe that differs from its pin (`State.candidates`) | `State`, `Placed` | `nanos`, `render`, `read_within`, `read_whole` |
+| `src/project/state.rs` | `.fetchloom/state`, one JSON document with an index of its records: each placed file's size and time (`Look`) and the last sync's inputs (`Synced`) | `State`, `Placed` | `nanos`, `render`, `read_within`, `read_whole` |
 | `src/project/git.rs` | git found and run as a bounded reader with no shell: each side of an unfinished merge whole, with the base, from its index or the commits being merged, the files git tracks, and a commit named by a revision that is never an option, with the plain files it holds | `stages`, `known`, `resolve`, `blobs` | `find`, `Stages`, `committed`, `tracked`, `Known`, `blob`, `Unnamed` |
-
-## recipe and build
-
-a recipe makes a dataset by running a command over other datasets, and only `fetchloom build` runs one. [recipes](recipes.md) covers the key, stale pins and each step.
-
-| file | owns | start at | other items |
-|---|---|---|---|
-| `src/recipe.rs` | a `run` command parsed and expanded (`Template`), the order of steps, a recipe as it stands with its key over everything its result depends on (`Step`), and what moved since its pin (`Change`), which tells a stale pin | `Template`, `key`, `drift` | `Step`, `Change`, `order`, `closure`, `content` |
-| `src/recipe/code.rs` | a recipe's `code` hashed alike on every system: CRLF read as LF, a folder as its tree, links refused | `hash` |  |
-| `src/build.rs` | the folder in the cache a step runs in, reading `in/<name>` and writing `out` | `Staging` |  |
-| `src/build/step.rs` | one step run without a shell in its own process group, its output in a private log with its tail kept, and the whole group ended on a stop | `run` |  |
-| `src/build/step/program.rs` | a step's program found on windows as a shell there finds it, so `npm` reaches `npm.cmd` | `find` |  |
-| `src/build/inputs.rs` | each input's private copy, made from the cache as a read-only reflink or copy, never a hardlink | `make` |  |
-| `src/build/capture.rs` | what a step wrote, taken into the cache without following a link: the walk, the names, the hashes and the publication | `read`, `publish` |  |
-| `src/build/compare.rs` | a rerun's files compared with the result data.lock pins: matching, changed, missing and extra | `compare` |  |
 
 ## source
 
@@ -254,9 +232,8 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | `src/cache/deferred.rs` | finished downloads that take their names only after a flush covers them, one flush per group on linux | `Cache::defer_downloads`, `Finished` | `Cache::publish_downloads`, `Cache::publish_due`, `Cache::publish_download_of` |
 | `src/cache/object.rs` | objects written in one go, as archive members or mirror copies: sealed read-only in `tmp/`, hashed and flushed before publishing, in batches; clones or copies of files other programs keep | `NewObject`, `Batch` | `Sealed`, `Copied`, `batch_in`, `clone_from`, `copy_from`, `seal`, `publish`, `copy_in`, `holds_pinned`, `syncfs_reports_errors` |
 | `src/cache/held.rs` | the cache-wide lock: runs hold it shared, `cache gc` exclusive | `Cache::hold` | `Access` |
-| `src/cache/staging.rs` | archive staging folders and recipe step folders, whose locks tell a live writer from a killed run | `Cache::staging`, `Staging` | `Cache::build_folder`, `Cache::sweep_staging`, `clear_tree` |
+| `src/cache/staging.rs` | archive staging folders, whose locks tell a live writer from a killed run | `Cache::staging`, `Staging` | `Cache::sweep_staging` |
 | `src/cache/unpacked.rs` | what each archive unpacked to, its member list and stable tree identity, keyed by its SHA-256 or a split archive's parts | `Cache::record_unpacked`, `tree_hash` | `Member`, `parts_key`, `Cache::record_tree_bytes`, `Cache::unpacked`, `Cache::holds_unpacked` |
-| `src/cache/results.rs` | recipe results under `builds/<key>/<tree>`, their key locks, and captured files moved into `objects/` | `Cache::record_result`, `Cache::hold_key` | `Built`, `KeyHold`, `Seen`, `Cache::results`, `seal_captured`, `Cache::publish_captured` |
 | `src/cache/imported.rs` | lists of the objects imports put in the cache, which no source can give back, so gc counts them apart and asks before `--now` frees them | `Cache::mark_imported`, `Cache::imported` | `Cache::forget_imported` |
 | `src/cache/changed.rs` | objects found changed, remembered after repair so projects can check their old hardlinks | `Cache::mark_changed`, `Doubt` | `Cache::trusted`, `Cache::mark_replaced`, `Cache::changed` |
 | `src/cache/upkeep.rs` | the projects that use the cache, scans, verification and gc, and how each project uses the objects it needs | `Cache::register`, `Needed` | `Use`, `Supply`, `Freed`, `Checked`, `Cache::scan_objects`, `Cache::sweep_with_stop`, `sweep_results`, `Cache::verify_scanned`, `Cache::free_input` |
@@ -325,7 +302,7 @@ every layer shares these small types and limits; [primitives](primitives.md) giv
 | `src/settings/edit.rs` | one key of the settings file set or unset in place: the value read by the file's own reader first, comments and other keys kept, the file replaced in one step with its permissions | `set`, `unset` | `Changed`, `overridden` |
 | `src/settings/resources.rs` | `resources` levels: what lean, default and max give the knobs they derive from the machine, and what a run spends once every knob is set, which `-v` says | `Level`, `Spending` | `Limits`, `limits`, `spending` |
 | `src/machine.rs` | what the machine allows: processors, available memory (on linux inside cgroup limits and whether a cgroup holds it, on windows and macos as sysinfo counts it), open files, the processors online, and programs on PATH; the settings and state folders | `Machine` | `read`, `processors_online`, `state_folder` |
-| `src/space.rs` | free and total space on the disk holding a folder, statvfs on unix and the volume list on windows, checked before a download starts; what that disk is formatted as, and the 4 GiB less one byte FAT32 holds in one file; the room a build needs | `free`, `Needs` | `short`, `Filesystem`, `cache_holds`, `peak`, `floor` |
+| `src/space.rs` | free space on the disk holding a folder, statvfs on unix and the volume list on windows, checked before a download starts; what that disk is formatted as, and the 4 GiB less one byte FAT32 holds in one file | `free` | `short`, `Filesystem`, `cache_holds`, `same_disk` |
 | `src/threads.rs` | the optional ceiling on local worker groups, and the scoped worker helper | `Threads`, `scoped` | `read`, `limit`, `archives` |
 | `src/shown.rs` | which query names hold secrets, and links as messages and logs show them, every query value masked unless its name is known to be harmless | `Shown`, `mask_query` | `secret`, `depends_on_path` |
 | `src/xml.rs` | a small XML reader for the answers of S3, azure and arXiv, without attributes, that refuses document type declarations | `parse` | `Element`, `unescape` |
@@ -346,12 +323,11 @@ the cli tests run the real binary in a sandbox; [building and testing](../engine
 | `tests/cli/support/command.rs` | a command with a deadline, whose failure shows its stderr and the end of its debug log | `Fetchloom` |  |
 | `tests/cli/support/running.rs` | a command running beside its test, its stderr read as it comes | `Running` |  |
 | `tests/cli/support/server.rs` | listeners and connections, stopped and joined with their test server | `ServerTask` |  |
-| `tests/cli/support/programs.rs` | the fetchloom binary and the `recipe_step` example the tests run | `executable`, `recipe_step` |  |
+| `tests/cli/support/programs.rs` | the fetchloom binary the tests run | `executable` |  |
 | `tests/support/links.rs` | a folder that links to another, a junction on windows, shared by unit and cli tests | `link_folder` |  |
 | `tests/support/paths.rs` | the workspace folder, shared by unit and cli tests | `workspace` |  |
 | `tests/support/ports.rs` | an address where every connection is refused, shared by unit and cli tests | `Refusing` |  |
 | `tests/support/skips.rs` | a skip that fails instead where `FETCHLOOM_TEST_REQUIRE` names the missing capability | `skip` |  |
-| `examples/recipe_step.rs` | the step program cli tests put in recipes | `main` |  |
 | `src/net/scripted.rs` | a local server that answers each connection with scripted bytes, for network unit tests | `serve` |  |
 | `src/source/recorded.rs` | answers recorded from real services, replayed in source unit tests, and the real network the `live_` tests reach | `Recorded` | `on`, `fixture`, `next`, `total`, `asked`, `block_on`, `live` |
 | `src/archive/samples.rs` | archives built at test time, and a scratch cache to unpack them into | `Scratch` |  |

@@ -18,7 +18,7 @@ copy = true
 path = "measurements"
 ```
 
-`project` and `datasets` are optional tables. a dataset is fetched from a source, named by `ref`, or made from other datasets by a [recipe](recipes.md), named by `from` and `run`. each dataset entry has these keys:
+`project` and `datasets` are optional tables. a dataset is fetched from a source, named by `ref`. each dataset entry has these keys:
 
 | key | meaning | default |
 |---|---|---|
@@ -31,8 +31,6 @@ path = "measurements"
 | `members` | tables that keep or leave out files inside each archive; see [files inside archives](#files-inside-archives) | none |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir`, or `"."` for the data folder itself | the dataset name |
-| `place` | `false` keeps the dataset pinned and cached but out of the data folder; see [datasets only recipes read](#datasets-only-recipes-read) | `true` |
-| `from`, `run`, `code`, `env` | a recipe's inputs, command, code and variables; see [recipes](recipes.md) | none |
 
 ## imported files
 
@@ -59,7 +57,7 @@ warning: iris was taken, so this one is iris-2
   help: choose a name with --as <name>
 ```
 
-to rename a dataset, change its table's name in data.toml, as `[datasets.iris]` to `[datasets.flowers]`, the name in each of its [members tables](#files-inside-archives), and the `from` and `{iris}` words of any recipe that reads it; members tables left under the old name are refused with `project.invalid`. the next `fetchloom sync` or `fetchloom lock` moves the pin in data.lock to the new name without asking the source, as long as the table asks for the same `ref`, `select`, `exclude` and `extract` as before, and says `Renamed iris to flowers in data.lock · its pin stays`; sync then places the files in the new name's folder. an [import](#imported-files) keeps the name it was added with. a rename together with one of those edits, or one fetchloom cannot match to a single old name, resolves the new name again, which may pin newer data. a renamed recipe keeps its pinned result, since its key never held its name, but a recipe that reads a renamed dataset has a new `from` and `run`, so it needs `fetchloom build`.
+to rename a dataset, change its table's name in data.toml, as `[datasets.iris]` to `[datasets.flowers]`, and the name in each of its [members tables](#files-inside-archives); members tables left under the old name are refused with `project.invalid`. the next `fetchloom sync` or `fetchloom lock` moves the pin in data.lock to the new name without asking the source, as long as the table asks for the same `ref`, `select`, `exclude` and `extract` as before, and says `Renamed iris to flowers in data.lock · its pin stays`; sync then places the files in the new name's folder. an [import](#imported-files) keeps the name it was added with. a rename together with one of those edits, or one fetchloom cannot match to a single old name, resolves the new name again, which may pin newer data.
 
 an explicitly supplied `--as` name that is taken is refused. a name that breaks the rules above is refused with the rule it breaks, such as its length or the characters it holds, and a suggestion made from it: lowercase, with accents dropped from letters (`ïris` gives `iris`), other characters turned into `-`, at most 40 characters, and `-data` after a name windows keeps for a device, such as `con`, whose help asks for another name, such as `--as con-data`. generated names are made the same way, so a file `con.csv` gives `con-data`.
 
@@ -106,24 +104,6 @@ file paths refuse control characters, including the bidi controls U+061C, U+200E
 
 `copy = true` makes the next sync replace each unchanged read-only file of the dataset with a writable copy or clone, as [placement](../concepts/cache-and-placement.md#placement) says; `status` lists those files as outdated until then. turning it off leaves writable files as they are.
 
-## datasets only recipes read
-
-`place = false` keeps a dataset out of the data folder, as for raw data only a [recipe](../guides/recipes.md#keep-only-the-result) reads. it works on fetched datasets and on recipes alike:
-
-```toml
-[datasets.raw]
-ref = "hf:datasets/scikit-learn/iris"
-place = false
-```
-
-data.lock pins the dataset as before, since `place` changes where its files go, not what is pinned, and a recipe's key leaves it out too. no command places its files: once it is pinned, a sync downloads nothing for it, `build` reads it from the cache, fetching what the cache lacks, `path` refuses it with `usage`, exit 2, and [`exclude`](../commands/exclude.md#raw-data-only-recipes-read) takes its files by the paths they would have in the data folder. setting it on a placed dataset makes the next sync remove what it placed there, unchanged files only, and say so once:
-
-```text
-    Retired data/raw · 1 file, since raw has place = false
-```
-
-an edited file stays, with the warning a removed dataset's edit gets. `status` and `list` say the dataset is not placed. `place` can only keep files out: data.toml comes with whatever repository you clone, so it never asks for more placement than the default.
-
 ## patterns
 
 `select` and `exclude` each accept a string or an array of strings. an empty array has the default meaning. matching is case-sensitive and covers the whole source path. leading `/` is ignored.
@@ -158,7 +138,7 @@ exclude = [
 
 `select` and `exclude` in a members table take the [patterns](#patterns) above and match each file by its path inside the archive, its top folder included, before placing strips that folder. `pets-v1/images/dog_010_corrupt.png` above lands at `data/pets/images/dog_010_corrupt.png`, since a dataset that is one archive loses the folder all its files share. a file a table leaves out is not placed, and every other file lands where it would without the table. a table under an archive's path names that archive alone, so in a dataset of `train.zip` and `test.zip` that both hold `images/x.png`, a table under `"train.zip"` leaves `test.zip`'s copy in place. without such a table the two copies would land on one path, so the run stops before placing anything, naming the path and both archives, as in `two files would land on data/fold/train/0000.txt: one from fold-000000.zip and one from fold-000001.zip`. leave one copy out, keep the archives packed with `extract = false`, or give each archive a dataset of its own. [`fetchloom exclude`](../commands/exclude.md) writes these lines for you from the paths in the data folder.
 
-a members table changes which files land, not what data.lock pins, so editing one needs no network: sync removes the files it leaves out and places those it lets back in from the cache, and `sync --locked` accepts it. a [recipe](recipes.md#what-fetchloom-keys) made from the dataset reads only the files kept, so the tables enter its key, and changing one means building it again. each of these is refused with `project.invalid`, exit 50, pointing at its line:
+a members table changes which files land, not what data.lock pins, so editing one needs no network: sync removes the files it leaves out and places those it lets back in from the cache, and `sync --locked` accepts it. each of these is refused with `project.invalid`, exit 50, pointing at its line:
 
 | mistake | why |
 |---|---|

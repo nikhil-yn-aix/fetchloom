@@ -896,24 +896,21 @@ async fn finish(
         .iter()
         .zip(outcomes)
         .map(|(target, outcome)| {
-            // get places downloads alone, never a recipe's result
-            let file = target.file();
+            let file = target.file;
             Got {
                 path: target.path.clone(),
                 size: target.size,
                 sha256: target.sha256,
-                url: file.map(|file| file.url.clone()).unwrap_or_default(),
-                origin: file
-                    .and_then(|file| origins.get(file.path.as_str()))
+                url: file.url.clone(),
+                origin: origins
+                    .get(file.path.as_str())
                     .copied()
                     .unwrap_or(Origin::Cache),
                 method: match outcome {
                     Outcome::Placed(method) | Outcome::Replaced(method) => Some(method.into()),
                     Outcome::AlreadyThere => None,
                 },
-                unpacked_from: file
-                    .filter(|file| file.unpacks_to.is_some())
-                    .map(|file| file.path.clone()),
+                unpacked_from: file.unpacks_to.is_some().then(|| file.path.clone()),
             }
         })
         .collect();
@@ -1475,10 +1472,7 @@ fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote
     )?)?;
     let mut entry = alone.datasets["get"].clone();
     entry.lines.clear();
-    match entry.source() {
-        Some(source) => engine::filter(&parsed.reference.shown(), &entry, source, listing),
-        None => Ok(listing.files.clone()),
-    }
+    engine::filter(&parsed.reference.shown(), &entry, listing)
 }
 
 /// the error for a pasted link to `file`, which its listing lacks, naming the file likely meant:

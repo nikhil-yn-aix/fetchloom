@@ -287,16 +287,6 @@ struct Imported<'a> {
     files: Vec<lock::LockedFile>,
 }
 
-/// the source of data.toml's `entry` of `name`, which an import has and a recipe does not.
-fn import_source<'e>(entry: &'e manifest::Entry, name: &str) -> Result<&'e Source, Error> {
-    entry.source().ok_or_else(|| {
-        Error::new(
-            Kind::Usage,
-            format!("{name} is made by a recipe in data.toml, so no files are imported for it"),
-        )
-    })
-}
-
 /// the source an import is checked against: data.toml's for `supplied`, an import `--as` names, or
 /// else one made from `args`, once `--as` gives a usable name.
 fn import_entry(manifest: &Manifest, supplied: Option<&str>, args: &Add) -> Result<Source, Error> {
@@ -314,7 +304,7 @@ fn import_entry(manifest: &Manifest, supplied: Option<&str>, args: &Add) -> Resu
         &args.filter.exclude,
         !args.no_extract,
     )?;
-    import_source(&Manifest::parse(&text)?.datasets["new"], "new").cloned()
+    Ok(Manifest::parse(&text)?.datasets["new"].source.clone())
 }
 
 /// data.lock's pin of `name`, when `old` has one that still answers data.toml's `entry`.
@@ -339,9 +329,7 @@ fn same_import(
     let Some(existing) = manifest.datasets.get(name) else {
         return false;
     };
-    let Some(had) = existing.source() else {
-        return false;
-    };
+    let had = &existing.source;
     let pin = |file: &lock::LockedFile| (file.path.clone(), file.size, file.sha256);
     local::is_imported(&had.reference)
         && had.select == source.select
@@ -407,7 +395,7 @@ async fn import_new(
         source.extract,
     )?;
     let manifest = Manifest::parse(&updated)?;
-    let pinned = pinned(name, import_source(&manifest.datasets[name], name)?, files);
+    let pinned = pinned(name, &manifest.datasets[name].source, files);
     let names = [name.to_owned()];
     let outcome = sync_add(
         work,
@@ -453,7 +441,7 @@ fn supplied_entry(manifest: &Manifest, name: &str, args: &Add) -> Result<Source,
             "leave out --select, --exclude and --no-extract, or change datasets.{name} in data.toml"
         )));
     }
-    import_source(&manifest.datasets[name], name).cloned()
+    Ok(manifest.datasets[name].source.clone())
 }
 
 /// a supply whose folder, `shown`, holds other files than data.lock pins for `name`.
@@ -1642,8 +1630,7 @@ mod tests {
             quoted(exclude)
         );
         Manifest::parse(&text).unwrap().datasets["flowers"]
-            .source()
-            .unwrap()
+            .source
             .clone()
     }
 

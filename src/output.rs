@@ -1745,8 +1745,9 @@ fn verb_color(verb: &str) -> Tone {
         "Downloading" | "Unpacking" | "Waiting" | "Resolving" | "Checking" | "Searching" => {
             Tone::Work
         }
-        "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" | "Stale" | "Untracked"
-        | "Outdated" => Tone::Warn,
+        "Missing" | "Extra" | "Kept" | "Edited" | "Unlocked" | "Untracked" | "Outdated" => {
+            Tone::Warn
+        }
         "Failed" | "Damaged" | "Blocked" => Tone::Fail,
         // a dry run's plan is work not yet done
         verb if verb.starts_with("Would ") => Tone::Work,

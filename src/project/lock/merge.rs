@@ -14,7 +14,6 @@ use std::path::Path;
 use serde::Serialize;
 
 use self::markers::Sides;
-use super::derived::Derived;
 use super::{Lock, Locked, LockedFile, Parsed, parse, spec};
 use crate::error::{Error, Kind};
 use crate::project::manifest::{self, Edit, Entry, Manifest};
@@ -443,14 +442,11 @@ fn summarize(decided: &Decided, merged: &Manifest, records: Option<&[Parsed]>) -
         };
         list.push(name.clone());
     }
-    // only `fetchloom build` pins a recipe, so the next sync or lock pins fetched datasets alone
     summary.unpinned = merged
         .datasets
-        .iter()
-        .filter(|(name, entry)| {
-            entry.source().is_some() && !pinned(name) && !decided.conflicts.contains_key(*name)
-        })
-        .map(|(name, _)| name.clone())
+        .keys()
+        .filter(|name| !pinned(name) && !decided.conflicts.contains_key(*name))
+        .cloned()
         .collect();
     summary.conflicts = decided.conflicts.keys().cloned().collect();
     summary
@@ -558,28 +554,15 @@ fn values(entry: &Entry) -> impl PartialEq {
             .map(|glob| glob.as_str().to_owned())
             .collect::<Vec<_>>()
     };
-    let source = entry.source().map(|source| {
-        (
-            source.reference.clone(),
-            patterns(&source.select),
-            patterns(&source.exclude),
-            source.extract,
-        )
-    });
-    let recipe = entry.recipe().map(|recipe| {
-        let run: Vec<String> = recipe
-            .run
-            .iter()
-            .map(|word| word.text().to_owned())
-            .collect();
-        (
-            recipe.from.clone(),
-            run,
-            recipe.code.clone(),
-            recipe.env.clone(),
-        )
-    });
-    (source, recipe, entry.copy, entry.path.clone())
+    let source = &entry.source;
+    (
+        source.reference.clone(),
+        patterns(&source.select),
+        patterns(&source.exclude),
+        source.extract,
+        entry.copy,
+        entry.path.clone(),
+    )
 }
 
 /// refuses a merged data.toml that does not say what the merge decided, which an unusual layout
@@ -684,8 +667,8 @@ fn read_locks(sides: &Sides, room: u64) -> Result<Locks, Error> {
     Ok(locks)
 }
 
-/// the data.lock entries kept for `merged`, sorted by name: a fetched dataset's answers its spec,
-/// and is the chosen side's when its entry was chosen; a recipe's result merges both sides'.
+/// the data.lock entries kept for `merged`, sorted by name: each answers its dataset's spec, and is
+/// the chosen side's when its entry was chosen.
 fn pick_records(
     locks: &Locks,
     merged: &Manifest,
@@ -694,21 +677,12 @@ fn pick_records(
 ) -> Vec<Parsed> {
     let mut kept = Vec::new();
     for (name, entry) in &merged.datasets {
-        let (ours, theirs, base) = match entry.source() {
-            Some(source) => {
-                let wanted = spec(source);
-                (
-                    answering(&locks.ours, name, &wanted),
-                    answering(&locks.theirs, name, &wanted),
-                    base_of(locks, name, find),
-                )
-            }
-            None => (
-                result(&locks.ours, name),
-                result(&locks.theirs, name),
-                base_of(locks, name, result),
-            ),
-        };
+        let wanted = spec(&entry.source);
+        let (ours, theirs, base) = (
+            answering(&locks.ours, name, &wanted),
+            answering(&locks.theirs, name, &wanted),
+            base_of(locks, name, find),
+        );
         let verdict = match (ours, theirs) {
             (Some(_), None) => Ok(Take::Side(Side::Ours)),
             (None, Some(_)) => Ok(Take::Side(Side::Theirs)),
@@ -860,10 +834,7 @@ fn chosen_records(
         let pin = merged
             .datasets
             .get(name)
-            .and_then(|entry| match entry.source() {
-                Some(source) => answering(pins, name, &spec(source)),
-                None => result(pins, name),
-            });
+            .and_then(|entry| answering(pins, name, &spec(&entry.source)));
         records.retain(|record| record.name() != name);
         records.extend(pin.cloned());
     }
@@ -871,7 +842,7 @@ fn chosen_records(
 }
 
 /// the merged data.lock of `records`, each list read below `root`, or from the commit of the side
-/// it comes from, as `committed` gives it, where git's merge deleted it: a rebuild on one side that
+/// it comes from, as `committed` gives it, where git's merge deleted it: a repin on one side that
 /// replaced a list deletes it, though the other side still names it. a pin that does not read
 /// stops the merge with how to restore its side, never with advice to pin anew. the lists
 /// together are read within `memory`, what a container leaves.
@@ -893,9 +864,7 @@ fn kept(
         };
         // the other side wrote these names, so only fetchloom's own are looked for or brought back
         let parts = match &record {
-            Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed)
-                if super::lists::named_as_written(&name, listed) =>
-            {
+            Parsed::Source(_, Some(listed)) if super::lists::named_as_written(&name, listed) => {
                 listed.parts.clone()
             }
             _ => Vec::new(),
@@ -926,7 +895,6 @@ fn kept(
             }
         })?;
         lock.datasets.extend(read.datasets);
-        lock.derived.extend(read.derived);
         lock.stated.extend(read.stated);
     }
     Ok(lock)
@@ -1010,7 +978,7 @@ fn list_gone(name: &str, side: Side, part: &str) -> Error {
         ),
     )
     .detail(
-        "a merge deletes a list one side's rebuild replaced, though the other side still names it",
+        "a merge deletes a list one side's repin replaced, though the other side still names it",
     )
     .help(help)
 }
@@ -1076,13 +1044,7 @@ fn answering<'a>(records: &'a [Parsed], name: &str, wanted: &str) -> Option<&'a 
         Parsed::Source(locked, _) | Parsed::Stated(super::Stated { pin: locked, .. }) => {
             locked.spec == wanted
         }
-        Parsed::Derived(..) => false,
     })
-}
-
-/// the entry of `records` for `name`, a recipe's result.
-fn result<'a>(records: &'a [Parsed], name: &str) -> Option<&'a Parsed> {
-    find(records, name).filter(|record| matches!(record, Parsed::Derived(..)))
 }
 
 /// what each side holds of `name`, which needs a choice, where data.toml tells the sides apart:
@@ -1212,7 +1174,7 @@ fn pins_held(locks: Option<&Locks>, name: &str, side: Side) -> Vec<String> {
 const SHOWN: usize = 3;
 
 /// what each side pins for `name`, which needs a choice, as lines to compare, never saying which
-/// to take: a result's key, the files and bytes, and up to [`SHOWN`] files only that side pins.
+/// to take: the files and bytes, and up to [`SHOWN`] files only that side pins.
 fn pinned_on_each_side(locks: &Locks, name: &str) -> Vec<String> {
     let mut lines = Vec::new();
     for side in [Side::Ours, Side::Theirs] {
@@ -1225,15 +1187,14 @@ fn pinned_on_each_side(locks: &Locks, name: &str) -> Vec<String> {
     lines
 }
 
-/// what `side` pins for `name`, as [`pinned_on_each_side`] shows it, without the name: its key,
-/// files and bytes first, then a line for each file only it pins, up to [`SHOWN`].
+/// what `side` pins for `name`, as [`pinned_on_each_side`] shows it, without the name: its files
+/// and bytes first, then a line for each file only it pins, up to [`SHOWN`].
 fn pinned(locks: &Locks, name: &str, side: Side) -> Vec<String> {
     let record = find(locks.of(side), name);
     let other = find(locks.of(side.other()), name);
-    let (key, files, listed): (_, &[LockedFile], _) = match record {
+    let (files, listed): (&[LockedFile], _) = match record {
         None => return vec!["not in data.lock".to_owned()],
-        Some(Parsed::Source(locked, listed)) => (None, &locked.files, listed.as_ref()),
-        Some(Parsed::Derived(derived, listed)) => (Some(derived.key), &[], Some(listed)),
+        Some(Parsed::Source(locked, listed)) => (&locked.files, listed.as_ref()),
         Some(Parsed::Stated(stated)) => {
             return vec![format!(
                 "{} \u{b7} {}, not downloaded yet",
@@ -1247,9 +1208,6 @@ fn pinned(locks: &Locks, name: &str, side: Side) -> Vec<String> {
         |listed| (listed.count, listed.bytes),
     );
     let mut head = String::new();
-    if let Some(key) = key {
-        let _ = write!(head, "key {}, ", key.short());
-    }
     let _ = write!(
         head,
         "{} \u{b7} {}",
@@ -1301,9 +1259,6 @@ fn alike(a: &Parsed, b: &Parsed) -> bool {
         (Parsed::Source(a, a_listed), Parsed::Source(b, b_listed)) => {
             a_listed == b_listed && untimed(a) == untimed(b)
         }
-        (Parsed::Derived(a, a_listed), Parsed::Derived(b, b_listed)) => {
-            a_listed == b_listed && untimed_result(a) == untimed_result(b)
-        }
         (Parsed::Stated(a), Parsed::Stated(b)) => {
             a.files == b.files && untimed(&a.pin) == untimed(&b.pin)
         }
@@ -1331,22 +1286,6 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
     (
         name, reference, spec, extract, web_page, resolved, title, license, doi, access, files,
     )
-}
-
-/// a recipe result's entry without when it was made.
-fn untimed_result(derived: &Derived) -> impl PartialEq + '_ {
-    let Derived {
-        name,
-        from,
-        run,
-        code,
-        env,
-        key,
-        timestamp: _,
-        tree,
-        files,
-    } = derived;
-    (name, from, run, code, env, key, tree, files)
 }
 
 /// the error for a side of `file` that does not read.

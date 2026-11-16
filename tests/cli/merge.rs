@@ -470,16 +470,6 @@ fn lock_reads_the_base_around_lines_zdiff3_moved_out_of_a_conflict() -> Result {
     Ok(())
 }
 
-/// runs `fetchloom build` in the work folder, with the step program recipes run on PATH and git
-/// given no settings of the machine's.
-fn building(sandbox: &Sandbox, args: &[&str]) -> Result<Output> {
-    let mut command = crate::build::building_in(sandbox, &sandbox.work(), args)?;
-    for name in git_variables() {
-        command.env_remove(name);
-    }
-    Ok(command.output()?)
-}
-
 /// a git merge or rebase in the work folder, as `args` asks, which must stop at a conflict.
 fn stopped(sandbox: &Sandbox, args: &[&str]) -> Result {
     let output = git(sandbox, &sandbox.work(), args)?.ok_or("git went away")?;
@@ -699,33 +689,32 @@ fn lock_asks_before_a_removal_drops_an_upgraded_pin() -> Result {
     Ok(())
 }
 
-/// a project pinning in.txt from `server` as a-src and making b-mk from it with a recipe, built
-/// and committed on main. branch b upgrades a-src to what the server serves next and builds b-mk
-/// again; branch a starts from main. none without git.
-fn rebuilt_on_b(sandbox: &Sandbox, server: &Server) -> Result<Option<()>> {
+/// [`run`] with every file list beside data.lock, as a big dataset keeps it.
+fn run_listed(sandbox: &Sandbox, args: &[&str]) -> Result<Output> {
+    let mut command = sandbox.command(args);
+    for name in git_variables() {
+        command.env_remove(name);
+    }
+    Ok(command.env("FETCHLOOM_TEST_INLINE", "0").output()?)
+}
+
+/// a project pinning in.txt from `server` as a-src, its list beside data.lock, committed on main.
+/// branch b upgrades a-src to what the server serves next; branch a starts from main. none
+/// without git.
+fn upgraded_on_b(sandbox: &Sandbox, server: &Server) -> Result<Option<()>> {
     if git(sandbox, &sandbox.work(), &["init", "-q"])?.is_none() {
         return Ok(None);
     }
-    succeeded(&run(sandbox, &["add", &server.url, "--as", "a-src"])?)?;
-    let manifest = sandbox.work().join("data.toml");
-    let text = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        format!(
-            "{text}\n[datasets.b-mk]\nfrom = [\"a-src\"]\nrun = [\"recipe-step\", \"copy\", \"{{a-src}}\", \"{{out}}\"]\n"
-        ),
-    )?;
-    succeeded(&building(sandbox, &["build"])?)?;
-    ok(sandbox, &["add", "."])?;
-    ok(sandbox, &["commit", "-qm", "recipe"])?;
-    ok(sandbox, &["checkout", "-qb", "b"])?;
-    succeeded(&run(sandbox, &["lock", "--upgrade", "a-src"])?)?;
-    succeeded(&building(sandbox, &["build"])?)?;
-    ok(sandbox, &["add", "."])?;
-    ok(
+    succeeded(&run_listed(
         sandbox,
-        &["commit", "-qm", "upgrade a-src and build b-mk again"],
-    )?;
+        &["add", &server.url, "--as", "a-src"],
+    )?)?;
+    ok(sandbox, &["add", "."])?;
+    ok(sandbox, &["commit", "-qm", "a-src"])?;
+    ok(sandbox, &["checkout", "-qb", "b"])?;
+    succeeded(&run_listed(sandbox, &["lock", "--upgrade", "a-src"])?)?;
+    ok(sandbox, &["add", "-A"])?;
+    ok(sandbox, &["commit", "-qm", "upgrade a-src"])?;
     ok(sandbox, &["checkout", "-qb", "a", "main"])?;
     Ok(Some(()))
 }
@@ -740,20 +729,24 @@ fn upstream() -> Result<Server> {
     )
 }
 
-/// c-new lands right after b-mk in data.lock, so git merges part of b-mk's entry and stops at the
-/// rest; read whole with the base, b-mk changed on b alone, so the merge needs no choice.
+/// c-new lands right after a-src in data.lock, so git merges part of a-src's entry and stops at
+/// the rest; read whole with the base, a-src changed on b alone, so the merge needs no choice.
 #[test]
-fn lock_merges_a_rebuilt_recipe_beside_a_new_dataset_by_itself() -> Result {
+fn lock_merges_an_upgrade_beside_a_new_dataset_by_itself() -> Result {
     let sandbox = Sandbox::new()?;
     let input = upstream()?;
     let extra = Server::start("/extra.txt", vec![file(b"extra\n", "\"e\"")])?;
     sandbox.allow(&input.url);
     sandbox.allow(&extra.url);
-    if rebuilt_on_b(&sandbox, &input)?.is_none() {
+    if upgraded_on_b(&sandbox, &input)?.is_none() {
         return Ok(());
     }
-    succeeded(&run(&sandbox, &["add", &extra.url, "--as", "c-new"])?)?;
-    ok(&sandbox, &["commit", "-qam", "add c-new"])?;
+    succeeded(&run_listed(
+        &sandbox,
+        &["add", &extra.url, "--as", "c-new"],
+    )?)?;
+    ok(&sandbox, &["add", "-A"])?;
+    ok(&sandbox, &["commit", "-qm", "add c-new"])?;
     let (a, b) = (
         shown(&sandbox, "a:data.lock")?,
         shown(&sandbox, "b:data.lock")?,
@@ -769,7 +762,7 @@ fn lock_merges_a_rebuilt_recipe_beside_a_new_dataset_by_itself() -> Result {
         let b_side = if a_side == "ours" { "theirs" } else { "ours" };
         ok(&sandbox, &["checkout", "-q", on])?;
         stopped(&sandbox, meeting)?;
-        let output = run(&sandbox, &["--json", "lock"])?;
+        let output = run_listed(&sandbox, &["--json", "lock"])?;
         assert_eq!(
             output.status.code(),
             Some(0),
@@ -783,15 +776,13 @@ fn lock_merges_a_rebuilt_recipe_beside_a_new_dataset_by_itself() -> Result {
         );
         assert_eq!(
             merge[format!("from_{b_side}")],
-            serde_json::json!(["a-src", "b-mk"]),
+            serde_json::json!(["a-src"]),
             "{meeting:?}"
         );
         let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
-        for name in ["a-src", "b-mk"] {
-            assert_eq!(table(&lock, name)?, table(&b, name)?, "{meeting:?}");
-        }
+        assert_eq!(table(&lock, "a-src")?, table(&b, "a-src")?, "{meeting:?}");
         assert_eq!(table(&lock, "c-new")?, table(&a, "c-new")?, "{meeting:?}");
-        succeeded(&run(&sandbox, &["lock", "--check"])?)?;
+        succeeded(&run_listed(&sandbox, &["lock", "--check"])?)?;
         abandon(&sandbox)?;
     }
     assert_eq!(
@@ -799,142 +790,6 @@ fn lock_merges_a_rebuilt_recipe_beside_a_new_dataset_by_itself() -> Result {
         asked,
         "a merge asks no server"
     );
-    Ok(())
-}
-
-/// [`rebuilt_on_b`], and branch a makes b-mk another way, built and committed. none without git.
-fn remade_on_a(sandbox: &Sandbox, server: &Server) -> Result<Option<()>> {
-    if rebuilt_on_b(sandbox, server)?.is_none() {
-        return Ok(None);
-    }
-    let manifest = sandbox.work().join("data.toml");
-    let text = fs::read_to_string(&manifest)?.replace(
-        "\"copy\", \"{a-src}\"",
-        "\"write\", \"made.txt\", \"by a\", \"{a-src}\"",
-    );
-    fs::write(&manifest, text)?;
-    succeeded(&building(sandbox, &["build"])?)?;
-    ok(sandbox, &["add", "."])?;
-    ok(sandbox, &["commit", "-qm", "make b-mk another way"])?;
-    Ok(Some(()))
-}
-
-/// a changes b-mk's command and b upgrades its input, and git merges b's input into a's side of
-/// the conflict, which would pin a's files as made from b's input.
-#[test]
-fn a_choice_takes_the_whole_pin_its_branch_committed() -> Result {
-    let sandbox = Sandbox::new()?;
-    let input = upstream()?;
-    sandbox.allow(&input.url);
-    if remade_on_a(&sandbox, &input)?.is_none() {
-        return Ok(());
-    }
-    let asked = input.requests().len();
-    for (side, branch) in [("ours", "a"), ("theirs", "b")] {
-        stopped(&sandbox, &["merge", "-q", "b"])?;
-        let output = run(&sandbox, &["--json", "lock", &format!("--{side}"), "b-mk"])?;
-        succeeded(&output)?;
-        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
-        assert_eq!(
-            table(&lock, "b-mk")?,
-            table(&shown(&sandbox, &format!("{branch}:data.lock"))?, "b-mk")?,
-            "--{side}"
-        );
-        assert_eq!(
-            table(&lock, "a-src")?,
-            table(&shown(&sandbox, "b:data.lock")?, "a-src")?
-        );
-        abandon(&sandbox)?;
-    }
-    assert_eq!(input.requests().len(), asked, "a merge asks no server");
-    Ok(())
-}
-
-/// a project making b-mk from a-src by copying it, built and committed on main. branch b runs the
-/// step another way that makes the same files, so b-mk's list keeps its name; branch a makes other
-/// files, so its rebuild replaces the list and its commit deletes the old one. none without git.
-fn relisted_on_a(sandbox: &Sandbox, server: &Server) -> Result<Option<String>> {
-    if git(sandbox, &sandbox.work(), &["init", "-q"])?.is_none() {
-        return Ok(None);
-    }
-    succeeded(&run(sandbox, &["add", &server.url, "--as", "a-src"])?)?;
-    let manifest = sandbox.work().join("data.toml");
-    let text = fs::read_to_string(&manifest)?;
-    let step = "run = [\"recipe-step\", \"copy\", \"{a-src}\", \"{out}\"]";
-    fs::write(
-        &manifest,
-        format!("{text}\n[datasets.b-mk]\nfrom = [\"a-src\"]\n{step}\n"),
-    )?;
-    succeeded(&building(sandbox, &["build"])?)?;
-    ok(sandbox, &["add", "."])?;
-    ok(sandbox, &["commit", "-qm", "recipe"])?;
-    let parts = || -> Result<Vec<String>> {
-        let mut parts: Vec<String> = fs::read_dir(sandbox.work().join("data.lock.d"))?
-            .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
-            .collect::<Result<_>>()?;
-        parts.sort();
-        Ok(parts)
-    };
-    let listed = parts()?;
-    let rewrite = |run: &str, why: &str| -> Result {
-        let text = fs::read_to_string(&manifest)?.replace(step, run);
-        fs::write(&manifest, text)?;
-        succeeded(&building(sandbox, &["build"])?)?;
-        ok(sandbox, &["add", "."])?;
-        ok(sandbox, &["commit", "-qm", why])?;
-        Ok(())
-    };
-    ok(sandbox, &["checkout", "-qb", "b"])?;
-    rewrite(
-        "run = [\"recipe-step\", \"say\", \"1\", \"{a-src}\", \"{out}\"]",
-        "say more, make the same",
-    )?;
-    assert_eq!(parts()?, listed, "the same files keep their list");
-    ok(sandbox, &["checkout", "-qb", "a", "main"])?;
-    rewrite(
-        "run = [\"recipe-step\", \"write\", \"made.txt\", \"by a\", \"{a-src}\", \"{out}\"]",
-        "make other files",
-    )?;
-    let [old] = listed.as_slice() else {
-        return Err("b-mk has one list part".into());
-    };
-    assert!(!parts()?.contains(old), "a's rebuild replaced {old}");
-    Ok(Some(format!("data.lock.d/{old}")))
-}
-
-/// git's merge deletes the list a's rebuild replaced, which b's b-mk still names. keeping b's
-/// side, as ours or theirs in a merge or a rebase, brings the list back from b's commit.
-#[test]
-fn keeping_a_side_brings_back_the_list_the_merge_deleted() -> Result {
-    let sandbox = Sandbox::new()?;
-    let input = Server::start("/in.txt", vec![file(b"one\n", "\"1\"")])?;
-    sandbox.allow(&input.url);
-    let Some(old) = relisted_on_a(&sandbox, &input)? else {
-        return Ok(());
-    };
-    let b = shown(&sandbox, "b:data.lock")?;
-    let meetings: [(&str, &[&str], &str); 3] = [
-        ("a", &["merge", "-q", "b"], "theirs"),
-        ("b", &["merge", "-q", "a"], "ours"),
-        ("b", &["rebase", "-q", "a"], "theirs"),
-    ];
-    for (on, meeting, b_side) in meetings {
-        ok(&sandbox, &["checkout", "-q", on])?;
-        stopped(&sandbox, meeting)?;
-        assert!(!sandbox.work().join(&old).exists(), "{meeting:?}");
-        let output = run(&sandbox, &["lock", &format!("--{b_side}"), "b-mk"])?;
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{meeting:?}: {}",
-            text(&output.stderr)?
-        );
-        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
-        assert_eq!(table(&lock, "b-mk")?, table(&b, "b-mk")?, "{meeting:?}");
-        assert!(sandbox.work().join(&old).is_file(), "{meeting:?}");
-        succeeded(&run(&sandbox, &["lock", "--check"])?)?;
-        abandon(&sandbox)?;
-    }
     Ok(())
 }
 
@@ -1081,38 +936,6 @@ fn a_side_chosen_wrong_is_chosen_again_after_git_checkout_m() -> Result {
         "{}",
         text(&outside.stderr)?
     );
-    Ok(())
-}
-
-/// a's b-mk was made from the a-src that b upgraded, so keeping it beside b's a-src leaves it
-/// stale, and the merge says so with the build that makes it again; b's b-mk is not stale.
-#[test]
-fn a_merge_names_the_recipes_it_left_stale() -> Result {
-    let sandbox = Sandbox::new()?;
-    let input = upstream()?;
-    sandbox.allow(&input.url);
-    if remade_on_a(&sandbox, &input)?.is_none() {
-        return Ok(());
-    }
-    for (side, stale) in [("ours", true), ("theirs", false)] {
-        stopped(&sandbox, &["merge", "-q", "b"])?;
-        let output = run(&sandbox, &["--json", "lock", &format!("--{side}"), "b-mk"])?;
-        succeeded(&output)?;
-        let document = json(&output)?;
-        let warned = document["warnings"]
-            .as_array()
-            .ok_or("no warnings")?
-            .iter()
-            .any(|warning| {
-                warning["kind"] == "build.changed"
-                    && warning["message"] == "b-mk changed since it was built: a-src changed"
-            });
-        assert_eq!(warned, stale, "--{side}: {document}");
-        abandon(&sandbox)?;
-    }
-    stopped(&sandbox, &["merge", "-q", "b"])?;
-    let told = text(&run(&sandbox, &["lock", "--ours", "b-mk"])?.stderr)?;
-    assert!(told.contains("run `fetchloom build b-mk`"), "{told}");
     Ok(())
 }
 

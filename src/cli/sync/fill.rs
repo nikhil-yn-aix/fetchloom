@@ -60,14 +60,10 @@ impl Loop<'_> {
         let Some(mut old) = old else {
             return Ok((None, given, carried));
         };
-        // a dataset waiting for its list keeps its entry while data.toml has it as the same kind;
-        // otherwise it is relocked as one data.lock does not pin
-        old.waiting.retain(|waiting| {
-            manifest
-                .datasets
-                .get(&waiting.name)
-                .is_some_and(|entry| entry.recipe().is_some() == waiting.made())
-        });
+        // a dataset waiting for its list keeps its entry while data.toml has it; otherwise it is
+        // relocked as one data.lock does not pin
+        old.waiting
+            .retain(|waiting| manifest.datasets.contains_key(&waiting.name));
         carried.waiting.clone_from(&old.waiting);
         let named: HashSet<String> = given
             .iter()
@@ -86,7 +82,7 @@ impl Loop<'_> {
             let current = manifest
                 .datasets
                 .get(&name)
-                .filter(|entry| entry.source().is_some() && stated.pin.drift(entry).is_none());
+                .filter(|entry| stated.pin.drift(entry).is_none());
             let changed = current.is_none() || upgrade.includes(&name) || named.contains(&name);
             if !changed && !self.fills {
                 carried.stated.push(stated);
@@ -134,8 +130,7 @@ impl Loop<'_> {
             let extract = manifest
                 .datasets
                 .get(stated.name())
-                .and_then(|entry| entry.source())
-                .is_some_and(|source| source.extract);
+                .is_some_and(|entry| entry.source.extract);
             jobs.extend(self::jobs(stated, listing, extract));
         }
         let fetched = self.download(jobs).await?;

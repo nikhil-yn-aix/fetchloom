@@ -166,14 +166,13 @@ def sync(
     warning names the file beside it that keeps the changed bytes.
 
     ``strict=True`` raises :class:`Error` with kind ``data.not_ready`` and code 1, as
-    ``sync --strict`` does, when the data is not ready to use afterwards: a file it kept, a
-    recipe's result not on this machine, or a dataset data.lock does not pin as data.toml
-    asks, each named in ``details`` with what makes it ready. ``yes=True`` approves a
+    ``sync --strict`` does, when the data is not ready to use afterwards: a file it kept, or a
+    dataset data.lock does not pin as data.toml asks, each named in ``details`` with what makes
+    it ready. ``yes=True`` approves a
     download above 10 GiB, or the size the ``ask_above`` setting gives, which otherwise raises
     kind ``unconfirmed``. ``offline=True`` prevents network requests. ``locked=True`` raises kind
     ``lock.outdated`` instead of updating a missing or out-of-date data.lock, for the named
-    datasets alone when ``names`` names some, and kind ``build.needed`` for a recipe data.lock
-    does not pin as building it now would make, which only ``fetchloom build`` changes.
+    datasets alone when ``names`` names some.
     ``verify=True`` checks the SHA-256 of every placed file and of each cached file it places, as
     ``sync --verify`` does, and puts back or downloads again one whose bytes changed though its
     size and time did not.

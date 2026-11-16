@@ -39,19 +39,14 @@ on windows a folder takes its permissions from the folders above it, and fetchlo
   projects/<sha256 of project root>.json
   changed/<object sha256>
   imported/<sha256 of the list>
-  builds/<key sha256>/<tree sha256>
-  builds/<key sha256>/lock
   tmp/<random>.stage/lock
   tmp/<random>.stage/<random>.new
-  tmp/<random>.build/lock
-  tmp/<random>.build/in/<dataset>/...
-  tmp/<random>.build/out/...
   tmp/
 ```
 
 `CACHEDIR.TAG` lets backup tools skip the cache, and on macos the cache is also kept out of spotlight and time machine. `gc.lock` is empty; commands that use the cache share a lock on it and `cache gc` takes it alone, as [runs that use the cache](../commands/cache.md#runs-that-use-the-cache) says. `reminded` is empty; its modification time is when fetchloom last [checked for bytes no project needs](../commands/cache.md#reminder).
 
-`objects/` holds the files, read-only. a file whose modification time moved since it entered the cache was written since, and is hashed before use. `tmp/` holds work in progress: an archive's files while they unpack, each recipe step's `in/` and `out/` folders, which only you may enter on linux and macos where the disk keeps folder permissions, and records being written. on linux and macos, when other users may write `tmp/`, a step's folders are in the folder `TMPDIR` names instead, as [recipes](recipes.md#the-step) says. a run that was killed leaves its folder there, and the next run or gc removes it.
+`objects/` holds the files, read-only. a file whose modification time moved since it entered the cache was written since, and is hashed before use. `tmp/` holds work in progress: an archive's files while they unpack, and records being written. a run that was killed leaves its folder there, and the next run or gc removes it.
 
 ## URL and partial records
 
@@ -75,7 +70,6 @@ a link is named by a fingerprint, the SHA-256 of its text, so a secret in a sign
 
 - `stated/md5/` maps an MD5 a source stated for a link to the SHA-256 and size of the bytes that matched it, as `<sha256> <size>`, with the S3 version after them when the bucket keeps versions, so a later download of that link can be skipped.
 - `unpacked/` holds what each archive unpacked to, in the [tree encoding](data-lock.md#the-tree-hash), checked against the `unpacks_to` data.lock pins.
-- `builds/<key>/<tree>` records what a recipe's step made, in the same encoding, under its key, so a later build can reuse it. on linux and macos a build reuses only records you wrote and no one else may change.
 - `projects/` registers each project a sync placed files for, as JSON naming its folder, so `cache gc` knows what it needs. a record that is a link, a fifo or anything but a small plain file is never read: `cache`, `cache gc` and `drop` stop with `local.io`, exit 50, and name it, and removing it is safe, since a sync in a project writes that project's record again.
 - `imported/` lists the cached files an import or the removal of an import put or found there, one SHA-256 a line, one list a run. no source can give them back, so `cache gc` counts them apart and asks before `--now` frees them, as [gc](../commands/cache.md#gc) says. gc drops a list once none of its files is left.
 - `changed/` holds a mark for each cached file found changed, as by an edit through a hardlink, naming the copies found changed, so sync can put each project's link back. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains how they are used.

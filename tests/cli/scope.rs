@@ -291,8 +291,7 @@ fn a_locked_path_checks_only_its_dataset() -> Result {
     Ok(())
 }
 
-/// a read-only checkout, which syncs without the project's hold, counts the same, and b counts
-/// none once it has `place = false`.
+/// a read-only checkout, which syncs without the project's hold, counts the same.
 #[test]
 fn a_settled_named_sync_counts_only_its_datasets() -> Result {
     let sandbox = Sandbox::new()?;
@@ -319,16 +318,5 @@ fn a_settled_named_sync_counts_only_its_datasets() -> Result {
         crate::project::writable(&sandbox.work(), true)?;
         assert_eq!(read_only?, 2);
     }
-    let manifest = sandbox.work().join("data.toml");
-    let written = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        written.replace("[datasets.b]\n", "[datasets.b]\nplace = false\n"),
-    )?;
-    let retired = sandbox.run(&["sync"])?;
-    assert_eq!(retired.status.code(), Some(0), "{}", text(&retired.stderr)?);
-    assert_eq!(unchanged(&["--json", "sync", "b"])?, 0);
-    assert_eq!(unchanged(&["--json", "sync", "a"])?, 2);
-    assert_eq!(unchanged(&["--json", "sync"])?, 2);
     Ok(())
 }

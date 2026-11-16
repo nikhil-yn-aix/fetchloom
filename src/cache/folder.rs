@@ -128,7 +128,7 @@ impl Folder {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt;
-            Ok(super::staging::names_at(&self.handle)?
+            Ok(names_at(&self.handle)?
                 .into_iter()
                 .map(|name| std::ffi::OsString::from_vec(name.into_bytes()))
                 .collect())
@@ -395,6 +395,19 @@ fn checked(root: &Path, below: &Path, make: bool) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// the names in the folder `folder` holds open.
+#[cfg(unix)]
+fn names_at(folder: &File) -> io::Result<Vec<std::ffi::CString>> {
+    let mut names = Vec::new();
+    for entry in rustix::fs::Dir::read_from(folder)? {
+        let entry = entry?;
+        if entry.file_name() != c"." && entry.file_name() != c".." {
+            names.push(entry.file_name().to_owned());
+        }
+    }
+    Ok(names)
 }
 
 #[cfg(test)]

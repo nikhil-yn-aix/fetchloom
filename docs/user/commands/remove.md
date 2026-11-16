@@ -35,8 +35,6 @@ error: precious was imported from files, and no source can give them back, so re
 
 the removal records the import's files in the cache, so [cache gc](cache.md#gc) asks again before `--now` frees them. a dry run asks nothing.
 
-a dataset a [recipe](../guides/recipes.md) is made from is not removed while any recipe reads it, unless that recipe is removed with it: `remove` exits 2, naming every recipe that reads it, as `clean and count are made from iris`, and changes nothing. removing a recipe drops its pin from `data.lock` too.
-
 nothing is downloaded. a file sync [adopted](sync.md#already-in-place) counts as placed, so `remove` deletes it if unchanged, and warns, since you put it there: `warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it`. removal compares the saved size and modification time, so touching a file keeps it even when its bytes still match the pin.
 
 a dataset folder that still holds files fetchloom did not place, such as your own outputs or the `.changed` copies sync kept, stays with them, and remove names it (stderr), with `-v` naming each file:
@@ -68,7 +66,7 @@ the files a real removal would keep, and the folders they keep, are named in war
 
 ## exit codes
 
-0 means removal completed, even when edited files remain. an import's removal that no yes answered exits 1. invalid usage exits 2, as does a dataset a recipe reads; local or invalid-project failures use 50. `remove` with no name exits 2 too, and lists the datasets it could remove:
+0 means removal completed, even when edited files remain. an import's removal that no yes answered exits 1. invalid usage exits 2; local or invalid-project failures use 50. `remove` with no name exits 2 too, and lists the datasets it could remove:
 
 ```text
 error: remove needs <name>

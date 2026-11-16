@@ -282,77 +282,27 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
     Ok(())
 }
 
-/// data.lock's table and one list part for `name`, a recipe's result holding `files` made from
-/// iris, as fetchloom writes them: the table's text, the part's path in the project and its text.
-fn result(name: &str, files: &[(&str, &[u8])]) -> (String, String, String) {
-    let mut tree = String::new();
-    for (path, bytes) in files {
-        let _ = writeln!(tree, "{path}\t{}\t{}", bytes.len(), sha256_hex(bytes));
-    }
-    let part_text = format!("path\tsize\tsha256\n{tree}");
-    let listed = sha256_hex(part_text.as_bytes());
-    let part = format!("data.lock.d/{name}.{}.tsv.zst", &listed[..12]);
-    let bytes: usize = files.iter().map(|(_, bytes)| bytes.len()).sum();
-    let table = format!(
-        "\n[[dataset]]\nname = \"{name}\"\nfrom = [\n  {{ name = \"iris\", content = \"sha256:{}\" }},\n]\nrun = [\"python3\", \"clean.py\", \"{{iris}}\", \"{{out}}\"]\ncode = []\nkey = \"sha256:{}\"\nlocked = \"2026-11-10T00:00:00Z\"\ntree = \"sha256:{}\"\nfiles_in = [\"{part}\"]\nfile_count = {}\nfile_bytes = {bytes}\nfiles_sha256 = \"sha256:{listed}\"\n",
-        sha256_hex(b"iris"),
-        sha256_hex(b"key"),
-        sha256_hex(tree.as_bytes()),
-        files.len(),
-    );
-    (table, part, part_text)
-}
-
-/// only `fetchloom build` makes a result, so another command writing data.lock keeps its pin
-/// while data.toml has the recipe, and a damaged list's refusal gives advice that works.
+/// a list in data.lock.d whose bytes changed is refused with advice that works.
 #[test]
-fn a_pinned_recipe_result_stays_and_a_damaged_list_is_refused() -> Result {
+fn a_damaged_list_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        "/iris.csv",
-        vec![file(b"iris", "\"v1\""), file(b"iris, again", "\"v2\"")],
-    )?;
+    let server = Server::start("/iris.csv", vec![file(b"iris", "\"v1\"")])?;
     sandbox.allow(&server.url);
-    assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
-    let manifest = sandbox.work().join("data.toml");
-    let recipe = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]\n";
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("FETCHLOOM_TEST_INLINE", "0")
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let part = fs::read_dir(sandbox.work().join("data.lock.d"))?
+        .next()
+        .ok_or("no list beside data.lock")??
+        .path();
+    let listed = String::from_utf8(zstd::decode_all(fs::read(&part)?.as_slice())?)?;
+    let (iris, other) = (sha256_hex(b"iris"), sha256_hex(b"irix"));
+    assert!(listed.contains(&iris), "{listed}");
     fs::write(
-        &manifest,
-        format!("{}{recipe}", fs::read_to_string(&manifest)?),
-    )?;
-    let (table, part, part_text) = result("clean", &[("iris.csv", b"abc")]);
-    let lock = sandbox.work().join("data.lock");
-    fs::create_dir(sandbox.work().join("data.lock.d"))?;
-    fs::write(
-        sandbox.work().join(&part),
-        zstd::encode_all(part_text.as_bytes(), 9)?,
-    )?;
-    fs::write(&lock, format!("{}{table}", fs::read_to_string(&lock)?))?;
-
-    let upgraded = sandbox.run(&["lock", "--upgrade"])?;
-    assert_eq!(
-        upgraded.status.code(),
-        Some(0),
-        "{}",
-        text(&upgraded.stderr)?
-    );
-    let rewritten = fs::read_to_string(&lock)?;
-    assert!(
-        rewritten.contains("size = 11"),
-        "the upgrade wrote data.lock: {rewritten}"
-    );
-    assert!(
-        rewritten.starts_with(&format!("version = 1\n{table}")),
-        "{rewritten}"
-    );
-    assert!(sandbox.work().join(&part).exists());
-    let status = sandbox.run(&["--json", "status"])?;
-    assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
-
-    let (_, _, other) = result("clean", &[("iris.csv", b"abd")]);
-    fs::write(
-        sandbox.work().join(&part),
-        zstd::encode_all(other.as_bytes(), 9)?,
+        &part,
+        zstd::encode_all(listed.replace(&iris, &other).as_bytes(), 9)?,
     )?;
     let damaged = sandbox.run(&["--json", "status"])?;
     assert_eq!(damaged.status.code(), Some(50));

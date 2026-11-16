@@ -207,10 +207,10 @@ fn a_second_sync_does_nothing_at_all() -> Result {
     Ok(())
 }
 
-/// adopting files that hold the pinned bytes is work, and `place = false` has nothing to be in
-/// place, so neither ends with all files in place and nothing to do.
+/// adopting files that hold the pinned bytes is work, so it never ends with all files in place and
+/// nothing to do.
 #[test]
-fn a_sync_that_adopts_or_places_nothing_says_so() -> Result {
+fn a_sync_that_adopts_says_so() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
@@ -228,30 +228,6 @@ fn a_sync_that_adopts_or_places_nothing_says_so() -> Result {
         adopted.ends_with("     Synced 1 dataset into data\n"),
         "{adopted}"
     );
-    let manifest = sandbox.work().join("data.toml");
-    let written = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        written.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1),
-    )?;
-    let retired = sandbox.run(&["sync"])?;
-    assert_eq!(retired.status.code(), Some(0), "{}", text(&retired.stderr)?);
-    for (args, said) in [
-        (
-            &["sync", "iris"][..],
-            "         Ok iris is not placed · place = false in data.toml, nothing to do\n",
-        ),
-        (
-            &["sync"][..],
-            "         Ok nothing to place in data, nothing to do\n",
-        ),
-        (
-            &["sync", "--dry-run", "iris"][..],
-            "         Ok iris is not placed · place = false in data.toml; dry run, nothing was changed\n",
-        ),
-    ] {
-        assert_eq!(text(&sandbox.run(args)?.stderr)?, said, "{args:?}");
-    }
     Ok(())
 }
 
@@ -380,11 +356,11 @@ fn status_rows_after_c_name_its_project() -> Result {
         servers.push(server);
     }
     let work = sandbox.work();
-    // b leaves data.toml, and c the data folder
+    // b leaves data.toml, so its row and its file's row each name a sync
     fs::write(
         work.join("data.toml"),
         format!(
-            "[datasets.a]\nref = \"{}\"\n\n[datasets.c]\nref = \"{}\"\nplace = false\n",
+            "[datasets.a]\nref = \"{}\"\n\n[datasets.c]\nref = \"{}\"\n",
             servers[0].url, servers[2].url
         ),
     )?;
@@ -396,7 +372,7 @@ fn status_rows_after_c_name_its_project() -> Result {
         .output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let rows = text(&output.stdout)?;
-    assert_eq!(rows.lines().count(), 3, "{rows}");
+    assert_eq!(rows.lines().count(), 2, "{rows}");
     for row in rows.lines() {
         let named = named_folder(row, " sync`").ok_or_else(|| format!("no -C in {row}"))?;
         assert_eq!(fs::canonicalize(named)?, project, "{row}");
@@ -599,14 +575,13 @@ fn every_command_a_run_with_c_suggests_names_the_project() -> Result {
     let project = fs::canonicalize(&work)?;
     let elsewhere = sandbox.folder("elsewhere")?;
     let more = format!("\n[datasets.wine]\nref = \"{wine}\"\n");
-    let cases: [WithC<'_>; 9] = [
+    let cases: [WithC<'_>; 8] = [
         (None, vec!["add", &iris], " path iris`"),
         (
             None,
             vec!["add", &wine, "--as", "iris"],
             " remove iris` first",
         ),
-        (None, vec!["build", "iris"], " sync` places it"),
         (None, vec!["exclude", "data/iris/iris.csv"], " remove iris`"),
         (None, vec!["path", "/iris"], " path iris` or"),
         (
@@ -1019,81 +994,6 @@ fn status_names_lists_git_does_not_have() -> Result {
     Ok(())
 }
 
-/// the warnings of the json document `value` about recipe code git does not have.
-fn code_warnings(value: &serde_json::Value) -> Vec<String> {
-    crate::support::warned(value)
-        .into_iter()
-        .filter(|warning| warning.contains("code of clean"))
-        .collect()
-}
-
-/// a recipe's code is in its key, so a clone needs all of it. what the code's hash skips, as
-/// `__pycache__`, is never named, and with no git on PATH status names nothing.
-#[test]
-fn status_names_recipe_code_git_does_not_have() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
-        return Ok(());
-    }
-    added(&sandbox, &server)?;
-    let work = sandbox.work();
-    let manifest = work.join("data.toml");
-    let written = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        format!(
-            "{written}\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"prep.py\", \"{{iris}}\", \"{{out}}\"]\ncode = [\"prep.py\", \"lib\"]\n"
-        ),
-    )?;
-    fs::create_dir_all(work.join("lib").join("__pycache__"))?;
-    for (path, bytes) in [
-        ("prep.py", "print(1)\n"),
-        ("lib/a.py", "a = 1\n"),
-        ("lib/new.py", "b = 2\n"),
-        ("lib/model.bin", "weights"),
-        ("lib/__pycache__/a.cpython-312.pyc", "cache"),
-    ] {
-        fs::write(work.join(path), bytes)?;
-    }
-    let ignore = fs::read_to_string(work.join(".gitignore"))?;
-    fs::write(work.join(".gitignore"), format!("{ignore}*.bin\n"))?;
-    let commit = ["data.toml", "data.lock", ".gitignore", "lib/a.py"];
-    crate::merge::ok(&sandbox, &[&["add"][..], &commit].concat())?;
-    crate::merge::ok(&sandbox, &["commit", "-qm", "clean"])?;
-
-    let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(
-        code_warnings(&status),
-        [
-            "git does not have 2 files of the code of clean, such as prep.py; run `git add prep.py lib/new.py`, then commit them, since a clone without them cannot build clean from the same code",
-            ".gitignore leaves out lib/model.bin, code of clean; a clone without it cannot build clean from the same code: commit it with `git add -f lib/model.bin`, or move it out of the recipe's code",
-        ]
-    );
-    let told = sandbox.run(&["-v", "status"])?;
-    let stderr = text(&told.stderr)?;
-    assert!(
-        stderr
-            .contains("warning: git does not have 2 files of the code of clean, such as prep.py\n"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("            lib/new.py\n"), "{stderr}");
-    assert!(!stderr.contains("__pycache__"), "{stderr}");
-    let unfound = sandbox
-        .command(&["--json", "status"])
-        .env("PATH", "")
-        .output()?;
-    assert_eq!(code_warnings(&json(&unfound)?), Vec::<String>::new());
-
-    crate::merge::ok(&sandbox, &["add", "prep.py", "lib"])?;
-    let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(code_warnings(&status).len(), 1, "{status}");
-    crate::merge::ok(&sandbox, &["add", "-f", "lib/model.bin"])?;
-    let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(code_warnings(&status), Vec::<String>::new());
-    Ok(())
-}
-
 /// a script is told by a warning and a person at a terminal by the `next:` line.
 #[test]
 fn a_new_list_git_does_not_have_is_named_at_the_end() -> Result {
@@ -1248,12 +1148,12 @@ fn a_locked_run_never_offers_a_fix_that_changes_data_lock() -> Result {
     let sandbox = Sandbox::new()?;
     let changed = || file(b"species\nsetosa\n", "\"v2\"");
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), changed()])?;
-    crate::build::with(&sandbox, &server, crate::recipes::WRITE)?;
+    added(&sandbox, &server)?;
     let work = sandbox.work();
     let (manifest, pins) = (work.join("data.toml"), work.join("data.lock"));
     let (asked, pinned) = (fs::read_to_string(&manifest)?, fs::read_to_string(&pins)?);
     let stops = |args: &[&str], kind: &str| -> Result {
-        let output = crate::build::build(&sandbox, args)?;
+        let output = sandbox.run(args)?;
         let error = &json(&output)?["errors"][0];
         assert_eq!(error["kind"], kind, "{args:?}: {error}");
         assert_eq!(error["fix"], serde_json::Value::Null, "{args:?}: {error}");
@@ -1261,8 +1161,6 @@ fn a_locked_run_never_offers_a_fix_that_changes_data_lock() -> Result {
         Ok(())
     };
 
-    stops(&["--json", "sync", "--locked"], "build.needed")?;
-    stops(&["--json", "path", "--locked", "clean"], "build.needed")?;
     fs::write(
         &manifest,
         asked.replacen(
@@ -1274,7 +1172,6 @@ fn a_locked_run_never_offers_a_fix_that_changes_data_lock() -> Result {
     for args in [
         &["--json", "sync", "--locked"][..],
         &["--json", "path", "--locked", "iris"],
-        &["--json", "build", "--locked"],
     ] {
         stops(args, "lock.outdated")?;
     }
@@ -1411,35 +1308,25 @@ fn a_data_folder_git_tracks_files_in_is_not_ignored() -> Result {
     Ok(())
 }
 
-/// a project begun from a hand-written data.toml gets the ignore rule from its first build, sync
-/// or add outside git, as one an add starts does, so a later `git init` and `git add -A` commit no
-/// data file.
+/// a project begun from a hand-written data.toml gets the ignore rule from its first sync or add
+/// outside git, as one an add starts does, so a later `git init` and `git add -A` commit no data
+/// file.
 #[test]
 fn a_hand_written_project_gets_the_ignore_rule_from_its_first_run() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
-    for (command, data_dir) in [("build", "data"), ("sync", "data"), ("add", "inputs")] {
+    for (command, data_dir) in [("sync", "data"), ("add", "inputs")] {
         let sandbox = Sandbox::new()?;
         sandbox.allow(&server.url);
         let work = sandbox.work();
-        let output = match command {
-            "build" => {
-                fs::write(
-                    work.join("data.toml"),
-                    "[datasets.sim]\nrun = [\"recipe-step\", \"seeded\", \"draws.csv\", \"{out}\"]\nenv = { SEED = \"7\" }\n",
-                )?;
-                crate::build::building_in(&sandbox, &work, &["build"])?.output()?
-            }
-            "sync" => {
-                fs::write(
-                    work.join("data.toml"),
-                    format!("[datasets.iris]\nref = \"{}\"\n", server.url),
-                )?;
-                sandbox.run(&["sync"])?
-            }
-            _ => {
-                fs::write(work.join("data.toml"), "[project]\ndata_dir = \"inputs\"\n")?;
-                sandbox.run(&["add", &server.url])?
-            }
+        let output = if command == "sync" {
+            fs::write(
+                work.join("data.toml"),
+                format!("[datasets.iris]\nref = \"{}\"\n", server.url),
+            )?;
+            sandbox.run(&["sync"])?
+        } else {
+            fs::write(work.join("data.toml"), "[project]\ndata_dir = \"inputs\"\n")?;
+            sandbox.run(&["add", &server.url])?
         };
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(0), "{command}: {stderr}");
@@ -1702,22 +1589,6 @@ fn status_lists_what_differs() -> Result {
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(document["result"]["missing"][0], "data/iris/iris.csv");
     assert_eq!(document["result"]["extra"][0], "data/iris/notes.txt");
-    // a dataset set to place = false names the files the next sync removes, each with -v
-    let synced = sandbox.run(&["sync"])?;
-    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    let manifest = sandbox.work().join("data.toml");
-    let written = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        written.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1),
-    )?;
-    let retiring = sandbox.run(&["-v", "status"])?;
-    assert_eq!(
-        text(&retiring.stdout)?,
-        " Not placed iris · place = false in data.toml, so `fetchloom sync` removes its file from data/iris\n            data/iris/iris.csv\n      Extra data/iris/notes.txt\n"
-    );
-    let stderr = text(&retiring.stderr)?;
-    assert!(!stderr.contains("data/iris/"), "{stderr}");
     Ok(())
 }
 
@@ -4166,79 +4037,6 @@ fn a_size_the_pinned_bytes_do_not_have_stops_until_data_lock_is_restored() -> Re
     Ok(())
 }
 
-/// a fresh clone of a project with a recipe, as a CI runner checks it out: data.toml, data.lock,
-/// data.lock.d and the recipe's code.
-fn fresh_with_recipe(sandbox: &Sandbox, name: &str) -> Result<std::path::PathBuf> {
-    let folder = clone(sandbox, name)?;
-    fs::copy(sandbox.work().join("clean.py"), folder.join("clean.py"))?;
-    fs::create_dir_all(folder.join("data.lock.d"))?;
-    for part in fs::read_dir(sandbox.work().join("data.lock.d"))? {
-        let part = part?;
-        fs::copy(
-            part.path(),
-            folder.join("data.lock.d").join(part.file_name()),
-        )?;
-    }
-    Ok(folder)
-}
-
-/// `--locked` checks data.lock alone, so a pinned result no cache or mirror holds is left out with
-/// a warning, as a plain sync leaves it, and `--strict` fails for it as for any data not ready. a
-/// source that changed iris still fails the job with the mismatch.
-#[test]
-fn a_locked_sync_leaves_out_a_result_found_nowhere_as_a_plain_sync_does() -> Result {
-    let sandbox = Sandbox::new()?;
-    let changed: &[u8] = b"sepal_length,species\n9.9,changed\n";
-    let server = Server::start(
-        PATH,
-        vec![
-            file(IRIS, "\"v1\""),
-            file(IRIS, "\"v1\""),
-            file(changed, "\"v2\""),
-        ],
-    )?;
-    crate::build::with_recipe(&sandbox, &server)?;
-    crate::build::pin_clean(&sandbox, crate::build::CODE, &[])?;
-    let runner = fresh_with_recipe(&sandbox, "runner")?;
-    let cache = sandbox.folder("runner-cache")?;
-    let locked = |args: &[&str]| {
-        sandbox
-            .command_in(&runner, args)
-            .env("FETCHLOOM_CACHE", &cache)
-            .output()
-    };
-    let output = locked(&["--json", "sync", "--locked", "--yes"])?;
-    let document = json(&output)?;
-    assert_eq!(output.status.code(), Some(0), "{document}");
-    assert!(
-        crate::support::kinds(&document).contains(&"build.left_out"),
-        "{document}"
-    );
-    assert_eq!(document["result"]["placement"]["placed"], 1, "{document}");
-    assert_eq!(
-        document["result"]["placement"]["unbuilt"],
-        serde_json::json!(["clean"]),
-        "{document}"
-    );
-    assert_eq!(fs::read(runner.join("data/iris/iris.csv"))?, IRIS);
-    let strict = locked(&["--json", "sync", "--locked", "--strict", "--yes"])?;
-    let document = json(&strict)?;
-    assert_eq!(strict.status.code(), Some(1), "{document}");
-    assert_eq!(
-        document["errors"][0]["kind"], "data.not_ready",
-        "{document}"
-    );
-    let drifted = fresh_with_recipe(&sandbox, "drifted")?;
-    let output = sandbox
-        .command_in(&drifted, &["--json", "sync", "--locked", "--yes"])
-        .env("FETCHLOOM_CACHE", sandbox.folder("drifted-cache")?)
-        .output()?;
-    let document = json(&output)?;
-    assert_eq!(output.status.code(), Some(30), "{document}");
-    assert_eq!(document["errors"][0]["kind"], "integrity.mismatch");
-    Ok(())
-}
-
 /// a folder named data.toml still marks its project, so no command there suggests starting one.
 #[test]
 fn a_folder_named_data_toml_is_told_as_such() -> Result {
@@ -4429,16 +4227,16 @@ fn a_title_stays_as_written_when_data_lock_is_written_again() -> Result {
     Ok(())
 }
 
-/// fetchloom with `args` in `folder`, writing every source's list beside data.lock, with the step
-/// program on PATH.
+/// fetchloom with `args` in `folder`, writing every source's list beside data.lock.
 fn listing_in(
     sandbox: &Sandbox,
     folder: &std::path::Path,
     args: &[&str],
 ) -> Result<std::process::Output> {
-    let mut command = crate::build::building_in(sandbox, folder, args)?;
-    command.env("FETCHLOOM_TEST_INLINE", "0");
-    Ok(command.output()?)
+    Ok(sandbox
+        .command_in(folder, args)
+        .env("FETCHLOOM_TEST_INLINE", "0")
+        .output()?)
 }
 
 /// [`clone`] with every list of data.lock.d but `left_out`'s, as `git commit -a` leaves a new list
@@ -4471,7 +4269,7 @@ fn checked_missing(sandbox: &Sandbox, folder: &std::path::Path, name: &str, part
 }
 
 /// a clone that lacks the list of big, imported from files: big waits alone, so every command
-/// that pins, places or builds the rest works and writes data.lock as it was.
+/// that pins or places the rest works and writes data.lock as it was.
 #[test]
 fn a_clone_missing_an_import_list_waits_for_it_alone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -4487,14 +4285,6 @@ fn a_clone_missing_an_import_list_waits_for_it_alone() -> Result {
         )?;
         assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     }
-    let manifest = sandbox.work().join("data.toml");
-    let made = "\n[datasets.made]\nfrom = [\"small\"]\nrun = [\"recipe-step\", \"copy\", \"{small}\", \"{out}\"]\n";
-    fs::write(
-        &manifest,
-        format!("{}{made}", fs::read_to_string(&manifest)?),
-    )?;
-    let built = listing_in(&sandbox, &sandbox.work(), &["build"])?;
-    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
     let (clone, part) = clone_without(&sandbox, "big")?;
     let lock = fs::read(clone.join("data.lock"))?;
     for args in [
@@ -4502,7 +4292,6 @@ fn a_clone_missing_an_import_list_waits_for_it_alone() -> Result {
         &["sync", "--dry-run"],
         &["lock"],
         &["lock", "--dry-run"],
-        &["build"],
     ] {
         let output = listing_in(&sandbox, &clone, args)?;
         let stderr = text(&output.stderr)?;
@@ -4516,7 +4305,6 @@ fn a_clone_missing_an_import_list_waits_for_it_alone() -> Result {
         "{stderr}"
     );
     assert_eq!(fs::read(clone.join("data/small/c.csv"))?, b"c.csv");
-    assert_eq!(fs::read(clone.join("data/made/c.csv"))?, b"c.csv");
     assert!(!clone.join("data/big").exists());
     checked_missing(&sandbox, &clone, "big", &part)
 }

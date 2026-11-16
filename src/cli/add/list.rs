@@ -266,14 +266,11 @@ fn listed_entry(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
-    let files = match entry.source() {
-        Some(source) => engine::filter(&parsed.reference.shown(), &entry, source, listing),
-        None => Ok(listing.files.clone()),
-    }
-    .map_err(|error| match at {
-        Some(at) => links::on_line(error, at),
-        None => error,
-    })?;
+    let files =
+        engine::filter(&parsed.reference.shown(), &entry, listing).map_err(|error| match at {
+            Some(at) => links::on_line(error, at),
+            None => error,
+        })?;
     if let (Some(sha256), Some(at)) = (line.sha256, at) {
         let [file] = files.as_slice() else {
             return Err(Error::new(
@@ -316,15 +313,11 @@ fn same_settings(
     name: &str,
     at: &str,
 ) -> Result<(), Error> {
-    let alike = existing
-        .source()
-        .zip(wanted.source())
-        .is_some_and(|(existing, wanted)| {
-            existing.select == wanted.select
-                && existing.exclude == wanted.exclude
-                && existing.extract == wanted.extract
-        });
-    if alike {
+    let (existing, wanted) = (&existing.source, &wanted.source);
+    if existing.select == wanted.select
+        && existing.exclude == wanted.exclude
+        && existing.extract == wanted.extract
+    {
         return Ok(());
     }
     Err(Error::new(

@@ -5,11 +5,9 @@ use std::fs;
 
 use serde_json::json;
 
-use crate::build::{build, with};
-use crate::mirrors::{IRIS, mirror_of, web_mirror_of};
-use crate::recipes::{WRITE, object};
+use crate::mirrors::{IRIS, mirror_of};
 use crate::support::{
-    Result, Routes, Running, Sandbox, Server, edit, file, json, ok, reply, text, wait_until, zip_of,
+    Result, Routes, Running, Sandbox, edit, file, json, object, ok, reply, text, wait_until, zip_of,
 };
 
 /// a project in the sandbox's work folder whose dataset iris is iris.csv from the source it
@@ -298,67 +296,12 @@ fn a_changed_file_stays_and_is_named() -> Result {
     Ok(())
 }
 
-/// a recipe's result, which no source gives back, drops only where a folder mirror holds a copy
-/// that hashes to its pin: a web mirror answering at its size is not enough.
-#[test]
-fn a_result_drops_only_where_a_folder_mirror_holds_it() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        crate::project::PATH,
-        vec![file(crate::project::IRIS, "\"v1\"")],
-    )?;
-    with(&sandbox, &server, WRITE)?;
-    let built = build(&sandbox, &["build"])?;
-    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
-    let result = sandbox.work().join("data/clean/clean.csv");
-    let output = sandbox.run(&["--json", "drop", "clean"])?;
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
-    let error = &json(&output)?["errors"][0];
-    assert_eq!(
-        error["details"],
-        json!([
-            "clean/clean.csv · no folder mirror holds a copy of this file of a recipe's result that hashes to its pin"
-        ])
-    );
-    assert_eq!(error["kind"], "data.not_ready");
-    assert_eq!(
-        error["help"],
-        "`fetchloom push clean --to <folder>` keeps a copy on a folder mirror, then `fetchloom drop clean --mirror <folder>` frees it"
-    );
-    let web = web_mirror_of(&sandbox)?;
-    let output = sandbox
-        .command(&["--json", "drop", "clean", "--mirror"])
-        .arg(format!("{}/m", web.url))
-        .output()?;
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
-    assert!(result.exists());
-    let root = sandbox.folder("mirror")?;
-    ok(&sandbox
-        .command(&["push", "clean", "--yes", "--to"])
-        .arg(&root)
-        .output()?)?;
-    ok(&sandbox
-        .command(&["drop", "clean", "--mirror"])
-        .arg(&root)
-        .output()?)?;
-    assert!(!result.exists());
-    // no source gives a result back, so status names the folder mirror, or a build
-    let told = text(&sandbox.run(&["status"])?.stderr)?;
-    assert!(
-        told.contains(
-            "Dropped clean · freed on this machine; `fetchloom sync clean --mirror <folder>` brings it back from a folder mirror that holds it, or `fetchloom build clean` makes it again\n"
-        ),
-        "{told}"
-    );
-    Ok(())
-}
-
 #[test]
 fn gc_frees_what_only_a_dropped_dataset_pins() -> Result {
     let sandbox = Sandbox::new()?;
     let _source = iris(&sandbox)?;
     ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
-    // its bytes back in the cache, as a build that reads it brings them, are needed no more
+    // its bytes back in the cache are needed no more
     let cached = object(&sandbox.cache(), IRIS);
     fs::create_dir_all(cached.parent().ok_or("an object in no folder")?)?;
     fs::write(&cached, IRIS)?;
@@ -387,26 +330,6 @@ fn a_source_that_gives_no_answer_keeps_the_dataset_as_not_checked() -> Result {
         "iris stays on this machine, since 1 of its files could not be checked elsewhere"
     );
     assert!(sandbox.work().join("data/iris/iris.csv").exists());
-    Ok(())
-}
-
-/// a dataset of which nothing is on this machine has nothing to drop, which is no failure.
-#[test]
-fn a_dataset_with_nothing_here_has_nothing_to_drop() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        crate::project::PATH,
-        vec![file(crate::project::IRIS, "\"v1\"")],
-    )?;
-    with(&sandbox, &server, WRITE)?;
-    let output = sandbox.run(&["--json", "drop", "clean"])?;
-    ok(&output)?;
-    assert_eq!(json(&output)?["result"]["absent"], json!(["clean"]));
-    let told = text(&sandbox.run(&["drop", "clean"])?.stderr)?;
-    assert!(
-        told.contains("Skipped clean · not built yet, so there is nothing to drop\n"),
-        "{told}"
-    );
     Ok(())
 }
 
@@ -463,7 +386,7 @@ fn a_drop_in_a_copied_project_frees_the_files_in_place() -> Result {
 
 /// a drop that could not finish, cut short as a kill or a file that will not go cuts it, leaves its
 /// dataset dropped with files in the data folder: status says so in the dataset's line, with the
-/// drop that finishes it, and the sync that removes them says why, never that it has place = false.
+/// drop that finishes it, and the sync that removes them says why.
 #[test]
 fn a_drop_cut_short_is_told_as_one() -> Result {
     let sandbox = Sandbox::new()?;
@@ -507,7 +430,6 @@ fn a_drop_cut_short_is_told_as_one() -> Result {
         told.contains("Retired data/iris · 1 file a drop cut short left\n"),
         "{told}"
     );
-    assert!(!told.contains("place = false"), "{told}");
     assert!(
         told.contains("`fetchloom drop iris` frees what the cache still holds of it"),
         "{told}"
@@ -559,31 +481,6 @@ fn a_dropped_dataset_whose_bytes_came_back_is_freed_again() -> Result {
     assert_eq!(result["dropped"], json!(["iris"]), "{result}");
     assert_eq!(result["objects"], 1, "{result}");
     assert!(!cached.exists());
-    Ok(())
-}
-
-/// a build that only reaches a dataset dropped here, as a recipe's input, leaves it dropped: it
-/// neither fetches nor places it, with or without the recipe named.
-#[test]
-fn a_build_leaves_a_dropped_input_dropped() -> Result {
-    let sandbox = Sandbox::new()?;
-    let answer = || file(crate::project::IRIS, "\"v1\"");
-    let server = Server::start(crate::project::PATH, vec![answer(), answer(), answer()])?;
-    with(&sandbox, &server, WRITE)?;
-    let built = build(&sandbox, &["build"])?;
-    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
-    ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
-    let folder = sandbox.work().join("data/iris");
-    assert!(!folder.exists());
-    let asked = server.requests().len();
-    for line in [&["build"][..], &["build", "clean"][..]] {
-        let built = build(&sandbox, line)?;
-        assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
-        assert!(!folder.exists(), "{line:?} placed the dropped input");
-        assert_eq!(server.requests().len(), asked, "{line:?} fetched it");
-    }
-    let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(status["result"]["dropped"], json!(["iris"]));
     Ok(())
 }
 

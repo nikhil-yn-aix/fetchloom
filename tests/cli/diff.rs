@@ -7,44 +7,56 @@ use std::process::Output;
 
 use serde_json::json;
 
-use crate::build::building_in;
-use crate::merge::ok;
-use crate::recipes::{DRAWS_7, DRAWS_8};
-use crate::support::{Result, Sandbox, json, sha256_hex, text};
+use crate::merge::{git_variables, ok};
+use crate::support::{Fetchloom, Result, Routes, Sandbox, file, json, sha256_hex, text};
 
-/// data.toml of recipes that read no dataset, each a name and the words of its step after the
-/// program: `seeded` draws from `SEED`, `write` writes one file.
-fn recipes(folder: &Path, steps: &[(&str, &str, &str)]) -> Result {
-    let tables: Vec<String> = steps
-        .iter()
-        .map(|(name, words, seed)| {
-            format!(
-                "[datasets.{name}]\nrun = [\"recipe-step\", {words}, \"{{out}}\"]\nenv = {{ SEED = \"{seed}\" }}\n"
-            )
-        })
-        .collect();
-    fs::write(folder.join("data.toml"), tables.join("\n"))?;
-    Ok(())
+/// the draws a source holds first, and those a later version of it holds.
+const FIRST: &[u8] = b"278\n231\n753\n673\n545\n";
+const SECOND: &[u8] = b"244\n312\n12\n307\n454\n";
+
+/// a server holding each `(name, bytes)` below `/files/`, which every later command may reach.
+fn source(sandbox: &Sandbox, files: &[(&str, &[u8])]) -> Result<Routes> {
+    let routes = Routes::start(
+        files
+            .iter()
+            .map(|(name, bytes)| (format!("/files/{name}"), served(bytes)))
+            .collect(),
+    )?;
+    sandbox.allow(&routes.url);
+    Ok(routes)
+}
+
+/// `bytes` as a server gives them, tagged by what they hold.
+fn served(bytes: &[u8]) -> Vec<crate::support::Part> {
+    file(bytes, &format!("\"{}\"", &sha256_hex(bytes)[..12]))
 }
 
 /// fetchloom with `args` in `folder`, without the git variables of whatever runs the tests.
-fn run(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Output> {
+fn command(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Fetchloom {
     let mut command = sandbox.command_in(folder, args);
-    for (name, _) in std::env::vars_os() {
-        if name.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(name);
-        }
+    for name in git_variables() {
+        command.env_remove(name);
     }
-    Ok(command.output()?)
+    command
 }
 
-fn built(sandbox: &Sandbox, folder: &Path) -> Result {
-    let output = building_in(sandbox, folder, &["build"])?.output()?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+fn run(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Output> {
+    Ok(command(sandbox, folder, args).output()?)
+}
+
+/// [`run`], which must succeed.
+fn done(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result {
+    let output = run(sandbox, folder, args)?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{args:?}: {}",
+        text(&output.stderr)?
+    );
     Ok(())
 }
 
-/// a project in `study` below the repository's top: a seeded draw changes, one recipe goes and
+/// a project in `study` below the repository's top: a source's file changes, one dataset goes and
 /// another comes, each file a line as `git diff --name-status` gives one, then the same between
 /// two commits as `--json` gives it.
 #[test]
@@ -52,17 +64,26 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
     let sandbox = Sandbox::new()?;
     let study = sandbox.work().join("study");
     fs::create_dir_all(&study)?;
-    let draws = ("sim", "\"seeded\", \"draws.csv\"", "7");
-    recipes(
-        &study,
-        &[draws, ("notes", "\"write\", \"notes.txt\", \"hello\"", "1")],
+    let routes = source(
+        &sandbox,
+        &[
+            ("draws.csv", FIRST),
+            ("notes.txt", b"hello"),
+            ("extra.csv", b"x"),
+        ],
     )?;
-    built(&sandbox, &study)?;
+    let url = |name: &str| format!("{}/files/{name}", routes.url);
+    done(&sandbox, &study, &["add", &url("draws.csv"), "--as", "sim"])?;
+    done(
+        &sandbox,
+        &study,
+        &["add", &url("notes.txt"), "--as", "notes"],
+    )?;
     if ok(&sandbox, &["init", "-q"])?.is_none() {
         return Ok(());
     }
     ok(&sandbox, &["add", "."])?;
-    ok(&sandbox, &["commit", "-qm", "seven"])?;
+    ok(&sandbox, &["commit", "-qm", "first"])?;
     let same = run(&sandbox, &study, &["diff"])?;
     assert_eq!(same.status.code(), Some(0), "{}", text(&same.stderr)?);
     assert_eq!(text(&same.stdout)?, "");
@@ -73,23 +94,29 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
         text(&same.stderr)?
     );
 
-    let eight = ("sim", "\"seeded\", \"draws.csv\"", "8");
-    recipes(
+    routes.change(vec![("/files/draws.csv".to_owned(), served(SECOND))]);
+    done(&sandbox, &study, &["lock", "--upgrade", "sim"])?;
+    done(&sandbox, &study, &["remove", "notes"])?;
+    done(
+        &sandbox,
         &study,
-        &[eight, ("extra", "\"write\", \"extra.csv\", \"x\"", "1")],
+        &["add", &url("extra.csv"), "--as", "extra"],
     )?;
-    built(&sandbox, &study)?;
     let output = run(&sandbox, &study, &["diff"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let told = text(&output.stdout)?;
     assert_eq!(
         told,
-        "extra added: made by a recipe; 1 file added, 1 B\n\
-         A  extra/extra.csv  1 B\n\
-         notes removed: made by a recipe; 1 file removed, 5 B\n\
-         D  notes/notes.txt  5 B\n\
-         sim changed: env SEED changed; 1 file changed\n\
-         M  sim/draws.csv  20 B \u{2192} 19 B\n"
+        format!(
+            "extra added: {}; 1 file added, 1 B\n\
+             A  extra/extra.csv  1 B\n\
+             notes removed: {}; 1 file removed, 5 B\n\
+             D  notes/notes.txt  5 B\n\
+             sim changed: 1 file changed\n\
+             M  sim/draws.csv  20 B \u{2192} 19 B\n",
+            url("extra.csv"),
+            url("notes.txt")
+        )
     );
     let quiet = text(&run(&sandbox, &study, &["-q", "diff"])?.stdout)?;
     assert_eq!(
@@ -101,7 +128,7 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
     );
 
     ok(&sandbox, &["add", "-A"])?;
-    ok(&sandbox, &["commit", "-qm", "eight"])?;
+    ok(&sandbox, &["commit", "-qm", "second"])?;
     let output = run(&sandbox, &study, &["--json", "diff", "HEAD~1", "HEAD"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     let document = json(&output)?;
@@ -128,8 +155,8 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
         json!([{
             "path": "draws.csv",
             "change": "changed",
-            "before": {"size": DRAWS_7.len(), "sha256": sha256_hex(DRAWS_7)},
-            "after": {"size": DRAWS_8.len(), "sha256": sha256_hex(DRAWS_8)},
+            "before": {"size": FIRST.len(), "sha256": sha256_hex(FIRST)},
+            "after": {"size": SECOND.len(), "sha256": sha256_hex(SECOND)},
         }])
     );
     Ok(())
@@ -140,16 +167,14 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
 #[test]
 fn diff_reads_a_revision_as_one_and_needs_a_repository() -> Result {
     let sandbox = Sandbox::new()?;
-    recipes(
-        &sandbox.work(),
-        &[("sim", "\"seeded\", \"draws.csv\"", "7")],
-    )?;
-    built(&sandbox, &sandbox.work())?;
+    let routes = source(&sandbox, &[("draws.csv", FIRST)])?;
+    let url = format!("{}/files/draws.csv", routes.url);
+    done(&sandbox, &sandbox.work(), &["add", &url, "--as", "sim"])?;
     if ok(&sandbox, &["init", "-q"])?.is_none() {
         return Ok(());
     }
     ok(&sandbox, &["add", "."])?;
-    ok(&sandbox, &["commit", "-qm", "seven"])?;
+    ok(&sandbox, &["commit", "-qm", "first"])?;
     let output = run(
         &sandbox,
         &sandbox.work(),
@@ -177,7 +202,7 @@ fn diff_reads_a_revision_as_one_and_needs_a_repository() -> Result {
     Ok(())
 }
 
-/// a commit made with `git commit -a` lacks the new list of a recipe it pins: diff says so for
+/// a commit made with `git commit -a` lacks the new list of a dataset it pins: diff says so for
 /// that dataset and goes on. a side with no data.lock and a dataset data.toml names that
 /// data.lock does not pin are each said.
 #[test]
@@ -185,25 +210,39 @@ fn diff_says_what_a_commit_lacks_and_goes_on() -> Result {
     let sandbox = Sandbox::new()?;
     let study = sandbox.work().join("study");
     fs::create_dir_all(&study)?;
-    recipes(&study, &[("sim", "\"seeded\", \"draws.csv\"", "7")])?;
-    built(&sandbox, &study)?;
+    let routes = source(&sandbox, &[("draws.csv", FIRST)])?;
+    // each file list goes to data.lock.d, as a big dataset's does
+    let listed = |args: &[&str]| -> Result {
+        let output = command(&sandbox, &study, args)
+            .env("FETCHLOOM_TEST_INLINE", "0")
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+        Ok(())
+    };
+    let url = format!("{}/files/draws.csv", routes.url);
+    listed(&["add", &url, "--as", "sim"])?;
     if ok(&sandbox, &["init", "-q"])?.is_none() {
         return Ok(());
     }
     ok(&sandbox, &["add", "."])?;
-    ok(&sandbox, &["commit", "-qm", "seven"])?;
-    recipes(&study, &[("sim", "\"seeded\", \"draws.csv\"", "8")])?;
-    built(&sandbox, &study)?;
+    ok(&sandbox, &["commit", "-qm", "first"])?;
+    routes.change(vec![("/files/draws.csv".to_owned(), served(SECOND))]);
+    listed(&["lock", "--upgrade", "sim"])?;
     ok(
         &sandbox,
-        &["commit", "-qam", "eight, its new list left out"],
+        &["commit", "-qam", "second, its new list left out"],
     )?;
     let output = run(&sandbox, &study, &["diff", "HEAD~1", "HEAD"])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         text(&output.stdout)?,
-        "sim changed: env SEED changed; its file list is not in HEAD, so its files were not compared\n"
+        "sim changed: its file list is not in HEAD, so its files were not compared\n"
     );
     assert!(stderr.contains("`git add data.lock.d`"), "{stderr}");
     let document = json(&run(
@@ -213,11 +252,14 @@ fn diff_says_what_a_commit_lacks_and_goes_on() -> Result {
     )?)?;
     assert_eq!(document["result"]["datasets"][0]["unlisted"], json!(["to"]));
 
-    let mut tables = fs::read_to_string(study.join("data.toml"))?;
-    tables.push_str(
-        "\n[datasets.more]\nrun = [\"recipe-step\", \"write\", \"more.txt\", \"m\", \"{out}\"]\n",
-    );
-    fs::write(study.join("data.toml"), tables)?;
+    let tables = fs::read_to_string(study.join("data.toml"))?;
+    fs::write(
+        study.join("data.toml"),
+        format!(
+            "{tables}\n[datasets.more]\nref = \"{}/files/more.txt\"\n",
+            routes.url
+        ),
+    )?;
     fs::remove_file(study.join("data.lock"))?;
     let output = run(&sandbox, &study, &["diff"])?;
     let stderr = text(&output.stderr)?;
@@ -227,7 +269,7 @@ fn diff_says_what_a_commit_lacks_and_goes_on() -> Result {
         "{stderr}"
     );
     assert!(
-        stderr.contains("data.toml names 2 datasets that data.lock does not pin yet, so diff cannot show them: `fetchloom build` pins them"),
+        stderr.contains("data.toml names 2 datasets that data.lock does not pin yet, so diff cannot show them: `fetchloom lock` pins them"),
         "{stderr}"
     );
     Ok(())
@@ -240,13 +282,14 @@ fn diff_tells_a_revision_it_cannot_compare() -> Result {
     let sandbox = Sandbox::new()?;
     let study = sandbox.work().join("study");
     fs::create_dir_all(&study)?;
-    recipes(&study, &[("sim", "\"seeded\", \"draws.csv\"", "7")])?;
-    built(&sandbox, &study)?;
+    let routes = source(&sandbox, &[("draws.csv", FIRST)])?;
+    let url = format!("{}/files/draws.csv", routes.url);
+    done(&sandbox, &study, &["add", &url, "--as", "sim"])?;
     if ok(&sandbox, &["init", "-q"])?.is_none() {
         return Ok(());
     }
     ok(&sandbox, &["add", "."])?;
-    ok(&sandbox, &["commit", "-qm", "seven"])?;
+    ok(&sandbox, &["commit", "-qm", "first"])?;
     for (revision, said, help) in [
         (
             "HEAD~1..HEAD",

@@ -1,6 +1,6 @@
 //! `.fetchloom/state`: every file fetchloom placed and how it looked right after, so `status` and
 //! `sync` notice hand edits without hashing, but for a file as new as the state, which a coarse
-//! clock cannot vouch for. it also keeps each rebuild of a recipe that differs from data.lock.
+//! clock cannot vouch for.
 //!
 //! its records come in path order, in blocks of about [`BLOCK`] bytes indexed at its end, so a
 //! command that names a dataset reads only the blocks that can hold its folder's paths.
@@ -13,10 +13,8 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cache::Member;
 use crate::digest::Sha256;
 use crate::place::Method;
-use crate::project::lock::derived::Derived;
 use crate::project::manifest::Manifest;
 
 const VERSION: u32 = 3;
@@ -45,10 +43,6 @@ pub(crate) struct State {
     /// data.toml and data.lock as the last sync left them.
     #[serde(default)]
     pub(crate) synced: Option<Synced>,
-    /// the rebuild of each recipe that made other files than data.lock pins for its key, kept until
-    /// `fetchloom build --accept` pins it, a build pins another or data.toml drops the recipe.
-    #[serde(default)]
-    pub(crate) candidates: BTreeMap<String, Candidate>,
     /// the datasets `fetchloom drop` freed on this machine, which a plain sync leaves out until a
     /// command that names one brings it back.
     #[serde(default)]
@@ -116,34 +110,6 @@ impl Folder {
         let same =
             |recorded: Option<u64>, found: Option<u64>| recorded.is_some() && recorded == found;
         same(self.inode, here.inode) || same(self.created, here.created)
-    }
-}
-
-/// a rebuild of a recipe that made other files than data.lock pins for the same key. its files are
-/// cached, but no build may reuse it: only a person pins it, with `fetchloom build --accept`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Candidate {
-    pub(crate) key: Sha256,
-    pub(crate) tree: Sha256,
-    /// the tree data.lock pinned for `key` when the rebuild was kept.
-    pub(crate) pinned: Sha256,
-    /// sorted by path.
-    pub(crate) files: Vec<Member>,
-}
-
-impl Candidate {
-    /// whether the rebuild answers the recipe and the pin as they are now, which `build --accept`
-    /// asks: `key` is the recipe's key now, the result data.lock pins now, `pinned`, must be the
-    /// one it was kept beside, its files must hash to its tree, and no path of them may leave the
-    /// result's folder, since the state is a file anyone with the project can change.
-    pub(crate) fn answers(&self, key: Option<Sha256>, pinned: Option<&Derived>) -> bool {
-        key == Some(self.key)
-            && pinned.is_some_and(|pinned| pinned.key == self.key && pinned.tree == self.pinned)
-            && self
-                .files
-                .iter()
-                .all(|file| crate::name::escapes(&file.path).is_none())
-            && crate::cache::tree_hash(&self.files) == self.tree
     }
 }
 
@@ -273,73 +239,14 @@ impl State {
         reading.streamed(&|_| true, ours)
     }
 
-    /// moves the kept rebuild of each recipe `manifest` no longer has to the one recipe it has
-    /// now whose result `lock` pins as the rebuild was kept beside, by its key and tree, and that
-    /// has no kept rebuild of its own: a renamed recipe keeps its result, since its key never held
-    /// its name, so its kept rebuild follows, whichever command moved the pin. says whether any
-    /// moved.
-    pub(crate) fn carry_candidates(
-        &mut self,
-        manifest: &Manifest,
-        lock: &crate::project::lock::Lock,
-    ) -> bool {
-        let is_recipe = |name: &str| {
-            manifest
-                .datasets
-                .get(name)
-                .is_some_and(|entry| entry.recipe().is_some())
-        };
-        let gone: Vec<String> = self
-            .candidates
-            .keys()
-            .filter(|name| !is_recipe(name))
-            .cloned()
-            .collect();
-        let mut moved = false;
-        for old in gone {
-            let kept = &self.candidates[&old];
-            let mut takers = manifest.datasets.keys().filter(|name| {
-                is_recipe(name)
-                    && !self.candidates.contains_key(*name)
-                    && lock
-                        .result(name)
-                        .is_some_and(|pinned| pinned.key == kept.key && pinned.tree == kept.pinned)
-            });
-            let (Some(new), None) = (takers.next(), takers.next()) else {
-                continue;
-            };
-            let new = new.clone();
-            if let Some(kept) = self.candidates.remove(&old) {
-                self.candidates.insert(new, kept);
-                moved = true;
-            }
-        }
-        moved
-    }
-
-    /// drops the kept rebuild of each recipe `manifest` no longer has, as relocking drops the
-    /// recipe's pin, and the mark of each dataset it no longer has, and says whether any went.
+    /// drops the mark of each dataset `manifest` no longer has, and says whether any went.
     pub(crate) fn forget_removed(&mut self, manifest: &Manifest) -> bool {
-        let before = (
-            self.candidates.len(),
-            self.dropped.len(),
-            self.freeing.len(),
-        );
-        self.candidates.retain(|name, _| {
-            manifest
-                .datasets
-                .get(name)
-                .is_some_and(|entry| entry.recipe().is_some())
-        });
+        let before = (self.dropped.len(), self.freeing.len());
         // a dataset added again under a dropped one's name starts out placed
         self.dropped
             .retain(|name| manifest.datasets.contains_key(name));
         self.freeing.retain(|name| self.dropped.contains(name));
-        (
-            self.candidates.len(),
-            self.dropped.len(),
-            self.freeing.len(),
-        ) != before
+        (self.dropped.len(), self.freeing.len()) != before
     }
 
     /// [`State::render_for`] the folder the state records, for tests.
@@ -397,10 +304,6 @@ impl State {
             out.extend_from_slice(br#","synced":"#);
             serde_json::to_writer(&mut *out, synced)?;
         }
-        if !self.candidates.is_empty() {
-            out.extend_from_slice(br#","candidates":"#);
-            serde_json::to_writer(&mut *out, &self.candidates)?;
-        }
         if !self.dropped.is_empty() {
             out.extend_from_slice(br#","dropped":"#);
             serde_json::to_writer(&mut *out, &self.dropped)?;
@@ -450,7 +353,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
     fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<State, A::Error> {
         use serde::de::Error;
         let mut state = State::default();
-        let (mut version, mut files, mut synced, mut candidates) = (None, false, false, false);
+        let (mut version, mut files, mut synced) = (None, false, false);
         let (mut dropped, mut freeing, mut folder, mut aside, mut replacing) =
             (false, false, false, false, false);
         while let Some(key) = map.next_key::<String>()? {
@@ -463,10 +366,6 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "synced" => {
                     state.synced = map.next_value()?;
                     std::mem::replace(&mut synced, true)
-                }
-                "candidates" => {
-                    state.candidates = map.next_value()?;
-                    std::mem::replace(&mut candidates, true)
                 }
                 "dropped" => {
                     state.dropped = map.next_value()?;
@@ -571,15 +470,13 @@ impl serde::de::Visitor<'_> for Kept<'_> {
 /// a block of records: the path of its first record, and where its bytes start and end.
 type Block = (String, u64, u64);
 
-/// what follows the records: the settled sync, the kept rebuilds, the dropped datasets and those
+/// what follows the records: the settled sync, the dropped datasets and those
 /// whose drop has not freed the cache yet, the folder, the files kept aside, those being replaced
 /// and the blocks.
 #[derive(Deserialize)]
 struct Tail {
     #[serde(default)]
     synced: Option<Synced>,
-    #[serde(default)]
-    candidates: BTreeMap<String, Candidate>,
     #[serde(default)]
     dropped: BTreeSet<String>,
     #[serde(default)]
@@ -693,7 +590,6 @@ fn indexed(
 ) -> Result<State, &'static str> {
     let Tail {
         synced,
-        candidates,
         dropped,
         freeing,
         folder,
@@ -719,7 +615,6 @@ fn indexed(
         version: VERSION,
         files,
         synced,
-        candidates,
         dropped,
         freeing,
         folder,
@@ -736,7 +631,6 @@ fn by_blocks(
 ) -> Result<State, &'static str> {
     let Tail {
         synced,
-        candidates,
         dropped,
         freeing,
         folder,
@@ -765,7 +659,6 @@ fn by_blocks(
         version: VERSION,
         files: records.into_iter().collect(),
         synced,
-        candidates,
         dropped,
         freeing,
         folder,
@@ -1117,133 +1010,18 @@ mod tests {
         }
     }
 
-    /// a rebuild kept beside the pin of `key` whose tree is `pinned`, its files hashing to its tree.
-    fn kept(key: Sha256, pinned: Sha256) -> Candidate {
-        let files = vec![Member {
-            path: "clean.csv".to_owned(),
-            size: 3,
-            sha256: digest::sha256(b"abc"),
-        }];
-        Candidate {
-            key,
-            tree: crate::cache::tree_hash(&files),
-            pinned,
-            files,
-        }
-    }
-
-    /// a kept rebuild answers only the recipe's key, beside the very pin it was kept beside, with
-    /// files inside the result that still hash to its tree; any one differing alone refuses it.
+    /// the mark of a dataset data.toml no longer has goes, so one added again is placed, and only
+    /// the call that drops it says so.
     #[test]
-    fn a_kept_rebuild_answers_only_its_own_key_pin_and_files() {
-        let (key, pinned, other) = (
-            digest::sha256(b"key"),
-            digest::sha256(b"pinned"),
-            digest::sha256(b"other"),
-        );
-        let pin = |key: Sha256, tree: Sha256| Derived {
-            name: "clean".to_owned(),
-            from: Vec::new(),
-            run: Vec::new(),
-            code: Vec::new(),
-            env: BTreeMap::new(),
-            key,
-            timestamp: String::new(),
-            tree,
-            files: Vec::new(),
+    fn marks_go_with_their_datasets_once() {
+        let manifest = Manifest::parse("[datasets.raw]\nref = \"zenodo:1\"\n").unwrap();
+        let mut state = State {
+            dropped: ["raw".to_owned(), "removed".to_owned()].into(),
+            ..State::default()
         };
-        let candidate = kept(key, pinned);
-        let unhashed = Candidate {
-            tree: other,
-            ..candidate.clone()
-        };
-        // a state anyone can edit may name a file outside the result, with its tree to match
-        let outside = vec![Member {
-            path: "../../notes.txt".to_owned(),
-            size: 3,
-            sha256: digest::sha256(b"abc"),
-        }];
-        let escaping = Candidate {
-            tree: crate::cache::tree_hash(&outside),
-            files: outside,
-            ..candidate
-        };
-        for (case, rebuild, now, pin, answers) in [
-            (
-                "all four match",
-                &candidate,
-                Some(key),
-                Some(pin(key, pinned)),
-                true,
-            ),
-            (
-                "the recipe's key moved",
-                &candidate,
-                Some(other),
-                Some(pin(key, pinned)),
-                false,
-            ),
-            (
-                "no key now",
-                &candidate,
-                None,
-                Some(pin(key, pinned)),
-                false,
-            ),
-            ("nothing pinned", &candidate, Some(key), None, false),
-            (
-                "a pin of another key",
-                &candidate,
-                Some(key),
-                Some(pin(other, pinned)),
-                false,
-            ),
-            (
-                "a pin of another tree",
-                &candidate,
-                Some(key),
-                Some(pin(key, other)),
-                false,
-            ),
-            (
-                "files of another tree",
-                &unhashed,
-                Some(key),
-                Some(pin(key, pinned)),
-                false,
-            ),
-            (
-                "a file outside the result",
-                &escaping,
-                Some(key),
-                Some(pin(key, pinned)),
-                false,
-            ),
-        ] {
-            assert_eq!(rebuild.answers(now, pin.as_ref()), answers, "{case}");
-        }
-    }
-
-    /// a recipe data.toml no longer has, or a dataset no longer made by one, takes its kept rebuild
-    /// with it, and only the call that drops them says so.
-    #[test]
-    fn kept_rebuilds_go_with_their_recipes_once() {
-        let manifest = Manifest::parse(
-            "[datasets.raw]\nref = \"zenodo:1\"\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n",
-        )
-        .unwrap();
-        let mut state = State::default();
-        for name in ["clean", "removed", "raw"] {
-            let candidate = kept(digest::sha256(name.as_bytes()), digest::sha256(b"pinned"));
-            state.candidates.insert(name.to_owned(), candidate);
-        }
-        assert!(state.forget_removed(&manifest));
-        assert_eq!(state.candidates.keys().collect::<Vec<_>>(), ["clean"]);
-        assert!(!state.forget_removed(&manifest));
-        // a mark of a dataset data.toml no longer has goes too, so one added again is placed
-        state.dropped = ["raw".to_owned(), "removed".to_owned()].into();
         assert!(state.forget_removed(&manifest));
         assert_eq!(state.dropped.iter().collect::<Vec<_>>(), ["raw"]);
+        assert!(!state.forget_removed(&manifest));
     }
 
     /// a small folder beside a large one reads little past its records, however large the state.
@@ -1321,24 +1099,11 @@ mod tests {
             complete: true,
         });
         assert_eq!(State::parse(&state.render()).synced, state.synced);
-        let kept = Candidate {
-            key: digest::sha256(b"key"),
-            tree: digest::sha256(b"tree"),
-            pinned: digest::sha256(b"pinned"),
-            files: vec![Member {
-                path: "random.bin".to_owned(),
-                size: 8,
-                sha256: digest::sha256(b"8 bytes!"),
-            }],
-        };
-        state.candidates.insert("clean".to_owned(), kept);
-        assert_eq!(State::parse(&state.render()).candidates, state.candidates);
         state.dropped.insert("pets".to_owned());
         state.freeing.insert("pets".to_owned());
         let read = State::parse(&state.render());
         assert_eq!(read.dropped, state.dropped);
         assert_eq!(read.freeing, state.freeing);
-        state.candidates.clear();
         state.dropped.clear();
         state.freeing.clear();
         state.synced = None;
@@ -1377,13 +1142,6 @@ mod tests {
             lock: digest::sha256(b"lock"),
             complete: true,
         });
-        let kept = Candidate {
-            key: digest::sha256(b"key"),
-            tree: digest::sha256(b"tree"),
-            pinned: digest::sha256(b"pinned"),
-            files: Vec::new(),
-        };
-        state.candidates.insert("clean".to_owned(), kept);
         let bytes = state.render();
         let inside = |path: &str| path.starts_with("data/a/");
         let read = State::parse_only(&bytes, &inside);
@@ -1392,7 +1150,6 @@ mod tests {
         assert_eq!(read.files.len(), 2);
         assert_eq!(read.files, expected.files);
         assert_eq!(read.synced, state.synced);
-        assert_eq!(read.candidates, state.candidates);
         assert_eq!(read.version, VERSION);
         for unread in [
             &b"not json"[..],
@@ -1570,7 +1327,6 @@ mod tests {
     fn assert_same(read: &State, whole: &State, case: &str) {
         assert_eq!(read.files, whole.files, "{case}");
         assert_eq!(read.synced, whole.synced, "{case}");
-        assert_eq!(read.candidates, whole.candidates, "{case}");
         assert_eq!(read.dropped, whole.dropped, "{case}");
         assert_eq!(read.freeing, whole.freeing, "{case}");
         assert_eq!(read.aside, whole.aside, "{case}");

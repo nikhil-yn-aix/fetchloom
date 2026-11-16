@@ -553,7 +553,6 @@ mod tests {
                 timestamp: "2026-11-11T00:00:00Z".to_owned(),
                 files,
             }],
-            derived: Vec::new(),
             stated: Vec::new(),
             waiting: Vec::new(),
         }

@@ -83,7 +83,7 @@ fn unpacked(archive: &str, members: &[&str], others: &[&str]) -> Vec<String> {
     let mut paths: Vec<String> = planned
         .targets
         .into_iter()
-        .filter(|target| target.file().is_some_and(|file| file.path == archive))
+        .filter(|target| target.file.path == archive)
         .map(|target| target.path)
         .collect();
     paths.sort();
@@ -101,9 +101,7 @@ fn pinned(text: &str, datasets: &[(&str, &[&str])]) -> (Manifest, Lock) {
     let manifest = manifest(text);
     let mut locked = lock(datasets);
     for dataset in &mut locked.datasets {
-        if let Some(source) = manifest.datasets[&dataset.name].source() {
-            dataset.spec = crate::project::lock::spec(source);
-        }
+        dataset.spec = crate::project::lock::spec(&manifest.datasets[&dataset.name].source);
         for file in &mut dataset.files {
             if archive::by_name(&file.path) == Some(archive::Packed::Archive) {
                 file.unpacks_to = Some(digest::sha256(file.path.as_bytes()));
@@ -364,7 +362,7 @@ fn two_glob_keys_matching_one_archive_are_refused() {
             "change one key so only one matches it, or give it a table of its own, as [datasets.a.members.\"shard-000001.tar\"], which wins over both"
         )
     );
-    let members = &manifest.datasets["a"].source().unwrap().members;
+    let members = &manifest.datasets["a"].source.members;
     assert!(members.get("shard-000001.tar").is_none());
     let (manifest, locked) = pinned(
         &format!("{text}[datasets.a.members.\"shard-000001.tar\"]\nexclude = \"s.json\"\n"),
@@ -769,21 +767,6 @@ fn a_clash_with_an_archives_file_suggests_leaving_either_out_or_keeping_it_packe
     }
 }
 
-/// only a build makes a recipe's files, whatever source pin data.lock keeps under its name.
-#[test]
-fn a_recipe_places_nothing_from_an_old_source_pin() {
-    let made = manifest(
-        "[datasets.a]\nref = \"x\"\n\n[datasets.b]\nfrom = [\"a\"]\nrun = [\"t\", \"{a}\", \"{out}\"]\n",
-    );
-    let locked = lock(&[("a", &["x.csv"]), ("b", &["y.csv"])]);
-    let paths: Vec<String> = targets(&made, &locked)
-        .unwrap()
-        .into_iter()
-        .map(|target| target.path)
-        .collect();
-    assert_eq!(paths, ["data/a/x.csv"]);
-}
-
 #[test]
 fn a_locked_dataset_missing_from_data_toml_places_nothing() {
     let only_a = manifest(ONE);
@@ -795,26 +778,17 @@ fn a_locked_dataset_missing_from_data_toml_places_nothing() {
     );
 }
 
-/// a dataset with `place = false`, fetched or made, has nothing downloaded, unpacked or placed,
-/// and nothing of it clashes.
+/// a dataset a drop left out here has nothing downloaded, unpacked or placed, and nothing of it
+/// clashes.
 #[test]
 fn an_unplaced_dataset_has_no_targets() {
-    let (unplaced, mut locked) = pinned(
-        "[datasets.raw]\nref = \"x\"\npath = \".\"\nplace = false\n\n[datasets.other]\nref = \"y\"\npath = \".\"\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\nplace = false\n",
+    let (mut unplaced, locked) = pinned(
+        "[datasets.raw]\nref = \"x\"\npath = \".\"\n\n[datasets.other]\nref = \"y\"\npath = \".\"\n",
         &[("raw", &["a.csv", "x.zip"]), ("other", &["a.csv"])],
     );
-    let files = vec![member("c.csv")];
-    locked.derived.push(Derived {
-        name: "clean".to_owned(),
-        from: Vec::new(),
-        run: Vec::new(),
-        code: Vec::new(),
-        env: std::collections::BTreeMap::new(),
-        key: digest::sha256(b"key"),
-        timestamp: String::new(),
-        tree: digest::sha256(b"tree"),
-        files,
-    });
+    if let Some(raw) = unplaced.datasets.get_mut("raw") {
+        raw.place = false;
+    }
     let planned = plan(&unplaced, &locked, &|_| None).unwrap();
     let paths: Vec<&str> = planned
         .targets

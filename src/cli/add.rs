@@ -552,8 +552,7 @@ async fn resolve_typed(
     let known = manifest
         .datasets
         .values()
-        .filter_map(manifest::Entry::source)
-        .any(|source| source.reference == reference);
+        .any(|entry| entry.source.reference == reference);
     match resolve_add(context, net, args, link, parsed).await {
         Ok(addition) => Ok(addition),
         Err(error) if known => Err(error),
@@ -812,9 +811,7 @@ fn moved_on(at: &str) -> String {
 
 /// how many files of `listing` the new dataset `name` keeps, after its select and exclude.
 fn kept_files(manifest: &Manifest, name: &str, listing: &Listing) -> usize {
-    let Some(manifest::Origin::Source(source)) =
-        manifest.datasets.get(name).map(|entry| &entry.origin)
-    else {
+    let Some(source) = manifest.datasets.get(name).map(|entry| &entry.source) else {
         return listing.files.len();
     };
     listing
@@ -1075,8 +1072,7 @@ fn validate_add(
         && manifest
             .datasets
             .get(asked)
-            .and_then(manifest::Entry::source)
-            .is_none_or(|source| source.reference != stored_reference(link, &parsed))
+            .is_none_or(|entry| entry.source.reference != stored_reference(link, &parsed))
     {
         usable(asked, manifest)?;
     }
@@ -1112,12 +1108,9 @@ async fn resolve_add(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
-    let kept = entry
-        .source()
-        .map(|source| engine::filter(&parsed.reference.shown(), &entry, source, &listing))
-        .transpose();
+    let kept = engine::filter(&parsed.reference.shown(), &entry, &listing);
     // what the patterns keep is what gets pinned, so the line counts that
-    let told = kept.as_ref().ok().and_then(Option::as_deref);
+    let told = kept.as_deref().ok();
     engine::tell_kept(&context.output, &listing, told.unwrap_or(&listing.files));
     kept?;
     Ok(Addition {
@@ -1191,7 +1184,6 @@ fn settled_before(
     let adds = |name: &str| names.iter().any(|added| added == name);
     let alone = manifest.datasets.keys().all(|name| adds(name))
         && lock.datasets.iter().all(|dataset| adds(&dataset.name))
-        && lock.derived.iter().all(|result| adds(&result.name))
         && lock.stated.iter().all(|stated| adds(stated.name()))
         && survey
             .state
@@ -1597,9 +1589,7 @@ impl<'a> Sources<'a> {
             by_resolved: HashMap::new(),
         };
         for (name, entry) in &manifest.datasets {
-            let Some(source) = entry.source() else {
-                continue;
-            };
+            let source = &entry.source;
             sources
                 .by_reference
                 .entry(&source.reference)
@@ -1622,7 +1612,7 @@ impl<'a> Sources<'a> {
     /// the dataset in data.toml that pins what was just resolved, under any spelling of its
     /// reference: one with the same settings first, then the same reference, then the first name.
     fn present(&self, wanted: &manifest::Entry, listing: &Listing) -> Option<String> {
-        let wanted = wanted.source()?;
+        let wanted = &wanted.source;
         let resolved = listing.resolved.to_string();
         let found: BTreeMap<&str, &Source> = self
             .by_reference
@@ -1654,16 +1644,13 @@ fn same_settings(manifest: &Manifest, present: &Present<'_>) -> Result<(), Error
         entry,
         listing,
     } = *present;
-    let differs = match (manifest.datasets[name].source(), entry.source()) {
-        (Some(existing), Some(wanted))
-            if existing.select != wanted.select || existing.exclude != wanted.exclude =>
-        {
-            Some(("other patterns", "the patterns of"))
-        }
-        (Some(existing), Some(wanted)) if existing.extract != wanted.extract => {
-            Some(("another extract setting", "extract on"))
-        }
-        _ => None,
+    let (existing, wanted) = (&manifest.datasets[name].source, &entry.source);
+    let differs = if existing.select != wanted.select || existing.exclude != wanted.exclude {
+        Some(("other patterns", "the patterns of"))
+    } else if existing.extract != wanted.extract {
+        Some(("another extract setting", "extract on"))
+    } else {
+        None
     };
     match differs {
         Some((differs, setting)) => Err(Error::new(
@@ -2372,7 +2359,7 @@ mod tests {
         let old = Lock {
             datasets: vec![pinned(
                 "a",
-                lock::spec(manifest.datasets["a"].source().unwrap()),
+                lock::spec(&manifest.datasets["a"].source),
                 vec![pinned_file("a", "https://example.org/a", b"a")],
             )],
             ..Lock::default()

@@ -857,9 +857,9 @@ pub(crate) mod tests {
     /// command's name alone, an example of a link, `--help`.
     #[test]
     fn helps_name_this_projects_commands_through_command() {
-        const PROJECT: [&str; 13] = [
-            "add", "remove", "exclude", "drop", "sync", "lock", "build", "status", "diff", "list",
-            "export", "push", "path",
+        const PROJECT: [&str; 12] = [
+            "add", "remove", "exclude", "drop", "sync", "lock", "status", "diff", "list", "export",
+            "push", "path",
         ];
         let elsewhere = [
             ("src/cli/add.rs", "fetchloom sync"),
@@ -877,7 +877,6 @@ pub(crate) mod tests {
                 "src/cli/fetch/mirrors.rs",
                 "fetchloom push --verify --to {}",
             ),
-            ("src/cli/project.rs", "fetchloom build"),
             ("src/cli/remove.rs", "fetchloom remove --help"),
             ("src/cli/remove.rs", "fetchloom sync"),
             ("src/cli/search.rs", "fetchloom sync --offline"),
@@ -915,9 +914,7 @@ pub(crate) mod tests {
     #[test]
     fn helps_give_git_commands_through_git() {
         let elsewhere = [
-            ("src/cli/build.rs", "git restore {}"),
             ("src/cli/diff.rs", "git commit -a"),
-            ("src/cli/project.rs", "git add -f"),
             ("src/cli/project.rs", "git commit -a"),
             ("src/cli/status.rs", "git rm"),
             ("src/project/lock/lists.rs", "git add {FOLDER}"),

@@ -437,7 +437,6 @@ mod tests {
                             &settings.mirrors,
                             settings.mirrors_only,
                             &settings.push_to,
-                            settings.build_floor,
                         )
                     )
                 };

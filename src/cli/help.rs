@@ -38,21 +38,14 @@ link to it where the disk allows, or a copy, so projects that use the same file
 store it once. files in data/ are read-only by default. to edit a dataset's
 files, set copy = true for it in data.toml.
 
-a recipe is a dataset made from others by a command of yours, written with
-from and run in data.toml. only `fetchloom build` runs it: it pins what the
-command wrote in data.lock and places it in data/ like any dataset.
-
-place = false keeps a dataset pinned in data.lock but out of data/, as for raw
-data that only a recipe reads. a build takes its files from the cache.
-
 a mirror is a folder, web server or S3 bucket that keeps pinned files, such
 as a lab disk. fetchloom asks the mirrors you name before the sources, and
 `fetchloom push` copies a project's pinned files into a folder or bucket.
 
 commit data.toml and data.lock with your code, and data.lock.d once it is
-there: each recipe's result and each big dataset keep their file lists in it.
-leave data/ out. anyone who clones the project runs `fetchloom sync` to place
-the pinned files. sync warns when it keeps edited or conflicting files.
+there: each big dataset keeps its file list in it. leave data/ out. anyone
+who clones the project runs `fetchloom sync` to place the pinned files.
+sync warns when it keeps edited or conflicting files.
 `fetchloom status` shows what differs.
 
 `fetchloom get` fetches a dataset once, with no list and no receipt, for a
@@ -114,10 +107,6 @@ const ENVIRONMENT: &str = "fetchloom environment
                        true asks the mirrors alone, never a source
   FETCHLOOM_PUSH_TO    the folder or S3 bucket fetchloom push copies files
                        into, unless --to names one
-  FETCHLOOM_BUILD_FLOOR
-                       the least free space a build's step may leave on the
-                       cache's disk, as 20G; by default the larger of 1G and
-                       1% of that disk
   FETCHLOOM_CACHE_BUDGET
                        how much the cache's files may hold, as 200G: a sync
                        that would download past it asks first; none by default
@@ -128,8 +117,6 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_ACCESSIBLE true asks on plain lines, takes a choice by its number
                        and draws no live progress, for screen readers
   FETCHLOOM_KEYRING    false keeps keys out of the system's credential store
-  FETCHLOOM_BUILDING   set by fetchloom build for its steps: the project
-                       a fetchloom inside a step may not lock
 
   HTTPS_PROXY, HTTP_PROXY, ALL_PROXY
                        the proxy for https links, for http links, or for both
@@ -146,8 +133,8 @@ const ENVIRONMENT: &str = "fetchloom environment
 a settings file keeps cache, resources, jobs, host_jobs, retries, timeout,
 ask_above, memory, most_files, the archive_ settings, allowed_origins,
 s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors,
-mirrors_only, push_to, build_floor and cache_budget for every run, one per
-line, as jobs = 16. a variable wins over the file.
+mirrors_only, push_to and cache_budget for every run, one per line, as
+jobs = 16. a variable wins over the file.
 fetchloom settings shows each value and where it came from, and
 fetchloom settings set jobs 16 saves one.
 
@@ -216,59 +203,12 @@ const EXIT_CODES: &str = "fetchloom exit codes
    30  integrity.mismatch: the bytes are not the ones data.lock pins
    40  auth.required: sign in, or accept the source's terms
    50  local.*, project.*: disk, permissions, a broken or changed project file
-   60  build.needed: a recipe changed or is not built; it runs your code, so
-       build it yourself. build.failed: a step failed. build.differs: a step
-       built again made other files than data.lock pins
   130  interrupted
 
 with --json, errors[0].kind names the exact cause and errors[0].fix, when
 present, the command to run next.
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/exit-codes/";
-
-/// `fetchloom help recipes`: how to write a recipe in data.toml, with an example to copy. the
-/// docs page has the details; a test reads the example as data.toml.
-const RECIPES: &str = "fetchloom recipes
-
-`fetchloom build` and recipes are experimental: later versions may change them.
-
-a recipe makes a dataset from others with a command of yours, such as a
-script that cleans a raw table. write it in data.toml with from and run in
-place of ref:
-
-  [datasets.iris]
-  ref = \"hf:datasets/scikit-learn/iris\"
-  select = \"Iris.csv\"
-
-  [datasets.clean]
-  from = [\"iris\"]
-  run = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]
-  code = [\"clean.py\"]
-
-from names the datasets it reads. run is the program and its words, which no
-shell reads: {iris} stands for a folder holding a copy of iris's files, and
-{out} for the folder the step writes its result in. a brace a word holds for
-itself, as python code may, is written twice: {{ or }}. code lists the files
-of the project the result depends on, such as the script, and
-env = { NAME = \"value\" } sets variables for the step alone.
-
-a recipe can also read no dataset, as a seeded simulation does: leave from
-out, and a build runs it again only when its run, code or env changes.
-
-run finds a bare program name on PATH, so for a project's own python write
-\".venv/bin/python\", on windows \".venv/Scripts/python.exe\", or start run
-with \"uv\", \"run\", \"python\".
-
-only `fetchloom build` runs a step, as you, with your files and keys, so read
-the commands of a project you cloned with `fetchloom build --dry-run` first.
-the build records what the step wrote, each file with its SHA-256, in
-data.lock, keeps the file list in data.lock.d and places the files in
-data/clean like any dataset: commit both.
-`fetchloom status` says when a recipe changed since its build.
-
-place = false on iris keeps raw data that only recipes read out of data/.
-
-more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/recipes/";
 
 /// `fetchloom help agents`: what an ai agent or a script needs to run fetchloom without a person,
 /// offline. a test holds its kinds and dry runs to the code.
@@ -298,17 +238,15 @@ errors[0].kind, and the exit code it gives:
    30  integrity.mismatch
    40  auth.required
    50  local.io, local.not_empty, project.invalid, project.changed
-   60  build.needed, build.failed, build.differs
   130  interrupted
 `fetchloom help exit-codes` says what to do about each.
 
 errors[0].fix is the command to run next, or null. it is safe to run
 without asking: it never downloads into place, writes outside the project,
-publishes, deletes, overwrites or repins your files, runs the project's
-code, signs in or answers a question for you, and in a --locked run it
-never writes data.lock. so add, sync, lock, path, get and push are no fix
-but with --dry-run, or lock with --check. help still names them, as steps
-for you to choose.
+publishes, deletes, overwrites or repins your files, signs in or answers a
+question for you, and in a --locked run it never writes data.lock. so add,
+sync, lock, path, get and push are no fix but with --dry-run, or lock with
+--check. help still names them, as steps for you to choose.
 
 nothing asks a question with --json, when stdin or stderr is no terminal,
 or where CI, AI_AGENT or a coding agent's own variable is set. a step that
@@ -317,8 +255,8 @@ answers yes, as to a large download or a project in the home folder, but
 never chooses for you: give add the reference of a dataset, which
 `fetchloom search <words> --json` finds, rather than words to pick from.
 
---dry-run, on add, remove, exclude, drop, sync, lock, build, push, get and
-cache gc, says what would change and changes nothing.
+--dry-run, on add, remove, exclude, drop, sync, lock, push, get and cache gc,
+says what would change and changes nothing.
 
 status, diff, list, search, help, lock --check, and settings, cache and
 auth without a subcommand, read and change nothing; export writes only the
@@ -328,12 +266,11 @@ ready, and cache verify notes changed cached files.
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/json-output/";
 
 /// help topics that are not commands, each with its text.
-const TOPICS: [(&str, &str); 5] = [
+const TOPICS: [(&str, &str); 4] = [
     ("agents", AGENTS),
     ("concepts", CONCEPTS),
     ("environment", ENVIRONMENT),
     ("exit-codes", EXIT_CODES),
-    ("recipes", RECIPES),
 ];
 
 fn topic_text(topic: &[String]) -> Option<&'static str> {
@@ -550,7 +487,7 @@ fn unknown(topic: &[String]) -> Error {
         }
         None => error
             .detail("topics: agents, concepts, environment, exit-codes,")
-            .detail("recipes, or a command, such as add or cache gc")
+            .detail("or a command, such as add or cache gc")
             .help("`fetchloom --help` lists the commands"),
     }
 }
@@ -709,7 +646,7 @@ fn agreed(text: &str) -> String {
 mod tests {
     use clap::CommandFactory;
 
-    use super::{AGENTS, CONCEPTS, ENVIRONMENT, EXIT_CODES, RECIPES, TOPICS, args, arguments};
+    use super::{AGENTS, CONCEPTS, ENVIRONMENT, EXIT_CODES, TOPICS, args, arguments};
 
     #[test]
     fn a_short_only_option_keeps_its_spelling_and_its_value() {
@@ -892,49 +829,6 @@ mod tests {
         }
         taking.sort_unstable();
         assert_eq!(named, taking);
-    }
-
-    /// a step finds a bare `python` on PATH, which has the project's own only while its venv is
-    /// active, so the topic names the venv's python by its path, and uv's way.
-    #[test]
-    fn the_recipes_topic_names_a_projects_own_python() {
-        for named in [
-            "\".venv/bin/python\"",
-            "\".venv/Scripts/python.exe\"",
-            "\"uv\", \"run\", \"python\"",
-        ] {
-            assert!(RECIPES.contains(named), "{named}");
-        }
-    }
-
-    /// the brace error's help asks for {{ and }}, which the topic says how to write.
-    #[test]
-    fn the_recipes_topic_says_how_to_write_a_brace() {
-        assert!(RECIPES.contains("is written twice: {{ or }}"), "{RECIPES}");
-    }
-
-    /// build may still change, which the command list, its help, short or long, and the recipes
-    /// topic say, rather than a warning on every run.
-    #[test]
-    fn build_and_recipes_are_labelled_experimental() {
-        let line =
-            "`fetchloom build` and recipes are experimental: later versions may change them.";
-        for (asked, text) in [
-            ("build --help", full_help("build")),
-            ("help recipes", RECIPES.to_owned()),
-        ] {
-            assert_eq!(text.matches(line).count(), 1, "{asked}: {text}");
-        }
-        let label = "run recipes and record their results in data.lock (experimental)";
-        for (asked, text) in [
-            ("--help", args::command().render_long_help().to_string()),
-            (
-                "build -h",
-                super::short(&["build".to_owned()]).unwrap_or_default(),
-            ),
-        ] {
-            assert!(text.contains(label), "{asked}: {text}");
-        }
     }
 
     /// a second paragraph in a command's about made clap put each option's text on a line of
@@ -1145,42 +1039,5 @@ mod tests {
                 assert!(line.chars().count() <= 80, "{name}: {line}");
             }
         }
-    }
-
-    /// even a one-file result keeps its list in data.lock.d, so recipes need it committed too.
-    #[test]
-    fn the_concepts_say_recipes_keep_their_lists_in_data_lock_d() {
-        let flat = CONCEPTS.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            flat.contains("and data.lock.d once it is there: each recipe's result and each big dataset keep their file lists in it."),
-            "{CONCEPTS}"
-        );
-    }
-
-    /// the topic's example reads as data.toml, a recipe made from a fetched dataset, and
-    /// `build --help` points at the topic.
-    #[test]
-    fn the_recipes_topic_shows_a_recipe_that_reads() {
-        let recipes = super::topic_text(&["recipes".to_owned()]).unwrap_or_default();
-        let example = recipes
-            .lines()
-            .skip_while(|line| !line.starts_with("  [datasets."))
-            .take_while(|line| line.is_empty() || line.starts_with("  "))
-            .map(str::trim_start)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let manifest = crate::project::manifest::Manifest::parse(&example).unwrap();
-        let recipe = manifest.datasets["clean"].recipe().unwrap();
-        assert_eq!(recipe.from, ["iris"]);
-        assert!(manifest.datasets["iris"].source().is_some(), "{example}");
-        let command = args::Args::command();
-        let build = command.find_subcommand("build").unwrap();
-        let after = build.get_after_help().map(ToString::to_string);
-        assert!(
-            after
-                .unwrap_or_default()
-                .contains("`fetchloom help recipes`"),
-            "build --help points at the topic"
-        );
     }
 }

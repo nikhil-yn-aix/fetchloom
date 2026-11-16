@@ -27,7 +27,6 @@ use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Ignore, Project, git, native};
-use crate::recipe::{self, Change};
 use crate::source::{Listing, local};
 pub(crate) use crate::suggested::command;
 use crate::units;
@@ -226,145 +225,6 @@ fn lists_gone(root: &Path) -> bool {
         .is_some_and(|tracked| !tracked.is_empty())
 }
 
-/// the most files of recipe code a warning names in its `git add`; `-v` names each one.
-const NAMED_CODE: usize = 5;
-
-/// a file of a recipe's code git does not have: its path from the project's folder, the code
-/// entry of data.toml that holds it and the recipes that name that entry.
-struct Uncommitted<'m> {
-    file: String,
-    code: &'m str,
-    recipes: &'m [&'m str],
-}
-
-/// warns of recipe code files git lacks, new or left out by .gitignore, since a commit leaves them
-/// out and a clone then cannot build the recipe from the same code.
-pub(super) fn warn_recipe_code(output: &Output, project: &Project, manifest: &Manifest) {
-    let mut code: Vec<(&str, Vec<&str>)> = Vec::new();
-    for (name, entry) in &manifest.datasets {
-        for path in entry.recipe().map_or(&[][..], |recipe| &recipe.code[..]) {
-            match code.iter_mut().find(|(seen, _)| seen == path) {
-                Some((_, recipes)) => recipes.push(name),
-                None => code.push((path, vec![name])),
-            }
-        }
-    }
-    let files: Vec<Uncommitted<'_>> = code
-        .iter()
-        .flat_map(|(path, recipes)| {
-            // code a build would refuse or cannot read is the build's to tell
-            recipe::code::files(&project.root, recipes[0], path)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|file| Uncommitted {
-                    file,
-                    code: path,
-                    recipes,
-                })
-        })
-        .collect();
-    if files.is_empty() {
-        return;
-    }
-    let paths: Vec<&str> = code.iter().map(|(path, _)| *path).collect();
-    let Some(known) = std::env::var_os("PATH")
-        .and_then(|path| git::find(Some(&path), &project.root))
-        .and_then(|program| git::known(&program, &project.root, &paths))
-    else {
-        return;
-    };
-    let (untracked, ignored): (Vec<Uncommitted<'_>>, Vec<Uncommitted<'_>>) = files
-        .into_iter()
-        .filter(|file| !in_git(&known.tracked, &file.file, ""))
-        .partition(|file| in_git(&known.untracked, &file.file, "/"));
-    for (files, ignored) in [(untracked, false), (ignored, true)] {
-        let Some((said, help)) = uncommitted(&project.root, &files, ignored) else {
-            continue;
-        };
-        output.warn_detailed(
-            Warning::GitCodeUntracked,
-            &said,
-            Some(&help),
-            files.iter().map(|file| &file.file),
-        );
-        if files.len() > 1 {
-            for file in &files {
-                output.detail(&file.file);
-            }
-        }
-    }
-}
-
-/// whether `listed` holds `file`, or a folder above it, written with `end`, as git lists a
-/// submodule or a repository inside the work tree whole.
-fn in_git(listed: &std::collections::HashSet<String>, file: &str, end: &str) -> bool {
-    listed.contains(file)
-        || file
-            .match_indices('/')
-            .any(|(at, _)| listed.contains(&format!("{}{end}", &file[..at])))
-}
-
-fn uncommitted(root: &Path, files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, String)> {
-    let first = files.first()?;
-    let mut recipes: Vec<&str> = files
-        .iter()
-        .flat_map(|file| file.recipes.iter().copied())
-        .collect();
-    recipes.sort_unstable();
-    recipes.dedup();
-    let recipes = units::listed(&recipes, "and");
-    let what = match files.len() {
-        1 => format!("{}, code of {recipes}", first.file),
-        count => format!(
-            "{} files of the code of {recipes}, such as {}",
-            units::grouped(count as u64),
-            first.file
-        ),
-    };
-    let it = if files.len() == 1 { "it" } else { "them" };
-    let words = |paths: &mut dyn Iterator<Item = &str>| {
-        let mut words: Vec<String> = paths
-            .map(|path| super::shell_word(path).into_owned())
-            .collect();
-        words.dedup();
-        words.join(" ")
-    };
-    let since = format!("a clone without {it} cannot build {recipes} from the same code");
-    let git = |words: String| crate::suggested::git(root, &words);
-    if ignored {
-        let add = if files.len() <= NAMED_CODE {
-            format!(
-                "`{}`",
-                git(format!(
-                    "add -f {}",
-                    words(&mut files.iter().map(|file| &*file.file))
-                ))
-            )
-        } else {
-            format!(
-                "`git add -f`, as `{}`",
-                git(format!("add -f {}", super::shell_word(&first.file)))
-            )
-        };
-        return Some((
-            format!(".gitignore leaves out {what}"),
-            format!("{since}: commit {it} with {add}, or move {it} out of the recipe's code"),
-        ));
-    }
-    let add = if files.len() <= NAMED_CODE {
-        words(&mut files.iter().map(|file| &*file.file))
-    } else {
-        words(&mut files.iter().map(|file| file.code))
-    };
-    Some((
-        format!("git does not have {what}"),
-        format!(
-            "run `{}`, then commit {it}, since {since}",
-            git(format!("add {add}"))
-        ),
-    ))
-}
-
 /// `sync`, failing with `--strict` when the data asked for is not ready once it is done.
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let strict = args.strict.then(|| args.names.clone());
@@ -376,16 +236,12 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     );
     let ready = match (strict, &report.placement) {
         (Some(names), Some(placement)) => {
-            let project = Project {
-                root: report.project.clone(),
-            };
             let scope = if names.is_empty() {
                 Scope::All
             } else {
                 Scope::Only(names.into_iter().collect())
             };
-            let unready =
-                super::status::ready::after_sync(&project, &scope, placement, &report.waiting)?;
+            let unready = super::status::ready::after_sync(&scope, placement, &report.waiting);
             super::status::ready::ready(&unready)
         }
         _ => Ok(()),
@@ -572,21 +428,20 @@ async fn sync_plain(
     let dropped = survey.state.dropped.clone();
     super::drop::tell_left_out(&context.output, plain, &Scope::All, &dropped);
     let plain = &*super::drop::placed_by(plain, &Scope::All, &dropped);
-    let (whole, outcome) =
-        if let Some(outcome) = settle(&work, plain, &survey, &seen, old.as_ref())? {
-            (None, outcome)
-        } else {
-            let whole = Project::parse_manifest(text)?;
-            let whole = super::drop::placed_by(&whole, &Scope::All, &dropped).into_owned();
-            let run = Run {
-                upgrade: Upgrade::Nothing,
-                force: args.force,
-                verify: false,
-                read: Read::Settled(&seen),
-            };
-            let outcome = sync_surveyed(&work, &whole, old, None, run, survey).await?;
-            (Some(whole), outcome)
+    let (whole, outcome) = if let Some(outcome) = settle(&work, plain, &survey, &seen)? {
+        (None, outcome)
+    } else {
+        let whole = Project::parse_manifest(text)?;
+        let whole = super::drop::placed_by(&whole, &Scope::All, &dropped).into_owned();
+        let run = Run {
+            upgrade: Upgrade::Nothing,
+            force: args.force,
+            verify: false,
+            read: Read::Settled(&seen),
         };
+        let outcome = sync_surveyed(&work, &whole, old, None, run, survey).await?;
+        (Some(whole), outcome)
+    };
     let manifest = whole.as_ref().unwrap_or(plain);
     let Outcome {
         lock_changed,
@@ -642,8 +497,7 @@ fn settled_named(
     let Scope::Only(names) = scope else {
         return Ok(None);
     };
-    let needed = engine::with_inputs(manifest, names.clone());
-    let Some((lock, lock_text)) = project.lock_only(&|name| needed.contains(name))? else {
+    let Some((lock, lock_text)) = project.lock_only(&|name| names.contains(name))? else {
         return Ok(None);
     };
     let seen = Seen {
@@ -654,7 +508,7 @@ fn settled_named(
     drop(lock_text);
     let work =
         Loop::new(context, project, Arc::new(context.net()), open_cache()?).within(scope.clone());
-    refuse_unbuilt(manifest, Some(&lock), scope)?;
+    refuse_named_waiting(Some(&lock), scope)?;
     let folders: Vec<String> = names
         .iter()
         .map(|name| plan::folder(manifest, name))
@@ -675,7 +529,6 @@ fn settled_named(
     else {
         return Ok(None);
     };
-    work.tell_stale(manifest, &lock);
     context
         .stop
         .check()
@@ -805,7 +658,6 @@ fn closing(
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
-        && placement.unbuilt.is_empty()
         && placement.adopted.is_empty()
     {
         let found = in_place(manifest, scope, verified, &waiting);
@@ -820,13 +672,7 @@ fn closing(
             next: None,
         };
     }
-    let (verb, text) = synced(
-        manifest,
-        scope,
-        placement.kept.len(),
-        &placement.unbuilt,
-        &waiting,
-    );
+    let (verb, text) = synced(manifest, scope, placement.kept.len(), &waiting);
     // `path` answers only a dataset placed in the data folder, and the line names one this
     // sync just placed
     let first = placement.filled.iter().find(|name| {
@@ -835,7 +681,6 @@ fn closing(
                 .datasets
                 .get(*name)
                 .is_some_and(|entry| entry.place)
-            && !placement.unbuilt.contains(*name)
     });
     let next = if lock_changed {
         Some(format!(
@@ -872,7 +717,6 @@ fn synced(
     manifest: &Manifest,
     scope: &Scope,
     kept: usize,
-    unbuilt: &[String],
     waiting: &[String],
 ) -> (&'static str, String) {
     let kept = match kept {
@@ -895,24 +739,11 @@ fn synced(
             let placed = manifest
                 .datasets
                 .iter()
-                .filter(|(name, entry)| {
-                    entry.place && !unbuilt.contains(*name) && !waiting.contains(*name)
-                })
+                .filter(|(name, entry)| entry.place && !waiting.contains(*name))
                 .count();
             if placed == 0 {
-                let until = match unbuilt {
-                    [] => String::new(),
-                    [recipe] => format!(" until {recipe} is built"),
-                    many => format!(
-                        " until {} are built",
-                        units::count(many.len() as u64, "result", "results")
-                    ),
-                };
                 let data = &manifest.data_dir;
-                return (
-                    "Ok",
-                    format!("nothing to place in {data}{until}{waits}{kept}"),
-                );
+                return ("Ok", format!("nothing to place in {data}{waits}{kept}"));
             }
             (units::count(placed as u64, "dataset", "datasets"), 0)
         }
@@ -934,10 +765,6 @@ fn synced(
         );
         said = format!("{said} · {others}");
     }
-    if !unbuilt.is_empty() {
-        let left = units::count(unbuilt.len() as u64, "result", "results");
-        said = format!("{said} · {left} left out until built");
-    }
     ("Synced", format!("{said}{waits}{kept}"))
 }
 
@@ -945,43 +772,24 @@ fn synced(
 /// `waiting` for their file lists, which are not.
 fn in_place(manifest: &Manifest, scope: &Scope, verified: bool, waiting: &[String]) -> String {
     let placed = |name: &String| manifest.datasets.get(name).is_some_and(|entry| entry.place);
-    let (files, unplaced) = match scope {
+    let files = match scope {
         Scope::All if !manifest.datasets.keys().any(placed) => {
             return format!("nothing to place in {}", manifest.data_dir);
         }
         Scope::All => match waiting {
-            [] => ("all pinned files".to_owned(), None),
-            [one] => (format!("all pinned files but {one}'s"), None),
-            many => (
-                format!(
-                    "all pinned files but those of {}",
-                    units::listed(many, "and")
-                ),
-                None,
+            [] => "all pinned files".to_owned(),
+            [one] => format!("all pinned files but {one}'s"),
+            many => format!(
+                "all pinned files but those of {}",
+                units::listed(many, "and")
             ),
         },
-        Scope::Only(names) => {
-            let (shown, unplaced): (BTreeSet<String>, BTreeSet<String>) =
-                names.iter().cloned().partition(placed);
-            let unplaced = (!unplaced.is_empty()).then(|| {
-                let are = if unplaced.len() == 1 { "is" } else { "are" };
-                format!("{} {are} not placed", named(&unplaced))
-            });
-            if shown.is_empty() {
-                let unplaced = unplaced.unwrap_or_default();
-                return format!("{unplaced} · place = false in data.toml");
-            }
-            (format!("the pinned files of {}", named(&shown)), unplaced)
-        }
+        Scope::Only(names) => format!("the pinned files of {}", named(names)),
     };
-    let found = if verified {
+    if verified {
         format!("{files} are in place, checked byte for byte")
     } else {
         format!("{files} are in place by size and time")
-    };
-    match unplaced {
-        Some(unplaced) => format!("{found} · {unplaced}, place = false in data.toml"),
-        None => found,
     }
 }
 
@@ -1084,8 +892,6 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     // a stop asked while the datasets were resolved leaves data.lock as it was
     context.stop.check()?;
     context.stop.finish();
-    // lock keeps a recipe's pin, which only a build moves, so it says which ones moved
-    let stale = work.tell_stale(&manifest, &lock);
     tell_waiting(&context.output, &waiting_in(&lock), &Scope::All);
     let changed = work.write_lock(&before, &lock)?.is_some();
     work.drop_unpacked(&lock);
@@ -1106,12 +912,10 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
             manifest.data_dir,
             committed(&project)
         ));
-    } else if stale.is_empty() {
+    } else {
         context
             .output
             .done("Ok", "data.lock is already up to date, nothing to do");
-    } else {
-        context.output.done("Ok", &unbuilt_pins(&stale));
     }
     Ok(Report {
         project: project.root,
@@ -1120,15 +924,6 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         placement: None,
         ..Report::default()
     })
-}
-
-/// said instead of "up to date" when a lock changed nothing but the recipes `stale` need a build.
-fn unbuilt_pins(stale: &[String]) -> String {
-    let need = if stale.len() > 1 { "need" } else { "needs" };
-    format!(
-        "data.lock pins the fetched datasets as data.toml asks; {} {need} a build",
-        units::listed(stale, "and")
-    )
 }
 
 fn tell_imports_kept(output: &Output, manifest: &Manifest) {
@@ -1160,7 +955,6 @@ async fn preview_lock(
     let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?);
     let dry = work.relock_dry(manifest, old, upgrade, Vec::new()).await?;
     let output = &context.output;
-    let stale = work.tell_stale(manifest, &dry.lock);
     tell_waiting(output, &waiting_in(&dry.lock), &Scope::All);
     let changed = !dry.before.holds(&dry.lock);
     if changed {
@@ -1196,12 +990,7 @@ async fn preview_lock(
         output.hint("whether a file no checksum pins has changed shows only once it is downloaded");
     }
     let nothing = !changed && download.is_empty() && dry.unpack.is_empty();
-    let found = if stale.is_empty() {
-        "data.lock is already up to date".to_owned()
-    } else {
-        unbuilt_pins(&stale)
-    };
-    dry_run_done(output, nothing.then_some(found.as_str()));
+    dry_run_done(output, nothing.then_some("data.lock is already up to date"));
     Ok(Report {
         project: project.root.clone(),
         selected: None,
@@ -1270,8 +1059,7 @@ pub(super) fn locked(
     }
 }
 
-/// `lock --check`, without network or writing. a recipe not built as it would be now is
-/// `build.needed`, not `lock.outdated`, since only a build, which runs the code, fixes it.
+/// `lock --check`, without network or writing.
 fn check(
     project: &Project,
     manifest: &Manifest,
@@ -1281,28 +1069,14 @@ fn check(
     let empty = Lock::default();
     let old = old.unwrap_or(&empty);
     let mut stale: Vec<String> = Vec::new();
-    let mut unbuilt: Vec<(String, Vec<Change>)> = Vec::new();
     for (name, entry) in &manifest.datasets {
         if !scope.includes(name) {
-            continue;
-        }
-        if entry.recipe().is_some() {
-            if old.get(name).is_some() || old.waits(name).is_some_and(|waiting| !waiting.made()) {
-                stale.push(format!(
-                    "{name} is made by a recipe in data.toml, but data.lock has it as fetched"
-                ));
-            }
-            let changes = recipe::drift(&project.root, manifest, old, name)?;
-            // a dataset it reads that waits for its list is told of below
-            if !changes.is_empty() && !recipe::only_waiting(&changes) {
-                unbuilt.push((name.clone(), changes));
-            }
             continue;
         }
         // a pin by its source's digests counts as locked until data.toml changes, and so does
         // one waiting for its list, whose missing list is told of below
         let stated = old.stated(name).map(|stated| &stated.pin);
-        let waiting = old.waits(name).and_then(lock::Waiting::pin);
+        let waiting = old.waits(name).map(lock::Waiting::pin);
         match old
             .get(name)
             .or(stated)
@@ -1324,23 +1098,9 @@ fn check(
     let names = old.datasets.iter().map(|dataset| &dataset.name);
     let stated = old.stated.iter().map(|stated| &stated.pin.name);
     let waiting = old.still_waiting().map(|waiting| &waiting.name);
-    for name in names
-        .chain(old.derived.iter().map(|result| &result.name))
-        .chain(stated)
-        .chain(waiting)
-    {
-        if !scope.includes(name) {
-            continue;
-        }
-        let made = old.result(name).is_some() || old.waits(name).is_some_and(lock::Waiting::made);
-        match manifest.datasets.get(name) {
-            None => stale.push(format!("{name} is in data.lock but no longer in data.toml")),
-            Some(entry) if entry.source().is_some() && made => {
-                stale.push(format!(
-                    "{name} is fetched in data.toml, but data.lock has it as made by a recipe"
-                ));
-            }
-            Some(_) => {}
+    for name in names.chain(stated).chain(waiting) {
+        if scope.includes(name) && !manifest.datasets.contains_key(name) {
+            stale.push(format!("{name} is in data.lock but no longer in data.toml"));
         }
     }
     if !stale.is_empty() {
@@ -1349,9 +1109,6 @@ fn check(
             error = error.detail(line);
         }
         return Err(error.help(format!("run `{}` and commit data.lock", command("lock"))));
-    }
-    if let Some(error) = needs_building(&unbuilt) {
-        return Err(error);
     }
     // its pin stands, but nothing here can place or check it until its list is back
     if let Some(waiting) = old
@@ -1399,44 +1156,6 @@ fn mispinned(project: &Project, manifest: &Manifest, lock: &Lock, scope: &Scope)
         }
     }
     None
-}
-
-/// the `build.needed` error for recipes data.lock does not pin as building them now would make.
-pub(super) fn needs_building(unbuilt: &[(String, Vec<Change>)]) -> Option<Error> {
-    let message = match unbuilt {
-        [] => return None,
-        [(name, changes)] if changes.first() == Some(&Change::Unbuilt) => {
-            format!("data.lock is out of date: {name} is not built yet")
-        }
-        [(name, _)] => format!("data.lock is out of date: {name} changed since it was built"),
-        many => {
-            let names: Vec<&str> = many.iter().map(|(name, _)| name.as_str()).collect();
-            format!(
-                "data.lock is out of date: {} need building",
-                units::listed(&names, "and")
-            )
-        }
-    };
-    let mut error = Error::new(Kind::BuildNeeded, message);
-    for (name, changes) in unbuilt {
-        error = error.detail(format!("{name}: {}", said(changes)));
-    }
-    let build = match unbuilt {
-        [(name, _)] => format!("fetchloom build {name}"),
-        _ => "fetchloom build".to_owned(),
-    };
-    Some(error.help(format!(
-        "run `{build}`, then commit data.lock and data.lock.d"
-    )))
-}
-
-/// what moved since a recipe was built, in a few words.
-pub(super) fn said(changes: &[Change]) -> String {
-    changes
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 /// data.toml and data.lock as a run read them, which the state records as the run leaves them.
@@ -1489,7 +1208,7 @@ pub(super) async fn sync_all(
     given: Option<(String, Listing)>,
     run: Run<'_>,
 ) -> Result<Outcome<Placement>, Error> {
-    refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
+    refuse_named_waiting(old.as_ref(), &work.scope)?;
     let survey = surveyed(work, &manifest.data_dir, run.verify)?;
     sync_surveyed(work, manifest, old, given, run, survey).await
 }
@@ -1521,14 +1240,12 @@ fn settle(
     manifest: &Manifest,
     survey: &Survey,
     seen: &Seen,
-    old: Option<&Lock>,
 ) -> Result<Option<Outcome<Placement>>, Error> {
     let Some(placement) =
         place::untouched(work.project, manifest, survey, seen, true, &work.scope)?
     else {
         return Ok(None);
     };
-    work.tell_stale(manifest, old.unwrap_or(&Lock::default()));
     // files hashing found unchanged settle with a state written now; a project folder
     // that takes no write fails no run that changed nothing
     if survey.needs_writing
@@ -1572,7 +1289,7 @@ async fn sync_surveyed(
     let manifest = &*left_out;
     let seen = match read {
         Read::Settled(seen) => {
-            if let Some(outcome) = settle(work, manifest, &survey, seen, old.as_ref())? {
+            if let Some(outcome) = settle(work, manifest, &survey, seen)? {
                 return Ok(outcome);
             }
             seen
@@ -1594,17 +1311,9 @@ async fn sync_surveyed(
         .await
         .map_err(|error| work.before_placing(error))?;
     work.tell_versions_kept(manifest, &before, &lock, &upgrade);
-    // a renamed recipe's kept rebuild follows its pin to the new name
-    for (old, new) in before.renamed() {
-        if let Some(candidate) = survey.state.candidates.remove(old) {
-            survey.state.candidates.insert(new.to_owned(), candidate);
-            survey.needs_writing = true;
-        }
-    }
     // a lock whose files cannot all land is refused before it is written, so data.lock never
     // pins what no sync can place. archives not unpacked here yet are checked once they are
     let plan = plan::from_cache(manifest, &lock, &work.cache)?;
-    work.tell_stale(manifest, &lock);
     let written = work.write_lock(&before, &lock)?;
     let changed = written.is_some();
     let pins = engine::repinned(&before, &lock);
@@ -1677,7 +1386,7 @@ pub(super) async fn preview_all(
     given: Vec<Given>,
     seen: Option<&Seen>,
 ) -> Result<Outcome<Preview>, Error> {
-    refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
+    refuse_named_waiting(old.as_ref(), &work.scope)?;
     let reading = work.context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(
         work.project,
@@ -1697,7 +1406,6 @@ pub(super) async fn preview_all(
         && let Some(placement) =
             place::untouched(work.project, manifest, &survey, seen, false, &work.scope)?
     {
-        work.tell_stale(manifest, old.as_ref().unwrap_or(&Lock::default()));
         return Ok(Outcome {
             lock_changed: false,
             pins: Vec::new(),
@@ -1718,7 +1426,6 @@ pub(super) async fn preview_all(
         .await?;
     let changed = !before.holds(&lock);
     let output = &work.context.output;
-    work.tell_stale(manifest, &lock);
     if changed {
         engine::tell_lock(
             output,
@@ -1747,28 +1454,13 @@ pub(super) async fn preview_all(
     })
 }
 
-/// refuses a run of named datasets that names one waiting for its file list, or a recipe `lock`
-/// pins no result of, before anything else: only `fetchloom build` makes one, so the run has
-/// nothing to place for it.
-fn refuse_unbuilt(manifest: &Manifest, lock: Option<&Lock>, scope: &Scope) -> Result<(), Error> {
-    let Scope::Only(names) = scope else {
-        return Ok(());
-    };
-    if let Some(lock) = lock {
+/// refuses a run of named datasets that names one waiting for its file list, before anything
+/// else, since the run has nothing to place for it.
+fn refuse_named_waiting(lock: Option<&Lock>, scope: &Scope) -> Result<(), Error> {
+    if let (Scope::Only(names), Some(lock)) = (scope, lock) {
         lock.refuse_waiting(names.iter().map(String::as_str))?;
     }
-    let unbuilt: Vec<(String, Vec<Change>)> = names
-        .iter()
-        .filter(|name| {
-            manifest
-                .datasets
-                .get(*name)
-                .is_some_and(|entry| entry.recipe().is_some())
-                && lock.is_none_or(|lock| lock.result(name).is_none())
-        })
-        .map(|name| (name.clone(), vec![Change::Unbuilt]))
-        .collect();
-    needs_building(&unbuilt).map_or(Ok(()), Err)
+    Ok(())
 }
 
 /// warns of each dataset of `waiting`, those that wait for their file list, in `scope`, with the
@@ -1945,17 +1637,6 @@ pub(super) async fn hold_until<T>(
     command: &str,
     mut ready: impl FnMut() -> Result<Option<T>, Error>,
 ) -> Result<Waited<T>, Error> {
-    if let Some(building) = &context.building
-        && same_folder(building, &project.root)
-    {
-        return Err(Error::new(
-            Kind::Usage,
-            format!(
-                "`fetchloom {command}` runs inside `fetchloom build` of this project, which holds the project until the step ends"
-            ),
-        )
-        .help("a step reads each dataset it is made from in the folder {name} stands for in its run, and writes into {out}, with no fetchloom command"));
-    }
     let mut told = false;
     let mut told_owner = false;
     let mut setup = Some(context.output.setup("Locking", "the project"));
@@ -2008,10 +1689,6 @@ pub(super) async fn hold_until<T>(
             () = context.stop.asked() => return Err(Error::new(Kind::Interrupted, "stopped while waiting for another fetchloom")),
         }
     }
-}
-
-fn same_folder(a: &std::path::Path, b: &std::path::Path) -> bool {
-    a == b || std::fs::canonicalize(a).is_ok_and(|a| std::fs::canonicalize(b).is_ok_and(|b| a == b))
 }
 
 /// refuses a name data.toml does not have, suggesting the closest as `command` would take it, as
@@ -2119,23 +1796,6 @@ pub(crate) mod tests {
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
         (dir, project, context)
-    }
-
-    /// git lists a submodule as one tracked entry and a repository inside the work tree as one
-    /// untracked folder, so a file below either is git's, and nothing else is.
-    #[test]
-    fn a_file_inside_a_folder_git_lists_whole_counts_as_listed() {
-        let listed = |paths: &[&str]| -> std::collections::HashSet<String> {
-            paths.iter().map(|path| (*path).to_owned()).collect()
-        };
-        let tracked = listed(&["prep.py", "lib/vendor"]);
-        assert!(in_git(&tracked, "prep.py", ""));
-        assert!(in_git(&tracked, "lib/vendor/x.py", ""));
-        assert!(!in_git(&tracked, "lib/vendored.py", ""));
-        assert!(!in_git(&tracked, "lib/new.py", ""));
-        let untracked = listed(&["lib/new.py", "lib/nested/"]);
-        assert!(in_git(&untracked, "lib/nested/deep/x.py", "/"));
-        assert!(!in_git(&untracked, "lib/nested.py", "/"));
     }
 
     #[test]
@@ -2284,7 +1944,7 @@ pub(crate) mod tests {
         .unwrap();
         let a = pinned(
             "a",
-            lock::spec(manifest.datasets["a"].source().unwrap()),
+            lock::spec(&manifest.datasets["a"].source),
             vec![pinned_file("README", "https://example.org/a", b"a")],
         );
         let old = Lock {
@@ -2336,7 +1996,7 @@ pub(crate) mod tests {
         .unwrap();
         let b = pinned(
             "b",
-            lock::spec(manifest.datasets["b"].source().unwrap()),
+            lock::spec(&manifest.datasets["b"].source),
             vec![pinned_file("README", "https://example.org/b", b"b")],
         );
         let old = Lock {
@@ -2553,7 +2213,7 @@ pub(crate) mod tests {
         crate::cache::tests::store(&cache, bytes);
         let iris = pinned(
             "iris",
-            lock::spec(manifest.datasets["iris"].source().unwrap()),
+            lock::spec(&manifest.datasets["iris"].source),
             vec![pinned_file("iris.csv", "https://example.org/iris", bytes)],
         );
         let lock = Lock {
@@ -2609,54 +2269,26 @@ pub(crate) mod tests {
         );
     }
 
-    /// a sync of every dataset counts only those it placed, not `place = false` or unbuilt ones.
+    /// a sync of every dataset counts only those it placed, not those a drop left out.
     #[test]
     fn a_sync_that_places_no_dataset_says_so() {
-        let raw = "[datasets.raw]\nplace = false\nref = \"zenodo:1\"\n";
-        let clean = "[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n";
-        let tidy = "[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"python3\", \"tidy.py\", \"{clean}\", \"{out}\"]\n";
+        let raw = "[datasets.raw]\nref = \"zenodo:1\"\n";
         let iris = "[datasets.iris]\nref = \"zenodo:2\"\n";
-        let names = |names: &[&str]| {
-            names
-                .iter()
-                .map(|&name| name.to_owned())
-                .collect::<Vec<_>>()
-        };
-        for (tables, kept, unbuilt, said) in [
-            (
-                &[raw, clean, iris][..],
-                0,
-                names(&["clean"]),
-                (
-                    "Synced",
-                    "1 dataset into data · 1 result left out until built",
-                ),
-            ),
-            (
-                &[raw, clean],
-                0,
-                names(&["clean"]),
-                ("Ok", "nothing to place in data until clean is built"),
-            ),
-            (
-                &[raw, clean, tidy],
-                0,
-                names(&["clean", "tidy"]),
-                ("Ok", "nothing to place in data until 2 results are built"),
-            ),
-            (&[raw], 0, Vec::new(), ("Ok", "nothing to place in data")),
+        for (tables, kept, said) in [
+            (&[raw, iris][..], 0, ("Synced", "1 dataset into data")),
+            (&[raw], 0, ("Ok", "nothing to place in data")),
             (
                 &[raw],
                 1,
-                Vec::new(),
                 (
                     "Ok",
                     "nothing to place in data, 1 file left unchanged; see the warnings above",
                 ),
             ),
         ] {
-            let manifest = Manifest::parse(&tables.join("\n")).unwrap();
-            let (verb, text) = synced(&manifest, &Scope::All, kept, &unbuilt, &[]);
+            let mut manifest = Manifest::parse(&tables.join("\n")).unwrap();
+            super::super::drop::left_out(&mut manifest, &BTreeSet::from(["raw".to_owned()]));
+            let (verb, text) = synced(&manifest, &Scope::All, kept, &[]);
             assert_eq!((verb, text.as_str()), said, "{tables:?}");
         }
     }

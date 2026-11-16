@@ -358,11 +358,10 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
                 &["exclude"],
                 &["sync"],
                 &["lock"],
-                &["build"],
                 &["push"],
                 &["cache", "gc"],
             ][..],
-            "`add`, `get`, `remove`, `exclude`, `sync`, `lock`, `build`, `push` and `cache gc` also take ",
+            "`add`, `get`, `remove`, `exclude`, `sync`, `lock`, `push` and `cache gc` also take ",
         ),
         (&[&["add"][..], &["get"]], "`add` and `get` also take "),
         (&[&["add"][..]], "`add` takes "),
@@ -500,7 +499,7 @@ fn help_concepts_explains_the_ideas_with_the_analogy() -> Result {
         assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
     }
     // under --json a topic is one document like any answer, with no ANSI even when color is forced
-    for topic in ["concepts", "environment", "exit-codes", "recipes"] {
+    for topic in ["concepts", "environment", "exit-codes"] {
         let json = sandbox
             .command(&["--json", "help", topic])
             .env("CLICOLOR_FORCE", "1")

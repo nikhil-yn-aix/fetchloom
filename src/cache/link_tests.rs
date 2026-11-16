@@ -26,7 +26,7 @@ fn cache_folders_cannot_be_links_to_another_folder() {
     }
     for name in [
         "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
-        "imported", "builds",
+        "imported",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("cache");
@@ -393,34 +393,6 @@ fn a_removal_inside_the_cache_never_follows_a_junction() {
     assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
 }
 
-/// a folder in a build swapped for a junction while its folders are held is removed as itself,
-/// never entered, so the folder it leads to keeps its files.
-#[cfg(windows)]
-#[test]
-fn a_junction_swapped_into_a_build_mid_clear_keeps_what_it_points_at() {
-    let (dir, cache) = super::tests::cache();
-    if !hardlinks(dir.path()) {
-        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
-    }
-    let outside = dir.path().join("outside");
-    fs::create_dir(&outside).unwrap();
-    let kept = outside.join("notes.txt");
-    fs::write(&kept, b"keep these bytes").unwrap();
-    let build = cache.root.join("tmp").join("0123456789abcdef.build");
-    let out = build.join("out");
-    fs::create_dir_all(&out).unwrap();
-    fs::write(out.join("result.csv"), b"a,b\n").unwrap();
-
-    let cleared = super::staging::clear_held(&cache.root, &build, || {
-        fs::rename(&out, dir.path().join("moved")).unwrap();
-        crate::test_links::link_folder(&outside, &out).unwrap();
-    });
-
-    cleared.unwrap();
-    assert!(!build.exists());
-    assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
-}
-
 #[test]
 fn a_swept_folder_swapped_for_a_link_keeps_what_it_points_at() {
     let (dir, cache) = super::tests::cache();
@@ -477,66 +449,6 @@ fn a_staging_folder_reached_through_a_swapped_tmp_keeps_its_files() {
     assert_eq!(fs::read(&payload).unwrap(), b"keep these bytes");
     assert!(stage.join("lock").exists());
     assert_ne!(freed.not_removed, []);
-}
-
-/// a build's folder whose lock a sweep can take is cleared at once, so a `tmp/` swapped for a
-/// link must not lead the sweep to clear a folder of that name elsewhere.
-#[test]
-fn a_build_folder_reached_through_a_swapped_tmp_keeps_its_files() {
-    let (dir, cache) = super::tests::cache();
-    if !hardlinks(dir.path()) {
-        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
-    }
-    let outside = dir.path().join("outside");
-    let build = outside.join("0123456789abcdef.build");
-    fs::create_dir_all(&build).unwrap();
-    fs::write(build.join("lock"), b"").unwrap();
-    let payload = build.join("payload");
-    fs::write(&payload, b"keep these bytes").unwrap();
-    let folder = cache.root.join("tmp");
-    fs::create_dir_all(&folder).unwrap();
-    fs::rename(&folder, cache.root.join("old-tmp")).unwrap();
-    crate::test_links::link_folder(&outside, &folder).unwrap();
-
-    let freed = cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
-
-    assert_eq!(fs::read(&payload).unwrap(), b"keep these bytes");
-    assert!(build.join("lock").exists());
-    // what a sweep could not remove is told as such, never also counted as removed
-    assert_eq!(freed.removed_leftovers, 0);
-    assert!(
-        freed
-            .not_removed
-            .iter()
-            .any(|failure| failure.path.ends_with("0123456789abcdef.build")),
-        "{:?}",
-        freed.not_removed
-    );
-}
-
-/// a sweep clears a build folder through handles that never follow a link, so a folder in it
-/// swapped for a link to someone's folder keeps what that folder holds.
-#[test]
-fn clearing_a_build_folder_never_follows_a_link_inside_it() {
-    let (dir, cache) = super::tests::cache();
-    let outside = dir.path().join("outside");
-    fs::create_dir(&outside).unwrap();
-    let kept = outside.join("notes.txt");
-    fs::write(&kept, b"keep these bytes").unwrap();
-    let build = cache.root.join("tmp").join("0123456789abcdef.build");
-    fs::create_dir_all(build.join("out")).unwrap();
-    fs::write(build.join("lock"), b"").unwrap();
-    // open to its owner alone, as a build makes its folder
-    #[cfg(unix)]
-    fs::set_permissions(&build, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
-    if crate::test_links::link_folder(&outside, &build.join("linked")).is_err() {
-        return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
-    }
-
-    cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
-
-    assert!(!build.exists());
-    assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
 }
 
 #[cfg(unix)]

@@ -53,16 +53,13 @@ pub(in crate::cli) fn held(cache: &Cache, threads: Threads, stop: &Stop) -> Opti
 
 /// the `most` largest datasets `lock` pins, by their pinned files' bytes, largest first.
 pub(super) fn largest(lock: &Lock, most: usize) -> Vec<(String, u64)> {
-    let fetched = lock.datasets.iter().map(|locked| {
-        let sizes = locked.files.iter().map(|file| file.size);
-        (&locked.name, sizes.fold(0, u64::saturating_add))
-    });
-    let made = lock.derived.iter().map(|derived| {
-        let sizes = derived.files.iter().map(|file| file.size);
-        (&derived.name, sizes.fold(0, u64::saturating_add))
-    });
-    let mut sized: Vec<(String, u64)> = fetched
-        .chain(made)
+    let mut sized: Vec<(String, u64)> = lock
+        .datasets
+        .iter()
+        .map(|locked| {
+            let sizes = locked.files.iter().map(|file| file.size);
+            (&locked.name, sizes.fold(0, u64::saturating_add))
+        })
         .filter(|(_, size)| *size > 0)
         .map(|(name, size)| (name.clone(), size))
         .collect();
@@ -291,7 +288,6 @@ mod tests {
                 dataset("iris", &[4608]),
                 dataset("mnist", &[4608]),
             ],
-            derived: Vec::new(),
             stated: Vec::new(),
             waiting: Vec::new(),
         };

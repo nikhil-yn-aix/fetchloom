@@ -9,7 +9,6 @@ profiling nine everyday jobs against the plain tools people use for them turned 
 | a hashing read's buffer sized to the file, up to 1 MiB, rather than 1 MiB for every file | importing 100,000 files 0.812 [0.787, 0.823], on glibc 0.939 [0.933, 0.962]; `cache verify` of 100,000 objects 0.784 [0.725, 0.826]; hashing 8 GiB, a 1 GiB download, 10,000 small downloads and a zip of 10,000 members flat | kept |
 | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697 [0.693, 0.699] warm and 0.949 [0.944, 0.954] cold; flat on musl, whose allocator already starts them at a page | kept |
 | a large download written to the disk while it arrives, every 32 MiB after its first 64 MiB | `get -o` of 10 GiB 0.531 [0.530, 0.540], at 500 MB/s 0.711 [0.704, 0.727]; 1 GiB 0.553 on ext4 and 0.913 on xfs; a resumed download 0.738; 1,000 and 10,000 small downloads flat | kept |
-| a step's exit wakes the build's watch | a recipe that writes 10,000 files 0.889 [0.886, 0.896], but on musl peak memory 1.061 [1.058, 1.078], with the step's output threads joined first or not; on glibc 1.004 [0.999, 1.009] | dropped |
 | the state's map built in one pass from a list of its files | a settled sync of 100,000 files 0.784 [0.771, 0.791], but peak memory 1.148 [1.130, 1.185] | dropped |
 | the same map built in chunks of 4,096 or 1,024 files that merge | a settled sync of 100,000 files 0.85 with no more memory, but on musl peak memory 1.06 at 10,000 files and 1.05 for `status` of 100,000; on glibc 1,000,000 files 0.997 and 1.017 | dropped |
 | one pool of scan workers for the whole walk | a settled sync of 100,000 files 0.902 [0.890, 0.917], but of 10,000 1.052 [1.046, 1.063] | dropped |
@@ -90,83 +89,6 @@ wall and CPU came from the interleaved harness. peak RSS came from GNU time's ch
 the fixed-input regression makes a file unavailable after its racy hash, then verifies that it is not reopened, an unchecked changed file is still found, and a racy edit stays an edit. the old code failed on the second open. disabling the new proof reproduced that failure. state round-trip checks reject a forged persisted proof, and the alias regression carries the proof with the record; these checks also passed on FAT32.
 
 the change meets the 10% keep rule without a measured control regression. it is kept, with the switch removed and the state format unchanged.
-
-## memoizing recipe input contents, 2026-11-12
-
-dropped after three bounded versions. the prototype remembered fetched recipe-input content by both the pin object's identity and its member-filter object's identity. read-only passes borrowed those objects; a build froze fetched-input hashes after relocking, without caching code hashes or derived trees. the checks before and after executing a recipe remained live. no recipe-key encoding changed.
-
-v1 used a B-tree memo. the fan-out case improved sharply, but independent 32-pair controls confirmed about 0.5–0.8% extra time when every recipe had a different one-file input. v2 used hash lookup, reserved the single-file canonical-line buffer from its format bounds, and built the frozen-input map without a second memo. its glibc 1,000-distinct-input control still slowed by about 1%, with roughly 260 more minor faults and higher system time. an independent repeat reproduced that cost. v3 reserved the complete recipe pass before its per-step allocations and pre-sized the frozen-input map from the selected iterator's bound. the last control pass still slowed, so no version stayed.
-
-v1 used the earlier 27811da3 build; v2 and v3 include c3438f1c's CPU changes and the kept rename index. each version has one release executable per libc with `FETCHLOOM_EXP_RECIPE_CONTENT` read once, not separately compiled arms. the paired wall, noise and bootstrap method follows [the rename comparison](lock-and-names.md#indexing-pin-membership-and-renames-2026-11-12). v2 used at least 64 clean pairs for one and ten recipes, 32 for protected controls, and 10 for large fan-out gains. native RSS was measured outside the wall lock with GNU time: 32 pairs at small n, five through 1,000 and three above it, with elapsed time retained separately because allocator purging depends on time.
-
-in a fan-out fixture, n recipes share one input of n files; the commands are offline JSON `status` and `build --dry-run`. no-reuse controls give each recipe its own one-file input. the named control previews one recipe among 1,000, and the ordinary 100,000-file status control has no recipes. all v2 output pairs matched. the complete v2 matrix follows; times are medians with 95% intervals, and RSS is median [minimum, maximum] of per-process peaks in MiB.
-
-| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before to after |
-|---|---|---:|---|---|---|---|
-| glibc | shared-input status | 1 | 4.432 [4.404, 4.457] | 4.458 [4.410, 4.496] | 1.0035 [1.0005, 1.0118] | 11.69 [11.14, 12.25] to 11.73 [10.85, 12.36] |
-| musl | shared-input status | 1 | 4.111 [4.085, 4.152] | 4.109 [4.080, 4.150] | 1.0037 [0.9950, 1.0148] | 18.05 [18.05, 18.30] to 18.05 [18.05, 18.05] |
-| glibc | shared-input dry run | 1 | 3.858 [3.842, 3.919] | 3.850 [3.825, 3.877] | 0.9957 [0.9828, 1.0084] | 11.60 [11.08, 11.92] to 11.58 [10.87, 12.00] |
-| musl | shared-input dry run | 1 | 3.371 [3.305, 3.408] | 3.391 [3.332, 3.458] | 1.0093 [0.9953, 1.0198] | 16.25 [16.25, 16.26] to 16.25 [16.25, 16.26] |
-| glibc | shared-input status | 10 | 4.470 [4.441, 4.499] | 4.452 [4.420, 4.499] | 0.9939 [0.9882, 1.0000] | 11.84 [11.05, 12.12] to 11.82 [10.89, 12.16] |
-| musl | shared-input status | 10 | 4.392 [4.361, 4.421] | 4.349 [4.326, 4.364] | 0.9926 [0.9798, 0.9965] | 18.30 [18.30, 18.31] to 18.30 [18.30, 18.31] |
-| glibc | shared-input dry run | 10 | 4.181 [4.109, 4.273] | 4.126 [4.005, 4.241] | 0.9827 [0.9796, 0.9895] | 11.77 [11.05, 12.31] to 11.78 [11.09, 12.07] |
-| musl | shared-input dry run | 10 | 3.607 [3.551, 3.736] | 3.530 [3.480, 3.591] | 0.9776 [0.9683, 0.9905] | 16.50 [16.25, 16.51] to 16.50 [16.25, 16.51] |
-| glibc | shared-input status | 1,000 | 447.475 [445.695, 448.513] | 25.185 [25.050, 25.782] | 0.0565 [0.0562, 0.0569] | 16.84 [16.55, 17.33] to 16.95 [16.71, 17.14] |
-| musl | shared-input status | 1,000 | 463.236 [462.403, 465.187] | 19.448 [19.311, 19.622] | 0.0419 [0.0417, 0.0422] | 34.27 [34.27, 34.28] to 30.27 [30.27, 30.28] |
-| glibc | shared-input dry run | 1,000 | 1163.073 [1155.403, 1172.514] | 739.067 [730.816, 749.855] | 0.6308 [0.6269, 0.6486] | 16.36 [15.79, 16.71] to 16.19 [16.04, 16.43] |
-| musl | shared-input dry run | 1,000 | 1159.120 [1155.832, 1161.063] | 709.471 [707.390, 711.157] | 0.6119 [0.6098, 0.6143] | 32.35 [32.35, 32.36] to 32.60 [32.35, 32.60] |
-| glibc | shared-input status | 4,000 | 6875.321 [6837.000, 7035.020] | 97.247 [95.045, 101.165] | 0.0140 [0.0139, 0.0144] | 33.42 [33.02, 33.68] to 32.33 [32.03, 33.43] |
-| musl | shared-input status | 4,000 | 7186.068 [7175.918, 7197.408] | 66.039 [65.833, 67.124] | 0.0092 [0.0092, 0.0093] | 53.53 [53.52, 53.53] to 70.27 [70.27, 70.28] |
-| glibc | status, no recipes | 100,000 | 426.502 [424.685, 430.796] | 427.475 [425.807, 431.293] | 1.0003 [0.9956, 1.0115] | 79.11 [79.02, 79.47] to 79.10 [78.98, 79.20] |
-| musl | status, no recipes | 100,000 | 367.862 [365.961, 370.291] | 368.748 [367.061, 370.699] | 1.0024 [0.9971, 1.0107] | 95.80 [85.65, 95.90] to 86.14 [85.65, 95.98] |
-| glibc | distinct-input status | 1,000 | 46.029 [45.616, 46.266] | 46.585 [46.367, 47.022] | 1.0111 [1.0015, 1.0199] | 19.53 [19.32, 19.96] to 20.61 [20.48, 20.67] |
-| musl | distinct-input status | 1,000 | 35.438 [35.332, 35.568] | 35.516 [35.293, 35.607] | 1.0010 [0.9950, 1.0050] | 42.27 [42.27, 42.28] to 44.28 [44.27, 44.52] |
-| glibc | distinct-input status | 4,000 | 190.867 [189.802, 191.724] | 191.076 [189.779, 192.440] | 0.9985 [0.9932, 1.0064] | 47.23 [46.85, 47.38] to 46.98 [46.67, 47.03] |
-| musl | distinct-input status | 4,000 | 132.682 [132.340, 133.029] | 132.696 [132.229, 132.942] | 1.0018 [0.9961, 1.0064] | 82.28 [82.03, 82.28] to 82.28 [82.28, 82.28] |
-| glibc | one named dry run | 1,000 | 18.454 [18.283, 19.108] | 18.490 [18.265, 18.976] | 1.0036 [0.9924, 1.0106] | 16.11 [15.94, 16.67] to 16.39 [16.02, 16.52] |
-| musl | one named dry run | 1,000 | 16.722 [16.662, 16.851] | 16.832 [16.631, 16.923] | 1.0065 [0.9966, 1.0138] | 26.36 [26.35, 26.60] to 26.35 [26.34, 26.60] |
-
-| libc | workload | n | instructions M, before to after | clean pairs | excluded burst pairs |
-|---|---|---:|---:|---:|---:|
-| glibc | shared-input status | 1 | 4.518 to 4.520 | 64 | 0 |
-| musl | shared-input status | 1 | 3.360 to 3.359 | 64 | 0 |
-| glibc | shared-input dry run | 1 | 3.361 to 3.357 | 64 | 0 |
-| musl | shared-input dry run | 1 | 2.577 to 2.579 | 76 | 4 |
-| glibc | shared-input status | 10 | 6.109 to 5.686 | 64 | 0 |
-| musl | shared-input status | 10 | 4.690 to 4.313 | 64 | 0 |
-| glibc | shared-input dry run | 10 | 5.723 to 5.292 | 78 | 2 |
-| musl | shared-input dry run | 10 | 4.562 to 4.190 | 64 | 0 |
-| glibc | shared-input status | 1,000 | 4522.578 to 142.146 | 13 | 1 |
-| musl | shared-input status | 1,000 | 4221.601 to 120.446 | 10 | 0 |
-| glibc | shared-input dry run | 1,000 | 12663.174 to 8307.728 | 10 | 4 |
-| musl | shared-input dry run | 1,000 | 11497.636 to 7398.191 | 10 | 8 |
-| glibc | shared-input status | 4,000 | 71331.961 to 570.015 | 10 | 0 |
-| musl | shared-input status | 4,000 | 66207.897 to 488.600 | 13 | 1 |
-| glibc | status, no recipes | 100,000 | 2001.309 to 2001.387 | 32 | 14 |
-| musl | status, no recipes | 100,000 | 2476.139 to 2476.324 | 32 | 0 |
-| glibc | distinct-input status | 1,000 | 261.836 to 261.132 | 32 | 0 |
-| musl | distinct-input status | 1,000 | 224.904 to 224.978 | 32 | 0 |
-| glibc | distinct-input status | 4,000 | 1064.742 to 1061.451 | 32 | 0 |
-| musl | distinct-input status | 4,000 | 922.276 to 922.487 | 32 | 0 |
-| glibc | one named dry run | 1,000 | 80.328 to 80.331 | 35 | 1 |
-| musl | one named dry run | 1,000 | 67.910 to 67.911 | 32 | 0 |
-
-v2's default musl 4,000-recipe peak rose from 53.5 to 70.3 MiB. it remains below 150 MB, but is not memory-neutral. the earlier purge-delay diagnostic reduced the v1 before/after peaks to about 39.6 MiB each; that override was not used for a keep decision. the ordinary and small measurements remain visible rather than subtracting inferred retained allocator pages.
-
-the fixed independent v2 confirmation again found the glibc 1,000-input slowdown: ratio 1.0106 [1.0031, 1.0179] over 32 clean pairs. its other no-reuse, named and single-dataset checks did not establish a slowdown. the final v3 control results were:
-
-| libc | control | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before to after |
-|---|---|---|---|---|---|
-| glibc | 1,000 distinct inputs | 46.151 [45.753, 46.668] | 46.485 [46.221, 46.941] | 1.0092 [1.0019, 1.0156] | 20.06 [18.94, 20.16] to 20.70 [20.61, 21.13] |
-| glibc | 4,000 distinct inputs | 188.578 [187.127, 190.354] | 189.115 [188.569, 189.920] | 1.0003 [0.9959, 1.0063] | 46.81 [46.66, 46.91] to 46.82 [46.12, 47.02] |
-| glibc | one named recipe among 1,000 | 18.157 [18.123, 18.216] | 18.207 [18.133, 18.251] | 1.0014 [0.9988, 1.0058] | 16.25 [16.05, 16.36] to 16.23 [16.17, 16.55] |
-| musl | 1,000 distinct inputs | 35.250 [35.183, 35.416] | 35.575 [35.426, 35.766] | 1.0086 [1.0050, 1.0113] | 42.28 [42.27, 42.59] to 46.27 [42.27, 46.28] |
-| musl | 4,000 distinct inputs | 131.481 [131.191, 131.764] | 131.161 [130.878, 131.657] | 0.9987 [0.9934, 1.0036] | 82.28 [82.27, 82.28] to 82.28 [82.28, 82.28] |
-| musl | one named recipe among 1,000 | 16.827 [16.716, 16.946] | 16.950 [16.829, 17.087] | 1.0079 [1.0022, 1.0201] | 26.35 [26.35, 26.60] to 26.59 [26.34, 26.60] |
-
-each v3 row has 32 clean wall pairs. the larger fan-out ladder was not repeated for v3 after these controls rejected it. the stated keep rule rejects a reproducible time regression elsewhere, so the large fan-out gain was not enough.
-
-correctness checks passed: `shared_recipe_inputs_are_read_once` first failed with two calculations instead of one, then passed with the memo and failed again when reuse was bypassed. `reading_again_uses_the_current_pin_and_member_filters`, `content_memo_keeps_pin_and_member_identities_apart`, `frozen_inputs_do_not_cross_pin_or_filter_identity` and `frozen_inputs_leave_code_and_derived_trees_live` covered identity changes and live code/derived values. the revised source also integrated the newly landed strict-sync check. v2 and v3 each passed 19 affected unit tests and all-target clippy. these tests, the switches and prototype code were removed from the product with the rejected change; their patches, binaries, full first-pass and independent-control records remain with the sweep outside the repository. no allocator policy was changed.
 
 ## searching selected folder ranges, 2026-11-12
 

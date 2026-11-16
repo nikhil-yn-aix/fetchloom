@@ -23,7 +23,7 @@ fn pin(name: &str, reference: &str, bytes: &[u8]) -> Locked {
     Locked {
         name: name.to_owned(),
         reference: reference.to_owned(),
-        spec: spec(entry.source().unwrap()),
+        spec: spec(&entry.source),
         extract: true,
         web_page: false,
         resolved: reference.to_owned(),
@@ -577,144 +577,6 @@ fn listed_datasets_merge_from_the_parts_of_the_side_kept() {
 }
 
 #[test]
-fn recipe_results_merge_by_name() {
-    let root = tempfile::tempdir().unwrap();
-    let files = vec![crate::cache::Member {
-        path: "out.csv".to_owned(),
-        size: 1,
-        sha256: digest::sha256(b"x"),
-    }];
-    let clean = Derived {
-        name: "clean".to_owned(),
-        from: vec![super::super::derived::Input {
-            name: "core".to_owned(),
-            content: digest::sha256(b"core"),
-        }],
-        run: ["python3", "clean.py", "{core}", "{out}"]
-            .map(str::to_owned)
-            .to_vec(),
-        code: Vec::new(),
-        env: BTreeMap::new(),
-        key: digest::sha256(b"key"),
-        timestamp: "2026-11-10T00:00:00Z".to_owned(),
-        tree: crate::cache::tree_hash(&files),
-        files,
-    };
-    let core = pin("core", "zenodo:3", b"core");
-    let with_result = Lock {
-        datasets: vec![core.clone()],
-        derived: vec![clean.clone()],
-        stated: Vec::new(),
-        waiting: Vec::new(),
-    };
-    fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
-    for (part, text) in with_result.lists() {
-        fs::write(root.path().join(part), lists::compress(&text).unwrap()).unwrap();
-    }
-    let recipe = "\n[datasets.clean]\nfrom = [\"core\"]\nrun = [\"python3\", \"clean.py\", \"{core}\", \"{out}\"]\n";
-    let text = format!("{}{recipe}", toml(&[("core", "zenodo:3")]));
-    let manifest = sides(text.clone(), text.clone(), None);
-    let added = sides(
-        with_result.render(),
-        lock(vec![core.clone()]),
-        Some(lock(vec![core.clone()])),
-    );
-    let choices = Choices::new();
-    let merging = |manifest: &Sides, locks: &Sides, choices: &Choices| {
-        merge(manifest, Some(locks), choices, root.path(), &|_| {}, None)
-    };
-    let merged = merging(&manifest, &added, &choices).unwrap();
-    assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
-    assert_eq!(merged.summary.from_ours, ["clean"]);
-    // the one result data.toml's recipe has is its pin, whatever the base was
-    let unknown = sides(added.ours.clone(), added.theirs.clone(), None);
-    let merged = merging(&manifest, &unknown, &choices).unwrap();
-    assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
-    let rebuilt = Lock {
-        datasets: vec![core.clone()],
-        derived: vec![Derived {
-            key: digest::sha256(b"another key"),
-            ..clean
-        }],
-        stated: Vec::new(),
-        waiting: Vec::new(),
-    };
-    let both = sides(with_result.render(), rebuilt.render(), None);
-    let error = merging(&manifest, &both, &choices).unwrap_err();
-    assert_eq!(error.message, "the merge needs a choice for clean");
-    // a result goes with its recipe, as a fetched dataset's pin goes with its entry, unless the
-    // other side built it anew: then removing the recipe waits for a choice
-    let dropped = sides(text.clone(), toml(&[("core", "zenodo:3")]), Some(text));
-    let error = merging(&dropped, &added, &choices).unwrap_err();
-    assert_eq!(
-        error.details,
-        [
-            "clean: one side changed it and the other removed it",
-            "clean on ours: from = [\"core\"]; run = [\"python3\", \"clean.py\", \"{core}\", \"{out}\"]",
-            "clean on theirs: not in data.toml",
-        ]
-    );
-    let removal = Choices::from([("clean".to_owned(), Side::Theirs)]);
-    let merged = merging(&dropped, &added, &removal).unwrap();
-    assert!(!merged.manifest.contains("clean"), "{}", merged.manifest);
-    assert_eq!(merged.lock.unwrap().derived, []);
-    let built_before = sides(
-        with_result.render(),
-        lock(vec![core]),
-        Some(with_result.render()),
-    );
-    let merged = merging(&dropped, &built_before, &choices).unwrap();
-    assert_eq!(merged.lock.unwrap().derived, []);
-    assert_eq!(merged.summary.removed, ["clean"]);
-}
-
-/// each side's recipes read but their merge does not: a person merges data.toml, told why.
-#[test]
-fn a_merge_whose_recipes_would_not_read_says_why() {
-    let recipe = |name: &str, from: &str| {
-        format!(
-            "\n[datasets.{name}]\nfrom = [\"{from}\"]\nrun = [\"t\", \"{{{from}}}\", \"{{out}}\"]\n"
-        )
-    };
-    let raw = toml(&[("raw", "zenodo:1")]);
-    let base = format!("{raw}{}{}", recipe("a", "raw"), recipe("b", "raw"));
-    let ours = format!("{raw}{}{}", recipe("a", "b"), recipe("b", "raw"));
-    let theirs = format!("{raw}{}{}", recipe("a", "raw"), recipe("b", "a"));
-    let error = merged(
-        &sides(ours, theirs, Some(base)),
-        &sides(lock(Vec::new()), lock(Vec::new()), None),
-        &[],
-    )
-    .unwrap_err();
-    assert_eq!(error.kind, Kind::ProjectInvalid);
-    assert_eq!(
-        error.message,
-        "the merged data.toml would not read: datasets a and b are made from each other: a \u{2192} b \u{2192} a"
-    );
-    assert_eq!(
-        error.help.as_deref(),
-        Some("merge data.toml by hand, then run `fetchloom lock`")
-    );
-}
-
-/// only a build pins a recipe.
-#[test]
-fn an_unbuilt_recipe_is_not_left_for_sync_to_pin() {
-    let text = format!(
-        "{}\n[datasets.clean]\nfrom = [\"core\"]\nrun = [\"t\", \"{{core}}\", \"{{out}}\"]\n",
-        toml(&[("core", "zenodo:3"), ("new", "zenodo:4")])
-    );
-    let core = lock(vec![pin("core", "zenodo:3", b"core")]);
-    let result = merged(
-        &sides(text.clone(), text, None),
-        &sides(core.clone(), core, None),
-        &[],
-    )
-    .unwrap();
-    assert_eq!(result.summary.unpinned, ["new"]);
-}
-
-#[test]
 fn text_outside_the_datasets_must_agree_or_be_changed_on_one_side() {
     let datasets = toml(&[("a", "zenodo:1")]);
     let with = |note: &str| format!("# {note}\n\n{datasets}");
@@ -841,7 +703,7 @@ fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
 }
 
 /// what a refusal shows of the other side holds only what fetchloom writes: list parts by the
-/// names it gives them, and no `ref` query or `env` value, which may carry a secret.
+/// names it gives them, and no `ref` query, which may carry a secret.
 #[test]
 fn a_needed_choice_shows_no_unchecked_part_or_secret() {
     let mut photos = pin("photos", "zenodo:7", b"one");
@@ -876,16 +738,10 @@ fn a_needed_choice_shows_no_unchecked_part_or_secret() {
         error.details
     );
 
-    let entry = |token: &str, seed: &str| {
-        format!(
-            "[datasets.raw]\nref = \"https://example.org/raw.csv?token={token}\"\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{{raw}}\", \"{{out}}\"]\nenv = {{ SEED = \"{seed}\" }}\n"
-        )
+    let entry = |token: &str| {
+        format!("[datasets.raw]\nref = \"https://example.org/raw.csv?token={token}\"\n")
     };
-    let manifest = sides(
-        entry("ours1", "4"),
-        entry("theirs1", "5"),
-        Some(entry("base1", "3")),
-    );
+    let manifest = sides(entry("ours1"), entry("theirs1"), Some(entry("base1")));
     let none = lock(Vec::new());
     let error = merged(
         &manifest,
@@ -894,15 +750,11 @@ fn a_needed_choice_shows_no_unchecked_part_or_secret() {
     )
     .unwrap_err();
     let said = error.details.join("\n");
-    for secret in ["ours1", "theirs1", "base1", "\"4\"", "\"5\""] {
+    for secret in ["ours1", "theirs1", "base1"] {
         assert!(!said.contains(secret), "{said}");
     }
-    for line in [
-        "clean on ours: env = { SEED = *** }",
-        "raw on theirs: ref = \"https://example.org/raw.csv?token=***\"",
-    ] {
-        assert!(error.details.iter().any(|detail| detail == line), "{said}");
-    }
+    let line = "raw on theirs: ref = \"https://example.org/raw.csv?token=***\"";
+    assert!(error.details.iter().any(|detail| detail == line), "{said}");
 }
 
 /// the texts of all three locks are held to the room together before any is parsed, so three
@@ -1177,10 +1029,7 @@ fn a_merge_reads_data_toml_as_often_for_many_datasets_as_for_few() {
         let manifest = Manifest::parse(&merged).unwrap();
         let removed = (count + 1) / 3;
         assert_eq!(manifest.datasets.len(), 4 * count - removed);
-        assert_eq!(
-            manifest.datasets["c000"].source().unwrap().reference,
-            "zenodo:1000"
-        );
+        assert_eq!(manifest.datasets["c000"].source.reference, "zenodo:1000");
         reads
     };
     assert_eq!(

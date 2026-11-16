@@ -20,7 +20,6 @@ use crate::plan::{self, Plan, Target};
 use crate::project::lock::archives::{self, Archive, Pinned};
 use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, Narrowing};
-use crate::recipe;
 use crate::units;
 
 /// what `exclude` did, or with `--dry-run` would do, as `--json` prints it.
@@ -144,8 +143,7 @@ pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Erro
     let mut pace = Pace::new(&poll);
     let progress = context.output.wait("Planning", planning(&paths));
     pace.look()?;
-    // a dataset with `place = false` is planned where its files would land, so exclude reaches them
-    let planned = plan::inputs(&manifest, &lock, &cache)?;
+    let planned = plan::from_cache(&manifest, &lock, &cache)?;
     let asked = asked(
         &manifest,
         &lock,
@@ -215,7 +213,7 @@ pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Erro
     let placement = placing
         .remove_only(&context.output)
         .map_err(|error| written_first(error, lock_changed))?;
-    tell_next(context, &project, &new_manifest, &edits, lock_changed);
+    tell_next(context, &project, lock_changed);
     Ok(report(placement, None))
 }
 
@@ -267,57 +265,16 @@ fn write(
     Ok(())
 }
 
-/// the closing `next:` line: build what data.lock pins as made from the files before, or commit.
-fn tell_next(
-    context: &Context,
-    project: &crate::project::Project,
-    manifest: &Manifest,
-    edits: &BTreeMap<&str, Edit>,
-    lock_changed: bool,
-) {
-    let datasets: Vec<&str> = edits.keys().copied().collect();
-    context
-        .output
-        .next(&match built_again(manifest, &datasets).as_slice() {
-            [] => {
-                let changed = if lock_changed {
-                    committed(project)
-                } else {
-                    "data.toml"
-                };
-                format!(
-                    "commit {changed}; other clones leave them out at their next `fetchloom sync`"
-                )
-            }
-            recipes => format!(
-                "run `{}`, then commit data.toml, data.lock and data.lock.d",
-                super::project::command(&format!("build {}", recipes.join(" ")))
-            ),
-        });
-}
-
-/// the recipes to build once `changed` datasets hold other files: each made from one of them,
-/// directly or not, apart from those another of these is made from, which its build makes too.
-fn built_again<'m>(manifest: &'m Manifest, changed: &[&str]) -> Vec<&'m str> {
-    let made_from: BTreeMap<&str, Vec<&str>> = manifest
-        .datasets
-        .iter()
-        .filter(|(name, entry)| entry.recipe().is_some() && !changed.contains(&name.as_str()))
-        .map(|(name, _)| {
-            let needs = recipe::closure(&manifest.datasets, &[name.as_str()]);
-            (name.as_str(), needs)
-        })
-        .filter(|(_, needs)| needs.iter().any(|need| changed.contains(need)))
-        .collect();
-    made_from
-        .keys()
-        .copied()
-        .filter(|name| {
-            !made_from
-                .iter()
-                .any(|(other, needs)| other != name && needs.contains(name))
-        })
-        .collect()
+/// the closing `next:` line: commit what changed.
+fn tell_next(context: &Context, project: &crate::project::Project, lock_changed: bool) {
+    let changed = if lock_changed {
+        committed(project)
+    } else {
+        "data.toml"
+    };
+    context.output.next(&format!(
+        "commit {changed}; other clones leave them out at their next `fetchloom sync`"
+    ));
 }
 
 fn planning(paths: &[String]) -> String {
@@ -453,7 +410,7 @@ pub(super) fn in_data_folder(
 }
 
 /// the planned files each of `paths` names, compared as a disk that ignores case compares names;
-/// it fails as `usage` for a path that names none, saying why, or that names a recipe's file.
+/// it fails as `usage` for a path that names none, saying why.
 fn asked<'p, 'a>(
     manifest: &Manifest,
     lock: &Lock,
@@ -477,14 +434,6 @@ fn asked<'p, 'a>(
             return Err(unplanned(
                 manifest, lock, cache, planned, &sorted, path, typed,
             ));
-        }
-        if let Some(made) = found.targets.iter().find(|target| {
-            manifest
-                .datasets
-                .get(target.dataset)
-                .is_some_and(|entry| entry.recipe().is_some())
-        }) {
-            return Err(made_by_recipe(path, made.dataset));
         }
         asked.push(found);
     }
@@ -518,14 +467,6 @@ fn named<'p, 'a>(sorted: &[(String, &'p Target<'a>)], path: &str) -> Asked<'p, '
     }
 }
 
-fn made_by_recipe(path: &str, dataset: &str) -> Error {
-    Error::new(
-        Kind::Usage,
-        format!("{path} belongs to {dataset}, which a recipe makes"),
-    )
-    .help("choose its files inside the recipe's step instead")
-}
-
 /// why `path`, `typed` as given, names no planned file of `sorted`, the targets by folded path.
 fn unplanned(
     manifest: &Manifest,
@@ -541,14 +482,6 @@ fn unplanned(
         let path = name::fold(path);
         path == folder || path.starts_with(&format!("{folder}/"))
     };
-    if let Some(name) = manifest
-        .datasets
-        .iter()
-        .find(|(name, entry)| entry.recipe().is_some() && within(name))
-        .map(|(name, _)| name)
-    {
-        return made_by_recipe(path, name);
-    }
     if let Some((_, archive)) = planned.unknown.iter().find(|(dataset, _)| within(dataset)) {
         let archive = archive_name(&archive.path);
         return Error::new(
@@ -684,7 +617,7 @@ fn exclude_help(
     let Some((dataset, first)) = found
         .targets
         .first()
-        .and_then(|target| Some((target.dataset, target.file()?)))
+        .map(|target| (target.dataset, target.file))
         .filter(|_| found.folder)
     else {
         return anywhere;
@@ -696,7 +629,7 @@ fn exclude_help(
     let one_origin = found
         .targets
         .iter()
-        .all(|target| target.dataset == dataset && target.file().is_some_and(alike));
+        .all(|target| target.dataset == dataset && alike(target.file));
     let Some(locked) = lock.get(dataset).filter(|_| one_origin) else {
         return anywhere;
     };
@@ -713,7 +646,7 @@ fn exclude_help(
         .filter_map(|target| {
             let origin = match &inside {
                 Some(inside) => inside.get(&target.path)?.as_str(),
-                None => target.file()?.path.as_str(),
+                None => target.file.path.as_str(),
             };
             Some((target.path.as_str(), origin))
         })
@@ -728,7 +661,7 @@ fn exclude_help(
             let key = manifest
                 .datasets
                 .get(dataset)
-                .and_then(|entry| entry.source())
+                .map(|entry| &entry.source)
                 .and_then(|source| source.members.of(dataset, &first.path).ok().flatten())
                 .map_or(first.path.as_str(), |(key, _)| key);
             format!("members.\"{key}\" of datasets.{dataset}")
@@ -745,7 +678,7 @@ fn left_out(manifest: &Manifest, lock: &Lock, cache: &Cache, path: &str) -> Opti
     let asked = name::fold(path);
     for locked in &lock.datasets {
         let name = &locked.name;
-        let Some(source) = manifest.datasets.get(name).and_then(|entry| entry.source()) else {
+        let Some(source) = manifest.datasets.get(name).map(|entry| &entry.source) else {
             continue;
         };
         let folder = plan::folder(manifest, name);
@@ -812,12 +745,7 @@ fn edits<'a>(
         let mut listed: BTreeMap<&'a str, Vec<(&Target<'a>, &'a LockedFile)>> = BTreeMap::new();
         let mut packed: BTreeMap<(&'a str, &'a str), Vec<(&Target<'a>, &'a LockedFile)>> =
             BTreeMap::new();
-        // `asked` refuses a recipe's files, so each target comes from a file a source lists
-        for (target, file) in request
-            .targets
-            .iter()
-            .filter_map(|target| Some((*target, target.file()?)))
-        {
+        for (target, file) in request.targets.iter().map(|target| (*target, target.file)) {
             pace.step()?;
             if !seen.insert(target.path.as_str()) {
                 continue;
@@ -875,11 +803,7 @@ fn edits<'a>(
     for (dataset, edit) in &mut edits {
         let locked = lock.get(dataset).ok_or_else(|| missing_pin(dataset))?;
         whole_archives(locked, edit, &archives);
-        if let Some(source) = manifest
-            .datasets
-            .get(*dataset)
-            .and_then(|entry| entry.source())
-        {
+        if let Some(source) = manifest.datasets.get(*dataset).map(|entry| &entry.source) {
             edit.copied = from_globs(source, locked, &edit.members, cache)?;
         }
     }
@@ -955,7 +879,7 @@ fn unpacked(
     let filter = match manifest
         .datasets
         .get(&locked.name)
-        .and_then(|entry| entry.source())
+        .map(|entry| &entry.source)
     {
         Some(source) => source.members.of(&locked.name, &file.path)?,
         None => None,
@@ -1225,10 +1149,7 @@ fn narrowed(
             });
         }
         // a table that matches no archive left would be refused, as a whole archive's own is
-        if let Some(source) = manifest
-            .datasets
-            .get(*dataset)
-            .and_then(|entry| entry.source())
+        if let Some(source) = manifest.datasets.get(*dataset).map(|entry| &entry.source)
             && let Some(locked) = lock.get(dataset)
             && !edit.leaving.is_empty()
         {
@@ -1268,7 +1189,7 @@ fn lock_written(updated: &str, lock: &Lock, edits: &BTreeMap<&str, Edit>) -> Res
         let Some(source) = new_manifest
             .datasets
             .get(&locked.name)
-            .and_then(|entry| entry.source())
+            .map(|entry| &entry.source)
         else {
             continue;
         };
@@ -1339,7 +1260,6 @@ mod tests {
         let files: Vec<(&str, bool)> = paths.iter().map(|path| (path.as_str(), false)).collect();
         let lock = Lock {
             datasets: vec![pinned(&manifest, "tiny", &files)],
-            derived: Vec::new(),
             stated: Vec::new(),
             waiting: Vec::new(),
         };
@@ -1357,7 +1277,7 @@ mod tests {
     #[test]
     fn a_folder_reads_its_dataset_list_once() {
         let (manifest, lock, _folder, cache) = tiny(10, 100);
-        let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
+        let planned = plan::from_cache(&manifest, &lock, &cache).unwrap();
         let paths = ["data/tiny/d003".to_owned(), "data/tiny/d007".to_owned()];
         let go_on = || Ok(());
         let mut pace = Pace::new(&go_on);
@@ -1380,34 +1300,11 @@ mod tests {
         assert!(pace.steps <= 2 * (1_000 + 100), "{}", pace.steps);
     }
 
-    /// a recipe another rebuilt recipe is made from builds along with it, and recipes made from
-    /// other datasets stay out.
-    #[test]
-    fn an_exclude_names_the_builds_that_make_every_result_again() {
-        let manifest = Manifest::parse(concat!(
-            "[datasets.lab]\nref = \"local\"\n\n",
-            "[datasets.mnist]\nref = \"local\"\n\n",
-            "[datasets.processed]\nfrom = [\"lab\", \"mnist\"]\nrun = [\"prep\", \"{lab}\", \"{mnist}\", \"{out}\"]\n\n",
-            "[datasets.features]\nfrom = [\"processed\"]\nrun = [\"feat\", \"{processed}\", \"{out}\"]\n\n",
-            "[datasets.thumbs]\nfrom = [\"lab\"]\nrun = [\"thumb\", \"{lab}\", \"{out}\"]\n\n",
-            "[datasets.digits]\nfrom = [\"mnist\"]\nrun = [\"digit\", \"{mnist}\", \"{out}\"]\n",
-        ))
-        .unwrap();
-        assert_eq!(built_again(&manifest, &["lab"]), ["features", "thumbs"]);
-        assert_eq!(built_again(&manifest, &["mnist"]), ["digits", "features"]);
-        assert_eq!(
-            built_again(&manifest, &["lab", "mnist"]),
-            ["digits", "features", "thumbs"]
-        );
-        let alone = Manifest::parse("[datasets.lab]\nref = \"local\"\n").unwrap();
-        assert_eq!(built_again(&alone, &["lab"]), Vec::<&str>::new());
-    }
-
     /// any one name of the path may be off, and the suggestion keeps the path as typed up to it.
     #[test]
     fn a_typo_is_found_one_name_away_and_kept_as_typed() {
         let (manifest, lock, _folder, cache) = tiny(3, 2);
-        let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
+        let planned = plan::from_cache(&manifest, &lock, &cache).unwrap();
         let mut sorted: Vec<(String, &Target)> = planned
             .targets
             .iter()
@@ -1453,7 +1350,7 @@ mod tests {
     #[test]
     fn planning_ends_at_the_first_look_after_a_stop() {
         let (manifest, lock, _folder, cache) = tiny(4, 1_000);
-        let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
+        let planned = plan::from_cache(&manifest, &lock, &cache).unwrap();
         let paths = ["data/tiny/d001", "data/tiny/d002", "data/tiny/d003"].map(str::to_owned);
         let stop = crate::stop::Stop::default();
         let looks = std::cell::Cell::new(0);
@@ -1540,7 +1437,7 @@ mod tests {
 
     /// the pin of `name`, read from `manifest`, holding `files`, each `(path, archive)`.
     fn pinned(manifest: &Manifest, name: &str, files: &[(&str, bool)]) -> Locked {
-        let source = manifest.datasets[name].source().unwrap();
+        let source = &manifest.datasets[name].source;
         Locked {
             name: name.to_owned(),
             reference: source.reference.clone(),
@@ -1616,7 +1513,6 @@ mod tests {
                 pinned(&manifest, "gamma", &[("old.zip", true), ("new.zip", true)]),
                 pinned(&manifest, "untouched", &[("only.bin", false)]),
             ],
-            derived: Vec::new(),
             stated: Vec::new(),
             waiting: Vec::new(),
         };
@@ -1683,7 +1579,6 @@ mod tests {
                         )
                     })
                     .collect(),
-                derived: Vec::new(),
                 stated: Vec::new(),
                 waiting: Vec::new(),
             };
@@ -1725,13 +1620,12 @@ mod tests {
                 pinned(&manifest, "c", &[("1.txt", false), ("2.txt", false)]),
                 pinned(&manifest, "d", &[("whole.zip", true)]),
             ],
-            derived: Vec::new(),
             stated: Vec::new(),
             waiting: Vec::new(),
         };
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
-        let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
+        let planned = plan::from_cache(&manifest, &lock, &cache).unwrap();
         let left = |dataset: &str, paths: &[&str]| -> Vec<Left> {
             paths
                 .iter()

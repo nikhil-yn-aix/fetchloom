@@ -1,5 +1,5 @@
 //! `fetchloom path`: where a dataset, or a file or folder in it, is, syncing that dataset alone
-//! first when its files are not in place. a recipe's result is placed as pinned, never built here.
+//! first when its files are not in place.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use super::project::{
 };
 use super::sync::disk::{Survey, is_inside};
 use super::sync::place::Seen;
-use super::sync::{self, Loop, Scope};
+use super::sync::{Loop, Scope};
 use super::{Context, open_cache};
 use crate::cache::Cache;
 use crate::digest;
@@ -32,10 +32,6 @@ pub(super) struct Report {
     path: PathBuf,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "a placed path is answered at once, else the project is held and synced first"
-)]
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, Error> {
     let project = find(&context.output)?;
     let before = state_stamp(&project);
@@ -47,7 +43,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         None => (target.as_str(), None),
     };
     let rest = &target[name.len()..];
-    answerable(&manifest, name, rest).map_err(|error| {
+    known_with_rest(&manifest, name, rest, "path").map_err(|error| {
         match held_by(&project, &manifest, &target) {
             Some(help) => error.help(help),
             None => error,
@@ -56,11 +52,6 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     let lock = pins(&project, &manifest, name)?;
     let scope = answered(&project, &manifest, lock.as_ref(), name, args.locked)?;
     let mut cache = None;
-    let tell_stale = |manifest: &Manifest, lock: Option<&Lock>| {
-        if let Some(lock) = lock {
-            sync::tell_stale(&context.output, &project.root, manifest, lock, &scope);
-        }
-    };
     let path = if let Some(path) = ready_path(
         context,
         &project,
@@ -70,21 +61,16 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         name,
         file,
     )? {
-        tell_stale(&manifest, lock.as_ref());
         path
     } else {
         drop(lock);
         drop(manifest);
         match hold_path(context, &project, &mut cache, (name, rest), file, before).await? {
-            Waited::Ready(path) => {
-                tell_stale_again(context, &project, name, &scope)?;
-                path
-            }
+            Waited::Ready(path) => path,
             Waited::Held(held) => {
                 let (text, manifest) = project.manifest()?;
-                answerable(&manifest, name, rest)?;
+                known_with_rest(&manifest, name, rest, "path")?;
                 let read = project.lock_and_text()?;
-                unbuilt(&manifest, read.as_ref().map(|(lock, _)| lock), name)?;
                 if let Some(path) = ready_path(
                     context,
                     &project,
@@ -94,7 +80,6 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                     name,
                     file,
                 )? {
-                    tell_stale(&manifest, read.as_ref().map(|(lock, _)| lock));
                     path
                 } else {
                     if args.locked {
@@ -233,31 +218,6 @@ fn named(manifest: &Manifest, target: &str) -> Result<(), Error> {
     )))
 }
 
-/// refuses a dataset data.toml does not have, as [`known_with_rest`] does, or keeps out of the data
-/// folder with `place = false`. `rest` is what was typed after the name, such as `/iris.csv`.
-fn answerable(manifest: &Manifest, name: &str, rest: &str) -> Result<(), Error> {
-    known_with_rest(manifest, name, rest, "path")?;
-    let entry = &manifest.datasets[name];
-    if entry.place {
-        return Ok(());
-    }
-    let error = Error::new(
-        Kind::Usage,
-        format!(
-            "{name} has place = false, so it has no folder in {}/",
-            manifest.data_dir
-        ),
-    );
-    let error = match entry.lines.get("place") {
-        Some(line) => error.detail(line.clone()),
-        None => error,
-    };
-    Err(error.help(format!(
-        "set place = true on datasets.{name} in data.toml, then run `{}`",
-        super::project::command(&format!("sync {name}"))
-    )))
-}
-
 /// data.lock with only the pins of [`needed`] for `name`, or none when the project has none yet.
 fn pins(project: &Project, manifest: &Manifest, name: &str) -> Result<Option<Lock>, Error> {
     let needed = needed(manifest, name);
@@ -270,11 +230,11 @@ fn pins(project: &Project, manifest: &Manifest, name: &str) -> Result<Option<Loc
     Ok(lock)
 }
 
-/// the datasets path reads from data.lock for `name`: it, those whose folders meet its folder, so
-/// planning finds every clash with its files, and what the recipes among them read.
+/// the datasets path reads from data.lock for `name`: it, and those whose folders meet its folder,
+/// so planning finds every clash with its files.
 fn needed(manifest: &Manifest, name: &str) -> BTreeSet<String> {
     let folder = crate::name::fold(&plan::folder(manifest, name));
-    let touching = manifest
+    manifest
         .datasets
         .keys()
         .filter(|other| {
@@ -282,32 +242,11 @@ fn needed(manifest: &Manifest, name: &str) -> BTreeSet<String> {
             is_inside(&theirs, &folder) || is_inside(&folder, &theirs)
         })
         .cloned()
-        .collect();
-    sync::with_inputs(manifest, touching)
+        .collect()
 }
 
-/// warns about the recipe `name` as [`sync::tell_stale`] does, once another run made it ready,
-/// from data.toml and data.lock as that run left them.
-fn tell_stale_again(
-    context: &Context,
-    project: &Project,
-    name: &str,
-    scope: &Scope,
-) -> Result<(), Error> {
-    let (_, manifest) = project.manifest()?;
-    if manifest
-        .datasets
-        .get(name)
-        .is_some_and(|entry| entry.recipe().is_some())
-    {
-        let lock = project.lock()?.unwrap_or_default();
-        sync::tell_stale(&context.output, &project.root, &manifest, &lock, scope);
-    }
-    Ok(())
-}
-
-/// the scope of a path to `name`, once nothing keeps it from an answer: a recipe data.lock pins
-/// no result of, or with `locked` a stale recipe, which stops it as `sync --locked` stops.
+/// the scope of a path to `name`, once nothing keeps it from an answer: with `locked`, a dataset
+/// data.lock does not pin as data.toml asks, which stops it as `sync --locked` stops.
 fn answered(
     project: &Project,
     manifest: &Manifest,
@@ -315,33 +254,11 @@ fn answered(
     name: &str,
     is_locked: bool,
 ) -> Result<Scope, Error> {
-    unbuilt(manifest, lock, name)?;
     let scope = Scope::Only(BTreeSet::from([name.to_owned()]));
     if is_locked {
         locked(project, manifest, lock, "run path without --locked", &scope)?;
     }
     Ok(scope)
-}
-
-/// refuses a recipe data.lock pins no result of: only `fetchloom build` makes one, so it has no
-/// folder in the data folder yet.
-fn unbuilt(manifest: &Manifest, lock: Option<&Lock>, name: &str) -> Result<(), Error> {
-    if manifest.datasets[name].recipe().is_none()
-        || lock.is_some_and(|lock| lock.result(name).is_some())
-    {
-        return Ok(());
-    }
-    Err(Error::new(
-        Kind::BuildNeeded,
-        format!(
-            "{name} is made by a recipe, and its result is not in {}/ yet",
-            manifest.data_dir
-        ),
-    )
-    .help(format!(
-        "run `{}`, which makes it",
-        super::project::command(&format!("build {name}"))
-    )))
 }
 
 /// where `file` in `name`, or `name`'s folder, is among what `planned` places: the plan that
@@ -435,14 +352,10 @@ fn ready_path(
     let Some(lock) = lock else {
         return Ok(None);
     };
-    // a recipe's pin stands until a build, which alone makes another
-    let fresh = match manifest.datasets.get(name) {
-        Some(entry) if entry.recipe().is_some() => lock.result(name).is_some(),
-        Some(entry) => lock
-            .get(name)
-            .is_some_and(|locked| locked.drift(entry).is_none()),
-        None => false,
-    };
+    let fresh = manifest.datasets.get(name).is_some_and(|entry| {
+        lock.get(name)
+            .is_some_and(|locked| locked.drift(entry).is_none())
+    });
     if !fresh {
         return Ok(None);
     }
@@ -515,7 +428,7 @@ async fn hold_path(
         }
         before = current;
         let (_, manifest) = project.manifest()?;
-        answerable(&manifest, name, rest)?;
+        known_with_rest(&manifest, name, rest, "path")?;
         let lock = pins(project, &manifest, name)?;
         ready_path(
             context,
@@ -552,7 +465,7 @@ mod tests {
         let lock = Lock {
             datasets: vec![pinned(
                 "a",
-                lock::spec(manifest.datasets["a"].source().unwrap()),
+                lock::spec(&manifest.datasets["a"].source),
                 vec![lock::LockedFile {
                     path: "x".to_owned(),
                     size: 4,
@@ -622,28 +535,24 @@ mod tests {
         );
     }
 
-    /// `path` needs its dataset's pins, those of overlapping folders, and what their recipes read.
+    /// `path` needs its dataset's pins and those of overlapping folders.
     #[test]
     fn path_reads_only_the_pins_its_dataset_needs() {
         let text = concat!(
             "[datasets.a]\nref = 'https://example.org/a'\n\n",
             "[datasets.inner]\nref = 'https://example.org/inner'\npath = 'A/inner'\n\n",
-            "[datasets.ab]\nref = 'https://example.org/ab'\n\n",
-            "[datasets.raw]\nref = 'https://example.org/raw'\nplace = false\n\n",
-            "[datasets.clean]\nfrom = ['raw']\nrun = ['t', '{raw}', '{out}']\n\n",
-            "[datasets.tidy]\nfrom = ['clean']\nrun = ['t', '{clean}', '{out}']\n",
+            "[datasets.ab]\nref = 'https://example.org/ab'\n",
         );
         let manifest = Manifest::parse(text).unwrap();
         assert_eq!(needed_in(&manifest, "a"), ["a", "inner"]);
         assert_eq!(needed_in(&manifest, "inner"), ["a", "inner"]);
         assert_eq!(needed_in(&manifest, "ab"), ["ab"]);
-        assert_eq!(needed_in(&manifest, "tidy"), ["clean", "raw", "tidy"]);
         let whole = Manifest::parse(&format!(
             "{text}\n[datasets.all]\nref = 'https://example.org/all'\npath = '.'\n"
         ))
         .unwrap();
         assert_eq!(needed_in(&whole, "ab"), ["ab", "all"]);
-        assert_eq!(needed_in(&whole, "all").len(), 7);
+        assert_eq!(needed_in(&whole, "all").len(), 4);
     }
 
     fn needed_in(manifest: &Manifest, name: &str) -> Vec<String> {

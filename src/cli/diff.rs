@@ -9,12 +9,10 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::{Context, args, shell_word};
-use crate::cache::Member;
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::output::plain;
 use crate::project::git::{self, Unnamed};
-use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Lock, Locked, LockedFile, Stated, StatedFile, lists};
 use crate::units;
 
@@ -50,8 +48,6 @@ struct Read {
 struct Dataset {
     name: String,
     change: Change,
-    /// `fetched` or `recipe`, as `to` pins it, else as `from` did.
-    kind: &'static str,
     /// each field of the pin that differs, apart from its files: all of them for a dataset
     /// added or removed.
     fields: Vec<Field>,
@@ -235,35 +231,27 @@ fn tell_unpinned(context: &Context, project: &crate::project::Project, now: &Loc
     let Ok((_, manifest)) = project.manifest() else {
         return;
     };
-    let pinned = |name: &str| {
-        now.get(name).is_some() || now.stated(name).is_some() || now.result(name).is_some()
+    let unpinned: Vec<&str> = manifest
+        .datasets
+        .keys()
+        .filter(|name| now.get(name).is_none() && now.stated(name).is_none())
+        .map(String::as_str)
+        .collect();
+    let Some(first) = unpinned.first() else {
+        return;
     };
-    // a source's pin comes from lock, a recipe's from build
-    for (made, command) in [(false, "fetchloom lock"), (true, "fetchloom build")] {
-        let unpinned: Vec<&str> = manifest
-            .datasets
-            .iter()
-            .filter(|(name, entry)| {
-                matches!(entry.origin, crate::project::manifest::Origin::Derived(_)) == made
-                    && !pinned(name)
-            })
-            .map(|(name, _)| name.as_str())
-            .collect();
-        let Some(first) = unpinned.first() else {
-            continue;
-        };
-        let (named, them) = if unpinned.len() == 1 {
-            (plain(first).into_owned(), "it")
-        } else {
-            (
-                units::count(unpinned.len() as u64, "dataset", "datasets"),
-                "them",
-            )
-        };
-        context.output.hint(&format!(
-            "data.toml names {named} that data.lock does not pin yet, so diff cannot show {them}: `{command}` pins {them}"
-        ));
-    }
+    let (named, them) = if unpinned.len() == 1 {
+        (plain(first).into_owned(), "it")
+    } else {
+        (
+            units::count(unpinned.len() as u64, "dataset", "datasets"),
+            "them",
+        )
+    };
+    let command = "fetchloom lock";
+    context.output.hint(&format!(
+        "data.toml names {named} that data.lock does not pin yet, so diff cannot show {them}: `{command}` pins {them}"
+    ));
 }
 
 /// the commit `revision` names in the repository holding the project at `root`.
@@ -369,7 +357,6 @@ enum Pin<'a> {
     Fetched(&'a Locked),
     /// fetched, but pinned by what its source states until a sync downloads it.
     Stated(&'a Stated),
-    Made(&'a Derived),
 }
 
 impl<'a> Pin<'a> {
@@ -377,14 +364,6 @@ impl<'a> Pin<'a> {
         lock.get(name)
             .map(Pin::Fetched)
             .or_else(|| lock.stated(name).map(Pin::Stated))
-            .or_else(|| lock.result(name).map(Pin::Made))
-    }
-
-    fn kind(self) -> &'static str {
-        match self {
-            Pin::Fetched(_) | Pin::Stated(_) => "fetched",
-            Pin::Made(_) => "recipe",
-        }
     }
 
     /// what data.lock records of it apart from its files, each field by its name there, in the
@@ -393,7 +372,6 @@ impl<'a> Pin<'a> {
         let (locked, downloaded) = match self {
             Pin::Fetched(locked) => (locked, true),
             Pin::Stated(stated) => (&stated.pin, false),
-            Pin::Made(derived) => return recipe(derived),
         };
         let masked = |text: &str| crate::shown::mask_query(text).into_owned();
         vec![
@@ -437,46 +415,8 @@ impl<'a> Pin<'a> {
                     (file.path.as_str(), pinned)
                 })
                 .collect(),
-            Pin::Made(derived) => derived
-                .files
-                .iter()
-                .map(|file: &'a Member| {
-                    let pinned = Pinned {
-                        size: file.size,
-                        sha256: Some(file.sha256),
-                        md5: None,
-                    };
-                    (file.path.as_str(), pinned)
-                })
-                .collect(),
         }
     }
-}
-
-/// what data.lock records of a recipe's result apart from its files, as [`Pin::fields`] gives it.
-fn recipe(derived: &Derived) -> Vec<(&'static str, Option<String>)> {
-    let from: Vec<String> = derived
-        .from
-        .iter()
-        .map(|input| format!("{} sha256:{}", input.name, input.content))
-        .collect();
-    let code: Vec<String> = derived
-        .code
-        .iter()
-        .map(|code| format!("{} sha256:{}", code.path, code.sha256))
-        .collect();
-    let env: Vec<String> = derived
-        .env
-        .iter()
-        .map(|(name, value)| format!("{name}={value}"))
-        .collect();
-    vec![
-        ("from", Some(from.join(", "))),
-        ("run", Some(derived.run.join(" "))),
-        ("code", Some(code.join(", "))),
-        ("env", Some(env.join(" "))),
-        ("key", Some(format!("sha256:{}", derived.key))),
-    ]
 }
 
 /// a dataset removed and another added with the same fields and files, which a rename of its
@@ -520,17 +460,13 @@ fn renamed(datasets: Vec<Dataset>) -> Vec<Dataset> {
             continue;
         }
         let same = pinned(dataset);
-        let Some(at) = gone
-            .iter()
-            .position(|old| old.kind == dataset.kind && pinned(old) == same)
-        else {
+        let Some(at) = gone.iter().position(|old| pinned(old) == same) else {
             continue;
         };
         let old = gone.remove(at);
         *dataset = Dataset {
             name: dataset.name.clone(),
             change: Change::Changed,
-            kind: dataset.kind,
             fields: Vec::new(),
             added: 0,
             removed: 0,
@@ -555,7 +491,6 @@ fn compared(before: &Read, after: &Read) -> Vec<Dataset> {
                 .iter()
                 .map(|locked| locked.name.as_str())
                 .chain(lock.stated.iter().map(Stated::name))
-                .chain(lock.derived.iter().map(|derived| derived.name.as_str()))
         })
         .collect();
     names.sort_unstable();
@@ -587,11 +522,11 @@ fn dataset(
     after: Option<Pin<'_>>,
     unlisted: Vec<&'static str>,
 ) -> Option<Dataset> {
-    let (change, kind) = match (before, after) {
+    let change = match (before, after) {
         (None, None) => return None,
-        (None, Some(after)) => (Change::Added, after.kind()),
-        (Some(before), None) => (Change::Removed, before.kind()),
-        (Some(_), Some(after)) => (Change::Changed, after.kind()),
+        (None, Some(_)) => Change::Added,
+        (Some(_), None) => Change::Removed,
+        (Some(_), Some(_)) => Change::Changed,
     };
     let fields = fields(before, after);
     let files = if unlisted.is_empty() {
@@ -605,15 +540,11 @@ fn dataset(
     if change == Change::Changed && fields.is_empty() && files.is_empty() && unlisted.is_empty() {
         return None;
     }
-    let said = match (before, after) {
-        (Some(Pin::Made(was)), Some(Pin::Made(now))) => recipe_said(was, now),
-        _ => fields_said(&fields),
-    };
+    let said = fields_said(&fields);
     let count = |change: Change| files.iter().filter(|file| file.change == change).count() as u64;
     Some(Dataset {
         name: name.to_owned(),
         change,
-        kind,
         added: count(Change::Added),
         removed: count(Change::Removed),
         changed: count(Change::Changed),
@@ -663,90 +594,10 @@ fn fields_said(fields: &[Field]) -> Vec<String> {
     said
 }
 
-/// what changed in how a recipe made its result, in words: the inputs it names, or each input
-/// whose bytes changed, its command, each file of its code and each variable, with its values.
-fn recipe_said(was: &Derived, now: &Derived) -> Vec<String> {
-    let mut said = Vec::new();
-    let names = |derived: &Derived| -> Vec<String> {
-        derived
-            .from
-            .iter()
-            .map(|input| plain(&input.name).into_owned())
-            .collect()
-    };
-    let listed = |names: Vec<String>| {
-        if names.is_empty() {
-            "none".to_owned()
-        } else {
-            names.join(", ")
-        }
-    };
-    if names(was) != names(now) {
-        said.push(format!(
-            "from {} \u{2192} {}",
-            listed(names(was)),
-            listed(names(now))
-        ));
-    }
-    for input in &now.from {
-        if was
-            .from
-            .iter()
-            .any(|old| old.name == input.name && old.content != input.content)
-        {
-            said.push(format!("{} changed", plain(&input.name)));
-        }
-    }
-    if was.run != now.run {
-        said.push("run changed".to_owned());
-    }
-    for code in &now.code {
-        match was.code.iter().find(|old| old.path == code.path) {
-            Some(old) if old.sha256 != code.sha256 => {
-                said.push(format!("{} changed", plain(&code.path)));
-            }
-            None => said.push(format!("{} added to code", plain(&code.path))),
-            Some(_) => {}
-        }
-    }
-    for old in &was.code {
-        if !now.code.iter().any(|code| code.path == old.path) {
-            said.push(format!("{} taken out of code", plain(&old.path)));
-        }
-    }
-    let variables: std::collections::BTreeSet<&String> =
-        was.env.keys().chain(now.env.keys()).collect();
-    for name in variables {
-        let name_shown = plain(name);
-        // a value may hold a key, so only the name of what changed shows
-        match (was.env.get(name), now.env.get(name)) {
-            (Some(before), Some(after)) if before != after => {
-                said.push(format!("env {name_shown} changed"));
-            }
-            (None, Some(_)) => said.push(format!("env {name_shown} added")),
-            (Some(_), None) => said.push(format!("env {name_shown} taken out")),
-            _ => {}
-        }
-    }
-    if said.is_empty() && was.key != now.key {
-        said.push("how it is built changed".to_owned());
-    }
-    said
-}
-
-/// the fields that differ: every field of a dataset added or removed, the kind alone of one now
-/// fetched where a recipe made it or the other way round, else each field with another value.
+/// the fields that differ: every field of a dataset added or removed, else each field with another
+/// value.
 fn fields(before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Vec<Field> {
     let listed = |pin: Option<Pin<'_>>| pin.map(Pin::fields).unwrap_or_default();
-    if let (Some(was), Some(now)) = (before, after)
-        && was.kind() != now.kind()
-    {
-        return vec![Field {
-            name: "kind",
-            before: Some(was.kind().to_owned()),
-            after: Some(now.kind().to_owned()),
-        }];
-    }
     let (was, now) = (listed(before), listed(after));
     let value = |fields: &[(&'static str, Option<String>)], name: &str| {
         fields
@@ -763,29 +614,7 @@ fn fields(before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Vec<Field> {
             after: value(&now, name),
         })
         .filter(|field| field.before != field.after)
-        .map(|field| match field.name {
-            // compared whole, then shown by name alone, as merge and data.toml's errors show them
-            "env" => Field {
-                before: before.and_then(variables),
-                after: after.and_then(variables),
-                ..field
-            },
-            _ => field,
-        })
         .collect()
-}
-
-/// a recipe's variables by their names alone, as `SEED=***`, since a value may hold a key.
-fn variables(pin: Pin<'_>) -> Option<String> {
-    let Pin::Made(derived) = pin else {
-        return None;
-    };
-    let named: Vec<String> = derived
-        .env
-        .keys()
-        .map(|name| format!("{name}=***"))
-        .collect();
-    Some(named.join(" "))
 }
 
 /// the files added, removed and changed from `before` to `after`, each sorted by path, as data.lock
@@ -910,9 +739,8 @@ fn summary(dataset: &Dataset, from: &str, to: &str) -> String {
                     .and_then(|field| field.after.as_ref().or(field.before.as_ref()))
                     .map(|value| plain(value).into_owned())
             };
-            let what = match (dataset.kind, shown("downloaded").as_deref()) {
-                ("recipe", _) => "made by a recipe".to_owned(),
-                (_, Some("false")) => format!(
+            let what = match shown("downloaded").as_deref() {
+                Some("false") => format!(
                     "{}, not downloaded yet",
                     shown("resolved").unwrap_or_default()
                 ),

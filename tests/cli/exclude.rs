@@ -424,13 +424,6 @@ fn exclude_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
     set(&sandbox)?;
     let work = sandbox.work();
     let manifest = work.join("data.toml");
-    fs::write(
-        &manifest,
-        format!(
-            "{}\n[datasets.clean]\nfrom = [\"pets\"]\nrun = [\"python3\", \"clean.py\", \"{{pets}}\", \"{{out}}\"]\n",
-            fs::read_to_string(&manifest)?
-        ),
-    )?;
     let before = (fs::read(&manifest)?, fs::read(work.join("data.lock"))?);
     for (arguments, code, message) in [
         (
@@ -447,11 +440,6 @@ fn exclude_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
             &["exclude", "data/pets"],
             2,
             "that is every file of pets, and a dataset needs one",
-        ),
-        (
-            &["exclude", "data/clean/x.csv"],
-            2,
-            "data/clean/x.csv belongs to clean, which a recipe makes",
         ),
         (
             &["exclude", "data/set/notes [v1].md", "data/set/test"],
@@ -539,58 +527,6 @@ fn exclude_and_remove_point_at_each_other() -> Result {
         assert_eq!(output.status.code(), Some(2), "{arguments:?}");
         assert_eq!(json(&output)?["errors"][0]["help"], help, "{arguments:?}");
     }
-    Ok(())
-}
-
-/// the file goes by the path it would have in the data folder; one left out already names its
-/// pattern, and a path naming no file gets neither.
-#[test]
-fn exclude_leaves_out_a_file_of_a_dataset_kept_out_of_the_data_folder() -> Result {
-    let sandbox = Sandbox::new()?;
-    pets(&sandbox)?;
-    let work = sandbox.work();
-    crate::recipes::unplace(&work, "pets")?;
-    ok(&sandbox.run(&["sync"])?)?;
-    let lock = fs::read(work.join("data.lock"))?;
-    let output = sandbox.run(&["--json", "exclude", "data/pets/images/dog_010_corrupt.png"])?;
-    ok(&output)?;
-    assert_eq!(
-        json(&output)?["result"]["excluded"],
-        json!([{"path": "data/pets/images/dog_010_corrupt.png", "dataset": "pets", "archive": "pets.zip", "pattern": "pets-v1/images/dog_010_corrupt.png"}])
-    );
-    let manifest = fs::read_to_string(work.join("data.toml"))?;
-    assert!(
-        manifest.ends_with("[datasets.pets.members.\"pets.zip\"]\nexclude = [\"pets-v1/images/dog_010_corrupt.png\"]\n"),
-        "{manifest}"
-    );
-    assert_eq!(fs::read(work.join("data.lock"))?, lock);
-    let keep = "check the path; exclude leaves out files data.lock places, so delete a file of your own yourself if you do not need it";
-    for (path, message, help) in [
-        (
-            "data/pets/images/dog_010_corrupt.png",
-            "data/pets/images/dog_010_corrupt.png is left out already, by exclude \"pets-v1/images/dog_010_corrupt.png\" in members.\"pets.zip\" of datasets.pets",
-            "to bring it back, delete that pattern from data.toml and run `fetchloom sync`",
-        ),
-        (
-            "data/pets/images/fish.png",
-            "data/pets/images/fish.png names no file of pets",
-            keep,
-        ),
-        (
-            "data/fish.png",
-            "data/fish.png names no file of any dataset",
-            keep,
-        ),
-    ] {
-        let output = sandbox.run(&["--json", "exclude", path])?;
-        assert_eq!(output.status.code(), Some(2), "{path}");
-        let error = &json(&output)?["errors"][0];
-        assert_eq!(
-            (&error["message"], &error["help"]),
-            (&json!(message), &json!(help))
-        );
-    }
-    assert_eq!(fs::read_to_string(work.join("data.toml"))?, manifest);
     Ok(())
 }
 
@@ -818,40 +754,19 @@ fn a_data_lock_that_is_a_pipe_is_refused_before_exclude_plans() -> Result {
     Ok(())
 }
 
-/// the recipe's pinned result came from files exclude left out, so the next step is that build,
-/// even for raw data only recipes read; an exclude no recipe reads says to commit.
+/// other clones leave out what an exclude left out once they have the files it changed.
 #[cfg(target_os = "linux")]
 #[test]
-fn exclude_names_the_build_that_reads_what_it_left_out() -> Result {
+fn exclude_says_to_commit_what_it_changed() -> Result {
     let sandbox = Sandbox::new()?;
     pets(&sandbox)?;
     set(&sandbox)?;
-    let work = sandbox.work();
-    crate::recipes::unplace(&work, "pets")?;
-    ok(&sandbox.run(&["sync"])?)?;
     let Some(screen) = sandbox.on_a_terminal(&["exclude", "data/set/notes [v1].md"])? else {
         return Ok(());
     };
     assert!(
         screen.contains(
             "\n  next: commit data.toml and data.lock; other clones leave them out at their next `fetchloom sync`\n"
-        ),
-        "{screen}"
-    );
-    let manifest = work.join("data.toml");
-    fs::write(
-        &manifest,
-        format!(
-            "{}\n[datasets.clean]\nfrom = [\"pets\"]\nrun = [\"python3\", \"clean.py\", \"{{pets}}\", \"{{out}}\"]\n\n[datasets.small]\nfrom = [\"clean\"]\nrun = [\"python3\", \"small.py\", \"{{clean}}\", \"{{out}}\"]\n",
-            fs::read_to_string(&manifest)?
-        ),
-    )?;
-    let screen = sandbox
-        .on_a_terminal(&["exclude", "data/pets/images/dog_010_corrupt.png"])?
-        .unwrap_or_default();
-    assert!(
-        screen.contains(
-            "   Excluded 1 file of pets.zip in data.toml\n  next: run `fetchloom build small`, then commit data.toml, data.lock and data.lock.d\n"
         ),
         "{screen}"
     );

@@ -286,8 +286,8 @@ fn a_login_written_into_allowed_origins_never_shows() -> Result {
     Ok(())
 }
 
-/// a cloned project's data.toml may name a server on this machine. sync and build take no link
-/// on their command line, so the help names `allowed_origins` alone.
+/// a cloned project's data.toml may name a server on this machine. sync takes no link on its
+/// command line, so the help names `allowed_origins` alone.
 #[test]
 fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Result {
     let sandbox = Sandbox::new()?;
@@ -295,10 +295,7 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     let origin = server.url.trim_end_matches(PATH).to_owned();
     fs::write(
         sandbox.work().join("data.toml"),
-        format!(
-            "[datasets.local]\nref = \"{}\"\n\n[datasets.made]\nfrom = [\"local\"]\nrun = [\"recipe-step\", \"copy\", \"{{local}}\", \"{{out}}\"]\n",
-            server.url
-        ),
+        format!("[datasets.local]\nref = \"{}\"\n", server.url),
     )?;
     let refused = |command: &str, allowed: Option<&str>, cache: &std::path::Path| -> Result<_> {
         let mut run = sandbox.command(&["--json", command]);
@@ -368,12 +365,6 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     let placed = sandbox.work().join("data").join("local").join("data.csv");
     assert_eq!(fs::read(&placed)?, b"a,b\n");
-    // as in a fresh clone, the build must download what the recipe reads
-    crate::support::delete(&placed)?;
-    assert_eq!(
-        refused("build", None, &sandbox.folder("empty")?)?["help"],
-        untrusted
-    );
     assert_eq!(server.requests().len(), 1, "only the allowed sync asked");
     Ok(())
 }

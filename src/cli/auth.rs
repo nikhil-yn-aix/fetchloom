@@ -1342,10 +1342,7 @@ async fn named_here(context: &Context, account: &Account) -> Option<String> {
     }
     let net = context.net();
     for entry in manifest.datasets.values() {
-        let crate::project::manifest::Origin::Source(source) = &entry.origin else {
-            continue;
-        };
-        let Ok(parsed) = Reference::parse(&source.reference) else {
+        let Ok(parsed) = Reference::parse(&entry.source.reference) else {
             continue;
         };
         let Reference::Doi(doi) = &parsed.reference else {
@@ -1372,10 +1369,7 @@ async fn named_here(context: &Context, account: &Account) -> Option<String> {
 fn names(manifest: &crate::project::manifest::Manifest, account: &Account) -> bool {
     use crate::source::Reference;
     manifest.datasets.values().any(|entry| {
-        let crate::project::manifest::Origin::Source(source) = &entry.origin else {
-            return false;
-        };
-        Reference::parse(&source.reference).is_ok_and(|parsed| {
+        Reference::parse(&entry.source.reference).is_ok_and(|parsed| {
             matches!(&parsed.reference, Reference::Dataverse(dataset) if dataset.account() == *account)
         })
     })

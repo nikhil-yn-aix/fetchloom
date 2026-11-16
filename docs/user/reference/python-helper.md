@@ -50,7 +50,7 @@ Downloading 1.4 MiB of 2.9 MiB · 10 s
 
 a notebook's stop button interrupts python, which stops the program too, and the next call continues from the bytes already downloaded. killing only the python process leaves the program running until it has placed the file.
 
-`sync()` keeps edited files and passes the warnings on. `strict=True` passes [`--strict`](../commands/sync.md#local-changes), so it raises `fetchloom.Error` with kind `data.not_ready` and code 1 when the data is not ready to use once the sync is done: a file sync kept, a recipe's result not on this machine, or a dataset data.lock does not pin as data.toml asks, each named in `details` with what makes it ready. use the CLI's JSON when you need status arrays. `fetchloom.__version__` is the installed package's version.
+`sync()` keeps edited files and passes the warnings on. `strict=True` passes [`--strict`](../commands/sync.md#local-changes), so it raises `fetchloom.Error` with kind `data.not_ready` and code 1 when the data is not ready to use once the sync is done: a file sync kept, or a dataset data.lock does not pin as data.toml asks, each named in `details` with what makes it ready. use the CLI's JSON when you need status arrays. `fetchloom.__version__` is the installed package's version.
 
 `yes`, `offline`, `locked`, sync's `strict` and `verify` and get's `force` are keyword-only booleans, false by default, passed as `--yes`, `--offline`, `--locked`, `--strict`, `--verify` and `--force`. without `yes=True`, a large download raises `unconfirmed`, and `locked=True` raises `lock.outdated` rather than update data.lock, for pipelines that must run on committed pins. `path()` and `sync()` do not expose `--force`.
 

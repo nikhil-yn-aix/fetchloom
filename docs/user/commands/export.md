@@ -29,14 +29,7 @@ fetchloom export [options] [name]...
 
 ## what it writes
 
-`export` reads `data.toml`, `data.lock` and what the cache recorded of each archive it unpacked. it asks no server anything and reads no file in the data folder: the hashes are the pins in `data.lock`, so `sha256sum -c` finds a file someone edited. a [recipe](../guides/recipes.md)'s result is in the `sha256` form like any placed dataset, and in no list of links, since nothing downloads it. in a fresh clone its files are in the data folder only once `fetchloom build` placed them, or a sync from a cache or [mirror](../guides/mirrors.md) that holds them, so before that `sha256sum -c` cannot open them:
-
-```text
-data/clean/clean.csv: FAILED open or read
-data/iris/iris.csv: OK
-```
-
-after `fetchloom build`, which ran the step and placed `clean`, both lines say `OK`.
+`export` reads `data.toml`, `data.lock` and what the cache recorded of each archive it unpacked. it asks no server anything and reads no file in the data folder: the hashes are the pins in `data.lock`, so `sha256sum -c` finds a file someone edited.
 
 the `sha256` paths start at the project's folder, so run `sha256sum -c` there, or it finds no such file. from a real run with a zenodo dataset and a zip from UCI, which unpacks to four files:
 
@@ -85,21 +78,11 @@ aria2c put the files in `downloads/iris/iris.csv` and `downloads/uci/iris.zip`.
 
 `out=` puts each file in the folder its dataset is placed in, so `aria2c -i sources.aria2 -d data`, run in the project's folder, puts each plain file where `fetchloom sync` places it. an archive arrives packed, beside where sync would unpack it.
 
-a dataset with `place = false` has no files in the data folder, so `sha256` leaves it out and [says so](#what-it-leaves-out), while `links` and `aria2` still list its files, since a recipe's rebuild reads them.
-
 `-o` writes the whole file under a hidden name beside it, then gives it its name without replacing anything. the file is UTF-8 with LF line ends on every system, while windows powershell 5.1's `>` would write UTF-16.
 
 ## what it leaves out
 
-a form leaves out what it has nothing to write for: `links` and `aria2` a recipe's result and files imported from a folder, and `sha256` a dataset with `place = false` or one [dropped](drop.md) on this machine, as `warning: the list leaves out pets: it is dropped on this machine, so its files are not in the data folder`. every form leaves out a dataset whose file list `data.lock.d` lacks, as in a clone of a commit that left the list out, with the warning that it [waits for it](../reference/data-lock.md#big-datasets); `export` naming that dataset stops with that warning's words, exit 50. each run says so once on stderr and still exits 0, even when stdout is empty. stderr from real runs in a project whose recipe `clean` copies `iris`, with `place = false` on `tips`; the first run wrote nothing on stdout:
-
-```sh
-$ fetchloom export --format links clean
-warning: the list leaves out clean: a recipe makes its files, so no link holds them
-$ fetchloom export -o data.sha256
-   Exported 2 files to data.sha256
-warning: the list leaves out tips: place = false keeps its files out of the data folder
-```
+a form leaves out what it has nothing to write for: `links` and `aria2` files imported from a folder, and `sha256` a dataset [dropped](drop.md) on this machine, as `warning: the list leaves out pets: it is dropped on this machine, so its files are not in the data folder`. every form leaves out a dataset whose file list `data.lock.d` lacks, as in a clone of a commit that left the list out, with the warning that it [waits for it](../reference/data-lock.md#big-datasets); `export` naming that dataset stops with that warning's words, exit 50. each run says so once on stderr and still exits 0, even when stdout is empty.
 
 JSON names each such dataset in `left_out`, with why.
 
@@ -108,7 +91,6 @@ otherwise a text form is complete or not written: `export` stops before writing 
 | what is missing | text forms | JSON field |
 |---|---|---|
 | a dataset `data.lock` does not pin as `data.toml` asks | all forms stop with `lock.outdated`, exit 1: run `fetchloom lock` first | `unlocked` |
-| a [recipe](../guides/recipes.md) `data.lock` pins no result of yet | all forms stop with `build.needed`, exit 60: run `fetchloom build` first | `unlocked` |
 | the files inside an archive this machine never unpacked, as in a fresh clone | `sha256` stops with `offline.missing`, exit 20: `fetchloom sync` unpacks it; `links` and `aria2` need no unpacking | `not_unpacked` |
 | a link that holds a space or a control character, which fetchloom never pins itself | `links` and `aria2` stop with `project.invalid`, exit 50. a link that holds a login or a secret stops every command sooner, as [`data.lock` is read](../reference/data-lock.md#encoding-and-validation) | `no_link` |
 
@@ -128,4 +110,4 @@ a refused link is never shown, in the error or in JSON.
 
 ## exit codes
 
-0 means the answer was written, even an empty one, or JSON listed what is known. 1 means a dataset is not pinned yet, 20 that an archive's files are not known here, 50 that a link cannot be written or that `-o` names a file already there, and 60 that a recipe is not built yet. a folder or `-` for `-o`, and `--force` without `-o`, are usage errors, exit 2. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 means the answer was written, even an empty one, or JSON listed what is known. 1 means a dataset is not pinned yet, 20 that an archive's files are not known here, and 50 that a link cannot be written or that `-o` names a file already there. a folder or `-` for `-o`, and `--force` without `-o`, are usage errors, exit 2. other failures use the [shared exit codes](../reference/exit-codes.md).

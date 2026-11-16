@@ -36,12 +36,9 @@ pub(super) struct Report {
     no_link: Vec<String>,
     /// the datasets the chosen form never lists, by their kind, with why.
     left_out: Vec<LeftOut>,
-    /// why each fetched dataset in `unlocked` is there.
+    /// why each dataset in `unlocked` is there.
     #[serde(skip)]
     stale: Vec<String>,
-    /// the recipes in `unlocked`: those data.lock pins no result of yet.
-    #[serde(skip)]
-    unbuilt: Vec<String>,
     /// why each link of `no_link` is not written, but for imported files, which have none.
     #[serde(skip)]
     refused: Vec<String>,
@@ -72,12 +69,8 @@ struct LeftOut {
 #[derive(Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Reason {
-    /// a recipe makes its files, so no link holds them.
-    Recipe,
     /// its files were imported from a folder on this machine, so no link holds them.
     Imported,
-    /// `place = false` keeps its files out of the data folder.
-    NotPlaced,
     /// `fetchloom drop` freed its files on this machine.
     Dropped,
     /// its file list, which data.lock names, is not there, so none of its files is known.
@@ -216,8 +209,6 @@ fn left_out(
             let reason = match format {
                 _ if waiting.iter().any(|waiting| waiting.name == *name) => Reason::Waiting,
                 Format::Sha256 if dropped.contains(name) => Reason::Dropped,
-                Format::Sha256 if !entry.place => Reason::NotPlaced,
-                Format::Links | Format::Aria2 if entry.recipe().is_some() => Reason::Recipe,
                 Format::Links | Format::Aria2 if entry.is_import() => Reason::Imported,
                 _ => return None,
             };
@@ -239,27 +230,6 @@ fn tell_left_out(output: &crate::output::Output, report: &Report) {
             .map(|left| left.dataset.as_str())
             .collect()
     };
-    let recipes = named(Reason::Recipe);
-    if !recipes.is_empty() {
-        let datasets = crate::units::listed(&recipes, "and");
-        let makes = if recipes.len() == 1 {
-            "a recipe makes its"
-        } else {
-            "recipes make their"
-        };
-        output.warn(
-            Warning::ExportLeftOut,
-            &format!("the list leaves out {datasets}: {makes} files, so no link holds them"),
-        );
-    }
-    let unplaced = named(Reason::NotPlaced);
-    if !unplaced.is_empty() {
-        let datasets = crate::units::listed(&unplaced, "and");
-        let its = if unplaced.len() == 1 { "its" } else { "their" };
-        output.warn(Warning::ExportLeftOut, &format!(
-            "the list leaves out {datasets}: place = false keeps {its} files out of the data folder"
-        ));
-    }
     let dropped = named(Reason::Dropped);
     if !dropped.is_empty() {
         let datasets = crate::units::listed(&dropped, "and");
@@ -290,15 +260,6 @@ fn inventory(
         if !wanted(name) {
             continue;
         }
-        // sync places a recipe's result as data.lock pins it, however its recipe changed since,
-        // so only one never built is missing
-        if entry.recipe().is_some() {
-            if lock.result(name).is_none() {
-                report.unlocked.push(name.clone());
-                report.unbuilt.push(name.clone());
-            }
-            continue;
-        }
         let stale = match lock.get(name).map(|locked| locked.drift(entry)) {
             None => format!("{name} is not in data.lock yet"),
             Some(Some(lock::Drift::Spec)) => format!("{name} changed in data.toml"),
@@ -310,7 +271,6 @@ fn inventory(
     }
     lock.datasets
         .retain(|locked| wanted(&locked.name) && !report.unlocked.contains(&locked.name));
-    lock.derived.retain(|result| wanted(&result.name));
     let planned = plan::from_cache(manifest, &lock, cache)?;
     for target in &planned.targets {
         if let Some(reason) = name::escapes(&target.path) {
@@ -322,9 +282,10 @@ fn inventory(
             size: target.size,
             sha256: target.sha256,
             unpacked_from: target
-                .file()
-                .filter(|file| file.unpacks_to.is_some())
-                .map(|file| file.path.clone()),
+                .file
+                .unpacks_to
+                .is_some()
+                .then(|| target.file.path.clone()),
         });
     }
     report.placed.sort_by(|a, b| a.path.cmp(&b.path));
@@ -413,19 +374,6 @@ fn complete(report: &Report, format: Format) -> Result<(), Error> {
                 "run `{}` and commit data.lock, then export again",
                 super::project::command("lock")
             )));
-    }
-    if !report.unbuilt.is_empty() {
-        return Err(Error::new(
-            Kind::BuildNeeded,
-            format!(
-                "data.lock pins no result of {} yet",
-                report.unbuilt.join(", ")
-            ),
-        )
-        .help(format!(
-            "run `{}`, then export again",
-            super::project::command(&format!("build {}", report.unbuilt.join(" ")))
-        )));
     }
     match format {
         Format::Sha256 if !report.not_unpacked.is_empty() => {

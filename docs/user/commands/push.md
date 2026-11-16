@@ -5,7 +5,6 @@
 ```sh
 fetchloom push --to /mnt/lab/fetchloom
 fetchloom push iris --dry-run
-fetchloom push --inputs clean
 fetchloom push --to /media/usb/fetchloom --json
 ```
 
@@ -15,12 +14,11 @@ fetchloom push --to /media/usb/fetchloom --json
 fetchloom push [options] [name]...
 ```
 
-`name` is a dataset in `data.toml`; with none, every dataset `sync` places is pushed, so one with `place = false` stays off the mirror unless it is named or `--inputs` adds it. an unknown name is a usage error, exit 2, that suggests the closest name. `--inputs` adds what the named [recipes](../guides/recipes.md) are made from.
+`name` is a dataset in `data.toml`; with none, every dataset is pushed. an unknown name is a usage error, exit 2, that suggests the closest name.
 
 | option | effect |
 |---|---|
 | `--to <folder>` | the mirror's folder. without it, the `push_to` setting names it, from the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_PUSH_TO`; with neither, push stops with `usage`, exit 2 |
-| `--inputs` | also push the datasets the named recipes are made from, and what those are made from in turn, so a rebuild on another machine finds them on the mirror. with no name, of every recipe |
 | `--verify` | read back each copy already on a folder mirror and replace one whose bytes are not the pinned ones; without it a copy of the right size counts as there. a bucket refuses it, since S3 checked each file when push sent it |
 | `-n`, `--dry-run` | say what would be downloaded, what would be copied and what is there already; change nothing |
 
@@ -85,15 +83,15 @@ a FAT32 drive refuses a file larger than 4 GiB, so push stops at the first one w
 
 ## what it fetches
 
-push copies what this machine's cache holds, and fills it first with what it lacks. a file the cache lacks that the data folder holds with its pinned bytes is copied into the cache, as in a project [moved to another machine](cache.md#moving-a-project-to-another-machine) with its data folder; the file in the data folder stays as it is. what neither holds, push downloads as a sync would: from a [mirror](../guides/mirrors.md) when one holds it, else from its source, each file checked against its pin. an archive this machine never unpacked is downloaded and unpacked to learn its files, and so is the raw data of a dataset with `place = false` when `--inputs` or its name asks for it. stderr from a real run in a copy of a project with a csv file, a zip and a recipe, whose cache was empty, the mirror's path shortened:
+push copies what this machine's cache holds, and fills it first with what it lacks. a file the cache lacks that the data folder holds with its pinned bytes is copied into the cache, as in a project [moved to another machine](cache.md#moving-a-project-to-another-machine) with its data folder; the file in the data folder stays as it is. what neither holds, push downloads as a sync would: from a [mirror](../guides/mirrors.md) when one holds it, else from its source, each file checked against its pin. an archive this machine never unpacked is downloaded and unpacked to learn its files. stderr from a real run in a copy of a project with a csv file twice, as datasets iris and twin, and a zip, whose cache was empty, the mirror's path shortened:
 
 ```text
- Downloaded 1 file · 824 B in 6 ms
-   Unpacked pets/pets.zip · 6 files · 639 B in 56 ms
-     Copied 2 files · 3.9 KiB from data into the cache
+ Downloaded 1 file · 515 B in 6 ms
+   Unpacked pets/pets.zip · 4 files · 33 B in 2 ms
+     Copied 1 file · 104 B from data into the cache
     Started a mirror in /mnt/lab/fetchloom
-     Pushed 8 files · 4.6 KiB to /mnt/lab/fetchloom
-         Ok every file clean, iris and pets need is on the mirror
+     Pushed 5 files · 137 B to /mnt/lab/fetchloom
+         Ok every file iris, pets and twin need is on the mirror
 ```
 
 offline, push downloads nothing, and in [mirror-only mode](../guides/mirrors.md#mirror-only-mode) it asks no source, so a file it would have to download stops it before anything is written, with `offline.missing` or `network.refused`, exit 20, naming the files. offline, from the same copy:
@@ -106,19 +104,11 @@ error: offline, and 1 file data.lock names is not in the cache
 
 a file in the data folder with other bytes than its pin counts as missing, so push downloads the pinned bytes instead and never changes the file.
 
-push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`. push never builds: a [recipe](../guides/recipes.md) whose result data.lock does not pin stops it with `build.needed`, exit 60, and a pinned result neither the cache nor the data folder holds, as one never built here or freed by `cache gc`, stops it with `offline.missing`, exit 20, naming the build that makes it. the JSON `fix` is null, since a build runs the project's code. from a clone that never built:
-
-```text
-error: this machine's cache lacks files the push needs, which only a build makes
-  clean/clean.csv
-  help: `fetchloom build clean` makes clean's files
-```
-
-`fetchloom push --inputs clean` sends `clean`'s result with every dataset it is made from, so a reviewer whose sources are gone can rebuild it from the mirror and check it against data.lock. with that raw data on the mirror, [`cache gc --inputs`](cache.md#raw-input-a-mirror-holds) can free this machine's copy of it.
+push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`.
 
 ## data you may not share
 
-`access` in [data.lock](../reference/data-lock.md) says what a dataset's source told about who may read it. a dataset whose source wanted an account (`login`) or accepted terms (`terms`), or did not say (`unknown`), is pushed only once you say yes, since anyone who can read the mirror can take its files without either. most sources say nothing, so most datasets ask, and a recipe's result asks when a dataset it is made from does. a dataset already on the mirror asks nothing. push asks before it downloads anything, so a no changes nothing.
+`access` in [data.lock](../reference/data-lock.md) says what a dataset's source told about who may read it. a dataset whose source wanted an account (`login`) or accepted terms (`terms`), or did not say (`unknown`), is pushed only once you say yes, since anyone who can read the mirror can take its files without either. most sources say nothing, so most datasets ask. a dataset already on the mirror asks nothing. push asks before it downloads anything, so a no changes nothing.
 
 ```text
 iris needs accepted terms. anyone who can read /mnt/lab/fetchloom can take its files from there. push it anyway? [y/N]
@@ -174,10 +164,9 @@ the work counters count what push downloaded, as for a sync, and `data_folder_ob
 | 0 | every file the datasets need is on the mirror |
 | 1 | nobody said yes to data that asks first, or data.lock is out of date |
 | 2 | a usage error, such as no folder or a web address |
-| 20 | a file it needs could not be downloaded, as offline or in mirror-only mode, or the cache lacks a file of a recipe's result, which only a build makes |
+| 20 | a file it needs could not be downloaded, as offline or in mirror-only mode |
 | 30 | a download or a pushed file read back holds other bytes than expected, or the cache's copy holds other bytes than its pin |
 | 50 | the folder is not a mirror, something else replaced a file push wrote, data.lock pins a file at a size its cached bytes do not have, or the disk refused a write or is full |
-| 60 | a recipe needs a build |
 | 130 | a stop |
 
 other failures use the [shared exit codes](../reference/exit-codes.md).

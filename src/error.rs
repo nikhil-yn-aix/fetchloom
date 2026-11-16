@@ -39,18 +39,9 @@ pub(crate) enum Kind {
     /// a check found data.lock out of date with data.toml.
     Outdated,
     /// a strict check found data the run asked for not ready: a file with other bytes than
-    /// data.lock pins, one not in place yet, a recipe's result not here, or a dataset not pinned
-    /// as data.toml asks; or `status --sources --check` found a file data.lock pins that no
+    /// data.lock pins, one not in place yet, or a dataset not pinned as data.toml asks; or `status --sources --check` found a file data.lock pins that no
     /// mirror or source serves.
     NotReady,
-    /// data.lock does not pin what a recipe in data.toml makes now, which only `fetchloom build`
-    /// can pin, since it runs the project's code.
-    BuildNeeded,
-    /// a recipe's step could not start, failed, or wrote what a result cannot hold.
-    BuildFailed,
-    /// a step built again from the same inputs, command and code made other files than
-    /// data.lock pins for them.
-    BuildDiffers,
     Interrupted,
 }
 
@@ -77,9 +68,6 @@ impl Kind {
             Kind::ProjectChanged => "project.changed",
             Kind::Outdated => "lock.outdated",
             Kind::NotReady => "data.not_ready",
-            Kind::BuildNeeded => "build.needed",
-            Kind::BuildFailed => "build.failed",
-            Kind::BuildDiffers => "build.differs",
             Kind::Interrupted => "interrupted",
         }
     }
@@ -101,7 +89,6 @@ impl Kind {
             Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,
             Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid | Kind::ProjectChanged => 50,
-            Kind::BuildNeeded | Kind::BuildFailed | Kind::BuildDiffers => 60,
             Kind::Interrupted => 130,
         }
     }
@@ -508,9 +495,6 @@ pub(crate) mod tests {
             ProjectChanged,
             Outdated,
             NotReady,
-            BuildNeeded,
-            BuildFailed,
-            BuildDiffers,
             Interrupted,
         ]
         .to_vec()

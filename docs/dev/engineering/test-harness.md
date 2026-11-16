@@ -47,8 +47,6 @@ a test that needs what a machine may lack returns early and says `skipped: <reas
 
 the btrfs and xfs passes require `reflinks`, the casefold pass requires `aliases`, and the FAT32, exFAT, ReFS and HFS+ passes require none.
 
-the recipe tests in `tests/cli/build.rs` run `examples/recipe_step.rs`, a step program with the standard library alone whose first argument picks what it does: copy, write, fail, hold until a file appears, and the like. `cargo test` builds it beside the fetchloom binary, and a run of the CLI tests alone refreshes it once with the `cargo` that runs them; CI prebuilds and archives it, so each nextest process reuses it without invoking cargo; each test copies it into the sandbox's `bin` folder as `recipe-step` and puts that folder first on `PATH`, so a recipe names it as any program. every run appends its mode to `runs` in the folder the step runs in, so a test counts runs without sleeping.
-
 snapshot filters normalize sandbox paths, ports, separators and durations and remove variable rates. on a drive that makes no links, `Sandbox::placed_filters` turns the copy wording of a story into the linking wording, so one snapshot covers every filesystem. inspect raw output when changing those fields. JSON work counters and output snapshots check different contracts.
 
 ## debug-only hooks

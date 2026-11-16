@@ -1,7 +1,7 @@
 //! `fetchloom push`: the files data.lock pins, copied from this machine's cache into a folder
 //! mirror or an S3 bucket's, with the lists of what their archives unpack to. it writes only the
 //! mirror, and the cache for a file it lacks, taken in as a sync would; it never changes the
-//! project or builds.
+//! project.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -29,7 +29,7 @@ use crate::project::manifest::Manifest;
 use crate::source::Access;
 use crate::stop::Stop;
 use crate::volume::read_unfollowed;
-use crate::{plan, recipe, units};
+use crate::{plan, units};
 
 /// what a push did, or with `--dry-run` would do, as `--json` prints it.
 #[derive(Serialize)]
@@ -126,19 +126,15 @@ type Writes<'a> = Vec<(&'a Needed, There)>;
 enum Source {
     /// a file a source pins, which a push downloads when the cache and the data folder lack it.
     Pinned,
-    /// a file of a recipe's result, in the cache once `fetchloom build` made it.
-    Result,
     /// the cache's record of what an archive unpacks to, by the record's key: the archive's
     /// SHA-256, or a split archive's parts key.
     List(Sha256),
 }
 
-/// a dataset a push asks about first, and why: what its source said of who may read it, or for a
-/// recipe's result the strictest of what the datasets it is made from said, with their names.
+/// a dataset a push asks about first, and why: what its source said of who may read it.
 struct Asking {
     dataset: String,
     access: Access,
-    from: Vec<String>,
     /// data.lock calls it public, but this machine keeps a key for where its files come from.
     keyed: bool,
 }
@@ -274,7 +270,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     for name in &args.names {
         known(&manifest, name, "push")?;
     }
-    let datasets = selected(&manifest, &args.names, args.inputs);
+    let datasets = selected(&manifest, &args.names);
     if datasets.is_empty() {
         context.output.done("Ok", &everything(&datasets));
         let target = match target {
@@ -303,7 +299,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     } else {
         super::open_cache()?
     };
-    let selected = (!args.names.is_empty()).then(|| selected(&manifest, &args.names, false));
+    let selected = (!args.names.is_empty()).then(|| selected(&manifest, &args.names));
     let mut planned = plan(
         context, &manifest, &lock, &cache, target, selected, datasets,
     )?;
@@ -487,25 +483,12 @@ fn reached(target: PathBuf) -> PathBuf {
     }
 }
 
-/// the datasets a push sends: `names`, else every dataset sync places, with `inputs` also what
-/// those are made from, all the way down, and with no names what every recipe is made from.
-fn selected(manifest: &Manifest, names: &[String], inputs: bool) -> Vec<String> {
-    let roots: Vec<&str> = if names.is_empty() {
-        manifest
-            .datasets
-            .iter()
-            .filter(|(_, entry)| entry.place || (inputs && entry.recipe().is_some()))
-            .map(|(name, _)| name.as_str())
-            .collect()
+/// the datasets a push sends: `names`, else every dataset in data.toml.
+fn selected(manifest: &Manifest, names: &[String]) -> Vec<String> {
+    let chosen: BTreeSet<&str> = if names.is_empty() {
+        manifest.datasets.keys().map(String::as_str).collect()
     } else {
         names.iter().map(String::as_str).collect()
-    };
-    let chosen: BTreeSet<&str> = if inputs {
-        recipe::closure(&manifest.datasets, &roots)
-            .into_iter()
-            .collect()
-    } else {
-        roots.into_iter().collect()
     };
     chosen.into_iter().map(str::to_owned).collect()
 }
@@ -553,7 +536,7 @@ fn plan(
         .map(|(needed, _)| needed.dataset.as_str())
         .chain(unknown.iter().map(|(dataset, _)| dataset.as_str()))
         .collect();
-    let asks = asking(manifest, lock, &datasets, &Keys::read(context))
+    let asks = asking(lock, &datasets, &Keys::read(context))
         .into_iter()
         .filter(|ask| copying.contains(ask.dataset.as_str()))
         .collect();
@@ -619,8 +602,8 @@ fn read_back(
 
 /// moves to `planned.taking` the files of `planned.lacked` the data folder holds: a `dry_run` only
 /// those vouched for or hashing to their pin, a push any of the pinned size the state does not
-/// record as other bytes, since taking checks it. fails with `offline.missing` naming the build for
-/// a lacking result's file, or `project.invalid` for a pin no bytes can have.
+/// record as other bytes, since taking checks it. fails with `project.invalid` for a pin no bytes
+/// can have.
 fn settle(
     context: &Context,
     project: &Project,
@@ -653,7 +636,7 @@ fn settle(
         .iter()
         .map(|at| &planned.needed[*at])
         .collect();
-    match mispinned(cache, lock, &lacked).or_else(|| unbuilt(&lacked)) {
+    match mispinned(cache, lock, &lacked) {
         Some(error) => Err(error.with_report(&report(planned, Outcome::Stopped))),
         None => Ok(()),
     }
@@ -685,7 +668,7 @@ fn fetch(
     if names.is_empty() {
         return Ok(());
     }
-    let work = Loop::new(context, project, Arc::new(context.net()), cache.clone()).readying("push");
+    let work = Loop::new(context, project, Arc::new(context.net()), cache.clone());
     waiting(work.ready(manifest, lock, names))
 }
 
@@ -707,8 +690,7 @@ fn mispinned(cache: &Cache, lock: &Lock, lacked: &[&Needed]) -> Option<Error> {
 }
 
 /// takes the files `planned.taking` names into the cache from the data folder, each only when its
-/// bytes hash to its pin, else downloads it; a result's file held with other bytes fails with
-/// `offline.missing` naming the build.
+/// bytes hash to its pin, else downloads it.
 fn take(
     context: &Context,
     project: &Project,
@@ -736,9 +718,6 @@ fn take(
         .map(|at| &planned.needed[*at])
         .filter(|needed| refused.contains(&needed.item.digest))
         .collect();
-    if let Some(error) = unbuilt(&lacked) {
-        return Err(error.with_report(&report(planned, Outcome::Stopped)));
-    }
     let names = lacked
         .iter()
         .map(|needed| needed.dataset.as_str())
@@ -776,38 +755,23 @@ fn needed(
     let (mut files, mut lists, mut unknown) = (Vec::new(), Vec::new(), Vec::new());
     let mut add =
         |into: &mut Vec<Needed>, item: Item, label: String, dataset: &str, source, fetch| {
-            let Some(&at) = seen.get(&(item.folder, item.digest)) else {
-                seen.insert((item.folder, item.digest), into.len());
-                into.push(Needed {
-                    item,
-                    label,
-                    dataset: dataset.to_owned(),
-                    source,
-                    fetch,
-                });
+            if seen.contains_key(&(item.folder, item.digest)) {
                 return;
-            };
-            // bytes a fetched dataset pins come with its download, though a result holds them too
-            let first: &mut Needed = &mut into[at];
-            if matches!(first.source, Source::Result) && matches!(source, Source::Pinned) {
-                first.source = source;
-                dataset.clone_into(&mut first.dataset);
-                first.fetch = fetch;
             }
+            seen.insert((item.folder, item.digest), into.len());
+            into.push(Needed {
+                item,
+                label,
+                dataset: dataset.to_owned(),
+                source,
+                fetch,
+            });
         };
     for name in datasets {
-        if let Some(result) = lock.result(name) {
-            // a result's files are pinned by data.lock itself, so it needs no list on the mirror
-            for member in &result.files {
-                let item = object(member.sha256, member.size);
-                let label = format!("{name}/{}", member.path);
-                add(&mut files, item, label, name, Source::Result, None);
-            }
-            continue;
-        }
-        let Some((locked, filters)) = recipe::source_read(manifest, lock, name) else {
+        let (Some(entry), Some(locked)) = (manifest.datasets.get(name), lock.get(name)) else {
             continue;
         };
+        let filters = &entry.source.members;
         // each archive's list of files, as the record that gave its members holds it
         let records = RefCell::new(Vec::new());
         let members = |archive: &Archive<'_>| {
@@ -842,7 +806,7 @@ fn needed(
         };
         for target in &planned.targets {
             let item = object(target.sha256, target.size);
-            let brings = target.file().map(fetch);
+            let brings = Some(fetch(target.file));
             add(
                 &mut files,
                 item,
@@ -902,42 +866,6 @@ fn lacking(context: &Context, cache: &Cache, needed: &[Needed], there: &[There])
         .collect()
 }
 
-/// the error for the files of recipes' results among `lacked`, which no download brings, with
-/// the build that makes each, which only a person may run.
-fn unbuilt(lacked: &[&Needed]) -> Option<Error> {
-    let made: Vec<&str> = lacked
-        .iter()
-        .filter(|needed| matches!(needed.source, Source::Result))
-        .map(|needed| needed.label.as_str())
-        .collect();
-    if made.is_empty() {
-        return None;
-    }
-    let error = Error::new(
-        Kind::OfflineMissing,
-        "this machine's cache lacks files the push needs, which only a build makes",
-    );
-    let built: BTreeSet<&str> = lacked
-        .iter()
-        .filter(|needed| matches!(needed.source, Source::Result))
-        .map(|needed| needed.dataset.as_str())
-        .collect();
-    let help: Vec<String> = built
-        .iter()
-        .map(|name| {
-            format!(
-                "`{}` makes the files of {name}",
-                super::project::command(&format!("build {name}"))
-            )
-        })
-        .collect();
-    Some(
-        error
-            .details_up_to(&made, super::fetch::NAMED)
-            .help(help.join("; ")),
-    )
-}
-
 /// the error for files, `lacked`, and archives of unknown files, `unknown`, a push still lacks
 /// after fetching them, as when something took them meanwhile; the next push fetches them again.
 fn missing(lacked: &[&Needed], unknown: &[(String, Fetch)]) -> Error {
@@ -956,51 +884,19 @@ fn missing(lacked: &[&Needed], unknown: &[(String, Fetch)]) -> Error {
 }
 
 /// the datasets that ask before they are pushed: one whose source wanted an account or accepted
-/// terms or did not say, and a result made from one. `access` is a hint, never a licence check.
-fn asking(manifest: &Manifest, lock: &Lock, datasets: &[String], keys: &Keys) -> Vec<Asking> {
+/// terms or did not say. `access` is a hint, never a licence check.
+fn asking(lock: &Lock, datasets: &[String], keys: &Keys) -> Vec<Asking> {
     datasets
         .iter()
         .filter_map(|name| {
-            if let Some(locked) = lock.get(name) {
-                let (access, keyed) = keys.access(locked);
-                return (access != Access::Public).then(|| Asking {
-                    dataset: name.clone(),
-                    access,
-                    from: Vec::new(),
-                    keyed,
-                });
-            }
-            // anyone who reads a result reads what it was made from
-            let from: Vec<(&str, Access)> = recipe::closure(&manifest.datasets, &[name.as_str()])
-                .into_iter()
-                .filter_map(|input| lock.get(input).map(|locked| (input, keys.access(locked).0)))
-                .filter(|(_, access)| *access != Access::Public)
-                .collect();
-            let access = from
-                .iter()
-                .map(|(_, access)| *access)
-                .max_by_key(|access| strictness(*access))?;
-            Some(Asking {
+            let (access, keyed) = keys.access(lock.get(name)?);
+            (access != Access::Public).then(|| Asking {
                 dataset: name.clone(),
                 access,
-                from: from
-                    .into_iter()
-                    .map(|(input, _)| input.to_owned())
-                    .collect(),
-                keyed: false,
+                keyed,
             })
         })
         .collect()
-}
-
-/// how much an access asks: an account most, then accepted terms, then a source that did not say.
-fn strictness(access: Access) -> u8 {
-    match access {
-        Access::Login => 3,
-        Access::Terms => 2,
-        Access::Unknown => 1,
-        Access::Public => 0,
-    }
 }
 
 /// asks before copying the files of datasets whose sources wanted an account or accepted terms, or
@@ -1070,7 +966,7 @@ fn ask_again(context: &Context, planned: &mut Planned, asked: &[String]) -> Resu
 fn reasons(asks: &[Asking]) -> String {
     let alike = |access: Access| -> Vec<&str> {
         asks.iter()
-            .filter(|ask| ask.access == access && ask.from.is_empty() && !ask.keyed)
+            .filter(|ask| ask.access == access && !ask.keyed)
             .map(|ask| ask.dataset.as_str())
             .collect()
     };
@@ -1109,10 +1005,6 @@ fn reasons(asks: &[Asking]) -> String {
             "the sources of {} did not say who may read them",
             named(many)
         )),
-    }
-    for ask in asks.iter().filter(|ask| !ask.from.is_empty()) {
-        let from: Vec<&str> = ask.from.iter().map(String::as_str).collect();
-        reasons.push(format!("{} is made from {}", ask.dataset, named(&from)));
     }
     reasons.join("; ")
 }
@@ -1328,7 +1220,7 @@ fn put_lists(
         .iter()
         .filter_map(|(needed, _)| match needed.source {
             Source::List(archive) => Some((needed.item.digest, archive)),
-            Source::Pinned | Source::Result => None,
+            Source::Pinned => None,
         })
         .collect();
     let items: Vec<(Item, There)> = lists
@@ -1744,34 +1636,7 @@ fn named(names: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::Member;
-    use crate::project::lock::derived::Derived;
     use crate::project::lock::{Locked, LockedFile};
-
-    /// raw and vault fetched, clean made from both, report from clean, and other fetched alone.
-    fn manifest() -> Manifest {
-        Manifest::parse(
-            r#"
-[datasets.raw]
-ref = "zenodo:1"
-
-[datasets.vault]
-ref = "zenodo:2"
-
-[datasets.other]
-ref = "zenodo:3"
-
-[datasets.clean]
-from = ["raw", "vault"]
-run = ["python3", "clean.py", "{raw}", "{vault}", "{out}"]
-
-[datasets.report]
-from = ["clean"]
-run = ["python3", "report.py", "{clean}", "{out}"]
-"#,
-        )
-        .unwrap()
-    }
 
     fn locked(name: &str, access: Access) -> Locked {
         Locked {
@@ -1788,18 +1653,6 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             timestamp: "2026-11-10T00:00:00Z".to_owned(),
             files: Vec::<LockedFile>::new(),
         }
-    }
-
-    fn member(path: &str, bytes: &[u8]) -> Member {
-        Member {
-            path: path.to_owned(),
-            size: bytes.len() as u64,
-            sha256: crate::digest::sha256(bytes),
-        }
-    }
-
-    fn names(selected: &[String]) -> Vec<&str> {
-        selected.iter().map(String::as_str).collect()
     }
 
     /// with no `--to` and no `push_to`, the help names `settings set push_to` and the details the
@@ -1823,7 +1676,6 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         let args = args::Push {
             names: Vec::new(),
             to: None,
-            inputs: false,
             verify: false,
             dry: args::DryRun { dry_run: false },
         };
@@ -1879,103 +1731,10 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         );
     }
 
-    /// `--inputs` adds what the named recipes are made from, all the way down, and nothing else.
-    #[test]
-    fn inputs_add_what_the_named_recipes_are_made_from() {
-        let manifest = manifest();
-        let report = ["report".to_owned()];
-        assert_eq!(names(&selected(&manifest, &report, false)), ["report"]);
-        assert_eq!(
-            names(&selected(&manifest, &report, true)),
-            ["clean", "raw", "report", "vault"]
-        );
-        let other = ["other".to_owned()];
-        assert_eq!(names(&selected(&manifest, &other, true)), ["other"]);
-        assert_eq!(selected(&manifest, &[], true).len(), 5);
-    }
-
-    /// a result's file the cache lacks says to build it, which only a person may run.
-    #[test]
-    fn a_result_goes_by_the_files_data_lock_pins_for_it() {
-        let files = vec![member("a.csv", b"a"), member("b.csv", b"b")];
-        let lock = Lock {
-            datasets: Vec::new(),
-            derived: vec![Derived {
-                name: "clean".to_owned(),
-                from: Vec::new(),
-                run: vec!["python3".to_owned()],
-                code: Vec::new(),
-                env: std::collections::BTreeMap::new(),
-                key: crate::digest::sha256(b"key"),
-                timestamp: "2026-11-10T00:00:00Z".to_owned(),
-                tree: crate::cache::tree_hash(&files),
-                files,
-            }],
-            stated: Vec::new(),
-            waiting: Vec::new(),
-        };
-        let folder = tempfile::tempdir().unwrap();
-        let cache = Cache::open(folder.path().join("cache")).unwrap();
-        let Wanted { needed, unknown } =
-            needed(&manifest(), &lock, &cache, &["clean".to_owned()]).unwrap();
-        assert!(unknown.is_empty());
-        let labels: Vec<&str> = needed.iter().map(|needed| needed.label.as_str()).collect();
-        assert_eq!(labels, ["clean/a.csv", "clean/b.csv"]);
-        assert!(
-            needed
-                .iter()
-                .all(|needed| needed.item.folder == OBJECTS
-                    && matches!(needed.source, Source::Result))
-        );
-        let lacked: Vec<&Needed> = needed.iter().collect();
-        let error = unbuilt(&lacked).unwrap();
-        assert_eq!(
-            error.help.as_deref(),
-            Some("`fetchloom build clean` makes the files of clean")
-        );
-    }
-
-    #[test]
-    fn a_result_asks_as_strictly_as_what_it_is_made_from() {
-        let manifest = manifest();
-        let lock = Lock {
-            // sorted by name, as data.lock keeps them
-            datasets: vec![
-                locked("other", Access::Public),
-                locked("raw", Access::Terms),
-                locked("vault", Access::Login),
-            ],
-            derived: Vec::new(),
-            stated: Vec::new(),
-            waiting: Vec::new(),
-        };
-        let asks = asking(
-            &manifest,
-            &lock,
-            &["report".to_owned(), "other".to_owned()],
-            &Keys::default(),
-        );
-        assert_eq!(asks.len(), 1);
-        assert_eq!(asks[0].dataset, "report");
-        assert_eq!(asks[0].access, Access::Login);
-        assert_eq!(asks[0].from, ["raw", "vault"]);
-        let public = Lock {
-            datasets: vec![
-                locked("raw", Access::Public),
-                locked("vault", Access::Public),
-            ],
-            derived: Vec::new(),
-            stated: Vec::new(),
-            waiting: Vec::new(),
-        };
-        assert!(asking(&manifest, &public, &["report".to_owned()], &Keys::default()).is_empty());
-    }
-
     /// a dataset data.lock calls public is asked about when this machine keeps a key for where its
-    /// files come from, since a clone's data.lock cannot vouch for that; so is a result made from it.
+    /// files come from, since a clone's data.lock cannot vouch for that.
     #[test]
     fn a_key_for_a_files_host_asks_whatever_data_lock_says() {
-        let manifest = manifest();
         let mut raw = locked("raw", Access::Public);
         raw.files = vec![LockedFile {
             path: "a.csv".to_owned(),
@@ -1987,26 +1746,24 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         }];
         let lock = Lock {
             datasets: vec![raw, locked("vault", Access::Public)],
-            derived: Vec::new(),
             stated: Vec::new(),
             waiting: Vec::new(),
         };
-        let names = ["raw".to_owned(), "clean".to_owned(), "vault".to_owned()];
-        assert!(asking(&manifest, &lock, &names, &Keys::default()).is_empty());
+        let names = ["raw".to_owned(), "vault".to_owned()];
+        assert!(asking(&lock, &names, &Keys::default()).is_empty());
         let keys = Keys {
             hosts: HashSet::from(["data.lab.example".to_owned()]),
             ..Keys::default()
         };
-        let asks = asking(&manifest, &lock, &names, &keys);
+        let asks = asking(&lock, &names, &keys);
         let asked: Vec<(&str, bool)> = asks
             .iter()
             .map(|ask| (ask.dataset.as_str(), ask.keyed))
             .collect();
-        assert_eq!(asked, [("raw", true), ("clean", false)]);
-        assert_eq!(asks[1].from, ["raw"]);
+        assert_eq!(asked, [("raw", true)]);
         assert_eq!(
             reasons(&asks),
-            "this machine signs in where raw's files come from, though data.lock calls it public; clean is made from raw"
+            "this machine signs in where raw's files come from, though data.lock calls it public"
         );
     }
 
@@ -2076,31 +1833,29 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         );
     }
 
-    fn asks(dataset: &str, access: Access, from: &[&str]) -> Asking {
+    fn asks(dataset: &str, access: Access) -> Asking {
         Asking {
             dataset: dataset.to_owned(),
             access,
-            from: from.iter().map(|name| (*name).to_owned()).collect(),
             keyed: false,
         }
     }
 
-    /// reasons are grouped as a person reads them, and a result's come from what it is made from.
+    /// reasons are grouped as a person reads them.
     #[test]
     fn the_question_says_why_each_dataset_asks() {
         let told = [
-            asks("pets", Access::Terms, &[]),
-            asks("iris", Access::Unknown, &[]),
-            asks("dogs", Access::Unknown, &[]),
-            asks("vault", Access::Login, &[]),
-            asks("clean", Access::Terms, &["pets"]),
+            asks("pets", Access::Terms),
+            asks("iris", Access::Unknown),
+            asks("dogs", Access::Unknown),
+            asks("vault", Access::Login),
         ];
         assert_eq!(
             reasons(&told),
-            "vault needs an account to read; pets needs accepted terms; the sources of iris and dogs did not say who may read them; clean is made from pets"
+            "vault needs an account to read; pets needs accepted terms; the sources of iris and dogs did not say who may read them"
         );
         assert_eq!(
-            reasons(&[asks("iris", Access::Unknown, &[])]),
+            reasons(&[asks("iris", Access::Unknown)]),
             "the source of iris did not say who may read it"
         );
         let six = ["a", "b", "c", "d", "e", "f"];

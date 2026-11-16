@@ -10,7 +10,6 @@ use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
 use crate::project::lock::archives::{self, Archive, Pinned};
-use crate::project::lock::derived::Derived;
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, MemberFilter, Members, Source};
 
@@ -24,37 +23,19 @@ pub(crate) struct Target<'a> {
     pub(crate) size: u64,
     /// a writable copy, for tools that write into their inputs.
     pub(crate) copy: bool,
-    pub(crate) holder: Holder<'a>,
-}
-
-/// what in data.lock holds a target's bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Holder<'a> {
-    /// a file a source lists, whose download holds them: the file itself, or the archive it
-    /// unpacks from.
-    File(&'a LockedFile),
-    /// a recipe's result, which only `fetchloom build` makes, so nothing downloads it.
-    Result,
+    /// the file a source lists whose download holds the target's bytes: the file itself, or the
+    /// archive it unpacks from.
+    pub(crate) file: &'a LockedFile,
 }
 
 impl<'a> Target<'a> {
-    /// the locked file whose download holds the target's bytes, or none for a recipe's result.
-    pub(crate) fn file(&self) -> Option<&'a LockedFile> {
-        match self.holder {
-            Holder::File(file) => Some(file),
-            Holder::Result => None,
-        }
-    }
-
     fn unpacked(&self) -> bool {
-        self.file().is_some_and(|file| file.unpacks_to.is_some())
+        self.file.unpacks_to.is_some()
     }
 
     /// the path in its dataset of the archive the target unpacks from, if it is in one.
     fn archive(&self) -> Option<&'a str> {
-        self.file()
-            .filter(|file| file.unpacks_to.is_some())
-            .map(|file| file.path.as_str())
+        self.unpacked().then_some(self.file.path.as_str())
     }
 }
 
@@ -119,7 +100,6 @@ pub(crate) fn from_cache_adding<'a>(
     let mut plan = planned(
         manifest,
         &lock.datasets,
-        &lock.derived,
         &|archive| archive.recorded(cache),
         &patterns,
     )?;
@@ -134,41 +114,6 @@ fn waiting(lock: &Lock) -> Vec<&str> {
         .collect()
 }
 
-/// every file of `lock`'s fetched datasets as a build reads them, those `place = false` keeps out
-/// laid out where they would land. only placed files are checked for clashes.
-pub(crate) fn inputs<'a>(
-    manifest: &Manifest,
-    lock: &'a Lock,
-    cache: &Cache,
-) -> Result<Plan<'a>, Error> {
-    let members = |archive: &Archive<'_>| archive.recorded(cache);
-    let mut plan = plan(manifest, lock, &members)?;
-    for dataset in &lock.datasets {
-        let Some((entry, source)) = manifest
-            .datasets
-            .get(&dataset.name)
-            .filter(|entry| !entry.place)
-            .and_then(|entry| Some((entry, entry.source()?)))
-        else {
-            continue;
-        };
-        if dataset.drift(entry).is_none() {
-            archives_named(&dataset.name, source, dataset)?;
-        }
-        let folder = folder(manifest, &dataset.name);
-        expand(
-            &mut plan,
-            &dataset.name,
-            &folder,
-            entry.copy,
-            &dataset.files,
-            &source.members,
-            &members,
-        )?;
-    }
-    Ok(plan)
-}
-
 /// refuses, before anything downloads, a clash among the files of `datasets` the cache's records
 /// already place. an archive with no record is checked once it is unpacked, before any placing.
 pub(crate) fn foresee<'a>(
@@ -180,44 +125,43 @@ pub(crate) fn foresee<'a>(
     let mut datasets: Vec<&Locked> = datasets.into_iter().collect();
     datasets.sort_by(|a, b| a.name.cmp(&b.name));
     let members = |archive: &Archive<'_>| archive.recorded(cache);
-    planned(manifest, datasets, &[], &members, &|_| Patterns::InDataToml).map(drop)
+    planned(manifest, datasets, &members, &|_| Patterns::InDataToml).map(drop)
 }
 
 /// every file the lock places for data.toml's datasets, archives as `members` recorded them, or
-/// the first clash: datasets may share a folder, never a path. `place = false` places nothing.
+/// the first clash: datasets may share a folder, never a path. a dataset `fetchloom drop` left
+/// out here places nothing.
 pub(crate) fn plan<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
     members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
     let patterns = |_: &str| Patterns::InDataToml;
-    let mut plan = planned(manifest, &lock.datasets, &lock.derived, members, &patterns)?;
+    let mut plan = planned(manifest, &lock.datasets, members, &patterns)?;
     plan.waiting = waiting(lock);
     Ok(plan)
 }
 
-/// [`plan`] for `datasets` and `results`, telling a clash in each dataset as `patterns` says
-/// where its patterns were written.
+/// [`plan`] for `datasets`, telling a clash in each dataset as `patterns` says where its patterns
+/// were written.
 fn planned<'a>(
     manifest: &Manifest,
     datasets: impl IntoIterator<Item = &'a Locked>,
-    results: &'a [Derived],
     members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
     patterns: &dyn Fn(&str) -> Patterns,
 ) -> Result<Plan<'a>, Error> {
     let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
     let mut plan = Plan::default();
     for dataset in datasets {
-        // a recipe's files come only from a build, never from a source pin left under its name,
-        // and a dataset with `place = false` has no files in the data folder at all
-        let Some((entry, source)) = manifest
+        // a dataset drop left out here has no files in the data folder at all
+        let Some(entry) = manifest
             .datasets
             .get(&dataset.name)
             .filter(|entry| entry.place)
-            .and_then(|entry| Some((entry, entry.source()?)))
         else {
             continue;
         };
+        let source = &entry.source;
         let folder = folder(manifest, &dataset.name);
         // a pin data.toml has moved past is planned as it stands until sync pins again, so its
         // member filters may not fit it yet
@@ -252,27 +196,6 @@ fn planned<'a>(
                 members,
             )?;
         }
-    }
-    for result in results {
-        // a fetched dataset's files come only from its source, never from a result left under
-        // its name
-        let Some(entry) = manifest
-            .datasets
-            .get(&result.name)
-            .filter(|entry| entry.recipe().is_some() && entry.place)
-        else {
-            continue;
-        };
-        let folder = folder(manifest, &result.name);
-        plan.targets
-            .extend(result.files.iter().map(|member| Target {
-                dataset: &result.name,
-                path: name::joined(&folder, &member.path),
-                sha256: member.sha256,
-                size: member.size,
-                copy: entry.copy,
-                holder: Holder::Result,
-            }));
     }
     check_by(&plan.targets, patterns)?;
     span.record("files", plan.targets.len());
@@ -334,7 +257,7 @@ pub(crate) fn expand<'a>(
                     sha256: file.sha256,
                     size: file.size,
                     copy,
-                    holder: Holder::File(file),
+                    file,
                 });
                 continue;
             }
@@ -347,7 +270,7 @@ pub(crate) fn expand<'a>(
             sha256,
             size,
             copy,
-            holder: Holder::File(file),
+            file,
         };
         // before the archive's files are known, so two globs stop a run before it downloads
         let filter = filters.of(dataset, &file.path)?;
@@ -613,17 +536,15 @@ pub(crate) fn unreached(
 ) -> Vec<Unreached> {
     let mut found: Vec<Unreached> = Vec::new();
     let mut by_dataset: HashMap<&str, Option<(String, glob::Set)>> = HashMap::new();
-    let inside_archives = targets.iter().filter_map(|target| {
-        Some((
-            target,
-            target.file().filter(|file| file.unpacks_to.is_some())?,
-        ))
-    });
+    let inside_archives = targets
+        .iter()
+        .filter(|target| target.unpacked())
+        .map(|target| (target, target.file));
     for (target, archive) in inside_archives {
         let Some((inside, excluded)) = by_dataset
             .entry(target.dataset)
             .or_insert_with(|| {
-                let source = manifest.datasets.get(target.dataset)?.source()?;
+                let source = &manifest.datasets.get(target.dataset)?.source;
                 let missed = unlisted.get(target.dataset)?;
                 let excluded: Vec<Glob> = source
                     .exclude
@@ -824,7 +745,7 @@ pub(crate) fn unportable(
     let Some(source) = manifest
         .datasets
         .get(&locked.name)
-        .and_then(manifest::Entry::source)
+        .map(|entry| &entry.source)
     else {
         return Vec::new();
     };
@@ -870,8 +791,7 @@ fn check_by(targets: &[Target], patterns: &dyn Fn(&str) -> Patterns) -> Result<(
     for target in targets {
         if let Some(reason) = name::metadata(&target.path) {
             // inside an archive, the name is the source's, as other refused member names are
-            let unpacked = target.file().is_some_and(|file| file.unpacks_to.is_some());
-            let kind = if unpacked {
+            let kind = if target.unpacked() {
                 Kind::SourceInvalid
             } else {
                 Kind::ProjectInvalid
@@ -972,7 +892,7 @@ fn fix(
     let listed = [first, second]
         .into_iter()
         .find(|target| !target.unpacked())
-        .and_then(Target::file);
+        .map(|target| target.file);
     if let (Some(member), Some(listed)) = (unpacked, listed) {
         return beside(member, listed, targets, patterns);
     }
@@ -989,7 +909,7 @@ fn fix(
 /// it: leave out either, the member only while its archive keeps another file, or keep it packed.
 fn beside(member: &Target, listed: &LockedFile, targets: &[Target], patterns: Patterns) -> String {
     let dataset = member.dataset;
-    let archive = member.file().map_or("", |file| file.path.as_str());
+    let archive = member.file.path.as_str();
     let named = format!("the {} beside {archive}", listed.path);
     if patterns == Patterns::OnCommandLine {
         return format!(
@@ -1001,7 +921,7 @@ fn beside(member: &Target, listed: &LockedFile, targets: &[Target], patterns: Pa
     let packed = format!("set extract = false on datasets.{dataset} to keep its archives packed");
     let others = targets
         .iter()
-        .any(|target| target.holder == member.holder && target.path != member.path);
+        .any(|target| target.file == member.file && target.path != member.path);
     if others {
         format!(
             "leave out {named} with exclude = [{exclude}] in datasets.{dataset}, or the one inside it with exclude in [datasets.{dataset}.members.\"{archive}\"], or {packed}"
@@ -1012,15 +932,7 @@ fn beside(member: &Target, listed: &LockedFile, targets: &[Target], patterns: Pa
 }
 
 fn leave_out(what: &str, target: &Target, patterns: Patterns) -> String {
-    let archive = match target.holder {
-        Holder::Result => {
-            return format!(
-                "change the step that makes datasets.{} so it writes other names",
-                target.dataset
-            );
-        }
-        Holder::File(file) => file.unpacks_to.is_some().then_some(file.path.as_str()),
-    };
+    let archive = target.archive();
     match (archive, patterns) {
         (Some(archive), Patterns::InDataToml) => format!(
             "leave {what} out with exclude in [datasets.{dataset}.members.\"{archive}\"] in data.toml, or set extract = false on datasets.{dataset} to keep its archives packed",

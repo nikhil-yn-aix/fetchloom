@@ -1,8 +1,6 @@
 //! `data.toml`: the datasets a project needs. people write it, and `add` and `remove` edit it in
 //! place, keeping comments, order and spacing.
 
-pub(crate) mod recipes;
-
 use std::collections::BTreeMap;
 use std::ops::{Bound, Range};
 
@@ -11,7 +9,6 @@ use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike, TomlE
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
-use recipes::{Slot, Template};
 
 pub(crate) const FILE: &str = "data.toml";
 /// the data folder of a project whose data.toml names none.
@@ -24,26 +21,11 @@ const PROJECT_FILES: [&str; 3] = [FILE, "data.lock", "data.lock.d"];
 const GIT_FILES: [&str; 3] = [".gitignore", ".gitattributes", ".gitmodules"];
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
-const DATASET_KEYS: [&str; 13] = [
-    "ref", "select", "exclude", "extract", "members", "web_page", "copy", "path", "place", "from",
-    "run", "code", "env",
+const DATASET_KEYS: [&str; 8] = [
+    "ref", "select", "exclude", "extract", "members", "web_page", "copy", "path",
 ];
-/// the keys of a dataset fetched from a source, beside `ref`.
-const SOURCE_KEYS: [&str; 5] = ["select", "exclude", "extract", "members", "web_page"];
 /// the keys of the table that chooses the files of one archive.
 const MEMBER_KEYS: [&str; 2] = ["select", "exclude"];
-/// the keys of a dataset a recipe makes.
-const RECIPE_KEYS: [&str; 4] = ["from", "run", "code", "env"];
-/// how a person writes a recipe's command, for the help of a mistake in one.
-const RUN_EXAMPLE: &str = "run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]";
-/// what `code` is for, for the help of a path it refuses.
-const OWN_FILES: &str = "name the project's own files, such as scripts and their settings";
-/// the files fetchloom writes beside data.toml, which no recipe's key may read.
-const WRITTEN: [&str; 2] = ["data.lock", "data.lock.d"];
-/// words of a variable's name that mark a secret, which data.toml must not hold.
-const SECRETS: [&str; 4] = ["SECRET", "PASSWORD", "PASSWD", "CREDENTIAL"];
-/// pairs of words that name a key, such as `API_KEY`.
-const KEYS: [&str; 3] = ["API", "ACCESS", "PRIVATE"];
 
 #[derive(Clone, Debug)]
 pub(crate) struct Manifest {
@@ -54,23 +36,16 @@ pub(crate) struct Manifest {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Entry {
-    pub(crate) origin: Origin,
+    pub(crate) source: Source,
     pub(crate) copy: bool,
     /// where the dataset lands inside the data folder, when not under its name: a folder, or
     /// [`DATA_FOLDER_ITSELF`].
     pub(crate) path: Option<String>,
-    /// whether its files are placed in the data folder. a dataset with `place = false` is
-    /// pinned and cached for the recipes that read it, and has no folder.
+    /// whether a run places its files in the data folder: false only for a dataset `fetchloom
+    /// drop` freed here, which a run that does not name it leaves out.
     pub(crate) place: bool,
     /// each key's line in data.toml, as `data.toml:7   select = ["*.edf"]`, for messages.
     pub(crate) lines: BTreeMap<&'static str, String>,
-}
-
-/// where a dataset's files come from.
-#[derive(Clone, Debug)]
-pub(crate) enum Origin {
-    Source(Source),
-    Derived(Recipe),
 }
 
 /// a dataset fetched from a source.
@@ -223,41 +198,10 @@ impl MemberFilter {
     }
 }
 
-/// a dataset made by a command, from other datasets or from its command and code alone. only
-/// `fetchloom build` runs it.
-#[derive(Clone, Debug)]
-pub(crate) struct Recipe {
-    /// the datasets it is made from, in data.toml's order; none when `from` is empty or left out.
-    pub(crate) from: Vec<String>,
-    /// the program and its arguments, never read by a shell.
-    pub(crate) run: Vec<Template>,
-    /// files and folders of the project whose bytes enter its key, with `/` between folders.
-    pub(crate) code: Vec<String>,
-    /// variables set for the command alone.
-    pub(crate) env: BTreeMap<String, String>,
-}
-
 impl Entry {
-    /// the source the dataset is fetched from, unless a recipe makes it.
-    pub(crate) fn source(&self) -> Option<&Source> {
-        match &self.origin {
-            Origin::Source(source) => Some(source),
-            Origin::Derived(_) => None,
-        }
-    }
-
     /// whether the dataset is an import: files from this machine, pinned by their bytes.
     pub(crate) fn is_import(&self) -> bool {
-        self.source()
-            .is_some_and(|source| crate::source::local::is_imported(&source.reference))
-    }
-
-    /// the recipe that makes the dataset, unless it is fetched from a source.
-    pub(crate) fn recipe(&self) -> Option<&Recipe> {
-        match &self.origin {
-            Origin::Source(_) => None,
-            Origin::Derived(recipe) => Some(recipe),
-        }
+        crate::source::local::is_imported(&self.source.reference)
     }
 }
 
@@ -303,21 +247,19 @@ impl Manifest {
                 datasets.insert(name.to_owned(), entry);
             }
         }
-        recipes_read_known_datasets(&datasets)?;
-        code_stays_out_of_the_data_folder(&data_dir, &datasets)?;
         Ok(Manifest { data_dir, datasets })
     }
 }
 
 /// data.toml as a settled sync reads it, when it holds only what `add` writes for a dataset of
-/// one ref: `[datasets.<name>]` tables of a `ref` and maybe `place`, blank lines and comments. it
+/// one ref: `[datasets.<name>]` tables of a `ref`, blank lines and comments. it
 /// reads them without a TOML parser, and only where [`Manifest::parse`] would read the same; none
 /// for anything else. an entry keeps no select its link implies and cites no line, so a sync that
 /// finds anything to do parses data.toml whole.
 pub(crate) fn read_plain(text: &str) -> Option<Manifest> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut datasets = BTreeMap::new();
-    let mut open: Option<(String, Option<String>, Option<bool>)> = None;
+    let mut open: Option<(String, Option<String>)> = None;
     for line in text.split_inclusive('\n') {
         // a carriage return ends a line only before a line feed
         let line = line
@@ -345,37 +287,22 @@ pub(crate) fn read_plain(text: &str) -> Option<Manifest> {
             if !bare || name::dataset_name_problem(name).is_some() || datasets.contains_key(name) {
                 return None;
             }
-            open = Some((name.to_owned(), None, None));
+            open = Some((name.to_owned(), None));
             continue;
         }
-        let (_, reference, place) = open.as_mut()?;
-        if let Some(value) = line
+        let (_, reference) = open.as_mut()?;
+        let value = line
             .strip_prefix("ref = \"")
-            .and_then(|rest| rest.strip_suffix('"'))
-        {
-            // no escape or quote, so the string is its text
-            if reference.is_some()
-                || value.contains(['"', '\\'])
-                || value.contains(char::is_control)
-            {
-                return None;
-            }
-            let value = value.trim();
-            if value.is_empty() {
-                return None;
-            }
-            *reference = Some(value.to_owned());
-            continue;
-        }
-        let value = line.strip_prefix("place = ")?;
-        if place.is_some() {
+            .and_then(|rest| rest.strip_suffix('"'))?;
+        // no escape or quote, so the string is its text
+        if reference.is_some() || value.contains(['"', '\\']) || value.contains(char::is_control) {
             return None;
         }
-        *place = Some(match value {
-            "true" => true,
-            "false" => false,
-            _ => return None,
-        });
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        *reference = Some(value.to_owned());
     }
     put_plain(&mut datasets, open)?;
     Some(Manifest {
@@ -384,38 +311,38 @@ pub(crate) fn read_plain(text: &str) -> Option<Manifest> {
     })
 }
 
-/// adds a dataset [`read_plain`] read, its name, ref and place, to `datasets`; none when it has
-/// no ref, which only the parser's error answers.
+/// adds a dataset [`read_plain`] read, its name and ref, to `datasets`; none when it has no ref,
+/// which only the parser's error answers.
 fn put_plain(
     datasets: &mut BTreeMap<String, Entry>,
-    read: Option<(String, Option<String>, Option<bool>)>,
+    read: Option<(String, Option<String>)>,
 ) -> Option<()> {
-    let Some((name, reference, place)) = read else {
+    let Some((name, reference)) = read else {
         return Some(());
     };
-    let origin = Origin::Source(Source {
+    let source = Source {
         reference: reference?,
         select: Vec::new(),
         exclude: Vec::new(),
         extract: true,
         members: Members::new(),
         web_page: false,
-    });
+    };
     datasets.insert(
         name,
         Entry {
-            origin,
+            source,
             copy: false,
             path: None,
-            place: place.unwrap_or(true),
+            place: true,
             lines: BTreeMap::new(),
         },
     );
     Some(())
 }
 
-/// where data.toml may hold a secret, sorted and merged: each ref, whose query can carry a key,
-/// and each env, which should not but may. a message cites such a line by number alone.
+/// where data.toml may hold a secret, sorted and merged: each ref, whose query can carry a key.
+/// a message cites such a line by number alone.
 fn private(root: &Table) -> Vec<Range<usize>> {
     let mut spans = Vec::new();
     let datasets = root.get("datasets").and_then(Item::as_table_like);
@@ -424,13 +351,6 @@ fn private(root: &Table) -> Vec<Range<usize>> {
             continue;
         };
         spans.extend(entry.get("ref").and_then(Item::span));
-        let Some(env) = entry.get("env") else {
-            continue;
-        };
-        spans.extend(env.span());
-        for (_, value) in env.as_table_like().into_iter().flat_map(TableLike::iter) {
-            spans.extend(value.span());
-        }
     }
     spans.sort_unstable_by_key(|span| span.start);
     let mut merged: Vec<Range<usize>> = Vec::with_capacity(spans.len());
@@ -441,97 +361,6 @@ fn private(root: &Table) -> Vec<Range<usize>> {
         }
     }
     merged
-}
-
-/// refuses code inside the data folder, or holding it, since fetchloom fills it from data.lock,
-/// so its files would change the key they come from.
-fn code_stays_out_of_the_data_folder(
-    data_dir: &str,
-    datasets: &BTreeMap<String, Entry>,
-) -> Result<(), Error> {
-    let data = name::fold(data_dir);
-    for (name, entry) in datasets {
-        for path in entry
-            .recipe()
-            .map(|recipe| recipe.code.as_slice())
-            .unwrap_or_default()
-        {
-            let folded = name::fold(path);
-            let reason = if folded == data || folded.starts_with(&format!("{data}/")) {
-                "it is inside the data folder, which fetchloom fills"
-            } else if data.starts_with(&format!("{folded}/")) {
-                "it holds the data folder, which fetchloom fills"
-            } else {
-                continue;
-            };
-            let error = Error::new(
-                Kind::ProjectInvalid,
-                format!("code \"{path}\" in datasets.{name} is refused because {reason}"),
-            )
-            .help(OWN_FILES);
-            return Err(match entry.lines.get("code") {
-                Some(line) => error.detail(line.clone()),
-                None => error,
-            });
-        }
-    }
-    Ok(())
-}
-
-/// refuses a recipe made from a dataset data.toml does not have, or recipes made from each
-/// other, which no order of steps could make.
-fn recipes_read_known_datasets(datasets: &BTreeMap<String, Entry>) -> Result<(), Error> {
-    for (name, entry) in datasets {
-        let Some(recipe) = entry.recipe() else {
-            continue;
-        };
-        for input in &recipe.from {
-            if datasets.contains_key(input) {
-                continue;
-            }
-            let error = Error::new(
-                Kind::ProjectInvalid,
-                format!("datasets.{name} is made from {input}, which data.toml does not have"),
-            );
-            let error = match entry.lines.get("from") {
-                Some(line) => error.detail(line.clone()),
-                None => error,
-            };
-            return Err(
-                match name::closest(input, datasets.keys().map(String::as_str)) {
-                    Some(best) => error.help(format!("did you mean {best}?")),
-                    None => error.help(format!(
-                        "add [datasets.{input}] to data.toml, or remove {input} from the from of datasets.{name}"
-                    )),
-                },
-            );
-        }
-    }
-    let Err(cycle) = recipes::order(datasets) else {
-        return Ok(());
-    };
-    let message = if let [only, _] = cycle.as_slice() {
-        format!("datasets.{only} is made from itself")
-    } else {
-        let mut names: Vec<&str> = cycle[..cycle.len() - 1].to_vec();
-        names.sort_unstable();
-        let names = crate::units::listed(&names, "and");
-        format!(
-            "datasets {names} are made from each other: {}",
-            cycle.join(" \u{2192} ")
-        )
-    };
-    let error = Error::new(Kind::ProjectInvalid, message);
-    let error = match datasets
-        .get(cycle[0])
-        .and_then(|entry| entry.lines.get("from"))
-    {
-        Some(line) => error.detail(line.clone()),
-        None => error,
-    };
-    Err(error.help(
-        "a recipe can read only datasets made before it; take one of them out of the other's from",
-    ))
 }
 
 /// reads data.toml's items into types, pointing at the line of any mistake.
@@ -570,21 +399,17 @@ impl Reader<'_> {
                 lines.insert(key, self.cite(span.start));
             }
         }
-        let origin = if RECIPE_KEYS.iter().any(|key| table.contains_key(key)) {
-            Origin::Derived(self.recipe(table, name)?)
-        } else if table.contains_key("members") && table.iter().all(|(key, _)| key == "members") {
+        if table.contains_key("members") && table.iter().all(|(key, _)| key == "members") {
             return Err(self.left_members(datasets, table, name, item.span().or(key_span)));
-        } else {
-            Origin::Source(self.source(table, name, item.span().or(key_span))?)
-        };
+        }
         Ok(Entry {
-            origin,
+            source: self.source(table, name, item.span().or(key_span))?,
             copy: self.boolean(table.get("copy"), "copy", false)?,
             path: table
                 .get("path")
                 .map(|item| self.relative(item, "path"))
                 .transpose()?,
-            place: self.boolean(table.get("place"), "place", true)?,
+            place: true,
             lines,
         })
     }
@@ -772,314 +597,6 @@ impl Reader<'_> {
         Ok(members)
     }
 
-    /// the recipe `table` gives; the datasets it reads are checked once every dataset is read.
-    fn recipe(&self, table: &dyn TableLike, name: &str) -> Result<Recipe, Error> {
-        let span = |key: &str| table.key(key).and_then(Key::span);
-        let first = RECIPE_KEYS
-            .into_iter()
-            .find(|key| table.contains_key(key))
-            .unwrap_or("from");
-        if table.contains_key("ref") {
-            return Err(self
-                .error(
-                    span(first),
-                    format!("datasets.{name} has both ref and {first}, but a dataset is fetched from a source or made by a recipe, not both"),
-                )
-                .help("keep ref to fetch it, or remove ref to make it by a recipe"));
-        }
-        if let Some(key) = SOURCE_KEYS.into_iter().find(|key| table.contains_key(key)) {
-            return Err(self
-                .error(
-                    span(key),
-                    format!("{key} is for a dataset fetched from a source, and datasets.{name} is made by a recipe"),
-                )
-                .help(format!("remove {key}, and choose files inside the step instead")));
-        }
-        let Some(run) = table.get("run") else {
-            return Err(self
-                .error(
-                    span(first),
-                    format!("datasets.{name} has {first} but no run, so nothing makes it"),
-                )
-                .help(format!(
-                    "add run, the program and arguments that make it, as {RUN_EXAMPLE}"
-                )));
-        };
-        let from = match table.get("from") {
-            Some(from) => self.inputs(from, name)?,
-            None => Vec::new(),
-        };
-        let run = self.run(run, name, &from)?;
-        let code = match table.get("code") {
-            None => Vec::new(),
-            Some(item) => Self::strings(item).ok_or_else(|| {
-                self.error(
-                    item.span(),
-                    "code in data.toml must be a list of files and folders in the project"
-                        .to_owned(),
-                )
-                .help("write it as code = [\"clean.py\"]")
-            })?,
-        };
-        let code = self.code(table.get("code"), name, code)?;
-        let env = match table.get("env") {
-            None => BTreeMap::new(),
-            Some(item) => self.variables(item, name)?,
-        };
-        Ok(Recipe {
-            from,
-            run,
-            code,
-            env,
-        })
-    }
-
-    /// a recipe's code: paths inside the project, each once, out of what fetchloom writes and
-    /// of repository metadata. the data folder is checked once it is known.
-    fn code(
-        &self,
-        item: Option<&Item>,
-        name: &str,
-        paths: Vec<String>,
-    ) -> Result<Vec<String>, Error> {
-        let span = item.and_then(Item::span);
-        let mut code: Vec<String> = Vec::with_capacity(paths.len());
-        for path in paths {
-            let path = path.trim().trim_end_matches('/').to_owned();
-            let first = path.split('/').next().unwrap_or_default();
-            let refused = |reason: &str, help: &str| {
-                self.error(
-                    span.clone(),
-                    format!("code \"{path}\" in datasets.{name} is refused because {reason}"),
-                )
-                .help(help.to_owned())
-            };
-            if let Some(reason) = name::escapes(&path) {
-                return Err(refused(
-                    reason,
-                    "name a file or folder inside the project, with / between folders",
-                ));
-            }
-            if let Some(reason) = name::metadata(&path) {
-                return Err(refused(reason, OWN_FILES));
-            }
-            if WRITTEN
-                .iter()
-                .any(|written| first.eq_ignore_ascii_case(written))
-            {
-                return Err(refused("fetchloom writes it", OWN_FILES));
-            }
-            if code
-                .iter()
-                .any(|known| name::fold(known) == name::fold(&path))
-            {
-                return Err(self
-                    .error(
-                        span,
-                        format!("datasets.{name} names the code \"{path}\" twice"),
-                    )
-                    .help("name each file or folder once in code"));
-            }
-            code.push(path);
-        }
-        Ok(code)
-    }
-
-    /// a recipe's env: strings under portable names, none fetchloom's own or a secret.
-    fn variables(&self, item: &Item, name: &str) -> Result<BTreeMap<String, String>, Error> {
-        let table = item.as_table_like().ok_or_else(|| {
-            self.error(
-                item.span(),
-                "env in data.toml must be a table of variables".to_owned(),
-            )
-            .help("write it as env = { SEED = \"1\" }")
-        })?;
-        let mut variables = BTreeMap::new();
-        for (variable, written) in table.iter() {
-            let span = written.span().or_else(|| item.span());
-            let Some(value) = written.as_str() else {
-                let value = written;
-                return Err(self
-                    .error(
-                        span,
-                        "every value in env must be a string in quotes".to_owned(),
-                    )
-                    .help(format!(
-                        "write it as {variable} = \"{}\"",
-                        value
-                            .as_value()
-                            .map(|value| value.to_string().trim().to_owned())
-                            .unwrap_or_default()
-                    )));
-            };
-            let refused =
-                |message: String, help: String| self.error(span.clone(), message).help(help);
-            let upper = variable.to_ascii_uppercase();
-            if !portable(variable) {
-                return Err(refused(
-                    format!(
-                        "env in datasets.{name} sets \"{variable}\", which is not a variable name every system takes"
-                    ),
-                    "name variables with letters, digits and _, not starting with a digit"
-                        .to_owned(),
-                ));
-            }
-            if upper.starts_with("FETCHLOOM_") {
-                return Err(refused(
-                    format!("env in datasets.{name} sets {variable}, one of fetchloom's own variables"),
-                    "set fetchloom's variables in your shell or its settings file, never in data.toml".to_owned(),
-                ));
-            }
-            if secret(&upper) {
-                return Err(refused(
-                    format!("env in datasets.{name} sets {variable}, which looks like a secret"),
-                    format!(
-                        "data.toml and data.lock are shared, and the step inherits your environment, so set {variable} there"
-                    ),
-                ));
-            }
-            if value.contains('\0') {
-                return Err(refused(
-                    format!(
-                        "env in datasets.{name} gives {variable} a value with a NUL character, which no program can be given"
-                    ),
-                    "remove the NUL character from the value".to_owned(),
-                ));
-            }
-            // git for windows checks data.toml out with CRLF, which a multi-line string keeps
-            variables.insert(variable.to_owned(), value.replace("\r\n", "\n"));
-        }
-        Ok(variables)
-    }
-
-    /// the datasets a recipe reads: a list of names, each once, or none for a step that makes its
-    /// result from its command and code alone, as a seeded simulation does.
-    fn inputs(&self, item: &Item, name: &str) -> Result<Vec<String>, Error> {
-        let names = Self::strings(item).ok_or_else(|| {
-            self.error(
-                item.span(),
-                "from in data.toml must be a list of dataset names".to_owned(),
-            )
-            .help("write it as from = [\"raw\"]")
-        })?;
-        for (index, input) in names.iter().enumerate() {
-            if input == recipes::OUT {
-                return Err(self
-                    .error(
-                        item.span(),
-                        format!("datasets.{name} is made from out, the name run keeps for the result's folder"),
-                    )
-                    .help("rename the dataset out in data.toml"));
-            }
-            if names[..index].contains(input) {
-                return Err(self
-                    .error(
-                        item.span(),
-                        format!("datasets.{name} is made from {input} twice"),
-                    )
-                    .help("name each dataset once in from"));
-            }
-        }
-        Ok(names)
-    }
-
-    /// a recipe's command: one word after another, each read by [`Template::parse`], naming the
-    /// folder of every dataset in `from` and of the result, and no other.
-    fn run(&self, item: &Item, name: &str, from: &[String]) -> Result<Vec<Template>, Error> {
-        let words = Self::strings(item).ok_or_else(|| {
-            self.error(
-                item.span(),
-                "run in data.toml must be a list of words, since no shell reads it".to_owned(),
-            )
-            .help(format!(
-                "write the program and each argument as a word of their own, as {RUN_EXAMPLE}"
-            ))
-        })?;
-        if words.is_empty() {
-            return Err(self
-                .error(
-                    item.span(),
-                    format!("run in datasets.{name} is empty, so there is no program to start"),
-                )
-                .help(format!(
-                    "write the program and each argument as a word of their own, as {RUN_EXAMPLE}"
-                )));
-        }
-        let mut run = Vec::with_capacity(words.len());
-        for word in &words {
-            let template = Template::parse(word).map_err(|reason| {
-                let help = if reason == recipes::CONTROL {
-                    "take the control character, such as a tab, a line break or an escape code, out of that word"
-                } else {
-                    "write {{ and }} for a brace of its own, and {name} for the folder of a dataset it reads"
-                };
-                self.error(
-                    item.span(),
-                    format!("a word of run in datasets.{name} {reason}"),
-                )
-                .help(help)
-            })?;
-            run.push(template);
-        }
-        let refused = |message: String, help: String| self.error(item.span(), message).help(help);
-        if run[0].text().is_empty() {
-            return Err(refused(
-                format!("the program in run of datasets.{name} is empty"),
-                format!("make the first word the program to start, as {RUN_EXAMPLE}"),
-            ));
-        }
-        let slots: Vec<Slot> = run.iter().flat_map(Template::slots).collect();
-        for slot in &slots {
-            if let Slot::Input(input) = slot
-                && !from.iter().any(|known| known == input)
-            {
-                let names = from.iter().map(String::as_str).chain([recipes::OUT]);
-                let help = match name::closest(input, names) {
-                    Some(best) => {
-                        format!("did you mean {{{best}}}? a name in braces is one of from, or out")
-                    }
-                    None => "a name in braces is one of from, or out".to_owned(),
-                };
-                return Err(refused(
-                    format!(
-                        "run in datasets.{name} names {{{input}}}, which is not a dataset it is made from"
-                    ),
-                    help,
-                ));
-            }
-        }
-        if !slots.contains(&Slot::Out) {
-            return Err(refused(
-                format!(
-                    "run in datasets.{name} never names {{out}}, so the step has nowhere to write"
-                ),
-                "put {out} where the step takes the folder to write the result in".to_owned(),
-            ));
-        }
-        if let Some(input) = from
-            .iter()
-            .find(|input| !slots.contains(&Slot::Input(input)))
-        {
-            return Err(refused(
-                format!(
-                    "run in datasets.{name} never names {{{input}}}, so the step cannot find {input}"
-                ),
-                format!(
-                    "put {{{input}}} where the step takes the folder holding the files of {input}"
-                ),
-            ));
-        }
-        Ok(run)
-    }
-
-    /// the strings of an array, or none when `item` is not an array of strings.
-    fn strings(item: &Item) -> Option<Vec<String>> {
-        item.as_array()?
-            .iter()
-            .map(|value| value.as_str().map(str::to_owned))
-            .collect()
-    }
-
     /// refuses any key not in `known`, suggesting the closest one.
     fn known(&self, table: &dyn TableLike, known: &[&str], within: &str) -> Result<(), Error> {
         for (key, _) in table.iter() {
@@ -1264,30 +781,6 @@ impl Reader<'_> {
             format!("{FILE}:{line}   {}", self.text[start..end].trim())
         }
     }
-}
-
-/// whether every system takes `variable` as a name, as POSIX names them.
-fn portable(variable: &str) -> bool {
-    variable
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        && variable
-            .bytes()
-            .next()
-            .is_some_and(|first| !first.is_ascii_digit())
-}
-
-/// whether an uppercase variable name looks like it holds a secret. a word must end in TOKEN, so
-/// `MAX_TOKENS` and `TOKENIZERS_PARALLELISM`, which count tokens of text, stay usable.
-fn secret(upper: &str) -> bool {
-    let words: Vec<&str> = upper.split('_').collect();
-    words.iter().any(|word| {
-        word.ends_with("TOKEN")
-            || SECRETS.iter().any(|secret| word.contains(secret))
-            || KEYS.iter().any(|key| word.ends_with(&format!("{key}KEY")))
-    }) || words
-        .windows(2)
-        .any(|pair| pair[1] == "KEY" && KEYS.contains(&pair[0]))
 }
 
 /// whether a folder is shell shorthand a person may expect expanded, as `~` or `${SCRATCH}`.

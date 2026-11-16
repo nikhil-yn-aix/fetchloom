@@ -93,7 +93,7 @@ live numbers vary with the service, so they show ranges and no ratios. quick run
 | far | 150 ms | 1% | 50 Mbit/s | 4 MiB | 50 |
 | poor | 300 ms | 3% | 10 Mbit/s | 1 MiB | 20 |
 
-ext4 runs s1 and s2 on every profile, s3 to s6, s8 and s9 on lan, and s7 on home. the full-run recipe uses xfs only for s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run).
+ext4 runs s1 and s2 on every profile, s3 to s6, s8 and s9 on lan, and s7 on home. the full run uses xfs only for s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run).
 
 ## platforms
 

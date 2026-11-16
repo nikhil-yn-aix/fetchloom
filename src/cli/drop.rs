@@ -58,21 +58,18 @@ pub(super) struct Report {
     dry_run: bool,
 }
 
-/// a dataset named to drop: its pinned files, owned here for a result, whose files data.lock
-/// lists as members, and whether a mirror alone may stand in for them.
+/// a dataset named to drop: its pinned files, and whether a mirror alone may stand in for them.
 struct Named<'a> {
     name: &'a str,
     files: Vec<LockedFile>,
     /// whether data.toml asks for its link's web page.
     page: bool,
-    /// a recipe's result, which only a build or a mirror brings back.
-    result: bool,
 }
 
 impl Named<'_> {
-    /// whether no source gives its files back: a recipe's result, or files imported from a folder.
+    /// whether no source gives its files back: files imported from a folder.
     fn owned(&self) -> bool {
-        self.result || self.files.iter().any(|file| file.url.is_empty())
+        self.files.iter().any(|file| file.url.is_empty())
     }
 }
 
@@ -143,7 +140,7 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
         .and_then(|cache| crate::plan::from_cache(&manifest, &lock, cache).ok());
     let (mut asked, mut already, mut absent) = (Vec::new(), Vec::new(), Vec::new());
     for name in given {
-        // a dataset dropped before whose bytes came back, as a build or push brings them, goes again
+        // a dataset dropped before whose bytes came back, as a push brings them, goes again
         if here(&project.root, &state, cache.as_ref(), &lock, &name)
             || in_folder(&project.root, planned.as_ref(), &name)
         {
@@ -159,7 +156,7 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
                 "Skipped",
                 &format!(
                     "{name} · {}, so there is nothing to drop",
-                    away(&manifest, &lock, &name)
+                    away(&lock, &name)
                 ),
             );
             absent.push(name);
@@ -259,21 +256,18 @@ fn in_folder(root: &Path, planned: Option<&crate::plan::Plan<'_>>, name: &str) -
 }
 
 /// why nothing of `name` is on this machine, as drop tells it.
-fn away(manifest: &Manifest, lock: &Lock, name: &str) -> &'static str {
-    let recipe = manifest.datasets[name].recipe().is_some();
-    if recipe && lock.result(name).is_none() {
-        "not built yet"
-    } else if lock.stated(name).is_some() {
+fn away(lock: &Lock, name: &str) -> &'static str {
+    if lock.stated(name).is_some() {
         "not downloaded yet"
-    } else if !recipe && lock.get(name).is_none() {
+    } else if lock.get(name).is_none() {
         "not pinned yet"
     } else {
         "not on this machine"
     }
 }
 
-/// a line saying how each of `dropped` comes back: a sync from its source, or a result's or an
-/// import's from the folder mirror whose copy stood in for it.
+/// a line saying how each of `dropped` comes back: a sync from its source, or an import's from the
+/// folder mirror whose copy stood in for it.
 fn tell_back(
     output: &crate::output::Output,
     named: &[Named<'_>],
@@ -311,7 +305,7 @@ fn tell_back(
 }
 
 /// the files of `name` to find elsewhere before it is dropped: those data.lock pins for it, an
-/// archive as itself, or for a recipe the files of its pinned result.
+/// archive as itself.
 fn pinned_files<'a>(
     manifest: &'a Manifest,
     lock: &Lock,
@@ -328,27 +322,6 @@ fn pinned_files<'a>(
             super::project::command(&format!("sync {name}"))
         ))
     };
-    if entry.recipe().is_some() {
-        let result = lock.result(name).ok_or_else(unpinned)?;
-        let files = result
-            .files
-            .iter()
-            .map(|member| LockedFile {
-                path: member.path.clone(),
-                size: member.size,
-                sha256: member.sha256,
-                md5: None,
-                url: String::new(),
-                unpacks_to: None,
-            })
-            .collect();
-        return Ok(Named {
-            name,
-            files,
-            page: false,
-            result: true,
-        });
-    }
     let locked = lock.get(name).ok_or_else(|| match lock.stated(name) {
         Some(stated) => Error::new(
             Kind::Usage,
@@ -362,14 +335,13 @@ fn pinned_files<'a>(
     Ok(Named {
         name,
         files: locked.files.clone(),
-        page: entry.source().is_some_and(|source| source.web_page),
-        result: false,
+        page: entry.source.web_page,
     })
 }
 
 /// where each file of `named` is found elsewhere. a folder mirror's copy counts once it hashes to
 /// its pin; with the network, a web or bucket mirror or the source serving the file at its size
-/// counts by its size alone, but never for a result's or an import's file, which no source gives
+/// counts by its size alone, but never for an import's file, which no source gives
 /// back.
 async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Error> {
     let locked: Vec<(&Named<'_>, &LockedFile)> = named
@@ -387,12 +359,7 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
     for (at, pinned) in pinned.iter().enumerate().filter(|(at, _)| !found[*at]) {
         let lacks = checked.lacks(pinned.dataset);
         // a size from a web or bucket mirror is too little for bytes no source gives back
-        if locked[at].0.result {
-            lacks.lost.push(format!(
-                "{} · no folder mirror holds a copy of this file of a recipe's result that hashes to its pin",
-                pinned.label()
-            ));
-        } else if locked[at].1.url.is_empty() {
+        if locked[at].1.url.is_empty() {
             lacks.lost.push(format!(
                 "{} · it was imported from files, and no folder mirror holds a copy that hashes to its pin",
                 pinned.label()
@@ -628,7 +595,7 @@ fn refused(checked: &Checked, asked: &[String], yes: bool) -> Option<Error> {
 }
 
 /// `manifest` as a sync of every dataset reads it while `dropped` are dropped here: each with
-/// `place = false`, so the run neither fetches nor places it.
+/// `place` false, so the run neither fetches nor places it.
 pub(super) fn left_out(manifest: &mut Manifest, dropped: &BTreeSet<String>) {
     for name in dropped {
         if let Some(entry) = manifest.datasets.get_mut(name) {
@@ -653,8 +620,8 @@ pub(super) fn placed_by<'m>(
 }
 
 /// whether a run of `scope`, for which the person named `named`, leaves `name` out: it is
-/// dropped here and the run only reaches it, as a build reaches a recipe's inputs or an add the
-/// rest of the project, so the run neither fetches nor places it.
+/// dropped here and the run only reaches it, as an add reaches the rest of the project, so the run
+/// neither fetches nor places it.
 pub(super) fn stays_dropped(
     name: &str,
     scope: &Scope,
@@ -665,7 +632,7 @@ pub(super) fn stays_dropped(
 }
 
 /// `manifest` as a run of `scope`, for which the person named `named`, places it while `dropped`
-/// are dropped here: each dataset [`stays_dropped`] says it leaves out has `place = false`.
+/// are dropped here: each dataset [`stays_dropped`] says it leaves out has `place` false.
 pub(super) fn placed_naming<'m>(
     manifest: &'m Manifest,
     scope: &Scope,
@@ -744,8 +711,6 @@ pub(super) fn kept_here(mut lock: Lock, dropped: &BTreeSet<String>) -> Lock {
     }
     lock.datasets
         .retain(|locked| !dropped.contains(&locked.name));
-    lock.derived
-        .retain(|result| !dropped.contains(&result.name));
     lock
 }
 
@@ -1035,8 +1000,8 @@ struct Objects {
     archives: Vec<Sha256>,
 }
 
-/// the cache files the datasets `freeing` of `lock` may hold: their pinned files, the files their
-/// archives unpacked to, and a result's files.
+/// the cache files the datasets `freeing` of `lock` may hold: their pinned files and the files their
+/// archives unpacked to.
 fn held(cache: &Cache, lock: &Lock, freeing: &BTreeSet<String>) -> Objects {
     let mut held = Objects {
         sizes: HashMap::new(),
@@ -1062,15 +1027,6 @@ fn held(cache: &Cache, lock: &Lock, freeing: &BTreeSet<String>) -> Objects {
                     }
                 }
             }
-        }
-    }
-    for result in lock
-        .derived
-        .iter()
-        .filter(|result| freeing.contains(&result.name))
-    {
-        for member in &result.files {
-            held.sizes.insert(member.sha256, member.size);
         }
     }
     held

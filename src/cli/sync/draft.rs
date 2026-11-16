@@ -87,7 +87,7 @@ impl Draft {
         let asks = upgrading
             && !(listing.resolved.fixes_bytes()
                 && previous.is_some_and(|locked| locked.resolved == listing.resolved.to_string()));
-        let files = filter(name, entry, source, &listing)?
+        let files = filter(name, entry, &listing)?
             .into_iter()
             .map(|remote| {
                 let pinned = remote.sha256.is_some() || remote.md5.is_some();
@@ -910,9 +910,9 @@ pub(super) fn unlisted(source: &Source, listing: &Listing) -> Vec<String> {
 pub(in crate::cli) fn filter(
     name: &str,
     entry: &Entry,
-    source: &Source,
     listing: &Listing,
 ) -> Result<Vec<Remote>, Error> {
+    let source = &entry.source;
     for glob in &source.select {
         if !listing.paths().any(|path| glob.matches(path)) {
             return Err(unmatched(name, entry, source, glob, listing));
@@ -1289,7 +1289,7 @@ mod tests {
         let kept = Draft::new(
             "set",
             entry,
-            entry.source().unwrap(),
+            &entry.source,
             listing(),
             Some(&locked),
             false,
@@ -1304,7 +1304,7 @@ mod tests {
         let upgraded = Draft::new(
             "set",
             entry,
-            entry.source().unwrap(),
+            &entry.source,
             listing(),
             Some(&locked),
             true,
@@ -1390,16 +1390,8 @@ mod tests {
                     etag: None,
                 }],
             };
-            let draft = Draft::new(
-                "notes",
-                entry,
-                entry.source().unwrap(),
-                listing,
-                None,
-                false,
-                &cache,
-            )
-            .unwrap();
+            let draft =
+                Draft::new("notes", entry, &entry.source, listing, None, false, &cache).unwrap();
             let jobs = draft.jobs(&cache);
             assert_eq!(jobs.len(), 1);
             assert_eq!(jobs[0].1.fetch.named, named_by_server);
@@ -1438,7 +1430,7 @@ mod tests {
             Draft::new(
                 "scans",
                 entry,
-                entry.source().unwrap(),
+                &entry.source,
                 listing,
                 previous,
                 false,
@@ -1545,16 +1537,7 @@ mod tests {
                 doi: None,
                 files,
             };
-            Draft::new(
-                "scans",
-                entry,
-                entry.source().unwrap(),
-                listing,
-                None,
-                false,
-                &cache,
-            )
-            .unwrap()
+            Draft::new("scans", entry, &entry.source, listing, None, false, &cache).unwrap()
         };
         assert!(drafted(true).jobs(&cache).is_empty(), "the listing vouches");
         let held: Vec<Option<Sha256>> = drafted(false)
@@ -1598,7 +1581,7 @@ mod tests {
             let draft = Draft::new(
                 "eeg",
                 entry,
-                entry.source().unwrap(),
+                &entry.source,
                 listing(),
                 previous,
                 false,
@@ -1620,7 +1603,7 @@ mod tests {
         let manifest = Manifest::parse(&excluded).unwrap();
         let rewritten = without_files(
             &before,
-            manifest.datasets["eeg"].source().unwrap(),
+            &manifest.datasets["eeg"].source,
             &HashSet::from([left_out]),
             "2026-11-11T09:00:00Z",
         );
@@ -1664,8 +1647,8 @@ mod tests {
         };
         let locked = Locked {
             name: "set".to_owned(),
-            reference: packed.source().unwrap().reference.clone(),
-            spec: lock::spec(packed.source().unwrap()),
+            reference: packed.source.reference.clone(),
+            spec: lock::spec(&packed.source),
             extract: false,
             web_page: false,
             resolved: "https://example.org/set.zip".to_owned(),
@@ -1680,7 +1663,7 @@ mod tests {
             ],
         };
         let unpacking = entry("");
-        let mut draft = Draft::switched(&unpacking, unpacking.source().unwrap(), &locked).unwrap();
+        let mut draft = Draft::switched(&unpacking, &unpacking.source, &locked).unwrap();
         assert!(draft.jobs(&cache).is_empty());
         assert!(draft.unknown_archives(&cache).is_empty());
         let unpacked = draft.finish("2026-02-02T00:00:00Z").unwrap();
@@ -1697,7 +1680,7 @@ mod tests {
             locked,
             "every other field is as data.lock had it"
         );
-        let repacked = Draft::switched(&packed, packed.source().unwrap(), &unpacked)
+        let repacked = Draft::switched(&packed, &packed.source, &unpacked)
             .unwrap()
             .finish(&locked.timestamp)
             .unwrap();
@@ -1705,7 +1688,7 @@ mod tests {
 
         let mut broken = locked;
         broken.files[1].url = "not a link".to_owned();
-        let Err(error) = Draft::switched(&unpacking, unpacking.source().unwrap(), &broken) else {
+        let Err(error) = Draft::switched(&unpacking, &unpacking.source, &broken) else {
             panic!("a broken link drafts nothing");
         };
         assert_eq!(error.kind, Kind::ProjectInvalid);
@@ -1773,7 +1756,7 @@ mod tests {
             let draft = Draft::new(
                 "w",
                 entry,
-                entry.source().unwrap(),
+                &entry.source,
                 listing(),
                 Some(&locked(before)),
                 upgrading,
@@ -1880,7 +1863,7 @@ mod tests {
             let draft = Draft::new(
                 "d",
                 entry,
-                entry.source().unwrap(),
+                &entry.source,
                 listing(),
                 Some(&locked),
                 upgrading,
@@ -1955,7 +1938,7 @@ mod tests {
                 let draft = Draft::new(
                     "d",
                     &manifest.datasets["d"],
-                    manifest.datasets["d"].source().unwrap(),
+                    &manifest.datasets["d"].source,
                     listing,
                     None,
                     upgrading,
@@ -1996,7 +1979,7 @@ mod tests {
         let mut draft = Draft::new(
             "sample",
             &manifest.datasets["sample"],
-            manifest.datasets["sample"].source().unwrap(),
+            &manifest.datasets["sample"].source,
             listing,
             None,
             false,
@@ -2078,7 +2061,7 @@ mod tests {
             Draft::new(
                 "raw",
                 entry,
-                entry.source().unwrap(),
+                &entry.source,
                 listing,
                 previous,
                 false,
@@ -2118,7 +2101,7 @@ mod tests {
         let mut draft = Draft::new(
             "a",
             &manifest.datasets["a"],
-            manifest.datasets["a"].source().unwrap(),
+            &manifest.datasets["a"].source,
             listed,
             None,
             false,
@@ -2202,7 +2185,7 @@ mod tests {
         let mut draft = Draft::new(
             "titanic",
             entry,
-            entry.source().unwrap(),
+            &entry.source,
             titanic(),
             None,
             false,
@@ -2283,7 +2266,7 @@ mod tests {
         let again = Draft::new(
             "titanic",
             entry,
-            entry.source().unwrap(),
+            &entry.source,
             titanic(),
             Some(&locked),
             false,
@@ -2341,16 +2324,8 @@ mod tests {
                     etag: Some(etag.to_owned()),
                 }],
             };
-            let draft = Draft::new(
-                "report",
-                entry,
-                entry.source().unwrap(),
-                listing,
-                None,
-                false,
-                &cache,
-            )
-            .unwrap();
+            let draft =
+                Draft::new("report", entry, &entry.source, listing, None, false, &cache).unwrap();
             assert_eq!(draft.jobs(&cache).len(), usize::from(page), "page: {page}");
         }
     }
@@ -2393,7 +2368,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let kept = filter("rows", &entry, entry.source().unwrap(), &listing)?;
+        let kept = filter("rows", &entry, &listing)?;
         Ok(kept.into_iter().map(|file| file.path).collect())
     }
 

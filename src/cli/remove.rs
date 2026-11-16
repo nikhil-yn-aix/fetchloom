@@ -1,7 +1,7 @@
 //! `fetchloom remove`: a dataset out of data.toml and data.lock, and its unchanged files out of the
 //! data folder. it downloads nothing.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use super::args::Remove;
 use super::project::{Outcome, Report, committed, dry_run_done, find, hold, known};
@@ -35,7 +35,6 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     };
     let (text, manifest) = project.manifest()?;
     named(&manifest, &names)?;
-    unread(&manifest, &names)?;
     // one edit of data.toml for every name, which a stop between names ends with nothing written
     let updated = manifest::without_datasets(&text, &names, |at| {
         stop_for_tests(&context.stop, at);
@@ -52,8 +51,6 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     let going: HashSet<&str> = names.iter().map(String::as_str).collect();
     lock.datasets
         .retain(|dataset| !going.contains(dataset.name.as_str()));
-    lock.derived
-        .retain(|result| !going.contains(result.name.as_str()));
     lock.stated
         .retain(|stated| !names.iter().any(|name| name == stated.name()));
     // one waiting for its file list goes too, as a removal needs nothing of its list
@@ -255,44 +252,6 @@ fn exclusion(manifest: &Manifest, typed: &str) -> Option<String> {
         "exclude leaves out files by their paths, as in `{}`",
         command(&format!("exclude {}", crate::suggested::shell_word(typed)))
     ))
-}
-
-/// refuses to remove the first of `removed` that a recipe in `manifest` is made from, unless that
-/// recipe is removed too.
-fn unread(manifest: &Manifest, removed: &[String]) -> Result<(), Error> {
-    let going: HashSet<&str> = removed.iter().map(String::as_str).collect();
-    let mut readers: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (reader, entry) in &manifest.datasets {
-        let Some(recipe) = entry.recipe() else {
-            continue;
-        };
-        if going.contains(reader.as_str()) {
-            continue;
-        }
-        for from in &recipe.from {
-            let of = readers.entry(from.as_str()).or_default();
-            if of.last() != Some(&reader.as_str()) {
-                of.push(reader.as_str());
-            }
-        }
-    }
-    let Some((name, readers)) = removed
-        .iter()
-        .find_map(|name| Some((name, readers.get(name.as_str())?)))
-    else {
-        return Ok(());
-    };
-    let them = crate::units::listed(readers, "and");
-    let (are, their) = if readers.len() == 1 {
-        ("is", "its")
-    } else {
-        ("are", "their")
-    };
-    Err(
-        Error::new(Kind::Usage, format!("{them} {are} made from {name}")).help(format!(
-            "remove {them} first, or take {name} out of {their} from in data.toml"
-        )),
-    )
 }
 
 /// a debug build's tests ask `stop` before the name at the index `FETCHLOOM_TEST_STOP_AFTER`

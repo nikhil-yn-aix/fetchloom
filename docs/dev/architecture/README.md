@@ -9,7 +9,6 @@ fetchloom separates source resolution, checked byte storage and placement so a p
 | [CLI](cli.md) | where do flags, settings and commands enter? |
 | [sync loop](sync-loop.md) | when does a run resolve, hash, fetch or skip work? |
 | [project](project.md) | what persists, and who may change it? |
-| [recipes](recipes.md) | how is a recipe's result keyed, and when is its pin stale? |
 | [sources](sources.md) | how does a reference become a pinned listing? |
 | [network](network.md) | how do requests, retries, splits and hashing cooperate? |
 | [cache](cache.md) | when are bytes reusable, and when are they doubtful? |
@@ -56,7 +55,7 @@ flowchart TD
     sync --> lower
 ```
 
-`cli/project.rs` orders project mutations for `sync` and `lock`, and `cli/add.rs`, `cli/remove.rs` and `cli/path.rs` for their own commands. `cli/sync/place.rs` uses `plan` to decide what is needed and `place` to do filesystem work. the cache uses `place::real_folder` for directory checks; placement uses `cache::read_unfollowed` when copying an object. `net` calls back into `source` for what a source decides about a request, such as which S3 requests go signed, and `project` uses `net`'s rules for which link keys are secret, masking them in messages. the drawing leaves out `auth`, which `net` and `source` call for keys, `mirror`, which the commands ask for pinned files, `recipe` and `build`, which [recipes](recipes.md) covers, and the shared modules [primitives](primitives.md) covers, which every layer calls.
+`cli/project.rs` orders project mutations for `sync` and `lock`, and `cli/add.rs`, `cli/remove.rs` and `cli/path.rs` for their own commands. `cli/sync/place.rs` uses `plan` to decide what is needed and `place` to do filesystem work. the cache uses `place::real_folder` for directory checks; placement uses `cache::read_unfollowed` when copying an object. `net` calls back into `source` for what a source decides about a request, such as which S3 requests go signed, and `project` uses `net`'s rules for which link keys are secret, masking them in messages. the drawing leaves out `auth`, which `net` and `source` call for keys, `mirror`, which the commands ask for pinned files, and the shared modules [primitives](primitives.md) covers, which every layer calls.
 
 ## the life of sync
 

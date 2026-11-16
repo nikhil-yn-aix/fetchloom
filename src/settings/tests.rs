@@ -37,41 +37,6 @@ fn file(text: &str) -> Result<File, Error> {
 }
 
 #[test]
-fn the_build_floor_is_a_size_or_left_to_the_cache_disk() {
-    assert_eq!(read(&[], None).unwrap().build_floor, Set::default(None));
-    assert_eq!(
-        read(&[("FETCHLOOM_BUILD_FLOOR", "20G")], None)
-            .unwrap()
-            .build_floor,
-        Set {
-            value: Some(20 << 30),
-            origin: Origin::Environment
-        }
-    );
-    let set = Settings::read(
-        &env(&[]),
-        file("build_floor = \"500M\"\n").unwrap(),
-        machine(None),
-    )
-    .unwrap();
-    assert_eq!(
-        set.build_floor,
-        Set {
-            value: Some(500 << 20),
-            origin: Origin::File
-        }
-    );
-    let error = read(&[("FETCHLOOM_BUILD_FLOOR", "lots")], None).unwrap_err();
-    assert_eq!(
-        error.message,
-        "FETCHLOOM_BUILD_FLOOR is \"lots\", which is not a size such as 512M or 4G"
-    );
-}
-
-/// no budget unless one is set, and a size the budget cannot read says how to have none.
-/// a size reads as fetchloom prints it, in either kind of unit and any case, with a space or
-/// not, and a number needs its unit; 0 is told as too small, not as no size.
-#[test]
 fn a_size_reads_as_fetchloom_prints_it() {
     let gib = 1 << 30;
     for (text, bytes) in [
@@ -98,7 +63,6 @@ fn a_size_reads_as_fetchloom_prints_it() {
     for (variable, text) in [
         ("FETCHLOOM_ASK_ABOVE", "10.5"),
         ("FETCHLOOM_CACHE_BUDGET", "2.5"),
-        ("FETCHLOOM_BUILD_FLOOR", "1.5"),
         ("FETCHLOOM_MEMORY", "0.5"),
     ] {
         let error = read(&[(variable, text)], None).unwrap_err();
@@ -407,7 +371,7 @@ fn a_mistyped_key_is_told_the_setting_it_is_near() {
     assert_eq!(
         unknown.help.as_deref(),
         Some(
-            "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to, build_floor, cache_budget, each a number or text"
+            "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, push_to, cache_budget, each a number or text"
         )
     );
 }

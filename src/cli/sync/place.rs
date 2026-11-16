@@ -48,9 +48,10 @@ pub(crate) struct Placement {
     pub(crate) changed_copies: Vec<ChangedCopy>,
     /// files fetchloom placed that someone deleted or moved, placed again. `placed` counts them.
     pub(crate) put_back: Vec<String>,
-    /// those of `put_back` that `fetchloom exclude` would not leave out, by path, with why.
+    /// those of `put_back` that `fetchloom exclude` would not leave out, each the only file of
+    /// its dataset, by path, with that dataset.
     #[serde(skip)]
-    pub(crate) unexcludable: BTreeMap<String, Unexcludable>,
+    pub(crate) unexcludable: BTreeMap<String, String>,
     /// those of `put_back` in a folder that held no file, with that folder, no higher than
     /// their dataset's own, so a warning names the folder once.
     #[serde(skip)]
@@ -64,8 +65,6 @@ pub(crate) struct Placement {
     /// the datasets the plan has files of, placed now or before.
     #[serde(skip)]
     pub(crate) planned: BTreeSet<String>,
-    /// recipes whose pinned results the run left out, since no cache or mirror holds them.
-    pub(crate) unbuilt: Vec<String>,
     /// excludes of datasets in the run naming files inside an archive, which stay in place.
     #[serde(skip)]
     pub(crate) unreached: Vec<plan::Unreached>,
@@ -94,24 +93,12 @@ pub(crate) struct Placement {
     /// folders no dataset uses now that still hold files fetchloom did not place, so they stay.
     #[serde(skip)]
     pub(crate) retired: Vec<Retired>,
-    /// of `removed`, the files of each dataset `place = false` keeps out of the data folder now.
-    #[serde(skip)]
-    pub(crate) unplaced: BTreeMap<String, u64>,
     /// of `removed`, the files of each dataset dropped here that a drop cut short left.
     #[serde(skip)]
     pub(crate) cut_short: BTreeMap<String, u64>,
     /// files fetchloom placed before `data_dir` changed, which stay outside the data folder.
     #[serde(skip)]
     pub(crate) left_behind: Option<LeftBehind>,
-}
-
-/// why `fetchloom exclude` would not leave out a file sync put back.
-#[derive(Debug)]
-pub(crate) enum Unexcludable {
-    /// a file of the result of this recipe, whose step decides its files.
-    Made(String),
-    /// the only file of this dataset, which needs one.
-    Only(String),
 }
 
 impl Placement {
@@ -187,17 +174,9 @@ impl Placement {
             .iter()
             .filter(|target| back.contains(target.path.as_str()))
             .filter_map(|target| {
-                let dataset = target.dataset.to_owned();
-                let why = if target.holder == plan::Holder::Result {
-                    Unexcludable::Made(dataset)
-                } else if planned.get(target.dataset) == Some(&1)
-                    && !unknown.iter().any(|(name, _)| *name == target.dataset)
-                {
-                    Unexcludable::Only(dataset)
-                } else {
-                    return None;
-                };
-                Some((target.path.clone(), why))
+                let only = planned.get(target.dataset) == Some(&1)
+                    && !unknown.iter().any(|(name, _)| *name == target.dataset);
+                only.then(|| (target.path.clone(), target.dataset.to_owned()))
             })
             .collect();
         self.unreached = plan::unreached(manifest, targets, unlisted)
@@ -349,7 +328,6 @@ impl Preview {
         let placement = &self.placement;
         placement.placed + placement.replaced + placement.removed == 0
             && placement.kept.is_empty()
-            && placement.unbuilt.is_empty()
             && self.changes.download.is_empty()
             && self.changes.unpack.is_empty()
             && self
@@ -380,9 +358,6 @@ pub(crate) enum Reason {
     Foreign,
     /// no dataset needs it now, but it changed since fetchloom placed it.
     Unneeded,
-    /// a recipe's result file linked to the cache's copy, which was changed: only a build makes
-    /// its pinned bytes again.
-    Damaged,
     /// another entry is in its way: a link or special file at its path, or a file where a folder on
     /// its way belongs. `--force` replaces it, though never a folder that holds anything.
     Blocked,
@@ -423,8 +398,6 @@ pub(crate) struct Placing<'a> {
     actions: Vec<Action>,
     survey: Survey,
     scope: Scope,
-    /// the recipes whose results it leaves out, as [`Placing::leave_out`] says.
-    unbuilt: Vec<String>,
     /// each listed dataset's excludes that matched no listed file, from [`Placing::listed`].
     unlisted: plan::Unlisted,
     /// whether every dataset outside `scope` is vouched for: none is outside a run of all, or they
@@ -446,24 +419,19 @@ impl<'a> Placing<'a> {
         survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
-        Self::from_plan(project, manifest, lock, plan, force, scope, survey)
+        Self::from_plan(project, manifest, plan, force, scope, survey)
     }
 
-    /// compares an already validated plan of `lock` without reading archive member records
-    /// again. a rebuild kept of a recipe `lock` pins under another name now moves to that name.
+    /// compares an already validated plan without reading archive member records again.
     pub(crate) fn from_plan(
         project: &'a Project,
         manifest: &'a Manifest,
-        lock: &Lock,
         plan: plan::Plan<'a>,
         force: bool,
         scope: &Scope,
         mut survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         project.planned_data_dir(manifest)?;
-        if survey.state.carry_candidates(manifest, lock) {
-            survey.needs_writing = true;
-        }
         survey.retarget(&project.root, &plan.targets);
         let _span = tracing::debug_span!("decide").entered();
         let mut actions = plan
@@ -513,7 +481,6 @@ impl<'a> Placing<'a> {
             actions,
             survey,
             scope: scope.clone(),
-            unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
             vouched: *scope == Scope::All,
         })
@@ -725,10 +692,8 @@ impl<'a> Placing<'a> {
     pub(crate) fn nested(&self) -> Vec<(&'a str, String, &'a LockedFile)> {
         self.put()
             .filter(|target| crate::archive::by_name(&target.path).is_some())
-            .filter_map(|target| {
-                let file = target.file().filter(|file| file.unpacks_to.is_some())?;
-                Some((target.dataset, target.path.clone(), file))
-            })
+            .filter(|target| target.file.unpacks_to.is_some())
+            .map(|target| (target.dataset, target.path.clone(), target.file))
             .collect()
     }
 
@@ -774,74 +739,6 @@ impl<'a> Placing<'a> {
             .collect()
     }
 
-    /// the recipes in scope whose result has bytes placing needs that `holds` says the cache lacks
-    /// and no fetched file brings: only a build makes a result.
-    pub(crate) fn unbuilt(&self, holds: impl Fn(&Sha256, u64) -> bool) -> Vec<String> {
-        let needed = || {
-            self.targets
-                .iter()
-                .zip(&self.actions)
-                .filter(|(_, action)| needs_bytes(action))
-                .map(|(target, _)| target)
-        };
-        let fetched: HashSet<Sha256> = needed()
-            .filter(|target| target.holder != plan::Holder::Result)
-            .map(|target| target.sha256)
-            .collect();
-        let mut names: Vec<String> = needed()
-            .filter(|target| {
-                target.holder == plan::Holder::Result
-                    && !fetched.contains(&target.sha256)
-                    && !holds(&target.sha256, target.size)
-            })
-            .map(|target| target.dataset.to_owned())
-            .collect();
-        names.sort();
-        names.dedup();
-        names
-    }
-
-    /// keeps in place each file of a recipe's result linked to the cache's changed copy whose
-    /// pinned bytes `holds` says the cache lacks and no fetched file of the run brings, so the
-    /// result is not left out for it and its intact files stay; the file is told with the build
-    /// that puts it back.
-    pub(crate) fn keep_changed_links(&mut self, holds: impl Fn(&Sha256, u64) -> bool) {
-        let fetched: HashSet<Sha256> = self
-            .targets
-            .iter()
-            .zip(&self.actions)
-            .filter(|(target, action)| needs_bytes(action) && target.holder != plan::Holder::Result)
-            .map(|(target, _)| target.sha256)
-            .collect();
-        for (target, action) in self.targets.iter().zip(&mut self.actions) {
-            if target.holder == plan::Holder::Result
-                && matches!(action, Action::Replace)
-                && self.survey.elsewhere.contains(&target.path)
-                && !fetched.contains(&target.sha256)
-                && !holds(&target.sha256, target.size)
-            {
-                *action = Action::Leave(Reason::Damaged);
-            }
-        }
-    }
-
-    /// leaves out the results of `names`, which [`Placing::unbuilt`] found nowhere, so the run is
-    /// incomplete. a result is placed whole or not at all, so every file of one left out is
-    /// unneeded now, even one in place that the new pin lists too.
-    pub(crate) fn leave_out(&mut self, names: &[String]) {
-        let (targets, actions) = std::mem::take(&mut self.targets)
-            .into_iter()
-            .zip(std::mem::take(&mut self.actions))
-            .filter(|(target, _)| {
-                !(target.holder == plan::Holder::Result
-                    && names.iter().any(|name| name == target.dataset))
-            })
-            .unzip();
-        self.targets = targets;
-        self.actions = actions;
-        self.unbuilt.extend_from_slice(names);
-    }
-
     /// what placing needs that `holds` says the cache lacks, as [`Placing::missing`] lists it.
     fn lacking(
         &self,
@@ -871,11 +768,10 @@ impl<'a> Placing<'a> {
             }
         }
         let mut seen = HashSet::new();
-        // a recipe's result is made by a build, so nothing downloads it
         Ok(needed
             .into_iter()
             .filter(|target| !present.contains(&target.sha256))
-            .filter_map(|target| Some((target.dataset, target.file()?)))
+            .map(|target| (target.dataset, target.file))
             .filter(|(_, file)| seen.insert(file.sha256))
             .map(|(dataset, file)| (dataset.to_owned(), file))
             .collect())
@@ -886,7 +782,6 @@ impl<'a> Placing<'a> {
     pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         self.preview_unwanted(&mut preview);
-        preview.placement.unbuilt.clone_from(&self.unbuilt);
         preview.placement.notice(
             self.manifest,
             &self.targets,
@@ -904,9 +799,7 @@ impl<'a> Placing<'a> {
             }
             if !guessed.is_empty()
                 && self.survey.disk.contains_key(&target.path)
-                && target.file().is_some_and(|file| {
-                    guessed.contains(&format!("{}/{}", target.dataset, file.path))
-                })
+                && guessed.contains(&format!("{}/{}", target.dataset, target.file.path))
             {
                 preview
                     .by_dataset
@@ -1011,12 +904,11 @@ impl<'a> Placing<'a> {
                     preview.placement.removed += 1;
                     let placed = self.survey.state.files.get(&path);
                     if let Some(placed) = placed.filter(|placed| unplaced(self.manifest, placed)) {
-                        let counts = if self.survey.state.dropped.contains(&placed.dataset) {
-                            &mut preview.placement.cut_short
-                        } else {
-                            &mut preview.placement.unplaced
-                        };
-                        *counts.entry(placed.dataset.clone()).or_default() += 1;
+                        *preview
+                            .placement
+                            .cut_short
+                            .entry(placed.dataset.clone())
+                            .or_default() += 1;
                     }
                     if placed.is_some_and(|placed| placed.adopted) {
                         preview.placement.removed_adopted.push(path.clone());
@@ -1108,15 +1000,11 @@ impl<'a> Placing<'a> {
             unknown,
             waiting,
             scope,
-            unbuilt,
             unlisted,
             vouched,
         } = self;
         let data_dir = project.data_dir(manifest)?;
-        let mut placement = Placement {
-            unbuilt,
-            ..Placement::default()
-        };
+        let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir)
             .with_threads(survey.threads)
@@ -1197,7 +1085,7 @@ impl<'a> Placing<'a> {
         flushed.map_err(ended)?;
         // a run of named datasets vouches for the others only as its caller says, else the next
         // sync looks at all
-        let whole = vouched && unknown.is_empty() && placement.unbuilt.is_empty();
+        let whole = vouched && unknown.is_empty();
         let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let recorded = removed || adopted || undone || kept_aside || !tallies.is_empty();
@@ -1289,7 +1177,7 @@ fn kept_copies(error: Error, copies: &[ChangedCopy]) -> Error {
 }
 
 /// writes `synced` and what a run did to the state. what it placed, removed or took as placed,
-/// `recorded`, must be written; settled hashes, the synced mark and forgotten rebuilds need not be,
+/// `recorded`, must be written; settled hashes and the synced mark need not be,
 /// so a project folder that takes no write, as on a full disk, fails no run that changed nothing.
 fn record(
     project: &Project,
@@ -2224,7 +2112,7 @@ fn decide(
 }
 
 /// deletes the unchanged files fetchloom placed for `scope` that no dataset needs now, counting
-/// those of datasets with `place = false`. says whether the state lost a file.
+/// those of datasets a drop left out. says whether the state lost a file.
 #[expect(
     clippy::too_many_arguments,
     reason = "each is a part of the placing whose unwanted files go"
@@ -2264,12 +2152,7 @@ fn remove_unwanted(
                             })?;
                         placement.removed += 1;
                         if unplaced(manifest, &before) {
-                            let counts = if survey.state.dropped.contains(&before.dataset) {
-                                &mut placement.cut_short
-                            } else {
-                                &mut placement.unplaced
-                            };
-                            *counts.entry(before.dataset).or_default() += 1;
+                            *placement.cut_short.entry(before.dataset).or_default() += 1;
                         }
                         if before.adopted {
                             placement.removed_adopted.push(path);
@@ -2308,7 +2191,7 @@ fn clear_system_made(project: &Project, placer: &mut Placer, retired: &[Retired]
     }
 }
 
-/// whether `placed` is a file of a dataset with `place = false`.
+/// whether `placed` is a file of a dataset left out of the data folder, one dropped here.
 fn unplaced(manifest: &Manifest, placed: &Placed) -> bool {
     manifest
         .datasets
@@ -2633,12 +2516,12 @@ pub(crate) fn mispinned(label: &str, size: u64, actual: u64) -> Error {
 }
 
 /// the label errors give `target` when data.lock pins it as a file of its own, not one inside
-/// an archive or a recipe's result: its dataset and its path there.
+/// an archive: its dataset and its path there.
 pub(crate) fn pinned_label(target: &Target) -> Option<String> {
-    target
-        .file()
-        .filter(|file| file.unpacks_to.is_none())
-        .map(|file| format!("{}/{}", target.dataset, file.path))
+    let file = target.file;
+    file.unpacks_to
+        .is_none()
+        .then(|| format!("{}/{}", target.dataset, file.path))
 }
 
 pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {
@@ -2732,13 +2615,21 @@ mod tests {
         let zero = dir.path().join("zero");
         std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
         let bytes = b"data";
+        let locked = crate::project::lock::LockedFile {
+            path: "x".to_owned(),
+            size: 4,
+            sha256: crate::digest::sha256(bytes),
+            md5: None,
+            url: "https://example.org/x".to_owned(),
+            unpacks_to: None,
+        };
         let target = Target {
             dataset: "d",
             path: "data/d/x".to_owned(),
             sha256: crate::digest::sha256(bytes),
             size: 4,
             copy: false,
-            holder: plan::Holder::Result,
+            file: &locked,
         };
         let look = Look {
             size: 4,
@@ -2871,7 +2762,7 @@ mod tests {
                 sha256: locked.sha256,
                 size: locked.size,
                 copy,
-                holder: crate::plan::Holder::File(&locked),
+                file: &locked,
             };
             let record = adoption(&target, now(&path).unwrap(), &path, &cache, 0);
             assert_eq!((record.method, record.writable), (Method::Copy, copy));
@@ -2898,7 +2789,7 @@ mod tests {
             sha256: locked.sha256,
             size: locked.size,
             copy: false,
-            holder: crate::plan::Holder::File(&locked),
+            file: &locked,
         };
         let project = Project {
             root: dir.path().join("project"),
@@ -2934,7 +2825,6 @@ mod tests {
             actions: vec![Action::Keep],
             survey: surveyed(&project),
             scope: Scope::All,
-            unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
             vouched: true,
         };
@@ -3002,7 +2892,7 @@ mod tests {
                 sha256: locked.sha256,
                 size: locked.size,
                 copy: false,
-                holder: crate::plan::Holder::File(&locked),
+                file: &locked,
             }],
             unknown: Vec::new(),
             waiting: Vec::new(),
@@ -3010,7 +2900,6 @@ mod tests {
         let all = Placing::from_plan(
             &project,
             &manifest,
-            &Lock::default(),
             plan(),
             true,
             &Scope::All,
@@ -3021,7 +2910,6 @@ mod tests {
         let placing = Placing::from_plan(
             &project,
             &manifest,
-            &Lock::default(),
             plan(),
             true,
             &named,
@@ -3081,7 +2969,7 @@ mod tests {
                 sha256: stored.digest,
                 size: bytes.len() as u64,
                 copy: false,
-                holder: crate::plan::Holder::File(&locked),
+                file: &locked,
             })
             .collect();
         let project = Project {
@@ -3130,7 +3018,6 @@ mod tests {
             actions,
             survey,
             scope: Scope::All,
-            unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
             vouched: true,
         };
@@ -3179,7 +3066,7 @@ mod tests {
                 sha256: digest,
                 size: bytes.len() as u64,
                 copy: false,
-                holder: crate::plan::Holder::File(&locked),
+                file: &locked,
             };
             let project = Project {
                 root: dir.path().join("project"),
@@ -3200,7 +3087,6 @@ mod tests {
                 actions: vec![Action::Overwrite(Reason::Foreign)],
                 survey: surveyed(&project),
                 scope: Scope::All,
-                unbuilt: Vec::new(),
                 unlisted: plan::Unlisted::new(),
                 vouched: true,
             };
@@ -3252,7 +3138,7 @@ mod tests {
                 sha256: digest,
                 size: bytes.len() as u64,
                 copy: false,
-                holder: crate::plan::Holder::File(&locked),
+                file: &locked,
             };
             let project = Project {
                 root: dir.path().join("project"),
@@ -3274,7 +3160,6 @@ mod tests {
                 actions: vec![Action::Unblock(blocker)],
                 survey,
                 scope: Scope::All,
-                unbuilt: Vec::new(),
                 unlisted: plan::Unlisted::new(),
                 vouched: true,
             };
@@ -3353,7 +3238,6 @@ mod tests {
             actions: Vec::new(),
             survey,
             scope: Scope::All,
-            unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
             vouched: true,
         };
@@ -3504,7 +3388,7 @@ mod tests {
                     sha256: file.sha256,
                     size: file.size,
                     copy: false,
-                    holder: crate::plan::Holder::File(file),
+                    file,
                 })
                 .collect(),
             unknown: Vec::new(),
@@ -3512,7 +3396,6 @@ mod tests {
             actions: cases.into_iter().map(|(_, _, action)| action).collect(),
             survey: surveyed(&project),
             scope: Scope::All,
-            unbuilt: Vec::new(),
             unlisted: plan::Unlisted::new(),
             vouched: true,
         };

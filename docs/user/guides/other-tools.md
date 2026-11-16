@@ -108,8 +108,8 @@ for each file `dvc import-url` brought in, run `fetchloom add` with the link its
 | tool | keep it for | with fetchloom |
 |---|---|---|
 | hugging face datasets, torchvision, tfds, webdataset, litdata | loading and streaming | give them the folder `fetchloom path <name>` prints and turn their own download off; webdataset reads [packed shards](../reference/archives.md#webdataset-shards) |
-| make, snakemake, nextflow, airflow, dvc pipelines | running steps | run `fetchloom sync --locked` before the first step, which stops rather than changes a pin, and find inputs with `fetchloom path`. a short step can be a [recipe](recipes.md): `fetchloom build` runs it, pins what it made and places it, and in a job `fetchloom build --locked` makes what no cache or mirror holds, as [CI](ci.md#recipes) shows |
-| git, git lfs, datalad, dvc remotes | versions of files you change | commit data.toml and data.lock with your code, and data.lock.d once a recipe or a big dataset keeps its file list there; `add` keeps `data/` out of git. [dvc, git-lfs and datalad](#dvc-git-lfs-and-datalad) says how each works beside fetchloom |
+| make, snakemake, nextflow, airflow, dvc pipelines | running steps | run `fetchloom sync --locked` before the first step, which stops rather than changes a pin, and find inputs with `fetchloom path` |
+| git, git lfs, datalad, dvc remotes | versions of files you change | commit data.toml and data.lock with your code, and data.lock.d once a big dataset keeps its file list there; `add` keeps `data/` out of git. [dvc, git-lfs and datalad](#dvc-git-lfs-and-datalad) says how each works beside fetchloom |
 | rclone, s5cmd, aws cli | copying files you own to and from storage | fetchloom reads buckets and never writes to one |
 | mlflow, weights and biases | runs and results | log data.lock with a run to record the bytes it read |
 | uv, pixi, conda, docker | environments | data.lock sits beside uv.lock or the environment file; a container keeps the cache on a volume, as [notebooks and containers](notebooks-and-containers.md) shows |
@@ -126,7 +126,7 @@ these tools version files: they keep each version of what you make or change, an
 | git-lfs | keeps large files in a git repository as small pointer files, their bytes on an LFS server, usually the git host | keep it for large files you change with your code. a published file stored there can leave: `fetchloom add` its link and `git rm` the file, which older commits still hold. a hugging face dataset is a repository like this, and fetchloom reads it at a pinned commit without git or git-lfs. a raw link to such a file on github or gitlab serves the pointer, which fetchloom refuses with the link that serves the file instead |
 | datalad | versions whole datasets with git and git-annex, nests them, and records the command that made a file with `datalad run` | keep it for datasets you curate. `git annex whereis <file>` lists where a file's bytes are, links among them, and `fetchloom add` takes such a link. an OpenNeuro dataset is in its S3 bucket too, as in the table [above](#replacing-a-download-step) |
 
-fetchloom keeps no history of files you change, beyond what git keeps of `data.toml` and `data.lock`, and writes to no remote but a folder [mirror](mirrors.md). it records how a dataset was made only for a [recipe](recipes.md): what it read, its command, code and variables, not a whole pipeline or an experiment's runs.
+fetchloom keeps no history of files you change, beyond what git keeps of `data.toml` and `data.lock`, and writes to no remote but a folder [mirror](mirrors.md). it records where a dataset came from, not how a result was made from it, a whole pipeline or an experiment's runs.
 
 ## leaving fetchloom
 

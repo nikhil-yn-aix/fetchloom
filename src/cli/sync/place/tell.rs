@@ -4,10 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::put::Tally;
-use super::{
-    Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope,
-    Unexcludable,
-};
+use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope};
 use crate::output::{Output, Warning};
 use crate::place::{Because, Placer, Unlinked};
 use crate::plan;
@@ -244,22 +241,18 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
         ));
     }
     let mut told = BTreeSet::new();
-    for (path, why) in paths
+    for (path, dataset) in paths
         .iter()
         .filter_map(|path| Some((*path, placement.unexcludable.get(*path)?)))
     {
         if leave.len() == NAMED {
             break;
         }
-        match why {
-            Unexcludable::Made(recipe) if told.insert(recipe) => leave.push(format!(
-                "{recipe} makes {path}, so to leave it out for good, choose the files inside the step of {recipe}"
-            )),
-            Unexcludable::Only(dataset) if told.insert(dataset) => leave.push(format!(
+        if told.insert(dataset) {
+            leave.push(format!(
                 "{path} is the only file of {dataset}, so to leave it out for good, run `{}`",
                 crate::cli::project::command(&format!("remove {dataset}"))
-            )),
-            _ => {}
+            ));
         }
     }
     let data = &manifest.data_dir;
@@ -576,19 +569,9 @@ fn placed(tally: &Tally) -> String {
     format!("{} {how}", units::count(tally.files, "file", "files"))
 }
 
-/// the lines for files a placement removed or would: `verbs[0]` per dataset with `place = false`,
+/// the lines for files a placement removed or would: `verbs[0]` per dataset a drop cut short,
 /// `verbs[1]` for unneeded files, naming the data folder so it never reads as a cache cleanup.
 fn tell_removed(output: &Output, manifest: &Manifest, verbs: [&str; 2], placement: &Placement) {
-    for (dataset, files) in &placement.unplaced {
-        output.step(
-            verbs[0],
-            &format!(
-                "{} · {}, since {dataset} has place = false",
-                plan::folder(manifest, dataset),
-                units::count(*files, "file", "files")
-            ),
-        );
-    }
     for (dataset, files) in &placement.cut_short {
         output.step(
             verbs[0],
@@ -609,7 +592,6 @@ fn tell_removed(output: &Output, manifest: &Manifest, verbs: [&str; 2], placemen
     }
     let unneeded = placement
         .removed
-        .saturating_sub(placement.unplaced.values().sum())
         .saturating_sub(placement.cut_short.values().sum());
     if unneeded > 0 {
         output.step(
@@ -856,9 +838,6 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         let (message, help) = match kept.reason {
             Reason::Blocked => continue,
             Reason::Changed => match kept.dataset.as_deref() {
-                Some(dataset) if !readers(manifest, dataset).is_empty() => {
-                    not_read(manifest, &kept.path, dataset)
-                }
                 Some(dataset) if kept.earlier => (
                     format!(
                         "{} has changed, so it stays, but it is an edit of an earlier version of {dataset}, not what data.lock pins now",
@@ -892,58 +871,13 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
                 ),
                 "delete it if you do not need it".to_owned(),
             ),
-            Reason::Damaged => {
-                let dataset = kept.dataset.as_deref().unwrap_or_default();
-                (
-                    format!(
-                        "{} is linked to the cache's copy, which was changed, and only a build makes the pinned bytes of {dataset} again",
-                        kept.path
-                    ),
-                    format!(
-                        "run `{}` to make them and put the file back",
-                        crate::cli::project::command(&format!("build {dataset}"))
-                    ),
-                )
-            }
         };
         output.warn_with(Warning::PlaceKept, &message, &help);
     }
 }
 
-fn readers<'m>(manifest: &'m Manifest, dataset: &str) -> Vec<&'m str> {
-    manifest
-        .datasets
-        .iter()
-        .filter(|(_, entry)| {
-            entry
-                .recipe()
-                .is_some_and(|recipe| recipe.from.iter().any(|from| from == dataset))
-        })
-        .map(|(name, _)| name.as_str())
-        .collect()
-}
-
-/// the warning for an edit at `path` of `dataset`, which recipes read: a step reads the bytes
-/// data.lock pins, so the edit reaches no result, and replacing it would undo the fix.
-fn not_read(manifest: &Manifest, path: &str, dataset: &str) -> (String, String) {
-    let recipes = readers(manifest, dataset);
-    let them = units::listed(&recipes, "and");
-    let either = units::listed(&recipes, "or");
-    let verb = if recipes.len() > 1 { "read" } else { "reads" };
-    (
-        format!(
-            "{path} has changed, so it stays, but {them} {verb} the bytes data.lock pins for {dataset}, not this edit"
-        ),
-        format!(
-            "to build from the fix, make it in a step of {either}, or copy the file out of {}/ and add it as a dataset of its own with `{}` for {either} to read",
-            manifest.data_dir,
-            crate::cli::project::command("add <copy> --as <name>")
-        ),
-    )
-}
-
-/// the command replacing what a sync of `scope` kept of `datasets`: after a named sync or build,
-/// only the kept datasets, so it replaces nothing else, or every placed one when it cannot tell.
+/// the command replacing what a sync of `scope` kept of `datasets`: after a named sync, only the
+/// kept datasets, so it replaces nothing else, or every placed one when it cannot tell.
 fn forcing(manifest: &Manifest, scope: &Scope, datasets: &BTreeSet<&str>) -> String {
     let Scope::Only(names) = scope else {
         return crate::cli::project::command("sync --force");
@@ -987,7 +921,6 @@ fn overwritten_what(reason: Reason) -> &'static str {
         Reason::Shared => "an edit through a link other projects share",
         Reason::Foreign => "a file fetchloom did not place",
         Reason::Changed | Reason::Unneeded | Reason::Blocked => "your edit",
-        Reason::Damaged => "a file linked to the cache's changed copy",
     }
 }
 
@@ -1311,7 +1244,7 @@ mod tests {
     }
 
     /// the help gives exclude with the first file it can leave out, quoted for a shell, else a
-    /// recipe's step or a dataset's removal, and `data_dir` when the whole data folder was gone.
+    /// dataset's removal, and `data_dir` when the whole data folder was gone.
     #[test]
     fn files_put_back_are_counted_and_the_first_five_named() {
         let output = Output::new(
@@ -1328,11 +1261,11 @@ mod tests {
             false,
         );
         let manifest = Manifest::parse("[datasets.pets]\nref = \"x\"\n").unwrap();
-        let put_back = |paths: &[&str], unexcludable: Vec<(&str, Unexcludable)>| Placement {
+        let put_back = |paths: &[&str], unexcludable: Vec<(&str, &str)>| Placement {
             put_back: paths.iter().map(|path| (*path).to_owned()).collect(),
             unexcludable: unexcludable
                 .into_iter()
-                .map(|(path, why)| (path.to_owned(), why))
+                .map(|(path, dataset)| (path.to_owned(), dataset.to_owned()))
                 .collect(),
             ..Placement::default()
         };
@@ -1340,29 +1273,15 @@ mod tests {
             .map(|n| format!("data/pets/my images/{n}.png"))
             .collect();
         let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let made = || Unexcludable::Made("thumbs".to_owned());
         warn_put_back(&output, &manifest, &put_back(&paths, vec![]), "put back");
         let first = put_back(&paths[..1], vec![]);
         warn_put_back(&output, &manifest, &first, "a sync would put back");
         warn_put_back(&output, &manifest, &put_back(&[], vec![]), "put back");
-        let mixed = put_back(
-            &["data/thumbs/a.png", "data/pets/b.png"],
-            vec![("data/thumbs/a.png", made())],
-        );
-        warn_put_back(&output, &manifest, &mixed, "put back");
-        let result = put_back(&["data/thumbs/a.png"], vec![("data/thumbs/a.png", made())]);
-        warn_put_back(&output, &manifest, &result, "put back");
-        let only = put_back(
-            &["data/m/m.csv"],
-            vec![("data/m/m.csv", Unexcludable::Only("m".to_owned()))],
-        );
+        let only = put_back(&["data/m/m.csv"], vec![("data/m/m.csv", "m")]);
         warn_put_back(&output, &manifest, &only, "put back");
         let both = put_back(
-            &["data/m/m.csv", "data/thumbs/a.png"],
-            vec![
-                ("data/m/m.csv", Unexcludable::Only("m".to_owned())),
-                ("data/thumbs/a.png", made()),
-            ],
+            &["data/m/m.csv", "data/pets/b.png"],
+            vec![("data/m/m.csv", "m")],
         );
         warn_put_back(&output, &manifest, &both, "put back");
         let many: Vec<String> = (0..5000).map(|n| format!("data/pets/{n}.png")).collect();
@@ -1380,16 +1299,10 @@ mod tests {
                     "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`; {own}"
                 ),
                 format!(
-                    "put back 2 files that were deleted or moved, since data.lock pins them: data/thumbs/a.png, data/pets/b.png; to leave a file out for good, run `fetchloom exclude data/pets/b.png`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside the step of thumbs; {own}"
-                ),
-                format!(
-                    "put back data/thumbs/a.png, which was deleted or moved, since data.lock pins it; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside the step of thumbs; {own}"
-                ),
-                format!(
                     "put back data/m/m.csv, which was deleted or moved, since data.lock pins it; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; {own}"
                 ),
                 format!(
-                    "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/thumbs/a.png; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; thumbs makes data/thumbs/a.png, so to leave it out for good, choose the files inside the step of thumbs; {own}"
+                    "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/pets/b.png; to leave a file out for good, run `fetchloom exclude data/pets/b.png`; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; {own}"
                 ),
                 format!(
                     "put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more; to leave a file out for good, run `fetchloom exclude data/pets/0.png`; {own}; to keep the data folder somewhere else than data/, set data_dir in data.toml"

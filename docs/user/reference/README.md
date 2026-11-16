@@ -6,7 +6,6 @@
 |---|---|
 | [data.toml](data-toml.md) | `data.toml` names the datasets a project wants and how to place them. |
 | [data.lock](data-lock.md) | `data.lock` pins every selected source file by SHA-256 and size. |
-| [Recipes](recipes.md) | a recipe makes a dataset from others with a command of yours; recipes says how fetchloom keys and checks them, and data.toml takes these rules. |
 | [Archives](archives.md) | fetchloom unpacks `.zip`, `.7z`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst`, `.tar.bz2`, `.tgz`, `.txz`, `.tzst`, `.tbz` and `.tbz2`, ignoring case; the bytes choose the decoder. |
 | [Environment variables and settings](environment.md) | environment variables choose the cache, network limits, credentials and terminal behavior. |
 | [Credentials](credentials.md) | fetchloom reads each source's key where the source's own tools keep it, so a key made for them works here too. |

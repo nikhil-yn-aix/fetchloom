@@ -13,7 +13,6 @@ use crate::error::Error;
 use crate::output::plain;
 use crate::plan;
 use crate::project::lock::archives::{self, Archive, Pinned};
-use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Lock, Locked};
 use crate::project::manifest::{Entry, Manifest};
 use crate::source::Access;
@@ -27,19 +26,14 @@ pub(super) struct Report {
 #[derive(Serialize)]
 struct Listed {
     name: String,
-    /// where the dataset is fetched from, or none when a recipe makes it.
+    /// where the dataset is fetched from.
     #[serde(rename = "ref")]
-    reference: Option<String>,
-    /// the datasets a recipe makes it from, or none when it is fetched.
-    from: Option<Vec<String>>,
+    reference: String,
     /// the version data.lock pins, or none before the dataset is locked.
     resolved: Option<String>,
     files: Option<u64>,
     bytes: Option<u64>,
     folder: String,
-    /// whether its files are placed in `folder`: false for a dataset with `place = false`, which
-    /// is pinned and cached for the recipes that read it.
-    placed: bool,
     /// whether `fetchloom drop` freed it on this machine, so a plain sync leaves it out; only
     /// a dropped dataset says so.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -133,16 +127,7 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
 fn one(output: &crate::output::Output, dataset: &Listed) {
     let Some(files) = &dataset.held else {
         // a state not reached yet is a difference, as status shows it, never an `Ok`
-        if dataset.from.is_some() {
-            output.mark(
-                "Unbuilt",
-                &format!("{} · data.lock pins no result of it yet", dataset.name),
-            );
-            output.hint(&format!(
-                "run `{}` to make it and pin its result",
-                super::project::command(&format!("build {}", dataset.name))
-            ));
-        } else {
+        {
             output.mark(
                 "Unlocked",
                 &format!("{} · data.lock has no pin of it yet", dataset.name),
@@ -261,7 +246,7 @@ fn each_held(
             each(&file.path, file.size);
         }
     };
-    let Some(source) = manifest.datasets.get(name).and_then(Entry::source) else {
+    let Some(source) = manifest.datasets.get(name).map(|entry| &entry.source) else {
         as_pinned(each);
         return;
     };
@@ -337,33 +322,16 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
     let datasets = chosen
         .into_iter()
         .map(|(name, entry)| {
-            let locked = lock.get(name).filter(|_| entry.source().is_some());
-            let result = lock.result(name).filter(|_| entry.recipe().is_some());
-            let stated = lock.stated(name).filter(|_| entry.source().is_some());
-            let (held, totals) = match (locked, result) {
-                (Some(locked), _) if view.paths => {
+            let locked = lock.get(name);
+            let stated = lock.stated(name);
+            let (held, totals) = match locked {
+                Some(locked) if view.paths => {
                     let held = held(manifest, name, locked, cache);
                     let totals = held.iter().map(|(_, size)| *size).fold((0, 0), counted);
                     (Some(held), Some(totals))
                 }
-                (Some(locked), _) => (None, Some(held_total(manifest, name, locked, cache))),
-                (None, Some(result)) => (
-                    view.paths.then(|| {
-                        result
-                            .files
-                            .iter()
-                            .map(|file| (file.path.clone(), file.size))
-                            .collect()
-                    }),
-                    Some(
-                        result
-                            .files
-                            .iter()
-                            .map(|file| file.size)
-                            .fold((0, 0), counted),
-                    ),
-                ),
-                (None, None) => match stated {
+                Some(locked) => (None, Some(held_total(manifest, name, locked, cache))),
+                None => match stated {
                     Some(stated) => (
                         view.paths.then(|| {
                             stated
@@ -381,16 +349,12 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
             let folder = plan::folder(manifest, name);
             Listed {
                 name: name.clone(),
-                reference: entry
-                    .source()
-                    .map(|source| crate::shown::mask_secrets(&source.reference).into_owned()),
-                from: entry.recipe().map(|recipe| recipe.from.clone()),
+                reference: crate::shown::mask_secrets(&entry.source.reference).into_owned(),
                 resolved: pinned.map(|locked| locked.resolved.clone()),
                 files: totals.map(|(files, _)| files),
                 bytes: totals.map(|(_, bytes)| bytes),
                 usual_folder: folder == format!("{}/{name}", manifest.data_dir),
                 folder,
-                placed: entry.place,
                 dropped: false,
                 waiting: None,
                 title: pinned.and_then(|locked| locked.title.clone()),
@@ -399,7 +363,7 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
                 access: pinned.map(|locked| locked.access),
                 downloaded: pinned.map(|_| stated.is_none()),
                 pinned_by: stated.map(lock::Stated::digests),
-                locked_files: view.pinned.then(|| locked_files(locked, result)).flatten(),
+                locked_files: locked.filter(|_| view.pinned).map(locked_files),
                 held,
             }
         })
@@ -407,36 +371,18 @@ fn listed(manifest: &Manifest, lock: &Lock, cache: Option<&Cache>, view: View<'_
     Report { datasets }
 }
 
-/// the files `--json` lists for a dataset: a source's with the links they download from, a
-/// recipe's result's without.
-fn locked_files(locked: Option<&Locked>, result: Option<&Derived>) -> Option<Vec<ListedFile>> {
-    match (locked, result) {
-        (Some(locked), _) => Some(
-            locked
-                .files
-                .iter()
-                .map(|file| ListedFile {
-                    path: file.path.clone(),
-                    size: file.size,
-                    sha256: file.sha256,
-                    url: super::export::link(&file.url).ok(),
-                })
-                .collect(),
-        ),
-        (None, Some(result)) => Some(
-            result
-                .files
-                .iter()
-                .map(|file| ListedFile {
-                    path: file.path.clone(),
-                    size: file.size,
-                    sha256: file.sha256,
-                    url: None,
-                })
-                .collect(),
-        ),
-        (None, None) => None,
-    }
+/// the files `--json` lists for a dataset, with the links they download from.
+fn locked_files(locked: &Locked) -> Vec<ListedFile> {
+    locked
+        .files
+        .iter()
+        .map(|file| ListedFile {
+            path: file.path.clone(),
+            size: file.size,
+            sha256: file.sha256,
+            url: super::export::link(&file.url).ok(),
+        })
+        .collect()
 }
 
 /// a license longer than this is cut, so one long statement does not push the table off screen.
@@ -628,7 +574,6 @@ fn contents(dataset: &Listed, marks: Marks) -> String {
             units::size(bytes)
         ),
         _ if dataset.waiting.is_some() => "waiting for its file list".to_owned(),
-        _ if dataset.from.is_some() => "not built yet".to_owned(),
         _ => "not locked yet".to_owned(),
     }
 }
@@ -637,8 +582,6 @@ fn contents(dataset: &Listed, marks: Marks) -> String {
 fn folder(dataset: &Listed, folders: Folders) -> String {
     if dataset.dropped {
         "dropped here".to_owned()
-    } else if !dataset.placed {
-        "not placed".to_owned()
     } else if folders == Folders::All || (folders == Folders::Unusual && !dataset.usual_folder) {
         plain(&dataset.folder).into_owned()
     } else {
@@ -646,15 +589,9 @@ fn folder(dataset: &Listed, folders: Folders) -> String {
     }
 }
 
-/// where a dataset comes from: its reference, what a recipe makes it from, or nothing.
+/// where a dataset comes from: its reference.
 fn source(dataset: &Listed) -> String {
-    let source = match (&dataset.reference, &dataset.from) {
-        (Some(reference), _) => reference.clone(),
-        (None, Some(from)) if from.is_empty() => "made from no dataset".to_owned(),
-        (None, Some(from)) => format!("made from {}", from.join(", ")),
-        (None, None) => String::new(),
-    };
-    plain(&source).into_owned()
+    plain(&dataset.reference).into_owned()
 }
 
 /// the rows, aligned: the source cut in the middle to `source` columns, or left out with none,
@@ -754,7 +691,7 @@ mod tests {
     #[test]
     fn the_heading_names_the_dataset_beside_its_license() {
         let mut dataset = Listed {
-            reference: Some("hf:datasets/scikit-learn/iris".to_owned()),
+            reference: "hf:datasets/scikit-learn/iris".to_owned(),
             files: Some(4),
             bytes: Some(18_534),
             ..zenodo("iris", Some("cc0-1.0"))
@@ -768,17 +705,6 @@ mod tests {
         assert_eq!(
             heading(&dataset),
             "iris · hf:datasets/scikit-learn/iris · Iris Species · 4 files · 18.1 KiB · license cc0-1.0 · doi 10.5281/zenodo.1"
-        );
-        dataset.reference = None;
-        dataset.from = Some(vec!["raw".to_owned(), "labels".to_owned()]);
-        assert!(
-            heading(&dataset).starts_with("iris · made from raw, labels · Iris Species"),
-            "a recipe's result names what it is made from"
-        );
-        dataset.from = Some(Vec::new());
-        assert!(
-            heading(&dataset).starts_with("iris · made from no dataset · Iris Species"),
-            "a step that reads nothing says so"
         );
     }
 
@@ -802,36 +728,15 @@ mod tests {
         );
     }
 
-    /// the JSON still says where the dataset's folder would be, beside `placed`.
-    #[test]
-    fn an_unplaced_dataset_lists_as_not_placed() {
-        let manifest = Manifest::parse(
-            "[datasets.iris]\nref = \"zenodo:3608990\"\nplace = false\n\n[datasets.wine]\nref = \"zenodo:1\"\n",
-        )
-        .unwrap();
-        let report = report(&manifest, &Lock::default(), None, None, true);
-        assert_eq!(
-            table(&report.datasets, None, UNICODE),
-            "iris  zenodo:3608990  not locked yet  not placed\n\
-             wine  zenodo:1        not locked yet  data/wine"
-        );
-        let value = serde_json::to_value(&report).unwrap();
-        assert_eq!(value["datasets"][0]["placed"], false);
-        assert_eq!(value["datasets"][0]["folder"], "data/iris");
-        assert_eq!(value["datasets"][1]["placed"], true);
-    }
-
     /// a placed dataset of one file from zenodo, with `license`; a test changes what it is about.
     fn zenodo(name: &str, license: Option<&str>) -> Listed {
         Listed {
             name: name.to_owned(),
-            reference: Some(format!("zenodo:{}", name.len())),
-            from: None,
+            reference: format!("zenodo:{}", name.len()),
             resolved: Some(format!("zenodo:{}@1", name.len())),
             files: Some(1),
             bytes: Some(4551),
             folder: format!("data/{name}"),
-            placed: true,
             dropped: false,
             waiting: None,
             usual_folder: true,
@@ -906,7 +811,7 @@ mod tests {
     #[test]
     fn a_long_source_is_cut_in_the_middle() {
         let listed = |name: &str, reference: &str, license: Option<&str>| Listed {
-            reference: Some(reference.to_owned()),
+            reference: reference.to_owned(),
             ..zenodo(name, license)
         };
         let datasets = [
@@ -957,7 +862,7 @@ mod tests {
     #[test]
     fn a_creative_commons_link_shows_as_its_id() {
         let listed = |name: &str, license: &str| Listed {
-            reference: Some(format!("arxiv:{name}")),
+            reference: format!("arxiv:{name}"),
             ..zenodo(name, Some(license))
         };
         let datasets = [
@@ -1001,7 +906,7 @@ mod tests {
     #[test]
     fn every_cell_shows_its_control_characters_escaped() {
         let dataset = Listed {
-            reference: Some("https://lab.example/x\u{1b}[2J".to_owned()),
+            reference: "https://lab.example/x\u{1b}[2J".to_owned(),
             folder: "data/ir\u{9b}is".to_owned(),
             usual_folder: false,
             ..zenodo("iris", Some("\u{1b}]0;TITLE\u{7}\u{9b}31m"))
@@ -1137,14 +1042,12 @@ mod tests {
         );
     }
 
-    /// a project with one dataset of each kind a list shows: a recipe's result, one not placed,
-    /// one whose link holds a secret, one not locked, an archive this machine recorded with a
-    /// members table, and one it never unpacked; with the cache that recorded it.
+    /// a project with one dataset of each kind a list shows: one whose link holds a secret, one not
+    /// locked, an archive this machine recorded with a members table, and one it never unpacked;
+    /// with the cache that recorded it.
     fn every_kind() -> (Manifest, Lock, tempfile::TempDir, Cache) {
         use crate::project::lock::LockedFile;
         let manifest = Manifest::parse(concat!(
-            "[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]\n\n",
-            "[datasets.hidden]\nref = \"zenodo:4\"\nplace = false\n\n",
             "[datasets.iris]\nref = \"https://example.org/iris.csv?token=abc\"\n\n",
             "[datasets.later]\nref = \"zenodo:3\"\n\n",
             "[datasets.pets]\nref = \"zenodo:2\"\n\n",
@@ -1179,7 +1082,7 @@ mod tests {
             unpacks_to: None,
         };
         let pinned = |name: &str, files: Vec<LockedFile>| {
-            let source = manifest.datasets[name].source().unwrap();
+            let source = &manifest.datasets[name].source;
             Locked {
                 name: name.to_owned(),
                 reference: source.reference.clone(),
@@ -1204,13 +1107,8 @@ mod tests {
             unpacks_to: Some(crate::digest::sha256(b"never unpacked")),
             ..file("scans.zip", 60_000, "")
         };
-        let result_files = vec![crate::cache::Member {
-            sha256: crate::digest::sha256(b"clean"),
-            ..member("iris-clean.csv", 700)
-        }];
         let lock = Lock {
             datasets: vec![
-                pinned("hidden", vec![file("h.bin", 9, "")]),
                 pinned(
                     "iris",
                     vec![
@@ -1221,17 +1119,6 @@ mod tests {
                 pinned("pets", vec![recorded, file("labels.csv", 30, "")]),
                 pinned("scans", vec![never]),
             ],
-            derived: vec![crate::project::lock::derived::Derived {
-                name: "clean".to_owned(),
-                from: Vec::new(),
-                run: vec!["python3".to_owned()],
-                code: Vec::new(),
-                env: std::collections::BTreeMap::new(),
-                key: crate::digest::sha256(b"key"),
-                timestamp: "2026-01-02T00:00:00Z".to_owned(),
-                tree: crate::cache::tree_hash(&result_files),
-                files: result_files,
-            }],
             stated: Vec::new(),
             waiting: Vec::new(),
         };
@@ -1254,25 +1141,13 @@ mod tests {
                 .collect()
         };
         let expected = [
-            r#"{"access":null,"bytes":700,"doi":null,"downloaded":null,"files":1,"folder":"data/clean","from":["iris"],"license":null,"locked_files":[{"path":"iris-clean.csv","sha256":"3b066804f6d1d077173cfe4d06002e6a61e6f21c2b2e648417962115f1afcd8e","size":700,"url":null}],"name":"clean","placed":true,"ref":null,"resolved":null,"title":null}"#,
-            r#"{"access":"unknown","bytes":9,"doi":null,"downloaded":true,"files":1,"folder":"data/hidden","from":null,"license":"cc-by-4.0","locked_files":[{"path":"h.bin","sha256":"0925728359a07a9b354226d3f74b9438c96b02f383533dae71cf688daf5ace47","size":9,"url":"https://example.org/h.bin"}],"name":"hidden","placed":false,"ref":"zenodo:4","resolved":"hidden-v1","title":"the hidden set"}"#,
-            r#"{"access":"unknown","bytes":4563,"doi":null,"downloaded":true,"files":2,"folder":"data/iris","from":null,"license":"cc-by-4.0","locked_files":[{"path":"iris.csv","sha256":"ab7cabb5c193f27616d6c479b5880441ab13117bebe91fdddc797bdfe88d3e08","size":4551,"url":null},{"path":"readme.txt","sha256":"9e6e4772050998a5c0dc3c61acf3dab0a7e594566171fa5746d6b62f9598efb6","size":12,"url":"https://example.org/readme.txt"}],"name":"iris","placed":true,"ref":"https://example.org/iris.csv?token=***","resolved":"iris-v1","title":"the iris set"}"#,
-            r#"{"access":null,"bytes":null,"doi":null,"downloaded":null,"files":null,"folder":"data/later","from":null,"license":null,"locked_files":null,"name":"later","placed":true,"ref":"zenodo:3","resolved":null,"title":null}"#,
-            r#"{"access":"unknown","bytes":8030,"doi":null,"downloaded":true,"files":3,"folder":"data/pets","from":null,"license":"cc-by-4.0","locked_files":[{"path":"pets.zip","sha256":"fa70fd5c3721e72a45715d3e82a49fcd15c1ed46aa714627a6fc0582b95c50c5","size":4000,"url":"https://example.org/pets.zip"},{"path":"labels.csv","sha256":"6bf6d3cb41de5ffae32a537c49ee7c4d8667314c5245cfdcd37399e1046d530e","size":30,"url":"https://example.org/labels.csv"}],"name":"pets","placed":true,"ref":"zenodo:2","resolved":"pets-v1","title":"the pets set"}"#,
-            r#"{"access":"unknown","bytes":60000,"doi":null,"downloaded":true,"files":1,"folder":"data/scans","from":null,"license":"cc-by-4.0","locked_files":[{"path":"scans.zip","sha256":"662d753124e3d540e95f3e4c988a0beb71357f542a7fa8358107c3cdb54e2d04","size":60000,"url":"https://example.org/scans.zip"}],"name":"scans","placed":true,"ref":"zenodo:5","resolved":"scans-v1","title":"the scans set"}"#,
+            r#"{"access":"unknown","bytes":4563,"doi":null,"downloaded":true,"files":2,"folder":"data/iris","license":"cc-by-4.0","locked_files":[{"path":"iris.csv","sha256":"ab7cabb5c193f27616d6c479b5880441ab13117bebe91fdddc797bdfe88d3e08","size":4551,"url":null},{"path":"readme.txt","sha256":"9e6e4772050998a5c0dc3c61acf3dab0a7e594566171fa5746d6b62f9598efb6","size":12,"url":"https://example.org/readme.txt"}],"name":"iris","ref":"https://example.org/iris.csv?token=***","resolved":"iris-v1","title":"the iris set"}"#,
+            r#"{"access":null,"bytes":null,"doi":null,"downloaded":null,"files":null,"folder":"data/later","license":null,"locked_files":null,"name":"later","ref":"zenodo:3","resolved":null,"title":null}"#,
+            r#"{"access":"unknown","bytes":8030,"doi":null,"downloaded":true,"files":3,"folder":"data/pets","license":"cc-by-4.0","locked_files":[{"path":"pets.zip","sha256":"fa70fd5c3721e72a45715d3e82a49fcd15c1ed46aa714627a6fc0582b95c50c5","size":4000,"url":"https://example.org/pets.zip"},{"path":"labels.csv","sha256":"6bf6d3cb41de5ffae32a537c49ee7c4d8667314c5245cfdcd37399e1046d530e","size":30,"url":"https://example.org/labels.csv"}],"name":"pets","ref":"zenodo:2","resolved":"pets-v1","title":"the pets set"}"#,
+            r#"{"access":"unknown","bytes":60000,"doi":null,"downloaded":true,"files":1,"folder":"data/scans","license":"cc-by-4.0","locked_files":[{"path":"scans.zip","sha256":"662d753124e3d540e95f3e4c988a0beb71357f542a7fa8358107c3cdb54e2d04","size":60000,"url":"https://example.org/scans.zip"}],"name":"scans","ref":"zenodo:5","resolved":"scans-v1","title":"the scans set"}"#,
         ];
-        let table_text = "clean   made from iris                          1 file · 700 B     data/clean\nhidden  zenodo:4                                1 file · 9 B       not placed  cc-by-4.0\niris    https://example.org/iris.csv?token=***  2 files · 4.5 KiB  data/iris   cc-by-4.0\nlater   zenodo:3                                not locked yet     data/later\npets    zenodo:2                                3 files · 7.8 KiB  data/pets   cc-by-4.0\nscans   zenodo:5                                1 file · 58.6 KiB  data/scans  cc-by-4.0";
-        let views: [(&str, &str, Option<&str>); 6] = [
-            (
-                "clean",
-                "clean · made from iris · 1 file · 700 B",
-                Some("iris-clean.csv  700 B"),
-            ),
-            (
-                "hidden",
-                "hidden · zenodo:4 · the hidden set · 1 file · 9 B · license cc-by-4.0",
-                Some("h.bin  9 B"),
-            ),
+        let table_text = "iris   https://example.org/iris.csv?token=***  2 files · 4.5 KiB  data/iris   cc-by-4.0\nlater  zenodo:3                                not locked yet     data/later\npets   zenodo:2                                3 files · 7.8 KiB  data/pets   cc-by-4.0\nscans  zenodo:5                                1 file · 58.6 KiB  data/scans  cc-by-4.0";
+        let views: [(&str, &str, Option<&str>); 4] = [
             (
                 "iris",
                 "iris · https://example.org/iris.csv?token=*** · the iris set · 2 files · 4.5 KiB · license cc-by-4.0",

@@ -60,7 +60,6 @@ class Lines(unittest.TestCase):
             ("Placed data/clean · 1 file linked to the cache", "done"),
             ("Synced small into data", "done"),
             # step_in: a tone its caller chooses where the verb alone would read wrong
-            ("Running clean · python3 clean.py", "work"),
             ("Replaced data/flowers/part1.csv · discarding your edit", "warn"),
             # label: a report's fact, bold in no tone
             ("Cache ~/.cache/fetchloom · 3 files, 1.2 MiB", "bold"),
@@ -71,15 +70,12 @@ class Lines(unittest.TestCase):
             ("Locking the project · 3 s", "work"),
             ("Placing 20,000 files", "work"),
             # a difference mark or report finds
-            ("Differs emb · 0 of 1 file match data.lock", "warn"),
-            ("Unbuilt clean · its pinned result is not on this machine", "warn"),
             ("Found 2 differences from data.lock", "warn"),
             ("Found 12 datasets for \"iris\"", "done"),
             ("Replaced 1 damaged copy on the mirror", "warn"),
             ("Replaced other.csv", "done"),
             ("Removed wine · not in data.toml, so `fetchloom sync` takes it out of data.lock", "warn"),
             ("Removed 1 file from data/ that no dataset needs", "done"),
-            ("Skipped tidy · it reads clean's result as data.lock pins it", "warn"),
             ("Skipped 6 files already there · 106 B", "done"),
             # a stop or cancel the person chose
             ("Cancelled signing in to hugging face", "warn"),
@@ -97,17 +93,14 @@ class Lines(unittest.TestCase):
                          '      <span class="fl-work">Would exclude</span> 1 file of pets.zip in data.toml\n')
 
     def test_a_faint_step_is_dim_whole(self):
-        for line in ("  Signed in to none of kaggle, zenodo", " Not placed raw · place = false in data.toml"):
-            with self.subTest(line=line):
-                self.assertEqual(render(line + "\n"), f'<span class="fl-dim">{line}</span>\n')
-        self.assertIn('<span class="fl-warn">Not placed</span>',
-                      render(" Not placed raw · place = false in data.toml, so `fetchloom sync` removes 2 files\n"))
+        line = "  Signed in to none of kaggle, zenodo"
+        self.assertEqual(render(line + "\n"), f'<span class="fl-dim">{line}</span>\n')
 
     def test_lines_under_a_step_are_dim_but_rows_under_a_status_row_are_left_alone(self):
-        self.assertEqual(render("    Running clean · python3 clean.py\n            kept 2 of 3 rows\n").splitlines()[1],
-                         '            <span class="fl-dim">kept 2 of 3 rows</span>')
-        self.assertEqual(render("       Kept emb · a rebuild\n            changed vectors.bin: /home/ada\n").splitlines()[1],
-                         "            changed vectors.bin: /home/ada")
+        self.assertEqual(render("    Removed 1 file from data/ that no dataset needs\n            data/old/a.csv\n").splitlines()[1],
+                         '            <span class="fl-dim">data/old/a.csv</span>')
+        self.assertEqual(render("    Missing data/iris · 2 files\n            data/iris/a.csv\n").splitlines()[1],
+                         "            data/iris/a.csv")
 
     def test_a_search_shows_what_to_type_in_the_accent(self):
         run = ('      Found 12 datasets for "iris"\n'
@@ -124,9 +117,9 @@ class Lines(unittest.TestCase):
                 self.assertEqual(render(line + "\n"), line + "\n")
 
     def test_html_in_a_line_is_escaped(self):
-        self.assertEqual(render("    Running clean · python3 clean.py <build>/in & <build>/out\n"),
-                         '    <span class="fl-work">Running</span> <span class="fl-bold">clean</span>'
-                         '<span class="fl-dim"> · python3 clean.py &lt;build&gt;/in &amp; &lt;build&gt;/out</span>\n')
+        self.assertEqual(render("     Placed data/<a> & b · 1 file linked to the cache\n"),
+                         '     <span class="fl-done">Placed</span> <span class="fl-bold">data/&lt;a&gt; &amp; b</span>'
+                         '<span class="fl-dim"> · 1 file linked to the cache</span>\n')
 
     def test_an_unclosed_backtick_keeps_the_rest_in_the_lines_own_style(self):
         self.assertEqual(render("  hint: run `fetchloom sync\n"), '  <span class="fl-dim">hint: run `fetchloom sync</span>\n')
@@ -134,7 +127,7 @@ class Lines(unittest.TestCase):
 
 class Blocks(unittest.TestCase):
     def test_blocks_of_fetchloom_output_are_transcripts(self):
-        for text in ("$ fetchloom sync\n", "error: iris is fetched, not built\n", "   Excluded 1 file of pets.zip\n",
+        for text in ("$ fetchloom sync\n", "error: offline, and 1 file data.lock names is not in the cache\n", "   Excluded 1 file of pets.zip\n",
                      "  hint: `fetchloom cache gc` frees it\n"):
             with self.subTest(text=text):
                 self.assertTrue(is_transcript(text))

@@ -25,7 +25,7 @@ files = [
 | field | value |
 |---|---|
 | `version` | integer `1`, the one format; a dataset may keep its files in [`data.lock.d`](#big-datasets) |
-| `dataset` | array of dataset tables; omitted for an empty lock. a dataset a recipe made has the keys under [recipe results](#recipe-results) instead of those below |
+| `dataset` | array of dataset tables; omitted for an empty lock |
 | `dataset[].name` | name in `data.toml` |
 | `dataset[].ref` | the manifest reference |
 | `dataset[].spec` | `sha256:` followed by 64 hex digits, computed below |
@@ -55,7 +55,7 @@ fetchloom reads and writes format 1 only. a lock with a higher `version` comes f
 
 a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`. a list is named by its content, so a new one is a new file, which `git commit -a` leaves out: in a git repository, `status` warns of each list data.lock names that git does not have, and a command that writes one ends with `git add data.lock.d`. `data.lock.d` must be a real folder, as `.fetchloom` must: when it is a link, a junction or a file, a command that changes the project, or reads a list there, stops with `project.invalid`, exit 50, before it reads, writes or removes a list, so a cloned project cannot point fetchloom at files outside it.
 
-a list that is not there, as in a clone of a commit that left it out, leaves its dataset waiting: `status` lists `Waiting clean · its file list data.lock.d/clean.025d92b1be6b.tsv.zst is not there`, `list` says `waiting for its file list`, and `status`, `sync`, `list`, `lock` and `export` warn `data.lock names data.lock.d/clean.025d92b1be6b.tsv.zst, the file list of clean, which is not there, so clean waits for it` (`lock.list_missing`), with help to get the commit that adds data.lock.d or, for a recipe's result, to run `fetchloom build clean`. its entry stays in data.lock as it is: a command that writes data.lock writes it back unchanged and never asks its source again, so every other dataset, fetched, imported or made, is used as before, and `sync`, `lock`, `build` and `add` pin and place the rest. `sync` leaves the files it placed of the waiting dataset as they are, and `status` counts none of them as extra. a recipe made from a waiting result is compared with the tree data.lock pins for it, so it stays up to date; `fetchloom build` makes the waiting result again, or takes the one the cache recorded for its key. `status --check` and `sync --strict` count the waiting dataset as not ready, exit 1, and `lock --check`, `sync --locked` and `build --locked` stop with the warning's words as their error, `project.invalid`, exit 50, so a ci run catches the missing `git add data.lock.d`. so does a command that needs its files, such as `sync clean`, `path clean`, `push clean`, `drop clean`, `export clean`, `lock --upgrade clean`, `exclude` of a file in its folder or a build of a recipe made from a waiting fetched dataset, while `remove clean` removes it, as that needs nothing of its list. `diff` against the project folder says its files were not compared, and `export` leaves it out, with the reason `waiting` in JSON. `cache gc`, in any project, keeps the result a waiting recipe's pin names while the cache records it, whoever's build recorded it, and counts nothing of a waiting fetched dataset, whose files its source holds. while an imported dataset waits, gc keeps every file the cache holds imported from files, since no source gives one back and which are that dataset's own is unknown until its list is back.
+a list that is not there, as in a clone of a commit that left it out, leaves its dataset waiting: `status` lists `Waiting photos · its file list data.lock.d/photos.025d92b1be6b.tsv.zst is not there`, `list` says `waiting for its file list`, and `status`, `sync`, `list`, `lock` and `export` warn `data.lock names data.lock.d/photos.025d92b1be6b.tsv.zst, the file list of photos, which is not there, so photos waits for it` (`lock.list_missing`), with help to get the commit that adds data.lock.d. its entry stays in data.lock as it is: a command that writes data.lock writes it back unchanged and never asks its source again, so every other dataset, fetched or imported, is used as before, and `sync`, `lock` and `add` pin and place the rest. `sync` leaves the files it placed of the waiting dataset as they are, and `status` counts none of them as extra. `status --check` and `sync --strict` count the waiting dataset as not ready, exit 1, and `lock --check` and `sync --locked` stop with the warning's words as their error, `project.invalid`, exit 50, so a ci run catches the missing `git add data.lock.d`. so does a command that needs its files, such as `sync photos`, `path photos`, `push photos`, `drop photos`, `export photos`, `lock --upgrade photos` or `exclude` of a file in its folder, while `remove photos` removes it, as that needs nothing of its list. `diff` against the project folder says its files were not compared, and `export` leaves it out, with the reason `waiting` in JSON. `cache gc`, in any project, counts nothing of a waiting fetched dataset, whose files its source holds. while an imported dataset waits, gc keeps every file the cache holds imported from files, since no source gives one back and which are that dataset's own is unknown until its list is back.
 
 the entry of a real run that imported a folder of 50,001 small files:
 
@@ -81,51 +81,9 @@ files_sha256 = "sha256:2e682d3ff7a415d2fa4340c6b13454e3d6ac7cce7e11119505ad0b558
 | `file_bytes` | the sum of their sizes |
 | `files_sha256` | `sha256:` and the SHA-256 of the parts' text, one part after another |
 
-a part is a zstandard frame of UTF-8 text: a header line naming its columns, then one line per file, sorted by path, at most 250,000 files a part. a source's list has the header `path\tsize\tsha256\tmd5\turl\tunpacks_to` and the fields of an inline file table; a [recipe result](#recipe-results)'s list has the header `path\tsize\tsha256`. reading expects the header of the dataset's kind, so one kind of list never stands for the other. `md5` and `unpacks_to` are empty when absent, and `unpacks_to` is the tree hash without its `sha256:`. a backslash, tab or line break inside a path or URL is written `\\`, `\t`, `\n` or `\r`. a path holds at most 4,096 bytes and a URL at most 64 KiB, as written before escaping: a command that would list a longer one stops with `project.invalid` before it writes a part, and reading refuses a part that holds one as damaged. a part's name holds the dataset's name and the first 12 digits of `files_sha256`, so a new list never overwrites one the lock on disk still names, and another file already under a new part's name is written over unless it holds that part; parts no lock names are removed once data.lock no longer needs them. `zstdcat data.lock.d/photos.*.tsv.zst | head` shows one.
+a part is a zstandard frame of UTF-8 text: a header line naming its columns, then one line per file, sorted by path, at most 250,000 files a part. a list has the header `path\tsize\tsha256\tmd5\turl\tunpacks_to` and the fields of an inline file table. `md5` and `unpacks_to` are empty when absent, and `unpacks_to` is the tree hash without its `sha256:`. a backslash, tab or line break inside a path or URL is written `\\`, `\t`, `\n` or `\r`. a path holds at most 4,096 bytes and a URL at most 64 KiB, as written before escaping: a command that would list a longer one stops with `project.invalid` before it writes a part, and reading refuses a part that holds one as damaged. a part's name holds the dataset's name and the first 12 digits of `files_sha256`, so a new list never overwrites one the lock on disk still names, and another file already under a new part's name is written over unless it holds that part; parts no lock names are removed once data.lock no longer needs them. `zstdcat data.lock.d/photos.*.tsv.zst | head` shows one.
 
 reading checks every part's name, line, order and count against `data.lock`, and the SHA-256 of the whole. a missing, changed or foreign part fails with `project.invalid`, and `cache gc` then keeps the whole cache rather than guess what the project needs. a list of more files than [`FETCHLOOM_MOST_FILES`](environment.md) allows is refused before it is read, and in a container a list whose paths and URLs would take more memory than its limit leaves is refused as it is read, as [a project too big for its container](../troubleshooting/README.md#a-project-too-big-for-its-container) says. a million files take about 46 bytes each, 47 MB in four parts; listed inline they would take about 300 MB.
-
-## recipe results
-
-a table with `from` and `run` in place of `ref` pins a dataset a [recipe](../guides/recipes.md) made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, once every step of the build is done, after the result's files are in the cache; every other command reads and checks them, keeps one as it is while `data.toml` has its recipe and drops it with the recipe, and `sync` places a result's files like a fetched dataset's. `locked` moves only when the key or the tree changes, so a build that makes the same files again leaves the table as it is. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
-
-from a real build:
-
-```toml
-[[dataset]]
-name = "clean"
-from = [
-  { name = "iris", content = "sha256:44b3e8323e385e61743eade568bb1ca54b660cc33aadd89a324b80a467b8a2a9" },
-]
-run = ["python3", "clean.py", "{iris}", "{out}"]
-code = [
-  { path = "clean.py", sha256 = "d71b468a0dc9d58310667feaf6b814d38d05f1e5e4d7a63d3be4e1f609f53a3e" },
-  { path = "lib", tree = "sha256:0a0b56cbee4ab6f62bc733bfe4378f682d6a5c8d598bbf70c4d1dcf7a694120c" },
-]
-env = { SOURCE_DATE_EPOCH = "315532800" }
-key = "sha256:d764536988d07c1808714c1d822acd09625f068427e816f05f01867649c3015d"
-locked = "2026-11-12T10:25:28Z"
-tree = "sha256:0b2cd7241af67f42241767d525012f7e7fb6eab90c364cc97aec8edf6f21d21b"
-files_in = ["data.lock.d/clean.48557b15b131.tsv.zst"]
-file_count = 1
-file_bytes = 366
-files_sha256 = "sha256:48557b15b131a59c6aff11e5019b52425a87400b3ddadc974a5c046735ea9048"
-```
-
-| field | value |
-|---|---|
-| `from` | the datasets it is made from, in `data.toml` order, each with its `name` and the `content` hash the key took, `sha256:` and 64 hex digits |
-| `run` | the command as `data.toml` writes it, with `{name}` and `{out}` not filled in |
-| `code` | the project files and folders whose bytes entered the key, sorted by path: a file with its `sha256`, 64 hex digits without a prefix, a folder with the `tree` of its files, `sha256:` and 64 hex digits; `[]` when there are none. [recipes](recipes.md#what-fetchloom-keys) says how each is hashed |
-| `env` | the variables set for the command, by name; omitted when there are none |
-| `key` | `sha256:` and the hash of everything the result was made from, as [recipes](recipes.md#what-fetchloom-keys) lists it |
-| `locked` | when the key or the tree last changed, in UTC |
-| `tree` | `sha256:` and the [tree hash](#the-tree-hash) of the files the result holds |
-| `files_in`, `file_count`, `file_bytes`, `files_sha256` | the result's list in `data.lock.d`, as for a [big dataset](#big-datasets) |
-
-a file's own hash has no prefix; a hash of something else, such as an input's content, a key, a tree or a list, starts with `sha256:`. a table that mixes these keys with those of a fetched dataset (`ref`, `spec`, `extract`, `resolved`, `title`, `license`, `doi`, `access` or `files`) is refused with `project.invalid`, as is one with no input, an input named twice or after the dataset itself, an empty program, a code path that leaves the project or comes twice, code with both or neither of `sha256` and `tree`, a variable whose name holds `=`, a NUL character in the command or a variable, or a list whose files do not hash to `tree`.
-
-each input's `content` is what the recipe read of it. for a fetched dataset it is the SHA-256 of one line a pinned file, sorted by path: `path`, `size` and `sha256` separated by tabs, then a tab and `sha256:` with the tree hash for an archive that unpacks, and a newline. a [split archive](archives.md#split-archives) is one line, at its first part, so the same files cut into other parts keep the content. for a recipe's result it is the result's `tree`.
 
 ## the spec hash
 
@@ -172,8 +130,6 @@ project commands recognize names such as `token`, `signature`, `sig`, `auth`, `j
 ```
 
 `\t` and `\n` above mean a literal tab and LF. paths are NFC, with `/` separators and leading `./` removed. SHA-256 of these exact bytes is `unpacks_to`. there is no header or byte order mark. an empty tree hashes zero bytes.
-
-a [recipe result](#recipe-results)'s `tree` hashes its files the same way, so the cache can keep both kinds of tree alike.
 
 paths in this record retain their archive folders; placement may strip a shared top folder. directory entries, times and permissions are absent. empty directories are not placed. files a system writes by itself, such as finder's `.DS_Store` and the `._` files under `__MACOSX`, are left out of the record, so they are in neither the tree nor what a [members table](data-toml.md#files-inside-archives) matches.
 

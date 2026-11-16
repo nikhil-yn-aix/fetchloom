@@ -270,7 +270,7 @@ fn bash_completes_the_dataset_names_data_toml_has() -> Result {
     for words in [
         "fetchloom sync cows ir",
         "fetchloom remove ir",
-        "fetchloom build --dry-run ir",
+        "fetchloom push --dry-run ir",
         "fetchloom lock --upgrade ir",
     ] {
         assert_eq!(offered(&work, words)?, ["iris", "irises"], "{words}");

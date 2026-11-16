@@ -1,6 +1,6 @@
 # Global options
 
-Every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C <dir>`, `--mirror <url>` and `--no-config`. `add`, `get`, `remove`, `exclude`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>`, `--no-extract` and `-i <file>`, which reads links from a list. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from; `cache gc` takes `--inputs` to free the raw data only builds read where a folder mirror holds it. the table below says what each global option does.
+Every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `--color`, `-C <dir>`, `--mirror <url>` and `--no-config`. `add`, `get`, `remove`, `exclude`, `sync`, `lock`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>`, `--no-extract` and `-i <file>`, which reads links from a list. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror. the table below says what each global option does.
 
 | option | effect |
 |---|---|
@@ -15,7 +15,7 @@ Every command takes `-q`, `-v`, `--json`, `--progress`, `--offline`, `--yes`, `-
 | `-C <dir>` | change the working directory before running; help, version and completions ignore it |
 | `--mirror <url>` | ask the [mirror](../guides/mirrors.md) at this web address or folder for pinned files before their sources; repeat it for more. these come before the mirrors the settings name |
 | `--no-config` | leave the [settings file](../reference/environment.md#settings-file) unread for this run, also one that would stop it, so its values give way to the variables and defaults; `settings` says the file was bypassed. `FETCHLOOM_NO_CONFIG=1` does the same. data.toml, data.lock and keys are read as always |
-| `-n`, `--dry-run` | with `add`, `remove`, `exclude`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. with `get`, tell what would be fetched and where it would land, and write nothing. with `build`, show what each step would run, and run nothing. with `push`, say what would be copied to the mirror, and copy nothing. explicit `FETCHLOOM_TRACE` output is still written |
+| `-n`, `--dry-run` | with `add`, `remove`, `exclude`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. with `get`, tell what would be fetched and where it would land, and write nothing. with `push`, say what would be copied to the mirror, and copy nothing. explicit `FETCHLOOM_TRACE` output is still written |
 | `-h` | print the short help, including after a command: examples and the commands and options used most, or a command's usage, examples and own options, then where the rest is |
 | `--help` | print the whole help, including after a command. the first of `-h` and `--help` on a line decides |
 | `-V`, `--version` | print the version; with `-v`, also the OS, the architecture, the git commit the build came from and the cache folder; root-level option |
@@ -24,7 +24,6 @@ all but `--version` and `--dry-run` go before or after the command; `--dry-run` 
 
 ```sh
 fetchloom help concepts
-fetchloom help recipes
 fetchloom help add
 fetchloom help cache gc
 fetchloom help --json
@@ -34,8 +33,7 @@ fetchloom help --json
 
 | command | what it does | when to use it |
 |---|---|---|
-| `help concepts` | explain data.toml, data.lock, the cache and sync, with an analogy, then recipes, `place = false`, mirrors and how to edit a dataset's files | learn the [project model](../concepts/README.md) |
-| `help recipes` | show how to write a recipe in data.toml, with an example to copy | write your first [recipe](../guides/recipes.md) at the terminal |
+| `help concepts` | explain data.toml, data.lock, the cache and sync, with an analogy, then mirrors and how to edit a dataset's files | learn the [project model](../concepts/README.md) |
 | `help environment`, `help exit-codes` | summarize settings, or explain what each exit code means | the [environment](../reference/environment.md) and [exit code](../reference/exit-codes.md) pages have the details |
 | `help <command>` | show a command's help | check syntax at the terminal |
 
@@ -45,7 +43,7 @@ project commands find the nearest `data.toml` at or above the working directory,
 
 ## typos
 
-a command, option, dataset name, path in a dataset or help topic that fetchloom does not know is a usage error, exit 2. when a known one is close, the help suggests your whole command line with only that word changed, so `fetchloom remove --dry-run irs` suggests `fetchloom remove --dry-run iris`, still a dry run. close means at most one change for every three letters, and at least one: a letter added, dropped, changed or swapped with its neighbour. commands match in any case, so `fetchloom Serach iris` suggests `fetchloom search iris`, and other tools' names for three of them count too: `fetchloom rm iris` suggests `fetchloom remove iris`, `fetchloom ls` suggests `fetchloom list` and `fetchloom version` suggests `fetchloom --version`. an unknown help topic lists the topics: concepts, recipes, environment and exit-codes, or a command. an option of a command typed before it, as `fetchloom --dry-run sync`, suggests the line with the option after the command, `fetchloom sync --dry-run`. a reference whose prefix is a typo away from one fetchloom reads suggests the line with that prefix fixed, so `fetchloom add zenodoo:3608990` suggests `fetchloom add zenodo:3608990`, and one pasted inside `<>` or quotes, as an email or markdown writes a link, suggests the line without them. a command missing an argument that takes a few known values lists them: `fetchloom completions` the shells, the one `SHELL` names first, and `fetchloom auth login` the accounts. a line holding a link with a query, a fragment or a login is never repeated, since any of them may carry a secret under a name fetchloom does not know, such as dropbox's `rlkey`; the suggestion then names the command and the corrected word alone.
+a command, option, dataset name, path in a dataset or help topic that fetchloom does not know is a usage error, exit 2. when a known one is close, the help suggests your whole command line with only that word changed, so `fetchloom remove --dry-run irs` suggests `fetchloom remove --dry-run iris`, still a dry run. close means at most one change for every three letters, and at least one: a letter added, dropped, changed or swapped with its neighbour. commands match in any case, so `fetchloom Serach iris` suggests `fetchloom search iris`, and other tools' names for three of them count too: `fetchloom rm iris` suggests `fetchloom remove iris`, `fetchloom ls` suggests `fetchloom list` and `fetchloom version` suggests `fetchloom --version`. an unknown help topic lists the topics: concepts, environment and exit-codes, or a command. an option of a command typed before it, as `fetchloom --dry-run sync`, suggests the line with the option after the command, `fetchloom sync --dry-run`. a reference whose prefix is a typo away from one fetchloom reads suggests the line with that prefix fixed, so `fetchloom add zenodoo:3608990` suggests `fetchloom add zenodo:3608990`, and one pasted inside `<>` or quotes, as an email or markdown writes a link, suggests the line without them. a command missing an argument that takes a few known values lists them: `fetchloom completions` the shells, the one `SHELL` names first, and `fetchloom auth login` the accounts. a line holding a link with a query, a fragment or a login is never repeated, since any of them may carry a secret under a name fetchloom does not know, such as dropbox's `rlkey`; the suggestion then names the command and the corrected word alone.
 
 ## output
 

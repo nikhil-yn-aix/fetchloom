@@ -179,13 +179,6 @@ impl Mirrors {
             Location::Folder(_) | Location::Web(_) => None,
         })
     }
-
-    /// whether any mirror is asked over the network: a web server or a bucket.
-    pub(crate) fn any_remote(&self) -> bool {
-        self.list
-            .iter()
-            .any(|location| !matches!(location, Location::Folder(_)))
-    }
 }
 
 /// the path below a mirror's top where it keeps `digest` under `kind`, as the module doc lays out.

@@ -78,12 +78,7 @@ fn files_the_system_makes_are_no_difference() -> Result {
     let output = sandbox.run(&["remove", "iris"])?;
     ok(&output)?;
     assert!(!iris.exists(), "{}", text(&output.stderr)?);
-    let toml = fs::read_to_string(work.join("data.toml"))?;
-    fs::write(
-        work.join("data.toml"),
-        toml.replace("[datasets.b]", "[datasets.b]\nplace = false"),
-    )?;
-    let output = sandbox.run(&["sync"])?;
+    let output = sandbox.run(&["remove", "b"])?;
     ok(&output)?;
     let said = text(&output.stderr)?;
     assert!(

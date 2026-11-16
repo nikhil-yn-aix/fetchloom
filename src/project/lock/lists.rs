@@ -1,5 +1,4 @@
-//! the file lists in `data.lock.d`, of sources past [`INLINE`] files and of every recipe result,
-//! compressed and in parts so data.lock stays reviewable and git takes each part under its size
+//! the file lists in `data.lock.d`, of sources past [`INLINE`] files, compressed and in parts so data.lock stays reviewable and git takes each part under its size
 //! limits. data.lock records each list's count, bytes and SHA-256 to catch a changed part.
 
 use std::fs;
@@ -7,7 +6,6 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use super::LockedFile;
-use crate::cache::Member;
 use crate::digest::{Hasher, Md5, Sha256};
 use crate::error::{Error, Kind};
 
@@ -64,51 +62,28 @@ pub(crate) struct Listed {
     pub(crate) sha256: Sha256,
 }
 
-/// a line of a list: a file a source pins, or a file of a tree a recipe made.
-pub(crate) trait Row: Sized {
-    /// the first line of every part of this kind, naming its columns.
-    const HEADER: &'static str;
-    /// what a list of this kind holds, as an error names it.
-    const HOLDS: &'static str;
-    fn path(&self) -> &str;
-    fn size(&self) -> u64;
+/// the first line of every part, naming its columns: path, size, SHA-256, MD5, link and the tree
+/// an archive unpacks to.
+const HEADER: &str = "path\tsize\tsha256\tmd5\turl\tunpacks_to\n";
+
+/// a file a source pins as a line of a list.
+impl LockedFile {
     /// the bytes of text the row holds, its path and link, which its memory grows with.
-    fn text(&self) -> u64;
-    /// what of the row is longer than a list may hold, [`LONGEST_PATH`] or [`LONGEST_URL`].
-    fn too_long(&self) -> Option<&'static str>;
-    /// appends the row's line, its fields between tabs, without the line break.
-    fn write(&self, text: &mut String);
-    /// the row a line holds, without its line break.
-    fn parse(line: &str) -> Option<Self>;
-}
-
-/// "its path" when `path` is longer than [`LONGEST_PATH`].
-fn path_too_long(path: &str) -> Option<&'static str> {
-    (path.len() > LONGEST_PATH).then_some("its path")
-}
-
-/// path, size, SHA-256, MD5, link and the tree an archive unpacks to.
-impl Row for LockedFile {
-    const HEADER: &'static str = "path\tsize\tsha256\tmd5\turl\tunpacks_to\n";
-    const HOLDS: &'static str = "the files of a source";
-
-    fn path(&self) -> &str {
-        &self.path
-    }
-
-    fn size(&self) -> u64 {
-        self.size
-    }
-
     fn text(&self) -> u64 {
         (self.path.len() + self.url.len()) as u64
     }
 
+    /// what of the row is longer than a list may hold, [`LONGEST_PATH`] or [`LONGEST_URL`].
     fn too_long(&self) -> Option<&'static str> {
-        path_too_long(&self.path).or((self.url.len() > LONGEST_URL).then_some("its link"))
+        if self.path.len() > LONGEST_PATH {
+            Some("its path")
+        } else {
+            (self.url.len() > LONGEST_URL).then_some("its link")
+        }
     }
 
-    fn write(&self, text: &mut String) {
+    /// appends the row's line, its fields between tabs, without the line break.
+    fn write_row(&self, text: &mut String) {
         escape(&self.path, text);
         text.push('\t');
         text.push_str(&self.size.to_string());
@@ -126,7 +101,8 @@ impl Row for LockedFile {
         }
     }
 
-    fn parse(line: &str) -> Option<LockedFile> {
+    /// the row a line holds, without its line break.
+    fn parse_row(line: &str) -> Option<LockedFile> {
         let mut fields = line.split('\t');
         let path = unescape(fields.next()?)?;
         let size = size(fields.next()?)?;
@@ -152,45 +128,6 @@ impl Row for LockedFile {
     }
 }
 
-/// path, size and SHA-256, the columns of the cache's records of what an archive unpacked to.
-impl Row for Member {
-    const HEADER: &'static str = "path\tsize\tsha256\n";
-    const HOLDS: &'static str = "the files of a recipe's result";
-
-    fn path(&self) -> &str {
-        &self.path
-    }
-
-    fn size(&self) -> u64 {
-        self.size
-    }
-
-    fn text(&self) -> u64 {
-        self.path.len() as u64
-    }
-
-    fn too_long(&self) -> Option<&'static str> {
-        path_too_long(&self.path)
-    }
-
-    fn write(&self, text: &mut String) {
-        escape(&self.path, text);
-        text.push('\t');
-        text.push_str(&self.size.to_string());
-        text.push('\t');
-        text.push_str(&self.sha256.hex());
-    }
-
-    fn parse(line: &str) -> Option<Member> {
-        let mut fields = line.split('\t');
-        let path = unescape(fields.next()?)?;
-        let size = size(fields.next()?)?;
-        let sha256 = Sha256::from_hex(fields.next()?)?;
-        let member = Member { path, size, sha256 };
-        (fields.next().is_none() && member.too_long().is_none()).then_some(member)
-    }
-}
-
 /// a size as a part writes it: decimal digits only.
 fn size(digits: &str) -> Option<u64> {
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -201,7 +138,7 @@ fn size(digits: &str) -> Option<u64> {
 
 /// refuses `rows`, the files of `name`'s list, when one is longer than [`read`] takes, so
 /// fetchloom never writes a list it would refuse.
-pub(crate) fn listable<R: Row>(name: &str, rows: &[R]) -> Result<(), Error> {
+pub(crate) fn listable(name: &str, rows: &[LockedFile]) -> Result<(), Error> {
     let Some((row, what)) = rows
         .iter()
         .find_map(|row| row.too_long().map(|what| (row, what)))
@@ -217,7 +154,7 @@ pub(crate) fn listable<R: Row>(name: &str, rows: &[R]) -> Result<(), Error> {
         Kind::ProjectInvalid,
         format!(
             "{name}/{} cannot be pinned: {what} is longer than {}, the most data.lock.d keeps",
-            crate::name::abridged(row.path()),
+            crate::name::abridged(&row.path),
             crate::units::count(longest as u64, "byte", "bytes")
         ),
     ))
@@ -225,15 +162,15 @@ pub(crate) fn listable<R: Row>(name: &str, rows: &[R]) -> Result<(), Error> {
 
 /// the texts of the parts that list `rows`, in order, each beginning with the header. a list of
 /// no rows is one part holding the header alone.
-pub(crate) fn texts<R: Row>(rows: &[R]) -> Vec<String> {
+pub(crate) fn texts(rows: &[LockedFile]) -> Vec<String> {
     if rows.is_empty() {
-        return vec![R::HEADER.to_owned()];
+        return vec![HEADER.to_owned()];
     }
     rows.chunks(PART)
         .map(|chunk| {
-            let mut text = String::from(R::HEADER);
+            let mut text = String::from(HEADER);
             for row in chunk {
-                row.write(&mut text);
+                row.write_row(&mut text);
                 text.push('\n');
             }
             text
@@ -242,7 +179,7 @@ pub(crate) fn texts<R: Row>(rows: &[R]) -> Vec<String> {
 }
 
 /// how data.lock names the list of the dataset `name`, which holds `rows` in parts of `texts`.
-pub(crate) fn listed<R: Row>(name: &str, rows: &[R], texts: &[String]) -> Listed {
+pub(crate) fn listed(name: &str, rows: &[LockedFile], texts: &[String]) -> Listed {
     let mut hasher = Hasher::default();
     for text in texts {
         hasher.update(text.as_bytes());
@@ -251,7 +188,7 @@ pub(crate) fn listed<R: Row>(name: &str, rows: &[R], texts: &[String]) -> Listed
     Listed {
         parts: names(name, &sha256, texts.len()),
         count: rows.len() as u64,
-        bytes: rows.iter().fold(0, |bytes, row| add(bytes, row.size())),
+        bytes: rows.iter().fold(0, |bytes, row| add(bytes, row.size)),
         sha256,
     }
 }
@@ -385,12 +322,12 @@ pub(crate) enum Parts<'a> {
 /// data.lock records; refused unread when a part's path is not one fetchloom writes for `name`,
 /// when the list holds more files than a run may list, or when [`FOLDER`] is no real folder.
 /// each row's text is weighed against `budget` as it is read.
-pub(crate) fn read<R: Row>(
+pub(crate) fn read(
     parts: Parts<'_>,
     name: &str,
     listed: &Listed,
     budget: &mut super::Budget,
-) -> Result<Vec<R>, Error> {
+) -> Result<Vec<LockedFile>, Error> {
     if !named_as_written(name, listed) {
         return Err(broken(format!(
             "data.lock names the file list of {name} in files fetchloom does not write"
@@ -412,7 +349,7 @@ pub(crate) fn read<R: Row>(
     if let Parts::Folder(root) = parts {
         folder(root)?;
     }
-    let mut rows: Vec<R> = Vec::with_capacity(count.min(1 << 20));
+    let mut rows: Vec<LockedFile> = Vec::with_capacity(count.min(1 << 20));
     let mut hasher = Hasher::default();
     let mut bytes: u64 = 0;
     for part in &listed.parts {
@@ -450,22 +387,20 @@ pub(crate) fn read<R: Row>(
             }
             hasher.update(&line);
             if number == 1 {
-                if line != R::HEADER.as_bytes() {
-                    return Err(other_kind::<R>(part, &line)
-                        .or_else(|| newer_columns::<R>(part, &line))
-                        .unwrap_or_else(|| damaged(part, 1)));
+                if line != HEADER.as_bytes() {
+                    return Err(newer_columns(part, &line).unwrap_or_else(|| damaged(part, 1)));
                 }
                 continue;
             }
             let row = std::str::from_utf8(&line[..line.len() - 1])
                 .ok()
-                .and_then(R::parse)
+                .and_then(LockedFile::parse_row)
                 .ok_or_else(|| damaged(part, number))?;
-            if rows.len() == count || rows.last().is_some_and(|last| last.path() >= row.path()) {
+            if rows.len() == count || rows.last().is_some_and(|last| last.path >= row.path) {
                 return Err(damaged(part, number));
             }
             budget.take(name, row.text())?;
-            bytes = add(bytes, row.size());
+            bytes = add(bytes, row.size);
             rows.push(row);
         }
         if number == 0 {
@@ -480,25 +415,10 @@ pub(crate) fn read<R: Row>(
     Ok(rows)
 }
 
-/// the error for a part of a list of `R` whose `header` names the other kind of list.
-fn other_kind<R: Row>(part: &str, header: &[u8]) -> Option<Error> {
-    let holds = [
-        (LockedFile::HEADER, LockedFile::HOLDS),
-        (Member::HEADER, Member::HOLDS),
-    ]
-    .into_iter()
-    .find(|(other, _)| other.as_bytes() == header)?
-    .1;
-    Some(broken(format!(
-        "{part} holds {holds}, where data.lock names {}",
-        R::HOLDS
-    )))
-}
-
-/// the error for `part`, a list of `R` whose `header` names a column this fetchloom does not
-/// know, as a newer fetchloom may add one: none when it names no columns at all, or only known
-/// ones, as a damaged part's first line does.
-fn newer_columns<R: Row>(part: &str, header: &[u8]) -> Option<Error> {
+/// the error for `part`, a list whose `header` names a column this fetchloom does not know, as a
+/// newer fetchloom may add one: none when it names no columns at all, or only known ones, as a
+/// damaged part's first line does.
+fn newer_columns(part: &str, header: &[u8]) -> Option<Error> {
     let header = std::str::from_utf8(header).ok()?.strip_suffix('\n')?;
     let columns: Vec<&str> = header.split('\t').collect();
     let named = |column: &&str| {
@@ -511,7 +431,7 @@ fn newer_columns<R: Row>(part: &str, header: &[u8]) -> Option<Error> {
     if !columns.iter().all(named) {
         return None;
     }
-    let known: Vec<&str> = R::HEADER.trim_end().split('\t').collect();
+    let known: Vec<&str> = HEADER.trim_end().split('\t').collect();
     let unknown: Vec<&str> = columns
         .into_iter()
         .filter(|column| !known.contains(column))
@@ -568,7 +488,7 @@ fn broken(message: String) -> Error {
 /// the error for `part` of `name`'s list, which did not read as `err` says.
 fn unreadable(name: &str, part: &str, err: &std::io::Error) -> Error {
     if err.kind() == std::io::ErrorKind::NotFound {
-        return not_there(name, part, false);
+        return not_there(name, part);
     }
     broken(format!("could not read {part}: {err}"))
 }
@@ -584,17 +504,8 @@ fn unread_line(part: &str, line: usize, err: &std::io::Error) -> Error {
 }
 
 /// the error for `part` of `name`'s list, which is not beside data.lock. the usual cause is a
-/// commit of data.lock without the new list, which a fresh pin of every dataset would not mend: it
-/// drops every recipe's pin. a recipe's result, `made`, a build makes again here.
-pub(crate) fn not_there(name: &str, part: &str, made: bool) -> Error {
-    let build = if made {
-        format!(
-            ", or run `{}` to make it here",
-            crate::suggested::command(&format!("build {name}"))
-        )
-    } else {
-        String::new()
-    };
+/// commit of data.lock without the new list.
+pub(crate) fn not_there(name: &str, part: &str) -> Error {
     Error::new(
         Kind::ProjectInvalid,
         format!("data.lock names {part}, the file list of {name}, which is not there"),
@@ -603,7 +514,7 @@ pub(crate) fn not_there(name: &str, part: &str, made: bool) -> Error {
         "{FOLDER} was probably not committed with data.lock: `git commit -a` leaves new files out"
     ))
     .help(format!(
-        "where {name} was pinned, run `git add {FOLDER}` and commit, then pull that commit here{build}. a part deleted here comes back with `git checkout -- {FOLDER}`"
+        "where {name} was pinned, run `git add {FOLDER}` and commit, then pull that commit here. a part deleted here comes back with `git checkout -- {FOLDER}`"
     ))
 }
 
@@ -633,7 +544,7 @@ mod tests {
     }
 
     /// writes `rows` as `name`'s list below `root`, returning how data.lock names it.
-    fn write<R: Row>(root: &Path, name: &str, rows: &[R]) -> Listed {
+    fn write(root: &Path, name: &str, rows: &[LockedFile]) -> Listed {
         let texts = texts(rows);
         let listed = listed(name, rows, &texts);
         fs::create_dir_all(root.join(FOLDER)).unwrap();
@@ -644,7 +555,7 @@ mod tests {
     }
 
     /// [`super::read`] with all the memory there is.
-    fn read<R: Row>(parts: Parts<'_>, name: &str, listed: &Listed) -> Result<Vec<R>, Error> {
+    fn read(parts: Parts<'_>, name: &str, listed: &Listed) -> Result<Vec<LockedFile>, Error> {
         let mut budget = super::super::Budget::of(std::iter::empty(), u64::MAX).unwrap();
         super::read(parts, name, listed, &mut budget)
     }
@@ -659,7 +570,7 @@ mod tests {
         assert!(listed.parts[0].ends_with(".1.tsv.zst"));
         assert_eq!(listed.count, (PART + 7) as u64);
         assert_eq!(
-            read::<LockedFile>(Parts::Folder(root.path()), "big", &listed).unwrap(),
+            read(Parts::Folder(root.path()), "big", &listed).unwrap(),
             written
         );
         for part in &listed.parts {
@@ -680,7 +591,7 @@ mod tests {
         let listed = write(outside.path(), "set", &files(2));
         let filed = tempfile::tempdir().unwrap();
         fs::write(filed.path().join(FOLDER), "").unwrap();
-        let file = read::<LockedFile>(Parts::Folder(filed.path()), "set", &listed).unwrap_err();
+        let file = read(Parts::Folder(filed.path()), "set", &listed).unwrap_err();
         assert_eq!(file.kind, Kind::ProjectInvalid);
         assert!(file.message.contains("is a file"), "{}", file.message);
         let root = tempfile::tempdir().unwrap();
@@ -693,7 +604,7 @@ mod tests {
         if !made {
             return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
         }
-        let linked = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
+        let linked = read(Parts::Folder(root.path()), "set", &listed).unwrap_err();
         assert_eq!(linked.kind, Kind::ProjectInvalid);
         assert!(linked.message.contains("is a link"), "{}", linked.message);
     }
@@ -713,7 +624,7 @@ mod tests {
             )]
         );
         assert_eq!(
-            read::<LockedFile>(Parts::Folder(root.path()), "odd", &listed).unwrap(),
+            read(Parts::Folder(root.path()), "odd", &listed).unwrap(),
             odd
         );
     }
@@ -736,25 +647,13 @@ mod tests {
             let lengths = (path.len(), url.len());
             assert_eq!(listable("set", &rows).is_ok(), reads, "{lengths:?}");
             let listed = write(root.path(), "set", &rows);
-            match read::<LockedFile>(Parts::Folder(root.path()), "set", &listed) {
+            match read(Parts::Folder(root.path()), "set", &listed) {
                 Ok(read) => assert!(reads && read == rows, "{lengths:?}"),
                 Err(error) => {
                     assert!(!reads, "{lengths:?}: {error:?}");
                     assert!(error.message.ends_with("is damaged at line 2"), "{error:?}");
                 }
             }
-        }
-        // a recipe's result holds paths alone
-        for (length, reads) in [(4096, true), (4097, false)] {
-            let made = [Member {
-                path: "m".repeat(length),
-                size: 1,
-                sha256: digest::sha256(b"m"),
-            }];
-            assert_eq!(listable("made", &made).is_ok(), reads, "{length}");
-            let listed = write(root.path(), "made", &made);
-            let read = read::<Member>(Parts::Folder(root.path()), "made", &listed);
-            assert_eq!(read.is_ok(), reads, "{length}");
         }
     }
 
@@ -784,9 +683,9 @@ mod tests {
             ("\u{1b}[2J\tpath\n", None),
             ("path\tsize\tsha256\tmd5\turl\n", None),
         ] {
-            let changed = text.replacen(LockedFile::HEADER, header, 1);
+            let changed = text.replacen(HEADER, header, 1);
             fs::write(root.path().join(part), compress(&changed).unwrap()).unwrap();
-            let error = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
+            let error = read(Parts::Folder(root.path()), "set", &listed).unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
             match says {
                 Some(says) => {
@@ -805,7 +704,7 @@ mod tests {
         let written = files(2);
         let listed = write(root.path(), "set", &written);
         assert_eq!(
-            read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap(),
+            read(Parts::Folder(root.path()), "set", &listed).unwrap(),
             written
         );
         let mut changed = written.clone();
@@ -848,8 +747,7 @@ mod tests {
         ] {
             let text = texts(&rows).remove(0);
             fs::write(root.path().join(&listed.parts[0]), compress(&text).unwrap()).unwrap();
-            let error =
-                read::<LockedFile>(Parts::Folder(root.path()), "set", &summary).expect_err(reason);
+            let error = read(Parts::Folder(root.path()), "set", &summary).expect_err(reason);
             assert_eq!(error.kind, Kind::ProjectInvalid, "{reason}");
             assert!(
                 error.message.contains(message),
@@ -864,15 +762,15 @@ mod tests {
             ..listed
         };
         assert!(
-            read::<LockedFile>(Parts::Folder(root.path()), "set", &elsewhere)
+            read(Parts::Folder(root.path()), "set", &elsewhere)
                 .unwrap_err()
                 .message
                 .contains("does not write")
         );
         // a part that is gone, as in a clone of a commit that left data.lock.d out: the help
-        // gets the list, and never leads with deleting data.lock, which drops recipes' pins
+        // gets the list, and never leads with deleting data.lock, which may pin newer data
         fs::remove_file(root.path().join(&listed.parts[0])).unwrap();
-        let gone = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
+        let gone = read(Parts::Folder(root.path()), "set", &listed).unwrap_err();
         assert_eq!(
             gone.message,
             format!(
@@ -905,7 +803,7 @@ mod tests {
         let elsewhere = root.path().join("elsewhere.tsv.zst");
         fs::rename(&part, &elsewhere).unwrap();
         std::os::unix::fs::symlink(&elsewhere, &part).unwrap();
-        let error = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
+        let error = read(Parts::Folder(root.path()), "set", &listed).unwrap_err();
         assert!(
             error.message.contains("is a link or a special file"),
             "{}",
@@ -922,14 +820,14 @@ mod tests {
             text.replacen("\t0\t", "\t+0\t", 1),
             text.replacen(".jpg", ".jpg\textra", 1),
             text.replace("shard/0000001.jpg", "shard/0000000.jpg"),
-            text.replacen(LockedFile::HEADER, "path\tsize\n", 1),
+            text.replacen(HEADER, "path\tsize\n", 1),
         ] {
             fs::write(
                 root.path().join(&listed.parts[0]),
                 compress(&damaged).unwrap(),
             )
             .unwrap();
-            let error = read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).unwrap_err();
+            let error = read(Parts::Folder(root.path()), "set", &listed).unwrap_err();
             assert!(
                 error.message.contains("damaged at line"),
                 "{}",
@@ -963,8 +861,7 @@ mod tests {
             ),
         ] {
             fs::write(root.path().join(&listed.parts[0]), bytes).unwrap();
-            let error =
-                read::<LockedFile>(Parts::Folder(root.path()), "set", &listed).expect_err(reason);
+            let error = read(Parts::Folder(root.path()), "set", &listed).expect_err(reason);
             assert_eq!(
                 error.message,
                 format!("{} is damaged at line {line}", listed.parts[0]),
@@ -982,77 +879,12 @@ mod tests {
             bytes: 0,
             sha256: digest::sha256(b"x"),
         };
-        let error =
-            read::<LockedFile>(Parts::Folder(Path::new("/nowhere")), "huge", &listed).unwrap_err();
+        let error = read(Parts::Folder(Path::new("/nowhere")), "huge", &listed).unwrap_err();
         assert_eq!(
             error.help.as_deref(),
             Some(
                 "raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"
             )
-        );
-    }
-
-    fn members(count: usize) -> Vec<Member> {
-        (0..count)
-            .map(|index| Member {
-                path: format!("out/{index:07}.csv"),
-                size: index as u64,
-                sha256: digest::sha256(index.to_string().as_bytes()),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn a_part_header_names_its_kind() {
-        let root = tempfile::tempdir().unwrap();
-        let source = texts(&files(2));
-        assert!(source[0].starts_with("path\tsize\tsha256\tmd5\turl\tunpacks_to\n"));
-        let tree = texts(&members(2));
-        assert_eq!(
-            tree,
-            [format!(
-                "path\tsize\tsha256\nout/0000000.csv\t0\t{}\nout/0000001.csv\t1\t{}\n",
-                digest::sha256(b"0"),
-                digest::sha256(b"1")
-            )]
-        );
-        let written = members(PART + 1);
-        let listed = write(root.path(), "result", &written);
-        assert_eq!(listed.parts.len(), 2);
-        assert_eq!(
-            read::<Member>(Parts::Folder(root.path()), "result", &listed).unwrap(),
-            written
-        );
-        let empty = write(root.path(), "nothing", &members(0));
-        assert_eq!(texts(&members(0)), ["path\tsize\tsha256\n"]);
-        assert_eq!(
-            read::<Member>(Parts::Folder(root.path()), "nothing", &empty).unwrap(),
-            []
-        );
-    }
-
-    #[test]
-    fn a_tree_part_cannot_stand_for_a_source_list() {
-        let root = tempfile::tempdir().unwrap();
-        let tree = write(root.path(), "set", &members(3));
-        let error = read::<LockedFile>(Parts::Folder(root.path()), "set", &tree).unwrap_err();
-        assert_eq!(error.kind, Kind::ProjectInvalid);
-        assert_eq!(
-            error.message,
-            format!(
-                "{} holds the files of a recipe's result, where data.lock names the files of a source",
-                tree.parts[0]
-            )
-        );
-        assert_eq!(error.help.as_deref(), Some(recovery().as_str()));
-        let source = write(root.path(), "other", &files(3));
-        let error = read::<Member>(Parts::Folder(root.path()), "other", &source).unwrap_err();
-        assert!(
-            error.message.ends_with(
-                "holds the files of a source, where data.lock names the files of a recipe's result"
-            ),
-            "{}",
-            error.message
         );
     }
 }

@@ -6,10 +6,9 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::build::{CODE, pin_clean, with_recipe};
 use crate::caps::shown;
 use crate::mirrors::{IRIS, MEMBERS, cold, holds_the_project, project};
-use crate::support::{Result, Sandbox, Server, edit, file, json, ok, sha256_hex, text};
+use crate::support::{Result, Sandbox, edit, json, ok, sha256_hex, text};
 
 /// the names of the files below `folder` of the mirror at `root`, each checked to hash to its
 /// name, as a reader checks it.
@@ -395,7 +394,7 @@ fn gated_data_asks_first() -> Result {
 #[cfg(unix)]
 #[test]
 fn a_stopped_push_says_it_copied_nothing_of_its_plan() -> Result {
-    use crate::support::{Part, reply};
+    use crate::support::{Part, Server, file, reply};
     let sandbox = Sandbox::new()?;
     let body = vec![b'x'; 1 << 20];
     let (release, wait) = std::sync::mpsc::channel();
@@ -576,132 +575,6 @@ fn a_cold_clone_syncs_from_what_a_push_left_with_no_other_request() -> Result {
     assert_eq!(document["work"]["requests"], 0);
     assert_eq!(document["work"]["mirror_objects"], 6);
     assert_eq!(source.requests().len(), asked, "the source is never asked");
-    Ok(())
-}
-
-/// a name or `--inputs` still sends a dataset with `place = false`.
-#[test]
-fn a_plain_push_leaves_out_what_sync_does_not_place() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        crate::project::PATH,
-        vec![file(crate::project::IRIS, "\"v1\"")],
-    )?;
-    with_recipe(&sandbox, &server)?;
-    pin_clean(&sandbox, CODE, &[])?;
-    let manifest = sandbox.work().join("data.toml");
-    let text = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        text.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1),
-    )?;
-    // the result as a build would leave it in the cache
-    let done = sha256_hex(b"done");
-    let fan = sandbox.cache().join("objects").join(&done[..2]);
-    fs::create_dir_all(&fan)?;
-    fs::write(fan.join(&done[2..]), b"done")?;
-    let pushed = |mirror: &str, args: &[&str]| -> Result<Vec<String>> {
-        let root = sandbox.work().join(mirror);
-        let mut command = sandbox.command(&["--yes", "push"]);
-        ok(&command.args(args).arg("--to").arg(&root).output()?)?;
-        named(&root, "objects")
-    };
-    let iris = sha256_hex(crate::project::IRIS);
-    assert_eq!(pushed("plain", &[])?, std::slice::from_ref(&done));
-    let mut both = vec![iris.clone(), done];
-    both.sort();
-    assert_eq!(pushed("inputs", &["--inputs"])?, both);
-    assert_eq!(pushed("named", &["iris"])?, [iris]);
-    // with no name, --inputs still sends what every recipe is made from, placed or not
-    let text = fs::read_to_string(&manifest)?;
-    fs::write(
-        &manifest,
-        text.replacen("[datasets.clean]\n", "[datasets.clean]\nplace = false\n", 1),
-    )?;
-    assert_eq!(pushed("unplaced", &["--inputs"])?, both);
-    Ok(())
-}
-
-/// a rebuild elsewhere finds the inputs on the mirror. a result the cache lacks names the build
-/// that makes it, which only a person may run.
-#[test]
-fn inputs_push_what_a_recipe_is_made_from() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        crate::project::PATH,
-        vec![file(crate::project::IRIS, "\"v1\"")],
-    )?;
-    with_recipe(&sandbox, &server)?;
-    pin_clean(&sandbox, CODE, &[])?;
-    let root = sandbox.work().join("mirror");
-    let output = sandbox
-        .command(&["--json", "--yes", "push", "--inputs", "clean", "--to"])
-        .arg(&root)
-        .output()?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
-    let document = json(&output)?;
-    assert_eq!(document["result"]["selected"], serde_json::json!(["clean"]));
-    assert_eq!(
-        document["result"]["datasets"],
-        serde_json::json!(["clean", "iris"])
-    );
-    let error = &document["errors"][0];
-    assert_eq!(error["kind"], "offline.missing");
-    assert_eq!(error["details"], serde_json::json!(["clean/clean.csv"]));
-    assert_eq!(
-        error["help"],
-        "`fetchloom build clean` makes the files of clean"
-    );
-    assert_eq!(error["fix"], Value::Null);
-    assert!(!root.exists());
-    // the result as a build would leave it in the cache
-    let hex = sha256_hex(b"done");
-    let fan = sandbox.cache().join("objects").join(&hex[..2]);
-    fs::create_dir_all(&fan)?;
-    fs::write(fan.join(&hex[2..]), b"done")?;
-    let pushed = sandbox
-        .command(&["--json", "--yes", "push", "--inputs", "clean", "--to"])
-        .arg(&root)
-        .output()?;
-    ok(&pushed)?;
-    assert_eq!(json(&pushed)?["result"]["copied"], 2);
-    let mut expected = vec![sha256_hex(crate::project::IRIS), hex];
-    expected.sort();
-    assert_eq!(named(&root, "objects")?, expected);
-    // a clone that never built is told to build the recipe before anything downloads, since no
-    // download brings its result
-    let clone = sandbox.folder("clone")?;
-    for name in ["data.toml", "data.lock", "clean.py"] {
-        fs::copy(sandbox.work().join(name), clone.join(name))?;
-    }
-    let parts = clone.join("data.lock.d");
-    fs::create_dir(&parts)?;
-    for part in fs::read_dir(sandbox.work().join("data.lock.d"))? {
-        let part = part?;
-        fs::copy(part.path(), parts.join(part.file_name()))?;
-    }
-    let output = sandbox
-        .command_in(
-            &clone,
-            &["--json", "--yes", "push", "--inputs", "clean", "--to"],
-        )
-        .arg(sandbox.folder("other")?.join("mirror"))
-        .env("FETCHLOOM_CACHE", sandbox.folder("clone-cache")?)
-        .output()?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
-    let document = json(&output)?;
-    let error = &document["errors"][0];
-    assert_eq!(
-        error["message"],
-        "this machine's cache lacks files the push needs, which only a build makes"
-    );
-    assert_eq!(error["details"], serde_json::json!(["clean/clean.csv"]));
-    assert_eq!(
-        error["help"],
-        "`fetchloom build clean` makes the files of clean"
-    );
-    assert_eq!(error["fix"], Value::Null);
-    assert_eq!(document["work"]["requests"], 0);
     Ok(())
 }
 

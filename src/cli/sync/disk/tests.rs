@@ -1012,7 +1012,7 @@ fn alias_retargeting_carries_edits_and_the_original_listed_spelling() {
         sha256: placed.sha256,
         size: 1,
         copy: true,
-        holder: crate::plan::Holder::File(&locked),
+        file: &locked,
     };
     survey.retarget(&project.root, &[target]);
     assert_eq!(survey.state.files.len(), 1);
@@ -1031,7 +1031,7 @@ fn target<'a>(locked: &'a crate::project::lock::LockedFile, path: &str) -> Targe
         sha256: locked.sha256,
         size: locked.size,
         copy: false,
-        holder: crate::plan::Holder::File(locked),
+        file: locked,
     }
 }
 

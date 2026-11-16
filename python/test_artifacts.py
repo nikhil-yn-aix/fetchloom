@@ -671,10 +671,10 @@ class JourneyTests(unittest.TestCase):
             (source / 'data').mkdir()
             self.assertEqual(sorted(path.name for path in journey.clone(source, 'first').iterdir()), ['data.lock', 'data.toml'])
             (source / 'data.lock.d').mkdir()
-            (source / 'data.lock.d/clean.lock').write_text('recipe pins', encoding='utf-8')
+            (source / 'data.lock.d/clean.lock').write_text('listed pins', encoding='utf-8')
             second = journey.clone(source, 'second')
             self.assertEqual(sorted(path.name for path in second.iterdir()), ['data.lock', 'data.lock.d', 'data.toml'])
-            self.assertEqual((second / 'data.lock.d/clean.lock').read_text(encoding='utf-8'), 'recipe pins')
+            self.assertEqual((second / 'data.lock.d/clean.lock').read_text(encoding='utf-8'), 'listed pins')
 
     def test_a_tree_of_placed_read_only_files_is_removed(self):
         with tempfile.TemporaryDirectory() as directory:

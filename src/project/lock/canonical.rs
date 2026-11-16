@@ -2,9 +2,7 @@
 //! other TOML returns none, so the general reader retains its validation and exact errors.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 
-use super::derived::{self, Code, Derived, Input};
 use super::lists::Listed;
 use super::{Locked, LockedFile, Parsed, Stated, StatedFile, VERSION, Words, prefixed};
 use crate::digest::{Md5, Sha256};
@@ -172,9 +170,6 @@ fn uncommented(line: &str) -> Option<&str> {
 
 fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
     let name = lines.value("name")?;
-    if lines.sets("from") {
-        return recipe(name, lines);
-    }
     let reference = lines.value("ref")?;
     let spec = lines.value("spec")?;
     // the writer records extract only when it is false, and web_page only when it is true
@@ -289,96 +284,6 @@ fn list(line: &str, lines: &mut Lines) -> Option<Listed> {
     })
 }
 
-/// a dataset a recipe made, after its name: `from` and `code` a line an entry, or `[]` with none,
-/// `run` on one line, `env` when it has variables, then `key`, `locked`, `tree` and the list of
-/// its files.
-fn recipe(name: String, lines: &mut Lines) -> Option<Parsed> {
-    let mut from = Vec::new();
-    match lines.next()? {
-        "from = []" => {}
-        "from = [" => loop {
-            let line = lines.next()?;
-            if line == "]" {
-                break;
-            }
-            let (input, rest) = string(line.strip_prefix("  { name = ")?)?;
-            let (content, rest) = string(rest.strip_prefix(", content = ")?)?;
-            if rest != " }," {
-                return None;
-            }
-            from.push(Input {
-                name: input.into_owned(),
-                content: prefixed(&content)?,
-            });
-        },
-        _ => return None,
-    }
-    let run = strings(lines.next()?.strip_prefix("run = ")?)?;
-    let mut code = Vec::new();
-    match lines.next()? {
-        "code = []" => {}
-        "code = [" => loop {
-            let line = lines.next()?;
-            if line == "]" {
-                break;
-            }
-            let (path, rest) = string(line.strip_prefix("  { path = ")?)?;
-            let (sha256, folder, rest) = if let Some(rest) = rest.strip_prefix(", tree = ") {
-                let (tree, rest) = string(rest)?;
-                (prefixed(&tree)?, true, rest)
-            } else {
-                let (sha256, rest) = string(rest.strip_prefix(", sha256 = ")?)?;
-                (Sha256::from_hex(&sha256)?, false, rest)
-            };
-            if rest != " }," {
-                return None;
-            }
-            code.push(Code {
-                path: path.into_owned(),
-                sha256,
-                folder,
-            });
-        },
-        _ => return None,
-    }
-    let mut env = BTreeMap::new();
-    if lines.sets("env") {
-        let mut rest = lines.next()?.strip_prefix("env = { ")?.strip_suffix(" }")?;
-        loop {
-            let (variable, after) = key(rest)?;
-            let (value, after) = string(after.strip_prefix(" = ")?)?;
-            if env
-                .last_key_value()
-                .is_some_and(|(last, _): (&String, _)| *last >= variable)
-            {
-                return None;
-            }
-            env.insert(variable, value.into_owned());
-            if after.is_empty() {
-                break;
-            }
-            rest = after.strip_prefix(", ")?;
-        }
-    }
-    let key = prefixed(&lines.value("key")?)?;
-    let timestamp = lines.value("locked")?;
-    let tree = prefixed(&lines.value("tree")?)?;
-    let listed = list(lines.next()?, lines)?;
-    let derived = Derived {
-        name,
-        from,
-        run,
-        code,
-        env,
-        key,
-        timestamp,
-        tree,
-        files: Vec::new(),
-    };
-    derived::check(&derived).ok()?;
-    Some(Parsed::Derived(derived, listed))
-}
-
 /// a one-line array of basic strings, `["…", "…"]`, holding at least one.
 fn strings(text: &str) -> Option<Vec<String>> {
     let mut rest = text.strip_prefix('[')?.strip_suffix(']')?;
@@ -391,18 +296,6 @@ fn strings(text: &str) -> Option<Vec<String>> {
         }
         rest = after.strip_prefix(", ")?;
     }
-}
-
-/// the key at the start of `text`, bare or a basic string, and the text after it.
-fn key(text: &str) -> Option<(String, &str)> {
-    if text.starts_with('"') {
-        let (key, rest) = string(text)?;
-        return Some((key.into_owned(), rest));
-    }
-    let end = text
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-        .unwrap_or(text.len());
-    (end > 0).then(|| (text[..end].to_owned(), &text[end..]))
 }
 
 /// one line of a `files` array: `  { path = "…", size = 1, sha256 = "…", url = "…" },`, with
@@ -529,7 +422,6 @@ fn refused(c: char) -> bool {
 mod tests {
     use super::super::Lock;
     use super::*;
-    use crate::cache::Member;
     use crate::digest;
 
     fn file(path: &str, index: usize) -> LockedFile {
@@ -589,65 +481,10 @@ mod tests {
                     dataset("b", &files[..3], true),
                     dataset("c", &files[3..], false),
                 ],
-                derived: vec![recipe("b-small", 2), recipe("d", 0)],
                 stated: Vec::new(),
                 waiting: Vec::new(),
             },
         ]
-    }
-
-    /// a result of `count` files, escapes and unicode in its command, code and variables; with no
-    /// files it reads no dataset and has no code.
-    fn recipe(name: &str, count: usize) -> Derived {
-        let files: Vec<Member> = (0..count)
-            .map(|index| Member {
-                path: format!("out/\u{e9}t\u{e9} {index}.csv"),
-                size: index as u64,
-                sha256: digest::sha256(&[u8::try_from(index).unwrap()]),
-            })
-            .collect();
-        let input = |name: &str| Input {
-            name: name.to_owned(),
-            content: digest::sha256(name.as_bytes()),
-        };
-        Derived {
-            name: name.to_owned(),
-            from: if count == 0 {
-                Vec::new()
-            } else {
-                vec![input("b"), input("a")]
-            },
-            run: vec![
-                "python3".to_owned(),
-                "say \"hi\"\t{b}".to_owned(),
-                "{out}".to_owned(),
-            ],
-            code: if count == 0 {
-                Vec::new()
-            } else {
-                vec![
-                    Code {
-                        path: "clean.py".to_owned(),
-                        sha256: digest::sha256(b"clean"),
-                        folder: false,
-                    },
-                    Code {
-                        path: "lib/\u{540d}".to_owned(),
-                        sha256: digest::sha256(b"lib"),
-                        folder: true,
-                    },
-                ]
-            },
-            env: [("SEED", "1"), ("two words", "a \"b\""), ("\u{e9}", "")]
-                .into_iter()
-                .take(count + 1)
-                .map(|(name, value)| (name.to_owned(), value.to_owned()))
-                .collect(),
-            key: digest::sha256(name.as_bytes()),
-            timestamp: "2026-11-10T00:00:00Z".to_owned(),
-            tree: crate::cache::tree_hash(&files),
-            files,
-        }
     }
 
     fn full(text: &str) -> Vec<Parsed> {
@@ -656,12 +493,6 @@ mod tests {
 
     #[test]
     fn the_writers_form_reads_as_the_toml_reader_reads_it() {
-        assert!(
-            samples()[2]
-                .render()
-                .contains("name = \"d\"\nfrom = []\nrun = "),
-            "a recipe that reads no dataset is in the samples"
-        );
         for lock in samples() {
             let text = lock.render();
             assert_eq!(read(&text, false), Some(full(&text)), "{text}");

@@ -43,7 +43,7 @@ fn rendered() -> String {
         bold("fetchloom <command> --help"),
         roman(" lists what a command takes, and "),
         bold("fetchloom help <topic>"),
-        roman(" explains concepts, recipes, the environment and exit codes. the guide is at "),
+        roman(" explains concepts, the environment and exit codes. the guide is at "),
         roman("https://nikhil-yn-aix.github.io/fetchloom/"),
     ]);
     String::from_utf8(page).unwrap() + &rest.to_roff()

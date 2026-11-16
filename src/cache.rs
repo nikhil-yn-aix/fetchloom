@@ -8,7 +8,6 @@ mod held;
 mod imported;
 mod object;
 mod partial;
-mod results;
 mod staging;
 mod unpacked;
 mod upkeep;
@@ -33,29 +32,19 @@ pub(crate) use held::Access;
 pub(crate) use object::{Batch, batch_in};
 pub(crate) use object::{Copied, NewObject, Sealed, holds_pinned};
 pub(crate) use partial::{Claim, Hashing, Partial, PartialWriter, names};
-#[cfg(unix)]
-pub(crate) use results::seal_captured;
-pub(crate) use results::{Built, Seen};
 pub(crate) use staging::Staging;
-#[cfg(not(unix))]
-pub(crate) use staging::clear_build;
-#[cfg(unix)]
-pub(crate) use staging::{
-    SCRATCH, clear_folder, enter_at, is_own, is_private, make_build_folder, names_at, sweep_scratch,
-};
 pub(crate) use unpacked::{Member, members_of, parts_key, tree, tree_hash};
 #[cfg(test)]
 pub(crate) use upkeep::Object;
-pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Supply, Unfinished, Use};
+pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Unfinished};
 
 use crate::digest::{self, Block, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::{Volume, is_plain, open_unfollowed, read_unfollowed, refuses_links};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
-const FOLDERS: [&str; 10] = [
+const FOLDERS: [&str; 9] = [
     "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed", "imported",
-    "builds",
 ];
 
 /// the file that keeps spotlight out of the cache on macos, made just before the tag.
@@ -1128,32 +1117,20 @@ impl Cache {
 
     /// replaces `path` in one step, so a reader sees the old file or the new, never half of one.
     fn write_atomically(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        self.replace_file(path, bytes, true, false)
-    }
-
-    /// [`write_atomically`](Self::write_atomically) for a record no one but this user may write,
-    /// even where the umask or the folder's ACL would let the group write the files made in it.
-    fn write_private(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        self.replace_file(path, bytes, true, true)
+        self.replace_file(path, bytes, true)
     }
 
     /// replaces `path` in one step without flushing it first. for records whose loss after a power
     /// cut costs only a download or a resume, and which read as absent when torn. dropping their
     /// flushes halved fetching 1,000 files of 100 KiB from a server on the same machine.
     fn write_hint(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        self.replace_file(path, bytes, false, false)
+        self.replace_file(path, bytes, false)
     }
 
     /// writes `bytes` to a new file in tmp/ and renames it to `path`, both through folders held
     /// from the cache's root, so neither goes elsewhere when someone sharing the cache swaps a
     /// folder on the way for a link meanwhile.
-    fn replace_file(
-        &self,
-        path: &Path,
-        bytes: &[u8],
-        durable: bool,
-        private: bool,
-    ) -> io::Result<()> {
+    fn replace_file(&self, path: &Path, bytes: &[u8], durable: bool) -> io::Result<()> {
         let parent = path.parent().unwrap_or(&self.root);
         let scratch = self.root.join("tmp");
         #[cfg(unix)]
@@ -1170,10 +1147,9 @@ impl Cache {
                 .map_err(|err| self.explained(parent, err))?;
             let tmp = folder::Folder::open(&self.root, Path::new("tmp"))
                 .map_err(|err| self.explained(&scratch, err))?;
-            let mode = if private { 0o644 } else { 0o666 };
             let (temporary, file) = loop {
                 let temporary = format!("{:016x}.tmp", fastrand::u64(..));
-                match tmp.create_new_with(&temporary, mode) {
+                match tmp.create_new_with(&temporary, 0o666) {
                     Ok(file) => break (temporary, file),
                     Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
                     Err(err) => return Err(self.explained(&scratch, err)),
@@ -1204,7 +1180,6 @@ impl Cache {
         }
         #[cfg(not(unix))]
         {
-            let _ = private;
             real_folder(parent, FolderUse::Cache).map_err(|err| self.explained(parent, err))?;
             let placer = self.remover.placer(&self.root);
             let (temporary, file) = loop {

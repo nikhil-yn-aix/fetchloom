@@ -412,7 +412,6 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     assert_eq!(result["copies"], copies, "{report}");
     assert_eq!(result["cloned"], cloned, "{report}");
     assert_eq!(result["unlinked_copies"], 0, "{report}");
-    assert_eq!(result["inputs_only"], 0, "{report}");
     let story = text(&sandbox.run(&["cache"])?.stderr)?;
     if links.hardlinks_read_only() && !links.reflink {
         // what files take on disk follows the disk's block size, and windows does not say it
@@ -776,7 +775,6 @@ fn gc_and_verify_refuse_a_missing_folder_and_answer_an_empty_one() -> Result {
         (&["--json", "cache", "gc", "--now"], "to free"),
         (&["--json", "cache", "gc", "--dry-run"], "to free"),
         (&["--json", "cache", "gc", "--now", "--dry-run"], "to free"),
-        (&["--json", "cache", "gc", "--inputs"], "to free"),
         (&["--json", "cache", "verify"], "to check"),
     ] {
         let variable = "FETCHLOOM_CACHE names that folder: check it for a typo";

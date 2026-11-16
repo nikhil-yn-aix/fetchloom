@@ -14,28 +14,24 @@ FAIL = {"Failed", "Damaged", "Blocked"}
 # bars, setup lines and tickers draw their verb as work under way
 LIVE = {"Copying", "Finishing", "Locking", "Opening", "Pinning", "Placing", "Planning", "Reading"}
 # a difference from mark or report, in difference's tone
-DIFFERENCES = {"Differs", "Forgot", "Not placed", "Refused", "Restarting", "Unbuilt", "Unchecked"}
+DIFFERENCES = {"Forgot", "Refused", "Restarting", "Unchecked"}
 # a cancel or a stop the person chose, and what a ctrl-c brings
 STOPS = {"Cancelled", "Stopped", "Stopping"}
 # say() writes these in the verb column with no tone
 SAID = {"Access", "Check", "Sign in"}
 # label() writes a report's facts under these, bold in no tone
 LABELS = {"Cache", "Copies", "Machine", "Needed", "Resources", "Settings", "Unfinished", "Unneeded", "Used by"}
-# step_in tells these in the tone their caller chooses
-CHOSEN = {"Running": "work"}
 # status's report rows, whose -v rows under them are report rows too, not dim details
-REPORTS = WARN | FAIL | {"Not placed", "Removed", "Unbuilt", "Unchecked"}
+REPORTS = WARN | FAIL | {"Removed", "Unchecked"}
 
 # the verbs a function other than step tells with the same words, known by what follows them
 CONTEXT = [
     ("Found", re.compile(r"[\d,]+ differences? from data\.lock$"), "warn"),
     ("Replaced", re.compile(r" on the mirror$| · discarding "), "warn"),
     ("Removed", re.compile(r" · not in data\.toml, so "), "warn"),
-    ("Skipped", re.compile(r" · it reads "), "warn"),
     ("Finishing", re.compile(r"\(press ctrl-c|complete; "), "warn"),
     ("Kept", re.compile(r"^a key for "), "done"),
     ("Signed in", re.compile(r"^to none of "), "faint"),
-    ("Not placed", re.compile(r" · place = false in data\.toml$"), "faint"),
 ]
 
 VERB = re.compile(r"[A-Z][A-Za-z]*(?: [a-z]+)*|[0-9]+")
@@ -76,8 +72,6 @@ def tone_of(verb, text):
         return None
     if verb in LABELS:
         return "bold"
-    if verb in CHOSEN:
-        return CHOSEN[verb]
     if verb in WORK or verb in LIVE or verb.startswith("Would"):
         return "work"
     if verb in FAIL:

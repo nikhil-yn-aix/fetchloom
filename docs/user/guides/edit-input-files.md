@@ -18,8 +18,6 @@ $ fetchloom status
 
 tools that write their own index or cache files beside the files they read leave such extras as well.
 
-to record how a processed dataset is made from the raw one, so others can make it again, declare the step as a [recipe](recipes.md). once a recipe makes what your code reads, the raw dataset can leave the data folder: `place = false` on it keeps it pinned and in the cache for builds, as [keep only the result](recipes.md#keep-only-the-result) shows.
-
 ## editing raw files
 
 placed files are read-only, so writing to one fails with permission denied. that protects the cache's copy, since a hardlinked file is the same file in every project linked to it. for a dataset whose files you edit, set `copy = true` in data.toml:
@@ -47,24 +45,12 @@ warning: data/penguins/penguins.csv has changed, so it stays
      Synced 2 datasets into data, 1 file left unchanged; see the warnings above
 ```
 
-once data.lock pins other bytes for that file, as after `fetchloom lock --upgrade` or a rebuild of a recipe's result, the warning adds that the file is an edit of an earlier version, not what data.lock pins now. a file whose time moved while its bytes stayed as fetchloom placed them, as `touch` or a restore from a backup leaves it, is no edit: `status` lists it as outdated, and `sync` replaces it with the new pin.
+once data.lock pins other bytes for that file, as after `fetchloom lock --upgrade`, the warning adds that the file is an edit of an earlier version, not what data.lock pins now. a file whose time moved while its bytes stayed as fetchloom placed them, as `touch` or a restore from a backup leaves it, is no edit: `status` lists it as outdated, and `sync` replaces it with the new pin.
 
-the edit lives on this machine only. a teammate's sync places the pinned bytes, so a change others need belongs in a recipe, or, for a file that should not be there at all, in an [exclude](../commands/exclude.md).
-
-a [recipe](recipes.md) never reads the edit either: its step reads the bytes data.lock pins. so when a recipe reads the dataset, `build` and `sync` say so instead of offering `--force`, which would replace your fix. stderr from a project where the recipe `mc` reads `m`, a table with `copy = true` whose missing value was filled in by hand:
-
-```text
-$ fetchloom build mc
- Up to date mc
-warning: data/m/measure.csv has changed, so it stays, but mc reads the bytes data.lock pins for m, not this edit
-  help: to build from the fix, make it in a step of mc, or copy the file out of data/ and add it as a dataset of its own with `fetchloom add <copy> --as <name>` for mc to read
-         Ok every recipe is built as data.lock pins it
-```
-
-a fix in a step runs for everyone who builds. a fixed copy added as a dataset of its own, as `fetchloom add ./fixes/measure.csv --as m_fixed`, is pinned like any other, and `from = ["m_fixed"]` in the recipe reads it.
+the edit lives on this machine only. a teammate's sync places the pinned bytes, so a change others need belongs in a fixed copy added as a dataset of its own, as `fetchloom add ./fixes/measure.csv --as m_fixed`, which is pinned like any other, or, for a file that should not be there at all, in an [exclude](../commands/exclude.md).
 
 ## reorganizing
 
 `path` in data.toml chooses each dataset's folder below the data folder. datasets may share one, and `path = "."` puts a dataset's files in the data folder itself, for scripts that read `data/train.csv`. `--select` and `--exclude` choose which source files a dataset keeps, and a members table chooses files inside an archive. [data.toml](../reference/data-toml.md) has the rules.
 
-a layout of your own, such as train and validation folders or renamed files, is your own work: a script can write it outside the data folder, as links to the raw files or as copies, and a [recipe](recipes.md) can make it a dataset of its own.
+a layout of your own, such as train and validation folders or renamed files, is your own work: a script can write it outside the data folder, as links to the raw files or as copies.

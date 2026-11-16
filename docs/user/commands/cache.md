@@ -5,7 +5,6 @@
 ```sh
 fetchloom cache
 fetchloom cache gc
-fetchloom cache gc --inputs --dry-run
 fetchloom cache verify
 ```
 
@@ -17,7 +16,7 @@ fetchloom cache gc [options]
 fetchloom cache verify [options]
 ```
 
-`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --inputs` also frees raw data that only built recipes read, where a folder mirror holds a copy that hashes right, once you say yes, as [raw input a mirror holds](#raw-input-a-mirror-holds) describes. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. [global options](global-options.md) apply to all three forms.
+`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. [global options](global-options.md) apply to all three forms.
 
 `fetchloom cache` makes no cache where there is none, and neither do gc and verify, in any form. before the first command that needs a cache makes one in the default folder, they say so, as on linux `Ok there is no cache at ~/.cache/fetchloom yet, so there is nothing to free`, exit 0. an empty folder `FETCHLOOM_CACHE` or the `cache` setting names, as a lab makes for a [shared cache](../guides/clusters.md#one-cache-for-a-whole-lab) before anyone syncs, gets the same answer. one that is missing, as a mistyped one is, stops them with `local.io`, exit 50, and the help says where the folder was set. stderr of `fetchloom cache gc` with `FETCHLOOM_CACHE` mistyped, the folder above it shortened to `/home/me`:
 
@@ -41,11 +40,11 @@ it also says where the space goes. stderr from a test on a drive that makes hard
   hint: `fetchloom cache gc` frees what no project needs once it is a day old; `fetchloom cache gc --now` frees it now
 ```
 
-- `Needed` is what the registered projects' data.lock files need. a file placed as a hardlink is a second name for the cached file, so its bytes are on the disk once, and deleting the cache's copy would free nothing of them. the files of a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) that only built [recipes](../guides/recipes.md) read are needed too, and the line says how much they are, as `Needed 465 B by 1 project · 265 B of it is read only by builds`; `cache gc --inputs` frees them where a folder mirror holds a copy.
+- `Needed` is what the registered projects' data.lock files need. a file placed as a hardlink is a second name for the cached file, so its bytes are on the disk once, and deleting the cache's copy would free nothing of them.
 - `Unneeded` is what no registered project needs, and when [gc](#gc) frees it: now, once it is a day old, or never while a folder outside the cache links it too, as one `get` made does. when nothing is unneeded, the report ends with `Ok every cached file is needed by a project`.
 - `Copies` is what the projects hold as files of their own beside the cached files: copies, clones, and hardlinks that lost their link, as [below](#copies-and-backups). a clone shares its blocks with the cache's copy until either changes, so it takes little room, and the line says how much of it is clones. an edited file is your own, so it does not count.
 
-the sizes count what the files hold, while a disk stores each file in whole blocks, often 4 KiB, so `du` counts more, many times more for many small files: 4,000 files of about 33 bytes on ext4 were `4,000 files · 128.9 KiB` to `fetchloom cache` and 17388 KiB to `du -sk`. plan free space by `du`. JSON adds `needed`, `linked`, `unneeded`, `freeable`, `copies`, `unlinked_copies`, `cloned` and `inputs_only`, as [JSON output](../reference/json-output.md#command-results) defines; a script that wants what `cache gc` frees now reads `freeable`, not `bytes`. the report looks once at each placed file of each project, so a project on a slow network drive slows it.
+the sizes count what the files hold, while a disk stores each file in whole blocks, often 4 KiB, so `du` counts more, many times more for many small files: 4,000 files of about 33 bytes on ext4 were `4,000 files · 128.9 KiB` to `fetchloom cache` and 17388 KiB to `du -sk`. plan free space by `du`. JSON adds `needed`, `linked`, `unneeded`, `freeable`, `copies`, `unlinked_copies` and `cloned`, as [JSON output](../reference/json-output.md#command-results) defines; a script that wants what `cache gc` frees now reads `freeable`, not `bytes`. the report looks once at each placed file of each project, so a project on a slow network drive slows it.
 
 downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them where the server allows, and `fetchloom cache` counts them on an `Unfinished` line, as JSON's `unfinished_downloads` and `unfinished_bytes`. bytes kept with no record beside them, as a run killed in a download's first second leaves, start again from their first byte unless the run knows the file's hash, as data.lock pins it or a source such as zenodo states it, which checks them once the rest is in; the line says how many have no record. gc removes a download's record only with its bytes, so bytes another program holds open, as windows refuses to remove them, keep their record for the next try. [cache folder](../reference/cache-folder.md) says where the cache is; `FETCHLOOM_CACHE` moves it.
 
@@ -64,21 +63,20 @@ deleting the copy's `data/` and running `fetchloom sync` there brought it from `
 
 ### moving a project to another machine
 
-a project copied with its data folder to a machine whose cache never held its files, as `rsync -a` copies it to another machine or cluster, needs no download for what that folder holds: a command that needs a pinned file the cache lacks takes it from the data folder before it asks a mirror or the source, when its bytes hash to the pin, and leaves the file there as it is. so `push`, `build`, `build --check` and `sync` work there `--offline` too. an edited file is never taken, and the files inside an archive come back this way only once the cache or a mirror lists what the archive holds. stderr of `fetchloom --offline build --check` in such a copy, with an empty cache:
+a project copied with its data folder to a machine whose cache never held its files, as `rsync -a` copies it to another machine or cluster, needs no download for what that folder holds: a command that needs a pinned file the cache lacks takes it from the data folder before it asks a mirror or the source, when its bytes hash to the pin, and leaves the file there as it is. so `push` and `sync` work there `--offline` too. an edited file is never taken, and the files inside an archive come back this way only once the cache or a mirror lists what the archive holds. stderr of `fetchloom --offline push --to /mnt/lab/fetchloom --yes` in such a copy of a project whose datasets iris and twin hold one file, with an empty cache, from a real run with the mirror's path shortened:
 
 ```text
-      Needs up to 63 B on the disk holding the cache, which has 326.2 GiB free
-     Copied 1 file · 21 B from data into the cache
-    Running squares · cp -R <build>/in/table/. <build>/out
-    Checked squares · 1 of 1 file matches data.lock
-         Ok every step made the files data.lock pins
+     Copied 1 file · 104 B from data into the cache
+    Started a mirror in /mnt/lab/fetchloom
+     Pushed 1 file · 104 B to /mnt/lab/fetchloom
+         Ok every file iris and twin need is on the mirror
 ```
 
 with `--json`, `work.data_folder_objects` and `work.data_folder_bytes` count those files.
 
 ## gc
 
-1. read the registered projects' `data.toml` and `data.lock` to find the files they need: each pinned file, each archive's unpacked files but those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, each [recipe](../guides/recipes.md)'s pinned result, every file of a dataset with `place = false`, which builds read, the files of a [kept rebuild](build.md#a-rebuild-that-differs), and what a sync cut short already downloaded of a dataset [`add --no-sync`](add.md) pinned.
+1. read the registered projects' `data.toml` and `data.lock` to find the files they need: each pinned file, each archive's unpacked files but those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, and what a sync cut short already downloaded of a dataset [`add --no-sync`](add.md) pinned.
 2. remove unneeded files and records once they are at least 24 hours old by modification time, not last use; `--now` removes this grace period.
 3. clean unfinished downloads nobody came back for in a day, or with `--now` every one no running fetchloom holds, and old temporary files, then report what it deleted.
 4. report the unneeded files kept because they are less than a day old.
@@ -155,65 +153,6 @@ fetchloom cache gc --now --dry-run
 
 `-v` names each path gc would delete. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
-### raw input a mirror holds
-
-gc keeps every file a project needs, including the raw data of a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) that only built [recipes](../guides/recipes.md) read. `--inputs` frees that raw data as well, so a laptop short on disk keeps every result while the raw data waits on a lab disk or a usb drive. a file goes only when all of these hold:
-
-- every registered project that needs it reads it only as raw input: fetched or imported data with `place = false`, read by recipes each built as data.lock pins it. a recipe still to build, a dataset that places the same file, a recipe's result or a [kept rebuild](build.md#a-rebuild-that-differs) keeps it. a recipe's result that only builds read stays too, since the next build would put it back, from a mirror or by running its recipe.
-- no name outside the cache shares it, such as a hardlink in a project, since freeing it would free nothing.
-- a folder [mirror](../guides/mirrors.md), from `--mirror`, `FETCHLOOM_MIRRORS` or the `mirrors` setting, holds a copy that gc reads whole and that hashes to its name in this run. a web mirror does not count, nor does a link or a file of another size in a copy's place, and a folder without its `fetchloom-mirror` file is warned about and skipped, as sync skips it. the folder `push_to` names counts only when it is one of those mirrors, since a build reads only mirrors.
-
-[`fetchloom push --inputs <recipe>`](push.md) puts exactly that raw data on a folder mirror. gc reads each copy it relies on in full, so 200 GiB on the mirror means 200 GiB read, and a `Checked` line says how much and how long; then it says what it would free and keep and what freeing costs, and asks. stderr of a real run at a terminal on linux, paths shortened, for a project whose python recipe `clean` reads a 93.8 MiB table and the 5 files of a zip, both with `place = false`, after `fetchloom push --inputs clean --to /home/me/lab-mirror`:
-
-```text
-    Checked 6 files · 99.5 MiB on /home/me/lab-mirror in 392 ms
-      Would free adult · 5 files, 5.7 MiB of raw input that only builds read
-            /home/me/lab-mirror holds a copy of each, hashed in this run
-      Costs rerunning clean fetches these 5.7 MiB back from /home/me/lab-mirror or adult's source
-      Would free covid · 1 file, 93.8 MiB of raw input that only builds read
-            /home/me/lab-mirror holds a copy of it, hashed in this run
-      Costs rerunning clean fetches these 93.8 MiB back from /home/me/lab-mirror or covid's source
-free adult and covid, 99.5 MiB, from the cache? [y/N] y
-      Freed adult · 5 files, 5.7 MiB of raw input that only builds read
-            /home/me/lab-mirror holds a copy of each, hashed in this run
-      Freed covid · 1 file, 93.8 MiB of raw input that only builds read
-            /home/me/lab-mirror holds a copy of it, hashed in this run
-    Cleaned the cache, keeping the rest of what 1 project needs
-```
-
-`du -sh` of the cache went from `100M` to `136K`. the project still syncs, and `fetchloom build` finds clean up to date, since its result stays in the cache. a build that runs clean again, as after a change to clean.py or with `build --check`, copies the raw data back from a folder mirror, `--offline` too, as `Copied 6 files · 99.5 MiB from /home/me/lab-mirror`, or downloads it from its source. so keep the mirror where builds can read it: a [mirror is not an archive](../guides/mirrors.md#a-mirror-is-not-an-archive), and once it and the source have lost a file, no build can make the result again. use `--inputs` for raw data you rarely rebuild from.
-
-no keeps everything as it was. `--yes` answers yes. without a terminal, and with `--json`, gc stops before it changes anything, the usual gc included, with `unconfirmed`, exit 1, and says what a yes would free; the JSON `fix` is null, since only a person may agree:
-
-```text
-error: freeing adult and covid, 99.5 MiB, from the cache needs a yes
-  help: answer yes at a terminal, or add --yes, once you are sure the mirror named above keeps these files
-```
-
-the long read and the question never hold up other runs. after a yes, gc looks again and frees a file only while it is still raw input nothing else keeps and its copy on the mirror is as it was when hashed; then it frees what plain gc frees. `--dry-run` reads the copies too, says what gc would free and keep, and frees and asks nothing.
-
-each file kept says why:
-
-| reason | the file stays because |
-|---|---|
-| `pending` | a recipe that reads it is not built as data.lock pins it, so the next build reads it |
-| `derived` | a recipe makes it, and the next build would put it back |
-| `shared` | the same bytes are needed another way too, as by a dataset that places them |
-| `linked` | a name outside the cache links it too, so freeing it would free nothing |
-| `no_mirror` | no folder mirror is set; a mirror on a web server or in a bucket does not count |
-| `no_copy` | no folder mirror holds a copy |
-| `damaged` | the copy on a mirror is of another size or does not hash to its name |
-| `unreadable` | the copy on a mirror could not be read |
-| `changed` | the copy on a mirror changed or went after gc read it |
-
-a dry run names each kept file's reason in words, as `Would keep adult · 1 file, 3.8 MiB: its copy on /home/me/lab-mirror does not hash to its name` for a copy damaged with its size kept. [push](push.md) replaces a copy of another size by itself; delete one of the right size that does not hash to its name, and the next `push --inputs` writes it again.
-
-JSON adds `result.inputs`: `freed_objects` and `freed_bytes`; `datasets`, a record for each dataset freed, with `route.mirrors`, the folder mirrors whose copies hashed right, and `costs.recipes`, the recipes that fetch it back to run again; and `kept`, a record for each dataset and reason, with `mirror`, the folder mirror a `damaged`, `unreadable` or `changed` copy is on, else null. `removed_objects` and `removed_bytes` keep counting only what plain gc removes. `result.inputs` of that damaged run with `--yes`, the paths shortened:
-
-```json
-{"freed_objects":5,"freed_bytes":100404272,"datasets":[{"project":"/home/me/study","name":"adult","objects":4,"bytes":2012789,"route":{"mirrors":["/home/me/lab-mirror"]},"costs":{"recipes":["clean"]}},{"project":"/home/me/study","name":"covid","objects":1,"bytes":98391483,"route":{"mirrors":["/home/me/lab-mirror"]},"costs":{"recipes":["clean"]}}],"kept":[{"project":"/home/me/study","name":"adult","objects":1,"bytes":3974305,"reason":"damaged","mirror":"/home/me/lab-mirror"}]}
-```
-
 ## verify
 
 1. hash every cached file again.
@@ -234,7 +173,6 @@ verification does not check copies in `data/`. after it finds changed bytes, run
 | the folder `FETCHLOOM_CACHE` or the `cache` setting names is missing, so gc or verify has no cache to work on | 50, `local.io`; nothing is made |
 | gc could not acquire its exclusive cache lock | 50, `local.io`; nothing is removed |
 | gc could not remove or inspect a cleanup path | 50, `local.io`, even after other removals succeeded |
-| `gc --inputs` had something to free and nobody said yes, or the answer was no | 1, `unconfirmed`; nothing is removed |
 | interrupted work | 130 |
 
 [exit codes](../reference/exit-codes.md) lists usage and other local failures.

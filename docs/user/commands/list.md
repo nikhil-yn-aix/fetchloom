@@ -28,9 +28,9 @@ tiny                                  zenodo:1                    not locked yet
 
 a wider terminal shows each reference whole and `data/small/tiny`, the one folder that is not the usual one. a name too long to stand beside its size takes a line of its own, whole, with the size and the folder below it. a script reading `list` through a pipe, or a coding agent, always gets one line per dataset.
 
-a dataset without a lock entry says it is not locked yet. a [recipe](../guides/recipes.md) shows what it is made from in place of a reference, and says it is not built yet until data.lock pins its result. a dataset whose file list data.lock names and `data.lock.d` lacks says `waiting for its file list`, with a warning that says how to get it back, as [big datasets](../reference/data-lock.md#big-datasets) says. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) shows `not placed` in place of its folder. counts and sizes are of the files a dataset puts in its folder: an archive counts as the files it unpacked to here, less those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, and as itself until a sync unpacks it. a stale lock can still supply these values; [lock --check](lock.md) checks the lock and [status](status.md) the placed files.
+a dataset without a lock entry says it is not locked yet. a dataset whose file list data.lock names and `data.lock.d` lacks says `waiting for its file list`, with a warning that says how to get it back, as [big datasets](../reference/data-lock.md#big-datasets) says. counts and sizes are of the files a dataset puts in its folder: an archive counts as the files it unpacked to here, less those a [members table](../reference/data-toml.md#files-inside-archives) leaves out, and as itself until a sync unpacks it. a stale lock can still supply these values; [lock --check](lock.md) checks the lock and [status](status.md) the placed files.
 
-with a name, `list` prints those files on stdout, one per line: the path inside the dataset folder, then its size, the sizes lined up on the right. at a terminal, a line on stderr comes first that names the dataset with its reference, or what a recipe makes it from, its title, how many files and bytes it holds, and its license and DOI when the lock has them:
+with a name, `list` prints those files on stdout, one per line: the path inside the dataset folder, then its size, the sizes lined up on the right. at a terminal, a line on stderr comes first that names the dataset with its reference, its title, how many files and bytes it holds, and its license and DOI when the lock has them:
 
 ```text
   iris · hf:datasets/scikit-learn/iris · 3 files · 16.6 KiB · license cc0-1.0
@@ -39,9 +39,9 @@ README.md         1.6 KiB
 database.sqlite  10.0 KiB
 ```
 
-a dataset without a lock entry prints no files. it shows as `Unlocked`, in the warning color, with `fetchloom sync` to pin it, or as `Unbuilt` for a recipe, with `fetchloom build <name>` to make it, as [status](status.md) shows them.
+a dataset without a lock entry prints no files. it shows as `Unlocked`, in the warning color, with `fetchloom sync` to pin it, as [status](status.md) shows it.
 
-JSON returns `result.datasets`, with each dataset's `name`, `ref`, `from`, `resolved`, `files`, `bytes`, `folder`, `placed`, `title`, `license`, which keeps a creative commons license's link as data.lock records it, `doi`, `access` and `locked_files`, each locked file's `path`, `size`, `sha256` and `url`; [JSON output](../reference/json-output.md#command-results) gives each field. `access` says who may read the data, as its source said when it was pinned: `public`, `login` for an account, `terms` for accepted terms, or `unknown`. it is a hint before sharing the files, not a license check. `url` is null for a recipe's result and for a link holding a space or a control character, which is never shown.
+JSON returns `result.datasets`, with each dataset's `name`, `ref`, `resolved`, `files`, `bytes`, `folder`, `title`, `license`, which keeps a creative commons license's link as data.lock records it, `doi`, `access` and `locked_files`, each locked file's `path`, `size`, `sha256` and `url`; [JSON output](../reference/json-output.md#command-results) gives each field. `access` says who may read the data, as its source said when it was pinned: `public`, `login` for an account, `terms` for accepted terms, or `unknown`. it is a hint before sharing the files, not a license check. `url` is null for a link holding a space or a control character, which is never shown.
 
 ## exit codes
 

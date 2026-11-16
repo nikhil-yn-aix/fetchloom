@@ -124,10 +124,8 @@ pub(super) fn pinned(
     listing: &Listing,
     (shown, typed): (&str, &str),
 ) -> Result<Stated, Error> {
-    let Some(source) = entry.source() else {
-        return Err(refused_path(typed));
-    };
-    let kept = engine::filter(shown, entry, source, listing)?;
+    let kept = engine::filter(shown, entry, listing)?;
+    let source = &entry.source;
     let unstated: Vec<&str> = kept
         .iter()
         .filter(|remote| stated(remote).is_none())
@@ -226,7 +224,6 @@ fn with(old: Option<Lock>, stated: Stated) -> Lock {
     let mut lock = old.unwrap_or_default();
     let name = stated.name().to_owned();
     lock.datasets.retain(|locked| locked.name != name);
-    lock.derived.retain(|result| result.name != name);
     lock.stated.retain(|other| other.name() != name);
     lock.stated.push(stated);
     lock.stated.sort_by(|a, b| a.name().cmp(b.name()));

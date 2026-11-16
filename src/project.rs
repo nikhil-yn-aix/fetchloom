@@ -74,9 +74,7 @@ struct Owner {
 }
 
 /// the commands that hold a project, the only ones an owner record names.
-const HOLDING: [&str; 8] = [
-    "add", "build", "drop", "exclude", "lock", "path", "remove", "sync",
-];
+const HOLDING: [&str; 7] = ["add", "drop", "exclude", "lock", "path", "remove", "sync"];
 
 /// the systems fetchloom is built for, which an owner record names besides this one.
 const SYSTEMS: [&str; 3] = ["linux", "macos", "windows"];
@@ -489,9 +487,8 @@ impl Project {
 
     /// refuses data.lock's new text `bytes` when it drops the pin of a dataset that waits for its
     /// file list, one data.lock names and data.lock.d lacks, while data.toml still has it, or pins
-    /// a fetched one by another list: only that list, once it is back, says what it pins. a
-    /// recipe's result only a build pins again. every writer keeps such a pin as it was read, so
-    /// this stops only a mistake.
+    /// it by another list: only that list, once it is back, says what it pins. every writer keeps
+    /// such a pin as it was read, so this stops only a mistake.
     fn keeps_waiting(&self, bytes: &[u8]) -> Result<(), Error> {
         let Ok(old) = fs::read_to_string(self.root.join(lock::FILE)) else {
             return Ok(());
@@ -502,17 +499,17 @@ impl Project {
         }
         let pinned = lock::listed(&String::from_utf8_lossy(bytes));
         let asked = self.manifest().ok().map(|(_, manifest)| manifest.datasets);
-        let lost = waiting.iter().find(|(waiting, part, made)| {
+        let lost = waiting.iter().find(|(waiting, part)| {
             let kept = pinned
                 .iter()
-                .any(|(name, parts)| name == waiting && (*made || parts.contains(part)));
+                .any(|(name, parts)| name == waiting && parts.contains(part));
             !kept
                 && asked
                     .as_ref()
                     .is_none_or(|asked| asked.contains_key(waiting))
         });
         match lost {
-            Some((name, part, made)) => Err(lock::lists::not_there(name, part, *made)),
+            Some((name, part)) => Err(lock::lists::not_there(name, part)),
             None => Ok(()),
         }
     }
@@ -520,7 +517,7 @@ impl Project {
     /// writes the parts of `lock`'s file lists not yet beside data.lock, returning their paths
     /// below the project. a part of a list data.lock on disk names stays as it is; any other file
     /// under a part's name is written over unless it holds that part, as a clone can plant one for
-    /// the result a recipe will make. refused, even with nothing to write, when data.lock.d is a
+    /// the list a sync will write. refused, even with nothing to write, when data.lock.d is a
     /// link or a file, and before any part is written when a list would hold a path or link
     /// longer than a list keeps.
     pub(crate) fn write_lists(&self, lock: &Lock) -> Result<Vec<String>, Error> {
@@ -2733,50 +2730,37 @@ mod tests {
         );
     }
 
-    /// while data.lock names a list data.lock.d lacks, it is written only with that pin: a fetched
-    /// one by the same list, a recipe's result by any, which only a build makes, unless data.toml
-    /// no longer has the dataset.
+    /// while data.lock names a list data.lock.d lacks, it is written only with that pin, by the same
+    /// list, unless data.toml no longer has the dataset.
     #[test]
     fn a_write_never_drops_or_moves_the_pin_of_a_dataset_that_waits() {
         let root = tempfile::tempdir().unwrap();
         let project = Project {
             root: root.path().to_path_buf(),
         };
-        let pinned = |name: &str, list: char, made: bool| {
-            let head = if made {
-                format!(
-                    "from = []\nrun = [\"make\"]\ncode = []\nkey = \"sha256:{}\"\nlocked = \"2026-10-27T17:30:00Z\"\ntree = \"sha256:{}\"\n",
-                    "1".repeat(64),
-                    "2".repeat(64)
-                )
-            } else {
-                "ref = \"zenodo:3608990\"\nspec = \"sha256:11\"\nresolved = \"zenodo:3608990\"\nlocked = \"2026-10-27T17:30:00Z\"\n".to_owned()
-            };
+        let pinned = |name: &str, list: char| {
             format!(
-                "version = 1\n\n[[dataset]]\nname = \"{name}\"\n{head}files_in = [\"data.lock.d/{name}.{}.tsv.zst\"]\nfile_count = 2\nfile_bytes = 9\nfiles_sha256 = \"sha256:{}\"\n",
+                "version = 1\n\n[[dataset]]\nname = \"{name}\"\nref = \"zenodo:3608990\"\nspec = \"sha256:11\"\nresolved = \"zenodo:3608990\"\nlocked = \"2026-10-27T17:30:00Z\"\nfiles_in = [\"data.lock.d/{name}.{}.tsv.zst\"]\nfile_count = 2\nfile_bytes = 9\nfiles_sha256 = \"sha256:{}\"\n",
                 list.to_string().repeat(12),
                 list.to_string().repeat(64)
             )
         };
         let lock = root.path().join(lock::FILE);
-        for made in [false, true] {
-            fs::write(&lock, pinned("iris", 'a', made)).unwrap();
-            for (text, kept) in [
-                ("version = 1\n".to_owned(), false),
-                (pinned("other", 'a', made), false),
-                (pinned("iris", 'b', made), made),
-                (pinned("iris", 'a', made), true),
-            ] {
-                let written = project.write(lock::FILE, text.as_bytes());
-                assert_eq!(written.is_ok(), kept, "{made} {text}");
-                if !kept {
-                    let error = written.unwrap_err();
-                    assert!(error.message.contains("the file list of iris"), "{error:?}");
-                }
+        fs::write(&lock, pinned("iris", 'a')).unwrap();
+        for (text, kept) in [
+            ("version = 1\n".to_owned(), false),
+            (pinned("other", 'a'), false),
+            (pinned("iris", 'b'), false),
+            (pinned("iris", 'a'), true),
+        ] {
+            let written = project.write(lock::FILE, text.as_bytes());
+            assert_eq!(written.is_ok(), kept, "{text}");
+            if !kept {
+                let error = written.unwrap_err();
+                assert!(error.message.contains("the file list of iris"), "{error:?}");
             }
-            fs::write(root.path().join(manifest::FILE), "").unwrap();
-            project.write(lock::FILE, b"version = 1\n").unwrap();
-            fs::remove_file(root.path().join(manifest::FILE)).unwrap();
         }
+        fs::write(root.path().join(manifest::FILE), "").unwrap();
+        project.write(lock::FILE, b"version = 1\n").unwrap();
     }
 }

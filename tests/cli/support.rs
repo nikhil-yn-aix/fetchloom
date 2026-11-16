@@ -30,7 +30,7 @@ pub(crate) use command::Fetchloom;
 pub(crate) use links::link_folder;
 pub(crate) use paths::workspace;
 pub(crate) use ports::Refusing;
-pub(crate) use programs::{executable, recipe_step};
+pub(crate) use programs::executable;
 pub(crate) use running::Running;
 pub(crate) use s3::S3;
 
@@ -258,9 +258,6 @@ impl Sandbox {
             // no test asks this machine's own google metadata server; one that wants a stand-in
             // names it
             .env("FETCHLOOM_TEST_GOOGLE_METADATA", "none")
-            // a build's floor would follow the free space of the disk the tests run on; a test
-            // of the floor sets its own
-            .env("FETCHLOOM_BUILD_FLOOR", "1B")
             .env("AWS_CONFIG_FILE", self.root.join("no-aws-config"))
             .env(
                 "AWS_SHARED_CREDENTIALS_FILE",
@@ -493,6 +490,12 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// the MD5 of `bytes` in hex, as an S3 `ETag` or a repository's listing states it.
+/// the cached object holding `bytes`, in the cache at `cache`.
+pub(crate) fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
+    let hex = sha256_hex(bytes);
+    cache.join("objects").join(&hex[..2]).join(&hex[2..])
+}
+
 pub(crate) fn md5_hex(bytes: &[u8]) -> String {
     use md5::Digest as _;
     hex(&md5::Md5::digest(bytes))

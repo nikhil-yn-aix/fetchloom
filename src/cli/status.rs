@@ -10,19 +10,14 @@ use serde::Serialize;
 use super::Context;
 use super::sync::disk::{Blocker, Entry, Survey};
 use super::sync::{Scope, place};
-use crate::build::compare;
-use crate::cache::{Cache, Member};
+use crate::cache::Cache;
 use crate::digest::{self, Sha256};
 use crate::error::Error;
-use crate::mirror::{Location, Mirrors};
 use crate::output::{Output, Warning};
 use crate::plan;
-use crate::project::lock::archives::{self, Pinned};
-use crate::project::lock::{Lock, Locked, LockedFile, Waiting};
-use crate::project::manifest::{Manifest, Members};
-use crate::project::state::Candidate;
+use crate::project::lock::{Lock, LockedFile, Waiting};
+use crate::project::manifest::Manifest;
 use crate::project::{Project, native};
-use crate::recipe;
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
@@ -36,7 +31,7 @@ const SHOWN: usize = 20;
 #[derive(Default, Serialize)]
 pub(super) struct Status {
     project: PathBuf,
-    /// datasets data.toml changed since data.lock was written, and stale recipes.
+    /// datasets data.toml changed since data.lock was written.
     unlocked: Vec<String>,
     /// datasets still in data.lock whose entries were removed from data.toml.
     removed: Vec<String>,
@@ -67,17 +62,11 @@ pub(super) struct Status {
     unneeded: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
-    /// recipes whose pinned result lacks files here that no cache or folder mirror holds, so only
-    /// `fetchloom build` makes it; their files are in no other list.
-    unbuilt: Vec<String>,
-    /// datasets data.toml keeps out of the data folder with `place = false`.
-    unplaced: Vec<String>,
     /// datasets `fetchloom drop` freed on this machine, which a plain sync leaves out.
     dropped: Vec<String>,
-    /// those of `dropped` no source gives back, recipes' results and imports, with whether each
-    /// is a result, which a build makes again.
+    /// those of `dropped` no source gives back: imports.
     #[serde(skip)]
-    dropped_owned: HashMap<String, bool>,
+    dropped_owned: HashSet<String>,
     /// those of `dropped` whose drop was cut short before it freed what the cache holds of them.
     #[serde(skip)]
     dropped_unfreed: HashSet<String>,
@@ -89,9 +78,6 @@ pub(super) struct Status {
     /// cache links an edit changed, here or in another project, which `sync` puts back, and copies
     /// only hashing finds, which `sync --verify` puts back.
     damaged: Vec<String>,
-    /// recipes with a rebuild that differs from data.lock kept, which `fetchloom build --accept`
-    /// pins, each with where its files that differ are.
-    candidates: Vec<Kept>,
     /// what a sync would download for the files it places, with about how long it takes.
     to_download: crate::net::estimate::Total,
     /// with `--sources`, whether a mirror or source still serves each file data.lock pins.
@@ -125,58 +111,26 @@ pub(super) struct Status {
     /// outdated files that are links to the cache's copy someone made writable.
     #[serde(skip)]
     unsealed: HashSet<String>,
-    /// recipes among `unlocked` with what moved since each was built, which only a build fixes.
-    #[serde(skip)]
-    building: BTreeMap<String, Vec<recipe::Change>>,
     /// the datasets among `unlocked` that data.lock pins under another name data.toml does not
     /// have, which a sync carries over, each with that name.
     #[serde(skip)]
     renamed: BTreeMap<String, String>,
     /// the datasets among `unlocked` that wait for their file list, by name, which a commit of
-    /// data.lock.d or a build brings back.
+    /// data.lock.d brings back.
     #[serde(skip)]
     waiting: BTreeMap<String, Waiting>,
-    /// the fetched datasets each of `unbuilt` is made from that the cache lacks files of, which
-    /// building it reads first.
-    #[serde(skip)]
-    lacking: BTreeMap<String, Vec<String>>,
-    /// the objects of the files in place with the bytes data.lock pins there, which a sync or a
-    /// build takes into the cache from the data folder when it lacks them.
+    /// the objects of the files in place with the bytes data.lock pins there, which a sync takes
+    /// into the cache from the data folder when it lacks them.
     #[serde(skip)]
     holding: HashSet<Sha256>,
-    /// of `unneeded`, the files of each dataset of `unplaced`, which an earlier sync placed and the
-    /// next one retires, told in its line rather than one by one, with its folder.
+    /// of `unneeded`, the files of each dataset of `dropped` that a drop cut short left, which the
+    /// next drop retires, told in its line rather than one by one, with its folder.
     #[serde(skip)]
     retiring: BTreeMap<String, (String, Vec<String>)>,
     /// of `missing`, those in a folder that holds no file now, as one deleted whole, with that
     /// folder, so a person at a terminal reads the folder once.
     #[serde(skip)]
     gone: HashMap<String, String>,
-}
-
-/// a rebuild a build kept of a recipe, whose files differ from what data.lock pins for its key.
-#[derive(Serialize)]
-struct Kept {
-    name: String,
-    /// the tree of its files, `sha256:` and its hash.
-    tree: String,
-    /// whether it came from another recipe or pin than data.lock has now, as after a checkout of
-    /// another commit, so `build --accept` refuses it.
-    stale: bool,
-    /// each file that differs from data.lock, by path: changed ones, then missing, then extra.
-    files: Vec<Differing>,
-}
-
-/// a file of a kept rebuild that differs from data.lock, with the cache files to compare.
-#[derive(Serialize)]
-struct Differing {
-    path: String,
-    /// `changed`, `missing` from the rebuild, or `extra`, made by the rebuild alone.
-    difference: &'static str,
-    /// the cache file holding the rebuild's bytes, unless it is missing or the cache lost it.
-    file: Option<PathBuf>,
-    /// the cache file holding the bytes data.lock pins, unless it is extra or the cache lacks it.
-    pinned: Option<PathBuf>,
 }
 
 /// `status`, hashing every placed file for `verify`, as `--verify` asks, asking each mirror and
@@ -197,26 +151,20 @@ pub(super) fn run(
         &project,
         context.threads,
         &context.stop,
-        &context.mirrors.mirrors,
         verify.then_some(&context.output),
     )?;
     let downloads = super::fetch::askable(context, std::mem::take(&mut status.downloads));
     status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
-    warn_git(output, &project, &manifest, lock.as_deref());
+    warn_git(output, &project, lock.as_deref());
     let waiting: Vec<Waiting> = status.waiting.values().cloned().collect();
     super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
     list(output, &status);
     if sum_up(output, &status) {
         let total = &status.to_download;
         super::fetch::tell_would(output, &units::count(total.files, "file", "files"), total);
-        // a sync would pin what the sources serve now, which a clone may not want; a project of
-        // recipes alone has no source, and the build hint below is its way on
-        let fetched = manifest
-            .datasets
-            .values()
-            .any(|entry| entry.recipe().is_none());
-        if status.lockless && fetched {
+        // a sync would pin what the sources serve now, which a clone may not want
+        if status.lockless && !manifest.datasets.is_empty() {
             output.hint(&format!(
                 "nothing pins the files' bytes yet: {}",
                 super::project::unpinned()
@@ -243,16 +191,6 @@ pub(super) fn run(
                 super::project::command("sync --force")
             ));
         }
-        if !status.building.is_empty() {
-            output.hint(&format!(
-                "`{}` shows the commands that would build them",
-                super::project::command("build --dry-run")
-            ));
-        }
-        hint_unbuilt(output, &status);
-    }
-    for kept in status.candidates.iter().filter(|kept| kept.stale) {
-        output.hint(&super::build::again(&kept.name));
     }
     if status.unfinished > 0 {
         let them = if status.unfinished == 1 { "it" } else { "them" };
@@ -264,12 +202,6 @@ pub(super) fn run(
                 "unfinished copies"
             ),
             super::project::command("sync")
-        ));
-    }
-    if !status.candidates.is_empty() && !output.shows_details() {
-        output.hint(&format!(
-            "`{}` lists where the files of each kept rebuild that differ from data.lock are",
-            super::project::command("status -v")
         ));
     }
     if sources && !status.lockless {
@@ -294,53 +226,11 @@ fn checked(status: &Status, sources: bool) -> Result<(), Error> {
     }
 }
 
-/// how to get each recipe's result data.lock pins that is not on this machine: a build, unless a
-/// build here already made other files.
-fn hint_unbuilt(output: &Output, status: &Status) {
-    // a build that made other files than the pins would make them again
-    let (differed, unbuilt): (Vec<&str>, Vec<&str>) =
-        status.unbuilt.iter().map(String::as_str).partition(|name| {
-            status
-                .candidates
-                .iter()
-                .any(|kept| kept.name == *name && !kept.stale)
-        });
-    match unbuilt.as_slice() {
-        [] => {}
-        [name] => output.hint(&format!(
-            "`{}` makes it on this machine",
-            super::project::command(&format!("build {name}"))
-        )),
-        names => output.hint(&format!(
-            "`{}` makes them on this machine",
-            super::project::command(&format!("build {}", names.join(" ")))
-        )),
-    }
-    if !differed.is_empty() {
-        let (them, rebuild) = if differed.len() == 1 {
-            ("it", "the rebuild")
-        } else {
-            ("them", "the rebuilds")
-        };
-        output.hint(&format!(
-            "a build here made other files than data.lock pins for {}: build {them} where the programs and libraries match the ones that made the pins, sync from a mirror that holds them, or pin {rebuild} with `{}`",
-            units::listed(&differed, "and"),
-            super::project::command(&format!("build --accept {}", differed.join(" ")))
-        ));
-    }
-}
-
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
-    let (status, manifest, lock) = check(
-        project,
-        context.threads,
-        &context.stop,
-        &context.mirrors.mirrors,
-        None,
-    )?;
+    let (status, manifest, lock) = check(project, context.threads, &context.stop, None)?;
     let output = &context.output;
-    warn_git(output, project, &manifest, lock.as_deref());
+    warn_git(output, project, lock.as_deref());
     if !sum_up(output, &status) {
         return Ok(status);
     }
@@ -357,12 +247,11 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     Ok(status)
 }
 
-/// warns of the files a commit would leave out that a clone needs: lists data.lock names and code
-/// recipes take in, and of lists data.lock no longer names, which a commit should not take.
-fn warn_git(output: &Output, project: &Project, manifest: &Manifest, lock: Option<&str>) {
+/// warns of the files a commit would leave out that a clone needs, the lists data.lock names,
+/// and of lists data.lock no longer names, which a commit should not take.
+fn warn_git(output: &Output, project: &Project, lock: Option<&str>) {
     warn_untracked(output, project);
     warn_unnamed(output, project, lock);
-    super::project::warn_recipe_code(output, project, manifest);
 }
 
 /// the most lists a warning about lists nothing reads names in its command; `-v` names each.
@@ -488,17 +377,14 @@ fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
         .datasets
         .iter()
         .filter(|(name, entry)| {
-            entry.source().is_some()
-                && lock
-                    .get(name)
-                    .or(lock.stated(name).map(|stated| &stated.pin))
-                    .is_none_or(|locked| locked.drift(entry).is_some())
+            lock.get(name)
+                .or(lock.stated(name).map(|stated| &stated.pin))
+                .is_none_or(|locked| locked.drift(entry).is_some())
         })
         .map(|(name, _)| name.clone())
         .collect();
     let names = lock.datasets.iter().map(|dataset| &dataset.name);
     let removed = names
-        .chain(lock.derived.iter().map(|result| &result.name))
         .chain(lock.stated.iter().map(|stated| &stated.pin.name))
         .filter(|name| !manifest.datasets.contains_key(*name))
         .cloned()
@@ -532,37 +418,6 @@ fn not_downloaded(
     (names, by)
 }
 
-/// each stale recipe, with what moved since it was built. one that waits for its file list is
-/// not stale: [`waiting`] names it, and so is none whose only change is a dataset it reads that
-/// waits.
-fn unbuilt(
-    project: &Project,
-    manifest: &Manifest,
-    lock: &Lock,
-) -> Result<BTreeMap<String, Vec<recipe::Change>>, Error> {
-    let mut building = BTreeMap::new();
-    for (name, entry) in &manifest.datasets {
-        if entry.recipe().is_none() || lock.waits(name).is_some() {
-            continue;
-        }
-        let changes = recipe::drift(&project.root, manifest, lock, name)?;
-        if !changes.is_empty() && !recipe::only_waiting(&changes) {
-            building.insert(name.clone(), changes);
-        }
-    }
-    Ok(building)
-}
-
-/// the datasets data.toml keeps out of the data folder with `place = false`.
-fn not_placed(manifest: &Manifest) -> Vec<String> {
-    manifest
-        .datasets
-        .iter()
-        .filter(|(_, entry)| !entry.place)
-        .map(|(name, _)| name.clone())
-        .collect()
-}
-
 /// the datasets of data.toml that wait for their file list, by name.
 fn waiting(lock: &Lock, manifest: &Manifest) -> BTreeMap<String, Waiting> {
     lock.still_waiting()
@@ -572,18 +427,12 @@ fn waiting(lock: &Lock, manifest: &Manifest) -> BTreeMap<String, Waiting> {
 }
 
 /// compares the data folder with data.lock by what the disk says, or with `verify` by hashing every
-/// placed file under its bar. a settled project is answered as sync finds it, without a plan, and a
-/// result is looked for in the cache and folder `mirrors` only, as status makes no request. it
+/// placed file under its bar. a settled project is answered as sync finds it, without a plan. it
 /// hands back data.toml and data.lock's text as it read them, so the warnings read neither again.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the disk check and the verify pass share one plan"
-)]
 fn check(
     project: &Project,
     threads: Threads,
     stop: &Stop,
-    mirrors: &Mirrors,
     verify: Option<&Output>,
 ) -> Result<(Status, Manifest, Option<String>), Error> {
     let (text, manifest) = project.manifest()?;
@@ -603,9 +452,8 @@ fn check(
         .map(|rename| (rename.new, rename.old))
         .collect();
     let (mut unlocked, removed) = out_of_date(&manifest, &lock);
-    let building = unbuilt(project, &manifest, &lock)?;
     let waiting = waiting(&lock, &manifest);
-    unlocked.extend(building.keys().chain(waiting.keys()).cloned());
+    unlocked.extend(waiting.keys().cloned());
     unlocked.extend(renamed.keys().cloned());
     unlocked.sort();
     unlocked.dedup();
@@ -618,37 +466,14 @@ fn check(
         removed,
         not_downloaded,
         pinned_by,
-        building,
         renamed,
         waiting,
-        unplaced: not_placed(&manifest),
         ..Status::default()
     };
     let cache = super::peek_cache()?;
     let mut survey = Survey::read(project, &manifest.data_dir, threads, stop)?;
     let manifest = dropped_here(&mut status, &manifest, &survey);
     status.unfinished = survey.leftovers().count();
-    // a renamed recipe's kept rebuild is shown under the name data.toml gives it now
-    survey.state.carry_candidates(&manifest, &lock);
-    status.candidates = survey
-        .state
-        .candidates
-        .iter()
-        .filter(|(name, _)| {
-            manifest
-                .datasets
-                .get(*name)
-                .is_some_and(|entry| entry.recipe().is_some())
-        })
-        .map(|(name, candidate)| {
-            // a step that cannot be read cannot be accepted either
-            let key = recipe::Step::read(&project.root, &manifest, &lock, name)
-                .ok()
-                .flatten()
-                .and_then(|step| step.key());
-            kept(name, candidate, &lock, &cache, key)
-        })
-        .collect();
     // status writes no state, so files hashing found unchanged ask for nothing
     survey.needs_writing = false;
     survey.check_doubted(&project.root, &cache)?;
@@ -670,17 +495,11 @@ fn check(
         .collect();
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &manifest, &survey, &planned)?;
-    // a dataset dropped here whose files a drop cut short left is told in one line, as one with
-    // place = false is
-    let unplaced: HashSet<&str> = status
-        .unplaced
-        .iter()
-        .chain(&status.dropped)
-        .map(String::as_str)
-        .collect();
+    // a dataset dropped here whose files a drop cut short left is told in one line
+    let dropped: HashSet<&str> = status.dropped.iter().map(String::as_str).collect();
     for path in &status.unneeded {
         if let Some(placed) = survey.state.files.get(path)
-            && unplaced.contains(placed.dataset.as_str())
+            && dropped.contains(placed.dataset.as_str())
         {
             let folder = || plan::folder(&manifest, &placed.dataset);
             let (_, paths) = status
@@ -690,7 +509,6 @@ fn check(
             paths.push(path.clone());
         }
     }
-    unbuilt_here(&mut status, &manifest, &lock, &planned, &cache, mirrors);
     status.downloads = downloads(&status, &planned, &cache);
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
@@ -711,11 +529,8 @@ fn dropped_here(status: &mut Status, manifest: &Manifest, survey: &Survey) -> Ma
     status.dropped_owned = status
         .dropped
         .iter()
-        .filter_map(|name| {
-            let entry = &manifest.datasets[name];
-            let result = entry.recipe().is_some();
-            (result || entry.is_import()).then(|| (name.clone(), result))
-        })
+        .filter(|name| manifest.datasets[*name].is_import())
+        .cloned()
         .collect();
     status.dropped_unfreed = status
         .dropped
@@ -750,7 +565,7 @@ fn downloads(
         .iter()
         .filter(|target| placing.contains(target.path.as_str()))
         .filter(|target| lacks(&target.sha256, target.size))
-        .filter_map(plan::Target::file)
+        .map(|target| target.file)
         .chain(planned.unknown.iter().map(|(_, archive)| *archive))
         .filter(|file| !file.url.is_empty() && seen.insert(file.sha256))
         .filter(|file| lacks(&file.sha256, file.size))
@@ -783,172 +598,6 @@ fn gone(
             Some((target.path.clone(), format!("{folder}/")))
         })
         .collect()
-}
-
-/// moves to `unbuilt` each recipe whose result sync would leave out, a missing or outdated file of
-/// it found nowhere: not in the cache, the data folder, a folder mirror or the sync's downloads.
-/// with a web or S3 mirror set nothing moves, as only a sync asks one.
-fn unbuilt_here(
-    status: &mut Status,
-    manifest: &Manifest,
-    lock: &Lock,
-    planned: &plan::Plan<'_>,
-    cache: &Cache,
-    mirrors: &Mirrors,
-) {
-    if mirrors.any_remote() {
-        return;
-    }
-    let folders: Vec<&std::path::Path> = mirrors
-        .list
-        .iter()
-        .filter_map(|location| match location {
-            Location::Folder(root) => Some(root.as_path()),
-            Location::Web(_) | Location::S3(_) => None,
-        })
-        .filter(|root| crate::mirror::folder::probe(root).is_ok())
-        .collect();
-    let placing: HashSet<&str> = status
-        .missing
-        .iter()
-        .chain(&status.outdated)
-        .map(String::as_str)
-        .collect();
-    let needed = || {
-        planned
-            .targets
-            .iter()
-            .filter(|target| placing.contains(target.path.as_str()))
-    };
-    let fetched: HashSet<Sha256> = needed()
-        .filter(|target| target.holder != plan::Holder::Result)
-        .map(|target| target.sha256)
-        .collect();
-    let mut unbuilt: Vec<String> = needed()
-        .filter(|target| {
-            target.holder == plan::Holder::Result
-                && !fetched.contains(&target.sha256)
-                && !status.holding.contains(&target.sha256)
-                && cache.find(&target.sha256, Some(target.size)).is_none()
-                && !folders
-                    .iter()
-                    .any(|root| crate::mirror::folder::has(root, &target.sha256, target.size))
-        })
-        .map(|target| target.dataset.to_owned())
-        .collect();
-    unbuilt.sort();
-    unbuilt.dedup();
-    let left_out: HashSet<&str> = planned
-        .targets
-        .iter()
-        .filter(|target| unbuilt.iter().any(|name| name == target.dataset))
-        .map(|target| target.path.as_str())
-        .collect();
-    status
-        .missing
-        .retain(|path| !left_out.contains(path.as_str()));
-    status
-        .outdated
-        .retain(|path| !left_out.contains(path.as_str()));
-    for name in &unbuilt {
-        let inputs = manifest
-            .datasets
-            .get(name)
-            .and_then(crate::project::manifest::Entry::recipe)
-            .map(|recipe| recipe.from.as_slice())
-            .unwrap_or_default();
-        let lacking: Vec<String> = inputs
-            .iter()
-            .filter(|input| {
-                let Some(source) = manifest.datasets[*input].source() else {
-                    return false;
-                };
-                lock.get(input)
-                    .is_some_and(|locked| !held(cache, &status.holding, locked, &source.members))
-            })
-            .cloned()
-            .collect();
-        if !lacking.is_empty() {
-            status.lacking.insert(name.clone(), lacking);
-        }
-    }
-    status.unbuilt = unbuilt;
-}
-
-/// the kept rebuild `candidate` of the recipe `name`, beside the result `lock` pins for it, and
-/// whether it answers `key`, the recipe's key now.
-fn kept(
-    name: &str,
-    candidate: &Candidate,
-    lock: &Lock,
-    cache: &Cache,
-    key: Option<Sha256>,
-) -> Kept {
-    let pinned = lock
-        .result(name)
-        .map_or(&[][..], |result| result.files.as_slice());
-    let compared = compare::compare(pinned, &candidate.files);
-    let made: HashMap<&str, &Member> = candidate
-        .files
-        .iter()
-        .map(|file| (file.path.as_str(), file))
-        .collect();
-    let was: HashMap<&str, &Member> = pinned
-        .iter()
-        .map(|file| (file.path.as_str(), file))
-        .collect();
-    let held = |files: &HashMap<&str, &Member>, path: &str| {
-        files
-            .get(path)
-            .and_then(|file| cache.find(&file.sha256, Some(file.size)))
-    };
-    let files = [
-        ("changed", &compared.changed),
-        ("missing", &compared.missing),
-        ("extra", &compared.extra),
-    ]
-    .into_iter()
-    .flat_map(|(difference, paths)| paths.iter().map(move |path| (difference, path)))
-    .map(|(difference, path)| Differing {
-        path: path.clone(),
-        difference,
-        file: held(&made, path),
-        pinned: held(&was, path),
-    })
-    .collect();
-    Kept {
-        name: name.to_owned(),
-        tree: format!("sha256:{}", candidate.tree),
-        stale: !candidate.answers(key, lock.result(name)),
-        files,
-    }
-}
-
-/// whether this machine holds every file a build reads of `locked`: each in the cache or in place,
-/// as `holding` says, and an archive whole in the cache or as the recorded files its `members`
-/// table keeps, as gc keeps them.
-fn held(cache: &Cache, holding: &HashSet<Sha256>, locked: &Locked, members: &Members) -> bool {
-    let has = |sha256: &Sha256, size| {
-        cache.find(sha256, Some(size)).is_some() || holding.contains(sha256)
-    };
-    archives::pinned(&locked.files)
-        .iter()
-        .all(|pinned| match pinned {
-            Pinned::File(file) => has(&file.sha256, file.size),
-            Pinned::Archive(archive) => {
-                let filter = members.get(&archive.file.path);
-                archive
-                    .files()
-                    .iter()
-                    .all(|file| cache.find(&file.sha256, Some(file.size)).is_some())
-                    || archive.recorded(cache).is_some_and(|recorded| {
-                        recorded
-                            .iter()
-                            .filter(|member| filter.is_none_or(|filter| filter.keeps(&member.path)))
-                            .all(|member| has(&member.sha256, member.size))
-                    })
-            }
-        })
 }
 
 /// files each target of `planned` into the list of what differs, by how `survey` saw it, and
@@ -1037,7 +686,7 @@ fn compare(
                     &mut status.edited
                 }
             },
-            // sync adopts it, and a build copies its bytes from here as from a placed file
+            // sync adopts it, and takes its bytes into the cache from here as from a placed file
             (Some(seen), None) if place::holds_target(target, seen, &file) => {
                 status.holding.insert(target.sha256);
                 &mut status.adoptable
@@ -1216,8 +865,6 @@ impl Status {
             && self.untracked.is_empty()
             && self.extra.is_empty()
             && self.blocked.is_empty()
-            && self.unbuilt.is_empty()
-            && self.candidates.is_empty()
             && self
                 .damaged
                 .iter()
@@ -1231,7 +878,7 @@ impl Status {
             || self
                 .unlocked
                 .iter()
-                .any(|name| !self.building.contains_key(name) && !self.waiting.contains_key(name))
+                .any(|name| !self.waiting.contains_key(name))
             || !self.missing.is_empty()
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
@@ -1270,24 +917,17 @@ fn tell_dropped(output: &Output, status: &Status) {
             );
             continue;
         }
-        let back = match status.dropped_owned.get(name) {
-            None => format!(
+        // no source gives back an import's files, so only the folder mirror drop found them on can
+        let back = if status.dropped_owned.contains(name) {
+            format!(
+                "`{}` brings it back from a folder mirror that holds it",
+                super::project::command(&format!("sync {name} --mirror <folder>"))
+            )
+        } else {
+            format!(
                 "`{}` brings it back",
                 super::project::command(&format!("sync {name}"))
-            ),
-            // no source gives back its files, so only the folder mirror drop found them on can
-            Some(result) => format!(
-                "`{}` brings it back from a folder mirror that holds it{}",
-                super::project::command(&format!("sync {name} --mirror <folder>")),
-                if *result {
-                    format!(
-                        ", or `{}` makes it again",
-                        super::project::command(&format!("build {name}"))
-                    )
-                } else {
-                    String::new()
-                }
-            ),
+            )
         };
         output.faint_step(
             "Dropped",
@@ -1312,34 +952,6 @@ fn tell_adoptable(output: &Output, status: &Status) {
             super::project::command("sync")
         ),
     );
-}
-
-/// a line for each dataset with `place = false`: faint on stderr once no file of it is left, else a
-/// row saying the next sync removes them.
-fn tell_unplaced(output: &Output, status: &Status) {
-    for name in &status.unplaced {
-        let Some((folder, paths)) = status.retiring.get(name) else {
-            output.faint_step(
-                "Not placed",
-                &format!("{name} · place = false in data.toml"),
-            );
-            continue;
-        };
-        let files = match paths.len() {
-            1 => "its file".to_owned(),
-            count => format!("its {} files", units::grouped(count as u64)),
-        };
-        output.report(
-            "Not placed",
-            &format!(
-                "{name} · place = false in data.toml, so `{}` removes {files} from {folder}",
-                super::project::command("sync")
-            ),
-        );
-        for path in paths {
-            report_detail(output, path);
-        }
-    }
 }
 
 /// a row for each dataset only its source's digests pin, saying which sync downloads it.
@@ -1379,25 +991,14 @@ fn tell_unlocked(output: &Output, status: &Status) {
             );
             continue;
         }
-        // a recipe that moved has its pin; only a build makes it again
-        let (verb, reason) = match (status.building.get(name), status.renamed.get(name)) {
-            (Some(moved), _) if moved.first() == Some(&recipe::Change::Unbuilt) => {
-                ("Unbuilt", super::project::said(moved))
-            }
-            (Some(moved), _) => (
-                "Stale",
-                format!("{} since it was built", super::project::said(moved)),
+        let reason = match status.renamed.get(name) {
+            Some(old) => format!(
+                "data.lock pins it as {old}, which data.toml does not have, and `{}` keeps that pin under this name without asking the source",
+                super::project::command("sync")
             ),
-            (None, Some(old)) => (
-                "Unlocked",
-                format!(
-                    "data.lock pins it as {old}, which data.toml does not have, and `{}` keeps that pin under this name without asking the source",
-                    super::project::command("sync")
-                ),
-            ),
-            (None, None) => ("Unlocked", unpinned.to_owned()),
+            None => unpinned.to_owned(),
         };
-        output.report(verb, &format!("{name} · {reason}"));
+        output.report("Unlocked", &format!("{name} · {reason}"));
     }
 }
 
@@ -1405,7 +1006,6 @@ fn tell_unlocked(output: &Output, status: &Status) {
 /// every file, a terminal one row per folder gone whole and at most `SHOWN` per kind.
 fn list(output: &Output, status: &Status) {
     let shown = output.answer_width().map(|_| SHOWN);
-    tell_unplaced(output, status);
     tell_dropped(output, status);
     tell_adoptable(output, status);
     tell_unlocked(output, status);
@@ -1419,9 +1019,6 @@ fn list(output: &Output, status: &Status) {
         );
     }
     tell_not_downloaded(output, status);
-    for kept in &status.candidates {
-        tell_kept(output, kept, shown);
-    }
     let retiring: HashSet<&String> = status
         .retiring
         .values()
@@ -1479,18 +1076,6 @@ fn list(output: &Output, status: &Status) {
             ),
         );
     }
-    for name in &status.unbuilt {
-        let said = format!("{name} · its pinned result is not on this machine or a mirror");
-        let said = match status.lacking.get(name).map(Vec::as_slice) {
-            None | Some([]) => said,
-            Some([one]) => format!("{said}, nor is {one}, which it is made from"),
-            Some(many) => format!(
-                "{said}, nor are {}, which it is made from",
-                units::listed(many, "and")
-            ),
-        };
-        output.report("Unbuilt", &said);
-    }
     let blocked = status
         .blocked
         .iter()
@@ -1536,46 +1121,6 @@ fn report_more(output: &Output, hidden: u64, detail: bool) {
     }
 }
 
-/// the row of a kept rebuild, and with `-v` each of its files that differs from data.lock with
-/// the cache file that holds the rebuild's bytes, at most `shown` of them.
-fn tell_kept(output: &Output, kept: &Kept, shown: Option<usize>) {
-    let name = &kept.name;
-    if kept.stale {
-        output.report(
-            "Kept",
-            &format!(
-                "{name} · a rebuild from another recipe or pin than data.lock has now, so `{}` refuses it",
-                super::project::command("build --accept")
-            ),
-        );
-    } else {
-        output.report(
-            "Kept",
-            &format!(
-                "{name} · a rebuild that differs from data.lock; `{}` pins it",
-                super::project::command(&format!("build --accept {name}"))
-            ),
-        );
-    }
-    let most = shown.unwrap_or(usize::MAX);
-    for file in kept.files.iter().take(most) {
-        let how = match file.difference {
-            "extra" => "new",
-            how => how,
-        };
-        let path = &file.path;
-        report_detail(
-            output,
-            &match (&file.file, file.difference) {
-                (Some(found), _) => format!("{how} {path}: {}", found.display()),
-                (None, "missing") => format!("{how} {path}"),
-                (None, _) => format!("{how} {path}, which the cache no longer holds"),
-            },
-        );
-    }
-    report_more(output, kept.files.len().saturating_sub(most) as u64, true);
-}
-
 /// a `-v` row under the row before it, on stdout with it.
 fn report_detail(output: &Output, text: &str) {
     if output.shows_details() {
@@ -1589,7 +1134,6 @@ fn sum_up(output: &Output, status: &Status) -> bool {
         + status.unlocked.len()
         + status.not_downloaded.len()
         + status.not_unpacked.len()
-        + status.unbuilt.len()
         + status.blocked.len()
         + status.damaged.len()
         + status
@@ -1707,50 +1251,6 @@ mod tests {
         );
         assert_eq!(value["removed"], serde_json::json!(["old"]));
         assert_eq!(value["edited"], serde_json::json!([]));
-    }
-
-    /// a result whose missing file nothing here holds is unbuilt, its file in no other list,
-    /// unless a web mirror is set, which only sync asks, so the file stays missing.
-    #[test]
-    fn a_web_mirror_keeps_a_result_missing_rather_than_unbuilt() {
-        let folder = tempfile::tempdir().unwrap();
-        let cache = Cache::open(folder.path().join("cache")).unwrap();
-        let manifest = Manifest::parse(
-            "[datasets.raw]\nref = \"https://example.org/raw.csv\"\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\n",
-        )
-        .unwrap();
-        let planned = plan::Plan {
-            targets: vec![plan::Target {
-                dataset: "clean",
-                path: "data/clean/clean.csv".to_owned(),
-                sha256: digest::sha256(b"done"),
-                size: 4,
-                copy: false,
-                holder: plan::Holder::Result,
-            }],
-            unknown: Vec::new(),
-            waiting: Vec::new(),
-        };
-        let web = url::Url::parse("https://lab.example/fetchloom/").unwrap();
-        for (mirrors, unbuilt) in [
-            (Mirrors::default(), true),
-            (Mirrors::new(vec![Location::Web(web)], &[], false), false),
-        ] {
-            let mut status = Status {
-                missing: vec!["data/clean/clean.csv".to_owned()],
-                ..Status::default()
-            };
-            unbuilt_here(
-                &mut status,
-                &manifest,
-                &Lock::default(),
-                &planned,
-                &cache,
-                &mirrors,
-            );
-            assert_eq!(status.unbuilt.len(), usize::from(unbuilt), "{mirrors:?}");
-            assert_eq!(status.missing.is_empty(), unbuilt, "{mirrors:?}");
-        }
     }
 
     /// status reads data.toml once: the warnings after its check use what the check read.

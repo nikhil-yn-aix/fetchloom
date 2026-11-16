@@ -5,7 +5,6 @@
 mod account;
 mod archive;
 mod auth;
-mod build;
 mod cache;
 mod cli;
 mod digest;
@@ -19,7 +18,6 @@ mod output;
 mod place;
 mod plan;
 mod project;
-mod recipe;
 mod settings;
 mod shown;
 mod source;

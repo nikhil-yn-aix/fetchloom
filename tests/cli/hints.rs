@@ -337,47 +337,26 @@ fn a_folder_named_in_no_utf_8_is_withheld_from_commands() -> Result {
     Ok(())
 }
 
-/// a name or a value data.toml holds may spell out a command between backticks, which its help
-/// then quotes: a members key, a variable's value and a from name. the json fix is only ever a
-/// command fetchloom wrote, so a cloned data.toml never chooses what a script runs next.
+/// a name data.toml holds may spell out a command between backticks, which its help then quotes,
+/// as a members key does. the json fix is only ever a command fetchloom wrote, so a cloned
+/// data.toml never chooses what a script runs next.
 #[test]
 fn a_command_spelled_out_in_data_toml_is_never_the_fix() -> Result {
     let sandbox = Sandbox::new()?;
     let spelled = "`fetchloom add --dry-run https://example.org/x.tar`";
-    let cases = [
-        (
-            "status",
-            format!(
-                "[datasets.sounds]\nref = \"https://example.org/v/x.tar`y\"\n\n[datasets.glob.members.'pre{spelled}y']\nexclude = [\"a\"]\n"
-            ),
-        ),
-        (
-            "sync",
-            format!(
-                "[datasets.raw]\nref = \"zenodo:1\"\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{{raw}}\", \"{{out}}\"]\nenv = {{ SEED = ['{spelled}'] }}\n"
-            ),
-        ),
-        (
-            "list",
-            format!(
-                "[datasets.clean]\nfrom = ['x. {spelled}. y']\nrun = [\"python3\", \"clean.py\", '{{x. {spelled}. y}}', \"{{out}}\"]\n"
-            ),
-        ),
-    ];
-    let mut fixes = Vec::new();
-    for (command, manifest) in cases {
-        fs::write(sandbox.work().join("data.toml"), &manifest)?;
-        let output = sandbox.run(&["--json", command])?;
-        let document = json(&output)?;
-        assert_eq!(output.status.code(), Some(50), "{manifest}: {document}");
-        let error = &document["errors"][0];
-        assert!(
-            error["help"].as_str().unwrap_or_default().contains(spelled),
-            "{manifest}: {error}"
-        );
-        fixes.push(error["fix"].clone());
-    }
-    assert_eq!(fixes, [Value::Null, Value::Null, Value::Null]);
+    let manifest = format!(
+        "[datasets.sounds]\nref = \"https://example.org/v/x.tar`y\"\n\n[datasets.glob.members.'pre{spelled}y']\nexclude = [\"a\"]\n"
+    );
+    fs::write(sandbox.work().join("data.toml"), &manifest)?;
+    let output = sandbox.run(&["--json", "status"])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(50), "{manifest}: {document}");
+    let error = &document["errors"][0];
+    assert!(
+        error["help"].as_str().unwrap_or_default().contains(spelled),
+        "{manifest}: {error}"
+    );
+    assert_eq!(error["fix"], Value::Null, "{manifest}: {error}");
     Ok(())
 }
 

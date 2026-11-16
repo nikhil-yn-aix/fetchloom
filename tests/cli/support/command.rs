@@ -48,7 +48,7 @@ impl Fetchloom {
 
     /// another command, `make` builds from this one, such as a shell that runs it, keeping its
     /// debug log and its deadline. its streams are its own.
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     pub(crate) fn through(&self, make: impl FnOnce(&Command) -> Command) -> Fetchloom {
         Fetchloom {
             command: make(&self.command),
@@ -56,13 +56,6 @@ impl Fetchloom {
             deadline: self.deadline,
             set: Streams::default(),
         }
-    }
-
-    /// the command itself, for a setting this type does not offer, such as how windows creates
-    /// the process. it still runs through this type.
-    #[cfg(windows)]
-    pub(crate) fn command_mut(&mut self) -> &mut Command {
-        &mut self.command
     }
 
     /// ends the command after `deadline` in place of [`DEADLINE`].

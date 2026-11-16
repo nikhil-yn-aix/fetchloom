@@ -19,7 +19,7 @@ fetchloom lock [options]
 
 | option | effect |
 |---|---|
-| `--check` | check manifest membership, spec hashes and `extract`, and that each recipe is built as data.lock pins it, without changing anything |
+| `--check` | check manifest membership, spec hashes and `extract`, without changing anything |
 | `--upgrade [name ...]` | resolve named datasets again; with no names, consider every dataset |
 | `-n`, `--dry-run` | list what locking would change without writing `data.lock` or downloading |
 | `--ours <name>` | after a git merge or rebase, keep our side, as git names it, of a dataset the merge needs a choice for; repeat it for more |
@@ -38,15 +38,7 @@ as in `sync`, each dataset pinned for the first time gets a `Pinned` line with w
 
 files already pinned need not be cached. a source that states a SHA-256 and size lets a file be locked without a download, but an archive that unpacks needs its tree hash, so it is downloaded.
 
-a passing `lock --check` ends with `Ok data.lock matches data.toml` on stderr, and with `-q` prints nothing. it checks data.toml against the lock, not the files in the data folder. an empty data.toml passes even without a lock, while `sync --locked` needs `data.lock` to exist. a dataset whose file list `data.lock.d` lacks, as in a clone of a commit that left it out, fails it with `project.invalid`, exit 50, once nothing else is out of date, as it does `sync --locked` and `build --locked`, so a ci run catches the missing `git add data.lock.d`; [big datasets](../reference/data-lock.md#big-datasets) says what every other command does then.
-
-only `fetchloom build` pins a [recipe](../guides/recipes.md), so `lock` keeps a recipe's pin while `data.toml` has the recipe, and drops it with the recipe. `lock --check` fails with `build.needed`, exit 60, when data.lock pins no result for a recipe or something it is made from changed since, after any `lock.outdated` finding. `lock` itself still exits 0 then: it warns about each such recipe as `sync` does, and its last line names the recipes that need a build. stderr after mc's code, c.py, changed, from a real run:
-
-```text
-warning: mc changed since it was built: c.py changed
-  help: data.lock still pins the result built before; run `fetchloom build mc`, then commit data.lock and data.lock.d
-         Ok data.lock pins the fetched datasets as data.toml asks; mc needs a build
-```
+a passing `lock --check` ends with `Ok data.lock matches data.toml` on stderr, and with `-q` prints nothing. it checks data.toml against the lock, not the files in the data folder. an empty data.toml passes even without a lock, while `sync --locked` needs `data.lock` to exist. a dataset whose file list `data.lock.d` lacks, as in a clone of a commit that left it out, fails it with `project.invalid`, exit 50, once nothing else is out of date, as it does `sync --locked`, so a ci run catches the missing `git add data.lock.d`; [big datasets](../reference/data-lock.md#big-datasets) says what every other command does then.
 
 ## upgrading
 
@@ -70,6 +62,5 @@ after an upgrade, run `fetchloom sync` to place the new inputs, and commit `data
 | 1 | `lock.outdated`: a stale lock under `--check`; `unconfirmed`: a merge that needs a choice |
 | 2 | incompatible options, or `--ours` and `--theirs` without conflict lines or naming a dataset that needs no choice |
 | 50 | `project.invalid`: conflict lines out of git's order, a side that does not read, a pin read from the conflict lines that does not read whole, or a `[project]` part that differs on both sides |
-| 60 | `build.needed`: a recipe data.lock does not pin as built now |
 
 resolution, download and local failures use the [shared exit codes](../reference/exit-codes.md).

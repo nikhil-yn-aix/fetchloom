@@ -17,7 +17,7 @@ fetchloom exclude [options] <path>...
 |---|---|
 | `-n`, `--dry-run` | show what would change on disk without changing it |
 
-[global options](global-options.md) also apply. each path is a file or a folder in the data folder, from the current folder or the folder `-C` names, and may name a file you deleted already. a folder stands for every file data.lock places under it. a path is taken as written: `*`, `?` and `[` are part of a name, never a pattern, as [refusals](#refusals) shows. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no files in the data folder, so its files are named by the path they would have there. on windows `\` separates folders too, and names are compared ignoring case.
+[global options](global-options.md) also apply. each path is a file or a folder in the data folder, from the current folder or the folder `-C` names, and may name a file you deleted already. a folder stands for every file data.lock places under it. a path is taken as written: `*`, `?` and `[` are part of a name, never a pattern, as [refusals](#refusals) shows. on windows `\` separates folders too, and names are compared ignoring case.
 
 ## what happens
 
@@ -28,7 +28,7 @@ fetchloom exclude [options] <path>...
     - a file the source lists gets its path in the dataset's `exclude`, and leaves `data.lock` too, rewritten as relocking the same listing would, so `sync --locked` takes it and nothing is resolved again.
     - a folder gets one pattern, such as `pets-v1/images/blurry/**` in a members table or `sub/**` in the dataset's `exclude`, when that pattern leaves out exactly the files under it, and one pattern for each file otherwise. files named one by one, as a shell expands `images/*.png`, get one pattern each, so a file that lands in that folder later stays.
     - leaving out every file an archive keeps leaves out the archive itself, in the dataset's `exclude`, and its members table goes, as does a glob key's table that then matches no archive.
-3. delete the unchanged files it leaves out, as [`remove`](remove.md) does. a file someone changed stays, with a warning. a dataset with `place = false` has none to delete.
+3. delete the unchanged files it leaves out, as [`remove`](remove.md) does. a file someone changed stays, with a warning.
 
 stderr when the curator excludes a broken image from a dataset that is one zip, `pets.zip`:
 
@@ -67,7 +67,7 @@ exclude = ["00000005.wav"]
 
 the `00000005.wav` of `shard-000000.tar` and `shard-000002.tar` stays, and so does the choice of the other shards. edit both tables to change what every shard keeps.
 
-commit `data.toml`, and `data.lock` when exclude changed it; the closing `next:` line names them, and the build first when a [recipe](../guides/recipes.md) is made from the dataset. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees it.
+commit `data.toml`, and `data.lock` when exclude changed it; the closing `next:` line names them. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees it.
 
 an `exclude` written by hand does not reach a file inside an archive. the next sync that lists the source warns about one that names such a file, and gives the exclude that leaves it out:
 
@@ -75,18 +75,6 @@ an `exclude` written by hand does not reach a file inside an archive. the next s
 warning: exclude "data/train.csv" in datasets.dataset names a file inside dataset.zip, which exclude does not reach
   help: run `fetchloom exclude data/dataset/data/train.csv`
 ```
-
-## raw data only recipes read
-
-a dataset with `place = false` keeps its files out of the data folder, but a [recipe](../guides/recipes.md) still reads them, so a bad sample there still reaches the result. name the file by the path it would have in the data folder, which is where it lands in the folder a build's step reads too. stderr when a researcher excludes a black frame from `images`, the zip `shapes.zip` that the recipe `thumbs` reads:
-
-```text
-$ fetchloom exclude data/images/images/img_009.png
-   Excluded 1 file of shapes.zip in data.toml
-  next: run `fetchloom build thumbs`, then commit data.toml, data.lock and data.lock.d
-```
-
-nothing is deleted, since nothing of `images` is placed. data.lock still pins the result `thumbs` made with the file, so the `next:` line names the build, and `fetchloom build --dry-run` says `Would run thumbs · images changed`.
 
 exclude never renames or moves a file. to bring one back, delete its pattern from `data.toml` and run `fetchloom sync`.
 
@@ -101,7 +89,6 @@ each refusal changes nothing.
 | a file left out already | 2, `usage` | nothing: the error names the pattern in data.toml that leaves it out. delete that pattern and run `fetchloom sync` to bring the file back |
 | a file inside an archive this machine never unpacked | 2, `usage` | run `fetchloom sync` first, so fetchloom knows what the archive holds |
 | every file of a dataset | 2, `usage` | run [`fetchloom remove <name>`](remove.md) to take the dataset out |
-| a file of a [recipe's](../guides/recipes.md) result | 2, `usage` | choose its files inside the recipe's step |
 | an exclude that leaves one archive the only file of its dataset | 2, `usage` | a dataset that is one archive places its files straight in its folder, so the archive's files would move. keep the files, or write the exclude by hand and run `fetchloom sync` |
 | a file the source lists, while data.toml changed the dataset since data.lock was written | 1, `lock.outdated` | run `fetchloom sync`, then exclude again |
 | a dataset or a members table written inline | 50, `project.invalid` | write it as a table, as `[datasets.pets]` |

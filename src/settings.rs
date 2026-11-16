@@ -36,7 +36,7 @@ const FILE: &str = "settings.toml";
 /// the most a settings file may hold: its few lines need far less, and a run reads it whole.
 const MOST_BYTES: u64 = 1 << 20;
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 22] = [
+const KEYS: [(&str, &str); 21] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("resources", "FETCHLOOM_RESOURCES"),
     ("jobs", "FETCHLOOM_JOBS"),
@@ -57,7 +57,6 @@ const KEYS: [(&str, &str); 22] = [
     ("mirrors", "FETCHLOOM_MIRRORS"),
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
     ("push_to", "FETCHLOOM_PUSH_TO"),
-    ("build_floor", "FETCHLOOM_BUILD_FLOOR"),
     ("cache_budget", "FETCHLOOM_CACHE_BUDGET"),
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
@@ -85,7 +84,7 @@ const CLEARED: [&str; 8] = [
     "push_to",
 ];
 /// the variables fetchloom reads besides those of the settings file's keys.
-const OTHERS: [&str; 13] = [
+const OTHERS: [&str; 12] = [
     "FETCHLOOM_SETTINGS",
     "FETCHLOOM_NO_CONFIG",
     "FETCHLOOM_OFFLINE",
@@ -94,7 +93,6 @@ const OTHERS: [&str; 13] = [
     "FETCHLOOM_SPLIT",
     "FETCHLOOM_LOG",
     "FETCHLOOM_TRACE",
-    "FETCHLOOM_BUILDING",
     "FETCHLOOM_COLORS",
     "FETCHLOOM_NO_HINTS",
     "FETCHLOOM_ACCESSIBLE",
@@ -489,9 +487,6 @@ pub(crate) struct Settings {
     pub(crate) mirrors_only: Set<bool>,
     /// the folder or S3 bucket `fetchloom push` writes to when `--to` names none.
     pub(crate) push_to: Set<Option<Location>>,
-    /// the least free space a recipe's step may leave on the disk holding the cache, or none for
-    /// the larger of 1 GiB and 1% of that disk.
-    pub(crate) build_floor: Set<Option<u64>>,
     /// the most bytes the cache's files may hold before a run that downloads more asks first, or
     /// none for no budget. nothing is ever deleted to keep within it.
     pub(crate) cache_budget: Set<Option<u64>>,
@@ -522,7 +517,6 @@ impl Settings {
             mirrors: Set::default(Vec::new()),
             mirrors_only: Set::default(false),
             push_to: Set::default(None),
-            build_floor: Set::default(None),
             cache_budget: Set::default(None),
             memory,
             steady_memory: memory.value,
@@ -615,11 +609,6 @@ impl Settings {
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
             push_to: push_target(&given, "push_to")?,
-            build_floor: optional_size(
-                &given,
-                "build_floor",
-                "to use the default, the larger of 1.0 GiB and 1% of the disk holding the cache",
-            )?,
             cache_budget: optional_size(&given, "cache_budget", "for no budget")?,
             memory,
             steady_memory: steady.value,

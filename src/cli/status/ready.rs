@@ -1,5 +1,5 @@
-//! whether the data a run asked for is ready to use: every placed file holds its pinned bytes,
-//! every pinned result is here, and data.lock pins what data.toml asks. `sync --strict` and
+//! whether the data a run asked for is ready to use: every placed file holds its pinned bytes, and
+//! data.lock pins what data.toml asks. `sync --strict` and
 //! `status --check` share it, failing with `data.not_ready`.
 
 use super::Status;
@@ -7,7 +7,6 @@ use crate::cli::project::command;
 use crate::cli::sync::Scope;
 use crate::cli::sync::place::{Placement, Reason};
 use crate::error::{Error, Kind};
-use crate::project::Project;
 use crate::project::lock::Waiting;
 
 /// the most files and datasets the error names; the command's result lists them all.
@@ -30,10 +29,6 @@ pub(in crate::cli) enum Unready {
     Damaged { path: String, hashed: bool },
     /// an archive this machine never unpacked, so none of its files is in place.
     Unpacked(String),
-    /// a recipe whose pinned result is neither on this machine nor in a folder mirror.
-    Unbuilt(String),
-    /// a recipe data.lock does not pin as building it now would make, with what `moved`.
-    Stale { name: String, moved: String },
     /// a fetched dataset data.lock does not pin as data.toml asks, or every dataset when there
     /// is no data.lock.
     Unpinned(Option<String>),
@@ -75,14 +70,6 @@ impl Unready {
                 "{archive} is not unpacked on this machine, so its files are not in place: `{}` unpacks it",
                 command("sync")
             ),
-            Unready::Unbuilt(name) => format!(
-                "the pinned result of {name} is not on this machine or a mirror: `{}` makes it",
-                command(&format!("build {name}"))
-            ),
-            Unready::Stale { name, moved } => format!(
-                "{name} needs a build ({moved}): `{}` makes it",
-                command(&format!("build {name}"))
-            ),
             Unready::Unpinned(Some(name)) => format!(
                 "{name} is not pinned as data.toml asks: `{}` pins and places it",
                 command("sync")
@@ -95,20 +82,10 @@ impl Unready {
                 "there is no data.lock, so nothing pins the files yet: ask whoever shares the project to commit it, or `{}` pins what the sources serve today",
                 command("sync")
             ),
-            Unready::Waiting(waiting) => {
-                let build = if waiting.made() {
-                    format!(
-                        ", or `{}` makes it here",
-                        command(&format!("build {}", waiting.name))
-                    )
-                } else {
-                    String::new()
-                };
-                format!(
-                    "{} waits for its file list {}, which is not there: commit data.lock.d where it was pinned{build}",
-                    waiting.name, waiting.part
-                )
-            }
+            Unready::Waiting(waiting) => format!(
+                "{} waits for its file list {}, which is not there: commit data.lock.d where it was pinned",
+                waiting.name, waiting.part
+            ),
         }
     }
 
@@ -126,8 +103,8 @@ impl Unready {
 }
 
 /// fails with `data.not_ready` naming each of `unready` with what to do; only when a plain sync
-/// makes all of it ready does the help name sync, so it never points at replacing an edit,
-/// repinning or building.
+/// makes all of it ready does the help name sync, so it never points at replacing an edit or
+/// repinning.
 pub(in crate::cli) fn ready(unready: &[Unready]) -> Result<(), Error> {
     if unready.is_empty() {
         return Ok(());
@@ -144,19 +121,17 @@ pub(in crate::cli) fn ready(unready: &[Unready]) -> Result<(), Error> {
 }
 
 /// what keeps the data of `scope` from being ready after a sync left `placement`: the files it kept
-/// but unneeded ones, the results it left out, stale recipes, which only a build changes, and the
-/// datasets of `waiting`, whose file lists are not there.
+/// but unneeded ones, and the datasets of `waiting`, whose file lists are not there.
 pub(in crate::cli) fn after_sync(
-    project: &Project,
     scope: &Scope,
     placement: &Placement,
     waiting: &[Waiting],
-) -> Result<Vec<Unready>, Error> {
+) -> Vec<Unready> {
     let mut unready: Vec<Unready> = placement
         .kept
         .iter()
         .filter_map(|kept| match kept.reason {
-            Reason::Changed | Reason::Shared | Reason::Damaged => Some(Unready::Kept {
+            Reason::Changed | Reason::Shared => Some(Unready::Kept {
                 path: kept.path.clone(),
                 placed: true,
             }),
@@ -168,27 +143,13 @@ pub(in crate::cli) fn after_sync(
             Reason::Unneeded => None,
         })
         .collect();
-    unready.extend(placement.unbuilt.iter().cloned().map(Unready::Unbuilt));
-    let (_, manifest) = project.manifest()?;
-    let recipes = manifest
-        .datasets
-        .iter()
-        .any(|(name, entry)| entry.recipe().is_some() && scope.includes(name));
-    if recipes && let Some(lock) = project.lock()? {
-        for (name, moved) in super::unbuilt(project, &manifest, &lock)? {
-            if scope.includes(&name) {
-                let moved = crate::cli::project::said(&moved);
-                unready.push(Unready::Stale { name, moved });
-            }
-        }
-    }
     unready.extend(
         waiting
             .iter()
             .filter(|waiting| scope.includes(&waiting.name))
             .map(|waiting| Unready::Waiting(Box::new(waiting.clone()))),
     );
-    Ok(unready)
+    unready
 }
 
 /// what keeps the data of every dataset from being ready, as `status` found the data folder.
@@ -201,9 +162,7 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
             status
                 .unlocked
                 .iter()
-                .filter(|name| {
-                    !status.building.contains_key(*name) && !status.waiting.contains_key(*name)
-                })
+                .filter(|name| !status.waiting.contains_key(*name))
                 .map(|name| Unready::Unpinned(Some(name.clone()))),
         );
     }
@@ -222,10 +181,6 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
                 by: status.pinned_by.get(name).copied().unwrap_or("digests"),
             }),
     );
-    unready.extend(status.building.iter().map(|(name, moved)| Unready::Stale {
-        name: name.clone(),
-        moved: crate::cli::project::said(moved),
-    }));
     let each = |paths: &[String], make: fn(String) -> Unready| {
         paths.iter().cloned().map(make).collect::<Vec<_>>()
     };
@@ -240,7 +195,6 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
     }));
     unready.extend(each(&status.outdated, Unready::Outdated));
     unready.extend(each(&status.not_unpacked, Unready::Unpacked));
-    unready.extend(each(&status.unbuilt, Unready::Unbuilt));
     unready.extend(
         status
             .blocked
@@ -259,7 +213,7 @@ mod tests {
     use super::*;
 
     /// the help names sync alone only for what a plain sync puts in place: replacing a file a
-    /// sync keeps is the person's call, and a build runs their code.
+    /// sync keeps is the person's call.
     #[test]
     fn only_what_a_plain_sync_puts_in_place_gets_it_as_the_next_step() {
         let missing = || Unready::Missing("data/iris/iris.csv".to_owned());
@@ -275,7 +229,7 @@ mod tests {
         };
         for unready in [
             vec![edited],
-            vec![missing(), Unready::Unbuilt("clean".to_owned())],
+            vec![missing(), Unready::Blocked("data/x".to_owned())],
         ] {
             let error = ready(&unready).unwrap_err();
             assert_eq!(

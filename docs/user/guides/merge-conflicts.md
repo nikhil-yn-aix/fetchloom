@@ -9,7 +9,6 @@ a git merge that could not combine two changes leaves both sides in `data.toml` 
 - a dataset each side changed its own way stops the merge with `unconfirmed`, exit 1, naming each one, and nothing is written. so does a dataset one side removed while the other pinned other files for it, by a re-import or `lock --upgrade`. those leave its entry in `data.toml` as it was, so git merges `data.toml` by itself and takes the removal, and only `data.lock` holds conflict lines.
 - `--ours <name>` keeps our side of such a dataset and `--theirs <name>` their side, its entry in `data.toml` and its pin alike, each whole as that side's branch has it when git can tell: a removed dataset comes back with its comments and every key of its entry. `--yes` never picks a side.
 - a pin is kept only when it answers the merged entry; an entry no pin answers is left for the next `fetchloom sync` or `fetchloom lock` to pin, with a warning.
-- a [recipe](recipes.md)'s result merges as a pin does: from the side that built it anew, with a choice when both sides built it their own way, and dropped with the recipe. a merged data.toml whose recipes would not read, as when one side's recipe reads a dataset the other side removed, stops the merge, saying why.
 - the same values with other comments on each side keep one side's text, with a warning naming it.
 - `[project]` and comments outside the datasets must agree or have changed on one side only. otherwise the merge stops with `project.invalid`, exit 50, and that part is for a person: keep one side's lines between git's conflict lines, such as one `data_dir`, delete the other side's lines and the conflict lines, then run `fetchloom lock`.
 
@@ -41,7 +40,7 @@ $ fetchloom lock --ours iris --theirs penguins
      Merged data.toml and data.lock · iris from ours, penguins from theirs, 1 the same
 ```
 
-`-v` also shows, after [what the run spends](speed-and-memory.md#see-what-a-run-uses), what each side pins of a dataset that needs a choice: a recipe result's key, how many files and bytes, and up to 3 of the files only that side pins, each with its size and the first 12 digits of its SHA-256. it picks no side. with git, after one branch removed `udata` while the other ran `lock --upgrade udata`, merged either way, on the branch that removed it:
+`-v` also shows, after [what the run spends](speed-and-memory.md#see-what-a-run-uses), what each side pins of a dataset that needs a choice: how many files and bytes, and up to 3 of the files only that side pins, each with its size and the first 12 digits of its SHA-256. it picks no side. with git, after one branch removed `udata` while the other ran `lock --upgrade udata`, merged either way, on the branch that removed it:
 
 ```sh
 $ fetchloom -v lock

@@ -2373,7 +2373,7 @@ fn kept_aside(sandbox: &Sandbox) -> Result<(serde_json::Value, String)> {
     let blocked = sandbox.run(&["sync"])?;
     assert_eq!(blocked.status.code(), Some(0), "{}", text(&blocked.stderr)?);
     // a copy of b.csv reads bytes the cache now refuses, after a.csv made the folder
-    let object = crate::recipes::object(&sandbox.cache(), b"second\n");
+    let object = crate::support::object(&sandbox.cache(), b"second\n");
     fs::set_permissions(&object, fs::Permissions::from_mode(0o000))?;
     let forced = sandbox.run(&["--json", "sync", "--force", "--offline"]);
     fs::set_permissions(&object, fs::Permissions::from_mode(0o444))?;
@@ -2534,7 +2534,7 @@ fn a_file_force_kept_aside_stays_named_when_the_last_state_write_fails() -> Resu
     let blocked = sandbox.run(&["sync"])?;
     assert_eq!(blocked.status.code(), Some(0), "{}", text(&blocked.stderr)?);
     // b.csv cannot be placed, so sub cannot go back once a.csv made the folder
-    let object = crate::recipes::object(&sandbox.cache(), b"second\n");
+    let object = crate::support::object(&sandbox.cache(), b"second\n");
     fs::set_permissions(&object, fs::Permissions::from_mode(0o000))?;
     let own = sandbox.work().join(".fetchloom");
     let release = sandbox.folder("hold")?.join("release");
@@ -3023,7 +3023,7 @@ fn a_failed_replacement_is_placed_later_without_blaming_anyone() -> Result {
         text(&upgraded.stderr)?
     );
     // a copy reads the new bytes, which the cache now refuses
-    let object = crate::recipes::object(&sandbox.cache(), V2);
+    let object = crate::support::object(&sandbox.cache(), V2);
     fs::set_permissions(&object, fs::Permissions::from_mode(0o000))?;
     let failed = sandbox.run(&["sync", "--offline"]);
     fs::set_permissions(&object, fs::Permissions::from_mode(0o444))?;
@@ -3278,7 +3278,7 @@ fn verify_checks_the_cached_bytes_a_fresh_clone_places() -> Result {
     for name in ["data.toml", "data.lock"] {
         fs::copy(sandbox.work().join(name), clone.join(name))?;
     }
-    let object = crate::recipes::object(&sandbox.cache(), V1);
+    let object = crate::support::object(&sandbox.cache(), V1);
     let modified = fs::metadata(&object)?.modified()?;
     let mut changed = V1.to_vec();
     changed[0] = b'S';
@@ -3445,171 +3445,6 @@ fn a_changed_data_dir_leaves_the_old_folder_and_says_so() -> Result {
     );
     assert_eq!(fs::read(work.join("data/iris/my-notes.txt"))?, b"mine\n");
     assert_eq!(fs::read(work.join("inputs/raw/iris/iris.csv"))?, V1);
-    Ok(())
-}
-
-/// sets `place = false` on the dataset `name` in the work folder's data.toml.
-fn unplace(sandbox: &Sandbox, name: &str) -> Result {
-    let manifest = sandbox.work().join("data.toml");
-    let table = format!("[datasets.{name}]\n");
-    let text = fs::read_to_string(&manifest)?;
-    assert!(text.contains(&table), "{text}");
-    fs::write(
-        &manifest,
-        text.replace(&table, &format!("{table}place = false\n")),
-    )?;
-    Ok(())
-}
-
-/// the edit stays with a removed dataset's warning, and the next sync tells neither again.
-#[test]
-fn place_false_retires_unchanged_files_and_keeps_edits() -> Result {
-    let sandbox = Sandbox::new()?;
-    let flowers = sandbox.folder("flowers")?;
-    fs::write(flowers.join("petals.csv"), b"length\n1.4\n")?;
-    fs::write(flowers.join("sepals.csv"), b"length\n5.1\n")?;
-    let added = sandbox.run(&["add", "../flowers"])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    let folder = sandbox.work().join("data").join("flowers");
-    let edited = folder.join("sepals.csv");
-    delete(&edited)?;
-    fs::write(&edited, b"length\n5.1\n4.9\n")?;
-    unplace(&sandbox, "flowers")?;
-
-    let preview = sandbox.run(&["sync", "--dry-run"])?;
-    assert_eq!(preview.status.code(), Some(0), "{}", text(&preview.stderr)?);
-    let stderr = text(&preview.stderr)?;
-    assert!(
-        stderr.contains("Would retire data/flowers · 1 file, since flowers has place = false\n"),
-        "{stderr}"
-    );
-    let output = sandbox.run(&["sync"])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    let stderr = text(&output.stderr)?;
-    assert!(
-        stderr.contains("    Retired data/flowers · 1 file, since flowers has place = false\n"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(
-            "warning: data/flowers/sepals.csv is no longer needed, but it has changed, so it stays\n"
-        ),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("no dataset needs"), "{stderr}");
-    assert!(!folder.join("petals.csv").exists());
-    assert_eq!(fs::read(&edited)?, b"length\n5.1\n4.9\n");
-
-    let again = sandbox.run(&["sync"])?;
-    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
-    let stderr = text(&again.stderr)?;
-    assert!(!stderr.contains("Retired"), "{stderr}");
-    assert!(!stderr.contains("warning"), "{stderr}");
-    Ok(())
-}
-
-/// path refuses the dataset and its files alike, naming the data.toml line that places it.
-#[test]
-fn path_of_an_unplaced_dataset_is_refused() -> Result {
-    let sandbox = Sandbox::new()?;
-    let flowers = sandbox.folder("flowers")?;
-    fs::write(flowers.join("petals.csv"), b"length\n1.4\n")?;
-    let added = sandbox.run(&["add", "../flowers"])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    unplace(&sandbox, "flowers")?;
-    for target in ["flowers", "flowers/petals.csv"] {
-        let output = sandbox.run(&["--json", "path", target])?;
-        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
-        let error = &json(&output)?["errors"][0];
-        assert_eq!(error["kind"], "usage");
-        assert_eq!(
-            error["message"],
-            "flowers has place = false, so it has no folder in data/"
-        );
-        assert_eq!(
-            error["help"],
-            "set place = true on datasets.flowers in data.toml, then run `fetchloom sync flowers`"
-        );
-    }
-    Ok(())
-}
-
-/// an unplaced dataset needs no file, so a sync in a clone with an empty cache downloads nothing.
-#[test]
-fn sync_fetches_nothing_for_a_pinned_unplaced_dataset() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
-    sandbox.allow(&server.url);
-    let added = sandbox.run(&["add", &server.url])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    unplace(&sandbox, "iris")?;
-    let clone = crate::project::clone(&sandbox, "clone")?;
-    let elsewhere = sandbox.folder("another cache")?;
-    for args in [&["sync"][..], &["sync", "--locked"], &["sync", "iris"]] {
-        let output = sandbox
-            .command_in(&clone, args)
-            .env("FETCHLOOM_CACHE", &elsewhere)
-            .output()?;
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{args:?}: {}",
-            text(&output.stderr)?
-        );
-    }
-    assert_eq!(server.requests().len(), 1, "only the add downloaded");
-    assert!(!clone.join("data").join("iris").exists());
-    Ok(())
-}
-
-/// the dataset is not a difference. until a sync retires what it placed, its line says sync
-/// removes those files but keeps the person's notes.
-#[test]
-fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
-    let sandbox = Sandbox::new()?;
-    let flowers = sandbox.folder("flowers")?;
-    fs::write(flowers.join("petals.csv"), b"length\n1.4\n")?;
-    let added = sandbox.run(&["add", "../flowers"])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    let notes = sandbox
-        .work()
-        .join("data")
-        .join("flowers")
-        .join("notes.txt");
-    fs::write(&notes, b"mine\n")?;
-    unplace(&sandbox, "flowers")?;
-    let output = sandbox.run(&["status"])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    let told = text(&output.stdout)?;
-    for line in [
-        " Not placed flowers · place = false in data.toml, so `fetchloom sync` removes its file from data/flowers\n",
-        "      Extra data/flowers/notes.txt\n",
-    ] {
-        assert!(told.contains(line), "{line:?} in\n{told}");
-    }
-    let story = text(&output.stderr)?;
-    let hint =
-        "  hint: `fetchloom sync` removes the files fetchloom placed that no dataset needs now\n";
-    assert!(story.contains(hint), "{hint:?} in\n{story}");
-    assert!(!format!("{told}{story}").contains("petals.csv"), "{told}");
-    let document = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(
-        document["result"]["unplaced"],
-        serde_json::json!(["flowers"])
-    );
-    let synced = sandbox.run(&["sync"])?;
-    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    assert_eq!(fs::read(&notes)?, b"mine\n");
-    fs::remove_file(&notes)?;
-    let told = text(&sandbox.run(&["status"])?.stderr)?;
-    assert!(
-        told.contains(" Not placed flowers · place = false in data.toml\n"),
-        "{told}"
-    );
-    assert!(
-        told.contains("Ok everything matches data.lock by size and time\n"),
-        "{told}"
-    );
     Ok(())
 }
 

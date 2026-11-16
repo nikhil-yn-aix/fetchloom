@@ -99,7 +99,7 @@ fetchloom --json --offline path iris
 
 ## CI cache
 
-[CI](ci.md) keeps the cache between jobs, keyed on `data.lock`, with recipes for github actions and gitlab ci.
+[CI](ci.md) keeps the cache between jobs, keyed on `data.lock`, with examples for github actions and gitlab ci.
 
 ## errors and exit codes
 

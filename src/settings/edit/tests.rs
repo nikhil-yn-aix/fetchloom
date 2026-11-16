@@ -425,7 +425,7 @@ fn changes_at_once_keep_every_key() {
         ("timeout", "60"),
         ("ask_above", "20G"),
         ("cache_budget", "50G"),
-        ("build_floor", "2G"),
+        ("archive_size", "2G"),
         ("memory", "512M"),
         ("most_files", "200000"),
         ("archive_ratio", "100"),

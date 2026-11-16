@@ -58,9 +58,8 @@
 
 | symptom | cause | fix |
 |---|---|---|
-| `warning: data.lock no longer names data.lock.d/clean.450ae405bf79.tsv.zst, so nothing reads it` | a list a build or a big dataset wrote is left after `git checkout` or a reset put an older data.lock back | run the delete or `git rm` its help names; never `git add data.lock.d` before that |
-| `warning: data.lock names data.lock.d/clean.450ae405bf79.tsv.zst, which git does not have` | a build or a big dataset wrote a new list, and `git commit -a` left it out | run `git add data.lock.d`, then commit |
-| `warning: git does not have prep.py, code of clean` | a recipe's code was never added to git, so `git commit -a` left it out | run the `git add` the help names, then commit |
+| `warning: data.lock no longer names data.lock.d/photos.450ae405bf79.tsv.zst, so nothing reads it` | a list a big dataset wrote is left after `git checkout` or a reset put an older data.lock back | run the delete or `git rm` its help names; never `git add data.lock.d` before that |
+| `warning: data.lock names data.lock.d/photos.450ae405bf79.tsv.zst, which git does not have` | a big dataset wrote a new list, and `git commit -a` left it out | run `git add data.lock.d`, then commit |
 
 ### path
 
@@ -80,7 +79,6 @@
 | symptom | cause | fix |
 |---|---|---|
 | `get` data is collected | one-off downloads do not register a project | use a project for inputs whose cache retention matters |
-| `gc --inputs` keeps raw data with `no_copy` or `no_mirror` | the mirror lacks it, or gc was not told of the mirror | run `fetchloom push --inputs <recipe> --to <folder>`, then name that folder with `--mirror` or the `mirrors` setting |
 
 ### push
 

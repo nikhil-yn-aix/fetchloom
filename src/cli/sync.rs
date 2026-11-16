@@ -31,7 +31,6 @@ use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::archives::{self, Archive};
-use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest, Source};
 use crate::project::state::Synced;
@@ -111,9 +110,6 @@ pub(super) struct Loop<'a> {
     /// datasets the command's last lines tell about, whose lock and placement lines wait for `-v`.
     told: BTreeSet<String>,
     pub(super) scope: Scope,
-    /// the datasets the person named, when the scope reaches more, as a build's reaches the
-    /// inputs of the recipes named; a dataset dropped here that they did not name stays dropped.
-    named: Option<BTreeSet<String>>,
     /// whether this run wrote data.lock, after which a cancel no longer leaves all as it was.
     wrote_lock: AtomicBool,
     /// whether a person said yes despite a short disk, which also covers every download's size.
@@ -122,8 +118,6 @@ pub(super) struct Loop<'a> {
     past_budget: AtomicBool,
     /// the run as its questions and warnings name it, as `this sync`.
     run: &'static str,
-    /// the command [`Loop::ready`] readies files for, which its help says to run again.
-    readying: &'static str,
     /// whether placing follows relocking, so the first downloads tell what placing adds.
     places: AtomicBool,
     /// whether relocking downloads the datasets only their sources' digests pin, as a sync does.
@@ -167,12 +161,10 @@ impl<'a> Loop<'a> {
             unlisted: Mutex::default(),
             told: BTreeSet::new(),
             scope: Scope::All,
-            named: None,
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
             past_budget: AtomicBool::new(false),
             run: "this sync",
-            readying: "build",
             places: AtomicBool::new(false),
             fills: false,
             verifies: false,
@@ -196,12 +188,6 @@ impl<'a> Loop<'a> {
     /// says placing follows the next relock, so downloads that learn hashes tell placing's too.
     pub(super) fn placing_next(&self) {
         self.places.store(true, Ordering::Relaxed);
-    }
-
-    /// [`Loop::ready`] readies files for `command`, as `push`, rather than a build.
-    pub(super) fn readying(mut self, command: &'static str) -> Self {
-        self.readying = command;
-        self
     }
 
     /// names the run `run` in its questions and warnings, as `this add`.
@@ -230,19 +216,11 @@ impl<'a> Loop<'a> {
         self
     }
 
-    /// the person named `named` alone of the datasets the scope reaches.
-    pub(super) fn naming(mut self, named: BTreeSet<String>) -> Self {
-        self.named = Some(named);
-        self
-    }
-
-    /// the datasets the person named: those [`Loop::naming`] gave, else the scope's, none for a
-    /// run of every dataset.
+    /// the datasets the person named: the scope's, none for a run of every dataset.
     pub(super) fn named(&self) -> BTreeSet<String> {
-        match (&self.named, &self.scope) {
-            (Some(named), _) => named.clone(),
-            (None, Scope::Only(names)) => names.clone(),
-            (None, Scope::All) => BTreeSet::new(),
+        match &self.scope {
+            Scope::Only(names) => names.clone(),
+            Scope::All => BTreeSet::new(),
         }
     }
 
@@ -333,16 +311,8 @@ impl<'a> Loop<'a> {
         survey.damaged.extend(damaged);
         survey.elsewhere.extend(elsewhere);
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
-        let placing = Placing::from_plan(
-            self.project,
-            manifest,
-            lock,
-            plan,
-            force,
-            &self.scope,
-            survey,
-        )?;
-        // a result whose bytes a download that failed was to bring waits with it
+        let placing = Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
+        // a dataset whose bytes a download that failed was to bring waits with it
         let waiting: BTreeSet<String> = placing
             .short(|digest, size| self.cache.find(digest, Some(size)).is_some())
             .into_iter()
@@ -362,8 +332,7 @@ impl<'a> Loop<'a> {
         let survey = placing.into_survey();
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let scope = Scope::Only(whole.clone());
-        let placing =
-            Placing::from_plan(self.project, manifest, lock, plan, force, &scope, survey)?;
+        let placing = Placing::from_plan(self.project, manifest, plan, force, &scope, survey)?;
         let placement = self.apply(manifest, lock, placing, synced)?;
         Ok(Some(Partial {
             placed: whole.into_iter().collect(),
@@ -383,15 +352,8 @@ impl<'a> Loop<'a> {
         survey: Survey,
     ) -> Result<Placing<'p>, Error> {
         self.warn_doubtful_paths(manifest, &plan);
-        let mut placing = Placing::from_plan(
-            self.project,
-            manifest,
-            lock,
-            plan,
-            force,
-            &self.scope,
-            survey,
-        )?;
+        let mut placing =
+            Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
         if self.verifies {
             placing.check_cached(&self.cache, &self.context.output)?;
@@ -424,10 +386,6 @@ impl<'a> Loop<'a> {
         })
         .await
         .map_err(|error| self.as_left(error))?;
-        self.settle_unbuilt(&mut placing, |digest, size| {
-            self.cache.find(digest, Some(size)).is_some()
-        })
-        .map_err(|error| self.as_left(error))?;
         let (unpacking, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)?
             .into_iter()
@@ -457,44 +415,6 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// leaves out the results `placing` needs that `holds` says the cache lacks, with a warning;
-    /// a run that names one stops first.
-    fn settle_unbuilt(
-        &self,
-        placing: &mut Placing<'_>,
-        holds: impl Fn(&Sha256, u64) -> bool,
-    ) -> Result<(), Error> {
-        placing.keep_changed_links(&holds);
-        let unbuilt = placing.unbuilt(holds);
-        if unbuilt.is_empty() {
-            return Ok(());
-        }
-        if self.scope != Scope::All {
-            return Err(unbuilt_here(&unbuilt));
-        }
-        let (said, them) = match unbuilt.as_slice() {
-            [name] => (
-                format!(
-                    "the pinned result of {name} is not on this machine or a mirror, so it is left out"
-                ),
-                "it",
-            ),
-            many => (
-                format!(
-                    "the pinned results of {} are not on this machine or a mirror, so they are left out",
-                    many.join(", ")
-                ),
-                "them",
-            ),
-        };
-        // a clone gets results only from a mirror, which whoever built them fills
-        self.context
-            .output
-            .warn_with(Warning::BuildLeftOut, &said, &result_route(&unbuilt, them));
-        placing.leave_out(&unbuilt);
-        Ok(())
-    }
-
     /// keeps the exclude patterns of `name` that match no path `listing` names, for placing.
     fn note_unlisted(&self, name: &str, source: &Source, listing: &Listing) {
         self.unlisted
@@ -508,17 +428,6 @@ impl<'a> Loop<'a> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-    }
-
-    /// [`tell_stale`] for the run's scope.
-    pub(super) fn tell_stale(&self, manifest: &Manifest, lock: &Lock) -> Vec<String> {
-        tell_stale(
-            &self.context.output,
-            &self.project.root,
-            manifest,
-            lock,
-            &self.scope,
-        )
     }
 
     /// says of each dataset `new` keeps at the version `before` pinned, though data.toml took that
@@ -540,8 +449,7 @@ impl<'a> Loop<'a> {
                 && manifest
                     .datasets
                     .get(&dataset.name)
-                    .and_then(Entry::source)
-                    .is_some_and(|source| keeps_version(old, source));
+                    .is_some_and(|entry| keeps_version(old, &entry.source));
             if kept {
                 self.context.output.hint(&format!(
                     "data.toml names no version of {}, so it stays at {}, as data.lock pins it; `{}` takes the newest",
@@ -553,9 +461,9 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// puts in the cache every file of the fetched datasets `names`, as a build's private copy
-    /// needs: from the data folder, else the mirrors, else their sources, unpacking an archive
-    /// again for a missing file. nothing in the project changes.
+    /// puts in the cache every file of the fetched datasets `names`, as a push needs: from the
+    /// data folder, else the mirrors, else their sources, unpacking an archive again for a missing
+    /// file. nothing in the project changes.
     pub(super) async fn ready(
         &self,
         manifest: &Manifest,
@@ -569,11 +477,10 @@ impl<'a> Loop<'a> {
                 .filter(|locked| names.contains(locked.name.as_str()))
                 .cloned()
                 .collect(),
-            derived: Vec::new(),
             stated: Vec::new(),
             waiting: Vec::new(),
         };
-        let planned = plan::inputs(manifest, &sources, &self.cache)?;
+        let planned = plan::from_cache(manifest, &sources, &self.cache)?;
         let unknown: Vec<(String, &LockedFile)> = planned
             .unknown
             .iter()
@@ -586,7 +493,7 @@ impl<'a> Loop<'a> {
                 .map_err(|error| self.as_left(error))?;
             self.unpack_locked(manifest, &sources, &unknown).await?;
         }
-        let planned = plan::inputs(manifest, &sources, &self.cache)?;
+        let planned = plan::from_cache(manifest, &sources, &self.cache)?;
         let lacking = || -> Vec<&plan::Target> {
             planned
                 .targets
@@ -614,7 +521,7 @@ impl<'a> Loop<'a> {
         let mut seen = HashSet::new();
         let (unpacking, files): (Vec<_>, Vec<_>) = lacking()
             .into_iter()
-            .filter_map(|target| Some((target.dataset.to_owned(), target.file()?)))
+            .map(|target| (target.dataset.to_owned(), target.file))
             .filter(|(_, file)| seen.insert(file.sha256))
             .partition(|(_, file)| file.unpacks_to.is_some());
         let unpacking = archives::of(&sources, unpacking);
@@ -632,8 +539,7 @@ impl<'a> Loop<'a> {
             let mirrored = !self.context.mirrors.mirrors.list.is_empty();
             return Err(
                 local::imported_elsewhere(dataset, &folder, mirrored).help(format!(
-                    "copy them to {folder} and {} again, or run `{}` where they are",
-                    self.readying,
+                    "copy them to {folder} and push again, or run `{}` where they are",
                     super::project::command(&format!("add <folder> --as {dataset}"))
                 )),
             );
@@ -692,7 +598,6 @@ impl<'a> Loop<'a> {
             mut drafts,
             mut pinned,
             others,
-            results,
             renamed,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
@@ -776,7 +681,7 @@ impl<'a> Loop<'a> {
             locked.timestamp.clone_from(&now);
             locked
         }));
-        let (mut lock, kept) = settled(&others, kept, drafted, results);
+        let (mut lock, kept) = settled(&others, kept, drafted);
         carried.back(&mut lock);
         Ok((
             lock,
@@ -805,7 +710,6 @@ impl<'a> Loop<'a> {
             mut drafts,
             pinned,
             others,
-            results,
             renamed,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
@@ -835,7 +739,7 @@ impl<'a> Loop<'a> {
             locked.timestamp.clone_from(&now);
             drafted.push(locked);
         }
-        let (mut lock, kept) = settled(&others, kept, drafted, results);
+        let (mut lock, kept) = settled(&others, kept, drafted);
         carried.back(&mut lock);
         let before = Before {
             existed,
@@ -873,7 +777,6 @@ impl<'a> Loop<'a> {
             mut others,
             mut drafts,
         } = self.sorted(manifest, old.datasets, upgrade, &mut whole)?;
-        let (results, dropped, moved) = rename::results(manifest, old.derived);
         // a dataset waiting for its list is never resolved: relocking puts its entry back
         let waiting: HashSet<&str> = old
             .waiting
@@ -886,7 +789,7 @@ impl<'a> Loop<'a> {
             .chain(whole.iter().map(|locked| locked.name.as_str()))
             .chain(waiting.iter().copied())
             .collect();
-        let mut renamed = rename::carry(
+        let renamed = rename::carry(
             manifest,
             &self.scope,
             upgrade,
@@ -894,18 +797,14 @@ impl<'a> Loop<'a> {
             &mut kept,
             &mut others,
         );
-        renamed.extend(moved);
         let others = Lock {
             datasets: others,
-            derived: dropped,
             stated: Vec::new(),
             waiting: Vec::new(),
         };
         let mut asks = Vec::new();
         for (name, entry) in &manifest.datasets {
-            let Some(source) = entry.source() else {
-                continue;
-            };
+            let source = &entry.source;
             let is_kept = kept
                 .binary_search_by(|locked| locked.name.as_str().cmp(name))
                 .is_ok();
@@ -928,9 +827,7 @@ impl<'a> Loop<'a> {
         let listings = self.resolve_all(manifest, asks, listed).await?;
         for (name, listing) in listings {
             let entry = &manifest.datasets[&name];
-            let Some(source) = entry.source() else {
-                continue;
-            };
+            let source = &entry.source;
             self.note_unlisted(&name, source, &listing);
             let draft = Draft::new(
                 &name,
@@ -956,7 +853,6 @@ impl<'a> Loop<'a> {
             drafts: drafts.into_iter().map(|(_, draft)| draft).collect(),
             pinned: whole,
             others,
-            results,
             renamed,
         })
     }
@@ -986,22 +882,21 @@ impl<'a> Loop<'a> {
             match manifest.datasets.get(&locked.name) {
                 // an import has no newer version anywhere, so even an upgrade keeps it
                 Some(entry) if !upgrade.includes(&locked.name) || entry.is_import() => {
-                    match (entry.source(), locked.drift(entry)) {
-                        (_, None) => kept.push(locked),
+                    let source = &entry.source;
+                    match locked.drift(entry) {
+                        None => kept.push(locked),
                         // an import's files stand as data.lock pins them, so a switch only
                         // learns what its archives unpack to
-                        (Some(source), Some(Drift::Extract))
-                            if local::is_imported(&source.reference) =>
-                        {
+                        Some(Drift::Extract) if local::is_imported(&source.reference) => {
                             whole.push(draft::switched_import(source, &locked));
                             others.push(locked);
                         }
-                        (Some(source), Some(Drift::Extract)) => {
+                        Some(Drift::Extract) => {
                             let draft = Draft::switched(entry, source, &locked)?;
                             drafts.push((locked.name.clone(), draft));
                             others.push(locked);
                         }
-                        _ => others.push(locked),
+                        Some(Drift::Spec) => others.push(locked),
                     }
                 }
                 _ => others.push(locked),
@@ -1076,15 +971,8 @@ impl<'a> Loop<'a> {
     ) -> Result<Preview, Error> {
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         self.warn_doubtful_paths(manifest, &plan);
-        let mut placing = Placing::from_plan(
-            self.project,
-            manifest,
-            lock,
-            plan,
-            force,
-            &self.scope,
-            survey,
-        )?;
+        let mut placing =
+            Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
         // what the data folder holds a sync takes from there; only that sync hashes it
         let held: HashSet<Sha256> = placing
@@ -1092,13 +980,6 @@ impl<'a> Loop<'a> {
             .into_iter()
             .map(|(digest, _)| digest)
             .collect();
-        // a dry run asks no mirror, so only with none could a result come from nowhere else
-        if self.context.mirrors.mirrors.list.is_empty() {
-            self.settle_unbuilt(&mut placing, |digest, size| {
-                held.contains(digest)
-                    || (!damaged.contains(digest) && self.cache.find(digest, Some(size)).is_some())
-            })?;
-        }
         let mut unpack = Vec::new();
         let wanted = placing
             .unknown()
@@ -1211,7 +1092,7 @@ impl<'a> Loop<'a> {
                 ));
             }
             let entry = &manifest.datasets[&name];
-            let select = entry.source().map_or(&[][..], |source| &source.select);
+            let select = &entry.source.select;
             let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
             // the line itself may hold a secret, so only its place is shown
             parsed
@@ -1221,7 +1102,7 @@ impl<'a> Loop<'a> {
                 asked.push(parsed.reference.to_string());
             }
             let net = self.net.clone();
-            let select = select.to_vec();
+            let select = select.clone();
             tasks.spawn(async move {
                 let listing = parsed.reference.resolve_in(&*net, &select).await;
                 (name, listing)
@@ -1245,13 +1126,9 @@ impl<'a> Loop<'a> {
             })?;
             let listing = listing?;
             // the files the dataset keeps, counted as an add counts them
-            let entry = &manifest.datasets[&name];
-            match entry
-                .source()
-                .map(|source| filter(&name, entry, source, &listing))
-            {
-                Some(Ok(kept)) => tell_kept(&self.context.output, &listing, &kept),
-                _ => tell_resolved(&self.context.output, &listing),
+            match filter(&name, &manifest.datasets[&name], &listing) {
+                Ok(kept) => tell_kept(&self.context.output, &listing, &kept),
+                Err(_) => tell_resolved(&self.context.output, &listing),
             }
             listings.push((name, listing));
         }
@@ -1903,139 +1780,6 @@ impl<'a> Loop<'a> {
     }
 }
 
-/// the datasets a run of `names` reads from data.lock: them, and the datasets each recipe among
-/// them reads, and theirs in turn, whose pins tell whether the recipe is stale.
-pub(super) fn with_inputs(manifest: &Manifest, mut names: BTreeSet<String>) -> BTreeSet<String> {
-    let mut recipes: Vec<String> = names.iter().cloned().collect();
-    while let Some(recipe) = recipes.pop() {
-        let Some(recipe) = manifest
-            .datasets
-            .get(&recipe)
-            .and_then(|entry| entry.recipe())
-        else {
-            continue;
-        };
-        for input in &recipe.from {
-            if names.insert(input.clone()) {
-                recipes.push(input.clone());
-            }
-        }
-    }
-    names
-}
-
-/// warns about each recipe in `scope` whose pinned result is not what building it now would make:
-/// unbuilt, changed, or reading an input data.toml changed, as a named run relocks no others. it
-/// reads code at `root`, fetches nothing, and returns the names.
-pub(super) fn tell_stale(
-    output: &Output,
-    root: &std::path::Path,
-    manifest: &Manifest,
-    lock: &Lock,
-    scope: &Scope,
-) -> Vec<String> {
-    let mut stale = Vec::new();
-    for (name, entry) in &manifest.datasets {
-        let Some(recipe) = entry.recipe().filter(|_| scope.includes(name)) else {
-            continue;
-        };
-        // its own warning names the list it waits for, which a build makes again too
-        if lock.waits(name).is_some() {
-            stale.push(name.clone());
-            continue;
-        }
-        let changes = match crate::recipe::drift(root, manifest, lock, name) {
-            Ok(changes) => changes,
-            Err(error) => {
-                match &error.help {
-                    Some(help) => output.warn_with(Warning::BuildUnchecked, &error.message, help),
-                    None => output.warn(Warning::BuildUnchecked, &error.message),
-                }
-                stale.push(name.clone());
-                continue;
-            }
-        };
-        // each dataset it reads that waits for its list has a warning of its own
-        if crate::recipe::only_waiting(&changes) {
-            continue;
-        }
-        if changes.first() == Some(&crate::recipe::Change::Unbuilt) {
-            output.warn_with(
-                Warning::BuildUnbuilt,
-                &format!("{name} is not built yet"),
-                &format!(
-                    "run `{}` to make it, then commit data.lock and data.lock.d",
-                    super::project::command(&format!("build {name}"))
-                ),
-            );
-            stale.push(name.clone());
-            continue;
-        }
-        let mut said: Vec<String> = changes.iter().map(ToString::to_string).collect();
-        for input in &recipe.from {
-            let moved = manifest
-                .datasets
-                .get(input)
-                .filter(|input| input.source().is_some())
-                .zip(lock.get(input))
-                .is_some_and(|(entry, locked)| locked.drift(entry).is_some());
-            if moved {
-                said.push(format!("{input} changed in data.toml"));
-            }
-        }
-        if said.is_empty() {
-            continue;
-        }
-        output.warn_with(
-            Warning::BuildChanged,
-            &format!("{name} changed since it was built: {}", said.join("; ")),
-            &format!(
-                "data.lock still pins the result built before; run `{}`, then commit data.lock and data.lock.d",
-                super::project::command(&format!("build {name}"))
-            ),
-        );
-        stale.push(name.clone());
-    }
-    stale
-}
-
-/// the error for recipes whose results data.lock pins but neither the cache nor a mirror holds,
-/// which only a build makes again, since it runs the project's code.
-pub(super) fn unbuilt_here(names: &[String]) -> Error {
-    let (message, them) = match names {
-        [name] => (
-            format!("the pinned result of {name} is not on this machine or a mirror"),
-            "it",
-        ),
-        many => (
-            format!(
-                "the pinned results of {} are not on this machine or a mirror",
-                many.join(", ")
-            ),
-            "them",
-        ),
-    };
-    Error::new(Kind::BuildNeeded, message).help(result_route(names, them))
-}
-
-/// how the results data.lock pins of recipes `names` come back where neither the cache nor a
-/// mirror holds them: first from a mirror that does, then by a build, which runs the project's
-/// code and may make other bytes, as a step drawing unseeded random numbers does.
-fn result_route(names: &[String], them: &str) -> String {
-    let joined = names.join(" ");
-    let step = if names.len() == 1 {
-        "its step makes"
-    } else {
-        "each step makes"
-    };
-    format!(
-        "a mirror that holds {them} brings {them} back: `{}`, or keep that mirror in the mirrors setting; whoever built {them} fills one with `{}`. else `{}` makes {them} here, though a rebuild gives the pinned bytes only when {step} the same bytes every run",
-        super::project::command(&format!("sync {joined} --mirror <folder>")),
-        super::project::command(&format!("push {joined} --to <folder>")),
-        super::project::command(&format!("build {joined}"))
-    )
-}
-
 /// refuses `asks`, the datasets a relock would resolve again, when one is an import: it names no
 /// source to list it again, so the run stops before it asks anyone. `others` holds the old pins.
 fn refuse_imports(
@@ -2089,20 +1833,13 @@ struct Drafted {
     pinned: Vec<Locked>,
     /// the entries of data.lock not kept: those to replace or drop.
     others: Lock,
-    /// the results of the recipes data.toml has, which [`settled`] moves into the new lock.
-    results: Vec<Derived>,
     /// the entries carried over to the names data.toml gives them now.
     renamed: Vec<Rename>,
 }
 
-/// the lock of `kept` and `drafted` entries and `results`, by name, with whether each dataset was
-/// kept; a pin keeps its date while its data stays, so resolving it again changes nothing.
-fn settled(
-    others: &Lock,
-    kept: Vec<Locked>,
-    drafted: Vec<Locked>,
-    results: Vec<Derived>,
-) -> (Lock, Vec<bool>) {
+/// the lock of `kept` and `drafted` entries, by name, with whether each dataset was kept; a pin
+/// keeps its date while its data stays, so resolving it again changes nothing.
+fn settled(others: &Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec<bool>) {
     let mut datasets: Vec<(Locked, bool)> = kept.into_iter().map(|locked| (locked, true)).collect();
     datasets.extend(drafted.into_iter().map(|mut locked| {
         if let Some(before) = others.get(&locked.name)
@@ -2118,7 +1855,6 @@ fn settled(
     (
         Lock {
             datasets,
-            derived: results,
             stated: Vec::new(),
             waiting: Vec::new(),
         },
@@ -2130,8 +1866,7 @@ fn settled(
 /// were are moved into the new lock instead of copied, so they are found there.
 pub(super) struct Before {
     existed: bool,
-    /// the old entries relocking did not keep: those it replaced or dropped, and the results of
-    /// recipes data.toml no longer has.
+    /// the old entries relocking did not keep: those it replaced or dropped.
     others: Lock,
     /// for each dataset of the new lock, in its order, whether it was kept from the old one.
     kept: Vec<bool>,
@@ -2171,15 +1906,6 @@ impl Before {
                 .iter()
                 .all(|dataset| self.get(lock, &dataset.name) == Some(dataset))
             && self.dropped(lock).next().is_none()
-            && self.others.derived.is_empty()
-    }
-
-    /// each entry relocking moved to the name data.toml gives it now, as old and new names.
-    pub(super) fn renamed(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.renamed
-            .iter()
-            .filter(|rename| rename.moved)
-            .map(|rename| (rename.old.as_str(), rename.new.as_str()))
     }
 
     /// the old datasets `lock` no longer has.
@@ -2232,13 +1958,6 @@ pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
         })
         .map(|dataset| dataset.name.clone())
         .chain(before.dropped(lock).map(|dataset| dataset.name.clone()))
-        .chain(
-            before
-                .others
-                .derived
-                .iter()
-                .map(|result| result.name.clone()),
-        )
         .chain(before.renamed.iter().flat_map(|rename| {
             let old = rename.moved.then(|| rename.old.clone());
             std::iter::once(rename.new.clone()).chain(old)
@@ -2345,11 +2064,7 @@ fn lock_lines(
             )
         });
     }
-    let dropped = before
-        .dropped(lock)
-        .map(|dataset| &dataset.name)
-        .chain(before.others.derived.iter().map(|result| &result.name));
-    for name in dropped {
+    for name in before.dropped(lock).map(|dataset| &dataset.name) {
         lines.push((verbs.dropped, format!("{name} from {}", lock::FILE)));
     }
     lines
@@ -2454,8 +2169,7 @@ fn asks_page(manifest: &Manifest, dataset: &str) -> bool {
     manifest
         .datasets
         .get(dataset)
-        .and_then(|entry| entry.source())
-        .is_some_and(|source| source.web_page)
+        .is_some_and(|entry| entry.source.web_page)
 }
 
 /// where to download `file` of `dataset` from: the link data.lock pins. an import pins none,
@@ -2871,7 +2585,7 @@ mod tests {
     fn filter_changes_keep_the_locked_revision_unless_upgrading() {
         let manifest =
             Manifest::parse("[datasets.set]\nref = 'zenodo:1'\nselect = '*.csv'\n").unwrap();
-        let entry = manifest.datasets["set"].source().unwrap();
+        let entry = &manifest.datasets["set"].source;
         let before = locked("set");
         assert_eq!(pinned(entry, Some(&before), false), "zenodo:2");
         assert_eq!(pinned(entry, Some(&before), true), "zenodo:1");
@@ -2892,7 +2606,7 @@ mod tests {
     #[test]
     fn a_version_taken_out_resolves_the_locked_one_unless_upgrading() {
         let manifest = Manifest::parse("[datasets.set]\nref = 'kaggle:uciml/iris'\n").unwrap();
-        let entry = manifest.datasets["set"].source().unwrap();
+        let entry = &manifest.datasets["set"].source;
         let commit = "0123456789abcdef0123456789abcdef01234567";
         for (before, resolved, now, kept) in [
             (
@@ -3172,11 +2886,7 @@ mod tests {
         };
         let old = Lock {
             datasets: vec![
-                pinned(
-                    "a",
-                    lock::spec(manifest.datasets["a"].source().unwrap()),
-                    file("a"),
-                ),
+                pinned("a", lock::spec(&manifest.datasets["a"].source), file("a")),
                 pinned("b", "sha256:an older entry".to_owned(), file("b")),
                 pinned("c", "sha256:a dropped entry".to_owned(), file("c")),
             ],
@@ -3252,72 +2962,6 @@ mod tests {
                 .is_some()
         );
         assert_eq!(project.lock().unwrap(), Some(Lock::default()));
-    }
-
-    /// a recipe has no source to resolve, so relocking keeps its result offline, asking nothing.
-    #[test]
-    fn relocking_keeps_a_recipe_result_only_while_data_toml_has_the_recipe() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
-        let cache = Cache::open(dir.path().join("cache")).unwrap();
-        let context = context();
-        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
-        let source = "[datasets.raw]\nref = 'zenodo:1'\n";
-        let recipe =
-            "[datasets.clean]\nfrom = ['raw']\nrun = ['python3', 'clean.py', '{raw}', '{out}']\n";
-        let both = Manifest::parse(&format!("{source}{recipe}")).unwrap();
-        let mut raw = locked("raw");
-        raw.spec = lock::spec(both.datasets["raw"].source().unwrap());
-        let files = vec![crate::cache::Member {
-            path: "clean.csv".to_owned(),
-            size: 1,
-            sha256: digest::sha256(b"c"),
-        }];
-        let result = Derived {
-            name: "clean".to_owned(),
-            from: vec![lock::derived::Input {
-                name: "raw".to_owned(),
-                content: digest::sha256(b"raw"),
-            }],
-            run: ["python3", "clean.py", "{raw}", "{out}"]
-                .map(str::to_owned)
-                .to_vec(),
-            code: Vec::new(),
-            env: std::collections::BTreeMap::new(),
-            key: digest::sha256(b"key"),
-            timestamp: "2026-11-10T00:00:00Z".to_owned(),
-            tree: crate::cache::tree_hash(&files),
-            files,
-        };
-        let old = Lock {
-            datasets: vec![raw],
-            derived: vec![result],
-            stated: Vec::new(),
-            waiting: Vec::new(),
-        };
-        let relock = |manifest: &Manifest| {
-            block_on(runner.relock(manifest, Some(old.clone()), &Upgrade::Nothing, Vec::new()))
-                .unwrap()
-        };
-        let (kept, before) = relock(&both);
-        assert_eq!(kept, old);
-        assert!(before.holds(&kept));
-        let (dropped, before) = relock(&Manifest::parse(source).unwrap());
-        assert_eq!(dropped.datasets, old.datasets);
-        assert_eq!(dropped.derived, []);
-        assert!(!before.holds(&dropped));
-        assert_eq!(repinned(&before, &dropped), ["clean"]);
-        let told = lock_lines(
-            &context.output,
-            &before,
-            &dropped,
-            Verbs::DONE,
-            None,
-            &HashSet::new(),
-        );
-        assert_eq!(told, [("Removed", "clean from data.lock".to_owned())]);
     }
 
     #[test]
@@ -3576,12 +3220,7 @@ mod tests {
             datasets: vec![locked("b"), locked("c")],
             ..Lock::default()
         };
-        let (lock, kept) = settled(
-            &others,
-            vec![locked("a")],
-            vec![changed, locked("d")],
-            Vec::new(),
-        );
+        let (lock, kept) = settled(&others, vec![locked("a")], vec![changed, locked("d")]);
         assert_eq!(
             lock.datasets
                 .iter()
@@ -3614,7 +3253,6 @@ mod tests {
             },
             vec![locked("a")],
             vec![locked("b")],
-            Vec::new(),
         );
         let unchanged = Before {
             existed: true,

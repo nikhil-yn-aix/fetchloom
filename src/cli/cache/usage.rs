@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use serde::Serialize;
 
-use crate::cache::{GRACE, Needed, Scan, Use};
+use crate::cache::{GRACE, Needed, Scan};
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::place::Method;
@@ -52,9 +52,6 @@ pub(crate) struct Usage {
     /// how many projects add to `copies`.
     #[serde(skip)]
     pub(crate) copied_projects: u64,
-    /// of `needed`, what only builds read: files of datasets with `place = false` that every
-    /// recipe reading them was built from. none when the needs walk did not tell uses apart.
-    pub(crate) inputs_only: Option<u64>,
 }
 
 impl Usage {
@@ -75,7 +72,6 @@ impl Usage {
         stop: &Stop,
     ) -> Result<Usage, Error> {
         let mut usage = Usage {
-            inputs_only: needed.told.then_some(0),
             on_disk: Some(0),
             ..Usage::default()
         };
@@ -91,11 +87,6 @@ impl Usage {
                 usage.needed += object.size;
                 if linked {
                     usage.linked += object.size;
-                }
-                if let (Some(inputs), Some(Use::Input(_))) =
-                    (&mut usage.inputs_only, needed.uses.get(&object.digest))
-                {
-                    *inputs += object.size;
                 }
                 continue;
             }
@@ -260,40 +251,9 @@ mod tests {
                 freeable: 1,
                 young: 100,
                 unneeded_objects: 3,
-                inputs_only: None,
                 ..Usage::default()
             }
         );
-    }
-
-    /// what every project only reads in builds is counted apart once the needs walk told uses;
-    /// an object one project places is no input, though another only reads it in builds.
-    #[test]
-    fn inputs_only_counts_what_every_project_only_reads_in_builds() {
-        let now = SystemTime::now();
-        let scan = Scan {
-            objects: vec![object("input", 1, now, 1), object("placed", 10, now, 1)],
-            ..Scan::default()
-        };
-        let mut needed = Needed {
-            told: true,
-            ..Needed::default()
-        };
-        let input = Use::Input(crate::cache::Supply::Source);
-        needed.add(digest::sha256(b"input"), input);
-        needed.add(digest::sha256(b"placed"), input);
-        needed.add(digest::sha256(b"placed"), Use::Placed);
-        let usage = Usage::measure(
-            &scan,
-            &needed,
-            &[],
-            now,
-            Threads::default(),
-            &Stop::default(),
-        )
-        .unwrap();
-        assert_eq!(usage.needed, 11);
-        assert_eq!(usage.inputs_only, Some(1));
     }
 
     /// the folder of a cache holding `held` and a project whose state records `placed` by path,

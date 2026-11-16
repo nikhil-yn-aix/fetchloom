@@ -6,7 +6,6 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use super::*;
 use crate::digest;
-use crate::plan::Holder;
 use crate::threads::Threads;
 
 const PATH: &str = "data/set/file.bin";
@@ -71,7 +70,6 @@ fn choice(action: &Action) -> Choice {
         Action::Leave(Reason::Shared) => Choice::Shared,
         Action::Leave(Reason::Foreign) => Choice::Foreign,
         Action::Leave(Reason::Unneeded) => panic!("a wanted target was called unneeded"),
-        Action::Leave(Reason::Damaged) => panic!("the model builds no recipe's result"),
         Action::Leave(Reason::Blocked)
         | Action::Blocked(_)
         | Action::Unblock(_)
@@ -220,7 +218,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
         sha256: file.sha256,
         size: 16,
         copy,
-        holder: Holder::File(&file),
+        file: &file,
     };
     let expected = reference(
         Observation {
@@ -296,7 +294,7 @@ fn a_damaged_file_is_replaced_without_force() {
             sha256: file.sha256,
             size: 16,
             copy,
-            holder: Holder::File(&file),
+            file: &file,
         };
         let actual = decide(&target, &survey, false, &destination).unwrap();
         assert_eq!(choice(&actual), Choice::Replace, "copy {copy}");
@@ -341,7 +339,7 @@ fn only_a_writable_copy_fetchloom_made_goes_once_copies_are_not_asked_for() {
             sha256: file.sha256,
             size: 16,
             copy: false,
-            holder: Holder::File(&file),
+            file: &file,
         };
         let actual = decide(&target, &survey, false, &destination).unwrap();
         assert_eq!(choice(&actual), expected, "adopted {adopted}");

@@ -360,7 +360,7 @@ fn a_fix_is_only_a_command_this_run_wrote() {
 }
 
 /// each rule in `fix`'s doc has a row: placeholders, examples, guesses, a person's terminal,
-/// hand fixes first, builds, "if intended" upgrades and, when locked, lock writers are no fix.
+/// hand fixes first, "if intended" upgrades and, when locked, lock writers are no fix.
 #[test]
 fn a_fix_is_the_first_runnable_command_in_the_help() {
     assert_eq!(
@@ -409,18 +409,6 @@ fn a_fix_is_the_first_runnable_command_in_the_help() {
         ),
         None,
         "files that failed on their own fail again until someone fixes them"
-    );
-    assert_eq!(
-        fix_in(
-            "run `fetchloom build clean`, then commit data.lock and data.lock.d",
-            false
-        ),
-        None,
-        "a build runs the project's code"
-    );
-    assert_eq!(
-        fix_in("run `fetchloom build -n clean` to see what it runs", false),
-        Some("fetchloom build -n clean")
     );
     assert_eq!(
         fix_in(
@@ -550,7 +538,6 @@ fn a_fix_is_only_a_command_the_table_allows() {
         ("drop", false, &["--dry-run"]),
         ("sync", false, &["--dry-run"]),
         ("lock", false, &["--check", "--dry-run"]),
-        ("build", false, &["--dry-run"]),
         ("status", true, &["--verify", "--check", "--sources"]),
         ("diff", true, &[]),
         ("list", true, &[]),
@@ -685,7 +672,7 @@ fn report_rows_follow_stdout_alone() {
     // wrong bytes or an entry in the way are failures
     for (verb, tone) in [
         ("Removed", super::Tone::Warn),
-        ("Unbuilt", super::Tone::Warn),
+        ("Waiting", super::Tone::Warn),
         ("Damaged", super::Tone::Fail),
         ("Blocked", super::Tone::Fail),
     ] {
@@ -839,7 +826,7 @@ fn hashes_on_a_line_read_apart_however_late_they_differ() {
         format!("got {}.", &hash[..12])
     );
     for untouched in [
-        format!("could not read /cache/builds/{hash}/lock"),
+        format!("could not read /cache/unpacked/{hash}/data.csv"),
         format!("sha256:{hash}"),
         format!("{hash}0 is no hash"),
         "expected 32 bytes, got 15".to_owned(),

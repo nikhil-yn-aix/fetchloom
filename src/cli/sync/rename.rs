@@ -5,9 +5,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 
 use super::{Scope, Upgrade};
-use crate::project::lock::derived::Derived;
 use crate::project::lock::{Lock, Locked};
-use crate::project::manifest::{Manifest, Recipe};
+use crate::project::manifest::Manifest;
 
 /// an entry of data.lock carried over to the name data.toml gives it now.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,9 +21,6 @@ pub(in crate::cli) struct Rename {
 /// `lock` with its entries carried to the names data.toml gives them now, as a relock of every
 /// dataset would, so status agrees with what a sync keeps; other entries stay as they are.
 pub(in crate::cli) fn forecast(manifest: &Manifest, lock: Lock) -> (Lock, Vec<Rename>) {
-    let (mut derived, dropped, mut renamed) = results(manifest, lock.derived);
-    derived.extend(dropped);
-    derived.sort_by(|a, b| a.name.cmp(&b.name));
     let mut datasets = Vec::new();
     let mut others = lock.datasets;
     // a dataset waiting for its list keeps its own pin
@@ -33,21 +29,20 @@ pub(in crate::cli) fn forecast(manifest: &Manifest, lock: Lock) -> (Lock, Vec<Re
         .iter()
         .map(|waiting| waiting.name.as_str())
         .collect();
-    renamed.extend(carry(
+    let renamed = carry(
         manifest,
         &Scope::All,
         &Upgrade::Nothing,
         &waiting,
         &mut datasets,
         &mut others,
-    ));
+    );
     datasets.extend(others);
     datasets.sort_by(|a, b| a.name.cmp(&b.name));
     let stated = lock.stated;
     (
         Lock {
             datasets,
-            derived,
             stated,
             waiting: lock.waiting,
         },
@@ -144,7 +139,7 @@ pub(super) fn carry(
             )
         });
     let new = manifest.datasets.iter().filter_map(|(name, entry)| {
-        let source = entry.source()?;
+        let source = &entry.source;
         (scope.includes(name)
             && !upgrade.includes(name)
             && !given.contains(name.as_str())
@@ -179,82 +174,6 @@ pub(super) fn carry(
     kept.sort_by(|a, b| a.name.cmp(&b.name));
     renamed.sort_by(|a, b| a.new.cmp(&b.new));
     renamed
-}
-
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-struct RecipeShape<'a> {
-    from: Vec<&'a str>,
-    run: Vec<&'a str>,
-    code: Vec<&'a str>,
-    env: &'a BTreeMap<String, String>,
-}
-
-impl<'a> RecipeShape<'a> {
-    fn pinned(result: &'a Derived) -> Self {
-        Self {
-            from: result
-                .from
-                .iter()
-                .map(|input| input.name.as_str())
-                .collect(),
-            run: result.run.iter().map(String::as_str).collect(),
-            code: result.code.iter().map(|code| code.path.as_str()).collect(),
-            env: &result.env,
-        }
-    }
-
-    fn asked(recipe: &'a Recipe) -> Self {
-        let mut code: Vec<&str> = recipe.code.iter().map(String::as_str).collect();
-        code.sort_unstable();
-        Self {
-            from: recipe.from.iter().map(String::as_str).collect(),
-            run: recipe
-                .run
-                .iter()
-                .map(crate::project::manifest::recipes::Template::text)
-                .collect(),
-            code,
-            env: &recipe.env,
-        }
-    }
-}
-
-/// data.lock's recipe results `derived` sorted into kept, dropped and renamed. only a build pins a
-/// result, so one stays while data.toml has its recipe, moves with a renamed one, and else goes.
-pub(super) fn results(
-    manifest: &Manifest,
-    derived: Vec<Derived>,
-) -> (Vec<Derived>, Vec<Derived>, Vec<Rename>) {
-    let (mut kept, mut dropped): (Vec<Derived>, Vec<Derived>) =
-        derived.into_iter().partition(|result| {
-            manifest
-                .datasets
-                .get(&result.name)
-                .is_some_and(|entry| entry.recipe().is_some())
-        });
-    if dropped.is_empty() {
-        return (kept, dropped, Vec::new());
-    }
-    let old = dropped
-        .iter()
-        .filter(|result| !manifest.datasets.contains_key(&result.name))
-        .map(|result| (RecipeShape::pinned(result), result.name.as_str()));
-    let new = manifest.datasets.iter().filter_map(|(name, entry)| {
-        let recipe = entry.recipe()?;
-        kept.binary_search_by(|result| result.name.cmp(name))
-            .is_err()
-            .then(|| (RecipeShape::asked(recipe), name.as_str()))
-    });
-    let matches = pairs_by_key(old, new);
-    let mut renamed = Vec::with_capacity(matches.len());
-    for mut result in dropped.extract_if(.., |result| matches.contains_key(&result.name)) {
-        let new = &matches[&result.name];
-        renamed.push(rename_to(&mut result.name, new, true));
-        kept.push(result);
-    }
-    kept.sort_by(|a, b| a.name.cmp(&b.name));
-    renamed.sort_by(|a, b| a.new.cmp(&b.new));
-    (kept, dropped, renamed)
 }
 
 #[cfg(test)]
@@ -292,7 +211,7 @@ mod tests {
         Locked {
             name: name.to_owned(),
             reference: reference.to_owned(),
-            spec: crate::project::lock::spec(manifest.datasets["input"].source().unwrap()),
+            spec: crate::project::lock::spec(&manifest.datasets["input"].source),
             extract,
             web_page: false,
             resolved: reference.to_owned(),
@@ -441,95 +360,5 @@ mod tests {
             assert_eq!(kept, []);
             assert_eq!(others, before);
         }
-    }
-
-    fn recipe_manifest(name: &str) -> String {
-        format!(
-            "[datasets.raw]\nref = \"local\"\n[datasets.labels]\nref = \"https://example.org/labels\"\n[datasets.{name}]\nfrom = [\"raw\", \"labels\"]\nrun = [\"run\", \"{{raw}}\", \"{{labels}}\", \"{{out}}\"]\ncode = [\"b.py\", \"a.py\"]\nenv = {{ MODE = \"one\" }}\n"
-        )
-    }
-
-    fn result(name: &str) -> Derived {
-        let hash = crate::digest::sha256(b"old");
-        Derived {
-            name: name.to_owned(),
-            from: ["raw", "labels"]
-                .into_iter()
-                .map(|name| crate::project::lock::derived::Input {
-                    name: name.to_owned(),
-                    content: hash,
-                })
-                .collect(),
-            run: ["run", "{raw}", "{labels}", "{out}"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            code: ["a.py", "b.py"]
-                .into_iter()
-                .map(|path| crate::project::lock::derived::Code {
-                    path: path.to_owned(),
-                    sha256: hash,
-                    folder: false,
-                })
-                .collect(),
-            env: [("MODE".to_owned(), "one".to_owned())].into(),
-            key: hash,
-            timestamp: "2026-11-12T00:00:00Z".to_owned(),
-            tree: hash,
-            files: vec![crate::cache::Member {
-                path: "result.csv".into(),
-                size: 3,
-                sha256: hash,
-            }],
-        }
-    }
-
-    #[test]
-    fn recipe_renames_match_the_ordered_recipe_not_its_old_hashes() {
-        let text = recipe_manifest("next");
-        let manifest = Manifest::parse(&text).unwrap();
-        let original = result("old");
-        let (kept, dropped, renamed) = results(&manifest, vec![original.clone()]);
-        let mut expected = original.clone();
-        expected.name = "next".into();
-        assert_eq!(kept, [expected]);
-        assert_eq!(dropped, []);
-        assert_eq!(
-            renamed,
-            [Rename {
-                old: "old".into(),
-                new: "next".into(),
-                moved: true
-            }]
-        );
-        for changed in [
-            text.replace("[\"raw\", \"labels\"]", "[\"labels\", \"raw\"]"),
-            text.replace("[\"run\",", "[\"other\","),
-            text.replace("\"b.py\"", "\"c.py\""),
-            text.replace("MODE = \"one\"", "MODE = \"two\""),
-        ] {
-            let manifest = Manifest::parse(&changed).unwrap();
-            let (kept, dropped, renamed) = results(&manifest, vec![original.clone()]);
-            assert_eq!(kept, []);
-            assert_eq!(dropped.as_slice(), std::slice::from_ref(&original));
-            assert_eq!(renamed, []);
-        }
-    }
-
-    #[test]
-    fn recipe_renames_refuse_ambiguous_old_or_new_shapes() {
-        let original = result("old");
-        let one = Manifest::parse(&recipe_manifest("next")).unwrap();
-        let (kept, dropped, renamed) = results(&one, vec![original.clone(), result("other_old")]);
-        assert_eq!(kept, []);
-        assert_eq!(dropped.len(), 2);
-        assert_eq!(renamed, []);
-        let mut two = one.clone();
-        two.datasets
-            .insert("other_new".into(), one.datasets["next"].clone());
-        let (kept, dropped, renamed) = results(&two, vec![original.clone()]);
-        assert_eq!(kept, []);
-        assert_eq!(dropped, [original]);
-        assert_eq!(renamed, []);
     }
 }

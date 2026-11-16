@@ -62,9 +62,6 @@ pub(crate) struct Placer {
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
-    /// whether a placed copy must reach the disk before it counts as placed. a build's private
-    /// copy of what a step reads is scratch, which a crash leaves for the next sweep.
-    durable: bool,
     can_reflink: AtomicBool,
     can_hardlink: AtomicBool,
     other_volume: AtomicBool,
@@ -219,18 +216,6 @@ impl Placer {
         }
     }
 
-    /// prepares placement of scratch files under `root` by reflink, else unflushed copy, never a
-    /// hardlink, so a write to one, as by a recipe's step, never reaches the cache.
-    pub(crate) fn without_hardlinks(root: &Path) -> Placer {
-        let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
-        let placer = Placer {
-            durable: false,
-            ..Placer::starting_at(root, Method::Reflink, None)
-        };
-        placer.can_hardlink.store(false, Ordering::Relaxed);
-        placer
-    }
-
     /// a placer that skips the methods above `first`, as if the filesystem had refused them.
     fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
@@ -251,7 +236,6 @@ impl Placer {
             checks_root: true,
             folders: HashSet::new(),
             synced,
-            durable: true,
             can_reflink: AtomicBool::new(first == Method::Reflink),
             can_hardlink: AtomicBool::new(first != Method::Copy),
             other_volume: AtomicBool::new(false),
@@ -370,8 +354,7 @@ impl Placer {
         let threads = grouped.threads(this.threads);
         // on linux a few copies flush one by one, since one flush of the filesystem also waits
         // for everything other programs wrote there
-        let batch = this.durable
-            && (cfg!(not(target_os = "linux")) || count > crate::volume::MOST_FLUSHED_ALONE)
+        let batch = (cfg!(not(target_os = "linux")) || count > crate::volume::MOST_FLUSHED_ALONE)
             && this.batches_copies();
         // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
         let put = |index: &usize| {
@@ -443,7 +426,7 @@ impl Placer {
             check_object(object)?;
             #[cfg(target_os = "linux")]
             let cloned = {
-                let flush = self.flushes_alone(&location, batch);
+                let flush = Self::flushes_alone(&location, batch);
                 self.clone_at(object, &location, writable, batch && !flush, flush)
                     .map(Ok)
             };
@@ -467,7 +450,7 @@ impl Placer {
                 Err(error) => self.learn(Method::Hardlink, error, object)?,
             }
         }
-        let flush = self.flushes_alone(&location, batch);
+        let flush = Self::flushes_alone(&location, batch);
         let put = if batch && !flush {
             let (staged, file) =
                 stage_copy_at(object, &location, writable, self.threads, &self.stop)?;
@@ -498,7 +481,7 @@ impl Placer {
     /// whether a file placed at `location` flushes on its own rather than in `batch`'s one flush,
     /// as outside a batch, or on a nested mount, which the root filesystem's batch flush does not
     /// cover.
-    fn flushes_alone(&self, location: &Location, batch: bool) -> bool {
+    fn flushes_alone(location: &Location, batch: bool) -> bool {
         #[cfg(unix)]
         let nested = || location.other_device();
         #[cfg(not(unix))]
@@ -506,7 +489,7 @@ impl Placer {
             let _ = location;
             false
         };
-        self.durable && (!batch || nested())
+        !batch || nested()
     }
 
     /// whether copies may skip their own flush, because [`Placer::flush_copies`] flushes them all.
@@ -1341,33 +1324,6 @@ pub(crate) fn hold_below(root: &Path, path: &Path) -> io::Result<impl Sized + us
         )
     })?;
     Parents::default().locate(root, below, false, false)
-}
-
-/// `root` and every folder below it, each held with those above it until the result is dropped,
-/// so none can be renamed or replaced meanwhile. `root` must be a real folder, and a link below it
-/// is refused, never entered.
-#[cfg(windows)]
-pub(crate) fn hold_tree(root: &Path) -> io::Result<impl Sized + use<>> {
-    let parents = Parents::default();
-    let mut held = Vec::new();
-    let mut folders = vec![PathBuf::new()];
-    while let Some(below) = folders.pop() {
-        held.push(parents.locate(root, &below.join("member"), true, false)?);
-        for entry in fs::read_dir(root.join(&below))? {
-            let entry = entry?;
-            let kind = entry.file_type()?;
-            if kind.is_symlink() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("{} is a link", entry.path().display()),
-                ));
-            }
-            if kind.is_dir() {
-                folders.push(below.join(entry.file_name()));
-            }
-        }
-    }
-    Ok(held)
 }
 
 /// refuses links and files where a caller needs a real folder.

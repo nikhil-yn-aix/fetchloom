@@ -1,11 +1,9 @@
 //! `status --sources`: whether a mirror or its source still serves each file data.lock pins, asked
 //! for each file's first byte, so nothing is downloaded.
 
-use crate::build::{build, with};
 use crate::mirrors::{IRIS, cold, mirror_of, project, web_mirror_of};
-use crate::recipes::WRITE;
 use crate::support::{
-    Ranged, Result, Routes, Sandbox, Server, file, json, ok, reply, sha256_hex, text, workspace,
+    Ranged, Result, Routes, Sandbox, file, json, ok, reply, sha256_hex, text, workspace,
 };
 
 /// each of `targets` on `source` added as a dataset of its own, named for its file.
@@ -377,33 +375,6 @@ fn a_mirror_keeping_an_archives_files_serves_it() -> Result {
         assert_eq!(archive["on_mirrors"], 1, "{mirror}: {archive}");
         assert_eq!(archive["lost_at_source"][0]["outcome"], "gone", "{archive}");
     }
-    Ok(())
-}
-
-/// a recipe's result is not asked about, and one line says so, so the count of files adds up.
-#[test]
-fn a_recipes_result_is_named_as_not_asked() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        crate::project::PATH,
-        vec![file(crate::project::IRIS, "\"v1\"")],
-    )?;
-    with(&sandbox, &server, WRITE)?;
-    ok(&build(&sandbox, &["build"])?)?;
-    let output = sandbox.run(&["--json", "status", "--sources"])?;
-    ok(&output)?;
-    let document = json(&output)?;
-    assert_eq!(
-        document["result"]["sources"]["recipes"],
-        serde_json::json!(["clean"])
-    );
-    let told = text(&sandbox.run(&["status", "--sources"])?.stderr)?;
-    assert!(
-        told.contains(
-            "Skipped clean · a recipe's result, which a build makes again, so not asked about\n"
-        ),
-        "{told}"
-    );
     Ok(())
 }
 

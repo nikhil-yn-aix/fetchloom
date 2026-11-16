@@ -12,9 +12,3 @@ path = "junit.xml"
 store-success-output = false
 store-failure-output = true
 flaky-fail-status = "failure"
-
-[[profile.ci.archive.include]]
-path = "debug/examples"
-relative-to = "target"
-depth = 1
-on-missing = "error"

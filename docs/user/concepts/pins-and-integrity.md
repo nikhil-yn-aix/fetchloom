@@ -11,7 +11,3 @@ every download must match its locked size and hashes. a source that states a SHA
 cached files are not hashed again on every use, except one written after it entered the cache, as an edit through a placed hardlink writes it. [cache verify](../commands/cache.md#verify) hashes everything when you want to be sure.
 
 `sync` first updates a missing or stale lock, unless `--locked` asks for an up-to-date one, and unchanged entries keep their pins. `lock --check` checks the lock against data.toml without changing files, and `lock --upgrade` asks the sources for newer versions.
-
-## recipes
-
-a dataset can also be a [recipe](../guides/recipes.md): a command of yours that makes it from other datasets. only `fetchloom build` runs it, on private copies of what it reads, then pins and places what it wrote; `status`, `lock --check` and `sync --locked` say when the pinned result no longer matches the recipe. raw data that only recipes read can stay out of the data folder, as [keep only the result](../guides/recipes.md#keep-only-the-result) shows.

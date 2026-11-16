@@ -23,14 +23,6 @@ pub(crate) enum Warning {
     AuthReadable,
     /// keys or credentials are set up in a way fetchloom cannot use, as the message says.
     AuthUnusable,
-    /// a recipe changed since it was built.
-    BuildChanged,
-    /// the pinned result of a recipe is on neither this machine nor a mirror, so it is left out.
-    BuildLeftOut,
-    /// a recipe is not built yet.
-    BuildUnbuilt,
-    /// whether a recipe changed since its build could not be told.
-    BuildUnchecked,
     /// a cached file changed, so it is downloaded again when it is needed.
     CacheChanged,
     /// the cache folder belongs to another user, or every user may write to it.
@@ -61,8 +53,6 @@ pub(crate) enum Warning {
     DownloadWebPage,
     /// a list `export` writes leaves out files no link holds.
     ExportLeftOut,
-    /// git does not have code a recipe runs.
-    GitCodeUntracked,
     /// fetchloom left the data folder's rule out of .gitignore, which is a link, a special file or
     /// too large, or git tracks files in the data folder, so the rule is for a person to add.
     GitIgnoreUnedited,
@@ -87,8 +77,6 @@ pub(crate) enum Warning {
     MirrorDamaged,
     /// a mirror is missing, unreadable or unreachable, so this run skips it.
     MirrorSkipped,
-    /// `cache gc` could not read copies on a mirror.
-    MirrorUnreadable,
     /// the name an add chose was taken, so the dataset got a number.
     NameTaken,
     /// a later run reaches a private address only once `allowed_origins` lists it.
@@ -164,10 +152,6 @@ impl Warning {
             Warning::AuthOverridden => "auth.overridden",
             Warning::AuthReadable => "auth.readable",
             Warning::AuthUnusable => "auth.unusable",
-            Warning::BuildChanged => "build.changed",
-            Warning::BuildLeftOut => "build.left_out",
-            Warning::BuildUnbuilt => "build.unbuilt",
-            Warning::BuildUnchecked => "build.unchecked",
             Warning::CacheChanged => "cache.changed",
             Warning::CacheForeign => "cache.foreign",
             Warning::CacheOverBudget => "cache.over_budget",
@@ -178,7 +162,6 @@ impl Warning {
             Warning::DownloadUnnamed => "download.unnamed",
             Warning::DownloadWebPage => "download.web_page",
             Warning::ExportLeftOut => "export.left_out",
-            Warning::GitCodeUntracked => "git.code_untracked",
             Warning::GitIgnoreUnedited => "git.ignore_unedited",
             Warning::GitImportInTree => "git.import_in_tree",
             Warning::GitLockPartUntracked => "git.lock_part_untracked",
@@ -190,7 +173,6 @@ impl Warning {
             Warning::MergeUnpinned => "merge.unpinned",
             Warning::MirrorDamaged => "mirror.damaged",
             Warning::MirrorSkipped => "mirror.skipped",
-            Warning::MirrorUnreadable => "mirror.unreadable",
             Warning::NameTaken => "name.taken",
             Warning::NetworkPrivateOrigin => "network.private_origin",
             Warning::NetworkRetry => "network.retry",
@@ -254,10 +236,6 @@ mod tests {
             AuthOverridden,
             AuthReadable,
             AuthUnusable,
-            BuildChanged,
-            BuildLeftOut,
-            BuildUnbuilt,
-            BuildUnchecked,
             CacheChanged,
             CacheForeign,
             CacheOverBudget,
@@ -268,7 +246,6 @@ mod tests {
             DownloadUnnamed,
             DownloadWebPage,
             ExportLeftOut,
-            GitCodeUntracked,
             GitIgnoreUnedited,
             GitImportInTree,
             GitLockPartUntracked,
@@ -280,7 +257,6 @@ mod tests {
             MergeUnpinned,
             MirrorDamaged,
             MirrorSkipped,
-            MirrorUnreadable,
             NameTaken,
             NetworkPrivateOrigin,
             NetworkRetry,

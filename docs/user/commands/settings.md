@@ -37,7 +37,7 @@ memory            4.0 GiB                  this machine   FETCHLOOM_MEMORY
 |---|---|
 | `environment` | a nonempty `FETCHLOOM_*` variable, or an empty `FETCHLOOM_ALLOWED_ORIGINS`, `FETCHLOOM_S3_BUCKETS`, `FETCHLOOM_GCS_BUCKETS`, `FETCHLOOM_AZURE_CONTAINERS`, `FETCHLOOM_DRIVE_FOLDERS`, `FETCHLOOM_MIRRORS`, `FETCHLOOM_MIRRORS_ONLY` or `FETCHLOOM_PUSH_TO`, which clears what the settings file names there |
 | `settings file` | the [settings file](../reference/environment.md#settings-file) |
-| `this machine` | sized from this machine: its processors, the memory it has available, or for `build_floor` the disk holding the cache |
+| `this machine` | sized from this machine: its processors or the memory it has available |
 | `default` | fetchloom's own default |
 | `resources = lean`, `resources = max` | the [resources level](../guides/speed-and-memory.md), for a setting no variable or settings file key sets. the `resources` row shows the level and where it came from |
 | `variable only` | `threads`, `rate`, `split` and `accessible`, which only their variables set, never the settings file, when no variable sets them. a variable that does shows as `environment` |

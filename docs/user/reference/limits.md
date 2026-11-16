@@ -4,7 +4,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 
 | outside fetchloom | what to use or expect |
 |---|---|
-| running workflows: steps at once, on a scheduler, or in a sandbox | `fetchloom build` runs [recipes](../guides/recipes.md) one step at a time, as you, on the machine it runs on, with no sandbox. for steps in parallel or jobs on a scheduler, call fetchloom from make, snakemake, nextflow or your script |
+| running workflows: steps at once, on a scheduler, or in a sandbox | fetchloom runs none of your code. call it from make, snakemake, nextflow or your script, which run the steps |
 | publishing and uploads | use the data repository's upload interface |
 | data branches and merges | manage produced data separately from fetched inputs |
 | cloud copying, and web mirrors | [`fetchloom push`](../commands/push.md) fills a folder [mirror](../guides/mirrors.md); copy that folder to a server or a bucket with a transfer application such as rclone |

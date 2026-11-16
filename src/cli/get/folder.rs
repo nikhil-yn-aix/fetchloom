@@ -423,7 +423,6 @@ mod tests {
     use super::*;
     use crate::cache::tests::store;
     use crate::output::{Level, Output, Style};
-    use crate::plan::Holder;
     use crate::project::lock::LockedFile;
 
     #[test]
@@ -579,7 +578,7 @@ mod tests {
                 sha256: file.sha256,
                 size: file.size,
                 copy: false,
-                holder: Holder::File(file),
+                file,
             })
             .collect();
         let style = Style {
@@ -644,7 +643,7 @@ mod tests {
                 sha256: file.sha256,
                 size: file.size,
                 copy: false,
-                holder: Holder::File(file),
+                file,
             })
             .collect();
         let context = Context::new(Output::new(
@@ -698,7 +697,7 @@ mod tests {
                 sha256: stored.digest,
                 size: 6,
                 copy: false,
-                holder: Holder::File(&locked),
+                file: &locked,
             })
             .collect();
         let context = Context::new(Output::new(
@@ -751,7 +750,7 @@ mod tests {
                 size: stored.size,
                 sha256: stored.digest,
                 copy: false,
-                holder: Holder::File(&locked),
+                file: &locked,
             }];
             let context = Context::new(Output::new(
                 Style {
