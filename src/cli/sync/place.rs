@@ -2014,6 +2014,9 @@ fn adopt(
     placement: &mut Placement,
 ) {
     let destination = native(&project.root, &target.path);
+    // so a CLI test can change the file between the plan that took it and its record
+    #[cfg(debug_assertions)]
+    crate::stop::hold("FETCHLOOM_TEST_HOLD_ADOPT");
     let mut found = adoption(target, seen, &destination, cache, survey.started);
     if found.method != Method::Hardlink && !survey.state.files.contains_key(&target.path) {
         found.adopted = true;

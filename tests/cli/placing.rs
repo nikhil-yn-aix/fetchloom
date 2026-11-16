@@ -2029,6 +2029,53 @@ fn copies_asked_for_and_hidden_edits_are_never_linked() -> Result {
     Ok(())
 }
 
+/// a file of a dataset that asks for copies stays a copy when sync takes it as placed though it
+/// was made read-only meanwhile, as a tool that guards its inputs makes them, and so it stays
+/// at the next sync.
+#[test]
+fn a_copy_asked_for_made_read_only_while_sync_takes_it_stays_a_copy() -> Result {
+    use crate::support::{Running, wait_until};
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    // the same bytes written again at a later time, so sync reads the file and takes it as placed
+    sandbox.wait_for_a_later_time(fs::metadata(&placed)?.modified()?)?;
+    fs::write(&placed, V1)?;
+    let release = sandbox.folder("hold")?.join("release");
+    let held = sandbox.folder("hold")?.join("release.held");
+    let mut command = sandbox.command(&["sync"]);
+    command.env("FETCHLOOM_TEST_HOLD_ADOPT", &release);
+    let running = Running::start(&mut command)?;
+    wait_until("sync to take the copy as placed", || Ok(held.exists()))?;
+    let mut permissions = fs::metadata(&placed)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&placed, permissions)?;
+    fs::write(&release, b"")?;
+    let output = running.finish()?;
+
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("Linked "), "{stderr}");
+    let object = iris_object(&sandbox, &sandbox.work())?;
+    assert!(!same_file::is_same_file(&placed, &object)?, "{stderr}");
+    assert_eq!(
+        placed_method(&sandbox.work(), "data/iris/iris.csv")?,
+        "copy"
+    );
+    let again = sandbox.run(&["sync"])?;
+    let told = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{told}");
+    assert!(!told.contains("Linked "), "{told}");
+    assert_eq!(
+        placed_method(&sandbox.work(), "data/iris/iris.csv")?,
+        "copy",
+        "{told}"
+    );
+    assert_eq!(fs::read(&placed)?, V1, "{told}");
+    Ok(())
+}
+
 /// a program reading a copy while sync links it keeps reading the bytes it opened: the link takes
 /// the copy's name in one step, and the copy lasts while it is open.
 #[test]
