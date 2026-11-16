@@ -1063,25 +1063,48 @@ fn ranged(total: u64, tagged: bool) -> (Url, Ranges) {
 }
 
 /// a resume goes on past the ranges an earlier split kept, asking only for the gaps between them,
-/// in order, when this run does not split, here with splitting off as `FETCHLOOM_SPLIT=false`
-/// turns it.
+/// in order and each up to where the next kept range starts, so no kept byte comes again, when
+/// this run does not split, here with splitting off as `FETCHLOOM_SPLIT=false` turns it. a kept
+/// range that no longer hashes as recorded is asked for with the rest, in one more request.
 #[test]
 fn a_resume_that_does_not_split_fetches_only_the_gaps() {
     let total = 3000;
     let (prefix, kept) = (1000, (1500, 2200));
-    let (url, asked) = ranged(total, true);
-    let folder = tempfile::tempdir().unwrap();
-    let cache = Cache::open(folder.path().join("cache")).unwrap();
-    kept_split(&cache, &url, total, prefix, kept);
-    let mut net = net(&url);
-    net.split.when = Splitting::Never;
-    let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
-    assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));
-    assert_eq!(
-        *asked.lock().unwrap(),
-        [(prefix, None), (kept.1, Some(total - 1))]
-    );
-    assert_eq!(fetched.moved, (kept.0 - prefix) + (total - kept.1));
+    for damaged in [false, true] {
+        let (url, asked) = ranged(total, true);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        kept_split(&cache, &url, total, prefix, kept);
+        if damaged {
+            let key = crate::digest::sha256(url.as_str().as_bytes()).hex();
+            let part = cache
+                .root()
+                .join("partial")
+                .join(&key[..1])
+                .join(format!("{key}.part"));
+            let mut bytes = fs::read(&part).unwrap();
+            bytes[usize::try_from(kept.0).unwrap()] ^= 1;
+            fs::write(&part, bytes).unwrap();
+        }
+        let mut net = net(&url);
+        net.split.when = Splitting::Never;
+        let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
+        assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));
+        let (ranges, moved) = if damaged {
+            (
+                vec![(prefix, Some(kept.0 - 1)), (kept.0, Some(total - 1))],
+                total - prefix,
+            )
+        } else {
+            (
+                vec![(prefix, Some(kept.0 - 1)), (kept.1, Some(total - 1))],
+                (kept.0 - prefix) + (total - kept.1),
+            )
+        };
+        assert_eq!(*asked.lock().unwrap(), ranges, "damaged: {damaged}");
+        assert_eq!(fetched.moved, moved, "damaged: {damaged}");
+        assert_eq!(net.work.counts().retries, 0, "damaged: {damaged}");
+    }
 }
 
 /// leaves what a split download of the file [`pattern`] makes, `total` bytes long under the

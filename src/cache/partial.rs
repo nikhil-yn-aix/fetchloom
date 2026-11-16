@@ -301,8 +301,22 @@ impl Partial {
     /// a split download finished there that the part still reaches. a resume checks each one
     /// again before it keeps it.
     pub(crate) fn kept_past(&self) -> u64 {
+        self.ranges_past()
+            .iter()
+            .map(|(start, end)| end - start)
+            .sum()
+    }
+
+    /// where the first of those ranges starts, which a request for the bytes before it ends at.
+    pub(crate) fn next_kept(&self) -> Option<u64> {
+        self.ranges_past().first().map(|(start, _)| *start)
+    }
+
+    /// the ranges past the prefix an earlier run recorded that the part still reaches, in order,
+    /// as [`PartialWriter::keep`] takes them.
+    fn ranges_past(&self) -> Vec<(u64, u64)> {
         let Some(record) = self.kept() else {
-            return 0;
+            return Vec::new();
         };
         let held = self
             .folder
@@ -310,14 +324,14 @@ impl Partial {
             .and_then(|file| file.metadata())
             .map_or(0, |metadata| metadata.len());
         let mut at = record.received;
-        let mut past = 0;
+        let mut past = Vec::new();
         for range in &record.ranges {
             let fits = range.start >= at
                 && range.end > range.start
                 && range.end <= held
                 && record.length.is_none_or(|length| range.end <= length);
             if fits {
-                past += range.end - range.start;
+                past.push((range.start, range.end));
                 at = range.end;
             }
         }

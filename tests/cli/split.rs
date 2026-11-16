@@ -119,15 +119,15 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
     let work = &json(&output)?["work"];
     assert_eq!(work["resumes"], 1, "{work}");
     let requests = &server.requests()[before..];
+    // the first request ends where the first range kept starts, so the server sends none of it
+    let first = ranges.first().map(|(start, _)| *start);
     assert_eq!(
         asked(&requests[0]),
-        Some((prefix, None)),
-        "the second run did not continue from the prefix kept: {}",
+        Some((prefix, first)),
+        "the second run did not continue from the prefix kept, up to the first range kept: {}",
         requests[0]
     );
     assert!(requests[0].contains("if-range: \"v1\""), "{}", requests[0]);
-    // bytes_down cannot show this: the first answer runs on into the first range kept until it
-    // is dropped, and the chunk read then can be larger than that range
     let parts: Vec<_> = requests[1..]
         .iter()
         .map(|head| asked(head).unwrap_or((0, None)))

@@ -218,6 +218,15 @@ impl Board {
         self.free.insert(index, range);
     }
 
+    /// the answer stream `id` has runs only up to `end`, so its share stops there and cannot
+    /// grow back over a range given up past it, and the rest goes back.
+    fn ends(&mut self, id: usize, end: u64) {
+        if let Some(Some(share)) = self.shares.get_mut(id) {
+            share.open = false;
+        }
+        self.trim(id, end);
+    }
+
     /// the server sends stream `id` its share only up to `end`, and the rest goes back.
     fn trim(&mut self, id: usize, end: u64) {
         let Some(Some(share)) = self.shares.get_mut(id) else {
@@ -389,12 +398,20 @@ impl Net {
                 delivered: 0,
             },
         };
-        let gaps = writer.gaps(total);
+        let mut board = Board::new(writer.gaps(total));
+        // an answer that ends before the file, as one asked for the gap before a kept range
+        // does, leaves the rest of that gap to another request
+        if let Some(end) = headers::range_end(response.headers())
+            .map(|last| last.saturating_add(1))
+            .filter(|end| *end < total)
+        {
+            board.ends(0, end);
+        }
         let (sender, receiver) = tokio::sync::mpsc::channel::<(u64, Bytes)>(16);
         let writing = write_at_places(writer, receiver);
         let streams = Streams {
             job,
-            board: Mutex::new(Board::new(gaps)),
+            board: Mutex::new(board),
             sender,
         };
         let Completion {

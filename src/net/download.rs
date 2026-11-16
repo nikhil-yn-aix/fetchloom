@@ -987,11 +987,19 @@ impl Net {
         let length = earlier.as_ref().and_then(|_| partial.length());
         // bytes kept that are all of the file ask for their last byte alone: an answer of the same
         // version says they still are, and names the file as a whole answer does
-        let asked = earlier.as_ref().map(|(received, validators)| {
-            let whole = *received > 0 && length == Some(*received);
-            (received - u64::from(whole), validators.clone())
-        });
-        let shape = conditions(asked.as_ref(), known);
+        let whole = earlier
+            .as_ref()
+            .is_some_and(|(received, _)| *received > 0 && length == Some(*received));
+        let asked = earlier
+            .as_ref()
+            .map(|(received, validators)| (received - u64::from(whole), validators.clone()));
+        // the bytes up to a range a split kept, and none of it, which the server would send on
+        // until the answer is let go
+        let until = asked
+            .as_ref()
+            .filter(|_| !whole)
+            .and_then(|_| partial.next_kept());
+        let shape = conditions(asked.as_ref(), until, known);
         let holding = super::Holding::new(&fetch.from, &mut state.permits);
         let response = self
             .send_body(from, fetch.mirror, shape, Some(holding))
@@ -1111,9 +1119,12 @@ impl Net {
             self.started(on, total, offset + kept, resumable)?;
         }
         // ranges kept past the prefix leave gaps that only the split path fills, which adds no
-        // stream to an answer that may not split
-        let at_once = self.split.when == Splitting::Always || kept > 0;
-        let watch = total.filter(|_| splits || kept > 0);
+        // stream to an answer that may not split, as does an answer that ends before the file
+        let short = headers::range_end(&head)
+            .is_some_and(|last| total.is_some_and(|total| last.saturating_add(1) < total));
+        let gaps = kept > 0 || (short && status == StatusCode::PARTIAL_CONTENT);
+        let at_once = self.split.when == Splitting::Always || gaps;
+        let watch = total.filter(|_| splits || gaps);
         // a stream held back by FETCHLOOM_RATE looks slow, and more streams share the same cap
         let monitor = watch.filter(|_| self.rate.is_none());
         let capped = bounded(fetch, offset, on);
@@ -2019,15 +2030,18 @@ fn other_version(kept: &Validators, stated: &Validators) -> bool {
     (kept.etag.is_some() || kept.last_modified.is_some()) && headers::changed(kept, stated)
 }
 
-/// the headers that ask for the rest of an earlier download, which `If-Range` keeps to the
-/// version it came from, or else for the file only when it changed since `known`.
+/// the headers that ask for the rest of an earlier download, up to the byte `until` when bytes
+/// past it are kept too, which `If-Range` keeps to the version it came from, or else for the file
+/// only when it changed since `known`.
 fn conditions<'a>(
     earlier: Option<&'a (u64, Validators)>,
+    until: Option<u64>,
     known: Option<&'a Validators>,
 ) -> impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder + 'a {
     move |mut request| {
         if let Some((received, validators)) = earlier {
-            request = request.header(header::RANGE, format!("bytes={received}-"));
+            let last = until.map_or(String::new(), |until| (until - 1).to_string());
+            request = request.header(header::RANGE, format!("bytes={received}-{last}"));
             if let Some(check) = if_range(validators) {
                 request = request.header(header::IF_RANGE, check);
             }
