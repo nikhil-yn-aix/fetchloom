@@ -395,7 +395,8 @@ fn a_redirect_to_another_port_of_the_same_host_carries_no_key() {
     }
 }
 
-/// the key goes to github's API alone, though release files sit on github.com.
+/// the key goes to github's API alone, though release files sit on github.com and a folder's
+/// on raw.githubusercontent.com, or on media.githubusercontent.com for one git-lfs keeps.
 #[test]
 fn a_github_key_never_reaches_github_com_or_its_storage() {
     let net = net();
@@ -405,6 +406,8 @@ fn a_github_key_never_reaches_github_com_or_its_storage() {
         "https://release-assets.githubusercontent.com/github-production-release-asset/1",
         "https://objects.githubusercontent.com/github-production-release-asset-2e65be/1",
         "https://raw.githubusercontent.com/jqlang/jq/master/README.md",
+        "https://github.com/lab/survey/raw/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/data/model.bin",
+        "https://media.githubusercontent.com/media/lab/survey/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/data/model.bin",
     ] {
         let url = Url::parse(url).unwrap();
         let request = net.request(client, &url, true).build().unwrap();
