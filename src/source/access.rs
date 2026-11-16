@@ -184,7 +184,13 @@ pub(crate) static GITHUB: Access = Access {
     name: "github",
     // only the API, never github.com or the storage a download is sent on to
     api: Origins::Fixed(&["https://api.github.com"]),
-    files: Origins::Fixed(&["https://github.com"]),
+    // a release's files on github.com, a folder's on raw.githubusercontent.com or on github.com,
+    // which sends a file git-lfs keeps on to media.githubusercontent.com
+    files: Origins::Fixed(&[
+        "https://github.com",
+        "https://raw.githubusercontent.com",
+        "https://media.githubusercontent.com",
+    ]),
     key: Some(&account::GITHUB_KEY),
     sites: &[],
     pages: no_page,

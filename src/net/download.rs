@@ -1884,7 +1884,7 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
 const LFS_POINTER: &[u8] = b"version https://git-lfs.github.com/spec/v1";
 /// files at least this large are never taken for a pointer, which keeps a few hundred bytes, so
 /// the files people mean to download are never read for one.
-const LFS_LARGEST: u64 = 1024;
+pub(crate) const LFS_LARGEST: u64 = 1024;
 
 /// whether a small file whose first bytes are `head` is a git-lfs pointer.
 fn is_lfs_pointer(head: &[u8]) -> bool {

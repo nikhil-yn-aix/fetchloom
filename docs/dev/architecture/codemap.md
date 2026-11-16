@@ -144,6 +144,7 @@ most adapters have a type with `parse` for an id, `from_link` for a pasted link 
 | `src/source/openneuro.rs` | OpenNeuro snapshots through its GraphQL API, large files from its S3 bucket | `Dataset` |  |
 | `src/source/github.rs` | github release files at a tag or the newest, with the SHA-256 github states; a rate limit worded by whether a key went, and a missing release told from a private repository | `Release` | `Release::resolve`, `limited`, `hidden` |
 | `src/source/gitlab.rs` | gitlab release links on gitlab.com or another server, `gitlab://<host>/...`, at a tag or the newest, each downloaded from its own address, since gitlab.com answers a program with a warning page for a link to another host | `Release` | `Release::resolve`, `hidden` |
+| `src/source/git.rs` | a folder of a github or gitlab repository, from the link a browser shows, at the commit its branch, tag or commit names, which data.lock pins; each file by its own link at that commit, git-lfs files as their bytes, git's links left out by name | `Folder` | `Folder::resolve`, `Held`, `Listed` |
 | `src/source/drive.rs` | google drive links: files from drive's download host, items shared with an account through its api | `Item`, `fetch_plan` | `Item::resolve` |
 | `src/source/drive/link.rs` | an open link, found to be a file or a folder by drive's redirect | `Item::opened` |  |
 | `src/source/drive/folder.rs` | shared folders, read from the page drive embeds them in, one request per subfolder | `list` |  |

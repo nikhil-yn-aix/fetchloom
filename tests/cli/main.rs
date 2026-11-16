@@ -21,6 +21,7 @@ mod dry_run;
 mod exclude;
 mod export;
 mod get;
+mod git_folders;
 mod google;
 mod hints;
 mod import;

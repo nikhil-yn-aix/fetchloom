@@ -192,7 +192,9 @@ fn a_missing_release_and_a_hidden_project_say_which_they_are() {
         need.maybe_missing.as_deref(),
         Some("https://gitlab.com/gitlab-org/gitlab-runner")
     );
-    let keyed = release("gitlab-org/gitlab-runner").hidden(true);
+    let keyed = release("gitlab-org/gitlab-runner")
+        .project
+        .hidden(true, "releases");
     assert!(keyed.message.ends_with("or this key cannot see it"));
     assert!(keyed.need.is_none(), "a key went already");
 }

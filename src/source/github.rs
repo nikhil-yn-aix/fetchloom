@@ -1,6 +1,7 @@
-//! github releases: a release's files, at a tag or the newest, with the SHA-256 github states. a
-//! tag can move, so the lock's SHA-256 names the bytes. a key goes to api.github.com only, so a
-//! private repository's files are not downloaded.
+//! github: a release's files, at a tag or the newest, with the SHA-256 github states, and the
+//! commits and trees a folder of a repository is listed from. a tag or a branch can move, so the
+//! lock's SHA-256 names the bytes. a key goes to api.github.com only, so a private repository's
+//! files are not downloaded.
 
 use std::fmt;
 
@@ -8,19 +9,29 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use url::Url;
 
+use super::git::{Entry, Held, Listed};
 use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::account::Account;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::net::{Api, Response};
+use crate::net::{Api, Extra, Response};
 
 const API: &str = "https://api.github.com";
+
+/// the answer github gives for a commit with this, its id alone.
+const SHA: Extra = &[("accept", "application/vnd.github.sha")];
+
+/// a github repository, by its owner and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Repo {
+    owner: String,
+    name: String,
+}
 
 /// a release of a github repository, at a tag or the newest one github calls the latest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Release {
-    owner: String,
-    repo: String,
+    repo: Repo,
     tag: Option<String>,
 }
 
@@ -55,18 +66,8 @@ impl Release {
     }
 
     fn named(owner: &str, repo: &str, tag: Option<String>) -> Option<Release> {
-        let owner_valid = (1..=39).contains(&owner.len())
-            && owner
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-');
-        let repo_valid = (1..=100).contains(&repo.len())
-            && !matches!(repo, "." | "..")
-            && repo
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
-        (owner_valid && repo_valid).then(|| Release {
-            owner: owner.to_owned(),
-            repo: repo.to_owned(),
+        Some(Release {
+            repo: Repo::named(owner, repo)?,
             tag,
         })
     }
@@ -74,14 +75,12 @@ impl Release {
     /// lists the release's files: at the tag, or of the release github calls the latest, which
     /// pins its tag.
     pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
-        let signed_in = Account::GitHub
-            .find(&super::env)
-            .is_some_and(|found| Account::GitHub.sendable(&found));
+        let signed_in = signed_in();
         let url = match &self.tag {
             Some(tag) => self.url(&["releases", "tags", tag])?,
             None => self.url(&["releases", "latest"])?,
         };
-        let response = self.get(api, &url, signed_in).await?;
+        let response = get(api, &url, &[], signed_in).await?;
         if response.status == 404 {
             return Err(self.missing(api, signed_in).await);
         }
@@ -124,7 +123,6 @@ impl Release {
             unavailable,
             warnings: Vec::new(),
             resolved: Reference::GitHub(Release {
-                owner: self.owner.clone(),
                 repo: self.repo.clone(),
                 tag: Some(answer.tag_name),
             }),
@@ -135,26 +133,11 @@ impl Release {
         })
     }
 
-    /// github's answer for `url`, or the error for its rate limit when the answer is that.
-    async fn get(&self, api: &impl Api, url: &Url, signed_in: bool) -> Result<Response, Error> {
-        let response = api.get(url).await.map_err(|error| {
-            if error.kind == Kind::NetworkRateLimited {
-                limited(signed_in).detail(error.message)
-            } else {
-                error
-            }
-        })?;
-        if says_limited(&response) {
-            return Err(limited(signed_in));
-        }
-        Ok(response)
-    }
-
     /// the error for a release github does not show, as it says alike of a missing release and a
     /// private or missing repository, which the repository's own answer tells apart.
     async fn missing(&self, api: &impl Api, signed_in: bool) -> Error {
         let repository = match self.url(&[]) {
-            Ok(url) => self.get(api, &url, signed_in).await,
+            Ok(url) => get(api, &url, &[], signed_in).await,
             Err(error) => Err(error),
         };
         match repository {
@@ -175,7 +158,7 @@ impl Release {
 
     /// github's answer that it shows no repository of this name, which may be private.
     fn hidden(&self, signed_in: bool) -> Error {
-        let name = format!("{}/{}", self.owner, self.repo);
+        let name = self.repo.to_string();
         let page = self.page();
         if signed_in {
             return Error::new(
@@ -195,21 +178,311 @@ impl Release {
         .needs_or_missing(Account::GitHub, page)
     }
 
-    /// the repository's URL in github's API, with `more` path segments after it.
     fn url(&self, more: &[&str]) -> Result<Url, Error> {
-        let mut url = Url::parse(&format!("{API}/repos"))
-            .map_err(|_| invalid(self, "the API URL is invalid"))?;
+        self.repo.url(more).map_err(|reason| invalid(self, reason))
+    }
+
+    fn page(&self) -> String {
+        self.repo.page()
+    }
+}
+
+impl Repo {
+    /// a repository's owner and name as github allows them: an owner of letters, digits and
+    /// `-`, a name of those, `_` and `.`.
+    pub(super) fn named(owner: &str, name: &str) -> Option<Repo> {
+        let owner_valid = (1..=39).contains(&owner.len())
+            && owner
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        let name_valid = (1..=100).contains(&name.len())
+            && !matches!(name, "." | "..")
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+        (owner_valid && name_valid).then(|| Repo {
+            owner: owner.to_owned(),
+            name: name.to_owned(),
+        })
+    }
+
+    /// the repository's own name, without its owner's.
+    pub(super) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// the repository's page on github.com.
+    pub(super) fn page(&self) -> String {
+        format!("https://github.com/{}/{}", self.owner, self.name)
+    }
+
+    /// the repository's URL in github's API, with `more` path segments after it, each one segment
+    /// however many `/` it holds.
+    fn url(&self, more: &[&str]) -> Result<Url, &'static str> {
+        let mut url = Url::parse(&format!("{API}/repos")).map_err(|_| "the API URL is invalid")?;
         url.path_segments_mut()
-            .map_err(|()| invalid(self, "the API URL has no path"))?
+            .map_err(|()| "the API URL has no path")?
             .push(&self.owner)
-            .push(&self.repo)
+            .push(&self.name)
             .extend(more);
         Ok(url)
     }
 
-    fn page(&self) -> String {
-        format!("https://github.com/{}/{}", self.owner, self.repo)
+    /// github's answer that it shows no repository of this name, which may be private: a key
+    /// would show a private one, but its folders' files stay where fetchloom sends no key.
+    fn hidden(&self, signed_in: bool) -> Error {
+        let page = self.page();
+        if signed_in {
+            return Error::new(
+                Kind::AuthRequired,
+                format!("github has no repository {self}, or this key cannot see it"),
+            )
+            .help(format!("check the name at {page}"))
+            .unseen();
+        }
+        Error::new(
+            Kind::AuthRequired,
+            format!("github has no repository {self}, or it is private"),
+        )
+        .help(format!(
+            "check the name at {page}. fetchloom downloads the folders of public repositories alone, since it sends a github key to api.github.com and nowhere else"
+        ))
+        .unseen()
     }
+
+    /// refuses a private repository before its folder is listed: github shows one to a key that
+    /// can read it, but serves its files only where fetchloom sends no key.
+    pub(super) async fn public(&self, api: &impl Api) -> Result<(), Error> {
+        let url = self.url(&[]).map_err(|reason| invalid(self, reason))?;
+        let response = get(api, &url, &[], true).await?;
+        if response.status == 404 {
+            return Err(self.hidden(true));
+        }
+        let answer: Visibility = super::json(self, &response)?;
+        if answer.private {
+            return Err(Error::new(
+                Kind::AuthRequired,
+                format!("github keeps {self} private, and fetchloom downloads the files of public repositories alone"),
+            )
+            .help(format!(
+                "github serves a private repository's files only with a key, and fetchloom sends a github key to api.github.com alone. clone the repository with git, then pin the folder from your clone with `{}`",
+                crate::suggested::command("add <folder> --as <name>")
+            )));
+        }
+        Ok(())
+    }
+
+    /// the commit `reference`, a branch, a tag or a commit, names in the repository, or none when
+    /// it names nothing there.
+    pub(super) async fn commit(
+        &self,
+        api: &impl Api,
+        reference: &str,
+        signed_in: bool,
+    ) -> Result<Option<String>, Error> {
+        let url = self
+            .url(&["commits", reference])
+            .map_err(|reason| invalid(self, reason))?;
+        let response = get(api, &url, SHA, signed_in).await?;
+        match response.status {
+            // github's word for a branch, tag or commit it does not know
+            422 => Ok(None),
+            404 => Err(self.hidden(signed_in)),
+            200..=299 => super::git::commit_id(response.text().trim())
+                .map(Some)
+                .ok_or_else(|| {
+                    invalid(self, &format!("its answer for {reference} names no commit"))
+                }),
+            _ => Err(super::unsuccessful(self, &response)),
+        }
+    }
+
+    /// what the tree at `commit` holds in `folder`: the whole tree in one answer, or, where github
+    /// cuts that short, the folders on the way to `folder` one by one, then each of its subtrees
+    /// whole where github allows.
+    pub(super) async fn tree(
+        &self,
+        api: &impl Api,
+        commit: &str,
+        folder: &str,
+        signed_in: bool,
+    ) -> Result<Listed, Error> {
+        let mut pages = super::Pages::most(api.most_files());
+        let whole = self
+            .listed(api, (commit, ""), true, signed_in, &mut pages, 0)
+            .await?;
+        if !whole.truncated {
+            return Ok(super::git::inside(whole.entries, folder));
+        }
+        // the folders still to list, by their tree's id and path, and whether to ask for one
+        // whole first, which the top folder no longer needs
+        let mut pending = vec![(commit.to_owned(), String::new(), false)];
+        let mut entries: Vec<Entry> = Vec::new();
+        while let Some((tree, path, whole)) = pending.pop() {
+            if whole && super::git::holds(folder, &path) {
+                let listed = self
+                    .listed(
+                        api,
+                        (&tree, &path),
+                        true,
+                        signed_in,
+                        &mut pages,
+                        entries.len(),
+                    )
+                    .await?;
+                if !listed.truncated {
+                    entries.extend(listed.entries);
+                    continue;
+                }
+            }
+            let listed = self
+                .listed(
+                    api,
+                    (&tree, &path),
+                    false,
+                    signed_in,
+                    &mut pages,
+                    entries.len(),
+                )
+                .await?;
+            if listed.truncated {
+                let named = if path.is_empty() {
+                    "at the top"
+                } else {
+                    path.as_str()
+                };
+                return Err(invalid(
+                    self,
+                    &format!(
+                        "it lists only part of the folder {named}, which holds more entries than github's api gives at once"
+                    ),
+                ));
+            }
+            for entry in listed.entries {
+                if let Held::Folder(id) = &entry.held
+                    && super::git::on_the_way(folder, &entry.path)
+                {
+                    pending.push((id.clone(), entry.path.clone(), true));
+                }
+                if super::git::holds(folder, &entry.path) {
+                    entries.push(entry);
+                }
+            }
+            if entries.len() > api.most_files() {
+                return Err(super::too_many(
+                    self,
+                    api.most_files(),
+                    "copy the link of a folder inside it that holds fewer files",
+                ));
+            }
+        }
+        Ok(super::git::inside(entries, folder))
+    }
+
+    /// one answer of the trees api: the tree `tree` names, at `path` in the repository, with every
+    /// subtree when `recursive`, its entries at their paths in the repository.
+    async fn listed(
+        &self,
+        api: &impl Api,
+        (tree, path): (&str, &str),
+        recursive: bool,
+        signed_in: bool,
+        pages: &mut super::Pages<String>,
+        held: usize,
+    ) -> Result<Tree, Error> {
+        pages
+            .next(format!("{recursive} {path}"), held)
+            .map_err(|reason| invalid(self, &reason))?;
+        let mut url = self
+            .url(&["git", "trees", tree])
+            .map_err(|reason| invalid(self, reason))?;
+        if recursive {
+            url.query_pairs_mut().append_pair("recursive", "1");
+        }
+        let response = get(api, &url, &[], signed_in).await?;
+        let answer: Answered = super::json(self, &response)?;
+        let entries = answer
+            .tree
+            .into_iter()
+            .map(|entry| {
+                let held = entry.held().ok_or_else(|| {
+                    invalid(
+                        self,
+                        &format!(
+                            "it gives \"{}\" a kind of entry git has not: {} {}",
+                            entry.path.escape_debug(),
+                            entry.kind,
+                            entry.mode
+                        ),
+                    )
+                })?;
+                let full = if path.is_empty() {
+                    entry.path
+                } else {
+                    format!("{path}/{}", entry.path)
+                };
+                Ok(Entry { path: full, held })
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok(Tree {
+            entries,
+            truncated: answer.truncated,
+        })
+    }
+
+    /// where a file of the repository at `commit` downloads from, and its size when that is sure:
+    /// a file of at least 1 KiB, too large for a git-lfs pointer, from raw.githubusercontent.com,
+    /// which serves what git holds; a smaller one from github.com, which sends a file git-lfs
+    /// keeps on to media.githubusercontent.com and any other to raw.githubusercontent.com.
+    pub(super) fn file(&self, commit: &str, path: &str, size: Option<u64>) -> (Url, Option<u64>) {
+        let large = size.filter(|size| *size >= crate::net::LFS_LARGEST);
+        let mut url = match large {
+            Some(_) => format!(
+                "https://raw.githubusercontent.com/{}/{}",
+                self.owner, self.name
+            ),
+            None => format!("https://github.com/{}/{}/raw", self.owner, self.name),
+        }
+        .parse::<Url>()
+        .unwrap_or_else(|_| unreachable!("a repository's link is a link"));
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments.push(commit).extend(path.split('/'));
+        }
+        (url, large)
+    }
+}
+
+/// whether a github key is on this machine and can go with a request.
+pub(super) fn signed_in() -> bool {
+    Account::GitHub
+        .find(&super::env)
+        .is_some_and(|found| Account::GitHub.sendable(&found))
+}
+
+/// github's answer for `url`, asked with `headers`, or the error for its rate limit when the
+/// answer is that.
+async fn get(
+    api: &impl Api,
+    url: &Url,
+    headers: Extra,
+    signed_in: bool,
+) -> Result<Response, Error> {
+    let asked = if headers.is_empty() {
+        api.get(url).await
+    } else {
+        api.get_with(url, headers).await
+    };
+    let response = asked.map_err(|error| {
+        if error.kind == Kind::NetworkRateLimited {
+            limited(signed_in).detail(error.message)
+        } else {
+            error
+        }
+    })?;
+    if says_limited(&response) {
+        return Err(limited(signed_in));
+    }
+    Ok(response)
 }
 
 /// a tag as git allows one, never empty and without whitespace or control characters.
@@ -244,6 +517,50 @@ fn limited(signed_in: bool) -> Error {
     )
     .help("set GH_TOKEN or GITHUB_TOKEN to a github token, or sign in with `fetchloom auth login github`, which raises the limit to 5,000 an hour; or run the same command again within the hour")
     .needs(Account::GitHub, None)
+}
+
+/// who may see a repository, as github answers for it.
+#[derive(Deserialize)]
+struct Visibility {
+    private: bool,
+}
+
+/// one answer of the trees api.
+#[derive(Deserialize)]
+struct Answered {
+    tree: Vec<TreeEntry>,
+    #[serde(default)]
+    truncated: bool,
+}
+
+/// an entry of a tree as github's api gives it, at its path below the tree listed.
+#[derive(Deserialize)]
+struct TreeEntry {
+    path: String,
+    mode: String,
+    #[serde(rename = "type")]
+    kind: String,
+    sha: String,
+    size: Option<u64>,
+}
+
+impl TreeEntry {
+    /// what git holds at the entry, none for a kind git has not.
+    fn held(&self) -> Option<Held> {
+        Some(match (self.kind.as_str(), self.mode.as_str()) {
+            ("tree", _) => Held::Folder(self.sha.clone()),
+            ("commit", _) => Held::Submodule,
+            ("blob", "120000") => Held::Link,
+            ("blob", _) => Held::File(self.size),
+            _ => return None,
+        })
+    }
+}
+
+/// a tree's entries, at their paths in the repository, and whether github left some out.
+struct Tree {
+    entries: Vec<Entry>,
+    truncated: bool,
 }
 
 #[derive(Deserialize)]
@@ -308,9 +625,15 @@ impl Asset {
     }
 }
 
+impl fmt::Display for Repo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.owner, self.name)
+    }
+}
+
 impl fmt::Display for Release {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "github:{}/{}", self.owner, self.repo)?;
+        write!(f, "github:{}", self.repo)?;
         if let Some(tag) = &self.tag {
             write!(f, "@{tag}")?;
         }

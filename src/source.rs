@@ -16,6 +16,7 @@ mod dryad;
 mod ena;
 mod figshare;
 mod geo;
+mod git;
 mod github;
 mod gitlab;
 mod hf;
@@ -155,6 +156,8 @@ pub(crate) enum Reference {
     Mendeley(mendeley::Dataset),
     GitHub(github::Release),
     GitLab(gitlab::Release),
+    /// a folder of a github or gitlab repository, at a branch, a tag or a commit.
+    GitFolder(git::Folder),
     Ena(ena::Accession),
     Geo(geo::Accession),
     Dandi(dandi::Dandiset),
@@ -276,7 +279,8 @@ impl Listing {
             | Reference::ArxivMonth(_)
             | Reference::S2Dataset(_)
             | Reference::GitHub(_)
-            | Reference::GitLab(_) => None,
+            | Reference::GitLab(_)
+            | Reference::GitFolder(_) => None,
             _ => self.title.as_deref(),
         }
     }
@@ -284,8 +288,9 @@ impl Listing {
     /// whether a generated name may come from the one file the listing holds. a paper is known by
     /// its title, and its file only by an id, as `1706.03762v7.pdf`; an arXiv month and a
     /// semantic scholar dataset by their reference, and their files by ids and times; a dandiset
-    /// by its title, its files by subject, as `sub-RAT123.nwb`; a bucket's folder by its path,
-    /// since folders often hold objects of one name, as `part_0000.gz`.
+    /// by its title, its files by subject, as `sub-RAT123.nwb`; a bucket's folder and a
+    /// repository's by their path, since folders often hold objects of one name, as
+    /// `part_0000.gz`.
     pub(crate) fn names_its_file(&self) -> bool {
         match &self.resolved {
             Reference::Arxiv(_)
@@ -293,19 +298,20 @@ impl Listing {
             | Reference::S2Paper(_)
             | Reference::S2Dataset(_)
             | Reference::Dandi(_)
-            | Reference::List(_) => false,
+            | Reference::List(_)
+            | Reference::GitFolder(_) => false,
             Reference::Bucket(prefix) => !prefix.names_a_folder(),
             _ => true,
         }
     }
 
     /// whether the file at `path` stays out of a dataset unless a select pattern keeps it: the
-    /// `.gitattributes` of a hugging face or openneuro repository, which tells git, or git-annex,
-    /// how to store the files and holds no data.
+    /// `.gitattributes` of a hugging face, openneuro, github or gitlab repository, which tells
+    /// git, or git-annex, how to store the files and holds no data.
     pub(crate) fn kept_only_if_selected(&self, path: &str) -> bool {
         matches!(
             self.resolved,
-            Reference::HuggingFace(_) | Reference::OpenNeuro(_)
+            Reference::HuggingFace(_) | Reference::OpenNeuro(_) | Reference::GitFolder(_)
         ) && path.rsplit('/').next() == Some(".gitattributes")
     }
 
@@ -500,6 +506,7 @@ impl Reference {
             Reference::Dataverse(dataset) => dataset.origin(),
             Reference::Invenio(record) => record.origin(),
             Reference::GitLab(release) => release.origin(),
+            Reference::GitFolder(folder) => folder.origin(),
             Reference::Bucket(prefix) => prefix.written_origin(),
             Reference::List(list) => list.written_origin(),
             _ => None,
@@ -536,6 +543,7 @@ impl Reference {
             Reference::HuggingFace(repo) => repo.is_at_commit(),
             Reference::Kaggle(dataset) => dataset.is_versioned(),
             Reference::OpenNeuro(dataset) => dataset.is_snapshot(),
+            Reference::GitFolder(folder) => folder.is_at_commit(),
             _ => false,
         }
     }
@@ -580,6 +588,7 @@ impl Reference {
     pub(crate) fn naming(&self) -> String {
         match self {
             Reference::List(list) => list.naming(),
+            Reference::GitFolder(folder) => folder.naming(),
             other => other.to_string(),
         }
     }
@@ -715,6 +724,7 @@ impl Reference {
             Reference::Mendeley(dataset) => dataset.resolve(api).await,
             Reference::GitHub(release) => release.resolve(api).await,
             Reference::GitLab(release) => release.resolve(api).await,
+            Reference::GitFolder(folder) => folder.resolve(api).await,
             Reference::Ena(accession) => accession.resolve(api).await,
             Reference::Geo(accession) => accession.resolve(api).await,
             Reference::Dandi(dandiset) => dandiset.resolve(api).await,
@@ -752,6 +762,7 @@ impl fmt::Display for Reference {
             Reference::Mendeley(dataset) => write!(f, "{dataset}"),
             Reference::GitHub(release) => write!(f, "{release}"),
             Reference::GitLab(release) => write!(f, "{release}"),
+            Reference::GitFolder(folder) => write!(f, "{folder}"),
             Reference::Ena(accession) => write!(f, "{accession}"),
             Reference::Geo(accession) => write!(f, "{accession}"),
             Reference::Dandi(dandiset) => write!(f, "{dandiset}"),
@@ -881,6 +892,7 @@ impl Reference {
             Reference::GitHub(_) => &access::GITHUB,
             Reference::GitLab(release) if release.is_elsewhere() => &access::GITLAB_SERVER,
             Reference::GitLab(_) => &access::GITLAB,
+            Reference::GitFolder(folder) => folder.access(),
             Reference::Ena(_) => &access::ENA,
             Reference::Geo(_) => &access::GEO,
             Reference::Dandi(_) => &access::DANDI,
@@ -988,6 +1000,10 @@ fn link(text: &str) -> Result<Parsed, Error> {
         .or_else(|| {
             gitlab::Release::from_server_link(&url)
                 .map(|release| parsed(Reference::GitLab(release), None))
+        })
+        .or_else(|| {
+            git::Folder::from_server_link(&url)
+                .map(|folder| parsed(Reference::GitFolder(folder), None))
         });
     let Some(routed) = routed else {
         if let Some(source) = access::page_of(&url) {
@@ -1052,6 +1068,7 @@ fn repository_link(url: &Url) -> Option<(Reference, Option<String>)> {
         .or_else(|| {
             gitlab::Release::from_link(url).map(|release| whole(Reference::GitLab(release)))
         })
+        .or_else(|| git::Folder::from_link(url).map(|folder| whole(Reference::GitFolder(folder))))
         .or_else(|| {
             ena::Accession::from_link(url).map(|accession| whole(Reference::Ena(accession)))
         })
@@ -1276,23 +1293,31 @@ pub(crate) fn json<T: serde::de::DeserializeOwned>(
     reference: &dyn fmt::Display,
     response: &Response,
 ) -> Result<T, Error> {
+    match response.status {
+        200..=299 => response.json(),
+        _ => Err(unsuccessful(reference, response)),
+    }
+}
+
+/// the error for an answer about `reference` that is no success, worded as [`json`] words it for
+/// every source.
+pub(crate) fn unsuccessful(reference: &dyn fmt::Display, response: &Response) -> Error {
     let reference = reference.to_string();
     let reference = crate::shown::mask_query(&reference);
     match response.status {
-        200..=299 => response.json(),
-        404 | 410 => Err(Error::new(
+        404 | 410 => Error::new(
             Kind::ReferenceUnresolved,
             format!("{reference} does not exist, or is not public"),
         )
-        .help(UNKNOWN_HELP)),
-        401 | 403 => Err(refused(net::host(&response.url), &reference)),
-        status => Err(Error::new(
+        .help(UNKNOWN_HELP),
+        401 | 403 => refused(net::host(&response.url), &reference),
+        status => Error::new(
             Kind::NetworkStatus,
             format!(
                 "{} answered {status} for {reference}",
                 net::host(&response.url)
             ),
-        )),
+        ),
     }
 }
 
@@ -1680,8 +1705,14 @@ mod tests {
             assert_eq!(listing.resolved.to_string(), raw);
             assert_eq!(listing.files[0].url.as_str(), raw);
         }
+        assert!(
+            matches!(
+                parse("https://github.com/org/repo/tree/main").reference,
+                Reference::GitFolder(_)
+            ),
+            "a folder's page names the folder, no file"
+        );
         for unchanged in [
-            "https://github.com/org/repo/tree/main",
             "https://github.com/org/repo/blob/main",
             "https://github.com/org/repo/blob/main/",
             "https://github.com.example.org/org/repo/blob/main/data.csv",

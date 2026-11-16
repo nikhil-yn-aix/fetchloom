@@ -124,6 +124,19 @@ fn rows() -> Vec<Row> {
             )],
         ),
         row(
+            "https://gitlab.com/gitlab-org/gitlab-test/-/tree/master/files",
+            &[
+                (
+                    "https://gitlab.com/api/v4/projects/gitlab-org%2Fgitlab-test/repository/commits/master",
+                    "gitlab/test-commit.json",
+                ),
+                (
+                    "https://gitlab.com/api/v4/projects/gitlab-org%2Fgitlab-test/repository/tree?path=files&ref=ddd0f15ae83993f5cb66a927a28673882e99100b&recursive=true&per_page=100&pagination=keyset",
+                    "gitlab/test-tree.json",
+                ),
+            ],
+        ),
+        row(
             "ena:SRR390728",
             &[
                 (
@@ -292,6 +305,22 @@ fn rows() -> Vec<Row> {
     rows.push(Row {
         reference: "kaggle:competitions/titanic",
         recorded: competition,
+    });
+    let seaborn = "https://api.github.com/repos/mwaskom/seaborn-data";
+    rows.push(Row {
+        reference: "https://github.com/mwaskom/seaborn-data/tree/master/raw",
+        recorded: Recorded::default()
+            .on(
+                &format!("{seaborn}/commits/master"),
+                200,
+                "71e2436a092d714350de0fc409ca8a8714e7e78f",
+            )
+            .fixture(
+                &format!(
+                    "{seaborn}/git/trees/71e2436a092d714350de0fc409ca8a8714e7e78f?recursive=1"
+                ),
+                "github/seaborn-tree.json",
+            ),
     });
     let open = "https://drive.google.com/open?id=1cKSdgtWrPgvEsBGmjWALOH33taGyVXKb";
     rows.push(Row {

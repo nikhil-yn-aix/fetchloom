@@ -1,8 +1,8 @@
-//! gitlab releases: the links of a release on gitlab.com or another gitlab server, at a tag or
-//! the newest, each downloaded from its own address. gitlab states no size or hash, so the lock's
-//! SHA-256 names the bytes; source archives are left out. a key goes to its own server only:
-//! gitlab.com's from `GITLAB_TOKEN` or `auth login gitlab`, another server's from `auth login
-//! <host>`, which saves it for that host alone.
+//! gitlab: the links of a release on gitlab.com or another gitlab server, at a tag or the newest,
+//! each downloaded from its own address, and the commits and trees a folder of a project is listed
+//! from. gitlab states no size or hash, so the lock's SHA-256 names the bytes; source archives are
+//! left out. a key goes to its own server only: gitlab.com's from `GITLAB_TOKEN` or `auth login
+//! gitlab`, another server's from `auth login <host>`, which saves it for that host alone.
 
 use std::fmt;
 
@@ -10,6 +10,7 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use url::Url;
 
+use super::git::{Entry, Held, Listed};
 use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::account::Account;
 use crate::error::{Error, Kind};
@@ -17,13 +18,19 @@ use crate::net::Api;
 
 const GITLAB_COM: &str = "gitlab.com";
 
-/// a release of a gitlab project, at a tag or the newest one, on gitlab.com or another server.
+/// a gitlab project, on gitlab.com or another server.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Release {
+pub(crate) struct Project {
     /// another server's host, with its port when that is not 443; none for gitlab.com.
     server: Option<String>,
     /// the project's path below its groups, as `gitlab-org/gitlab-runner`.
-    project: String,
+    path: String,
+}
+
+/// a release of a gitlab project, at a tag or the newest one, on gitlab.com or another server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Release {
+    project: Project,
     tag: Option<String>,
 }
 
@@ -95,21 +102,9 @@ impl Release {
         }
     }
 
-    /// a project's path from its parts: a group or more, then the project, each made of letters,
-    /// digits, `_`, `-` and `.`, on `server`, which is no other server when it is gitlab.com.
     fn named(server: Option<String>, parts: &[&str], tag: Option<String>) -> Option<Release> {
-        let valid = parts.len() >= 2
-            && parts.iter().all(|part| {
-                !part.is_empty()
-                    && part.len() <= 255
-                    && !part.starts_with(['-', '.'])
-                    && part
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-            });
-        valid.then(|| Release {
-            server: server.filter(|host| host != GITLAB_COM),
-            project: parts.join("/"),
+        Some(Release {
+            project: Project::named(server, parts)?,
             tag,
         })
     }
@@ -117,17 +112,17 @@ impl Release {
     /// the origin of another server, where every request for its releases goes; none for
     /// gitlab.com, which is no origin a person names.
     pub(super) fn origin(&self) -> Option<url::Origin> {
-        self.server.as_ref().and_then(|_| self.api_origin())
+        self.project.origin()
     }
 
     /// whether the release is on another server than gitlab.com.
     pub(super) fn is_elsewhere(&self) -> bool {
-        self.server.is_some()
+        self.project.is_elsewhere()
     }
 
     /// the server's host, with its port when that is not 443.
     fn host(&self) -> &str {
-        self.server.as_deref().unwrap_or(GITLAB_COM)
+        self.project.host()
     }
 
     /// lists the release's links: at the tag, or of the newest release, which pins its tag.
@@ -139,13 +134,13 @@ impl Release {
         let response = api.get(&url).await?;
         if response.status == 404 {
             return Err(if response.text().contains("Project Not Found") {
-                self.hidden(self.signed_in())
+                self.project.hidden(self.project.signed_in(), "releases")
             } else {
                 self.no_release()
             });
         }
-        if matches!(response.status, 401 | 403) && self.server.is_some() {
-            return Err(self.refused());
+        if matches!(response.status, 401 | 403) && self.is_elsewhere() {
+            return Err(self.project.refused(self));
         }
         let answer: Answer = super::json(self, &response)?;
         // the tag is pinned in data.lock, which must read back as written
@@ -186,7 +181,6 @@ impl Release {
             unavailable,
             warnings: Vec::new(),
             resolved: Reference::GitLab(Release {
-                server: self.server.clone(),
                 project: self.project.clone(),
                 tag: Some(answer.tag_name),
             }),
@@ -263,11 +257,11 @@ impl Release {
             .ok()
             .filter(|url| {
                 url.scheme() == "https"
-                    && Some(url.origin()) == self.api_origin()
+                    && Some(url.origin()) == self.project.api_origin()
                     && url.query().is_none()
             })
             .ok_or_else(invalid)?;
-        let prefix = format!("/{}/-/releases/", self.project.to_ascii_lowercase());
+        let prefix = format!("/{}/-/releases/", self.project.path.to_ascii_lowercase());
         let path = url
             .path()
             .to_ascii_lowercase()
@@ -294,8 +288,77 @@ impl Release {
         ))
     }
 
-    /// whether a key for the release's server is on this machine and can go with a request.
-    fn signed_in(&self) -> bool {
+    /// the project's URL in gitlab's API, with `more` after it.
+    fn url(&self, more: &[&str]) -> Result<Url, Error> {
+        self.project
+            .url(more)
+            .map_err(|reason| invalid(self, reason))
+    }
+
+    fn page(&self) -> String {
+        self.project.page()
+    }
+}
+
+impl Project {
+    /// a project's path from its parts: a group or more, then the project, each made of letters,
+    /// digits, `_`, `-` and `.`, on `server`, which is no other server when it is gitlab.com.
+    fn named(server: Option<String>, parts: &[&str]) -> Option<Project> {
+        let valid = parts.len() >= 2
+            && parts.iter().all(|part| {
+                !part.is_empty()
+                    && part.len() <= 255
+                    && !part.starts_with(['-', '.'])
+                    && part
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            });
+        valid.then(|| Project {
+            server: server.filter(|host| host != GITLAB_COM),
+            path: parts.join("/"),
+        })
+    }
+
+    /// the project whose page `url` is a page of, `parts` being its path's parts before gitlab's
+    /// `-`: on gitlab.com, or on another server over https.
+    pub(super) fn of_page(url: &Url, parts: &[&str]) -> Option<Project> {
+        let host = url.host_str()?;
+        if host == GITLAB_COM {
+            return Project::named(None, parts);
+        }
+        if url.scheme() != "https" {
+            return None;
+        }
+        let named = match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_owned(),
+        };
+        Project::named(Some(server(&named)?), parts)
+    }
+
+    /// the origin of another server, where every request for the project goes; none for
+    /// gitlab.com, which is no origin a person names.
+    pub(super) fn origin(&self) -> Option<url::Origin> {
+        self.server.as_ref().and_then(|_| self.api_origin())
+    }
+
+    /// whether the project is on another server than gitlab.com.
+    pub(super) fn is_elsewhere(&self) -> bool {
+        self.server.is_some()
+    }
+
+    /// the server's host, with its port when that is not 443.
+    fn host(&self) -> &str {
+        self.server.as_deref().unwrap_or(GITLAB_COM)
+    }
+
+    /// the project's own name, the last part of its path.
+    pub(super) fn name(&self) -> &str {
+        self.path.rsplit('/').next().unwrap_or(&self.path)
+    }
+
+    /// whether a key for the project's server is on this machine and can go with a request.
+    pub(super) fn signed_in(&self) -> bool {
         match &self.server {
             Some(host) => crate::auth::site::find(&super::env, host).is_some(),
             None => Account::GitLab
@@ -304,8 +367,9 @@ impl Release {
         }
     }
 
-    /// gitlab's answer that it shows no project of this path, which may be private.
-    fn hidden(&self, signed_in: bool) -> Error {
+    /// gitlab's answer that it shows no project of this path, which may be private: a key that
+    /// can read it lifts that, to read its `what`.
+    fn hidden(&self, signed_in: bool, what: &str) -> Error {
         let page = self.page();
         let host = self.host();
         if signed_in {
@@ -313,7 +377,7 @@ impl Release {
                 Kind::AuthRequired,
                 format!(
                     "{host} has no project {}, or this key cannot see it",
-                    self.project
+                    self.path
                 ),
             )
             .help(format!("check the path at {page}"))
@@ -321,30 +385,30 @@ impl Release {
         }
         let error = Error::new(
             Kind::AuthRequired,
-            format!("{host} has no project {}, or it is private", self.project),
+            format!("{host} has no project {}, or it is private", self.path),
         );
         match &self.server {
             Some(server) => error
                 .help(format!(
-                    "check the path at {page}. a private project's releases need a key that can read it: save one with `{}`, which goes to {server} alone",
+                    "check the path at {page}. a private project's {what} need a key that can read it: save one with `{}`, which goes to {server} alone",
                     token_command(server)
                 ))
                 .needs_site(server.clone())
                 .unseen(),
             None => error
                 .help(format!(
-                    "check the path at {page}. a private project's releases need a key that can read it: set GITLAB_TOKEN, or sign in with `fetchloom auth login gitlab`"
+                    "check the path at {page}. a private project's {what} need a key that can read it: set GITLAB_TOKEN, or sign in with `fetchloom auth login gitlab`"
                 ))
                 .needs_or_missing(Account::GitLab, page),
         }
     }
 
-    /// another server's refusal of the release's listing, which a key saved for it may lift.
-    fn refused(&self) -> Error {
+    /// another server's refusal of `subject`, which a key saved for it may lift.
+    fn refused(&self, subject: &dyn fmt::Display) -> Error {
         let host = self.host();
         Error::new(
             Kind::AuthRequired,
-            format!("{host} refused access to {self}"),
+            format!("{host} refused access to {subject}"),
         )
         .help(format!(
             "if the project is private, save a key that can read it with `{}`, then run the same command again",
@@ -360,19 +424,154 @@ impl Release {
             .map(|url| url.origin())
     }
 
-    /// the project's URL in gitlab's API, its path one encoded segment, with `more` after it.
-    fn url(&self, more: &[&str]) -> Result<Url, Error> {
+    /// the project's URL in gitlab's API, its path one encoded segment, with `more` after it,
+    /// each one segment however many `/` it holds.
+    fn url(&self, more: &[&str]) -> Result<Url, &'static str> {
         let mut url = Url::parse(&format!("https://{}/api/v4/projects", self.host()))
-            .map_err(|_| invalid(self, "the API URL is invalid"))?;
+            .map_err(|_| "the API URL is invalid")?;
         url.path_segments_mut()
-            .map_err(|()| invalid(self, "the API URL has no path"))?
-            .push(&self.project)
+            .map_err(|()| "the API URL has no path")?
+            .push(&self.path)
             .extend(more);
         Ok(url)
     }
 
-    fn page(&self) -> String {
-        format!("https://{}/{}", self.host(), self.project)
+    /// the project's page on its server.
+    pub(super) fn page(&self) -> String {
+        format!("https://{}/{}", self.host(), self.path)
+    }
+
+    /// the commit `reference`, a branch, a tag or a commit, names in the project, or none when it
+    /// names nothing there.
+    pub(super) async fn commit(
+        &self,
+        api: &impl Api,
+        reference: &str,
+    ) -> Result<Option<String>, Error> {
+        let url = self
+            .url(&["repository", "commits", reference])
+            .map_err(|reason| invalid(self, reason))?;
+        let response = api.get(&url).await?;
+        match response.status {
+            404 if response.text().contains("Project Not Found") => {
+                Err(self.hidden(self.signed_in(), "files"))
+            }
+            404 => Ok(None),
+            401 | 403 if self.is_elsewhere() => Err(self.refused(self)),
+            _ => {
+                let answer: Commit = super::json(self, &response)?;
+                super::git::commit_id(&answer.id).map(Some).ok_or_else(|| {
+                    invalid(self, &format!("its answer for {reference} names no commit"))
+                })
+            }
+        }
+    }
+
+    /// what the tree at `commit` holds in `folder`, read page by page.
+    pub(super) async fn tree(
+        &self,
+        api: &impl Api,
+        commit: &str,
+        folder: &str,
+    ) -> Result<Listed, Error> {
+        let mut first = self
+            .url(&["repository", "tree"])
+            .map_err(|reason| invalid(self, reason))?;
+        {
+            let mut query = first.query_pairs_mut();
+            if !folder.is_empty() {
+                query.append_pair("path", folder);
+            }
+            query
+                .append_pair("ref", commit)
+                .append_pair("recursive", "true")
+                .append_pair("per_page", "100")
+                .append_pair("pagination", "keyset");
+        }
+        let start = first.clone();
+        let mut next = Some(first);
+        let mut pages = super::Pages::most(api.most_files());
+        let mut entries: Vec<Entry> = Vec::new();
+        while let Some(url) = next {
+            pages
+                .next(url.clone(), entries.len())
+                .map_err(|reason| invalid(self, &reason))?;
+            let response = api.get(&url).await?;
+            // gitlab says so of a folder its tree does not have, since version 17.7
+            if response.status == 404 && url == start {
+                return Ok(Listed::Missing);
+            }
+            if matches!(response.status, 401 | 403) && self.is_elsewhere() {
+                return Err(self.refused(self));
+            }
+            let page: Vec<TreeEntry> = super::json(self, &response)?;
+            for entry in page {
+                let held = entry.held().ok_or_else(|| {
+                    invalid(
+                        self,
+                        &format!(
+                            "it gives \"{}\" a kind of entry git has not: {} {}",
+                            entry.path.escape_debug(),
+                            entry.kind,
+                            entry.mode
+                        ),
+                    )
+                })?;
+                if !super::git::holds(folder, &entry.path) || entry.path == folder {
+                    return Err(invalid(
+                        self,
+                        &format!(
+                            "it lists \"{}\", which is not in the folder asked for",
+                            entry.path.escape_debug()
+                        ),
+                    ));
+                }
+                entries.push(Entry {
+                    path: entry.path,
+                    held,
+                });
+            }
+            if entries.len() > api.most_files() {
+                return Err(super::too_many(
+                    self,
+                    api.most_files(),
+                    "copy the link of a folder inside it that holds fewer files",
+                ));
+            }
+            // a page goes on only to the next page of this listing, on the same server
+            next = match response.next {
+                Some(page) if page.origin() == start.origin() && page.path() == start.path() => {
+                    Some(page)
+                }
+                Some(_) => {
+                    return Err(invalid(
+                        self,
+                        "a page's next page is not one of this listing's",
+                    ));
+                }
+                None => None,
+            };
+        }
+        // an older gitlab answers an empty list for a folder its tree does not have, and git
+        // keeps no empty folder
+        if entries.is_empty() {
+            return Ok(Listed::Missing);
+        }
+        Ok(Listed::Entries(super::git::relative(entries, folder)))
+    }
+
+    /// where a file of the project at `commit` downloads from: its raw page on the project's own
+    /// server, which serves a file git-lfs keeps as its bytes, and takes the key saved for the
+    /// server.
+    pub(super) fn file(&self, commit: &str, path: &str) -> Url {
+        let mut url =
+            Url::parse(&self.page()).unwrap_or_else(|_| unreachable!("a project's page is a link"));
+        if let Ok(mut segments) = url.path_segments_mut() {
+            segments
+                .extend(["-", "raw", commit])
+                .extend(path.split('/'));
+        }
+        url
     }
 }
 
@@ -412,6 +611,35 @@ fn tag_name(text: &str) -> Option<String> {
     valid.then(|| text.to_owned())
 }
 
+/// a commit as gitlab's api gives it.
+#[derive(Deserialize)]
+struct Commit {
+    id: String,
+}
+
+/// an entry of a tree as gitlab's api gives it, at its path in the project.
+#[derive(Deserialize)]
+struct TreeEntry {
+    id: String,
+    path: String,
+    mode: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+impl TreeEntry {
+    /// what git holds at the entry, none for a kind git has not.
+    fn held(&self) -> Option<Held> {
+        Some(match (self.kind.as_str(), self.mode.as_str()) {
+            ("tree", _) => Held::Folder(self.id.clone()),
+            ("commit", _) => Held::Submodule,
+            ("blob", "120000") => Held::Link,
+            ("blob", _) => Held::File(None),
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Deserialize)]
 struct Answer {
     tag_name: String,
@@ -435,11 +663,17 @@ struct Link {
     direct_asset_url: Option<String>,
 }
 
+impl fmt::Display for Project {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.page())
+    }
+}
+
 impl fmt::Display for Release {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.server {
-            Some(server) => write!(f, "gitlab://{server}/{}", self.project)?,
-            None => write!(f, "gitlab:{}", self.project)?,
+        match &self.project.server {
+            Some(server) => write!(f, "gitlab://{server}/{}", self.project.path)?,
+            None => write!(f, "gitlab:{}", self.project.path)?,
         }
         if let Some(tag) = &self.tag {
             write!(f, "@{tag}")?;

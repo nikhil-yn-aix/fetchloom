@@ -43,7 +43,7 @@ pub(crate) use azure::Given;
 pub(crate) use azure::test_identity_endpoint;
 pub(crate) use azure::{Azure, Sent};
 pub(crate) use download::{
-    Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Probed, Resumable,
+    Divert, Event, Expect, Expired, Fetch, Fetched, LFS_LARGEST, Origin, Probed, Resumable,
 };
 pub(crate) use endpoint::Endpoint;
 pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing};

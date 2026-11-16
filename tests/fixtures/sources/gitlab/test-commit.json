@@ -1,0 +1,12 @@
+{
+  "id": "ddd0f15ae83993f5cb66a927a28673882e99100b",
+  "short_id": "ddd0f15a",
+  "created_at": "2019-06-25T23:59:19.000+00:00",
+  "parent_ids": [
+    "1e292f8fedd741b75372e19097c76d327140c312",
+    "2d1db523e11e777e49377cfb22d368deec3f0793"
+  ],
+  "title": "Merge branch 'po-fix-test-env-path' into 'master'",
+  "message": "Merge branch 'po-fix-test-env-path' into 'master'\n\nCorrect test_env.rb path for adding branch\n\nSee merge request gitlab-org/gitlab-test!38",
+  "web_url": "https://gitlab.com/gitlab-org/gitlab-test/-/commit/ddd0f15ae83993f5cb66a927a28673882e99100b"
+}
