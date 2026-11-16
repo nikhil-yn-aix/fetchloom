@@ -1,6 +1,9 @@
 //! `fetchloom export`: the SHA-256 of placed files, or the link and SHA-256 of downloaded ones, as
-//! `sha256sum -c` input, a list of links or an aria2c input file, asking no server. a text form is
+//! `sha256sum -c` input, a list of links or an aria2c input file, asking no server; a citation of
+//! each dataset, asking doi.org about each DOI; or a data availability statement. a text form is
 //! complete or not written, but for datasets with nothing to write, which it names.
+
+mod cite;
 
 use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
@@ -19,7 +22,7 @@ use crate::name;
 use crate::output::Warning;
 use crate::place::Placer;
 use crate::plan;
-use crate::project::lock::{self, Lock, Waiting};
+use crate::project::lock::{self, Lock, Locked, Waiting};
 use crate::project::manifest::{Entry, Manifest};
 
 #[derive(Default, Serialize)]
@@ -36,6 +39,8 @@ pub(super) struct Report {
     no_link: Vec<String>,
     /// the datasets the chosen form never lists, by their kind, with why.
     left_out: Vec<LeftOut>,
+    /// for bibtex, csl and ris, what the citation of each dataset names.
+    citations: Vec<cite::Cited>,
     /// why each dataset in `unlocked` is there.
     #[serde(skip)]
     stale: Vec<String>,
@@ -117,6 +122,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
         lock.refuse_stated(args.names.iter().map(String::as_str))?;
     }
     let waiting: Vec<Waiting> = lock.still_waiting().cloned().collect();
+    let pins = pins(&lock, &manifest, args);
     let dropped = project.dropped();
     // the data folder as this machine holds it: a dataset dropped here has no files there, and
     // one waiting for its file list has none known
@@ -133,12 +139,26 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
         return Ok(report);
     }
     if output.json() && args.output.is_none() {
+        if args.format.cites() {
+            report.citations = cite::cite(context, &cited(&manifest, &pins, &report), link_of)?;
+        }
         return Ok(report);
     }
     if let Err(error) = complete(&report, args.format) {
         return Err(error.with_report(&report));
     }
-    let (text, count) = render(&report, args.format);
+    let (text, count) = match args.format {
+        format if format.cites() => {
+            report.citations = cite::cite(context, &cited(&manifest, &pins, &report), link_of)?;
+            let text = cite::render(&report.citations, format);
+            (text, report.citations.len() as u64)
+        }
+        Format::Statement => {
+            let stated = stated(&manifest, &pins, &report);
+            (cite::statement(&stated), stated.len() as u64)
+        }
+        format => render(&report, format),
+    };
     let Some(path) = &args.output else {
         if !text.is_empty() {
             output.answer(text.trim_end_matches('\n'));
@@ -157,6 +177,13 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     let what = match args.format {
         Format::Sha256 => crate::units::count(count, "file", "files"),
         Format::Links | Format::Aria2 => crate::units::count(count, "link", "links"),
+        Format::Bibtex | Format::Csl | Format::Ris => {
+            crate::units::count(count, "citation", "citations")
+        }
+        Format::Statement => format!(
+            "a statement of {}",
+            crate::units::count(count, "dataset", "datasets")
+        ),
     };
     output.done("Exported", &format!("{what} to {}", path.display()));
     tell_imported(output, &report, args.format);
@@ -165,7 +192,16 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
 }
 
 fn tell_imported(output: &crate::output::Output, report: &Report, format: Format) {
-    if format == Format::Sha256 || report.imported.is_empty() {
+    if format.cites() {
+        let names: Vec<&str> = report
+            .imported
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        cite::tell_imported(output, &names);
+        return;
+    }
+    if matches!(format, Format::Sha256 | Format::Statement) || report.imported.is_empty() {
         return;
     }
     let files: u64 = report.imported.iter().map(|(_, files)| files).sum();
@@ -209,7 +245,11 @@ fn left_out(
             let reason = match format {
                 _ if waiting.iter().any(|waiting| waiting.name == *name) => Reason::Waiting,
                 Format::Sha256 if dropped.contains(name) => Reason::Dropped,
-                Format::Links | Format::Aria2 if entry.is_import() => Reason::Imported,
+                Format::Links | Format::Aria2 | Format::Bibtex | Format::Csl | Format::Ris
+                    if entry.is_import() =>
+                {
+                    Reason::Imported
+                }
                 _ => return None,
             };
             Some(LeftOut {
@@ -343,6 +383,71 @@ fn sources(manifest: &Manifest, lock: &Lock, report: &mut Report) -> Result<(), 
     Ok(())
 }
 
+/// the pins of the datasets `args` names, or of every one, that a citation or a statement names,
+/// which the inventory does not keep.
+fn pins(lock: &Lock, manifest: &Manifest, args: &args::Export) -> Vec<Locked> {
+    if !args.format.cites() && args.format != Format::Statement {
+        return Vec::new();
+    }
+    let wanted = |name: &str| args.names.is_empty() || args.names.iter().any(|named| named == name);
+    lock.datasets
+        .iter()
+        .filter(|locked| wanted(&locked.name) && manifest.datasets.contains_key(&locked.name))
+        .cloned()
+        .collect()
+}
+
+/// the pins of `pins` a citation names: those `report` does not leave out, but for imports, which
+/// no source holds.
+fn cited(manifest: &Manifest, pins: &[Locked], report: &Report) -> Vec<Locked> {
+    pins.iter()
+        .filter(|locked| !report.unlocked.contains(&locked.name) && !imported(manifest, locked))
+        .cloned()
+        .collect()
+}
+
+/// whether `locked` is a dataset data.toml imports from a folder, which no source holds.
+fn imported(manifest: &Manifest, locked: &Locked) -> bool {
+    manifest
+        .datasets
+        .get(&locked.name)
+        .is_some_and(Entry::is_import)
+}
+
+/// the link a reader can open for `locked` where it has no DOI: the link it was pinned from, when
+/// that is a web link export would write.
+fn link_of(locked: &Locked) -> Option<String> {
+    match crate::source::Reference::parse(&locked.resolved)
+        .ok()?
+        .reference
+    {
+        crate::source::Reference::Url(url) => link(url.as_str()).ok(),
+        _ => None,
+    }
+}
+
+/// each of `pins` that `report` does not leave out, with its files and their SHA-256, for a data
+/// availability statement.
+fn stated<'a>(
+    manifest: &Manifest,
+    pins: &'a [Locked],
+    report: &'a Report,
+) -> Vec<cite::Stated<'a>> {
+    pins.iter()
+        .filter(|locked| !report.unlocked.contains(&locked.name))
+        .map(|locked| cite::Stated {
+            locked,
+            imported: imported(manifest, locked),
+            link: link_of(locked),
+            files: locked
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.sha256.to_string()))
+                .collect(),
+        })
+        .collect()
+}
+
 /// `text` as export and list write a link, or why not: fetchloom never pins a link with a login
 /// or a secret, or one a line cannot hold, so such a link was written by someone else.
 pub(super) fn link(text: &str) -> Result<String, &'static str> {
@@ -450,6 +555,8 @@ fn render(report: &Report, format: Format) -> (String, u64) {
                 count += 1;
             }
         }
+        // cited and stated apart, from data.lock and doi.org
+        Format::Bibtex | Format::Csl | Format::Ris | Format::Statement => {}
     }
     (text, count)
 }

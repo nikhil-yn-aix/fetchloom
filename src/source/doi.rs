@@ -12,6 +12,9 @@ use super::{Reference, malformed};
 use crate::error::{Error, Kind};
 use crate::net::Api;
 
+/// what [`Doi::csl`] asks doi.org for.
+const CSL: crate::net::Extra = &[("accept", "application/vnd.citationstyles.csl+json")];
+
 /// a DOI such as `10.5281/zenodo.3608990`, lowercased, since DOIs ignore case.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Doi(String);
@@ -76,6 +79,37 @@ impl Doi {
             None => location,
         };
         self.target(&location)
+    }
+
+    /// what the DOI's registration agency says of it, as CSL-JSON: one GET to doi.org with an
+    /// `Accept` header, which doi.org sends on to the agency's own service, as datacite's or
+    /// crossref's. no key goes with it.
+    ///
+    /// # Errors
+    ///
+    /// no answer, an answer other than 200, or one that is not JSON, as a landing page an agency
+    /// without CSL-JSON sends.
+    pub(crate) async fn csl(&self, api: &impl Api) -> Result<serde_json::Value, Error> {
+        let mut url = Url::parse("https://doi.org/")
+            .map_err(|_| self.invalid("the doi.org URL is invalid"))?;
+        // a DOI is opaque, so its slashes, query marks and fragments belong to one path segment
+        url.path_segments_mut()
+            .map_err(|()| self.invalid("the doi.org URL has no path"))?
+            .pop_if_empty()
+            .push(&self.0);
+        let scoped = super::access::Scoped::new(api, &super::access::DOI, None, self.to_string());
+        let response = scoped.get_with(&url, CSL).await?;
+        match response.status {
+            200 => response.json(),
+            404 | 410 => Err(Self::unresolved(&format!("doi.org does not know {self}"))),
+            status => Err(Error::new(
+                Kind::NetworkStatus,
+                format!(
+                    "{} answered {status} for {self}",
+                    crate::net::host(&response.url)
+                ),
+            )),
+        }
     }
 
     /// the link doi.org's record holds.

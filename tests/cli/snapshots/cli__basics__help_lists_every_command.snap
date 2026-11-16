@@ -20,7 +20,7 @@ commands:
   audit        ask the sources if data.lock's files are still served or changed
   diff         show what data.lock and its file lists changed between commits
   list         list the project's datasets: source, size and folder
-  export       write the SHA-256 or link of each file, for other tools
+  export       write the SHA-256 or link of each file, or citations of datasets
   push         copy the files data.lock lists into a folder or S3 bucket mirror
   path         print where a dataset or a file in it is, syncing it if needed
   cache        show the cache, free what no project needs, or verify it

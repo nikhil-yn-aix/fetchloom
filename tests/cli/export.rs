@@ -420,3 +420,204 @@ fn a_ctrl_c_past_the_exports_mark_lets_it_write_the_file() -> Result {
     );
     Ok(())
 }
+
+/// zenodo's answer for record `id`, which holds iris.csv and has a DOI.
+fn record(id: u64) -> Result<Vec<crate::support::Part>> {
+    let record = serde_json::json!({
+        "id": id,
+        "doi": format!("10.5281/zenodo.{id}"),
+        "metadata": { "title": "DatasetIris", "license": { "id": "cc-by-4.0" }, "access_right": "open" },
+        "files": [{ "key": "iris.csv", "size": IRIS.len(), "checksum": format!("md5:{}", crate::support::md5_hex(IRIS)) }],
+    });
+    Ok(crate::support::reply(
+        "200 OK",
+        &[("Content-Type", "application/json")],
+        &serde_json::to_vec(&record)?,
+    ))
+}
+
+/// a CSL-JSON answer, as a registration agency sends it.
+fn csl(item: &serde_json::Value) -> Result<Vec<crate::support::Part>> {
+    Ok(crate::support::reply(
+        "200 OK",
+        &[("Content-Type", "application/vnd.citationstyles.csl+json")],
+        &serde_json::to_vec(item)?,
+    ))
+}
+
+/// doi.org sending a request on to `to`, as it does for a DOI's registration agency.
+fn sent_on(to: &str) -> Vec<crate::support::Part> {
+    crate::support::reply(
+        "302 Found",
+        &[("Location", to), ("Content-Length", "0")],
+        b"",
+    )
+}
+
+/// a project of three datasets on hosts `routes` stands in for: two zenodo records with DOIs,
+/// one an article's, and a plain link without one.
+fn cited_project(sandbox: &Sandbox) -> Result<Routes> {
+    let routes = Routes::start(vec![
+        ("/zenodo.org/api/records/101".to_owned(), record(101)?),
+        ("/zenodo.org/api/records/202".to_owned(), record(202)?),
+        (
+            "/zenodo.org/api/records/101/files/iris.csv/content".to_owned(),
+            file(IRIS, "\"i\""),
+        ),
+        (
+            "/zenodo.org/api/records/202/files/iris.csv/content".to_owned(),
+            file(IRIS, "\"i\""),
+        ),
+        ("/data.example.org/uci/a.csv".to_owned(), file(A, "\"a\"")),
+        (
+            "/doi.org/10.5281%2Fzenodo.101".to_owned(),
+            sent_on("https://data.crosscite.org/10.5281%2Fzenodo.101"),
+        ),
+        (
+            "/data.crosscite.org/10.5281%2Fzenodo.101".to_owned(),
+            csl(&serde_json::json!({
+                "type": "dataset",
+                "title": "DatasetIris",
+                "author": [{ "family": "Montero Loaiza", "given": "David" }],
+                "issued": { "date-parts": [[2020, 1, 15]] },
+                "publisher": "Zenodo",
+                "DOI": "10.5281/ZENODO.101",
+            }))?,
+        ),
+        (
+            "/doi.org/10.5281%2Fzenodo.202".to_owned(),
+            sent_on("https://api.crossref.org/v1/works/10.5281%2Fzenodo.202/transform"),
+        ),
+        (
+            "/api.crossref.org/v1/works/10.5281%2Fzenodo.202/transform".to_owned(),
+            csl(&serde_json::json!({
+                "type": "article-journal",
+                "title": ["Irises, {measured}"],
+                "author": [{ "family": "Fisher", "given": "R. A." }],
+                "issued": { "date-parts": [["1936"]] },
+                "container-title": "Annals of Eugenics",
+                "publisher": "Wiley",
+            }))?,
+        ),
+    ])?;
+    for (reference, name) in [
+        ("zenodo:101", "iris"),
+        ("zenodo:202", "paper"),
+        ("https://data.example.org/uci/a.csv", "uci"),
+    ] {
+        let added = sandbox
+            .command(&["add", reference, "--as", name])
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    Ok(routes)
+}
+
+/// three pinned datasets, two with DOIs: bibtex has two entries from the DOIs' records, asked of
+/// doi.org once each with an Accept header and no other, and one from data.lock marked incomplete.
+#[test]
+fn bibtex_cites_from_each_doi_record_and_marks_one_from_the_lock_incomplete() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = cited_project(&sandbox)?;
+    let asked = routes.requests().len();
+    let output = sandbox
+        .command(&["export", "--format", "bibtex", "-o", "data.bib"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Exported 3 citations to data.bib"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("warning: uci has no DOI, so its entry is built from data.lock alone and marked incomplete"),
+        "{stderr}"
+    );
+    let bib = fs::read_to_string(sandbox.work().join("data.bib"))?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let day = lock
+        .split("locked = \"")
+        .nth(1)
+        .and_then(|rest| rest.get(..10))
+        .unwrap_or_default();
+    assert_eq!(
+        bib,
+        format!(
+            "@misc{{iris,\n  author = {{Montero Loaiza, David}},\n  title = {{DatasetIris}},\n  publisher = {{Zenodo}},\n  year = {{2020}},\n  doi = {{10.5281/zenodo.101}},\n  url = {{https://doi.org/10.5281/zenodo.101}},\n  urldate = {{{day}}},\n  copyright = {{cc-by-4.0}},\n}}\n\n@article{{paper,\n  author = {{Fisher, R. A.}},\n  title = {{Irises, \\textbraceleft{{}}measured\\textbraceright{{}}}},\n  journal = {{Annals of Eugenics}},\n  publisher = {{Wiley}},\n  year = {{1936}},\n  doi = {{10.5281/zenodo.202}},\n  url = {{https://doi.org/10.5281/zenodo.202}},\n  urldate = {{{day}}},\n  copyright = {{cc-by-4.0}},\n}}\n\n@misc{{uci,\n  title = {{uci}},\n  url = {{https://data.example.org/uci/a.csv}},\n  urldate = {{{day}}},\n  note = {{Incomplete: built from data.lock, which gives no author, year or title.}},\n}}\n"
+        )
+    );
+    let asked: Vec<String> = routes.requests()[asked..].to_vec();
+    let doi: Vec<&String> = asked
+        .iter()
+        .filter(|head| head.starts_with("get /doi.org/"))
+        .collect();
+    assert_eq!(doi.len(), 2, "{asked:#?}");
+    for head in doi {
+        let accepts: Vec<&str> = head
+            .lines()
+            .filter(|line| line.starts_with("accept:"))
+            .collect();
+        assert_eq!(
+            accepts,
+            ["accept: application/vnd.citationstyles.csl+json"],
+            "{head}"
+        );
+    }
+    Ok(())
+}
+
+/// offline, every entry comes from data.lock, the run says doi.org was not asked, asks nothing
+/// and exits 0; csl and ris carry the same entries, and the statement each file's SHA-256.
+#[test]
+fn offline_citations_come_from_the_lock_and_say_doi_org_was_not_asked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = cited_project(&sandbox)?;
+    let asked = routes.requests().len();
+    let output = sandbox.run(&["--offline", "export", "--format", "ris"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("offline, so doi.org was not asked for the DOI metadata of iris and paper: their entries are built from data.lock alone"),
+        "{stderr}"
+    );
+    let ris = text(&output.stdout)?;
+    assert_eq!(ris.matches("TY  - DATA\n").count(), 3, "{ris}");
+    assert_eq!(ris.matches("ER  - \n").count(), 3, "{ris}");
+    assert!(ris.contains("DO  - 10.5281/zenodo.101\n"), "{ris}");
+    assert!(
+        ris.contains("N1  - Incomplete: built from data.lock, which gives no author or year. License: cc-by-4.0.\n"),
+        "{ris}"
+    );
+    let output = sandbox.run(&["--offline", "--json", "export", "--format", "csl"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let citations = &document["result"]["citations"];
+    assert_eq!(citations[0]["from"], "data.lock", "{citations}");
+    assert_eq!(citations[0]["unasked"], "offline, so doi.org was not asked");
+    assert_eq!(
+        citations[0]["missing"],
+        serde_json::json!(["author", "year"])
+    );
+    let output = sandbox.run(&["--offline", "export", "--format", "csl"])?;
+    let items: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(items[0]["id"], "iris", "{items}");
+    assert_eq!(items[0]["DOI"], "10.5281/zenodo.101");
+    let output = sandbox.run(&["--offline", "export", "--format", "statement"])?;
+    let statement = text(&output.stdout)?;
+    assert!(
+        statement.starts_with("Data availability\n\nThis work uses 3 datasets."),
+        "{statement}"
+    );
+    for line in [
+        "iris: DatasetIris, https://doi.org/10.5281/zenodo.101, 1 file:\n".to_owned(),
+        "uci: https://data.example.org/uci/a.csv, 1 file:\n".to_owned(),
+        format!("{}  iris.csv\n", sha256_hex(IRIS)),
+        format!("{}  a.csv\n", sha256_hex(A)),
+    ] {
+        assert!(statement.contains(&line), "{line} in\n{statement}");
+    }
+    assert_eq!(routes.requests().len(), asked, "offline asks nothing");
+    Ok(())
+}

@@ -38,7 +38,7 @@ a stopped download keeps what it fetched and goes on from there in the next run,
 
 ## commands and integrations not implemented
 
-`cite`, archive-service fallbacks and lab administration are not implemented. buckets and containers are read anonymously over HTTPS, or with your keys or sign-in for those you list, and private google drive items through drive's api for the folders and files you list, as [signing in](../guides/private-cloud-storage.md#private-buckets-and-folders) says. the [python module](python-helper.md) provides `path()`, `sync()` and `get()`, and the [R package](r-package.md) `path()`, `sync()` and `download()`; there is no other language or workflow wrapper.
+archive-service fallbacks and lab administration are not implemented. buckets and containers are read anonymously over HTTPS, or with your keys or sign-in for those you list, and private google drive items through drive's api for the folders and files you list, as [signing in](../guides/private-cloud-storage.md#private-buckets-and-folders) says. the [python module](python-helper.md) provides `path()`, `sync()` and `get()`, and the [R package](r-package.md) `path()`, `sync()` and `download()`; there is no other language or workflow wrapper.
 
 see the [developer roadmap](../../dev/roadmap.md) for future work. current commands are listed in the [command guide](../commands/README.md).
 

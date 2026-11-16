@@ -91,8 +91,9 @@ on disk: nothing. it reads data.toml, data.lock and what the cache recorded of e
   fetchloom export > data.sha256    # for sha256sum -c
   fetchloom export --format links iris    # each file's link and SHA-256
   fetchloom export --format aria2 -o sources.aria2    # for aria2c -i
+  fetchloom export --format bibtex -o data.bib    # a citation of each dataset
 
-on disk: nothing, or the one file -o names, which it never replaces without --force. it reads data.toml, data.lock and what the cache recorded of each archive";
+on disk: nothing, or the one file -o names, which it never replaces without --force. it reads data.toml, data.lock and what the cache recorded of each archive. bibtex, csl and ris ask doi.org once for each DOI, and nothing offline";
 
     pub(super) const PUSH: &str = "examples:
   fetchloom push --to /mnt/lab/fetchloom
@@ -594,7 +595,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom list [options] [name]", help_template = TEMPLATE, after_help = examples::LIST)]
     List(List),
 
-    /// write the SHA-256 or link of each file, for other tools
+    /// write the SHA-256 or link of each file, or citations of datasets
     #[command(override_usage = "fetchloom export [options] [name]...", help_template = TEMPLATE, after_help = examples::EXPORT)]
     Export(Export),
 
@@ -1164,7 +1165,7 @@ pub(crate) struct List {
     pub(crate) name: Option<String>,
 }
 
-/// write the SHA-256 or link of each file, for other tools
+/// write the SHA-256 or link of each file, or citations of datasets
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Export {
     /// the datasets to export, by their names in data.toml; all of them when none is named
@@ -1172,7 +1173,10 @@ pub(crate) struct Export {
     pub(crate) names: Vec<String>,
 
     /// sha256 for each file in the data folder, as `sha256sum -c` reads them; links for each
-    /// file downloaded, with its SHA-256; aria2 for an `aria2c -i` input file
+    /// file downloaded, with its SHA-256; aria2 for an `aria2c -i` input file; bibtex, csl or ris
+    /// for a citation of each dataset, from the record of its DOI at doi.org where it has one,
+    /// else from data.lock; statement for a data availability paragraph with the SHA-256 of each
+    /// file
     #[arg(long, value_enum, value_name = "format", default_value_t = Format::Sha256, hide_default_value = true, hide_possible_values = true, help_heading = "options")]
     pub(crate) format: Format,
 
@@ -1219,6 +1223,22 @@ pub(crate) enum Format {
     Links,
     /// each file downloaded, as an aria2c input file with `out=` and `checksum=`.
     Aria2,
+    /// a BibTeX entry for each dataset.
+    Bibtex,
+    /// a CSL-JSON item for each dataset, as citation processors read them.
+    Csl,
+    /// an RIS record for each dataset.
+    Ris,
+    /// a data availability paragraph for a paper: each dataset with its DOI or link, and the
+    /// SHA-256 of each of its files.
+    Statement,
+}
+
+impl Format {
+    /// whether it cites each dataset, from its DOI's record where it has one.
+    pub(crate) fn cites(self) -> bool {
+        matches!(self, Format::Bibtex | Format::Csl | Format::Ris)
+    }
 }
 
 /// print where a dataset or a file in it is

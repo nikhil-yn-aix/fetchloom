@@ -51,6 +51,9 @@ pub(crate) enum Warning {
     DownloadUnnamed,
     /// a link meant for a data file answered with a web page.
     DownloadWebPage,
+    /// a citation `export` writes is built from data.lock alone, so it lacks what only a DOI's
+    /// record gives, such as authors and a year: offline, doi.org gave nothing, or no DOI.
+    ExportIncomplete,
     /// a list `export` writes leaves out files no link holds.
     ExportLeftOut,
     /// fetchloom left the data folder's rule out of .gitignore, which is a link, a special file or
@@ -161,6 +164,7 @@ impl Warning {
             Warning::DownloadEncoded => "download.encoded",
             Warning::DownloadUnnamed => "download.unnamed",
             Warning::DownloadWebPage => "download.web_page",
+            Warning::ExportIncomplete => "export.incomplete",
             Warning::ExportLeftOut => "export.left_out",
             Warning::GitIgnoreUnedited => "git.ignore_unedited",
             Warning::GitImportInTree => "git.import_in_tree",
@@ -245,6 +249,7 @@ mod tests {
             DownloadEncoded,
             DownloadUnnamed,
             DownloadWebPage,
+            ExportIncomplete,
             ExportLeftOut,
             GitIgnoreUnedited,
             GitImportInTree,

@@ -29,8 +29,9 @@ pub(crate) trait Api: Sync {
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send;
 
     /// a GET that also carries `headers`, as a GraphQL server's guard against cross-site requests
-    /// asks. its answer is kept by the link and every header, so one query never gets another's;
-    /// a test's network that answers by link alone may answer as [`Api::get`] does.
+    /// asks; one the network sets too, as `accept`, takes its place. its answer is kept by the
+    /// link and every header, so one query never gets another's; a test's network that answers by
+    /// link alone may answer as [`Api::get`] does.
     fn get_with(
         &self,
         url: &Url,
@@ -64,10 +65,19 @@ pub(crate) trait Api: Sync {
 /// headers a request carries besides those the network gives it, by name and value.
 pub(crate) type Extra = &'static [(&'static str, &'static str)];
 
+/// `request` with `extra`'s headers in place of any of the same name, since a server reading two
+/// `accept` headers may answer the first: doi.org sends `application/json` to a landing page.
 fn with_extra(request: reqwest::RequestBuilder, extra: Extra) -> reqwest::RequestBuilder {
-    extra.iter().fold(request, |request, (name, value)| {
-        request.header(*name, *value)
-    })
+    let mut headers = header::HeaderMap::new();
+    for (name, value) in extra {
+        if let (Ok(name), Ok(value)) = (
+            header::HeaderName::try_from(*name),
+            header::HeaderValue::try_from(*value),
+        ) {
+            headers.append(name, value);
+        }
+    }
+    request.headers(headers)
 }
 
 /// what a server answered, with the few headers sources read.
