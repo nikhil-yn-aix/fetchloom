@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::args;
-use super::probe::{self, Ask, Found, Pinned};
+use super::probe::{self, Ask, Found, Lack, Pinned};
 use super::project::{dry_run_done, find, hold, known};
 use super::sync::Scope;
 use super::sync::disk::Survey;
@@ -92,14 +92,18 @@ struct Lacks {
     /// how many a web or bucket mirror or source serves at their size alone, which does not show
     /// their bytes.
     sized: u64,
+    /// how many their source serves without saying their size, which shows still less of them.
+    no_size: u64,
 }
 
 impl Checked {
     /// whether `name` stays: a file of it is lost or could not be checked, or, without `yes`, one
-    /// was checked by its size alone.
+    /// was checked by its size alone or served without a size.
     fn keeps(&self, name: &str, yes: bool) -> bool {
         self.lacks.get(name).is_some_and(|lacks| {
-            !lacks.lost.is_empty() || !lacks.unchecked.is_empty() || (!yes && lacks.sized > 0)
+            !lacks.lost.is_empty()
+                || !lacks.unchecked.is_empty()
+                || (!yes && lacks.sized + lacks.no_size > 0)
         })
     }
 
@@ -391,6 +395,11 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
                 lacks.sized += 1;
                 continue;
             }
+            // its source answered with the file, and asking again gets that answer again
+            Found::Nowhere(Lack::Unsized(_)) => {
+                lacks.no_size += 1;
+                continue;
+            }
             Found::Nowhere(why) => why,
         };
         let (lost, outcome) = (why.lost(), why.outcome());
@@ -581,17 +590,44 @@ fn refused(checked: &Checked, asked: &[String], yes: bool) -> Option<Error> {
         );
     }
     let sized: u64 = lacks.iter().map(|lacks| lacks.sized).sum();
+    let no_size: u64 = lacks.iter().map(|lacks| lacks.no_size).sum();
+    let were = |count: u64| if count == 1 { "was" } else { "were" };
+    let (checked, alone) = match (sized, no_size) {
+        (_, 0) => (
+            format!(
+                "{} of {them} files {} checked elsewhere by size alone",
+                units::grouped(sized),
+                were(sized)
+            ),
+            "on the sizes alone",
+        ),
+        (0, _) => (
+            format!(
+                "{} of {them} files {} served without a size",
+                units::grouped(no_size),
+                were(no_size)
+            ),
+            "anyway",
+        ),
+        _ => (
+            format!(
+                "{} of {them} files {} checked elsewhere by size alone and {} served without a size",
+                units::grouped(sized),
+                were(sized),
+                units::grouped(no_size)
+            ),
+            "anyway",
+        ),
+    };
     Some(
         Error::new(
             Kind::Unconfirmed,
             format!(
-                "{said} on this machine, since {} of {them} files {} checked elsewhere by size alone, which does not show the bytes are the same",
-                units::grouped(sized),
-                if sized == 1 { "was" } else { "were" }
+                "{said} on this machine, since {checked}, which does not show the bytes are the same"
             ),
         )
         .help(format!(
-            "{push}; or `{}` frees {it} on the sizes alone",
+            "{push}; or `{}` frees {it} {alone}",
             super::project::command(&format!("drop {names} --yes"))
         )),
     )

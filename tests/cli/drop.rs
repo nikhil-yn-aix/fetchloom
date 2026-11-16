@@ -338,6 +338,36 @@ fn a_source_that_gives_no_answer_keeps_the_dataset_as_not_checked() -> Result {
     Ok(())
 }
 
+/// a source that serves the file without saying its size answered, and asking again gets the
+/// same answer: the dataset stays unconfirmed, as with a size alone, and `--yes` frees it.
+#[test]
+fn a_source_that_states_no_size_needs_a_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = iris(&sandbox)?;
+    source.change(vec![(
+        "/files/iris.csv".to_owned(),
+        reply("200 OK", &[], IRIS),
+    )]);
+    let output = sandbox.run(&["--json", "drop", "iris"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed");
+    assert_eq!(
+        error["message"],
+        "iris stays on this machine, since 1 of its files was served without a size, which does not show the bytes are the same"
+    );
+    assert_eq!(
+        error["help"],
+        "`fetchloom push iris --verify --to <folder>` keeps a checked copy on a folder mirror, replacing a damaged one, then `fetchloom drop iris --mirror <folder>` frees it; or `fetchloom drop iris --yes` frees it anyway"
+    );
+    assert!(sandbox.work().join("data/iris/iris.csv").exists());
+    let output = sandbox.run(&["--json", "drop", "iris", "--yes"])?;
+    ok(&output)?;
+    assert_eq!(json(&output)?["result"]["dropped"], json!(["iris"]));
+    assert!(!sandbox.work().join("data/iris/iris.csv").exists());
+    Ok(())
+}
+
 /// in a copy of the project, whose state is not used, drop takes the files that hold the pinned
 /// bytes as placed, as status counts them in place, and frees them, so status then agrees; one with
 /// other bytes stays, and drop says why.
