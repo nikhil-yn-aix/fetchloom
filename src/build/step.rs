@@ -201,6 +201,13 @@ fn process(command: &Command<'_>, building: &Path) -> io::Result<std::process::C
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a step with no program"))?;
     #[cfg(windows)]
+    if program::names_a_stream(program) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a colon past its drive names a stream of a file on windows, which is no program to start",
+        ));
+    }
+    #[cfg(windows)]
     let program = program::find(program, command.folder, command.env);
     let mut process = std::process::Command::new(program);
     process
@@ -619,6 +626,24 @@ mod tests {
         assert_eq!(ended(Ended::Exited(1), Some(0)), Ended::Low { free: 0 });
         assert_eq!(ended(Ended::Exited(0), Some(100)), Ended::Exited(0));
         assert_eq!(ended(Ended::Exited(3), None), Ended::Exited(3));
+    }
+
+    /// on windows a program named with a stream of a file, as `./tool.bat::$DATA`, never starts:
+    /// windows would start the stream as a program of its own, past how it treats a `.bat`.
+    #[cfg(windows)]
+    #[test]
+    fn a_program_naming_a_stream_never_starts() {
+        let env = BTreeMap::new();
+        let command = Command {
+            words: ["./tool.bat::$DATA", "x"].map(OsString::from).to_vec(),
+            folder: Path::new("."),
+            env: &env,
+        };
+
+        let refused = process(&command, Path::new(".")).err().unwrap();
+
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
+        assert!(refused.to_string().contains("stream"), "{refused}");
     }
 
     /// a step that ends before the watch looks, as one quicker than the first look or that ends

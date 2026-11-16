@@ -37,6 +37,23 @@ pub(super) fn find(
     .map_or_else(|| name.to_owned(), PathBuf::into_os_string)
 }
 
+/// whether `name`, a program as `run` names it, names a stream of a file, as `tool.bat::$DATA` or
+/// `tool:extra` do on windows: a colon anywhere but right after a drive letter at its start.
+/// windows would start the stream as a program of its own, past how it treats a `.bat`.
+pub(super) fn names_a_stream(name: &OsStr) -> bool {
+    let text = name.to_string_lossy();
+    let text = text
+        .strip_prefix(r"\\?\")
+        .or_else(|| text.strip_prefix(r"\\.\"))
+        .unwrap_or(&text);
+    let mut chars = text.chars();
+    let rest = match (chars.next(), chars.next()) {
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic() => chars.as_str(),
+        _ => text,
+    };
+    rest.contains(':')
+}
+
 /// where a shell in `folder` finds `name`: a name with a folder from `folder`, a bare one in each
 /// folder of `path` but never `folder` itself, as written when its extension is in `pathext`,
 /// else with each of those added in order. `is_file` tells files apart.
@@ -142,6 +159,24 @@ mod tests {
             Some(first.join("npm.cmd")),
             "with no PATHEXT, the extensions windows starts"
         );
+    }
+
+    /// a colon past a drive letter at the start names a stream of a file, which is no program.
+    #[test]
+    fn a_program_naming_a_stream_is_told_apart() {
+        for (name, stream) in [
+            ("./tool.bat::$DATA", true),
+            ("tool.exe:extra", true),
+            ("C:\\tools\\tool.exe:extra", true),
+            ("python3", false),
+            ("./tools/prep.bat", false),
+            ("C:\\Python\\python.exe", false),
+            ("C:/Python/python.exe", false),
+            ("c:tool.exe", false),
+            ("\\\\?\\C:\\tools\\tool.exe", false),
+        ] {
+            assert_eq!(names_a_stream(OsStr::new(name)), stream, "{name}");
+        }
     }
 
     /// `path` as a lowercase string, with `/` between folders on every system.
