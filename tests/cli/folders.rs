@@ -650,3 +650,59 @@ fn a_synced_folder_upgrades_by_asking_whether_its_files_changed() -> Result {
     }
     Ok(())
 }
+
+/// a sync keeps what the server said of each file only that server vouches for, a folder's, so an
+/// upgrade can ask whether it changed; a file its source pins by a checksum, as a SHA256SUMS
+/// list's, needs no such record, and the sync keeps none.
+#[test]
+fn a_sync_keeps_records_only_of_files_their_server_vouches_for() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(python)?;
+    // the list's files hold other bytes than the folder's, so a record names one file alone
+    let (rows, notes): (&[u8], &[u8]) = (b"site,count\na,1\n", b"collected in 2020\n");
+    let sums = format!(
+        "{}  rows.csv\n{}  notes.txt\n",
+        sha256_hex(rows),
+        sha256_hex(notes)
+    );
+    server.change(vec![
+        ("/sums/rows.csv".to_owned(), file(rows, "\"r1\"")),
+        ("/sums/notes.txt".to_owned(), file(notes, "\"n1\"")),
+        (
+            "/sums/SHA256SUMS".to_owned(),
+            file(sums.as_bytes(), "\"s1\""),
+        ),
+    ]);
+    for link in [
+        format!("{}/data/", server.url),
+        format!("{}/sums/SHA256SUMS", server.url),
+    ] {
+        let added = sandbox.run(&["add", &link])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+    sandbox.allow(&server.url);
+    let synced = sandbox
+        .command_in(&clone, &["sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(clone.join("data/sums/rows.csv"))?, rows);
+    let mut records = String::new();
+    for entry in fs::read_dir(cache.join("urls"))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|extension| extension == "log") {
+            records.push_str(&fs::read_to_string(path)?);
+        }
+    }
+    let kept = |bytes: &[u8]| records.contains(&format!("\"sha256\":\"{}\"", sha256_hex(bytes)));
+    for (path, bytes, vouched) in [
+        ("data/iris.csv", IRIS, true),
+        ("data/sub/tips.csv", TIPS, true),
+        ("sums/rows.csv", rows, false),
+        ("sums/notes.txt", notes, false),
+    ] {
+        assert_eq!(kept(bytes), vouched, "{path}: {records}");
+    }
+    Ok(())
+}
