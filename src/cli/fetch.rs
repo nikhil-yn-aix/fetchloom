@@ -1554,7 +1554,25 @@ async fn ended(
         return kept(failed, held);
     }
     tasks.abort_all();
-    kept(stopped(labels, results, index, failed), held)
+    ended_by(labels, results, (index, failed), held)
+}
+
+/// the error for `failed`, the failure of the job at `index` that stopped every download, joined
+/// with those of `results` that failed on their own before it. the joined error takes the first
+/// failure's kind, while the downloads a network failure stopped keep what `held` says.
+fn ended_by(
+    labels: &[String],
+    results: &mut [Option<Result<Fetched, Error>>],
+    (index, failed): (usize, Error),
+    held: &[Held],
+) -> Error {
+    let network = failed.kind == Kind::NetworkUnreachable;
+    let joined = stopped(labels, results, index, failed);
+    if network {
+        keeping(joined, held)
+    } else {
+        joined
+    }
 }
 
 /// the error for `stopping`, the failure of the job at `index` that stops every download, joined
@@ -1651,6 +1669,11 @@ fn kept(error: Error, held: &[Held]) -> Error {
     if !matches!(error.kind, Kind::Interrupted | Kind::NetworkUnreachable) {
         return error;
     }
+    keeping(error, held)
+}
+
+/// `error` with the lines [`kept`] tells, whatever its kind.
+fn keeping(error: Error, held: &[Held]) -> Error {
     let (mut sure, mut maybe, mut lost, mut unproven) = (0_u64, 0_u64, 0_u64, 0_u64);
     let mut lockless = 0_u64;
     let mut reasons = Vec::new();
@@ -3299,7 +3322,9 @@ mod tests {
         );
         let mut results = vec![None, Some(Err(gone)), None, None];
         let silent = Error::new(Kind::NetworkUnreachable, "the server did not answer");
-        let error = stopped(&labels, &mut results, 2, silent);
+        let held: Vec<Held> = std::iter::repeat_with(Held::default).take(4).collect();
+        held[2].keep(3 << 20, Resumable::Yes);
+        let error = ended_by(&labels, &mut results, (2, silent), &held);
         assert_eq!(error.kind, Kind::ReferenceUnresolved);
         let failed: Vec<&str> = error
             .failures
@@ -3312,6 +3337,7 @@ mod tests {
             [
                 "dead/dead.csv: the server has nothing at dead.csv",
                 "down/down.csv: the server did not answer",
+                "the 3.0 MiB downloaded so far is kept, and the next run continues from there",
             ]
         );
     }
