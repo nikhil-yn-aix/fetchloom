@@ -75,6 +75,7 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 | mendeley data | the public API under `/public-api` that its site uses: a version, its folders and their files | data.mendeley.com |
 | ENA | portal API: `filereportcount` and `filereport` for read runs | www.ebi.ac.uk, its files on ftp.sra.ebi.ac.uk over https |
 | GEO | the folder indexes of NCBI's file server under `/geo`, a series' `suppl/filelist.txt`, and where NCBI refuses an index, the first byte of each file GEO names alike for every accession | ftp.ncbi.nlm.nih.gov over https |
+| internet archive | the metadata API, `/metadata/<identifier>`, and `/download/` links | archive.org, and the servers its downloads go on to |
 | DANDI | API: a dandiset, a version's `info/` and its `assets/` with `metadata=true`, in pages | api.dandiarchive.org, its blobs on dandiarchive.s3.amazonaws.com over https |
 | OpenNeuro | GraphQL by GET with `apollo-require-preflight`: a dataset's newest snapshot, a snapshot's description and its folders, one at a time | openneuro.org, its files on s3.amazonaws.com/openneuro.org over https |
 | arXiv | API query (`id_list`, and `cat:` with `submittedDate` 1,000 papers a page) and OAI-PMH `GetRecord` in `arXivRaw`, one request every 3 s; pdfs from cornell's mirror through the cloud storage JSON API, else export.arxiv.org's `/pdf/` | export.arxiv.org, oaipmh.arxiv.org and the `arxiv-dataset` bucket on storage.googleapis.com |

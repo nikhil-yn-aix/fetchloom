@@ -330,6 +330,19 @@ pub(crate) static DROPBOX: Access = Access {
     pace: &[],
 };
 
+pub(crate) static INTERNET_ARCHIVE: Access = Access {
+    name: "internet archive",
+    api: Origins::Fixed(&["https://archive.org"]),
+    // archive.org sends each download on to a server that holds the item
+    files: Origins::Fixed(&["https://archive.org"]),
+    key: None,
+    sites: &[],
+    pages: |url| {
+        on(url, &["archive.org", "www.archive.org"]) && url.path().starts_with("/details/")
+    },
+    pace: &[],
+};
+
 /// S3, google cloud storage and azure: a bucket's host varies with its store, region and the
 /// endpoint a person names, and its keys go only to the buckets the settings list.
 pub(crate) static BUCKET: Access = Access {
@@ -408,7 +421,7 @@ pub(crate) static LOCAL: Access = Access {
 };
 
 /// every source, in the order a link's page is matched to one.
-static ALL: [&Access; 22] = [
+static ALL: [&Access; 23] = [
     &ZENODO,
     &DRYAD,
     &MENDELEY,
@@ -419,6 +432,7 @@ static ALL: [&Access; 22] = [
     &FIGSHARE,
     &OSF,
     &HUGGING_FACE,
+    &INTERNET_ARCHIVE,
     &KAGGLE,
     &DRIVE,
     &DROPBOX,

@@ -168,6 +168,10 @@ fn every_source() -> Vec<Case> {
             )],
         ),
         case(
+            "ia:iris_20240626",
+            &[("https://archive.org/metadata/iris_20240626", "ia/iris.json")],
+        ),
+        case(
             "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP",
             &[(
                 "https://dataverse.harvard.edu/api/datasets/:persistentId/versions/:latest-published?persistentId=doi%3A10.7910%2FDVN%2FTJCLKP",

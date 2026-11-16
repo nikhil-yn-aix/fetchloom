@@ -1169,6 +1169,118 @@ fn a_geo_series_whose_listing_ncbi_refuses_is_pinned_by_name() -> Result {
     Ok(())
 }
 
+const IA_ITEM: &str = "/archive.org/metadata/iris_20240626";
+
+/// archive.org's answer about `iris_20240626` listing `(name, bytes, md5, private)` files beside its
+/// own list of files, and the bytes behind each public file's download link.
+fn internet_archive(files: &[(&str, &[u8], &str, bool)]) -> Result<Routes> {
+    let mut listed: Vec<serde_json::Value> = files
+        .iter()
+        .map(|(name, body, md5, private)| {
+            let mut file = serde_json::json!({
+                "name": name,
+                "source": "original",
+                "size": body.len().to_string(),
+                "md5": md5,
+                "format": "Comma-Separated Values",
+            });
+            if *private {
+                file["private"] = "true".into();
+            }
+            file
+        })
+        .collect();
+    listed.push(serde_json::json!({
+        "name": "iris_20240626_files.xml",
+        "source": "original",
+        "format": "Metadata",
+        "md5": "3b9b9a3bb15c4a09c24d8a4f1c8bad64",
+        "summation": "md5",
+    }));
+    let mut item = fixture("ia/iris.json")?;
+    item["files"] = listed.into();
+    let mut routes = vec![(IA_ITEM.to_owned(), answer(&item)?)];
+    for (name, body, _, private) in files {
+        if !private {
+            routes.push((
+                format!("/archive.org/download/iris_20240626/{name}"),
+                file(body, "\"v1\""),
+            ));
+        }
+    }
+    Routes::start(routes)
+}
+
+/// an item pins its public files by bytes their stated MD5 checked, leaves a file it keeps
+/// private out with a reason, and a teammate's sync reads the lock alone.
+#[test]
+fn an_internet_archive_item_pins_md5_checked_files_and_syncs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = internet_archive(&[
+        ("iris.csv", ROWS, &md5_hex(ROWS), false),
+        ("notes.txt", NOTES, &md5_hex(NOTES), true),
+    ])?;
+    let page = "https://archive.org/details/iris_20240626";
+    let output = command(&sandbox, &routes, &["--json", "add", page, "--as", "iris"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let warnings = crate::support::warned(&json(&output)?);
+    assert!(
+        warnings.contains(
+            &"archive.org keeps 1 file of ia:iris_20240626 private, so it is left out: notes.txt"
+                .to_owned()
+        ),
+        "{warnings:?}"
+    );
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.iris]\nref = \"ia:iris_20240626\"\n"),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains(&format!(
+            "{{ path = \"iris.csv\", size = {}, sha256 = \"{}\", md5 = \"{}\", url = \"https://archive.org/download/iris_20240626/iris.csv\" }}",
+            ROWS.len(),
+            sha256_hex(ROWS),
+            md5_hex(ROWS)
+        )),
+        "{lock}"
+    );
+    assert!(
+        !lock.contains("notes.txt") && !lock.contains("_files.xml"),
+        "{lock}"
+    );
+
+    let listed = routes.targets().len();
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
+    ok(&synced)?;
+    assert_eq!(fs::read(teammate.join("data/iris/iris.csv"))?, ROWS);
+    assert_eq!(
+        routes.targets()[listed..],
+        ["/archive.org/download/iris_20240626/iris.csv"],
+        "the lock alone says what to download"
+    );
+    Ok(())
+}
+
+/// bytes unlike the MD5 archive.org states are refused, and never placed.
+#[test]
+fn an_internet_archive_file_unlike_its_md5_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = internet_archive(&[("iris.csv", ROWS, &md5_hex(NOTES), false)])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "ia:iris_20240626", "--as", "iris"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(30), "{}", text(&output.stderr)?);
+    assert_eq!(json(&output)?["errors"][0]["kind"], "integrity.mismatch");
+    assert!(!sandbox.work().join("data/iris/iris.csv").exists());
+    Ok(())
+}
+
 const DANDI_API: &str = "/api.dandiarchive.org/api/dandisets/000027";
 const DANDI_VERSION: &str = "0.210831.2033";
 

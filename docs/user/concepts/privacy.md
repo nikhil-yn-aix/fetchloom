@@ -8,6 +8,7 @@ fetchloom sends nothing on its own: it has no telemetry, no account and no updat
 |---|---|
 | search words, given to `search`, `add` or `get` in place of a link | the search of hugging face, kaggle, zenodo, GEO and openneuro, or of the sites `search --source` names, ENA and dandi among them |
 | a reference | the site it names: a DOI to doi.org, which says where it points, an id such as `zenodo:3608990` to that site, a link to its host |
+| an internet archive item, as `ia:iris_20240626` | archive.org's metadata api, then archive.org for each file, which sends the download on to a server that holds the item |
 | a download | the file's host, or a [mirror](../guides/mirrors.md#privacy) you named, which is asked by SHA-256 alone |
 | a key | its own host only, over https, as [where a key goes](#where-a-key-goes) says |
 | a request for AWS keys, once a bucket `s3_buckets` lists refused one without a key and no variable or profile gives keys | the AWS CLI on this machine, as `aws configure export-credentials`, whose default chain asks AWS's own services, such as this machine's instance metadata service; fetchloom asks none of them itself |

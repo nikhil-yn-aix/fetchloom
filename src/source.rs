@@ -17,6 +17,7 @@ mod geo;
 mod github;
 mod gitlab;
 mod hf;
+mod ia;
 pub(crate) mod kaggle;
 pub(crate) mod local;
 mod mendeley;
@@ -159,6 +160,8 @@ pub(crate) enum Reference {
     Dataverse(dataverse::Dataset),
     Osf(osf::Node),
     HuggingFace(hf::Repo),
+    /// an internet archive item, by its identifier.
+    InternetArchive(ia::Item),
     Kaggle(kaggle::Dataset),
     KaggleCompetition(kaggle::Competition),
     Drive(drive::Item),
@@ -362,7 +365,7 @@ pub(crate) struct Remote {
 }
 
 /// the prefixes [`Reference::parse`] reads before a `:`, which a guess at a typo picks from.
-pub(crate) const SCHEMES: [&str; 23] = [
+pub(crate) const SCHEMES: [&str; 24] = [
     "http",
     "https",
     "doi",
@@ -379,6 +382,7 @@ pub(crate) const SCHEMES: [&str; 23] = [
     "dataverse",
     "osf",
     "hf",
+    "ia",
     "kaggle",
     "arxiv",
     "s2",
@@ -442,6 +446,7 @@ impl Reference {
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
             "hf" => whole(Reference::HuggingFace(hf::Repo::parse(rest)?)),
+            "ia" => whole(Reference::InternetArchive(ia::Item::parse(rest)?)),
             "kaggle" => whole(kaggle::parse(rest)?),
             "arxiv" => whole(arxiv::parse(rest)?),
             "s2" => whole(s2::parse(rest)?),
@@ -615,6 +620,7 @@ impl Reference {
                 repo.resolve(api, crate::glob::folders(select).as_deref())
                     .await
             }
+            Reference::InternetArchive(item) => item.resolve(api).await,
             Reference::Kaggle(dataset) => dataset.resolve(api).await,
             Reference::KaggleCompetition(competition) => competition.resolve(api).await,
             Reference::Drive(item) => item.resolve(api).await,
@@ -647,6 +653,7 @@ impl fmt::Display for Reference {
             Reference::Dataverse(dataset) => write!(f, "{dataset}"),
             Reference::Osf(node) => write!(f, "{node}"),
             Reference::HuggingFace(repo) => write!(f, "{repo}"),
+            Reference::InternetArchive(item) => write!(f, "{item}"),
             Reference::Kaggle(dataset) => write!(f, "{dataset}"),
             Reference::KaggleCompetition(competition) => write!(f, "{competition}"),
             Reference::Drive(item) => write!(f, "{item}"),
@@ -772,6 +779,7 @@ impl Reference {
             Reference::Dataverse(_) => &access::DATAVERSE,
             Reference::Osf(_) => &access::OSF,
             Reference::HuggingFace(_) => &access::HUGGING_FACE,
+            Reference::InternetArchive(_) => &access::INTERNET_ARCHIVE,
             Reference::Kaggle(_) | Reference::KaggleCompetition(_) => &access::KAGGLE,
             Reference::Drive(_) => &access::DRIVE,
             Reference::Dropbox(_) => &access::DROPBOX,
@@ -933,6 +941,7 @@ fn repository_link(url: &Url) -> Option<(Reference, Option<String>)> {
         .or_else(|| {
             openneuro::Dataset::from_link(url).map(|dataset| whole(Reference::OpenNeuro(dataset)))
         })
+        .or_else(|| ia::Item::from_link(url).map(|item| whole(Reference::InternetArchive(item))))
 }
 
 /// repository file pages have a stable raw endpoint, unlike their HTML view.

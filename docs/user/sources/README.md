@@ -22,6 +22,7 @@ a dataset's page works as well as its id, so you can paste the link from your br
 | [kaggle](kaggle.md) | datasets and competitions | `kaggle:uciml/iris`, `kaggle:competitions/titanic` | competitions |
 | [ENA](ena.md) | sequencing reads, SRA's and DDBJ's included | `ena:SRR390728` | nothing; controlled-access runs are left out |
 | [GEO](geo.md) | gene expression series, samples and platforms | `geo:GSE1000` | nothing |
+| [internet archive](internet-archive.md) | the files of an archive.org item | `ia:iris_20240626` | nothing; private files are left out |
 | [DANDI](dandi.md) | neurophysiology dandisets | `dandi:000027` | nothing; embargoed dandisets are refused |
 | [OpenNeuro](openneuro.md) | neuroimaging datasets | `openneuro:ds000001@1.0.0` | nothing; private datasets are refused |
 | [arXiv](arxiv.md) | papers' pdfs: one paper, a month's or one category's month | `arxiv:1706.03762`, `arxiv:2401`, `arxiv:cs.LG/2401` | nothing |
