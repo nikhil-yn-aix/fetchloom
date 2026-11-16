@@ -714,19 +714,34 @@ fn unrecorded_part(cache: &Cache, url: &Url, pinned: Option<&Sha256>, bytes: &[u
     }
 }
 
-/// bytes a killed run never recorded are kept when the file's pin can check them: all of a
-/// pinned file, whatever its size and sealed or not, are put in place with no request; part of
-/// it goes on from where it ends, and the pin checks the joined bytes. bytes that are not the
-/// pinned file, or no pin to check them, start the file over.
+/// what a download of `bytes` pinned by its SHA-256 and size expects.
+fn pin(bytes: &[u8]) -> Expect {
+    Expect {
+        sha256: Some(crate::digest::sha256(bytes)),
+        size: Some(bytes.len() as u64),
+        ..Expect::default()
+    }
+}
+
+/// what a download of `bytes` whose source states its MD5 and size expects.
+fn stated(bytes: &[u8]) -> Expect {
+    let mut hasher = crate::digest::Hasher::with_md5();
+    hasher.update(bytes);
+    Expect {
+        md5: hasher.finish().1,
+        size: Some(bytes.len() as u64),
+        ..Expect::default()
+    }
+}
+
+/// bytes a killed run never recorded are kept when the file's pin, or the MD5 its source states,
+/// can check them: all of such a file, whatever its size and sealed or not, are put in place with
+/// no request; part of it goes on from where it ends, and the hash checks the joined bytes. bytes
+/// that are not the file, or no hash to check them, start the file over.
 #[test]
 fn bytes_no_record_names_are_kept_when_a_pin_checks_them() {
     let body = pattern(0, (3 << 20) + 5);
     let small = pattern(7, 300_000);
-    let pin = |bytes: &[u8]| Expect {
-        sha256: Some(crate::digest::sha256(bytes)),
-        size: Some(bytes.len() as u64),
-        ..Expect::default()
-    };
     let half = body.len() / 2;
     let rest = format!("bytes {half}-{}/{}", body.len() - 1, body.len());
     let whole = |bytes: &[u8]| reply("200 OK", &[("ETag", "\"v1\"")], bytes);
@@ -737,6 +752,19 @@ fn bytes_no_record_names_are_kept_when_a_pin_checks_them() {
         (pin(&small), &small[..], &small, whole(&small), None, 0),
         (
             pin(&body),
+            &body[..half],
+            &body,
+            reply(
+                "206 Partial Content",
+                &[("Content-Range", &rest), ("ETag", "\"v1\"")],
+                &body[half..],
+            ),
+            Some(format!("range: bytes={half}-")),
+            body.len() - half,
+        ),
+        (stated(&body), &body[..], &body, whole(&body), None, 0),
+        (
+            stated(&body),
             &body[..half],
             &body,
             reply(
