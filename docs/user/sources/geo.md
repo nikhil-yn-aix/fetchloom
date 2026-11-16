@@ -35,7 +35,7 @@ select by folder, as `--select "matrix/*"`; some files are large, such as GPL96'
 
 ## pins
 
-`resolved` is the reference itself, as `geo:GSE1000`; each file's `url` is its link on ftp.ncbi.nlm.nih.gov. NCBI states no checksums for these files, so the SHA-256 the lock records is all that names their bytes. its indexes round sizes, as `1.3M`, so a file's size comes from its download rather than from the index.
+`resolved` is the reference itself, as `geo:GSE1000`; each file's `url` is its link on ftp.ncbi.nlm.nih.gov. NCBI states no checksums for these files, so the SHA-256 the lock records is all that names their bytes. its indexes round sizes, as `1.3M`, so a file's size comes from its download rather than from the index, except where a series' `suppl/filelist.txt` states it: the tar of every sample's files, and the filelist itself.
 
 GEO remakes a series' SOFT, MINiML and matrix files from time to time, as the dates in their folders show, so a file pinned once can stop matching. a sync that receives other bytes stops with `integrity.mismatch`, exit 30, and places nothing; [push](../commands/push.md) the pinned bytes to a mirror to keep them, or run [`lock --upgrade`](../commands/lock.md#upgrading) to take the new ones. `access` is `public`.
 
@@ -46,3 +46,5 @@ GEO remakes a series' SOFT, MINiML and matrix files from time to time, as the da
 ## limits
 
 requests to NCBI's hosts start a third of a second apart, as NCBI asks of a program without a key, so a large listing takes a while. [search](../commands/search.md) finds GEO's series through NCBI's E-utilities, and records GEO keeps private for reviewers are not listed.
+
+NCBI's file server refuses a program the listing of its folders at times, with 403, while it still serves the files in them. a refused folder is then listed by the names GEO gives every series or platform, as `soft/GSE1000_family.soft.gz` and `matrix/GSE1000_series_matrix.txt.gz`, each kept once the server sends its first byte, and a series' supplementary tar by its `filelist.txt`; a `source.partial` warning says so, since a file named otherwise, such as a matrix for each of several platforms, is left out until NCBI lists the folder again. a sample's files have no such names, so a refused sample fails with `network.status`, exit 20: run the same command again later.

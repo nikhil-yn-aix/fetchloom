@@ -1093,6 +1093,82 @@ fn bytes_geo_remade_under_the_same_name_are_refused_by_the_lock() -> Result {
     Ok(())
 }
 
+/// NCBI refuses a program the listing of its folders at times while it serves their files: a
+/// series is still pinned from the names GEO gives every series and the tar its filelist names,
+/// at the size the filelist states, and the add says what such a listing leaves out rather than
+/// calling the series private.
+#[test]
+fn a_geo_series_whose_listing_ncbi_refuses_is_pinned_by_name() -> Result {
+    let sandbox = Sandbox::new()?;
+    let filelist = format!(
+        "#Archive/File\tName\tTime\tSize\tType\nArchive\tGSE1000_RAW.tar\t01/17/2013 13:28:57\t{}\tTAR\nFile\tGSM15785.cel.gz\t01/28/2004 08:49:28\t3460434\tCEL\n",
+        NOTES.len()
+    );
+    let routes = Routes::start(vec![
+        (
+            format!("{GEO_SERIES}/"),
+            reply(
+                "403 Forbidden",
+                &[("Content-Type", "text/html")],
+                b"<h1>Access forbidden</h1>",
+            ),
+        ),
+        (
+            format!("{GEO_SERIES}/matrix/GSE1000_series_matrix.txt.gz"),
+            file(ROWS, "\"m1\""),
+        ),
+        (
+            format!("{GEO_SERIES}/suppl/filelist.txt"),
+            file(filelist.as_bytes(), "\"f1\""),
+        ),
+        (
+            format!("{GEO_SERIES}/suppl/GSE1000_RAW.tar"),
+            file(NOTES, "\"t1\""),
+        ),
+    ])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "geo:GSE1000", "--as", "gse1000"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let warnings = crate::support::warned(&json(&output)?);
+    assert!(
+        warnings.iter().any(|warning| warning.starts_with(
+            "NCBI refused to list the folders of geo:GSE1000 for now, so it holds the files GEO names alike for every series"
+        )),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings.iter().all(|warning| !warning.contains("owner")),
+        "{warnings:?}"
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(
+        lock.contains(&format!(
+            "{{ path = \"suppl/GSE1000_RAW.tar\", size = {}, sha256 = \"{}\", url = \"https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/suppl/GSE1000_RAW.tar\" }}",
+            NOTES.len(),
+            sha256_hex(NOTES)
+        )),
+        "{lock}"
+    );
+    assert!(lock.contains("path = \"suppl/filelist.txt\""), "{lock}");
+    assert!(
+        !lock.contains("soft/") && !lock.contains("miniml/"),
+        "names the file server does not serve are left out: {lock}"
+    );
+    assert_eq!(
+        fs::read(
+            sandbox
+                .work()
+                .join("data/gse1000/matrix/GSE1000_series_matrix.txt.gz")
+        )?,
+        ROWS
+    );
+    Ok(())
+}
+
 const DANDI_API: &str = "/api.dandiarchive.org/api/dandisets/000027";
 const DANDI_VERSION: &str = "0.210831.2033";
 

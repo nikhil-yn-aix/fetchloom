@@ -118,6 +118,7 @@ fn every_source() -> Vec<Case> {
                 (&format!("{geo}miniml/"), "geo/miniml.html"),
                 (&format!("{geo}soft/"), "geo/soft.html"),
                 (&format!("{geo}suppl/"), "geo/suppl.html"),
+                (&format!("{geo}suppl/filelist.txt"), "geo/filelist.txt"),
             ],
         ),
         case(
