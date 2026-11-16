@@ -2076,6 +2076,27 @@ fn a_copy_asked_for_made_read_only_while_sync_takes_it_stays_a_copy() -> Result 
     Ok(())
 }
 
+/// a drive that makes no links says so when sync copies files there: fat and exfat refuse both
+/// links, macos on exfat with its own ENOTSUP, which counts as a refusal too.
+#[test]
+fn a_drive_that_links_nothing_says_files_were_copied() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+
+    let added = sandbox.run(&["add", &server.url])?;
+
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    let links = sandbox.links()?;
+    assert_eq!(
+        stderr.contains("cannot link files"),
+        !links.reflink && !links.hardlink,
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a program reading a copy while sync links it keeps reading the bytes it opened: the link takes
 /// the copy's name in one step, and the copy lasts while it is open.
 #[test]

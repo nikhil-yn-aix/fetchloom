@@ -1323,6 +1323,31 @@ fn a_cache_elsewhere_is_not_blamed_for_a_drive_that_links_nothing() {
     assert_eq!(placer.unlinked(), Some(Unlinked::NoLinks));
 }
 
+/// a link the disk cannot make is not asked for again after the first file: hfs+ answers a clone,
+/// and exfat a clone and a hardlink, with macos's own ENOTSUP, so placing there goes straight to
+/// what the disk makes, and says so where it links nothing.
+#[test]
+fn a_link_the_disk_cannot_make_is_not_asked_for_again() {
+    let (folder, object) = cache(true);
+    let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
+
+    let method = placer
+        .place(&object, &folder.path().join("first.csv"), false)
+        .unwrap();
+
+    // windows tries a hardlink first, and a clone only when that fails
+    let cloning_tried = !(cfg!(windows) && method == Method::Hardlink);
+    if cloning_tried && method != Method::Reflink {
+        assert!(!placer.can_reflink.load(Ordering::Relaxed), "{method:?}");
+    }
+    let hardlinks = makes_hardlinks(folder.path());
+    assert_eq!(placer.can_hardlink(), Some(hardlinks), "{method:?}");
+    if method == Method::Copy {
+        assert!(!placer.can_hardlink.load(Ordering::Relaxed));
+        assert_eq!(placer.unlinked(), Some(Unlinked::NoLinks));
+    }
+}
+
 /// whether the filesystem holding `folder` makes hardlinks, as NTFS and ext4 do and FAT
 /// and exFAT do not.
 pub(super) fn makes_hardlinks(folder: &Path) -> bool {

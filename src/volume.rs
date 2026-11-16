@@ -304,9 +304,11 @@ pub(crate) fn gives_no_locks(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Unsupported
 }
 
-/// whether `err`, from making a reflink or a hardlink, says the volume makes no such link: FAT32
-/// and exFAT answer code 1, `ERROR_INVALID_FUNCTION` or `EPERM`, though `EPERM` may refuse one file
-/// alone under linux's `protected_hardlinks`, which only a probe of fetchloom's own tells apart.
+/// whether `err`, from making a reflink or a hardlink, says the volume makes no such link: the
+/// system or the filesystem lacks the call, as `ENOSYS`, `EOPNOTSUPP` and macos's own `ENOTSUP`
+/// say, which hfs+ and exfat answer there, or FAT32 and exFAT answer code 1,
+/// `ERROR_INVALID_FUNCTION` or `EPERM`, though `EPERM` may refuse one file alone under linux's
+/// `protected_hardlinks`, which only a probe of fetchloom's own tells apart.
 pub(crate) fn refuses_links(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Unsupported || err.raw_os_error().is_some_and(refusal_code)
 }
@@ -363,10 +365,12 @@ fn win32(code: i32) -> u32 {
     }
 }
 
-/// `EPERM`. linux reports the other refusals with codes std already calls unsupported.
+/// `EPERM`, and `ENOTSUP`, which macos keeps apart from `EOPNOTSUPP` and std leaves uncategorized
+/// there, while it calls `ENOSYS` and `EOPNOTSUPP` unsupported everywhere.
 #[cfg(not(windows))]
 fn refusal_code(code: i32) -> bool {
-    code == 1
+    use rustix::io::Errno;
+    code == Errno::PERM.raw_os_error() || code == Errno::NOTSUP.raw_os_error()
 }
 
 /// makes a new empty file that file browsers do not show: windows hides it by its attribute,
@@ -671,15 +675,13 @@ pub(crate) fn rename_new_at<P: rustix::path::Arg + Copy, Q: rustix::path::Arg + 
             rustix::fs::AtFlags::empty(),
         )
     };
-    match linked {
+    match linked.map_err(io::Error::from) {
         Ok(()) => rustix::fs::unlinkat(from_parent, from, rustix::fs::AtFlags::empty())
             .map_err(Into::into),
-        Err(error)
-            if error == rustix::io::Errno::NOTSUP || error == rustix::io::Errno::OPNOTSUPP =>
-        {
+        Err(error) if refuses_links(&error) => {
             rename_over_reserved(from_parent, from, to_parent, to)
         }
-        Err(error) => Err(error.into()),
+        Err(error) => Err(error),
     }
 }
 
@@ -1027,5 +1029,49 @@ mod tests {
         assert!(!syncfs_reports_errors("3.10.0-1160.el7.x86_64"));
         assert!(!syncfs_reports_errors(""));
         assert!(!syncfs_reports_errors("unknown"));
+    }
+
+    /// a disk that makes no such link says so by any of its codes: the call missing from the
+    /// system or the disk, ENOSYS, EOPNOTSUPP and ENOTSUP, which macos keeps apart and answers on
+    /// hfs+ and exfat, or FAT's EPERM; a full disk, a missing file or a link across drives is
+    /// another failure.
+    #[test]
+    fn a_disk_that_makes_no_such_link_says_so_by_each_of_its_codes() {
+        #[cfg(unix)]
+        let codes = {
+            use rustix::io::Errno;
+            [
+                (Errno::PERM, true),
+                (Errno::NOSYS, true),
+                (Errno::OPNOTSUPP, true),
+                (Errno::NOTSUP, true),
+                (Errno::NOSPC, false),
+                (Errno::IO, false),
+                (Errno::ACCESS, false),
+                (Errno::EXIST, false),
+                (Errno::NOENT, false),
+                (Errno::XDEV, false),
+                (Errno::MLINK, false),
+            ]
+            .map(|(errno, refuses)| (errno.raw_os_error(), refuses))
+        };
+        // reflink-copy wraps a windows code in an HRESULT, 0x8007 above it
+        #[cfg(windows)]
+        let codes = [
+            (1, true),
+            (50, true),
+            (0x8007_0001_u32.cast_signed(), true),
+            (0x8007_0032_u32.cast_signed(), true),
+            (5, false),
+            (17, false),
+            (32, false),
+            (112, false),
+        ];
+        for (code, refuses) in codes {
+            let error = io::Error::from_raw_os_error(code);
+            assert_eq!(refuses_links(&error), refuses, "{error}");
+        }
+        assert!(refuses_links(&io::ErrorKind::Unsupported.into()));
+        assert!(!refuses_links(&io::ErrorKind::Other.into()));
     }
 }
