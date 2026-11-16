@@ -100,6 +100,11 @@ struct Record {
     /// 416 past them, does not give again. records from before it was kept have none.
     #[serde(default)]
     name: Option<String>,
+    /// whether a credential of this machine went with an answer that brought some of the bytes,
+    /// so the object they make is marked as one a key came with, whichever link finishes it.
+    /// records from before it was kept have none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    keyed: bool,
 }
 
 /// bytes written past the prefix, from `start` up to `end`, and their SHA-256, which a resume
@@ -521,6 +526,7 @@ impl Partial {
                 validators,
                 ranges: Vec::new(),
                 name: recorded.as_ref().and_then(|record| record.name.clone()),
+                keyed: recorded.as_ref().is_some_and(|record| record.keyed),
             },
         };
         if keep && let Some(record) = recorded {
@@ -709,6 +715,12 @@ impl PartialWriter {
     /// them with no answer naming the file.
     pub(crate) fn name(&mut self, name: &str) {
         self.record.name = Some(name.to_owned());
+    }
+
+    /// notes that a credential of this machine went with an answer whose bytes this download
+    /// keeps, which its records and the object it makes remember.
+    pub(crate) fn keyed(&mut self) {
+        self.record.keyed = true;
     }
 
     /// how many bytes past the prefix are written.
@@ -940,6 +952,11 @@ impl PartialWriter {
         } = self;
         // read-back must finish before resizing could hide a short read
         let (digest, md5) = hasher.finish(prefix)?;
+        if record.keyed {
+            cache
+                .mark_keyed(&digest)
+                .map_err(|err| cache.explained(&cache.root().join("keyed"), err))?;
+        }
         // bytes past the prefix are not in the hash, such as the end of an earlier version
         let metadata = file.metadata()?;
         if metadata.len() != prefix {

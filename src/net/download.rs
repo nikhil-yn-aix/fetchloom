@@ -820,7 +820,8 @@ impl Net {
                     name: partial.named(),
                     page: false,
                 };
-                self.finish_kept(fetch, partial, kept, told, &watched).await
+                self.finish_kept(fetch, partial, kept, (told, false), &watched)
+                    .await
             } else {
                 self.keep_permit(&fetch.from, &mut state.permits).await?;
                 self.attempt(
@@ -1057,8 +1058,9 @@ impl Net {
             refuse_other_length(fetch, Some(size))?;
             // the bytes are all here, so the slots go to other files before the check
             drop(state.permits.take());
+            let kept = (size, kept.clone());
             return self
-                .finish_kept(fetch, partial, (size, kept.clone()), told, on)
+                .finish_kept(fetch, partial, kept, (told, carried(&response)), on)
                 .await;
         }
         if let Some((received, kept)) = &earlier
@@ -1131,6 +1133,9 @@ impl Net {
         };
         if let Some(name) = &told.name {
             writer.name(name);
+        }
+        if carried(&response) {
+            writer.keyed();
         }
         let kept = writer.kept();
         if offset > 0 {
@@ -1225,13 +1230,14 @@ impl Net {
 
     /// the answer for bytes an earlier run kept, `size` of them under `validators`, that are all
     /// of the file: opened as a resume opens them, which checks them against their record, and
-    /// put in the cache with no byte more. a later run would do the same.
+    /// put in the cache with no byte more, as one a key came with when the record says so or
+    /// `carried` says the answer that found them whole carried one. a later run would do the same.
     async fn finish_kept(
         &self,
         fetch: &Fetch,
         partial: &Partial,
         (size, validators): (u64, Validators),
-        told: Told,
+        (told, carried): (Told, bool),
         on: Listener<'_>,
     ) -> Result<Answer, Failure> {
         let body = Body {
@@ -1247,6 +1253,9 @@ impl Net {
             on(Event::Spoiled).map_err(Failure::Final)?;
             return Ok(Answer::StartOver);
         };
+        if carried {
+            writer.keyed();
+        }
         self.started(on, Some(size), size, Resumable::Yes)?;
         self.refuse_pointer(fetch, &mut writer)?;
         on(Event::Arrived).map_err(Failure::Final)?;
@@ -1996,6 +2005,12 @@ fn unread(error: Error, refused: Error, version: &str) -> Error {
 /// every file it unpacked to.
 fn holds(cache: &Cache, fetch: &Fetch, digest: &Sha256, size: Option<u64>) -> bool {
     cache.find(digest, size).is_some() || fetch.unpack && cache.holds_unpacked(digest, None)
+}
+
+/// whether a credential of this machine went with `response`'s request or a hop before it, as
+/// [`super::Carried`] marks it.
+fn carried(response: &reqwest::Response) -> bool {
+    response.extensions().get::<super::Carried>().is_some()
 }
 
 /// the bytes `record` says the URL served, which `origin` brings back without a new answer.

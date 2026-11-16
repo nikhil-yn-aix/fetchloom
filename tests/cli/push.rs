@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::caps::shown;
 use crate::mirrors::{IRIS, MEMBERS, cold, holds_the_project, project};
-use crate::support::{Result, Sandbox, edit, json, ok, sha256_hex, text};
+use crate::support::{Result, Routes, Sandbox, edit, file, json, ok, reply, sha256_hex, text};
 
 /// the names of the files below `folder` of the mirror at `root`, each checked to hash to its
 /// name, as a reader checks it.
@@ -777,5 +777,68 @@ fn a_public_claim_still_asks_when_this_machine_signs_in_there() -> Result {
         "{error}"
     );
     assert!(!fresh.join("objects").exists());
+    Ok(())
+}
+
+/// a cloned data.lock may pin a link this machine keeps no key for that redirects to a host it
+/// signs in to, whose `.netrc` login then goes with the request: the file came with a key, so a
+/// push asks about it, and so does a push of the same bytes another project pins at a link
+/// that never leads there.
+#[test]
+fn a_file_a_key_went_with_on_its_way_still_asks() -> Result {
+    let sandbox = Sandbox::new()?;
+    let keyed = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"k1\""))])?;
+    let away = format!("{}/iris.csv", keyed.url);
+    let public = Routes::start(vec![(
+        "/iris.csv".to_owned(),
+        reply(
+            "302 Found",
+            &[("Location", &away), ("Content-Length", "0")],
+            b"",
+        ),
+    )])?;
+    // this machine by another name, which no key saved for 127.0.0.1 answers
+    let named = public.url.replace("127.0.0.1", "localhost");
+    sandbox.allow(&named);
+    sandbox.allow(&keyed.url);
+    let netrc = sandbox.folder("home")?.join(".netrc");
+    fs::write(&netrc, "machine 127.0.0.1 login lab password lab-secret\n")?;
+    #[cfg(unix)]
+    fs::set_permissions(&netrc, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    ok(&sandbox.run(&["add", &format!("{named}/iris.csv"), "--as", "iris"])?)?;
+    assert!(
+        keyed
+            .requests()
+            .iter()
+            .any(|head| head.contains("authorization: basic")),
+        "the login went with the redirected request"
+    );
+    access(&sandbox, &[("iris", "public")])?;
+    let push = |folder: &Path, root: &Path| -> Result<Value> {
+        let output = sandbox
+            .command_in(folder, &["--json", "push", "--to"])
+            .arg(root)
+            .output()?;
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+        assert!(!root.join("objects").exists());
+        Ok(json(&output)?["errors"][0].clone())
+    };
+    let error = push(&sandbox.work(), &sandbox.folder("lab")?.join("mirror"))?;
+    assert_eq!(error["kind"], "unconfirmed");
+    assert!(
+        error["message"].as_str().is_some_and(
+            |message| message.contains("this machine signs in where iris's files come from")
+        ),
+        "{error}"
+    );
+    let other = sandbox.folder("other")?;
+    fs::copy(sandbox.work().join("data.toml"), other.join("data.toml"))?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let pinned = format!("url = \"{named}/iris.csv\"");
+    assert!(lock.contains(&pinned), "{lock}");
+    let elsewhere = format!("url = \"{named}/elsewhere.csv\"");
+    fs::write(other.join("data.lock"), lock.replace(&pinned, &elsewhere))?;
+    let again = push(&other, &sandbox.folder("lab")?.join("second"))?;
+    assert_eq!(again["kind"], "unconfirmed", "{again}");
     Ok(())
 }

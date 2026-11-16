@@ -4,6 +4,7 @@
 use std::future::{Future, poll_fn};
 use std::io;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::task::Poll;
 use std::time::{Duration, Instant};
@@ -355,6 +356,9 @@ struct Streams<'a> {
     job: Job<'a>,
     board: Mutex<Board>,
     sender: tokio::sync::mpsc::Sender<(u64, Bytes)>,
+    /// whether a credential of this machine went with the request of a part, as with the answer
+    /// the split started from.
+    keyed: AtomicBool,
 }
 
 impl Streams<'_> {
@@ -413,6 +417,7 @@ impl Net {
             job,
             board: Mutex::new(board),
             sender,
+            keyed: AtomicBool::new(false),
         };
         let Completion {
             interrupted,
@@ -423,11 +428,15 @@ impl Net {
             let board = streams.board();
             (board.stopped, board.pieced)
         };
+        let keyed = streams.keyed.load(Ordering::Relaxed);
         drop(streams);
-        let writer = writing
+        let mut writer = writing
             .await
             .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
             .map_err(|err| Failure::Final(local(&err)))?;
+        if keyed {
+            writer.keyed();
+        }
         if interrupted {
             return Err(Failure::Final(failure::interrupted(from)));
         }
@@ -602,6 +611,9 @@ impl Net {
             )
             .await
             .map_err(Ended::Failed)?;
+        if super::carried(&response) {
+            shared.keyed.store(true, Ordering::Relaxed);
+        }
         let status = response.status();
         let head = response.headers();
         tracing::debug!(url = %Shown(job.from), status = status.as_u16(), start, end, "part");

@@ -26,7 +26,7 @@ fn cache_folders_cannot_be_links_to_another_folder() {
     }
     for name in [
         "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed",
-        "imported",
+        "imported", "keyed",
     ] {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("cache");

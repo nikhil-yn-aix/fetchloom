@@ -5,7 +5,9 @@
 use std::fs;
 
 use crate::project::IRIS;
-use crate::support::{Result, Routes, Sandbox, file, json, reply, sha256_hex, text};
+use crate::support::{
+    Result, Routes, Sandbox, delete, file, json, object, reply, sha256_hex, text,
+};
 
 const LINK: &str = "https://data.example.org/files/iris.csv";
 
@@ -219,5 +221,69 @@ fn a_link_with_a_query_is_never_sent_to_the_wayback_machine() -> Result {
             .contains("the wayback machine was not asked, since the link holds a query"),
         "{document}"
     );
+    Ok(())
+}
+
+/// a link whose host this machine keeps no key for may redirect to one it signs in to, whose
+/// `.netrc` login then goes with the download: once the file is gone from its link and from
+/// this machine, no archive hears of it, and the failure says why.
+#[cfg(debug_assertions)]
+#[test]
+fn no_archive_is_asked_about_a_file_a_key_went_with() -> Result {
+    let sandbox = Sandbox::new()?;
+    let keyed = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"k1\""))])?;
+    let away = format!("{}/iris.csv", keyed.url);
+    let target = LINK.replacen("https://", "/", 1);
+    let routes = Routes::start(vec![(
+        target.clone(),
+        reply(
+            "302 Found",
+            &[("Location", &away), ("Content-Length", "0")],
+            b"",
+        ),
+    )])?;
+    sandbox.allow(&keyed.url);
+    let home = sandbox.folder("home")?;
+    let port = keyed.url.rsplit(':').next().ok_or("no port")?;
+    fs::write(
+        home.join(".netrc"),
+        format!("machine 127.0.0.1:{port} login lab password lab-secret\n"),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(home.join(".netrc"), fs::Permissions::from_mode(0o600))?;
+    }
+    let output = sandbox
+        .command(&["add", LINK, "--as", "iris"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(
+        keyed
+            .requests()
+            .iter()
+            .any(|head| head.contains("authorization: basic")),
+        "the login went with the redirected request"
+    );
+    routes.change(vec![
+        (target, reply("404 Not Found", &[], b"")),
+        (heritage(), file(IRIS, "\"h\"")),
+    ]);
+    delete(&sandbox.work().join("data").join("iris").join("iris.csv"))?;
+    delete(&object(&sandbox.cache(), IRIS))?;
+    let output = sandbox
+        .command(&["--json", "sync"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(10), "{document}");
+    assert!(
+        document.to_string().contains(
+            "no web archive was asked, since a key of this machine went with an earlier download of the file, so it may not be public"
+        ),
+        "{document}"
+    );
+    assert_eq!(archived(&routes), Vec::<String>::new());
     Ok(())
 }

@@ -303,7 +303,7 @@ pub(crate) fn unpack(
     let mut guard = Guard::new(limits, watch, &meter)
         .writing_to(cache.root(), filesystem)
         .with_room(cache.root(), &room);
-    let (mut members, added) = store::store_all(cache, writers, |writers| {
+    let (mut members, added) = store::store_all(cache, writers, input.keyed(), |writers| {
         let mut buffer = vec![0; BUFFER];
         let mut keep = |guard: &mut Guard<'_>, path: String, size: u64, from: &mut dyn Read| {
             writers.keep(guard, path, size, from, &mut buffer)

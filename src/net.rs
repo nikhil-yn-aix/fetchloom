@@ -858,8 +858,13 @@ impl Net {
 
     /// a GET to `url`, shaped by `shape`, following redirects one checked hop at a time and
     /// waiting out its host's rate limit. a credential goes to its own host alone, and past a
-    /// redirect only when it answers every hop, as a saved login does; the trust boundaries
-    /// section of docs/dev/architecture/network.md has the rest.
+    /// redirect only when it answers every hop, as a saved login does; the answer is marked
+    /// [`Carried`] when one went with any hop. the trust boundaries section of
+    /// docs/dev/architecture/network.md has the rest.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each hop's checks, credentials and answer stay in order in one loop"
+    )]
     async fn send_on(
         &self,
         lane: Lane,
@@ -890,7 +895,7 @@ impl Net {
         let mut first_origin = true;
         let mut asked_signed = false;
         let mut renewed = false;
-        let (mut site_sent, mut answering) = (None, Duration::ZERO);
+        let (mut site_sent, mut answering, mut keyed) = (None, Duration::ZERO, false);
         loop {
             self.may_ask(&hop, mirror, sent_by.as_ref())?;
             let (client, carrier) = self.checked_client(wire, lane, &hop).await?;
@@ -905,7 +910,9 @@ impl Net {
                 .await
                 .map_err(Failure::Final)?;
             let credentials = (signer.as_ref(), &tokened, &blobbed);
-            let request = self.hop_request(client, &hop, &shape, first_origin, credentials)?;
+            let (request, sends_key) =
+                self.hop_request(client, &hop, &shape, first_origin, credentials)?;
+            keyed |= sends_key;
             // counted as it goes: one refused before is no request, and a redirect's hop is part
             // of the request it follows
             if redirects == 0 {
@@ -965,6 +972,9 @@ impl Net {
             let Some(next) = self.next_hop(url, &hop, &response, &mut redirects, &mut name)? else {
                 if let Some(name) = name {
                     response.extensions_mut().insert(RedirectName(name));
+                }
+                if keyed {
+                    response.extensions_mut().insert(Carried);
                 }
                 response.extensions_mut().insert(Answering(answering));
                 return Ok(response);
@@ -1076,7 +1086,8 @@ impl Net {
     }
 
     /// the request for `hop`, as `shape` makes it: signed by `signer`, or else with its host's
-    /// stored credential while on the `first_origin`, a google token and an azure credential.
+    /// stored credential while on the `first_origin`, a google token and an azure credential, and
+    /// whether any credential of this machine goes with it.
     fn hop_request(
         &self,
         client: &reqwest::Client,
@@ -1088,21 +1099,27 @@ impl Net {
             &google::Tokened<'_>,
             &azure::Blobbed<'_>,
         ),
-    ) -> Result<reqwest::RequestBuilder, Failure> {
+    ) -> Result<(reqwest::RequestBuilder, bool), Failure> {
         if let Some(signer) = signer {
             tracing::debug!(host = host(hop), "signing the request with an AWS key");
-            return signed(
+            let request = signed(
                 shape(client.get(hop.clone())),
                 signer.headers(hop, SystemTime::now()),
             )
-            .map_err(Failure::Final);
+            .map_err(Failure::Final)?;
+            return Ok((request, true));
         }
-        let request = shape(self.request(client, &blobbed.url(hop), first_origin))
+        let (request, stored) = self.carrying(client, &blobbed.url(hop), first_origin);
+        let request = shape(request)
             .headers(tokened.headers())
             .headers(blobbed.headers());
-        blobbed
+        let request = blobbed
             .signed(request, SystemTime::now())
-            .map_err(Failure::Final)
+            .map_err(Failure::Final)?;
+        Ok((
+            request,
+            stored || tokened.has_credential() || blobbed.has_credential(),
+        ))
     }
 
     /// whether S3 refused `response` because the keys a program gave for `signer` expired, which
@@ -1190,8 +1207,19 @@ impl Net {
         url: &Url,
         credentials: bool,
     ) -> reqwest::RequestBuilder {
+        self.carrying(client, url, credentials).0
+    }
+
+    /// [`Net::request`], and whether a stored credential or a website's went with it.
+    fn carrying(
+        &self,
+        client: &reqwest::Client,
+        url: &Url,
+        credentials: bool,
+    ) -> (reqwest::RequestBuilder, bool) {
         let mut request = client.get(url.clone());
         let site = self.site_headers(url, credentials);
+        let mut carried = !site.is_empty();
         if self.carries(url)
             && let Some(host) = url.host_str()
         {
@@ -1214,6 +1242,7 @@ impl Net {
                         tracing::debug!(host, header = %key.name, "sending a stored credential");
                         request = request.header(key.name.clone(), key.value.clone());
                         sent.push(&key.name);
+                        carried = true;
                     }
                 }
             }
@@ -1221,7 +1250,7 @@ impl Net {
         for (name, value) in site {
             request = request.header(name, value);
         }
-        request
+        (request, carried)
     }
 
     /// waits while a rate limit of the URL's host is used up, telling the person watching once
@@ -1408,6 +1437,13 @@ async fn unanswered(
 /// a redirect may name the download even when the final storage response does not.
 #[derive(Clone, Debug)]
 struct RedirectName(String);
+
+/// marks an answer whose request, or a hop before it, carried a credential of this machine: a
+/// saved key, a `.netrc` login, a site's sign-in or the cookies it set, an S3 signature or a
+/// google or azure credential. a download it brings is marked in the cache, so push and the web
+/// archives treat its file as one that may not be public.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Carried;
 
 /// the host of a URL as people say it, for messages, and as requests to it are counted, paced and
 /// grouped: without the closing dot a fully qualified name may end with, which names the same

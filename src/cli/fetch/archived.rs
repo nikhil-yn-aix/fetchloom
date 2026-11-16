@@ -1,8 +1,9 @@
 //! a pinned file that no cache, mirror or source gives any more is asked of two public archives:
 //! software heritage by its SHA-256, then the wayback machine for a capture of its link in
 //! data.lock. the pinned hash decides, as for a mirror, so an archive can withhold a file but
-//! never change one. neither is asked about a file this machine could have needed a key for, one
-//! on a private network, offline or in mirror-only mode.
+//! never change one. neither is asked about a file this machine could have needed a key for, by
+//! its host or by the cache's mark of a key that came with it before, one on a private network,
+//! offline or in mirror-only mode.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -65,6 +66,9 @@ enum Unasked {
     Private(String),
     /// this machine keeps a key for its host, so it may not be public.
     Keyed(String),
+    /// a key of this machine went with an earlier download of it, as the cache marks it, so it
+    /// may not be public.
+    KeyWent,
     /// the run already asked about the most files one run asks about.
     Most,
 }
@@ -78,6 +82,7 @@ impl Unasked {
             Unasked::Keyed(host) => Some(format!(
                 "no web archive was asked, since this machine keeps a key for {host}, so the file may not be public"
             )),
+            Unasked::KeyWent => Some("no web archive was asked, since a key of this machine went with an earlier download of the file, so it may not be public".to_owned()),
             Unasked::Most => Some(format!(
                 "no web archive was asked, since this run already asked about {MOST} files, the most one run asks about"
             )),
@@ -98,8 +103,9 @@ impl Archived {
     }
 
     /// why no archive may be asked about the file at `link`, if none may: the setting, offline,
-    /// mirror-only mode, a private host or one this machine keeps a key for, then the run's cap.
-    fn unasked(&self, link: &Url, offline: bool, only: bool) -> Option<Unasked> {
+    /// mirror-only mode, a private host or one this machine keeps a key for, a key that went with
+    /// the file before, as `marked` says the cache recorded, then the run's cap.
+    fn unasked(&self, link: &Url, marked: bool, offline: bool, only: bool) -> Option<Unasked> {
         if !self.on {
             return Some(Unasked::Off);
         }
@@ -120,6 +126,9 @@ impl Archived {
         });
         if keys.signs_in(link.as_str()) {
             return Some(Unasked::Keyed(host));
+        }
+        if marked {
+            return Some(Unasked::KeyWent);
         }
         if self.asked.fetch_add(1, Ordering::Relaxed) >= MOST {
             return Some(Unasked::Most);
@@ -180,7 +189,8 @@ pub(super) async fn recover(
         return Err(failed);
     }
     let link = &job.fetch.url;
-    if let Some(unasked) = archived.unasked(link, net.offline().enabled(), only) {
+    let marked = cache.is_keyed(&digest);
+    if let Some(unasked) = archived.unasked(link, marked, net.offline().enabled(), only) {
         return Err(match unasked.said() {
             Some(said) => failed.detail(said),
             None => failed,
@@ -343,7 +353,8 @@ mod tests {
     }
 
     /// a link on this machine, a private network, or an origin the settings allow there names a
-    /// file no archive may hold, and a run asks about at most [`MOST`] files.
+    /// file no archive may hold, as does one a key of this machine went with before, and a run
+    /// asks about at most [`MOST`] files.
     #[test]
     fn archives_are_asked_only_about_public_files_and_at_most_so_many() {
         let archived = asking();
@@ -357,29 +368,39 @@ mod tests {
             ("http://lab.example:8080/a.csv", "lab.example"),
         ] {
             assert_eq!(
-                archived.unasked(&url(link), false, false),
+                archived.unasked(&url(link), false, false, false),
                 Some(Unasked::Private(unasked.to_owned())),
                 "{link}"
             );
         }
         let public = url("https://data.example.org/a.csv");
         assert_eq!(
-            archived.unasked(&public, true, false),
+            archived.unasked(&public, false, true, false),
             Some(Unasked::Offline)
         );
         assert_eq!(
-            archived.unasked(&public, false, true),
+            archived.unasked(&public, false, false, true),
             Some(Unasked::MirrorsOnly)
+        );
+        assert_eq!(
+            archived.unasked(&public, true, false, false),
+            Some(Unasked::KeyWent)
         );
         let off = Archived {
             on: false,
             ..asking()
         };
-        assert_eq!(off.unasked(&public, false, false), Some(Unasked::Off));
+        assert_eq!(
+            off.unasked(&public, false, false, false),
+            Some(Unasked::Off)
+        );
         for _ in 0..MOST {
-            assert_eq!(archived.unasked(&public, false, false), None);
+            assert_eq!(archived.unasked(&public, false, false, false), None);
         }
-        assert_eq!(archived.unasked(&public, false, false), Some(Unasked::Most));
+        assert_eq!(
+            archived.unasked(&public, false, false, false),
+            Some(Unasked::Most)
+        );
     }
 
     /// a link holding a query may hold a key, and a share link is one, so neither is sent.

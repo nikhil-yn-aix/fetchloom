@@ -39,6 +39,7 @@ on windows a folder takes its permissions from the folders above it, and fetchlo
   projects/<sha256 of project root>.json
   changed/<object sha256>
   imported/<sha256 of the list>
+  keyed/<first 2 sha256 digits>/<remaining 62 digits>
   tmp/<random>.stage/lock
   tmp/<random>.stage/<random>.new
   tmp/
@@ -64,7 +65,7 @@ on windows a folder takes its permissions from the folders above it, and fetchlo
 | `validators.version` | the version an S3 bucket that keeps versions named for the bytes, its `x-amz-version-id`, or null |
 | `page` | `true` when the bytes came as a web page; absent otherwise. a later run that takes the bytes from the cache, offline or after the server answered that they are unchanged, refuses them unless it asks for the page, as a fresh answer would be refused |
 
-a link is named by a fingerprint, the SHA-256 of its text, so a secret in a signed link never reaches a record. a download a run stopped keeps its bytes as `partial/<digit>/<fingerprint>.part`, the fingerprint of the pinned SHA-256 for a file data.lock pins, so a mirror's, an archive's or a new link's download of that file goes on from bytes another left, else of the link, with a `.json` record of how many bytes arrived, their SHA-256, the file's stated length, the server's validators, any pieces finished past them and the file name the server gave, so the next run can continue it; a `.part` with no `.json`, as a run killed in a download's first second leaves, is continued only for a file data.lock pins, whose SHA-256 then checks it. its `.lock` keeps two runs from writing one download. gc removes an unfinished download nobody came back for after a day, or at once with `cache gc --now`. without file locks, downloads cannot continue across runs, so a stop deletes what an unfinished download brought and says so.
+a link is named by a fingerprint, the SHA-256 of its text, so a secret in a signed link never reaches a record. a download a run stopped keeps its bytes as `partial/<digit>/<fingerprint>.part`, the fingerprint of the pinned SHA-256 for a file data.lock pins, so a mirror's, an archive's or a new link's download of that file goes on from bytes another left, else of the link, with a `.json` record of how many bytes arrived, their SHA-256, the file's stated length, the server's validators, any pieces finished past them, the file name the server gave and whether one of your keys went with them, so the next run can continue it; a `.part` with no `.json`, as a run killed in a download's first second leaves, is continued only for a file data.lock pins, whose SHA-256 then checks it. its `.lock` keeps two runs from writing one download. gc removes an unfinished download nobody came back for after a day, or at once with `cache gc --now`. without file locks, downloads cannot continue across runs, so a stop deletes what an unfinished download brought and says so.
 
 ## other indexes
 
@@ -72,6 +73,7 @@ a link is named by a fingerprint, the SHA-256 of its text, so a secret in a sign
 - `unpacked/` holds what each archive unpacked to, in the [tree encoding](data-lock.md#the-tree-hash), checked against the `unpacks_to` data.lock pins.
 - `projects/` registers each project a sync placed files for, as JSON naming its folder, so `cache gc` knows what it needs. a record that is a link, a fifo or anything but a small plain file is never read: `cache`, `cache gc` and `drop` stop with `local.io`, exit 50, and name it, and removing it is safe, since a sync in a project writes that project's record again.
 - `imported/` lists the cached files an import or the removal of an import put or found there, one SHA-256 a line, one list a run. no source can give them back, so `cache gc` counts them apart and asks before `--now` frees them, as [gc](../commands/cache.md#gc) says. gc drops a list once none of its files is left.
+- `keyed/` holds an empty file for each cached file one of your keys went with on its way in, as a `.netrc` login a redirect led to, and for each file of an archive that came so. [push](../commands/push.md#data-you-may-not-share) asks before it copies such a file to a mirror, and no [web archive](../concepts/offline-and-recovery.md#web-archives) is asked about it. a file copied in from a mirror folder, the data folder or another tool's cache gets none, a push never copies one to a mirror, and gc drops it with its file.
 - `changed/` holds a mark for each cached file found changed, as by an edit through a hardlink, naming the copies found changed, so sync can put each project's link back. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains how they are used.
 
 an archive's own bytes leave the cache once its files are in, unless a registered project needs it packed. [cache commands](../commands/cache.md) explain retention and gc.

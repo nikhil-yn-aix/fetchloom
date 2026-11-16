@@ -21,12 +21,14 @@ pub(crate) enum Input {
     Joined(Vec<Part>),
 }
 
-/// a file of an archive: where it is, the size it must have, and which file it was when judged.
+/// a file of an archive: where it is, the size it must have, which file it was when judged, and
+/// whether a key of this machine came with it, as the cache marks it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Part {
     path: PathBuf,
     size: u64,
     id: Id,
+    keyed: bool,
 }
 
 /// which file a handle has open: its disk and its index there, which a hardlink shares.
@@ -61,6 +63,18 @@ impl Part {
             path,
             size,
             id: Id::of(file)?,
+            keyed: false,
+        })
+    }
+
+    /// the cache's object holding `digest`, opened as [`Cache::open_object`] opens and judges it,
+    /// of `size` when given.
+    fn cached(cache: &Cache, digest: &Sha256, size: Option<u64>) -> io::Result<Part> {
+        let file = cache.open_object(digest, size)?;
+        let size = file.metadata()?.len();
+        Ok(Part {
+            keyed: cache.is_keyed(digest),
+            ..Part::opened(cache.object_path(digest), size, &file)?
         })
     }
 
@@ -101,21 +115,25 @@ impl Input {
 
     /// the cache's object holding `digest`, as [`Cache::open_object`] opens and judges it.
     pub(crate) fn cached(cache: &Cache, digest: &Sha256, size: Option<u64>) -> io::Result<Input> {
-        let file = cache.open_object(digest, size)?;
-        let size = file.metadata()?.len();
-        Part::opened(cache.object_path(digest), size, &file).map(Input::File)
+        Part::cached(cache, digest, size).map(Input::File)
     }
 
     /// a split archive's `parts`, each the SHA-256 and size of an object of the cache, in order.
     pub(crate) fn cached_parts(cache: &Cache, parts: &[(Sha256, u64)]) -> io::Result<Input> {
         parts
             .iter()
-            .map(|(digest, size)| {
-                let file = cache.open_object(digest, Some(*size))?;
-                Part::opened(cache.object_path(digest), *size, &file)
-            })
+            .map(|(digest, size)| Part::cached(cache, digest, Some(*size)))
             .collect::<io::Result<Vec<Part>>>()
             .map(Input::Joined)
+    }
+
+    /// whether a key of this machine came with any part of the archive, so what it unpacks to
+    /// did too.
+    pub(super) fn keyed(&self) -> bool {
+        match self {
+            Input::File(part) => part.keyed,
+            Input::Joined(parts) => parts.iter().any(|part| part.keyed),
+        }
     }
 
     /// the file an error reading the archive names: the archive, or its first part.

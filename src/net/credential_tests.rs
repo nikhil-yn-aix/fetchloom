@@ -435,6 +435,43 @@ fn a_redirect_cannot_pick_up_another_sources_credentials() {
     );
 }
 
+/// an answer says when a credential of this machine went with its request or any hop before
+/// it, as a login a redirect led to does, which is what the cache marks a download by.
+#[test]
+fn an_answer_says_whether_a_key_went_with_any_hop() {
+    let net = carrying(vec![Credential {
+        host: "urs.earthdata.nasa.gov".to_owned(),
+        header: "authorization",
+        value: "Basic YWRhOnB3".to_owned(),
+        every_hop: true,
+        every_port: false,
+    }]);
+    let start = "https://archive.example/granule";
+    let carried = |hops: &[&str]| {
+        let hops: Vec<String> = hops.iter().map(|hop| (*hop).to_owned()).collect();
+        trust_all(
+            &net,
+            std::iter::once(start).chain(hops.iter().map(String::as_str)),
+        );
+        let client = transport();
+        let (local, _) = server(&hops);
+        let Ok(answer) = block_on(net.send(&Url::parse(start).unwrap(), |request| {
+            let request = request.build().unwrap();
+            client.get(local.clone()).headers(request.headers().clone())
+        })) else {
+            panic!("the local redirect chain must finish");
+        };
+        answer.extensions().get::<Carried>().is_some()
+    };
+    assert!(carried(&[
+        "https://urs.earthdata.nasa.gov/oauth",
+        "https://archive.example/granule?code=1"
+    ]));
+    assert!(carried(&["https://urs.earthdata.nasa.gov/granule"]));
+    assert!(!carried(&["https://elsewhere.example/granule"]));
+    assert!(!carried(&[]));
+}
+
 fn redirect_headers(net: &Net, start: &str, hops: &[String], header: &str) -> Vec<Option<String>> {
     trust_all(
         net,

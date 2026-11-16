@@ -842,6 +842,63 @@ fn a_pinned_file_kept_whole_needs_no_request() {
     }
 }
 
+/// a download whose request carried a key of this machine marks its object in the cache before
+/// the object takes its name, and one that carried none marks nothing. bytes a run kept after such
+/// an answer carry the mark in their record to whichever link finishes them, with no request.
+#[test]
+fn a_download_a_key_went_with_marks_its_object() {
+    let body = pattern(0, 4096);
+    for keyed in [false, true] {
+        let (url, asked) = serve(vec![reply("200 OK", &[], &body)]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let login = crate::auth::Credential {
+            host: format!("127.0.0.1:{}", url.port().unwrap()),
+            header: "authorization",
+            value: "Basic bGFiOnB3".to_owned(),
+            every_hop: false,
+            every_port: false,
+        };
+        let logins = if keyed { vec![login] } else { Vec::new() };
+        let net = net(&url).finding_credentials(move || logins);
+        let fetched =
+            block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+        let heads = asked.lock().unwrap().join("\n").to_ascii_lowercase();
+        assert_eq!(heads.contains("authorization: basic"), keyed, "{heads}");
+        assert_eq!(cache.is_keyed(&fetched.digest), keyed);
+    }
+    let body = pattern(1, (1 << 20) + 7);
+    let digest = crate::digest::sha256(&body);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let (gone, asked) = serve(Vec::new());
+    let Claim::Owned(partial) = cache
+        .claim_pinned("https://keyed.example/file", Some(&digest))
+        .unwrap()
+    else {
+        panic!("nothing else holds the download");
+    };
+    let mut writer = partial
+        .writer(
+            0,
+            Some(body.len() as u64),
+            Validators::default(),
+            false,
+            false,
+        )
+        .unwrap();
+    writer.keyed();
+    writer.write_all(&body).unwrap();
+    writer.save().unwrap();
+    drop((writer, partial));
+    let mut fetch = Fetch::new(gone.join("elsewhere").unwrap());
+    fetch.expect.sha256 = Some(digest);
+    fetch.expect.size = Some(body.len() as u64);
+    let fetched = block_on(net(&gone).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!((fetched.digest, lines(&asked).len()), (digest, 0));
+    assert!(cache.is_keyed(&digest));
+}
+
 /// a file no pin checks, kept whole, asks for its last byte alone: an answer of the same version
 /// says the bytes are still the file and names it as the whole answer did, so none comes again.
 #[test]

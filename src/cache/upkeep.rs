@@ -499,6 +499,7 @@ impl Cache {
         freed.removed_leftovers += self.sweep_staging(now, stop, &mut freed.not_removed);
         stop.check()?;
         self.forget_changed_reporting(&needed.objects, stop, &mut freed.not_removed)?;
+        self.forget_keyed_reporting(stop, &mut freed.not_removed)?;
         self.forget_url_records(needed, stop, &mut freed.not_removed)?;
         for entry in scan_entries(&self.root.join("tmp"), &mut freed.not_removed, stop)? {
             stop.check()?;
@@ -1443,11 +1444,16 @@ mod tests {
         assert_eq!(resumed, Some(3), "the next run publishes it");
     }
 
+    /// a sweep removes what no project needs once it is old, and the mark of a file a key came
+    /// with goes with its file.
     #[test]
     fn a_sweep_keeps_what_is_needed_and_what_is_new() {
         for (_dir, cache) in [cache(), fat()] {
             let needed = store(&cache, b"needed");
             let unneeded = store(&cache, b"unneeded");
+            for stored in [&needed, &unneeded] {
+                cache.mark_keyed(&stored.digest).unwrap();
+            }
             let later = SystemTime::now() + GRACE + Duration::from_secs(60);
             let keep = Needed {
                 objects: HashSet::from([needed.digest]),
@@ -1458,10 +1464,16 @@ mod tests {
                 0,
                 "nothing is old yet"
             );
+            assert!(
+                cache.is_keyed(&unneeded.digest),
+                "a mark stays with its file"
+            );
             let freed = cache.sweep(&keep, later);
             assert_eq!((freed.removed_objects, freed.removed_bytes), (1, 8));
             assert!(cache.find(&needed.digest, Some(6)).is_some());
             assert!(cache.find(&unneeded.digest, Some(8)).is_none());
+            assert!(cache.is_keyed(&needed.digest));
+            assert!(!cache.is_keyed(&unneeded.digest));
         }
     }
 

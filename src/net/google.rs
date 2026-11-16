@@ -446,6 +446,11 @@ impl Tokened<'_> {
         }
         headers
     }
+
+    /// whether a google token goes with the hop.
+    pub(super) fn has_credential(&self) -> bool {
+        self.bearer.is_some()
+    }
 }
 
 impl Authorized {

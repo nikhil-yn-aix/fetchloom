@@ -102,10 +102,12 @@ impl Writers<'_> {
 }
 
 /// runs `read` with writers that seal each member it keeps, then puts them all in place, with
-/// which were new. on any failure what was sealed goes and nothing is put in place.
+/// which were new, each marked first as one a key came with when `keyed` says the archive did.
+/// on any failure what was sealed goes and nothing is put in place.
 pub(super) fn store_all(
     cache: &Cache,
     cap: Option<usize>,
+    keyed: bool,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
     let threads = thread::available_parallelism()
@@ -113,7 +115,7 @@ pub(super) fn store_all(
         .min(MOST_WRITERS);
     let threads = cap.map_or(threads, |cap| threads.min(cap));
     // a capped run starts no thread past its cap
-    store_with(cache, threads, cap.is_none(), read)
+    store_with(cache, threads, cap.is_none(), keyed, read)
 }
 
 /// with `ahead`, a large archive's flush starts on xfs while its members are still written.
@@ -121,6 +123,7 @@ fn store_with(
     cache: &Cache,
     threads: usize,
     ahead: bool,
+    keyed: bool,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
     let staging = cache.staging().map_err(|err| {
@@ -224,15 +227,18 @@ fn store_with(
         let flushed = batch.flush();
         flushed.map_err(|err| Error::io("could not flush the unpacked files to disk", &err))?;
     }
-    publish_all(cache, sealed, threads)
+    publish_all(cache, sealed, threads, keyed)
 }
 
 /// puts every sealed member in place on `threads` threads, returning them with the new digests.
-/// after a failure the rest is removed, while what was put in place stays for others or gc.
+/// with `keyed`, a member the cache does not hold yet is marked as one a key came with before it
+/// takes its name. after a failure the rest is removed, while what was put in place stays for
+/// others or gc.
 fn publish_all(
     cache: &Cache,
     sealed: Vec<(String, Sealed)>,
     threads: usize,
+    keyed: bool,
 ) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
     let count = sealed.len();
     let queue = Mutex::new(sealed.into_iter());
@@ -244,7 +250,12 @@ fn publish_all(
             let Some((path, sealed)) = locked(&queue).next() else {
                 return;
             };
-            match sealed.publish(cache) {
+            let marked = if keyed && !cache.object_path(&sealed.digest).exists() {
+                cache.mark_keyed(&sealed.digest)
+            } else {
+                Ok(())
+            };
+            match marked.and_then(|()| sealed.publish(cache)) {
                 Ok(stored) => {
                     if stored.new {
                         locked(&added).push(stored.digest);
@@ -483,7 +494,7 @@ mod tests {
         let meter = Meter::default();
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
-        store_all(&scratch.cache, None, |writers| {
+        store_all(&scratch.cache, None, false, |writers| {
             let mut buffer = vec![0; 64 << 10];
             for (path, bytes) in members {
                 writers.keep(
@@ -578,7 +589,7 @@ mod tests {
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
         let bytes = vec![7; SMALL + 1];
-        let (mut members, added) = store_all(&scratch.cache, Some(0), |writers| {
+        let (mut members, added) = store_all(&scratch.cache, Some(0), false, |writers| {
             assert!(writers.jobs.is_none());
             for (name, mut bytes) in [("large", bytes.as_slice()), ("small", b"1,2\n".as_slice())] {
                 writers.keep(
@@ -605,7 +616,7 @@ mod tests {
         let meter = Meter::default();
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
-        let error = store_all(&scratch.cache, Some(0), |writers| {
+        let error = store_all(&scratch.cache, Some(0), false, |writers| {
             writers.keep(
                 &mut guard,
                 "small".to_owned(),
@@ -670,7 +681,7 @@ mod tests {
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
         let bytes = vec![7; SMALL + 1];
-        let (members, _) = store_all(&scratch.cache, None, |writers| {
+        let (members, _) = store_all(&scratch.cache, None, false, |writers| {
             writers.keep(
                 &mut guard,
                 "large.bin".to_owned(),
@@ -745,7 +756,7 @@ mod tests {
         let meter = Meter::default();
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
-        let err = store_all(&scratch.cache, None, |writers| {
+        let err = store_all(&scratch.cache, None, false, |writers| {
             let mut buffer = vec![0; 1024];
             for index in 0..50 {
                 writers.keep(
@@ -791,7 +802,7 @@ mod tests {
         let limits = Limits::default();
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
-        let error = store_all(&scratch.cache, Some(0), |writers| {
+        let error = store_all(&scratch.cache, Some(0), false, |writers| {
             writers.keep(
                 &mut guard,
                 "discard".to_owned(),
@@ -869,7 +880,7 @@ mod tests {
             }
         }
         let scratch = Scratch::new();
-        let (members, _) = store_with(&scratch.cache, 2, false, |writers| {
+        let (members, _) = store_with(&scratch.cache, 2, false, false, |writers| {
             let releases = paused_writers(writers, 2);
             let (ahead, reached) = sync_channel(1);
             let files = thread::scope(|scope| {
@@ -936,7 +947,7 @@ mod tests {
         let read = Cell::new(0);
         let stopped = |_| read.get() > SMALL + (64 << 10);
         let mut guard = Guard::new(&limits, &stopped, &meter);
-        let error = store_with(&scratch.cache, 2, false, |writers| {
+        let error = store_with(&scratch.cache, 2, false, false, |writers| {
             writers.keep(
                 &mut guard,
                 "large.bin".to_owned(),
@@ -956,7 +967,7 @@ mod tests {
         let scratch = Scratch::new();
         let bytes = vec![b'a'; SMALL + (64 << 10)];
         for (size, threads) in [(bytes.len() as u64, 2), (8 << 20, 1)] {
-            let (members, _) = store_with(&scratch.cache, threads, false, |writers| {
+            let (members, _) = store_with(&scratch.cache, threads, false, false, |writers| {
                 let releases = paused_writers(writers, threads);
                 let limits = Limits::default();
                 let meter = Meter::default();
@@ -997,7 +1008,7 @@ mod tests {
         meter.count(8 * SMALL);
         let mut guard = Guard::new(&limits, &|_| false, &meter);
         let bytes = vec![b'a'; 8 * SMALL];
-        let (members, _) = store_all(&scratch.cache, Some(2), |writers| {
+        let (members, _) = store_all(&scratch.cache, Some(2), false, |writers| {
             assert!(writers.jobs.is_none());
             writers.keep(
                 &mut guard,

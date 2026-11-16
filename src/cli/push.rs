@@ -135,7 +135,8 @@ enum Source {
 struct Asking {
     dataset: String,
     access: Access,
-    /// data.lock calls it public, but this machine keeps a key for where its files come from.
+    /// data.lock calls it public, but this machine keeps a key for where its files come from, or
+    /// one went with their download, as the cache marks it.
     keyed: bool,
 }
 
@@ -194,10 +195,11 @@ impl Keys {
     }
 
     /// what `locked` asks before a push, and whether a key of this machine made it ask: data.lock's
-    /// access, or an account's for a dataset it calls public whose files may have needed a key.
-    fn access(&self, locked: &crate::project::lock::Locked) -> (Access, bool) {
+    /// access, or an account's for a dataset it calls public whose files may have needed a key,
+    /// by their hosts, or came with one, as `marked` says the cache recorded for one of them.
+    fn access(&self, locked: &crate::project::lock::Locked, marked: bool) -> (Access, bool) {
         let keyed = locked.access == Access::Public
-            && locked.files.iter().any(|file| self.signs_in(&file.url));
+            && (marked || locked.files.iter().any(|file| self.signs_in(&file.url)));
         if keyed {
             (Access::Login, true)
         } else {
@@ -561,7 +563,8 @@ fn plan(
         .map(|(needed, _)| needed.dataset.as_str())
         .chain(unknown.iter().map(|(dataset, _)| dataset.as_str()))
         .collect();
-    let asks = asking(lock, &datasets, &Keys::read(&context.settings))
+    let marked = marked(context, cache, lock, &needed, &there);
+    let asks = asking(lock, &datasets, &Keys::read(&context.settings), &marked)
         .into_iter()
         .filter(|ask| copying.contains(ask.dataset.as_str()))
         .collect();
@@ -964,13 +967,46 @@ fn missing(lacked: &[&Needed], unknown: &[(String, Fetch)]) -> Error {
         .help("run the push again, which downloads them")
 }
 
+/// the datasets of `needed` that data.lock calls public with a file to copy, as `there` says,
+/// that a key of this machine came with, as the cache marks it. every other dataset asks anyway.
+fn marked<'n>(
+    context: &Context,
+    cache: &Cache,
+    lock: &Lock,
+    needed: &'n [Needed],
+    there: &[There],
+) -> BTreeSet<&'n str> {
+    let copied: Vec<&Needed> = needed
+        .iter()
+        .zip(there)
+        .filter(|(needed, there)| {
+            **there != There::Present
+                && matches!(needed.source, Source::Pinned)
+                && lock
+                    .get(&needed.dataset)
+                    .is_some_and(|locked| locked.access == Access::Public)
+        })
+        .map(|(needed, _)| needed)
+        .collect();
+    let keyed = crate::place::run_all(&copied, context.threads, |needed| {
+        cache.is_keyed(&needed.item.digest)
+    });
+    copied
+        .into_iter()
+        .zip(keyed)
+        .filter(|(_, keyed)| *keyed)
+        .map(|(needed, _)| needed.dataset.as_str())
+        .collect()
+}
+
 /// the datasets that ask before they are pushed: one whose source wanted an account or accepted
-/// terms or did not say. `access` is a hint, never a licence check.
-fn asking(lock: &Lock, datasets: &[String], keys: &Keys) -> Vec<Asking> {
+/// terms or did not say, or one with a file `marked` names. `access` is a hint, never a licence
+/// check.
+fn asking(lock: &Lock, datasets: &[String], keys: &Keys, marked: &BTreeSet<&str>) -> Vec<Asking> {
     datasets
         .iter()
         .filter_map(|name| {
-            let (access, keyed) = keys.access(lock.get(name)?);
+            let (access, keyed) = keys.access(lock.get(name)?, marked.contains(name.as_str()));
             (access != Access::Public).then(|| Asking {
                 dataset: name.clone(),
                 access,
@@ -1821,7 +1857,8 @@ mod tests {
     }
 
     /// a dataset data.lock calls public is asked about when this machine keeps a key for where its
-    /// files come from, since a clone's data.lock cannot vouch for that.
+    /// files come from, or the cache marks one of its files as one a key came with, since a clone's
+    /// data.lock cannot vouch for either.
     #[test]
     fn a_key_for_a_files_host_asks_whatever_data_lock_says() {
         let mut raw = locked("raw", Access::Public);
@@ -1839,17 +1876,21 @@ mod tests {
             waiting: Vec::new(),
         };
         let names = ["raw".to_owned(), "vault".to_owned()];
-        assert!(asking(&lock, &names, &Keys::default()).is_empty());
+        let unmarked = BTreeSet::new();
+        assert!(asking(&lock, &names, &Keys::default(), &unmarked).is_empty());
         let keys = Keys {
             hosts: HashSet::from(["data.lab.example".to_owned()]),
             ..Keys::default()
         };
-        let asks = asking(&lock, &names, &keys);
-        let asked: Vec<(&str, bool)> = asks
-            .iter()
-            .map(|ask| (ask.dataset.as_str(), ask.keyed))
-            .collect();
-        assert_eq!(asked, [("raw", true)]);
+        let asked = |asks: &[Asking]| -> Vec<(String, bool)> {
+            asks.iter()
+                .map(|ask| (ask.dataset.clone(), ask.keyed))
+                .collect()
+        };
+        let marked = asking(&lock, &names, &Keys::default(), &BTreeSet::from(["vault"]));
+        assert_eq!(asked(&marked), [("vault".to_owned(), true)]);
+        let asks = asking(&lock, &names, &keys, &unmarked);
+        assert_eq!(asked(&asks), [("raw".to_owned(), true)]);
         assert_eq!(
             reasons(&asks),
             "this machine signs in where raw's files come from, though data.lock calls it public"

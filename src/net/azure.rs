@@ -463,6 +463,11 @@ impl Blobbed<'_> {
         Cow::Owned(url)
     }
 
+    /// whether a SAS, a token or a key's signature goes with the hop.
+    pub(super) fn has_credential(&self) -> bool {
+        self.credential.is_some()
+    }
+
     /// the version of azure's API a request to a blob host asks for, and the token it carries,
     /// or nothing.
     pub(super) fn headers(&self) -> HeaderMap {

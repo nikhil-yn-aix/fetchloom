@@ -6,6 +6,7 @@ mod failure;
 mod folder;
 mod held;
 mod imported;
+mod keyed;
 mod object;
 mod partial;
 mod staging;
@@ -45,8 +46,9 @@ use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::{Volume, is_plain, open_unfollowed, read_unfollowed, refuses_links};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
-const FOLDERS: [&str; 9] = [
+const FOLDERS: [&str; 10] = [
     "objects", "partial", "urls", "stated", "unpacked", "projects", "tmp", "changed", "imported",
+    "keyed",
 ];
 
 /// the file that keeps spotlight out of the cache on macos, made just before the tag.
@@ -365,10 +367,9 @@ pub(crate) fn unshared(root: &Path, umask: Option<u32>) -> Option<String> {
     if fs::metadata(root).ok()?.mode() & 0o2020 != 0o2020 {
         return None;
     }
-    let fans = fs::read_dir(root.join("objects"))
-        .into_iter()
-        .flatten()
-        .flatten()
+    let fans = ["objects", "keyed"]
+        .iter()
+        .flat_map(|top| fs::read_dir(root.join(top)).into_iter().flatten().flatten())
         .map(|fan| fan.path());
     let closed = FOLDERS
         .iter()

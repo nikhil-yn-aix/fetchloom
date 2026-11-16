@@ -475,6 +475,48 @@ fn a_cached_archive_with_another_name_must_hash_to_its_name() {
     );
 }
 
+/// the files a keyed archive unpacks to, by its whole object or by any one of its parts, are
+/// marked as files a key came with before they take their names, but for a file the cache held
+/// already, which keeps what brought it; an archive no key came with marks nothing.
+#[test]
+fn what_a_keyed_archive_unpacks_to_is_marked() {
+    let scratch = Scratch::new();
+    let cache = &scratch.cache;
+    let held = crate::cache::tests::store(cache, b"held\n");
+    let keyed = crate::cache::tests::store(
+        cache,
+        &tar_of(&[("own.csv", b"own\n"), ("held.csv", b"held\n")]),
+    );
+    let plain = crate::cache::tests::store(cache, &tar_of(&[("plain.csv", b"plain\n")]));
+    cache.mark_keyed(&keyed.digest).unwrap();
+    for archive in [&keyed, &plain] {
+        let limits = Limits::default();
+        super::unpack_cached(
+            cache,
+            &archive.digest,
+            archive.size,
+            None,
+            &limits,
+            &|_| false,
+            None,
+        )
+        .unwrap();
+    }
+    let split = tar_of(&[("split.csv", b"split\n")]);
+    let (first, second) = split.split_at(split.len() / 2);
+    let parts = [
+        crate::cache::tests::store(cache, first),
+        crate::cache::tests::store(cache, second),
+    ];
+    cache.mark_keyed(&parts[1].digest).unwrap();
+    let parts = parts.map(|part| (part.digest, part.size));
+    super::unpack_cached_parts(cache, &parts, None, &Limits::default(), &|_| false, None).unwrap();
+    let keyed = |bytes: &[u8]| cache.is_keyed(&crate::digest::sha256(bytes));
+    assert!(keyed(b"own\n") && keyed(b"split\n"));
+    assert!(!keyed(b"held\n") && !keyed(b"plain\n"));
+    assert!(!cache.is_keyed(&held.digest));
+}
+
 /// an archive is judged as it is opened, then read again by its name: a file someone sharing the
 /// cache puts at that name meanwhile, as a hardlink to a private archive, is never read.
 #[cfg(unix)]
