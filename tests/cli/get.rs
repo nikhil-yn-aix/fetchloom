@@ -735,7 +735,7 @@ fn a_folder_named_by_the_server_is_quoted_in_the_warning() -> Result {
     if cfg!(windows) {
         assert_eq!(
             warning["help"],
-            "use `--dir <folder>` to unpack it into a folder"
+            r#"use `--dir "<folder>"` to unpack it into a folder"#
         );
         assert_eq!(
             warning["details"][0],

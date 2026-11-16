@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// the folder a run given `-C` works in, quoted for a shell. unset without `-C`, as in tests.
@@ -207,8 +208,9 @@ pub(crate) fn safe_on_windows(word: &str) -> bool {
 }
 
 /// `text` with each word [`shell_word`] withheld named by a placeholder, `<file>`, `<folder>` or
-/// `<name>`, which no shell runs and `--json`'s fix never offers, and a line for each saying which
-/// name it stands for. marks a name holds outside a command stay as they are.
+/// `<name>`, in double quotes, so no shell reads it as a redirection from a file of its name, and
+/// `--json`'s fix never offers it, and a line for each saying which name it stands for. marks a
+/// name holds outside a command stay as they are.
 pub(crate) fn withheld(text: &str) -> (Cow<'_, str>, Vec<String>) {
     if !text.contains(OPEN) {
         return (Cow::Borrowed(text), Vec::new());
@@ -257,7 +259,7 @@ pub(crate) fn withheld(text: &str) -> (Cow<'_, str>, Vec<String>) {
             named.push((word, placeholder.clone()));
             placeholder
         });
-        shown.push_str(&placeholder);
+        let _ = write!(shown, "\"{placeholder}\"");
         rest = &after[end + CLOSE.len_utf8()..];
     }
     shown.push_str(rest);
@@ -551,7 +553,7 @@ pub(crate) mod tests {
         let (shown, lines) = withheld(&help);
         assert_eq!(
             shown,
-            "run `fetchloom -C <folder> exclude <file>`, then `fetchloom -C <folder> sync`; or `fetchloom get <name>`"
+            r#"run `fetchloom -C "<folder>" exclude "<file>"`, then `fetchloom -C "<folder>" sync`; or `fetchloom get "<name>"`"#
         );
         assert_eq!(
             lines,
@@ -569,7 +571,7 @@ pub(crate) mod tests {
         assert_eq!(
             withheld(&again),
             (
-                Cow::Owned(format!("{shown}; then run `fetchloom path <file 2>`")),
+                Cow::Owned(format!("{shown}; then run `fetchloom path \"<file 2>\"`")),
                 vec!["<file 2> is data/a&b.csv, which no command here can hold safely".to_owned()]
             )
         );
@@ -595,7 +597,7 @@ pub(crate) mod tests {
             assert_eq!(
                 withheld(&command),
                 (
-                    Cow::Owned("run `fetchloom exclude <file>`".to_owned()),
+                    Cow::Owned(r#"run `fetchloom exclude "<file>"`"#.to_owned()),
                     vec![format!(
                         "<file> is {written}, which no command here can hold safely"
                     )]
@@ -606,7 +608,7 @@ pub(crate) mod tests {
         assert_eq!(
             withheld(&format!("in {}", shell_folder(&format!("a{OPEN}b")))),
             (
-                Cow::Owned("in <folder>".to_owned()),
+                Cow::Owned(r#"in "<folder>""#.to_owned()),
                 vec![r"<folder> is a\u{f8e0}b, which no command here can hold safely".to_owned()]
             )
         );
@@ -631,7 +633,7 @@ pub(crate) mod tests {
             withheld(&help),
             (
                 Cow::Owned(format!(
-                    "bring data/a{OPEN}b back: run `fetchloom exclude <name>`"
+                    "bring data/a{OPEN}b back: run `fetchloom exclude \"<name>\"`"
                 )),
                 vec!["<name> is x&y.csv, which no command here can hold safely".to_owned()]
             )
@@ -658,7 +660,7 @@ pub(crate) mod tests {
         assert_eq!(
             withheld(&help),
             (
-                Cow::Owned("run `git rm <file> <file 2>`, then commit".to_owned()),
+                Cow::Owned(r#"run `git rm "<file>" "<file 2>"`, then commit"#.to_owned()),
                 vec![
                     r"<file> is data.lock.d/a\u{f8e0}b.aaaaaaaaaaaa.tsv.zst, which no command here can hold safely".to_owned(),
                     r#"<file 2> is data.lock.d/c\u{f8e1}$(mkdir PWNED)"'.bbbbbbbbbbbb.tsv.zst, which no command here can hold safely"#.to_owned(),
@@ -667,13 +669,59 @@ pub(crate) mod tests {
         );
     }
 
+    /// a placeholder stands where a name was, as `exclude "<file>" after` shows it, and a shell
+    /// reads it as a word, never as a redirection from a file of its name into the word after it.
+    #[cfg(unix)]
+    #[test]
+    fn a_placeholder_redirects_nothing_in_a_unix_shell() {
+        let folder = tempfile::tempdir().unwrap();
+        let there = ["file", "folder", "name"];
+        for name in there {
+            std::fs::write(folder.path().join(name), "mine").unwrap();
+        }
+        let crafted = format!("data/a{OPEN}b.csv");
+        let printed = format!("printf '%s\\n' {} after", shell_word(&crafted));
+        let (line, _) = withheld(&printed);
+        for shell in [
+            &["bash", "--norc", "--noprofile", "-c"][..],
+            &["sh", "-c"],
+            &["zsh", "-f", "-c"],
+            &["fish", "--no-config", "-c"],
+        ] {
+            let ran = std::process::Command::new(shell[0])
+                .args(&shell[1..])
+                .arg(line.as_ref())
+                .current_dir(folder.path())
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output();
+            let Ok(ran) = ran else {
+                crate::test_skips::skip(shell[0], &format!("{} cannot start", shell[0]));
+                continue;
+            };
+            let told = String::from_utf8_lossy(&ran.stdout);
+            assert_eq!(told, "<file>\nafter\n", "{}: {line}", shell[0]);
+            let mut made: Vec<_> = std::fs::read_dir(folder.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            made.sort();
+            assert_eq!(made, there, "{}: {line}", shell[0]);
+        }
+    }
+
     /// each word's command as fetchloom prints it on windows, pasted into powershell and into cmd,
-    /// runs nothing it does not show: no folder appears from a name that tries to make one, and
-    /// powershell reads a word fetchloom quotes back whole.
+    /// runs nothing it does not show: no folder appears from a name that tries to make one, a
+    /// placeholder redirects nothing in cmd though files of its name are there, and powershell
+    /// reads a word fetchloom quotes back whole.
     #[cfg(windows)]
     #[test]
     fn a_printed_command_runs_nothing_more_in_powershell_or_cmd() {
         let folder = tempfile::tempdir().unwrap();
+        let there = ["file", "folder", "name"];
+        for name in there {
+            std::fs::write(folder.path().join(name), "mine").unwrap();
+        }
         let tries = [
             "p$ & mkdir PWNED-cmd7 & q",
             "x | mkdir PWNED-pipe",
@@ -686,7 +734,7 @@ pub(crate) mod tests {
             .map(|(word, _, quoted)| (*word, quoted.is_some()))
             .chain(tries.iter().map(|word| (*word, false)));
         for (word, quoted) in words {
-            let printed = format!("echo {}", shell_word_for(word, true));
+            let printed = format!("echo {} after", shell_word_for(word, true));
             let line = withheld(&printed).0.into_owned();
             let shells: [(&str, &[&str]); 2] = [
                 (
@@ -705,14 +753,19 @@ pub(crate) mod tests {
                     .unwrap();
                 if shell == "powershell.exe" && quoted {
                     let told = String::from_utf8_lossy(&output.stdout);
-                    assert_eq!(told.trim_end(), word, "{shell}: {line}");
+                    assert_eq!(told.lines().next(), Some(word), "{shell}: {line}");
                 }
             }
-            let made: Vec<_> = std::fs::read_dir(folder.path())
+            let mut made: Vec<_> = std::fs::read_dir(folder.path())
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name())
                 .collect();
-            assert!(made.is_empty(), "{word}: {line} made {made:?}");
+            made.sort();
+            assert_eq!(made, there, "{word}: {line}");
+            for name in there {
+                let kept = std::fs::read_to_string(folder.path().join(name)).unwrap();
+                assert_eq!(kept, "mine", "{word}: {line}");
+            }
         }
     }
 

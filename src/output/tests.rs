@@ -1474,7 +1474,7 @@ fn a_withheld_name_on_a_plain_line_is_named_under_it() {
     output.step("Signed", &format!("in to {marked}"));
     let said = output.said();
     assert_eq!(said.len(), 2, "{said:?}");
-    assert!(said[0].ends_with("Signed in to <name>"), "{said:?}");
+    assert!(said[0].ends_with(r#"Signed in to "<name>""#), "{said:?}");
     assert_eq!(
         said[1].trim_start(),
         "<name> is a&b.example, which no command here can hold safely"

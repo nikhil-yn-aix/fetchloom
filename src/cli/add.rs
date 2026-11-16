@@ -2113,7 +2113,7 @@ mod tests {
         // no command on windows holds `&` or `$` safely, so the help names the link apart there
         if cfg!(windows) {
             let (shown, named) = crate::suggested::withheld(&help);
-            assert_eq!(shown, "did you mean `fetchloom add <name>`?");
+            assert_eq!(shown, r#"did you mean `fetchloom add "<name>"`?"#);
             assert_eq!(
                 named,
                 [

@@ -506,7 +506,7 @@ fn a_sign_in_command_keeps_each_host_one_literal_word() {
         let (command, _) = crate::suggested::withheld(&printed);
         // on windows a host no command there can hold safely is named apart, by a placeholder
         if cfg!(windows) && !named.iter().copied().all(crate::suggested::safe_on_windows) {
-            assert!(command.ends_with(" <name>"), "{command}");
+            assert!(command.ends_with(r#" "<name>""#), "{command}");
             continue;
         }
         let words: Vec<&str> = ["fetchloom", "auth", "login"]

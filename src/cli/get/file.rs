@@ -1063,7 +1063,7 @@ mod tests {
         let error = usage(&folder, &links, false).unwrap_err();
         let file = folder.join("$(id).csv").display().to_string();
         let named = if cfg!(windows) {
-            "name the file inside it, as in `-o <file>`".to_owned()
+            r#"name the file inside it, as in `-o "<file>"`"#.to_owned()
         } else {
             format!("name the file inside it, as in `-o '{file}'`")
         };
@@ -1470,7 +1470,7 @@ mod tests {
         let zipped = crate::cache::tests::store(&cache, &zip.finish().unwrap().into_inner());
         let error = refuse_zipped(&cache, &listed, &zipped.digest).unwrap_err();
         let quoted = if cfg!(windows) {
-            "use `--dir <folder>` to unpack it into a folder"
+            r#"use `--dir "<folder>"` to unpack it into a folder"#
         } else {
             "use `--dir '$(touch PWNED)'` to unpack it into a folder"
         };

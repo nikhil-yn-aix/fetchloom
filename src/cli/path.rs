@@ -598,7 +598,7 @@ mod tests {
         let help = error.help.unwrap_or_default();
         // no command on windows holds `$` safely, so a placeholder stands in for the path there
         if cfg!(windows) {
-            assert_eq!(&*help, "did you mean `fetchloom path <file>`?");
+            assert_eq!(&*help, r#"did you mean `fetchloom path "<file>"`?"#);
             let named = "<file> is iris/notes $(id).csv, which no command here can hold safely";
             assert!(
                 error.details.iter().any(|line| line == named),
