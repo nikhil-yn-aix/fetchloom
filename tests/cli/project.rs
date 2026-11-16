@@ -4918,3 +4918,52 @@ fn adding_as_a_waiting_dataset_asks_no_source() -> Result {
     );
     Ok(())
 }
+
+/// `lock --check`, which holds nothing, reading data.lock just before a writer replaces it and
+/// sweeps the list it named, looks for that list again under the new data.lock rather than
+/// calling iris waiting for a list that was there a moment ago.
+#[cfg(debug_assertions)]
+#[test]
+fn a_reader_racing_a_writer_never_sees_a_false_wait() -> Result {
+    use crate::support::{Running, wait_until};
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])?;
+    sandbox.allow(&routes.url);
+    let link = format!("{}{PATH}", routes.url);
+    let added = listing_in(&sandbox, &sandbox.work(), &["add", &link])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let before = parts(&sandbox)?;
+    routes.change(vec![(
+        PATH.to_owned(),
+        file(b"sepal_length\n9.9\n", "\"v2\""),
+    )]);
+    let release = sandbox.folder("hold")?.join("release");
+    let mut command = sandbox.command(&["lock", "--check"]);
+    command
+        .env("FETCHLOOM_TEST_INLINE", "0")
+        .env("FETCHLOOM_TEST_HOLD_LOCK_READ", &release);
+    let reader = Running::start(&mut command)?;
+    let mut held = release.as_os_str().to_owned();
+    held.push(".held");
+    wait_until("the check to hold once it read data.lock", || {
+        Ok(std::path::Path::new(&held).exists())
+    })?;
+    let upgraded = listing_in(&sandbox, &sandbox.work(), &["lock", "--upgrade"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    let after = parts(&sandbox)?;
+    assert!(
+        before.iter().all(|part| !after.contains(part)),
+        "{before:?} {after:?}"
+    );
+    fs::write(&release, b"")?;
+    let checked = reader.finish()?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("data.lock matches data.toml"), "{stderr}");
+    Ok(())
+}

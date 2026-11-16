@@ -372,14 +372,28 @@ impl Project {
 
     fn lock_by(
         &self,
-        read: impl FnOnce(&str) -> Result<Lock, Error>,
+        read: impl Fn(&str) -> Result<Lock, Error>,
     ) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
-        let Some(text) = self.lock_text()? else {
+        let Some(mut text) = self.lock_text()? else {
             return Ok(None);
         };
+        #[cfg(debug_assertions)]
+        crate::stop::hold("FETCHLOOM_TEST_HOLD_LOCK_READ");
+        let mut lock = read(&text);
+        // a reader holds nothing, and a writer replaces data.lock before it sweeps the lists the
+        // old one named: a list gone from under the text read first is looked for again under
+        // the text that replaced it
+        let missed = lock.as_ref().map_or(true, |lock| !lock.waiting.is_empty());
+        if missed
+            && let Ok(Some(now)) = self.lock_text()
+            && now != text
+        {
+            text = now;
+            lock = read(&text);
+        }
         span.record("bytes", text.len());
-        let lock = read(&text).map_err(|error| unmerged(lock::FILE, &text).unwrap_or(error))?;
+        let lock = lock.map_err(|error| unmerged(lock::FILE, &text).unwrap_or(error))?;
         Ok(Some((lock, text)))
     }
 
