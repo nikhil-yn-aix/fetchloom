@@ -247,9 +247,9 @@ fn a_private_repository_release_pins_its_assets_at_the_api() {
 }
 
 /// github's api serves a blob's bytes, and a release asset's, only in the media type asked for,
-/// and a private repository's only to a key: a run without one is refused before the request,
-/// in words naming the key and the repository. any other link, of github's or another host, is
-/// asked as it is.
+/// and a private repository's only to a key: its 404 to a request without one is told in words
+/// naming the key and the repository. any other link, of github's or another host, is asked as it
+/// is.
 #[test]
 fn githubs_api_links_to_files_ask_for_their_bytes_and_a_key() {
     let blob = "https://api.github.com/repos/lab/secret/git/blobs/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";

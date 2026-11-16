@@ -884,10 +884,6 @@ impl Net {
         let container = self.azure.locate(url);
         // judged on the link as written too, before a test server stands in for it
         let in_the_clear = (!self.carries(url)).then(|| s3::in_the_clear(url));
-        // a link its source serves only with a key goes nowhere without one
-        if let Some(refusal) = (self.rules.keyless)(url).filter(|_| !self.sends_key(url)) {
-            return Err(Failure::Final(refusal));
-        }
         // stored keys, the origin they stay on and a source's media type are judged on each hop
         // as written, before a test server stands in for it, as on the host itself
         let written = url;

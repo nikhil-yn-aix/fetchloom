@@ -918,7 +918,7 @@ pub(crate) fn rules() -> net::Rules {
             })
         },
         account_at: access::account_at,
-        keyless_limit: gitlab::keyless_limit,
+        keyless_limit,
         accept: github::accept,
         keyless: github::keyless,
     }
@@ -1203,6 +1203,15 @@ fn raw_link(url: &Url) -> Option<Url> {
     parts[marker + 1] = "raw";
     raw.set_path(&format!("/{}", parts.join("/")));
     Some(raw)
+}
+
+/// a rate limit that stopped a request to `url` that went with no key, in the words of the source
+/// whose host limits such requests: the key that lifts it.
+fn keyless_limit(url: &Url, error: Error) -> Error {
+    match github::keyless_limit(url) {
+        Some(limited) => limited.detail(error.message),
+        None => gitlab::keyless_limit(url, error),
+    }
 }
 
 /// what to do about the git-lfs pointer `url` answered with: a private github repository's file

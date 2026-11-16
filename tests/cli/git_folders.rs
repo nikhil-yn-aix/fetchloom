@@ -3,6 +3,7 @@
 #![cfg(debug_assertions)]
 
 use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::support::{Part, Result, Routes, Sandbox, file, hex, json, ok, reply, sha256_hex, text};
 
@@ -725,11 +726,11 @@ fn a_private_github_folder_pins_at_the_api_and_the_key_goes_there_alone() -> Res
     Ok(())
 }
 
-/// a teammate without a github key is told which key a private repository's files take, before
-/// any request for one goes out, and one whose key cannot read the repository is told that; with
-/// the key, the files come from github's api.
+/// a teammate without a github key asks github's api for a private repository's files without
+/// one, and github's 404 is told as the key they take, with nothing asked again; one whose key
+/// cannot read the repository is told that; with the key, the files come from github's api.
 #[test]
-fn a_teammate_without_the_key_is_told_which_before_any_request() -> Result {
+fn a_teammate_without_the_key_is_told_which_when_github_refuses() -> Result {
     let sandbox = Sandbox::new()?;
     let big = large();
     let routes = added_secret(&sandbox, &big)?;
@@ -762,11 +763,19 @@ fn a_teammate_without_the_key_is_told_which_before_any_request() -> Result {
         "{stderr}"
     );
     assert!(!stderr.contains("404"), "{stderr}");
-    assert_eq!(
-        routes.requests().len(),
-        asked,
-        "no request went without the key"
-    );
+    let refusing = &routes.requests()[asked..];
+    assert!(!refusing.is_empty(), "github answers for itself");
+    let mut targets: Vec<&str> = refusing.iter().map(|head| target(head)).collect();
+    targets.sort_unstable();
+    targets.dedup();
+    assert_eq!(targets.len(), refusing.len(), "{refusing:?}");
+    for head in refusing {
+        assert!(
+            target(head).starts_with(&format!("{SECRET_API}/git/blobs/")),
+            "{head}"
+        );
+        assert!(!head.contains("authorization:"), "{head}");
+    }
 
     let unread = sync("unread-cache", Some("ghp_another_key_that_cannot_read_it"))?;
     let stderr = text(&unread.stderr)?;
@@ -792,6 +801,87 @@ fn a_teammate_without_the_key_is_told_which_before_any_request() -> Result {
             "{head}"
         );
         assert!(holds(head, &key_line()), "{head}");
+    }
+    Ok(())
+}
+
+/// a pin made while its repository was private stays good once github shows the repository to
+/// anyone: a run without a key asks github's api for each file without one, and github's limit on
+/// such requests, 60 an hour, is told as the key that lifts it.
+#[test]
+fn a_private_pin_downloads_without_a_key_once_its_repository_is_public() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let routes = added_secret(&sandbox, &big)?;
+    routes.unkeyed(SECRET_API);
+    let asked = routes.requests().len();
+    let (teammate, synced) = teammate_sync(&sandbox, &routes)?;
+    ok(&synced)?;
+    for (path, bytes) in secret_files(&big) {
+        assert_eq!(
+            fs::read(teammate.join("data/secret").join(path))?,
+            bytes,
+            "{path}"
+        );
+    }
+    let public = &routes.requests()[asked..];
+    assert_eq!(public.len(), 3, "{public:?}");
+    for head in public {
+        assert!(
+            target(head).starts_with(&format!("{SECRET_API}/git/blobs/")),
+            "{head}"
+        );
+        assert!(!head.contains("authorization:"), "{head}");
+    }
+
+    let reset = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + 3600;
+    let used_up = || {
+        reply(
+            "403 Forbidden",
+            &[
+                ("Content-Type", "application/json"),
+                ("x-ratelimit-limit", "60"),
+                ("x-ratelimit-remaining", "0"),
+                ("x-ratelimit-reset", &reset.to_string()),
+            ],
+            br#"{"message":"API rate limit exceeded for 203.0.113.7."}"#,
+        )
+    };
+    routes.change(
+        secret_files(&big)
+            .iter()
+            .map(|(_, bytes)| {
+                (
+                    format!("{SECRET_API}/git/blobs/{}", blob_id(bytes)),
+                    used_up(),
+                )
+            })
+            .collect(),
+    );
+    let reader = sandbox.folder("reader")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), reader.join(name))?;
+    }
+    let asked = routes.requests().len();
+    let limited = sandbox
+        .command_in(&reader, &["sync", "--locked"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("reader-cache")?)
+        .output()?;
+    let stderr = text(&limited.stderr)?;
+    assert_eq!(limited.status.code(), Some(20), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: github allows 60 requests an hour without a key, and they are used up\n"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: set GH_TOKEN or GITHUB_TOKEN to a github token, or sign in with `fetchloom auth login github`, which raises the limit to 5,000 an hour"),
+        "{stderr}"
+    );
+    for head in &routes.requests()[asked..] {
+        assert!(!head.contains("authorization:"), "{head}");
     }
     Ok(())
 }

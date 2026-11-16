@@ -53,8 +53,8 @@ pub(crate) struct Rules {
     /// the media type a source serves a link's bytes in, which every request for the link asks
     /// for: github's api answers a blob or a release asset with json about it otherwise.
     pub(crate) accept: fn(&Url) -> Option<&'static str>,
-    /// a source's refusal of a link it serves only with its key, given before any request for it
-    /// goes out without one, as github's api shows a private repository's files to a key alone.
+    /// a source's refusal of a link it answered 404 for when no key went with the request, as
+    /// github's api answers for a private repository's files, which it shows to a key alone.
     pub(crate) keyless: fn(&Url) -> Option<Error>,
 }
 

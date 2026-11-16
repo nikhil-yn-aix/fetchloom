@@ -352,6 +352,12 @@ impl Net {
         status: StatusCode,
         headers: &HeaderMap,
     ) -> Failure {
+        if status == StatusCode::NOT_FOUND
+            && !self.sends_key(url)
+            && let Some(error) = (self.rules.keyless)(url)
+        {
+            return Failure::Final(error);
+        }
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             && let Some(error) = (self.rules.refused_download)(url, status.as_u16())
         {
@@ -449,7 +455,8 @@ pub(super) fn broke(url: &Url, what: &str, err: &reqwest::Error) -> Failure {
 }
 
 /// a status that ends the download, or a transient failure to retry. a 429 whose limit resets
-/// soon is waited out; one that resets later asks for that wait, which fails as a rate limit.
+/// soon is waited out; one that resets later asks for that wait, which fails as a rate limit. a
+/// 403 whose rate-limit headers say none remain is one too, as github answers a used-up limit.
 pub(super) fn refusal(
     url: &Url,
     status: StatusCode,
@@ -457,21 +464,29 @@ pub(super) fn refusal(
     account_at: fn(&str) -> Option<crate::account::Account>,
 ) -> Failure {
     let code = status.as_u16();
-    if is_transient(status) {
-        let reason = format!("{} answered {code}", host(url));
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            let wait = pace::used_up(&pace::limits(status, headers, SystemTime::now()));
-            if let Some(wait) = wait.filter(|wait| *wait <= pace::LONGEST) {
-                return Failure::Limited { reason, wait };
-            }
+    let reason = || format!("{} answered {code}", host(url));
+    if matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::FORBIDDEN
+    ) {
+        let wait = pace::used_up(&pace::limits(status, headers, SystemTime::now()));
+        if let Some(wait) = wait.filter(|wait| *wait <= pace::LONGEST) {
+            return Failure::Limited {
+                reason: reason(),
+                wait,
+            };
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS || wait.is_some() {
             return Failure::Transient {
-                reason,
+                reason: reason(),
                 retry_after: wait.or_else(|| retry_after(headers)),
                 unreachable: false,
             };
         }
+    }
+    if is_transient(status) {
         return Failure::Transient {
-            reason,
+            reason: reason(),
             retry_after: retry_after(headers),
             unreachable: false,
         };
@@ -1470,6 +1485,36 @@ mod tests {
             panic!("a reset beyond the rate limit budget must not wait");
         };
         assert_eq!(retry_after, Some(Duration::from_secs(121)));
+    }
+
+    /// github answers a used-up limit with a 403 as well as a 429, its rate-limit headers saying
+    /// so; a 403 with requests left is a refusal of access, as any other is.
+    #[test]
+    fn a_403_whose_limit_is_used_up_is_a_rate_limit() {
+        let url = Url::parse("https://api.github.com/repos/lab/data/git/blobs/e69d").unwrap();
+        let answered = |remaining: &str, reset: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-ratelimit-remaining", remaining.parse().unwrap());
+            headers.insert("x-ratelimit-reset", reset.parse().unwrap());
+            refusal(
+                &url,
+                StatusCode::FORBIDDEN,
+                &headers,
+                crate::source::access::account_at,
+            )
+        };
+        let Failure::Limited { wait, .. } = answered("0", "30") else {
+            panic!("a limit that resets soon is waited out");
+        };
+        assert_eq!(wait, Duration::from_secs(30));
+        let Failure::Transient { retry_after, .. } = answered("0", "3600") else {
+            panic!("a limit that resets later asks for that wait");
+        };
+        assert_eq!(retry_after, Some(Duration::from_hours(1)));
+        let Failure::Final(error) = answered("12", "3600") else {
+            panic!("a 403 with requests left is final");
+        };
+        assert_eq!(error.kind, Kind::AuthRequired);
     }
 
     #[test]

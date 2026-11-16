@@ -552,8 +552,9 @@ pub(super) fn lfs_help(url: &Url) -> Option<String> {
         .then(|| format!("{PRIVATE_LFS}: leave the file out to pin the others"))
 }
 
-/// the refusal of `url`, a private repository's file at github's api, for a run whose requests
-/// go without a github key: github answers 404 to them, as for a repository it has not.
+/// the refusal of `url`, a private repository's file at github's api, which github answered 404
+/// for a request without a github key, as it answers for a repository it has not. a repository
+/// made public since its pin serves the file to such a request.
 pub(super) fn keyless(url: &Url) -> Option<Error> {
     let repository = served(url)?.1?;
     Some(
@@ -566,6 +567,12 @@ pub(super) fn keyless(url: &Url) -> Option<Error> {
         .help("set GH_TOKEN or GITHUB_TOKEN to a github token that can read it, or sign in with `fetchloom auth login github`, then run the same command again")
         .needs(Account::GitHub, None),
     )
+}
+
+/// the error for github's limit on requests without a key, used up by downloads of files pinned
+/// at its api, as a repository's pinned while it was private are: a key lifts it.
+pub(super) fn keyless_limit(url: &Url) -> Option<Error> {
+    served(url).map(|_| limited(false))
 }
 
 /// whether a github key is on this machine and can go with a request.

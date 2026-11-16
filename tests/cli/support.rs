@@ -1402,6 +1402,15 @@ impl Routes {
             .push((start.to_owned(), header.to_ascii_lowercase()));
     }
 
+    /// answers the targets that start with `start` to any request again, as a repository made
+    /// public is shown to anyone.
+    pub(crate) fn unkeyed(&self, start: &str) {
+        self.keyed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(kept, _)| kept != start);
+    }
+
     /// the head of every request so far, lowercased.
     pub(crate) fn requests(&self) -> Vec<String> {
         self.heads()
