@@ -576,7 +576,8 @@ async fn resolve_typed(
 }
 
 /// `error`, a source showing no dataset of that name, which hugging face and kaggle say of a
-/// private one too, with the command meant when the owner has a public dataset one typo away.
+/// private one too, with the command meant when the owner has a public dataset one typo away. a
+/// source whose owners' datasets fetchloom cannot list is searched for nothing, and says nothing.
 async fn near_miss(
     context: &Context,
     net: &Net,
@@ -584,7 +585,10 @@ async fn near_miss(
     parsed: &Parsed,
     mut error: Error,
 ) -> Error {
-    if !error.unseen || context.offline.enabled() {
+    if !error.unseen
+        || context.offline.enabled()
+        || crate::source::search::Near::asks(&parsed.reference).is_none()
+    {
         return error;
     }
     let near = {

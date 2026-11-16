@@ -638,6 +638,53 @@ pub(crate) struct Near {
     pub(crate) reference: Reference,
 }
 
+/// the request [`near`] makes for a reference: its owner's list of datasets.
+pub(crate) struct OwnerList<'a> {
+    owner: &'a str,
+    name: &'a str,
+    /// what a dataset's id is written after, as `hf:datasets/`.
+    prefix: &'static str,
+    url: Url,
+}
+
+impl Near {
+    /// what [`near`] asks to look for a dataset one typo from `reference`: none for a source
+    /// whose owners' datasets it does not list, which it then never searches.
+    pub(crate) fn asks(reference: &Reference) -> Option<OwnerList<'_>> {
+        let (owner, name, prefix, url) = match reference {
+            Reference::HuggingFace(repo) => {
+                let (owner, name) = repo.dataset_parts()?;
+                let url = query(
+                    "https://huggingface.co/api/datasets",
+                    &[
+                        ("author", owner),
+                        ("sort", "downloads"),
+                        ("direction", "-1"),
+                        ("limit", "100"),
+                        ("expand[]", "private"),
+                    ],
+                );
+                (owner, name, "hf:datasets/", url)
+            }
+            Reference::Kaggle(dataset) => {
+                let (owner, name) = dataset.parts();
+                let url = query(
+                    "https://api.kaggle.com/v1/datasets/list",
+                    &[("user", owner), ("page", "1")],
+                );
+                (owner, name, "kaggle:", url)
+            }
+            _ => return None,
+        };
+        Some(OwnerList {
+            owner,
+            name,
+            prefix,
+            url: url.ok()?,
+        })
+    }
+}
+
 /// a dataset an owner publishes, as hugging face lists one.
 #[derive(Deserialize)]
 struct Owned {
@@ -654,35 +701,15 @@ struct Published {
 }
 
 /// the public dataset one typo from `reference`, a hugging face or kaggle dataset its source would
-/// not show, among its owner's others, the most downloaded first on hugging face. it makes one
-/// request, and a failed or rate-limited one finds none.
+/// not show, among its owner's others, the most downloaded first on hugging face. it makes the one
+/// request [`Near::asks`] names, and a failed or rate-limited one finds none.
 pub(crate) async fn near(api: &impl Api, reference: &Reference) -> Option<Near> {
-    let (owner, name, prefix, url) = match reference {
-        Reference::HuggingFace(repo) => {
-            let (owner, name) = repo.dataset_parts()?;
-            let url = query(
-                "https://huggingface.co/api/datasets",
-                &[
-                    ("author", owner),
-                    ("sort", "downloads"),
-                    ("direction", "-1"),
-                    ("limit", "100"),
-                    ("expand[]", "private"),
-                ],
-            );
-            (owner, name, "hf:datasets/", url)
-        }
-        Reference::Kaggle(dataset) => {
-            let (owner, name) = dataset.parts();
-            let url = query(
-                "https://api.kaggle.com/v1/datasets/list",
-                &[("user", owner), ("page", "1")],
-            );
-            (owner, name, "kaggle:", url)
-        }
-        _ => return None,
-    };
-    let url = url.ok()?;
+    let OwnerList {
+        owner,
+        name,
+        prefix,
+        url,
+    } = Near::asks(reference)?;
     let api = super::access::Scoped::new(api, reference.access(), None, reference.shown());
     let response = api.get_once(&url).await.ok()?;
     let ids: Vec<String> = match reference {

@@ -1915,6 +1915,49 @@ fn a_typo_in_an_id_gets_the_command_meant_when_signed_in() -> Result {
     Ok(())
 }
 
+/// a typo in an id gets one search of its owner's other datasets, which the line before it says,
+/// as it starts; a source that has no such list, as github and gitlab for a repository they do not
+/// show, is searched for nothing, so no line says it is.
+#[cfg(debug_assertions)]
+#[test]
+fn the_search_line_shows_only_where_a_search_asks() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (hub, _kaggle) = typo_sources("401 Unauthorized")?;
+    let output = sandbox
+        .command(&["add", "hf:datasets/scikit-learn/irsi", "--dry-run"])
+        .env("FETCHLOOM_TEST_HF_API", &hub.url)
+        .env("FETCHLOOM_TEST_TICKER", "on")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("Searching for a public dataset named like hf:datasets/scikit-learn/irsi"),
+        "{stderr}"
+    );
+    // github answers 404 to everything, as to a repository it does not show, and gitlab says so
+    let hosts = Routes::start(vec![(
+        "/gitlab.com/api/v4/projects/lab%2Fhidden/repository/commits/main".to_owned(),
+        reply(
+            "404 Not Found",
+            &[("Content-Type", "application/json")],
+            br#"{"message":"404 Project Not Found"}"#,
+        ),
+    )])?;
+    for link in [
+        "https://github.com/lab/hidden/tree/main/data",
+        "https://gitlab.com/lab/hidden/-/tree/main/data",
+    ] {
+        let output = sandbox
+            .command(&["add", link, "--dry-run"])
+            .env("FETCHLOOM_TEST_HOSTS", &hosts.url)
+            .env("FETCHLOOM_TEST_TICKER", "on")
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(40), "{link}: {stderr}");
+        assert!(!stderr.contains("Searching"), "{link}: {stderr}");
+    }
+    Ok(())
+}
+
 /// the list is a hint the person can do without, so a 429, a 500 or a used-up rate limit gets no
 /// further request, and the error comes at once, with no suggestion.
 #[cfg(debug_assertions)]
