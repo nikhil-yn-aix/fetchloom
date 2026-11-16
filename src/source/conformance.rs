@@ -646,7 +646,7 @@ fn subjects() -> Vec<Subject> {
 /// findings in sources other builders are changing, handed to them: the property, the row, a
 /// part of the change and the start of the problem. a fix deletes its line, which the property
 /// then holds; a line no finding matches fails, so it cannot outlive its fix.
-const HANDED_OFF: [(&str, &str, &str, &str); 3] = [
+const HANDED_OFF: [(&str, &str, &str, &str); 4] = [
     // geo reads any page sent with 200 as a folder's index, an empty one when it is no index
     (
         "wrong answers",
@@ -660,6 +660,13 @@ const HANDED_OFF: [(&str, &str, &str, &str); 3] = [
         "geo:GSE1000",
         "suppl/filelist.txt",
         "trusted",
+    ),
+    // geo reads an index's links without its html entities, so `a&amp;b` names another file
+    (
+        "hostile names",
+        "geo:GSE1000",
+        " as hostile<x>.csv in its links",
+        "listed",
     ),
     // geo's index reader leaves out an entry that starts with `.` or holds `:` without a word
     (
@@ -1056,28 +1063,21 @@ fn names_in<'a>(subject: &'a Subject, body: &str) -> Vec<&'a str> {
 }
 
 /// the problem with a listing that holds `hostile`, written where a file's name was: a name
-/// changed rather than refused, or a file left out without a warning.
-fn placed(subject: &Subject, listing: &Listing, hostile: &str) -> Option<String> {
+/// changed rather than refused, or a file left out without a warning. a name may differ from
+/// `hostile` only where the answer's own links held it: `linked` has the last part of each.
+fn placed(
+    subject: &Subject,
+    listing: &Listing,
+    hostile: &str,
+    linked: &[String],
+) -> Option<String> {
     let before: std::collections::HashSet<&str> = subject.listed.paths().collect();
-    // a file a source names by its link, the link's last part or what follows its `#`, is
-    // named by where the link leads once parsed, or as fetchloom names a plain link's file
-    let linked = |path: &str| {
-        let name = path.rsplit('/').next().unwrap_or(path);
-        listing.files.iter().any(|file| {
-            let last = file.url.path_segments().and_then(Iterator::last);
-            file.path == path
-                && (last
-                    .into_iter()
-                    .chain(file.url.fragment())
-                    .any(|part| percent_decode_str(part).decode_utf8_lossy() == name)
-                    || crate::name::from_url(&file.url).as_deref() == Some(name))
-        })
-    };
     if let Some(path) = listing.paths().find(|path| {
+        let name = path.rsplit('/').next().unwrap_or(path);
         !before.contains(path)
             && path.contains("hostile")
             && !path.contains(hostile)
-            && !linked(path)
+            && !linked.iter().any(|last| made_portable(last, name))
     }) {
         return Some(format!("listed {path:?}, not the name the answer gave"));
     }
@@ -1088,6 +1088,151 @@ fn placed(subject: &Subject, listing: &Listing, hostile: &str) -> Option<String>
         return Some("left a file out without refusing its name".to_owned());
     }
     None
+}
+
+/// whether `made` is `name`, a link's last part, as a file may be named on any disk: each
+/// character windows refuses, a control one or one of `<>:"|?*`, as `_`, without the dots and
+/// spaces windows drops at its end, and after a `_` where windows keeps the name for a device.
+fn made_portable(name: &str, made: &str) -> bool {
+    let name = name.trim_end_matches(['.', ' ']);
+    let same = |made: &str| {
+        made.chars().count() == name.chars().count()
+            && made.chars().zip(name.chars()).all(|(made, was)| {
+                made == was || made == '_' && (was.is_control() || "<>:\"|?*".contains(was))
+            })
+    };
+    same(made) || made.strip_prefix('_').is_some_and(same)
+}
+
+/// whether `value` is a link: one with a scheme, or one written without it whose first part
+/// names a host, as ENA's `ftp.sra.ebi.ac.uk/vol1/…`. a key such as `data/a.csv` is none.
+fn is_link(value: &str) -> bool {
+    value.contains("://")
+        || value.split_once('/').is_some_and(|(host, _)| {
+            host.contains('.')
+                && host.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-".contains(&byte)
+                })
+        })
+}
+
+/// `text` with the five entities xml and html name read as what they stand for.
+fn unescaped(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// the last part of each link an answer holds, as the url crate reads it, decoded: each value
+/// that [`is_link`], each part of one that lists several with `;`, as ENA's do, and each html
+/// `href`, read against `page`, the answer's own link.
+fn link_names(text: &str, page: &Url) -> Vec<String> {
+    let last = |url: Url| {
+        url.path_segments()
+            .and_then(|mut parts| parts.next_back().map(str::to_owned))
+            .map(|part| percent_decode_str(&part).decode_utf8_lossy().into_owned())
+    };
+    let parsed = |value: &str| {
+        let value = value.trim();
+        if value.contains("://") {
+            Url::parse(value).ok()
+        } else {
+            Url::parse(&format!("https://{value}")).ok()
+        }
+    };
+    let mut values: Vec<(String, bool)> = Vec::new();
+    if let Ok(document) = serde_json::from_str::<Value>(text) {
+        strings(&document, &mut |value| {
+            values.push((value.to_owned(), false));
+        });
+    } else {
+        for (token, href) in tokens(text) {
+            values.push((unescaped(token), href));
+        }
+    }
+    let mut names = Vec::new();
+    for (value, href) in values {
+        if href {
+            names.extend(page.join(&value).ok().and_then(last));
+            continue;
+        }
+        for part in value.split(';').filter(|part| is_link(part)) {
+            names.extend(parsed(part).and_then(last));
+        }
+    }
+    names
+}
+
+/// calls `each` with every string in a json document.
+fn strings(value: &Value, each: &mut dyn FnMut(&str)) {
+    match value {
+        Value::String(text) => each(text),
+        Value::Array(items) => items.iter().for_each(|item| strings(item, each)),
+        Value::Object(members) => members.values().for_each(|member| strings(member, each)),
+        _ => {}
+    }
+}
+
+/// the words of an xml or html answer, between quotes, tags and spaces, each with whether it is
+/// an html `href`.
+fn tokens(text: &str) -> Vec<(&str, bool)> {
+    let is_edge = |c: char| matches!(c, '"' | '\'' | '<' | '>') || c.is_whitespace();
+    let mut found = Vec::new();
+    let mut start = 0;
+    for (at, c) in text.char_indices().chain([(text.len(), ' ')]) {
+        if is_edge(c) {
+            if at > start {
+                let href = text[..start].ends_with("href=\"") || text[..start].ends_with("href='");
+                found.push((&text[start..at], href));
+            }
+            start = at + c.len_utf8();
+        }
+    }
+    found
+}
+
+/// `body` with `name` written as `hostile` where the answer gives it as a name, or where it is
+/// part of a link, as `in_links` says; none when the answer holds it in no such place.
+fn written_in(body: &str, name: &str, hostile: &str, in_links: bool) -> Option<String> {
+    if let Ok(mut document) = serde_json::from_str::<Value>(body) {
+        let mut changed = false;
+        rewrite(&mut document, &mut |value: &mut String| {
+            if value.contains(name) && is_link(value) == in_links {
+                *value = value.replace(name, hostile);
+                changed = true;
+            }
+        });
+        return changed.then(|| serde_json::to_string(&document).unwrap());
+    }
+    let mut out = String::with_capacity(body.len());
+    let mut done = 0;
+    let mut changed = false;
+    for (token, href) in tokens(body) {
+        if !token.contains(name) || (href || is_link(token)) != in_links {
+            continue;
+        }
+        let at = token.as_ptr() as usize - body.as_ptr() as usize;
+        out.push_str(&body[done..at]);
+        out.push_str(&token.replace(name, &written(hostile, false)));
+        done = at + token.len();
+        changed = true;
+    }
+    out.push_str(&body[done..]);
+    changed.then_some(out)
+}
+
+/// calls `each` with every string in a json document, to change it.
+fn rewrite(value: &mut Value, each: &mut dyn FnMut(&mut String)) {
+    match value {
+        Value::String(text) => each(text),
+        Value::Array(items) => items.iter_mut().for_each(|item| rewrite(item, each)),
+        Value::Object(members) => members
+            .values_mut()
+            .for_each(|member| rewrite(member, each)),
+        _ => {}
+    }
 }
 
 /// the error the network gives for an answer longer than it reads whole.
@@ -1273,33 +1418,49 @@ fn every_adapter_reads_sizes_and_digests_strictly() {
     found.none();
 }
 
-/// (b) a name no file may be placed at, written in an answer where a file's name was, is
+/// (b) a name no file may be placed at, written in an answer where it gives a file's name, is
 /// refused with an error that says what to do, or listed as written for the checks before
-/// placing to refuse, never changed into another name or left out without a word.
+/// placing to refuse, never changed into another name or left out without a word. written
+/// inside the answer's links instead, it may also come back as the name the links themselves
+/// give, as a source that names a file by its link does.
 #[test]
 fn every_adapter_refuses_a_hostile_name() {
     let mut found = Found::of("hostile names");
     for subject in subjects() {
         for link in subject.recorded.links() {
+            let page = Url::parse(&link).unwrap();
             let body = String::from_utf8_lossy(subject.recorded.body(&link)).into_owned();
-            let json = serde_json::from_str::<Value>(&body).is_ok();
             for name in names_in(&subject, &body) {
                 for hostile in HOSTILE {
-                    let changed = body.replace(&written(name, json), &written(hostile, json));
-                    let recorded = subject.hostile().answer(&link, 200, changed.into_bytes());
-                    let what = format!("{link} {name} as {hostile}");
-                    let outcome = subject.resolve(&recorded);
-                    if let Some(problem) = misbehaved(&outcome) {
-                        found.add(&subject, &what, &problem);
-                    }
-                    if let Outcome::Listed(listing) = &outcome {
-                        assert!(
-                            listing
-                                .paths()
-                                .all(|path| crate::name::escapes(path).is_none())
-                        );
-                        if let Some(problem) = placed(&subject, listing, hostile) {
+                    for in_links in [false, true] {
+                        let Some(changed) = written_in(&body, name, hostile, in_links) else {
+                            continue;
+                        };
+                        let where_ = if in_links {
+                            "in its links"
+                        } else {
+                            "as a name"
+                        };
+                        let what = format!("{link} {name} as {hostile} {where_}");
+                        let linked = if in_links {
+                            link_names(&changed, &page)
+                        } else {
+                            Vec::new()
+                        };
+                        let recorded = subject.hostile().answer(&link, 200, changed.into_bytes());
+                        let outcome = subject.resolve(&recorded);
+                        if let Some(problem) = misbehaved(&outcome) {
                             found.add(&subject, &what, &problem);
+                        }
+                        if let Outcome::Listed(listing) = &outcome {
+                            assert!(
+                                listing
+                                    .paths()
+                                    .all(|path| crate::name::escapes(path).is_none())
+                            );
+                            if let Some(problem) = placed(&subject, listing, hostile, &linked) {
+                                found.add(&subject, &what, &problem);
+                            }
                         }
                     }
                 }
