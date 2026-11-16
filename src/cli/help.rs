@@ -465,7 +465,7 @@ fn arguments(command: &clap::Command, top: bool) -> Vec<Argument> {
 /// the error for a topic that names no help topic or command, suggesting the closest one.
 fn unknown(topic: &[String]) -> Error {
     let asked = topic.join(" ");
-    let shown = crate::shown::mask_query(&asked);
+    let shown = crate::shown::mask_reference(&asked);
     let mut topics: Vec<String> = TOPICS.iter().map(|(name, _)| (*name).to_owned()).collect();
     for command in args::Args::command()
         .get_subcommands()

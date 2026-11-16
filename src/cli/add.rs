@@ -333,7 +333,7 @@ fn request(args: &mut Add) -> Result<Request, Error> {
 /// project at `root`, where whoever clones the project finds it again. a list from stdin or from
 /// outside the project could not be found again, so it is refused.
 fn list_in_project(path: &Path, root: &Path, here: &Path) -> Result<String, Error> {
-    let typed = path.display().to_string();
+    let typed = crate::shown::mask_query(&path.display().to_string()).into_owned();
     let elsewhere = |what: String| {
         Error::new(Kind::Usage, what).help(format!(
             "put the list in the project folder, {}, then run `{}`, so data.toml can name it for whoever clones the project",
@@ -382,7 +382,7 @@ fn named_as(asked: &str, typed: &[String]) -> Result<(), Error> {
         && name::dataset_name_problem(word).is_none()
         && (asked.contains(':') || local::is_path(asked))
     {
-        let shown = crate::shown::mask_query(asked);
+        let shown = crate::shown::mask_reference(asked);
         let instead =
             super::project::command(&format!("add {} --as {word}", super::shell_word(&shown)));
         let line = super::typed::meant(&["--as", asked, word], &[asked, "--as", word], instead);
@@ -1882,11 +1882,13 @@ pub(in crate::cli) async fn foresee_names(
 /// gives it, saying why and suggesting one the next run accepts.
 pub(super) fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
     if let Some(problem) = name::dataset_name_problem(asked) {
+        // a link given as the name may hold a login, which neither the name nor its suggestion shows
+        let typed = crate::shown::mask_reference(asked);
         // a name long enough to be refused for its length would fill the screen
-        let shown = if units::columns(asked) > 40 {
-            format!("{}\u{2026}", units::within(asked, 40))
+        let shown = if units::columns(&typed) > 40 {
+            format!("{}\u{2026}", units::within(&typed, 40))
         } else {
-            asked.to_owned()
+            typed.clone().into_owned()
         };
         let error = Error::new(
             Kind::Usage,
@@ -1897,7 +1899,7 @@ pub(super) fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
             "use lowercase letters a to z, digits, - and _, starting with a letter or a digit, at most {} characters",
             name::DATASET_NAME_MOST
         );
-        return Err(match name::dataset_name(asked) {
+        return Err(match name::dataset_name(&typed) {
             // lowercase letters cannot fix a name windows keeps for a device
             Some(suggested) if name::is_reserved_on_windows(asked) => {
                 error.help(format!("pick another name, such as --as {suggested}"))

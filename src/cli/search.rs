@@ -357,6 +357,18 @@ fn more(candidates: &[Candidate], limit: usize) -> bool {
     })
 }
 
+/// whether `word`, one of the words to search for, holds a link's login or key, or a login with
+/// its password before a host, as `ada:pw@data.example.org` does, which no search site may get.
+/// an address alone, as an author's, holds no secret.
+fn holds_secret(word: &str) -> bool {
+    if matches!(crate::shown::mask_secrets(word), std::borrow::Cow::Owned(_)) {
+        return true;
+    }
+    word.split_once('@')
+        .is_some_and(|(login, _)| login.contains(':'))
+        && crate::shown::mask_reference(word) != word
+}
+
 async fn find(
     context: &Context,
     api: &impl Api,
@@ -372,7 +384,18 @@ async fn find(
         return Err(Error::new(
             Kind::Usage,
             format!(
-                "\"{path}\" is a path on this machine, and fetchloom does not send paths to search sites"
+                "\"{}\" is a path on this machine, and fetchloom does not send paths to search sites",
+                crate::shown::mask_query(path)
+            ),
+        )
+        .help("search with words that describe the data, as in `fetchloom search iris`"));
+    }
+    if let Some(word) = words.split_whitespace().find(|word| holds_secret(word)) {
+        return Err(Error::new(
+            Kind::Usage,
+            format!(
+                "\"{}\" holds a login or a key, and fetchloom sends no secret to search sites",
+                crate::shown::mask_reference(word)
             ),
         )
         .help("search with words that describe the data, as in `fetchloom search iris`"));

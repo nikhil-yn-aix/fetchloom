@@ -168,6 +168,29 @@ pub(crate) fn mask_typed(typed: &str) -> String {
     }
 }
 
+/// `typed`, a reference, a name or a command a person typed, as a refusal or a did-you-mean shows
+/// it: masked as [`mask_query`] masks it, and with a login before a host in its first part masked
+/// too, as the password in `ada:pw@data.example.org/x.csv`, which a URL parser reads as no login
+/// without a scheme. an `@` before no host, as `figshare:1@2` has, or past a `/`, as
+/// `github:owner/repo@v1` has, names a version, so it stays.
+pub(crate) fn mask_reference(typed: &str) -> Cow<'_, str> {
+    let masked = mask_query(typed);
+    let end = masked.find(['/', '\\', '?', '#']).unwrap_or(masked.len());
+    let Some(at) = masked[..end].rfind('@').filter(|at| *at > 0) else {
+        return masked;
+    };
+    let host = &masked[at + 1..end];
+    let (name, port) = host.split_once(':').unwrap_or((host, ""));
+    let hostlike = name.contains('.')
+        || name.eq_ignore_ascii_case("localhost")
+        || (!port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()));
+    if hostlike {
+        Cow::Owned(format!("***{}", &masked[at..]))
+    } else {
+        masked
+    }
+}
+
 fn mask_normalized(text: &str, hides: fn(&str) -> bool) -> Option<String> {
     // URL parsing removes these characters, even from the scheme or authority
     let normalized = if text.contains(['\t', '\r', '\n']) {
@@ -185,19 +208,14 @@ fn mask_normalized(text: &str, hides: fn(&str) -> bool) -> Option<String> {
     }
 }
 
-/// replaces the `user:password@` of a web link's authority with `***@`, after any number of
-/// slashes, as a URL parser reads them. only web links count, so `figshare:1@2` keeps its version.
+/// replaces the `user:password@` of a link's authority with `***@`: after a web scheme and any
+/// number of slashes, as a URL parser reads them, after the `//` of any other scheme wherever the
+/// link starts, as in `scp://` or `list:scp://`, or after a `//` that starts the text. a reference
+/// with no authority keeps its `@`, so `figshare:1@2` keeps its version.
 fn mask_login(text: &str) -> Cow<'_, str> {
-    let Some((scheme, rest)) = text.split_once(':') else {
+    let Some(start) = authority(text) else {
         return Cow::Borrowed(text);
     };
-    if !["http", "https", "ftp"]
-        .iter()
-        .any(|web| scheme.trim().eq_ignore_ascii_case(web))
-    {
-        return Cow::Borrowed(text);
-    }
-    let start = text.len() - rest.trim_start_matches(['/', '\\']).len();
     let end = text[start..]
         .find(['/', '\\', '?', '#'])
         .map_or(text.len(), |at| start + at);
@@ -205,6 +223,23 @@ fn mask_login(text: &str) -> Cow<'_, str> {
         Some(at) => Cow::Owned(format!("{}***{}", &text[..start], &text[start + at..])),
         None => Cow::Borrowed(text),
     }
+}
+
+/// where the authority [`mask_login`] masks starts in `text`, if it has one.
+fn authority(text: &str) -> Option<usize> {
+    let past_slashes = |rest: &str| text.len() - rest.trim_start_matches(['/', '\\']).len();
+    if let Some((scheme, rest)) = text.split_once(':')
+        && ["http", "https", "ftp"]
+            .iter()
+            .any(|web| scheme.trim().eq_ignore_ascii_case(web))
+    {
+        return Some(past_slashes(rest));
+    }
+    if text.starts_with("//") || text.starts_with("\\\\") {
+        return Some(past_slashes(text));
+    }
+    let colon = text.find("://").or_else(|| text.find(":\\\\"))?;
+    Some(past_slashes(&text[colon + 1..]))
 }
 
 fn mask_values(text: &str, hides: fn(&str) -> bool) -> Cow<'_, str> {
@@ -328,8 +363,51 @@ mod tests {
             ),
             ("figshare:34744689@1", "figshare:34744689@1"),
             ("zenodo:1", "zenodo:1"),
+            // any scheme's authority, wherever its link starts, and a `//` that starts the text
+            (
+                "scp://ada:pw@example.org/a.csv",
+                "scp://***@example.org/a.csv",
+            ),
+            (
+                "<smb://ada:pw@example.org/a.csv>",
+                "<smb://***@example.org/a.csv>",
+            ),
+            (
+                "list:scp://ada:pw@example.org/a.txt",
+                "list:scp://***@example.org/a.txt",
+            ),
+            (
+                "s3:https://ada:pw@minio.example.org/b",
+                "s3:https://***@minio.example.org/b",
+            ),
+            ("//ada:pw@example.org/a.csv", "//***@example.org/a.csv"),
+            ("hf://datasets/x@main", "hf://datasets/x@main"),
         ] {
             assert_eq!(mask_query(text), shown, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_typed_reference_hides_a_login_before_a_host_and_keeps_a_version() {
+        for (typed, shown) in [
+            (
+                "ada:pw@data.example.org/x.csv",
+                "***@data.example.org/x.csv",
+            ),
+            ("zenodoo:ada:pw@localhost:8000", "***@localhost:8000"),
+            ("ada@lab:8000/x", "***@lab:8000/x"),
+            (
+                "scp://ada:pw@example.org/a.csv",
+                "scp://***@example.org/a.csv",
+            ),
+            ("figshare:34744689@1", "figshare:34744689@1"),
+            ("github:jqlang/jq@jq-1.8.2", "github:jqlang/jq@jq-1.8.2"),
+            (
+                "hf:datasets/scikit-learn/iris@main",
+                "hf:datasets/scikit-learn/iris@main",
+            ),
+        ] {
+            assert_eq!(mask_reference(typed), shown, "{typed}");
         }
     }
 

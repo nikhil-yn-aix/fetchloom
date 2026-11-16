@@ -669,6 +669,133 @@ fn debug_logs_never_show_a_token_or_a_stored_key() -> Result {
     Ok(())
 }
 
+/// the password a person types in a link of any scheme, or before an `@` that ends the part a host
+/// takes, never shows in a refusal, a did-you-mean or a suggested name, whatever argument it was
+/// typed as. a path shows as typed unless it holds a link's login.
+#[test]
+fn a_login_typed_in_any_reference_never_shows() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(sandbox.work().join("f.csv"), "a\n")?;
+    let added = sandbox.run(&["add", "./f.csv"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let canary = "pwcanary";
+    let links = [
+        "scp://me:pwcanary@lab.example.org/x.csv",
+        "<smb://me:pwcanary@lab.example.org/x.csv>",
+        "huggingface://me:pwcanary@lab.example.org/x",
+        "zenodo://me:pwcanary@lab.example.org/1",
+        "list:scp://me:pwcanary@lab.example.org/list.txt",
+        "//me:pwcanary@lab.example.org/x.csv",
+        "file://me:pwcanary@lab.example.org/x.csv",
+    ];
+    let hostless = [
+        "huggingface:me:pwcanary@lab.example.org/x",
+        "gitlab:me:pwcanary@lab.example.org/a/b",
+        "invenio:me:pwcanary@lab.example.org/1",
+        "me:pwcanary@lab.example.org/x.csv",
+        "zenodoo:me:pwcanary@lab.example.org",
+    ];
+    let mut failures = Vec::new();
+    for typed in links.iter().chain(&hostless) {
+        let mut runs = vec![
+            vec!["add", typed],
+            vec!["get", typed],
+            vec!["search", typed],
+            vec!["help", typed],
+            vec![typed],
+            vec!["remove", typed],
+            vec!["sync", typed],
+            vec!["status", typed],
+            vec!["add", "./f.csv", "--as", typed],
+        ];
+        if links.contains(typed) {
+            runs.extend([
+                vec!["add", "-i", typed],
+                vec!["get", "-i", typed],
+                vec!["exclude", typed],
+            ]);
+            // windows refuses `:` in a folder's name, and its refusal shows the whole path as windows writes it
+            if !cfg!(windows) {
+                runs.push(vec!["-C", typed, "status"]);
+            }
+        }
+        for args in runs {
+            for json in [false, true] {
+                let mut command = vec!["--offline"];
+                if json {
+                    command.push("--json");
+                }
+                command.extend(&args);
+                let output = sandbox.run(&command)?;
+                let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+                if shown.to_lowercase().contains(canary) {
+                    failures.push(format!("{command:?}:\n{shown}"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+/// a search for words holding a link's login or key is refused before any site is asked, as a
+/// path is: the search sites would get the secret.
+#[cfg(debug_assertions)]
+#[test]
+fn a_search_for_a_link_holding_a_secret_asks_no_site() -> Result {
+    let sandbox = Sandbox::new()?;
+    let sites = Routes::start(Vec::new())?;
+    for (args, masked) in [
+        (
+            &[
+                "--json",
+                "search",
+                "https://me:pwcanary@lab.example.org/x.csv",
+            ][..],
+            "https://***@lab.example.org/x.csv",
+        ),
+        (
+            &[
+                "--json",
+                "search",
+                "iris",
+                "scp://me:pwcanary@lab.example.org/x",
+            ],
+            "scp://***@lab.example.org/x",
+        ),
+        (
+            &[
+                "--json",
+                "search",
+                "iris https://lab.example.org/x.csv?token=pwcanary",
+            ],
+            "https://lab.example.org/x.csv?token=***",
+        ),
+    ] {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &sites.url)
+            .output()?;
+        let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {shown}");
+        assert!(!shown.contains("pwcanary"), "{args:?}: {shown}");
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(
+            error["message"],
+            format!(
+                "\"{masked}\" holds a login or a key, and fetchloom sends no secret to search sites"
+            ),
+            "{args:?}"
+        );
+        assert_eq!(
+            error["help"],
+            "search with words that describe the data, as in `fetchloom search iris`"
+        );
+    }
+    assert_eq!(sites.targets(), Vec::<String>::new());
+    Ok(())
+}
+
 #[test]
 fn an_unknown_help_topic_never_shows_the_token() -> Result {
     let sandbox = Sandbox::new()?;

@@ -182,32 +182,15 @@ pub(super) fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Op
             return None;
         }
         let shown = match arg.split_once('=').filter(|_| arg.starts_with('-')) {
-            Some((option, value)) => Cow::Owned(format!("{option}={}", without_login(value))),
-            None => without_login(&arg),
+            Some((option, value)) => {
+                Cow::Owned(format!("{option}={}", crate::shown::mask_reference(value)))
+            }
+            None => crate::shown::mask_reference(&arg),
         };
         line.push(' ');
         line.push_str(&shell_word(&shown));
     }
     Some(line)
-}
-
-/// `word` with a login before a host, as in `ada:pw@data.example.org`, shown as `***@`; a URL
-/// parser reads no login there without a scheme. `figshare:1@2` names no host, so it stays.
-fn without_login(word: &str) -> Cow<'_, str> {
-    let end = word.find(['/', '\\', '?', '#']).unwrap_or(word.len());
-    let Some(at) = word[..end].rfind('@').filter(|at| *at > 0) else {
-        return Cow::Borrowed(word);
-    };
-    let host = &word[at + 1..end];
-    let (name, port) = host.split_once(':').unwrap_or((host, ""));
-    let hostlike = name.contains('.')
-        || name.eq_ignore_ascii_case("localhost")
-        || (!port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()));
-    if hostlike {
-        Cow::Owned(format!("***{}", &word[at..]))
-    } else {
-        Cow::Borrowed(word)
-    }
 }
 
 /// whether `arg` holds a link with a query, a fragment or a login, which may carry a secret under
@@ -250,13 +233,17 @@ fn may_hold_secret(arg: &str) -> bool {
 
 /// `error`, for a reference `command` could not read, with the line retyped where `typed`'s prefix
 /// is one typo from one fetchloom reads, as `zenodoo:` is, or where `typed` comes inside the marks
-/// an email, markdown or a quote put around a link; a link that may hold a secret gets none.
+/// an email, markdown or a quote put around a link; a link that may hold a secret, or a login
+/// before a host, gets none.
 pub(in crate::cli) fn scheme_meant(
     error: crate::error::Error,
     typed: &str,
     command: &str,
 ) -> crate::error::Error {
-    if error.kind != crate::error::Kind::ReferenceInvalid || may_hold_secret(typed) {
+    if error.kind != crate::error::Kind::ReferenceInvalid
+        || may_hold_secret(typed)
+        || crate::shown::mask_reference(typed) != typed
+    {
         return error;
     }
     let inner = unwrapped(typed.trim());

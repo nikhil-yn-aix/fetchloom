@@ -414,7 +414,7 @@ impl Reference {
         // a link parser drops tabs and line breaks, so what is written and what is fetched could
         // differ, and data.lock's record of the entry could match another one
         if text.contains(char::is_control) {
-            let text = crate::shown::mask_query(text);
+            let text = crate::shown::mask_reference(text);
             return Err(Error::new(
                 Kind::ReferenceInvalid,
                 format!(
@@ -490,8 +490,8 @@ impl Reference {
             "sftp" => Err(sftp(text)),
             other => Err(match site_named(other) {
                 Some(prefix) => unknown(text).help(format!(
-                    "did you mean {}?",
-                    crate::shown::mask_query(&format!("{prefix}:{rest}"))
+                    "did you mean {prefix}:{}?",
+                    crate::shown::mask_reference(rest)
                 )),
                 None => unknown(text),
             }),
@@ -1385,7 +1385,7 @@ fn site_named(scheme: &str) -> Option<&'static str> {
 }
 
 fn unknown(text: &str) -> Error {
-    let text = crate::shown::mask_query(text);
+    let text = crate::shown::mask_reference(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
         .help("use a name to search for, the link of the dataset's page, such as https://huggingface.co/datasets/scikit-learn/iris, a DOI, or an id such as kaggle:uciml/iris")
 }
@@ -1406,7 +1406,11 @@ fn sftp(text: &str) -> Error {
 
 /// the error for a malformed id after a known prefix, such as `zenodo:abc`.
 fn malformed(text: &str, expected: &str) -> Error {
-    let text = crate::shown::mask_query(text);
+    // the prefix is one fetchloom reads and holds no login, so it shows as typed
+    let text = match text.split_once(':') {
+        Some((prefix, rest)) => format!("{prefix}:{}", crate::shown::mask_reference(rest)),
+        None => crate::shown::mask_reference(text).into_owned(),
+    };
     Error::new(
         Kind::ReferenceInvalid,
         format!("\"{text}\" is not a valid reference"),

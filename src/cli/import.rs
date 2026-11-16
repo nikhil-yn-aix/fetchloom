@@ -681,7 +681,10 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
             .ok_or_else(|| {
                 Error::new(
                     Kind::Usage,
-                    format!("\"{typed}\" names no file on this machine"),
+                    format!(
+                        "\"{}\" names no file on this machine",
+                        crate::shown::mask_query(typed)
+                    ),
                 )
                 .help(format!(
                     "give the path of the folder or file, as in `{}`",
@@ -716,13 +719,14 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
         if let Some(refused) = refused_name(typed, &path, &err, line, cfg!(windows)) {
             return refused;
         }
+        let shown = crate::shown::mask_query(typed);
         if err.kind() != std::io::ErrorKind::NotFound {
-            return Error::io(format_args!("could not find {typed}"), &err);
+            return Error::io(format_args!("could not find {shown}"), &err);
         }
         // a path typed wrong is a mistake on the command line, not a fault of the disk
         let error = Error::new(
             Kind::Usage,
-            format!("there is no file or folder \"{typed}\""),
+            format!("there is no file or folder \"{shown}\""),
         );
         match near(typed, &path) {
             Some(guess) => {
@@ -735,7 +739,7 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
             }
             None if Path::new(typed).is_relative() && !typed.starts_with('~') => {
                 error.help(format!(
-                    "check the path: fetchloom reads {typed} from {}",
+                    "check the path: fetchloom reads {shown} from {}",
                     units::path(here)
                 ))
             }
@@ -761,7 +765,10 @@ fn refused_name(
     Some(
         Error::new(
             Kind::Usage,
-            format!("there is no file or folder \"{typed}\": windows takes no {refused} in a name"),
+            format!(
+                "there is no file or folder \"{}\": windows takes no {refused} in a name",
+                crate::shown::mask_query(typed)
+            ),
         )
         .help(super::typed::refused_help(
             refused,

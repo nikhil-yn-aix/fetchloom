@@ -96,7 +96,7 @@ impl List {
                 Kind::ReferenceInvalid,
                 format!(
                     "{MARK}{} names no list fetchloom reads, because {reason}",
-                    crate::name::escaped(text)
+                    crate::name::escaped(&crate::shown::mask_query(text))
                 ),
             )
             .help("write list: and the list's link, or its path inside the project with / between folders, such as list:lists/files.txt")

@@ -387,7 +387,7 @@ pub(super) fn in_data_folder(
             Kind::Usage,
             format!(
                 "{} is not inside the data folder, {data_dir}/",
-                arg.display()
+                crate::shown::mask_query(&arg.display().to_string())
             ),
         )
         .help(format!(

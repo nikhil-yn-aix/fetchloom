@@ -814,7 +814,7 @@ fn unusable(
             Kind::Usage,
             format!(
                 "cannot work in {}: {}",
-                folder.display(),
+                crate::shown::mask_query(&folder.display().to_string()),
                 crate::error::said_at(err, folder)
             ),
         )
@@ -827,7 +827,7 @@ fn unusable(
             Kind::Usage,
             format!(
                 "cannot work in {}: windows takes no {refused} in a folder's name",
-                path.display()
+                crate::shown::mask_query(&path.display().to_string())
             ),
         )
         .help(typed::refused_help(
@@ -842,7 +842,7 @@ fn unusable(
         Kind::Usage,
         format!(
             "cannot work in {}: at {length} characters, its path is too long for a working folder",
-            path.display()
+            crate::shown::mask_query(&path.display().to_string())
         ),
     )
     .help(match moved_command(typed.into_iter()) {

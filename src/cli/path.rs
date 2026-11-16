@@ -255,7 +255,10 @@ fn named(manifest: &Manifest, target: &str) -> Result<(), Error> {
     let message = if target.is_empty() {
         "\"\" names no dataset".to_owned()
     } else if target.starts_with(['/', '\\']) || std::path::Path::new(target).is_absolute() {
-        format!("\"{target}\" is a path on this machine, not a dataset")
+        format!(
+            "\"{}\" is a path on this machine, not a dataset",
+            crate::shown::mask_query(target)
+        )
     } else {
         return Ok(());
     };

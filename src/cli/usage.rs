@@ -110,7 +110,7 @@ fn context_value(err: &clap::Error, kind: ContextKind) -> Option<String> {
     typed(err, kind)
         .into_iter()
         .next()
-        .map(|value| crate::shown::mask_query(&value).into_owned())
+        .map(|value| crate::shown::mask_reference(&value).into_owned())
 }
 
 /// every value clap recorded for `kind`, as it was typed.
@@ -648,7 +648,7 @@ fn first_line(err: &clap::Error) -> String {
         ContextKind::InvalidSubcommand,
     ] {
         for value in typed(err, kind) {
-            let masked = crate::shown::mask_query(&value);
+            let masked = crate::shown::mask_reference(&value);
             if masked != value {
                 line = line.replace(&value, &masked);
             }

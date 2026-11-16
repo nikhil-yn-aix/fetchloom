@@ -57,7 +57,7 @@ fn read_text(path: &Path, most: u64) -> Result<(String, String), Error> {
     let (name, reading): (String, Box<dyn std::io::Read>) = if path == Path::new("-") {
         ("stdin".to_owned(), Box::new(std::io::stdin()))
     } else {
-        let name = path.display().to_string();
+        let name = crate::shown::mask_query(&path.display().to_string()).into_owned();
         let file = std::fs::File::open(path)
             .map_err(|err| Error::io(format_args!("could not read {name}"), &err))?;
         (name, Box::new(file))
