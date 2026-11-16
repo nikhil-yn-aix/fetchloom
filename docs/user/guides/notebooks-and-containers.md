@@ -76,11 +76,11 @@ error: could not open the cache at /root/.cache/fetchloom: read-only file system
   help: set FETCHLOOM_CACHE to a folder fetchloom may write to
 ```
 
-an image can carry `data.toml` and `data.lock` with the code, but sync writes `data/` and `.fetchloom/` beside them, so copy the two files into the volume first.
+an image can carry `data.toml` and `data.lock` with the code, but sync writes `data/` and `.fetchloom/` beside them, so copy them into the volume first, with `data.lock.d` when the project has one: it holds the file lists of datasets of more than 50,000 files, without which `sync --locked` stops with `project.invalid`, exit 50.
 
 ### a kubernetes job
 
-this job restores the inputs in an init container, then runs the training container, which only reads them. the image holds the code, `data.toml` and `data.lock` in `/app`:
+this job restores the inputs in an init container, then runs the training container, which only reads them. the image holds the code, `data.toml`, `data.lock` and any `data.lock.d` in `/app`:
 
 ```yaml
 apiVersion: v1
@@ -111,6 +111,7 @@ spec:
               set -e
               mkdir -p /work/project
               cp /app/data.toml /app/data.lock /work/project/
+              if [ -d /app/data.lock.d ]; then cp -R /app/data.lock.d /work/project/; fi
               cd /work/project
               fetchloom sync --locked
               fetchloom cache gc --now

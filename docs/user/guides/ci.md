@@ -45,7 +45,7 @@ restore-data:
     - fetchloom cache gc --now
 ```
 
-jobs on different systems, such as linux and windows runners, should use different prefixes, as the github key does with `runner.os`.
+jobs on different systems, such as linux and windows runners, should use different prefixes, as the github key does with `runner.os`. the cache sits in the project folder there, so `git status` lists `.fetchloom-cache/` until the repository's `.gitignore` holds `/.fetchloom-cache/`: fetchloom adds `/data/` there itself, not the cache.
 
 a kubernetes job or another container keeps its cache on a volume instead; [notebooks and containers](notebooks-and-containers.md#a-kubernetes-job) has an example with a read-only root filesystem.
 
