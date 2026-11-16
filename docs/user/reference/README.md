@@ -13,6 +13,7 @@
 | [JSON output](json-output.md) | `--json` returns one versioned document on stdout for scripts to read. |
 | [Exit codes](exit-codes.md) | exit codes group failures, while error kinds identify the cause. |
 | [Python helper](python-helper.md) | install from source with python 3.10 or later and the rust build prerequisites. |
+| [R package](r-package.md) | the R package in `r/` runs the fetchloom program with `--json --progress` and returns paths, as the python helper does. |
 | [Cache folder](cache-folder.md) | the cache is one folder that keeps each file by its SHA-256, with the records fetchloom needs to reuse and check them. |
 | [Project folder](project-folder.md) | the project folder holds `data.toml` and `data.lock`, and its `.fetchloom/` holds what this machine knows of the project: a lock, a record of which command holds it, and what sync placed. |
 | [Compatibility](compatibility.md) | fetchloom supports the systems, terminals and source APIs listed below. |

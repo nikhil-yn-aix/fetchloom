@@ -1,0 +1,5 @@
+export(download)
+export(path)
+export(sync)
+importFrom(jsonlite, parse_json)
+S3method(conditionMessage, fetchloom_error)

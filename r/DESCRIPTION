@@ -1,0 +1,18 @@
+Package: fetchloom
+Title: Place Pinned Research Data with 'fetchloom'
+Version: 0.1.0
+Authors@R: person("Nikhil", "Y N", email = "nikhilylkn@gmail.com", role = c("aut", "cre"))
+Description: Runs the 'fetchloom' program, which pins the data a project uses
+    from published or shared places by SHA-256 and places those exact bytes on
+    any machine. path() returns where a dataset is placed, sync() places a
+    project's data and download() gets a link once, each raising the kind and
+    help 'fetchloom' gives when it fails.
+License: Apache License (== 2.0)
+URL: https://github.com/nikhil-yn-aix/fetchloom
+BugReports: https://github.com/nikhil-yn-aix/fetchloom/issues
+Depends: R (>= 4.1.0)
+Imports: jsonlite
+Suggests: testthat (>= 3.0.0), withr
+SystemRequirements: fetchloom (https://github.com/nikhil-yn-aix/fetchloom#install)
+Config/testthat/edition: 3
+Encoding: UTF-8

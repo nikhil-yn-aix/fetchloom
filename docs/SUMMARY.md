@@ -81,6 +81,7 @@
         - [JSON output](user/reference/json-output.md)
         - [Exit codes](user/reference/exit-codes.md)
         - [Python helper](user/reference/python-helper.md)
+        - [R package](user/reference/r-package.md)
         - [Cache folder](user/reference/cache-folder.md)
         - [Project folder](user/reference/project-folder.md)
         - [Compatibility](user/reference/compatibility.md)

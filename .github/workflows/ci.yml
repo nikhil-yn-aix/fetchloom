@@ -34,7 +34,7 @@ env:
 
 jobs:
   ci:
-    needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts, action]
+    needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts, action, r]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -481,3 +481,37 @@ jobs:
           test "$FIRST" != true
           test "$SECOND" = true
           ${{ matrix.python }} python/ci_action.py check --root "$RUNNER_TEMP/action"
+
+  # the R package in r/, checked by R CMD check against the fetchloom this job builds; the check
+  # fails on a warning, and a skipped test fails the job too
+  r:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: build fetchloom and put it on PATH
+        run: |
+          cargo build --locked --bin fetchloom
+          echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
+      - uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2.14.0
+        with:
+          r-version: release
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2.14.0
+        with:
+          working-directory: r
+          extra-packages: any::rcmdcheck
+          needs: check
+      - uses: r-lib/actions/check-r-package@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2.14.0
+        with:
+          working-directory: r
+      - name: every test ran
+        run: |
+          cat r/check/fetchloom.Rcheck/tests/testthat.Rout
+          grep -E '\[ FAIL 0 \| WARN 0 \| SKIP 0 \| PASS [0-9]+ \]' r/check/fetchloom.Rcheck/tests/testthat.Rout
