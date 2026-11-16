@@ -34,6 +34,7 @@ fn an_answer_is_served_only_at_the_pinned_size() {
     let file = |total, page| Probed::File {
         total,
         page,
+        slashed: false,
         name: None,
         head: Vec::new(),
         modified: None,

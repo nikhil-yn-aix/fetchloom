@@ -197,8 +197,11 @@ pub(crate) enum Event {
         resumed: u64,
         resumable: Resumable,
     },
+    /// a web page came, under the name its server gave, if any. `slashed` says the server sent
+    /// the link on to itself with a `/` added, as servers send a folder's link on to the folder.
     WebPage {
         name: Option<String>,
+        slashed: bool,
     },
     /// the server named the file, by its answer's `Content-Disposition` or a redirect's, before
     /// any byte flows.
@@ -1730,7 +1733,11 @@ fn describe_response(
 ) -> Result<Option<String>, Failure> {
     let name = served_name(response, url).map_err(Failure::Final)?;
     if headers::is_html(response.headers()) {
-        on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
+        on(Event::WebPage {
+            name: name.clone(),
+            slashed: slashed(url, response.url()),
+        })
+        .map_err(Failure::Final)?;
     }
     if let Some(given) = &name {
         on(Event::Named(given.clone())).map_err(Failure::Final)?;
@@ -1739,6 +1746,19 @@ fn describe_response(
         on(Event::Encoded(encoding)).map_err(Failure::Final)?;
     }
     Ok(name)
+}
+
+/// whether `answered`, where a request for `asked` ended, is `asked` with a `/` added, as a
+/// server sends a folder's link without its `/` on to the folder, over https where asked over
+/// http, as most do.
+pub(super) fn slashed(asked: &Url, answered: &Url) -> bool {
+    let schemes = (asked.scheme(), answered.scheme());
+    !asked.path().ends_with('/')
+        && (schemes.0 == schemes.1 || schemes == ("http", "https"))
+        && answered.host() == asked.host()
+        && answered.port() == asked.port()
+        && answered.path().strip_suffix('/') == Some(asked.path())
+        && answered.query() == asked.query()
 }
 
 /// the name the server gives the file it answers the link `url` with: the one its answer states,
@@ -2069,6 +2089,7 @@ fn recalled(record: UrlRecord, origin: Origin, on: Listener<'_>) -> Result<Fetch
     if record.page {
         on(Event::WebPage {
             name: record.name.clone(),
+            slashed: false,
         })?;
     }
     Ok(fetched(record, origin))

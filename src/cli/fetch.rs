@@ -176,8 +176,9 @@ pub(in crate::cli) fn page_call(job: &Job, given: Option<&str>) -> PageCall {
 }
 
 /// the refusal of a web page `job`'s link answered with where it expected a file, which `named`
-/// says the link's name promised, as `data.csv` does.
-pub(in crate::cli) fn page_refused(job: &Job, named: bool) -> Error {
+/// says the link's name promised, as `data.csv` does, and `slashed` that came from the link with a
+/// `/` added, as a folder's listing does: only then is the folder's link offered.
+pub(in crate::cli) fn page_refused(job: &Job, named: bool, slashed: bool) -> Error {
     if let Some(refused) = super::share::page_refused(&job.fetch.url) {
         return refused;
     }
@@ -206,7 +207,7 @@ pub(in crate::cli) fn page_refused(job: &Job, named: bool) -> Error {
     }
     let mut folder = url.clone();
     folder.set_path(&format!("{}/", url.path()));
-    let listing = if url.query().is_none() && url.fragment().is_none() {
+    let listing = if slashed && url.query().is_none() && url.fragment().is_none() {
         format!(
             "if it is a folder listing, use its link with a / at the end, {}, which fetchloom reads as one dataset. otherwise ",
             crate::shown::Shown(&folder)
@@ -817,7 +818,7 @@ impl<'a> Watch<'a> {
                 std::io::Read::read_to_end(&mut std::io::Read::take(file, HEAD as u64), &mut head);
         }
         if reads_as_html(&head) {
-            return Err(self.page_refused(true));
+            return Err(self.page_refused(true, false));
         }
         Ok(fetched)
     }
@@ -1156,9 +1157,10 @@ impl<'a> Watch<'a> {
     }
 
     /// the refusal of a web page the job's link answered with where it expected a file, which
-    /// `named` says the link's name promised, as `data.csv` does.
-    fn page_refused(&self, named: bool) -> Error {
-        page_refused(self.job, named)
+    /// `named` says the link's name promised, as `data.csv` does, and `slashed` that came from the
+    /// link with a `/` added.
+    fn page_refused(&self, named: bool, slashed: bool) -> Error {
+        page_refused(self.job, named, slashed)
     }
 
     fn on(&self, event: &Event) -> Result<(), Error> {
@@ -1191,11 +1193,11 @@ impl<'a> Watch<'a> {
                 resumed,
                 resumable,
             } => self.started(total, resumed, resumable)?,
-            Event::WebPage { ref name } => {
+            Event::WebPage { ref name, slashed } => {
                 let given = name.as_deref().and_then(crate::name::sanitize);
                 match page_call(self.job, given.as_deref()) {
                     PageCall::Taken => {}
-                    PageCall::Refused => return Err(self.page_refused(false)),
+                    PageCall::Refused => return Err(self.page_refused(false, slashed)),
                     PageCall::ByBytes => self.page.store(true, Ordering::Relaxed),
                     PageCall::Warned => {
                         let named = given.as_deref().unwrap_or(label);
@@ -3405,7 +3407,7 @@ mod tests {
     fn on_page(
         link: &str,
         label: &str,
-        name: Option<&str>,
+        (name, slashed): (Option<&str>, bool),
         sha256: Option<crate::digest::Sha256>,
     ) -> Result<(), Error> {
         let output = quiet();
@@ -3427,6 +3429,7 @@ mod tests {
         let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
         watch.on(&Event::WebPage {
             name: name.map(str::to_owned),
+            slashed,
         })
     }
 
@@ -3490,7 +3493,12 @@ mod tests {
         ] {
             let stored = crate::cache::tests::store(&cache, bytes);
             let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
-            watch.on(&Event::WebPage { name: None }).unwrap();
+            watch
+                .on(&Event::WebPage {
+                    name: None,
+                    slashed: false,
+                })
+                .unwrap();
             let fetched = Fetched {
                 digest: stored.digest,
                 size: stored.size,
@@ -3535,7 +3543,11 @@ mod tests {
             again: None,
         };
         let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
-        let advice = watch.page_refused(true).told().help.unwrap_or_default();
+        let advice = watch
+            .page_refused(true, false)
+            .told()
+            .help
+            .unwrap_or_default();
         // windows withholds a name its shells would run and shows a placeholder instead
         let suggested = if cfg!(windows) {
             "`fetchloom auth login \"<name>\"`"
@@ -3547,41 +3559,30 @@ mod tests {
 
     /// a page that names no file, at a link that names none either, is a folder listing or a
     /// site's page, refused before its bytes, one at a folder's link as no listing fetchloom
-    /// reads, and the folder's own link, ending in /, is offered where the link has none; a link
+    /// reads, and the folder's own link, ending in /, is offered where the server sent the link
+    /// on to it, as servers send a folder's link without its `/`; a link
     /// that names a page, a file the server names, pinned bytes, and a link named as data, whose
     /// first bytes decide, are not.
     #[test]
     fn a_web_page_that_names_no_file_is_refused_before_its_bytes() {
         let pinned = Some(crate::digest::sha256(b"a pinned listing"));
         let folder = "if it is a folder listing, use its link with a / at the end, http://lab.example/shards/, which fetchloom reads as one dataset. otherwise open it in a browser";
+        let page = "answered with a web page, such as a folder listing, not a file";
+        let other = "answered with a web page, not a file or a folder listing fetchloom reads";
         let refused = [
-            (
-                "http://lab.example/shards",
-                "shards",
-                "answered with a web page, such as a folder listing, not a file",
-                true,
-            ),
-            (
-                "http://lab.example/shards?page=2",
-                "shards",
-                "answered with a web page, such as a folder listing, not a file",
-                false,
-            ),
-            (
-                "http://lab.example/shards/",
-                "shards",
-                "answered with a web page, not a file or a folder listing fetchloom reads",
-                false,
-            ),
-            (
-                "http://lab.example/",
-                "download",
-                "answered with a web page, not a file or a folder listing fetchloom reads",
-                false,
-            ),
+            ("http://lab.example/shards", true, page, true),
+            ("http://lab.example/shards", false, page, false),
+            ("http://lab.example/shards?page=2", true, page, false),
+            ("http://lab.example/shards/", false, other, false),
+            ("http://lab.example/", false, other, false),
         ];
-        for (link, label, said, offered) in refused {
-            let error = on_page(link, label, None, None).unwrap_err();
+        for (link, slashed, said, offered) in refused {
+            let label = if link.contains("shards") {
+                "shards"
+            } else {
+                "download"
+            };
+            let error = on_page(link, label, (None, slashed), None).unwrap_err();
             assert_eq!(error.kind, Kind::SourceInvalid);
             assert_eq!(error.message, format!("{link} {said}"));
             let advice = error.help.unwrap_or_default();
@@ -3612,7 +3613,7 @@ mod tests {
             ("http://lab.example/page.HTM", "page.HTM", None, None),
         ] {
             assert!(
-                on_page(link, label, name, sha256).is_ok(),
+                on_page(link, label, (name, false), sha256).is_ok(),
                 "{link} as {label}"
             );
         }

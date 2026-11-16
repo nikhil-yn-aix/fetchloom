@@ -17,12 +17,14 @@ use crate::work::Work;
 #[derive(Debug)]
 pub(crate) enum Probed {
     /// the file or its first byte: the whole file's size when the answer states it, whether the
-    /// answer is a web page that names no file, the name the server gives the file, which a
-    /// download of the link takes, for such a page, the first bytes a [`Net::peek`] read, and
-    /// when the server says the file last changed.
+    /// answer is a web page that names no file, and whether it came from the link with a `/`
+    /// added, as a folder's does, the name the server gives the file, which a download of the
+    /// link takes, for such a page, the first bytes a [`Net::peek`] read, and when the server says
+    /// the file last changed.
     File {
         total: Option<u64>,
         page: bool,
+        slashed: bool,
         name: Option<String>,
         head: Vec<u8>,
         modified: Option<std::time::SystemTime>,
@@ -185,6 +187,7 @@ impl Net {
             .then(|| headers::total_length(&head, StatusCode::PARTIAL_CONTENT))
             .flatten();
         let served = |response: &reqwest::Response| super::served_name(response, &fetch.url);
+        let answered = response.url().clone();
         let modified = head
             .get(header::LAST_MODIFIED)
             .and_then(|value| value.to_str().ok())
@@ -213,6 +216,7 @@ impl Net {
                 Ok(Step::Probed(Probed::File {
                     total,
                     page,
+                    slashed: page && super::slashed(&fetch.url, &answered),
                     name,
                     head,
                     modified,
@@ -221,6 +225,7 @@ impl Net {
             _ if empty.is_some() => Ok(Step::Probed(Probed::File {
                 total: empty,
                 page: false,
+                slashed: false,
                 name: served(&response).ok().flatten(),
                 head: Vec::new(),
                 modified,

@@ -2752,3 +2752,73 @@ fn a_git_lfs_pointer_names_the_link_that_serves_its_file() {
         )
     );
 }
+
+/// a page came from its link with a `/` added only where the server sent the link on to that,
+/// on the same host and port, over https where asked over http.
+#[test]
+fn a_link_is_slashed_only_where_its_server_adds_the_slash() {
+    let url = |link| Url::parse(link).unwrap();
+    for (asked, answered, slashed) in [
+        (
+            "http://lab.example/shards",
+            "http://lab.example/shards/",
+            true,
+        ),
+        (
+            "http://lab.example/shards",
+            "https://lab.example/shards/",
+            true,
+        ),
+        (
+            "https://lab.example/shards",
+            "http://lab.example/shards/",
+            false,
+        ),
+        (
+            "http://lab.example/shards",
+            "http://other.example/shards/",
+            false,
+        ),
+        (
+            "http://lab.example:8080/shards",
+            "http://lab.example/shards/",
+            false,
+        ),
+        (
+            "http://lab.example/shards?page=2",
+            "http://lab.example/shards/",
+            false,
+        ),
+        (
+            "http://lab.example/shards?page=2",
+            "http://lab.example/shards/?page=2",
+            true,
+        ),
+        (
+            "http://lab.example/shards",
+            "http://lab.example/shards/index.html",
+            false,
+        ),
+        (
+            "http://lab.example/shards",
+            "http://lab.example/shards",
+            false,
+        ),
+        (
+            "http://lab.example/shards/",
+            "http://lab.example/shards//",
+            false,
+        ),
+        (
+            "http://lab.example/shards",
+            "http://lab.example/other/",
+            false,
+        ),
+    ] {
+        assert_eq!(
+            super::slashed(&url(asked), &url(answered)),
+            slashed,
+            "{asked} answered from {answered}"
+        );
+    }
+}

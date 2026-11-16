@@ -370,7 +370,8 @@ fn lock_upgrade_pins_a_file_the_folder_gained() -> Result {
 
 /// a dry run of an add tells the files the add then pins and places, and fails where the add
 /// fails, in its words: at a page that is no listing, and at a folder's link without its `/`,
-/// which the server sends on to the folder, where the help offers the link with its `/`.
+/// which the server sends on to the folder, where the help offers the link with its `/`. a page
+/// its server sends on nowhere is offered no `/`.
 #[test]
 fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
     let sandbox = Sandbox::new()?;
@@ -378,6 +379,10 @@ fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
     server.change(vec![
         (
             "/lab/".to_owned(),
+            page("<!DOCTYPE html><html><head><title>Our lab</title></head><body></body></html>"),
+        ),
+        (
+            "/lab".to_owned(),
             page("<!DOCTYPE html><html><head><title>Our lab</title></head><body></body></html>"),
         ),
         (
@@ -408,6 +413,7 @@ fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
     );
     for (link, offers) in [
         (format!("{}/lab/", server.url), false),
+        (format!("{}/lab", server.url), false),
         (format!("{}/data", server.url), true),
     ] {
         let dry = sandbox.run(&["--json", "add", &link, "--as", "page", "--dry-run"])?;
@@ -420,6 +426,7 @@ fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
         assert_eq!(dry["help"], run["help"], "{link}");
         let help = run["help"].as_str().unwrap_or_default();
         assert_eq!(help.starts_with(&offered), offers, "{help}");
+        assert_eq!(help.contains("with a / at the end"), offers, "{help}");
     }
     Ok(())
 }
