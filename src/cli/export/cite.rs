@@ -62,11 +62,7 @@ struct Name {
 impl Cited {
     /// the entry data.lock alone gives `locked`, which `link` links to when no DOI does.
     fn of_lock(locked: &Locked, link: Option<String>) -> Cited {
-        let doi = locked
-            .doi
-            .as_deref()
-            .map(words)
-            .filter(|doi| !doi.is_empty());
+        let doi = locked.doi.as_deref().and_then(bare_doi);
         let paper =
             Reference::parse(&locked.resolved).is_ok_and(|parsed| parsed.reference.is_paper());
         let mut cited = Cited {
@@ -219,6 +215,24 @@ fn words(text: &str) -> String {
         .filter(|word| !word.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// a DOI as data.lock or a source may write it, as `doi:10.5281/zenodo.1` or its doi.org link,
+/// without that prefix, on one line; none when nothing is left.
+fn bare_doi(text: &str) -> Option<String> {
+    let text = words(text);
+    let lower = text.to_ascii_lowercase();
+    let prefix = [
+        "doi:",
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://dx.doi.org/",
+        "http://dx.doi.org/",
+    ]
+    .into_iter()
+    .find(|prefix| lower.starts_with(prefix))
+    .map_or(0, str::len);
+    Some(text[prefix..].trim().to_owned()).filter(|doi| !doi.is_empty())
 }
 
 /// the version `resolved`, as data.lock writes it, names after `@`, as `kaggle:uciml/iris@2`.
@@ -675,11 +689,7 @@ pub(super) fn statement(datasets: &[Stated<'_>]) -> String {
         {
             said.push(title);
         }
-        let doi = locked
-            .doi
-            .as_deref()
-            .map(words)
-            .filter(|doi| !doi.is_empty());
+        let doi = locked.doi.as_deref().and_then(bare_doi);
         if dataset.imported {
             said.push("imported from a local folder, with no public source".to_owned());
         } else if let Some(doi) = doi {
@@ -810,6 +820,24 @@ mod tests {
                 "Incomplete: built from data.lock, which gives no author, year, title or link. License: cc-by-4.0."
             )
         );
+    }
+
+    #[test]
+    fn a_doi_is_cited_without_the_prefix_a_source_wrote() {
+        for written in [
+            "10.5281/zenodo.1",
+            "doi:10.5281/zenodo.1",
+            "DOI:10.5281/zenodo.1",
+            "https://doi.org/10.5281/zenodo.1",
+            " http://dx.doi.org/10.5281/zenodo.1\n",
+        ] {
+            assert_eq!(
+                bare_doi(written).as_deref(),
+                Some("10.5281/zenodo.1"),
+                "{written}"
+            );
+        }
+        assert_eq!(bare_doi("doi:"), None);
     }
 
     #[test]
