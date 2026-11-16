@@ -1200,6 +1200,12 @@ fn written_in(body: &str, name: &str, hostile: &str, in_links: bool) -> Option<S
         });
         return changed.then(|| serde_json::to_string(&document).unwrap());
     }
+    // markup writes `<`, `&` and quotes as entities; a checksum list holds a name as it is
+    let hostile = if is_markup(body) {
+        written(hostile, false)
+    } else {
+        hostile.to_owned()
+    };
     let mut out = String::with_capacity(body.len());
     let mut done = 0;
     let mut changed = false;
@@ -1209,12 +1215,19 @@ fn written_in(body: &str, name: &str, hostile: &str, in_links: bool) -> Option<S
         }
         let at = token.as_ptr() as usize - body.as_ptr() as usize;
         out.push_str(&body[done..at]);
-        out.push_str(&token.replace(name, &written(hostile, false)));
+        out.push_str(&token.replace(name, &hostile));
         done = at + token.len();
         changed = true;
     }
     out.push_str(&body[done..]);
     changed.then_some(out)
+}
+
+/// whether `body` is html or xml rather than plain text.
+fn is_markup(body: &str) -> bool {
+    body.trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with('<')
 }
 
 /// calls `each` with every string in a json document, to change it.
