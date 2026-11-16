@@ -135,3 +135,51 @@ fn files_in_a_folder_a_system_names_are_a_persons() -> Result {
     }
     Ok(())
 }
+
+/// iris added from a source of its own and synced as a writable copy, `copy = true`, with the
+/// state that records it gone, as in a copy of the project: the file fetchloom did not place there.
+fn copied_without_a_state(sandbox: &Sandbox) -> Result<(Routes, std::path::PathBuf)> {
+    let source = Routes::start(vec![("/files/iris.csv".to_owned(), file(IRIS, "\"i\""))])?;
+    sandbox.allow(&source.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/iris.csv", source.url)])?)?;
+    let work = sandbox.work();
+    let manifest = work.join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace("[datasets.iris]\n", "[datasets.iris]\ncopy = true\n"),
+    )?;
+    ok(&sandbox.run(&["sync"])?)?;
+    fs::remove_file(work.join(".fetchloom").join("state"))?;
+    Ok((source, work.join("data/iris/iris.csv")))
+}
+
+/// a read-only file holding the pinned bytes of a dataset that asks for writable copies is no file
+/// a sync takes as placed: status calls it outdated, and the sync replaces it with a writable copy.
+#[test]
+fn a_read_only_copy_nothing_recorded_is_outdated() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (_source, placed) = copied_without_a_state(&sandbox)?;
+    let mut permissions = fs::metadata(&placed)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&placed, permissions)?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let result = &document["result"];
+    assert_eq!(
+        (&result["outdated"], &result["adoptable"]),
+        (
+            &serde_json::json!(["data/iris/iris.csv"]),
+            &serde_json::json!([])
+        ),
+        "{document}"
+    );
+    let output = sandbox.run(&["sync"])?;
+    ok(&output)?;
+    assert!(
+        !fs::metadata(&placed)?.permissions().readonly(),
+        "{}",
+        text(&output.stderr)?
+    );
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}

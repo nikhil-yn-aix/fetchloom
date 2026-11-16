@@ -760,10 +760,15 @@ fn compare(
                     &mut status.edited
                 }
             },
-            // sync adopts it, and takes its bytes into the cache from here as from a placed file
+            // sync adopts it, and takes its bytes into the cache from here as from a placed file,
+            // but replaces a read-only one where the dataset asks for writable copies
             (Some(seen), None) if place::holds_target(target, seen, &file) => {
-                status.holding.insert(target.sha256);
-                &mut status.adoptable
+                if target.copy && !place::now_writable(&file) {
+                    &mut status.outdated
+                } else {
+                    status.holding.insert(target.sha256);
+                    &mut status.adoptable
+                }
             }
             (Some(_), None) => &mut status.untracked,
         };
