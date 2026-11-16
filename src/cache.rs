@@ -177,10 +177,27 @@ pub(crate) fn absent(root: &Path) -> bool {
 pub(crate) fn exposed(root: &Path) -> Option<String> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        let found = fs::metadata(root).ok()?;
         let user = rustix::process::geteuid().as_raw();
-        if let Some(what) = exposure(found.uid(), found.mode(), user) {
+        let groups = rustix::process::getgroups().unwrap_or_default();
+        let group = rustix::process::getegid();
+        exposed_as(root, user, &|gid| {
+            group.as_raw() == gid || groups.iter().any(|member| member.as_raw() == gid)
+        })
+    }
+    #[cfg(not(unix))]
+    exposed_on(root)
+}
+
+/// [`exposed`] as the user `user` sees it, who `member` says is in a group or not.
+#[cfg(unix)]
+fn exposed_as(root: &Path, user: u32, member: &dyn Fn(u32) -> bool) -> Option<String> {
+    {
+        use std::os::unix::fs::MetadataExt;
+        // a folder a group shares on purpose, as the clusters guide makes a lab's cache: setgid,
+        // writable by its group, which this user is in, and by no one else
+        let shared = |found: &fs::Metadata| found.mode() & 0o2022 == 0o2020 && member(found.gid());
+        let found = fs::metadata(root).ok()?;
+        if let Some(what) = exposure(found.uid(), found.mode(), user, shared(&found)) {
             return Some(format!(
                 "the cache folder {} {what}, so they can change the files projects place from it",
                 root.display()
@@ -201,7 +218,8 @@ pub(crate) fn exposed(root: &Path) -> Option<String> {
             let inside = fs::symlink_metadata(&folder)
                 .ok()
                 .filter(fs::Metadata::is_dir)?;
-            exposure(inside.uid(), inside.mode(), user).map(|what| told(&folder, what))
+            exposure(inside.uid(), inside.mode(), user, shared(&inside))
+                .map(|what| told(&folder, what))
         });
         // a fan of objects/ every user may write, as `umask 000` makes them, lets them put any
         // bytes under an object's name; each member of a team may own some of them
@@ -217,6 +235,11 @@ pub(crate) fn exposed(root: &Path) -> Option<String> {
             })
         })
     }
+}
+
+/// [`exposed`] where folders have no owner and group of their own.
+#[cfg(not(unix))]
+fn exposed_on(root: &Path) -> Option<String> {
     #[cfg(windows)]
     {
         use crate::space::Filesystem;
@@ -274,10 +297,11 @@ pub(crate) fn unshared(root: &Path, umask: Option<u32>) -> Option<String> {
     ))
 }
 
-/// [`exposed`] for a folder of `owner` with `mode`, as `user` sees it.
+/// [`exposed`] for a folder of `owner` with `mode`, as `user` sees it; `shared` when a group
+/// shares it on purpose, so whose it is matters no more than it does to a git repository's group.
 #[cfg(unix)]
-fn exposure(owner: u32, mode: u32, user: u32) -> Option<&'static str> {
-    if owner != user {
+fn exposure(owner: u32, mode: u32, user: u32, shared: bool) -> Option<&'static str> {
+    if owner != user && !shared {
         Some("belongs to another user")
     } else if mode & 0o002 != 0 {
         Some("lets every user of this machine write to it")
@@ -1826,14 +1850,15 @@ pub(crate) mod tests {
     #[cfg(unix)]
     #[test]
     fn a_cache_folder_another_user_owns_or_anyone_writes_is_exposed() {
-        assert_eq!(super::exposure(1000, 0o40700, 1000), None);
-        assert_eq!(super::exposure(1000, 0o42770, 1000), None);
+        assert_eq!(super::exposure(1000, 0o40700, 1000, false), None);
+        assert_eq!(super::exposure(1000, 0o42770, 1000, false), None);
         assert_eq!(
-            super::exposure(1001, 0o40700, 1000),
+            super::exposure(1001, 0o40700, 1000, false),
             Some("belongs to another user")
         );
+        assert_eq!(super::exposure(1001, 0o42770, 1000, true), None);
         assert_eq!(
-            super::exposure(1000, 0o40777, 1000),
+            super::exposure(1000, 0o40777, 1000, false),
             Some("lets every user of this machine write to it")
         );
     }
@@ -1866,6 +1891,30 @@ pub(crate) mod tests {
                 "{inner} in a folder only its owner enters"
             );
         }
+    }
+
+    /// a lab's cache, a setgid folder its group may write and no one else, as the clusters guide
+    /// makes it, is shared on purpose: its members hear nothing of whose it is, while one outside
+    /// that group, or a cache every user may write, still warns.
+    #[cfg(unix)]
+    #[test]
+    fn a_cache_a_group_shares_on_purpose_is_not_another_users() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let (_dir, cache) = cache();
+        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o2770)).unwrap();
+        let found = fs::metadata(&cache.root).unwrap();
+        // as another member sees the folder its owner made
+        let member = found.uid() + 1;
+        let group = found.gid();
+
+        assert_eq!(exposed_as(&cache.root, member, &|gid| gid == group), None);
+        let outsider = exposed_as(&cache.root, member, &|_| false).unwrap_or_default();
+        assert!(outsider.contains("belongs to another user"), "{outsider}");
+        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o2777)).unwrap();
+        assert!(
+            exposed_as(&cache.root, member, &|gid| gid == group).is_some(),
+            "every user may write it"
+        );
     }
 
     /// in a cache a group shares, a run whose umask takes the group's write from what it makes is
