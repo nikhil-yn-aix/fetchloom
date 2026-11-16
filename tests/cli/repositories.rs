@@ -27,6 +27,16 @@ fn teammate_sync(
     routes: &Routes,
     args: &[&str],
 ) -> Result<(std::path::PathBuf, std::process::Output)> {
+    teammate_sync_with(sandbox, routes, args, &[])
+}
+
+/// [`teammate_sync`] with the variables `envs` set too.
+fn teammate_sync_with(
+    sandbox: &Sandbox,
+    routes: &Routes,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<(std::path::PathBuf, std::process::Output)> {
     let teammate = sandbox.folder("teammate")?;
     for name in ["data.toml", "data.lock"] {
         fs::copy(sandbox.work().join(name), teammate.join(name))?;
@@ -35,6 +45,7 @@ fn teammate_sync(
         .command_in(&teammate, args)
         .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .envs(envs.iter().copied())
         .output()?;
     Ok((teammate, synced))
 }
@@ -59,6 +70,11 @@ const DRYAD: &str = "/datadryad.org/api/v2";
 /// dryad's answers for doi:10.5061/dryad.j1fd7, its newest version listing `(path, bytes, md5)`
 /// files with the MD5 stated, and the bytes behind each file's download link in its API.
 fn dryad(files: &[(&str, &[u8], &str)]) -> Result<Routes> {
+    dryad_stating("md5", files)
+}
+
+/// [`dryad`] stating each file's `(path, bytes, digest)` digest as `kind`, as `md5` or `sha-256`.
+fn dryad_stating(kind: &str, files: &[(&str, &[u8], &str)]) -> Result<Routes> {
     let listed: Vec<_> = files
         .iter()
         .enumerate()
@@ -73,7 +89,7 @@ fn dryad(files: &[(&str, &[u8], &str)]) -> Result<Routes> {
                 "size": body.len(),
                 "status": "created",
                 "digest": md5,
-                "digestType": "md5",
+                "digestType": kind,
             })
         })
         .collect();
@@ -2243,6 +2259,90 @@ fn an_offline_sync_places_what_it_has_while_a_stated_pin_waits() -> Result {
     let lock = fs::read_to_string(clone.join("data.lock"))?;
     let pin = &unsynced[unsynced.find("[[dataset]]").unwrap_or_default()..];
     assert!(lock.contains(pin), "the pin stays as it is:\n{lock}");
+    Ok(())
+}
+
+/// a dry run promises nothing its run does not do: a pin by its source's MD5 that the run cannot
+/// fill, offline, alone or beside a file data.lock names that the cache lacks, or with only a
+/// folder mirror to ask, which keeps no file by its MD5, is not told as one it would lock, and the
+/// dry run refuses with its run's words and exit code.
+#[test]
+fn a_dry_run_refuses_as_its_run_does_and_promises_no_lock() -> Result {
+    for (beside, mirrors_only) in [(false, false), (true, false), (false, true)] {
+        let sandbox = Sandbox::new()?;
+        let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+        added_unsynced(&sandbox, &routes)?;
+        if beside {
+            let files =
+                Routes::start(vec![("/files/notes.txt".to_owned(), file(NOTES, "\"n1\""))])?;
+            sandbox.allow(&files.url);
+            ok(&sandbox.run(&["add", &format!("{}/files/notes.txt", files.url)])?)?;
+        }
+        let root = sandbox.folder("mirror")?;
+        fs::write(root.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
+        let mirror = root.to_string_lossy().into_owned();
+        let (args, envs): (&[&str], &[(&str, &str)]) = if mirrors_only {
+            (
+                &["--mirror", &mirror, "sync"],
+                &[("FETCHLOOM_MIRRORS_ONLY", "1")],
+            )
+        } else {
+            (&["--offline", "sync"], &[])
+        };
+        let case = format!("beside a missing file: {beside}, mirrors only: {mirrors_only}");
+        let (teammate, run) = teammate_sync_with(&sandbox, &routes, args, envs)?;
+        let refused = if mirrors_only { 10 } else { 20 };
+        assert_eq!(
+            run.status.code(),
+            Some(refused),
+            "{case}: {}",
+            text(&run.stderr)?
+        );
+        assert_eq!(
+            fs::read(teammate.join("data.lock"))?,
+            fs::read(sandbox.work().join("data.lock"))?,
+            "{case}: the run locks nothing"
+        );
+        let dry = [args, &["--dry-run"]].concat();
+        let (_, dry) = teammate_sync_with(&sandbox, &routes, &dry, envs)?;
+        assert_eq!(
+            (dry.status.code(), text(&dry.stderr)?),
+            (run.status.code(), text(&run.stderr)?),
+            "{case}"
+        );
+    }
+    Ok(())
+}
+
+/// offline, a pin by the SHA-256 its source states fills from a folder mirror that holds the file,
+/// and its dry run, which only looks at the mirror, says it would lock the pin rather than refuse.
+#[test]
+fn an_offline_dry_run_counts_a_stated_file_a_mirror_holds_as_its_run_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let digest = sha256_hex(ROWS);
+    let routes = dryad_stating("sha-256", &[("rows.csv", ROWS, &digest)])?;
+    added_unsynced(&sandbox, &routes)?;
+    let root = sandbox.folder("mirror")?;
+    fs::write(root.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
+    let fan = root.join("objects").join(&digest[..2]);
+    fs::create_dir_all(&fan)?;
+    fs::write(fan.join(&digest[2..]), ROWS)?;
+    let mirror = root.to_string_lossy().into_owned();
+    let (_, dry) = teammate_sync(
+        &sandbox,
+        &routes,
+        &["--offline", "--mirror", &mirror, "sync", "--dry-run"],
+    )?;
+    let said = text(&dry.stderr)?;
+    assert_eq!(dry.status.code(), Some(0), "{said}");
+    assert!(said.contains("Would lock archiving"), "{said}");
+    let (teammate, run) = teammate_sync(
+        &sandbox,
+        &routes,
+        &["--offline", "--mirror", &mirror, "sync"],
+    )?;
+    assert_eq!(run.status.code(), Some(0), "{}", text(&run.stderr)?);
+    assert_eq!(fs::read(teammate.join("data/archiving/rows.csv"))?, ROWS);
     Ok(())
 }
 

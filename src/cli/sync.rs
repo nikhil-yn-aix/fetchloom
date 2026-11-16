@@ -1184,6 +1184,8 @@ impl<'a> Loop<'a> {
         };
         let gettable = |job: &Job| available(job) || elsewhere.contains(&job.label);
         self.refuse_offline_with(&jobs, gettable)?;
+        // a pin relocking could not fill is refused though nothing else lacks, as placing does
+        self.refuse_unreachable(manifest, &[])?;
         self.refuse_unmirrored(jobs.iter().filter(|job| !gettable(job)))?;
         self.refuse_unasked(jobs.iter().map(|job| &job.fetch.from))?;
         // the run itself would ask before downloads the cache's disk may lack room for

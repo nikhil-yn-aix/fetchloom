@@ -13,9 +13,12 @@ use super::draft::{self, Unit};
 use super::{Given, Loop, Upgrade, in_cache};
 use crate::cli::fetch::data_folder::DataFolder;
 use crate::cli::fetch::{self, Again, Job};
+use crate::cli::probe::{self, Ask, Found, Pinned};
+use crate::digest::Sha256;
 use crate::error::{Error, Kind};
+use crate::mirror::Wanted;
 use crate::net::{Expect, Fetch};
-use crate::project::lock::{Lock, Locked, Stated, Waiting};
+use crate::project::lock::{Lock, Locked, Stated, StatedFile, Waiting};
 use crate::project::manifest::Manifest;
 use crate::source::{self, Listing, Reference, Remote};
 
@@ -111,9 +114,12 @@ impl Loop<'_> {
             .iter()
             .map(listing)
             .collect::<Result<Vec<_>, Error>>()?;
-        if download && self.net.offline().enabled() && !filling.is_empty() {
+        if self.net.offline().enabled() && !filling.is_empty() {
             (filling, listings) = self
-                .held_offline(manifest, filling, listings, &mut carried)
+                .held_offline(manifest, filling, listings, &mut carried, download)
+                .await?;
+        } else if !download && self.context.mirrors.mirrors.only && !filling.is_empty() {
+            self.refuse_unmirrored_dry(manifest, &filling, &listings)
                 .await?;
         }
         // a pin with no files and a spec no entry has, so relocking replaces or drops it whole and
@@ -158,8 +164,9 @@ impl Loop<'_> {
         Ok(())
     }
 
-    /// the pins of `filling`, with their `listings`, whose every file an offline run has, in the
-    /// cache or from a mirror it may read. each other pin goes to `carried` as it is, and the files
+    /// the pins of `filling`, with their `listings`, whose every file an offline run has: in the
+    /// cache, a reuse folder or a mirror it may read, which a run that may `download` takes them
+    /// from and a dry run only looks at. each other pin goes to `carried` as it is, and the files
     /// it lacks wait for the refusal that names every file the run lacks, with placing's own.
     async fn held_offline(
         &self,
@@ -167,6 +174,7 @@ impl Loop<'_> {
         filling: Vec<Stated>,
         listings: Vec<Listing>,
         carried: &mut Carried,
+        download: bool,
     ) -> Result<(Vec<Stated>, Vec<Listing>), Error> {
         let mut jobs = Vec::new();
         let mut ends = Vec::with_capacity(filling.len());
@@ -174,21 +182,26 @@ impl Loop<'_> {
             jobs.extend(self::jobs(stated, listing, extracts(manifest, stated)));
             ends.push(jobs.len());
         }
-        fetch::mirrors::fill(
-            self.context,
-            &self.net,
-            &self.cache,
-            &DataFolder::default(),
-            || fetch::mirrors::pinned(&jobs, &self.cache),
-        )
-        .await
-        .map_err(|error| self.as_left(error))?;
+        let elsewhere = if download {
+            fetch::mirrors::fill(
+                self.context,
+                &self.net,
+                &self.cache,
+                &DataFolder::default(),
+                || fetch::mirrors::pinned(&jobs, &self.cache),
+            )
+            .await
+            .map_err(|error| self.as_left(error))?;
+            HashSet::new()
+        } else {
+            self.stated_elsewhere(&filling).await?
+        };
         let (mut held, mut lacked) = ((Vec::new(), Vec::new()), Vec::new());
         let mut start = 0;
         for ((stated, listing), end) in filling.into_iter().zip(listings).zip(ends) {
             let lacking: Vec<Unfilled> = jobs[start..end]
                 .iter()
-                .filter(|job| !in_cache(&self.cache, &job.fetch))
+                .filter(|job| !in_cache(&self.cache, &job.fetch) && !elsewhere.contains(&job.label))
                 .map(|job| Unfilled {
                     dataset: stated.name().to_owned(),
                     label: job.label.clone(),
@@ -206,6 +219,74 @@ impl Loop<'_> {
         }
         *self.unfilled.lock().unwrap_or_else(PoisonError::into_inner) = lacked;
         Ok(held)
+    }
+
+    /// refuses, for a dry run that may ask the mirrors alone, the files of `filling`, with their
+    /// `listings`, that its run's download would refuse: those the cache lacks and no reuse folder
+    /// or mirror holds, looked at without taking anything.
+    async fn refuse_unmirrored_dry(
+        &self,
+        manifest: &Manifest,
+        filling: &[Stated],
+        listings: &[Listing],
+    ) -> Result<(), Error> {
+        let elsewhere = self.stated_elsewhere(filling).await?;
+        let jobs: Vec<Job> = filling
+            .iter()
+            .zip(listings)
+            .flat_map(|(stated, listing)| self::jobs(stated, listing, extracts(manifest, stated)))
+            .collect();
+        self.refuse_unmirrored(
+            jobs.iter().filter(|job| {
+                !in_cache(&self.cache, &job.fetch) && !elsewhere.contains(&job.label)
+            }),
+        )
+    }
+
+    /// the labels of the files of `filling` the cache lacks that a reuse folder or a mirror holds
+    /// by the SHA-256 their source states, looked at without taking anything.
+    async fn stated_elsewhere(&self, filling: &[Stated]) -> Result<HashSet<String>, Error> {
+        let label = |name: &str, file: &StatedFile| format!("{name}/{}", file.path);
+        let files: Vec<(&str, &StatedFile, Sha256)> = filling
+            .iter()
+            .flat_map(|stated| stated.files.iter().map(move |file| (stated.name(), file)))
+            .filter_map(|(name, file)| Some((name, file, file.sha256?)))
+            .filter(|(_, file, digest)| self.cache.find(digest, Some(file.size)).is_none())
+            .collect();
+        if files.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let wanted: Vec<Wanted> = files
+            .iter()
+            .map(|(name, file, digest)| Wanted {
+                digest: *digest,
+                size: file.size,
+                label: label(name, file),
+                link: Some(file.url.clone()),
+            })
+            .collect();
+        let in_reuse = self
+            .context
+            .reuse
+            .holding(self.context, &self.cache, &wanted)?;
+        let (reused, asked): (Vec<_>, Vec<_>) = files
+            .into_iter()
+            .partition(|(_, _, digest)| in_reuse.contains(digest));
+        let asked: Vec<Pinned<'_>> = asked
+            .into_iter()
+            .map(|(name, file, _)| Pinned::stated(name, file, false))
+            .collect();
+        let found = probe::find(self.context, &self.net, &asked, Ask::Mirrors).await?;
+        let mirrored = asked
+            .iter()
+            .zip(found)
+            .filter(|(_, found)| matches!(found, Found::Mirror { .. }))
+            .map(|(pinned, _)| pinned.label());
+        Ok(reused
+            .into_iter()
+            .map(|(name, file, _)| label(name, file))
+            .chain(mirrored)
+            .collect())
     }
 }
 
