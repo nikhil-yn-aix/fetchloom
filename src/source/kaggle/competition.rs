@@ -56,8 +56,9 @@ struct Page {
 #[serde(rename_all = "camelCase")]
 struct File {
     name: String,
-    #[serde(default)]
-    total_bytes: u64,
+    /// none where kaggle leaves it out, which is no size of 0: the rules probe would take such
+    /// a file for the smallest.
+    total_bytes: Option<u64>,
 }
 
 /// the message in an error kaggle's API sends.
@@ -212,7 +213,7 @@ impl Competition {
             .push(&file.name);
         Ok(Remote {
             path: file.name,
-            size: Some(file.total_bytes),
+            size: file.total_bytes,
             sha256: None,
             md5: None,
             url,
