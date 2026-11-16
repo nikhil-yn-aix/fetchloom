@@ -37,7 +37,7 @@ pub(crate) enum List {
 }
 
 /// the hash a line states for its file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Checksum {
     Md5(Md5),
     Sha256(Sha256),
@@ -45,7 +45,7 @@ pub(crate) enum Checksum {
 
 /// what a line names: a link, a DOI or an id as written, or a path below the list's folder,
 /// which a pooch registry may follow with the file's own link.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Named {
     Link(String),
     Path { path: String, link: Option<String> },
@@ -322,14 +322,19 @@ pub(crate) fn too_big(shown: &str, most: u64) -> Error {
 
 /// the entries of the list `name`, whose text is `text`, at most `most` of them. a line in no
 /// known form, a hash fetchloom does not check, or a path that could leave its folder is refused,
-/// naming the line.
+/// naming the line. a line naming a file at a hash an earlier line gave counts once.
 pub(crate) fn read(name: &str, text: &str, most: usize) -> Result<Vec<Entry>, Error> {
     let mut entries = Vec::new();
+    // openbsd's own SHA256 repeats lines byte for byte, as `sha256sum -c` accepts
+    let mut seen = std::collections::HashSet::new();
     for (index, written) in text.trim_start_matches('\u{feff}').lines().enumerate() {
         let number = index + 1;
         let Some((named, checksum)) = read_line(name, number, written)? else {
             continue;
         };
+        if !seen.insert((named.clone(), checksum)) {
+            continue;
+        }
         if entries.len() == most {
             return Err(super::too_many(name, most, "list fewer files"));
         }

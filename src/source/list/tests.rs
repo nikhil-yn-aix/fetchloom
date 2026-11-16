@@ -254,6 +254,31 @@ fn a_list_at_a_link_places_each_path_below_its_folder() {
     assert_eq!(listed.resolved, Reference::List(list));
 }
 
+/// a list may repeat a line, as openbsd's own SHA256 does: a file at the same hash counts once,
+/// whichever form each line has. one path with two hashes is two files of one name, still refused.
+#[test]
+fn a_repeated_line_counts_once_and_a_path_with_two_hashes_is_refused() {
+    let repeated = format!(
+        "SHA256 (install78.img) = {SHA}\nSHA256 (install78.iso) = {OTHER}\nSHA256 (install78.img) = {SHA}\n{SHA}  install78.img\n"
+    );
+    assert_eq!(
+        entries(&repeated),
+        [
+            (path("install78.img"), sha(SHA)),
+            (path("install78.iso"), sha(OTHER))
+        ]
+    );
+    let at = Url::parse("https://example.org/pub/SHA256").unwrap();
+    let list = List::Link(at.clone());
+    let twice = format!("{SHA}  install78.img\n{OTHER}  install78.img\n");
+    let listed = listing(&list, read("SHA256", &twice, 10).unwrap(), Some(&at)).unwrap();
+    let error = crate::source::check(&Reference::List(list), listed, 10).unwrap_err();
+    assert_eq!(
+        error.message,
+        "list:https://example.org/pub/SHA256 lists \"install78.img\" twice"
+    );
+}
+
 /// a list gives no path or link longer than data.lock keeps.
 #[test]
 fn a_list_bounds_its_paths_and_links_as_data_lock_does() {
