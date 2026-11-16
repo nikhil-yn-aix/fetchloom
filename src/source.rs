@@ -2037,6 +2037,7 @@ mod tests {
                 authorized: None,
                 drive: None,
                 signed: None,
+                endpoint: None,
                 body: std::sync::Arc::new(b"not json".to_vec()),
             };
             let error = json::<serde_json::Value>(&reference, &response).unwrap_err();

@@ -6,7 +6,7 @@ use super::{Repo, RepoKind, is_id};
 use crate::account::Account;
 use crate::auth::Origin;
 use crate::error::{Error, Kind};
-use crate::net::{Api, Response};
+use crate::net::{Api, Endpoint, Response};
 use crate::source::Access;
 
 /// what the revision endpoint says about a repository.
@@ -74,8 +74,11 @@ impl Repo {
                 if let Some(other) = self.same_named_other(api).await {
                     return Err(self.other_kind(&other));
                 }
-                return Err(match err.kind {
-                    Kind::AuthRequired => self.unseen(&err),
+                return Err(match (err.kind, &response.endpoint) {
+                    (Kind::AuthRequired, Some(endpoint)) => {
+                        self.unseen_by_mirror(&err, endpoint, response.signed.is_some())
+                    }
+                    (Kind::AuthRequired, None) => self.unseen(&err),
                     _ => err.unseen(),
                 });
             }
@@ -177,6 +180,26 @@ impl Repo {
         }
     }
 
+    /// [`Repo::unseen`] for the mirror `endpoint` names, which no hugging face token went to,
+    /// unless one was `signed` for its host.
+    fn unseen_by_mirror(&self, refused: &Error, endpoint: &Endpoint, signed: bool) -> Error {
+        Error::new(
+            refused.kind,
+            format!(
+                "{} has no {} {}, or it is private",
+                endpoint.host(),
+                kind_word(self.kind),
+                self.id
+            ),
+        )
+        .help(format!(
+            "check the name at {}. {}",
+            self.page(),
+            mirror_help(endpoint, signed)
+        ))
+        .unseen()
+    }
+
     /// the dataset with this model's name, or the model with this dataset's, at the same revision,
     /// when the hub shows one.
     async fn same_named_other(&self, api: &impl Api) -> Option<Repo> {
@@ -200,6 +223,21 @@ impl Repo {
         let response = api.get(&self.api(&["auth-check"])?).await?;
         match response.status {
             200..=299 => Ok(()),
+            401 | 403 if response.endpoint.is_some() => {
+                let endpoint = response
+                    .endpoint
+                    .as_ref()
+                    .map(|endpoint| mirror_help(endpoint, response.signed.is_some()));
+                Err(Error::new(
+                    Kind::AuthRequired,
+                    format!("{self} requires permission to download its files"),
+                )
+                .help(format!(
+                    "accept the terms at {} while signed in to hugging face. {}",
+                    self.page(),
+                    endpoint.unwrap_or_default()
+                )))
+            }
             status @ (401 | 403) => {
                 // a 401 says the hub took the request as from nobody, so a key that went with it
                 // was refused
@@ -293,6 +331,26 @@ impl Info {
 
 /// where hugging face keys are made.
 const TOKENS: &str = "https://huggingface.co/settings/tokens";
+
+/// how a person lets the mirror `endpoint` read what hugging face keeps from those without a
+/// token: hugging face's own token never goes to a mirror, so the mirror gets one only when the
+/// person saves it for the mirror's host, over https alone. `signed` says one went and was refused.
+fn mirror_help(endpoint: &Endpoint, signed: bool) -> String {
+    let host = endpoint.host();
+    if !endpoint.is_https() {
+        return format!(
+            "HF_ENDPOINT sends requests to {host} over plain http, where no key ever goes: set HF_ENDPOINT to an https mirror, or unset it to ask huggingface.co"
+        );
+    }
+    if signed {
+        return format!(
+            "{host}, the mirror HF_ENDPOINT names, refused the token saved for it: save a hugging face token that can read it with `fetchloom auth login {host} --token`"
+        );
+    }
+    format!(
+        "{host}, the mirror HF_ENDPOINT names, wants a hugging face token for it, and fetchloom never sends hugging face's own token to a mirror. saving one with `fetchloom auth login {host} --token` gives that host the token"
+    )
+}
 
 /// what messages call a repository of `kind`.
 fn kind_word(kind: RepoKind) -> &'static str {

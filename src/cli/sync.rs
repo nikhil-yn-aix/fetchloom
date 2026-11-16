@@ -1085,15 +1085,17 @@ impl<'a> Loop<'a> {
                     self.net.offline().retry()
                 )));
             }
-            if self.context.mirrors.mirrors.only {
+            let entry = &manifest.datasets[&name];
+            let select = &entry.source.select;
+            let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
+            if self.context.mirrors.mirrors.only
+                && !fetch::mirrors::resolves_at_hf_endpoint(self.context, &parsed.reference)
+            {
                 return Err(fetch::mirrors::refused(
                     self.context,
                     &format!("{name} needs a new entry in data.lock, which only its source gives"),
                 ));
             }
-            let entry = &manifest.datasets[&name];
-            let select = &entry.source.select;
-            let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
             // the line itself may hold a secret, so only its place is shown
             parsed
                 .check_shareable()
@@ -1166,6 +1168,7 @@ impl<'a> Loop<'a> {
             let lacking: Vec<(String, Option<Sha256>)> = jobs
                 .iter()
                 .filter(|job| !in_cache(&self.cache, &job.fetch))
+                .filter(|job| !fetch::mirrors::at_hf_endpoint(self.context, &job.fetch.from))
                 .map(|job| (job.label.clone(), job.fetch.expect.sha256))
                 .collect();
             fetch::mirrors::sources_allowed(self.context, &lacking)?;
@@ -1652,6 +1655,11 @@ impl<'a> Loop<'a> {
     ) -> Result<(), Error> {
         let named: Vec<(String, Option<Sha256>)> = lacking
             .iter()
+            .filter(|(_, file)| {
+                self.net.offline().enabled()
+                    || !url::Url::parse(&file.url)
+                        .is_ok_and(|url| fetch::mirrors::at_hf_endpoint(self.context, &url))
+            })
             .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
             .collect();
         if self.net.offline().enabled() && !named.is_empty() {

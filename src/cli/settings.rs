@@ -199,7 +199,7 @@ fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Result<(), Err
     } else {
         "keep a mirror in `mirrors`, as `fetchloom settings set mirrors /mnt/lab/fetchloom` saves one, or run `fetchloom settings unset mirrors_only` first"
     };
-    super::fetch::mirrors::read(&[], settings)
+    super::fetch::mirrors::read(&[], settings, None)
         .map(drop)
         .map_err(|error| error.help(help))
 }

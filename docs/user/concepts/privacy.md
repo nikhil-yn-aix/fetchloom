@@ -13,6 +13,7 @@ fetchloom sends nothing on its own: it has no telemetry, no account and no updat
 | a key | its own host only, over https, as [where a key goes](#where-a-key-goes) says |
 | a request for AWS keys, once a bucket `s3_buckets` lists refused one without a key and no variable or profile gives keys | the AWS CLI on this machine, as `aws configure export-credentials`, whose default chain asks AWS's own services, such as this machine's instance metadata service; fetchloom asks none of them itself |
 | a request for a google token, once a bucket `gcs_buckets` or an item `drive_folders` lists was refused without one | google's token endpoint, `oauth2.googleapis.com`, for credentials in a file; with none, google's metadata server at `169.254.169.254`, on this machine's own network, with no proxy, which answers only on google cloud |
+| every request for huggingface.co, while `HF_ENDPOINT` names a mirror of it | that mirror instead, with no hugging face token; unset `HF_ENDPOINT` to ask huggingface.co |
 
 each request names fetchloom and its version, as `fetchloom/0.1.0`, in its `User-Agent` header. a path on this machine never leaves it: `add` copies the files a path names into the cache with no request, `get` and `search` refuse a path before any request, and data.lock records no path for an import. what your repository shares is `data.toml` and `data.lock`: each dataset's reference, links, file names, sizes and SHA-256. a `-vv` log names local paths and every link fetchloom asked for, so read it before you share it.
 

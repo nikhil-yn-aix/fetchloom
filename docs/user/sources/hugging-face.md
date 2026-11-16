@@ -31,3 +31,9 @@ when every select pattern starts with a folder, as `sample/10BT/**` or `data/tra
 ## credentials
 
 public repositories need no account. a gated or private one needs a key whose account may read it: sign in with `fetchloom auth login hf`, set `HF_TOKEN`, or keep the token the hf command saved, in the [order environment gives](../reference/credentials.md). a gated repository also needs its owner's approval, which you ask for on its page; fetchloom cannot grant it. a key the hub refuses, as an old or wrong one, is named by where it comes from, `HF_TOKEN` or the token file, never by its value.
+
+## a mirror of huggingface.co
+
+where huggingface.co is blocked or slow, set `HF_ENDPOINT` to a mirror of it, as hugging face's own tools read it: `HF_ENDPOINT=https://hf-mirror.com fetchloom add hf:datasets/scikit-learn/iris`. every request for huggingface.co then goes to the mirror, and data.lock still holds huggingface.co links, so a teammate without the variable gets the same files from huggingface.co and every file is checked against its pin. the mirror must be a mirror of huggingface.co: a separate hub's repository names would go to huggingface.co on a teammate's sync. a plain http mirror on your network works, since every pinned byte is checked. in mirror-only mode the mirror counts as a mirror you named.
+
+hugging face's token never goes to the mirror. a gated or private repository through it needs a token saved for the mirror's host, `fetchloom auth login hf-mirror.com --token`, which gives that host the token; no key goes to a plain http mirror.

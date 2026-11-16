@@ -93,6 +93,8 @@ pub(crate) struct Response {
     /// what a saved credential or `.netrc` login sent with the request that answered, when one
     /// went, so a refusal can say it was refused.
     pub(crate) signed: Option<super::site::Sent>,
+    /// the mirror `HF_ENDPOINT` names, when the request for huggingface.co went there.
+    pub(crate) endpoint: Option<super::Endpoint>,
     pub(crate) body: Arc<Vec<u8>>,
 }
 
@@ -328,6 +330,8 @@ impl Net {
             )
             .help(self.offline.retry()));
         }
+        let mirrored = self.through_endpoint(url);
+        let url = mirrored.as_ref().unwrap_or(url);
         #[cfg(debug_assertions)]
         let url = match test_endpoint(url) {
             Some(local) => {
@@ -390,16 +394,29 @@ impl Net {
                 .and_then(|value: &header::HeaderValue| value.to_str().ok())
                 .map(str::to_owned)
         };
-        // a next page stays with the server that named it, so a listing cannot send the next
-        // request, with that host's key, to another host
+        let endpoint = self
+            .hf_endpoint
+            .as_ref()
+            .filter(|endpoint| endpoint.holds(url))
+            .cloned();
         let next = response
             .headers()
             .get_all(header::LINK)
             .iter()
             .filter_map(|value| value.to_str().ok())
             .filter_map(next_link)
-            .find_map(|link| response.url().join(&link).ok())
-            .filter(|next| next.origin() == response.url().origin());
+            .find_map(|link| response.url().join(&link).ok());
+        // a next page stays with the server that named it, so a listing cannot send the next
+        // request, with that host's key, to another host. a mirror's page is the hub's page it
+        // stands for, which goes to the mirror again, as a hub's page it passed on does
+        let next = match &endpoint {
+            Some(endpoint) => next.and_then(|next| {
+                endpoint
+                    .written(&next)
+                    .or_else(|| endpoint.rewrite(&next).map(|_| next))
+            }),
+            None => next.filter(|next| next.origin() == response.url().origin()),
+        };
         let total = text(header::CONTENT_RANGE).as_deref().and_then(items_total);
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let keyed = response.extensions().get::<super::s3::Keyed>().cloned();
@@ -455,6 +472,7 @@ impl Net {
                 authorized,
                 drive,
                 signed,
+                endpoint,
                 body: Arc::new(body),
             },
             sent,
@@ -673,6 +691,52 @@ mod tests {
         let response = block_on(net.get(&url)).unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.next, None);
+    }
+
+    /// a listing through the hugging face mirror goes on with the hub's next page, whether the
+    /// mirror names it at its own address or passes the hub's on, and never elsewhere; hugging
+    /// face's token stays home.
+    #[test]
+    fn a_mirrors_next_page_is_the_hubs_next_page() {
+        let first =
+            Url::parse("https://huggingface.co/api/datasets/x/y/tree/c?recursive=true").unwrap();
+        for (link, next) in [
+            (
+                "</hf/api/datasets/x/y/tree/c?cursor=2>; rel=next",
+                Some("https://huggingface.co/api/datasets/x/y/tree/c?cursor=2"),
+            ),
+            (
+                "<https://huggingface.co/api/datasets/x/y/tree/c?cursor=2>; rel=next",
+                Some("https://huggingface.co/api/datasets/x/y/tree/c?cursor=2"),
+            ),
+            ("<https://elsewhere.example/api?cursor=2>; rel=next", None),
+            ("</other/api?cursor=2>; rel=next", None),
+        ] {
+            let (url, asked) = serve(vec![reply("200 OK", &[("Link", link)], b"[]")]);
+            let endpoint = crate::net::Endpoint::at(&format!("{url}hf"));
+            let hf = |name: &str| (name == "HF_TOKEN").then(|| "hf-test".into());
+            let net = Net::new(
+                Options {
+                    offline: Offline::No,
+                    jobs: 1,
+                    credentials: crate::auth::credentials(&hf),
+                    split: Splitting::Never,
+                },
+                Arc::default(),
+                Arc::default(),
+                Arc::new(|_| {}),
+            )
+            .with_hf_endpoint(Some(endpoint.clone()));
+            let response = block_on(net.get(&first)).unwrap();
+            assert_eq!(response.endpoint, Some(endpoint), "{link}");
+            assert_eq!(response.next.as_ref().map(Url::as_str), next, "{link}");
+            let heads = asked.lock().unwrap();
+            assert!(
+                heads[0].starts_with("GET /hf/api/datasets/x/y/tree/c?recursive=true "),
+                "{heads:?}"
+            );
+            assert!(!heads[0].contains("authorization"), "{heads:?}");
+        }
     }
 
     #[test]

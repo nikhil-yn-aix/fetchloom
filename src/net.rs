@@ -6,6 +6,7 @@ mod api;
 mod azure;
 mod cookies;
 mod download;
+mod endpoint;
 pub(crate) mod estimate;
 mod failure;
 pub(crate) mod google;
@@ -42,6 +43,7 @@ pub(crate) use azure::{Azure, Sent};
 pub(crate) use download::{
     Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Probed, Resumable,
 };
+pub(crate) use endpoint::Endpoint;
 pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing};
 #[cfg(debug_assertions)]
 pub(crate) use google::test_token_endpoint;
@@ -267,6 +269,9 @@ pub(crate) struct Net {
     /// the S3 mirrors' buckets, which a mirror's request in mirror-only mode may also ask, in
     /// whichever region S3 keeps them.
     mirror_buckets: Vec<s3::Bucket>,
+    /// the mirror of huggingface.co `HF_ENDPOINT` names, where every request for huggingface.co
+    /// goes instead.
+    hf_endpoint: Option<Endpoint>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
@@ -492,6 +497,7 @@ impl Net {
             refuse_versions: Mutex::default(),
             mirrors_only: None,
             mirror_buckets: Vec::new(),
+            hf_endpoint: None,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
@@ -619,6 +625,23 @@ impl Net {
         self
     }
 
+    /// sends every request for huggingface.co to `endpoint` instead, whose origin is trusted as a
+    /// mirror a person named is: on a private address, and in mirror-only mode. a request there
+    /// carries only the keys saved for its own host, never hugging face's.
+    pub(crate) fn with_hf_endpoint(mut self, endpoint: Option<Endpoint>) -> Net {
+        if let Some(endpoint) = &endpoint {
+            self.typed.allow([endpoint.origin()]);
+        }
+        self.hf_endpoint = endpoint;
+        self
+    }
+
+    /// where a request for `url` goes: below the mirror `HF_ENDPOINT` names, for a link to
+    /// huggingface.co.
+    fn through_endpoint(&self, url: &Url) -> Option<Url> {
+        self.hf_endpoint.as_ref()?.rewrite(url)
+    }
+
     /// refuses `url` in mirror-only mode unless it is a `mirror`'s request below a mirror's
     /// address, the same origin and a path inside it, or in an S3 mirror's bucket. a refused
     /// redirect names its sender.
@@ -626,6 +649,13 @@ impl Net {
         let Some(bases) = &self.mirrors_only else {
             return Ok(());
         };
+        if self
+            .hf_endpoint
+            .as_ref()
+            .is_some_and(|endpoint| endpoint.holds(url))
+        {
+            return Ok(());
+        }
         let below =
             |base: &Url| url.origin() == base.origin() && url.path().starts_with(base.path());
         let in_bucket =
@@ -826,6 +856,9 @@ impl Net {
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
         mut holding: Option<Holding<'_>>,
     ) -> Result<reqwest::Response, Failure> {
+        // before the address check and the keys, so both judge the mirror's own host
+        let mirrored = self.through_endpoint(url);
+        let url = mirrored.as_ref().unwrap_or(url);
         self.may_ask(url, mirror, None)?;
         // the bucket is judged on the link as written, before a test server stands in for it
         let bucket = self.signing.locate(url);

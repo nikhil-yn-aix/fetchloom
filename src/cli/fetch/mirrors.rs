@@ -389,7 +389,11 @@ fn refused_help(
 
 /// the mirrors this run asks: those `given` with `--mirror`, then the settings' list. `usage` for a
 /// `--mirror` that is no folder, web address or S3 bucket, or `mirrors_only` with no mirror to ask.
-pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirrors, Error> {
+pub(in crate::cli) fn read(
+    given: &[String],
+    settings: &Settings,
+    hf_endpoint: Option<&crate::net::Endpoint>,
+) -> Result<Mirrors, Error> {
     let mut flagged = Vec::with_capacity(given.len());
     for text in given {
         let location = Location::parse(text, None).map_err(|refusal| {
@@ -409,7 +413,8 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
     let flagged = at_endpoints(flagged)?;
     let listed = at_endpoints(settings.mirrors.value.clone())?;
     let mirrors = Mirrors::new(flagged, &listed, only.value);
-    if mirrors.only && mirrors.list.is_empty() {
+    // a mirror of huggingface.co a person set is a mirror they named
+    if mirrors.only && mirrors.list.is_empty() && hf_endpoint.is_none() {
         let variable = crate::settings::variable("mirrors_only");
         let (named, undo) = if only.origin == Origin::File {
             (
@@ -454,6 +459,24 @@ fn at_endpoints(locations: Vec<Location>) -> Result<Vec<Location>, Error> {
         homed.push(Location::S3(top.at(found.as_ref())));
     }
     Ok(homed)
+}
+
+/// whether a request for `url` goes to the mirror of huggingface.co `HF_ENDPOINT` names, which
+/// mirror-only mode asks as it asks the mirrors a person named.
+pub(in crate::cli) fn at_hf_endpoint(context: &Context, url: &url::Url) -> bool {
+    context
+        .hf_endpoint
+        .as_ref()
+        .is_some_and(|endpoint| endpoint.rewrite(url).is_some())
+}
+
+/// whether `reference` resolves at the mirror of huggingface.co `HF_ENDPOINT` names, as a
+/// hugging face repository does, which mirror-only mode lets it.
+pub(in crate::cli) fn resolves_at_hf_endpoint(
+    context: &Context,
+    reference: &crate::source::Reference,
+) -> bool {
+    context.hf_endpoint.is_some() && matches!(reference, crate::source::Reference::HuggingFace(_))
 }
 
 /// the error for what only a source gives, `what`, while `mirrors_only` lets fetchloom ask its

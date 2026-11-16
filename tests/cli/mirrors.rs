@@ -996,3 +996,211 @@ fn a_split_archive_comes_from_a_mirror_by_its_tree() -> Result {
     );
     Ok(())
 }
+
+/// the commit the hugging face mirror tests pin.
+#[cfg(debug_assertions)]
+const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// the hub's answers about the dataset `lab/<name>` and its one file `rows.csv`, at paths below
+/// `prefix`, as a mirror of huggingface.co serves them. `gated` makes its terms need accepting,
+/// which the hub's auth check then refuses.
+#[cfg(debug_assertions)]
+fn hub_answers(prefix: &str, name: &str, gated: bool) -> Vec<(String, Vec<crate::support::Part>)> {
+    let answer = |status: &str, body: serde_json::Value| {
+        reply(
+            status,
+            &[("Content-Type", "application/json")],
+            body.to_string().as_bytes(),
+        )
+    };
+    let mut info = serde_json::json!({"id": format!("lab/{name}"), "sha": COMMIT, "tags": [], "private": false});
+    if gated {
+        info["gated"] = "auto".into();
+    }
+    vec![
+        (
+            format!(
+                "{prefix}/api/datasets/lab/{name}/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData"
+            ),
+            answer("200 OK", info),
+        ),
+        (
+            format!("{prefix}/api/datasets/lab/{name}/auth-check"),
+            answer(
+                "403 Forbidden",
+                serde_json::json!({"error": "Access to dataset is restricted."}),
+            ),
+        ),
+        (
+            format!("{prefix}/api/datasets/lab/{name}/tree/{COMMIT}?recursive=true"),
+            answer(
+                "200 OK",
+                serde_json::json!([{"type": "file", "oid": "1", "size": IRIS.len(), "path": "rows.csv"}]),
+            ),
+        ),
+        (
+            format!("{prefix}/datasets/lab/{name}/resolve/{COMMIT}/rows.csv"),
+            file(IRIS, "\"r\""),
+        ),
+    ]
+}
+
+/// with `HF_ENDPOINT` every request goes to the mirror, hugging face's token stays home, and
+/// data.lock holds the huggingface.co links a run without it writes, which a teammate without the
+/// variable syncs from huggingface.co.
+#[cfg(debug_assertions)]
+#[test]
+fn a_hugging_face_mirror_gets_every_request_and_the_lock_keeps_hub_links() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mirror = Routes::start(hub_answers("", "rows", false))?;
+    // what huggingface.co itself would get: the api, and the files on hosts of their own
+    let hub = Routes::start(hub_answers("", "rows", false))?;
+    let hosts = Routes::start(hub_answers("/huggingface.co", "rows", false))?;
+    let run = |folder: &Path, args: &[&str], endpoint: Option<&str>| {
+        let mut command = sandbox.command_in(folder, args);
+        command
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_HOSTS", &hosts.url)
+            .env("HF_TOKEN", "hf_FAKEfakeFAKEfakeFAKEfake1234");
+        if let Some(endpoint) = endpoint {
+            command.env("HF_ENDPOINT", endpoint);
+        }
+        command.output()
+    };
+    ok(&run(
+        &sandbox.work(),
+        &["add", "hf:datasets/lab/rows"],
+        Some(&mirror.url),
+    )?)?;
+    assert_eq!(hub.targets(), Vec::<String>::new());
+    assert_eq!(hosts.targets(), Vec::<String>::new());
+    let asked = mirror.targets();
+    assert_eq!(asked.len(), 3, "{asked:?}");
+    assert!(
+        asked.contains(&format!("/datasets/lab/rows/resolve/{COMMIT}/rows.csv")),
+        "{asked:?}"
+    );
+    let heads = mirror.requests();
+    assert!(
+        !heads.iter().any(|head| head.contains("authorization")),
+        "{heads:?}"
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(
+        lock.contains(&format!(
+            "https://huggingface.co/datasets/lab/rows/resolve/{COMMIT}/rows.csv"
+        )),
+        "{lock}"
+    );
+    assert!(!lock.contains("127.0.0.1"), "{lock}");
+    let plain = sandbox.folder("plain")?;
+    ok(&run(&plain, &["add", "hf:datasets/lab/rows"], None)?)?;
+    let pinned = |lock: &str| -> Vec<String> {
+        lock.lines()
+            .filter(|line| !line.starts_with("locked = "))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(
+        pinned(&fs::read_to_string(plain.join("data.lock"))?),
+        pinned(&lock)
+    );
+    // the teammate: the same lock, a cache of their own and no variable
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    let before = hosts.targets().len();
+    let synced = sandbox
+        .command_in(&teammate, &["sync"])
+        .env("FETCHLOOM_TEST_HOSTS", &hosts.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&synced)?;
+    assert_eq!(fs::read(teammate.join("data/rows/rows.csv"))?, IRIS);
+    assert_eq!(
+        hosts.targets()[before..],
+        [format!(
+            "/huggingface.co/datasets/lab/rows/resolve/{COMMIT}/rows.csv"
+        )]
+    );
+    Ok(())
+}
+
+/// a gated dataset through a mirror names how the mirror gets a hugging face token, and that
+/// saving one for its host gives that host the token; over plain http, that no key goes there.
+#[cfg(debug_assertions)]
+#[test]
+fn a_gated_dataset_through_a_mirror_names_the_mirrors_sign_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let local = Routes::start(hub_answers("", "gated", true))?;
+    let named = Routes::start(hub_answers("/hf-mirror.example", "gated", true))?;
+    for (endpoint, help) in [
+        (
+            "https://hf-mirror.example",
+            "help: accept the terms at https://huggingface.co/datasets/lab/gated while signed in to hugging face. hf-mirror.example, the mirror HF_ENDPOINT names, wants a hugging face token for it, and fetchloom never sends hugging face's own token to a mirror. saving one with `fetchloom auth login hf-mirror.example --token` gives that host the token\n".to_owned(),
+        ),
+        (
+            local.url.as_str(),
+            format!(
+                "help: accept the terms at https://huggingface.co/datasets/lab/gated while signed in to hugging face. HF_ENDPOINT sends requests to {} over plain http, where no key ever goes: set HF_ENDPOINT to an https mirror, or unset it to ask huggingface.co\n",
+                local.url.trim_start_matches("http://")
+            ),
+        ),
+    ] {
+        let output = sandbox
+            .command(&["add", "hf:datasets/lab/gated"])
+            .env("HF_ENDPOINT", endpoint)
+            .env("FETCHLOOM_TEST_HOSTS", &named.url)
+            .env("HF_TOKEN", "hf_FAKEfakeFAKEfakeFAKEfake1234")
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(40), "{stderr}");
+        assert!(
+            stderr.contains("error: hf:datasets/lab/gated requires permission to download its files\n"),
+            "{stderr}"
+        );
+        assert!(stderr.contains(&help), "{stderr}");
+    }
+    for heads in [local.requests(), named.requests()] {
+        assert_ne!(heads, Vec::<String>::new());
+        assert!(
+            !heads.iter().any(|head| head.contains("authorization")),
+            "{heads:?}"
+        );
+    }
+    Ok(())
+}
+
+/// in mirror-only mode the hugging face mirror a person set is one of their mirrors: add and lock
+/// go through it, and nothing else is asked.
+#[cfg(debug_assertions)]
+#[test]
+fn mirror_only_mode_asks_the_hugging_face_mirror() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mirror = Routes::start(hub_answers("", "rows", false))?;
+    let elsewhere = Routes::start(Vec::new())?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("HF_ENDPOINT", &mirror.url)
+            .env("FETCHLOOM_MIRRORS_ONLY", "1")
+            .env("FETCHLOOM_TEST_HF_API", &elsewhere.url)
+            .env("FETCHLOOM_TEST_HOSTS", &elsewhere.url)
+            .output()
+    };
+    ok(&run(&["add", "hf:datasets/lab/rows"])?)?;
+    assert_eq!(fs::read(sandbox.work().join("data/rows/rows.csv"))?, IRIS);
+    fs::remove_file(sandbox.work().join("data.lock"))?;
+    ok(&run(&["lock"])?)?;
+    assert!(fs::read_to_string(sandbox.work().join("data.lock"))?.contains("lab/rows"));
+    let refused = run(&["add", "https://data.example.org/rows.csv"])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(10),
+        "{}",
+        text(&refused.stderr)?
+    );
+    assert_eq!(elsewhere.targets(), Vec::<String>::new());
+    Ok(())
+}

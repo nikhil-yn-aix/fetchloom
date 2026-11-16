@@ -126,6 +126,9 @@ const ENVIRONMENT: &str = "fetchloom environment
                        private network's, as one word or metadata.internal
                        does: list such a server in allowed_origins
   NO_PROXY             hosts reached without the proxy, separated by commas
+  HF_ENDPOINT          a mirror of huggingface.co, as https://hf-mirror.com,
+                       that every request for huggingface.co goes to
+                       instead; hugging face's token never goes there
 
   NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them
   CI, AI_AGENT, coding agents' variables   no questions, color or animation

@@ -62,6 +62,8 @@ struct Context {
     yes: bool,
     settings: Settings,
     rate: Option<Arc<net::Rate>>,
+    /// the mirror of huggingface.co `HF_ENDPOINT` names.
+    hf_endpoint: Option<net::Endpoint>,
     threads: Threads,
     /// when a large download splits across streams, which `FETCHLOOM_SPLIT` sets.
     split: net::Splitting,
@@ -111,6 +113,7 @@ impl Context {
             yes: false,
             settings: Settings::defaults(Machine::default()),
             rate: None,
+            hf_endpoint: None,
             threads: Threads::default(),
             split: net::Splitting::WhenSlow,
             work: Arc::default(),
@@ -157,7 +160,10 @@ impl Context {
             .clone();
         let output = Arc::clone(&self.output);
         let cautioned = Arc::clone(&self.cautioned);
+        // checking a key goes through `net_with`, so hugging face's token is checked with
+        // huggingface.co itself, the one host it goes to
         self.net_with(Vec::new())
+            .with_hf_endpoint(self.hf_endpoint.clone())
             .finding_credentials(move || {
                 credentials.extend(crate::auth::credentials(&crate::machine::env));
                 caution(&output, &cautioned, &credentials);
@@ -911,15 +917,27 @@ pub(crate) fn run() -> ExitCode {
         Ok(settings) => context.take_settings(settings),
         Err(error) => return finish::<()>(&context, name, Err(bypassable(error, &var)), started),
     }
-    match fetch::mirrors::read(&global.mirror, &context.settings) {
-        Ok(mirrors) => context.mirrors = fetch::mirrors::Mirrored::new(mirrors),
-        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    if let Err(error) = read_mirrors(&mut context, &global.mirror, &var) {
+        return finish::<()>(&context, name, Err(error), started);
     }
     match net::Rate::read(&var) {
         Ok(rate) => context.rate = rate,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
     execute(context, Some(command), started)
+}
+
+/// the mirror of huggingface.co `HF_ENDPOINT` names, and the mirrors `given` and the settings
+/// name, among which mirror-only mode counts that mirror.
+fn read_mirrors(
+    context: &mut Context,
+    given: &[String],
+    var: crate::machine::Var<'_>,
+) -> Result<(), Error> {
+    context.hf_endpoint = net::Endpoint::read(var)?;
+    let mirrors = fetch::mirrors::read(given, &context.settings, context.hf_endpoint.as_ref())?;
+    context.mirrors = fetch::mirrors::Mirrored::new(mirrors);
+    Ok(())
 }
 
 fn execute(context: Context, command: Option<args::Command>, started: Instant) -> ExitCode {

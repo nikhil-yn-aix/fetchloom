@@ -1288,6 +1288,7 @@ fn empty_pages_pause_a_listing_and_a_hundred_in_a_row_end_it() {
                 authorized: None,
                 drive: None,
                 signed: None,
+                endpoint: None,
                 body: Arc::new((self.0)(page).into_bytes()),
             }))
         }
