@@ -405,13 +405,29 @@ fn help_option(root: &clap::Command, current: &clap::Command, word: &str) -> (bo
 
 pub(super) fn command() -> clap::Command {
     // help is wrapped as it is printed, which keeps command lines in the examples whole
-    linked(Args::command())
+    linked(repeatable(Args::command()))
         .term_width(0)
         .color(if Style::stdout_color(color()) {
             clap::ColorChoice::Always
         } else {
             clap::ColorChoice::Never
         })
+}
+
+/// `command` with each switch taking a second mention as the first, so `--json` that a wrapper
+/// adds to a line holding it runs; an option with a value given twice still stops, since which
+/// value was meant is the person's to say.
+fn repeatable(command: clap::Command) -> clap::Command {
+    command
+        .mut_args(|arg| {
+            if matches!(arg.get_action(), ArgAction::SetTrue) {
+                let id = arg.get_id().clone();
+                arg.overrides_with(id)
+            } else {
+                arg
+            }
+        })
+        .mut_subcommands(repeatable)
 }
 
 const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom/";
@@ -1377,6 +1393,33 @@ mod tests {
                 .name(),
             "cache verify"
         );
+    }
+
+    /// a switch given twice, as `--json` a wrapper adds to a line that has it, means what it means
+    /// once, before or after the command; an option with a value given twice still stops.
+    #[test]
+    fn a_switch_given_twice_reads_as_once() {
+        for line in [
+            &["fetchloom", "--json", "--json", "status"][..],
+            &["fetchloom", "--json", "status", "--json"],
+            &[
+                "fetchloom",
+                "sync",
+                "--dry-run",
+                "-n",
+                "--offline",
+                "--offline",
+            ],
+        ] {
+            assert!(
+                super::command().try_get_matches_from(line).is_ok(),
+                "{line:?}"
+            );
+        }
+        let twice = super::command()
+            .try_get_matches_from(["fetchloom", "push", "--to", "/mnt/a", "--to", "/mnt/b"])
+            .unwrap_err();
+        assert_eq!(twice.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

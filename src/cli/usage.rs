@@ -122,18 +122,30 @@ fn typed(err: &clap::Error, kind: ContextKind) -> Vec<String> {
     }
 }
 
-/// a conflict whose reason one sentence gives better than clap's words, as message and help.
-fn explained(err: &clap::Error) -> Option<(&'static str, &'static str)> {
+/// a conflict whose reason one sentence gives better than clap's words: --force with --dir, or an
+/// option with a value given twice, which clap calls a conflict with itself, where which value
+/// was meant is the person's to say.
+fn explained(err: &clap::Error) -> Option<Error> {
     if err.kind() != ErrorKind::ArgumentConflict {
         return None;
     }
     let arg = context_value(err, ContextKind::InvalidArg)?;
     let prior = context_value(err, ContextKind::PriorArg)?;
     let pair = [bare(&arg), bare(&prior)];
-    (pair.contains(&"--force") && pair.contains(&"--dir")).then_some((
-        "--force replaces only the file -o names, so it cannot go with --dir",
-        "leave out --force and give --dir an empty folder, or write one file with -o <file> --force",
-    ))
+    if pair[0] == pair[1] {
+        let option = pair[0];
+        return Some(
+            Error::new(Kind::Usage, format!("{option} was given twice"))
+                .help(format!("give {option} once, with the value you mean")),
+        );
+    }
+    (pair.contains(&"--force") && pair.contains(&"--dir")).then(|| {
+        Error::new(
+            Kind::Usage,
+            "--force replaces only the file -o names, so it cannot go with --dir",
+        )
+        .help("leave out --force and give --dir an empty folder, or write one file with -o <file> --force")
+    })
 }
 
 /// the error line, in fetchloom's words where clap's are stiff.
@@ -296,9 +308,7 @@ fn describe(
     (parent, line): (Option<&str>, &[String]),
     shell: Option<&std::ffi::OsStr>,
 ) -> Error {
-    let explained =
-        explained(err).map(|(message, help)| Error::new(Kind::Usage, message).help(help));
-    if let Some(error) = explained.or_else(|| dashed_revision(err, parent, line)) {
+    if let Some(error) = explained(err).or_else(|| dashed_revision(err, parent, line)) {
         return error;
     }
     let named = |kind| context_value(err, kind);
@@ -1063,6 +1073,20 @@ mod tests {
         assert_eq!(
             status.help.as_deref(),
             Some("`fetchloom auth` alone lists each account and whether it is signed in")
+        );
+        Ok(())
+    }
+
+    /// an option with a value given twice is told as that, as which value was meant is the
+    /// person's to say, never as a clash with itself.
+    #[test]
+    fn an_option_given_twice_is_told_as_twice() -> Result<(), Box<dyn std::error::Error>> {
+        let error = problem(&["fetchloom", "push", "--to", "/mnt/a", "--to", "/mnt/b"])?;
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(error.message, "--to was given twice");
+        assert_eq!(
+            error.help.as_deref(),
+            Some("give --to once, with the value you mean")
         );
         Ok(())
     }
