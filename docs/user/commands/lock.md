@@ -63,6 +63,6 @@ after an upgrade, run `fetchloom sync` to place the new inputs, and commit `data
 | 0 | pins were updated, a merge was written or a check passed |
 | 1 | `lock.outdated`: a stale lock under `--check`; `unconfirmed`: a merge that needs a choice |
 | 2 | incompatible options, or `--ours` and `--theirs` without conflict lines or naming a dataset that needs no choice |
-| 50 | `project.invalid`: conflict lines out of git's order, a side that does not read, a pin read from the conflict lines that does not read whole, or a `[project]` part that differs on both sides |
+| 50 | `project.invalid`: a dataset whose file list `data.lock.d` lacks, under `--check` or named by `--upgrade`; conflict lines out of git's order, a side that does not read, a pin read from the conflict lines that does not read whole, or a `[project]` part that differs on both sides |
 
 resolution, download and local failures use the [shared exit codes](../reference/exit-codes.md).
