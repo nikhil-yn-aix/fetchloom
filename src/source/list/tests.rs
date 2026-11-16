@@ -278,6 +278,10 @@ fn a_list_on_this_machine_gives_each_files_link() {
         ),
         ("# nothing yet\n".to_owned(), "links.txt lists no files"),
         (
+            "https://example.org/x\u{202e}vsc.exe".to_owned(),
+            "the link on line 1 of links.txt holds a control character",
+        ),
+        (
             format!("https://example.org/{}.csv", "x".repeat(64 << 10)),
             "line 1 of links.txt gives a link longer than data.lock keeps",
         ),

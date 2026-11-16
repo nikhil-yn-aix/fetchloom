@@ -637,9 +637,16 @@ pub(crate) fn no_folder(name: &str, entry: &Entry, path: &str) -> Error {
     .help("put the file's link on that line, or use the list by its own link, as `fetchloom add https://example.org/data/SHA256SUMS` does")
 }
 
-/// the link `text` a line gives a file, refused when it is no plain link or carries a secret
-/// data.lock would keep.
+/// the link `text` a line gives a file, refused when it is no plain link, holds a control
+/// character a link parser would hide, or carries a secret data.lock would keep.
 fn file_link(text: &str, at: &str) -> Result<Url, Error> {
+    if text.contains(crate::name::is_control) {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("the link on {at} holds a control character"),
+        )
+        .help("write each link on its line as it is, without control characters"));
+    }
     if !is_link(text) {
         return Err(Error::new(
             Kind::Usage,
