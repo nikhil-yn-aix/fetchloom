@@ -566,18 +566,15 @@ fn tell(output: &Output, report: &Report) {
     let unasked = report.unasked().count();
     let moved = report.moved();
     if unserved == 0 && report.unchecked == 0 && gone + unasked + moved.len() == 0 {
-        output.done(
-            "Ok",
-            &match report.files {
-                0 => "data.lock pins no file to ask about".to_owned(),
-                1 => "the file in data.lock is still served, and its source changed nothing"
-                    .to_owned(),
-                files => format!(
-                    "all {} files in data.lock are still served, and their sources changed nothing",
-                    units::grouped(files)
-                ),
-            },
-        );
+        let all = match report.files {
+            0 => "data.lock pins no file to ask about".to_owned(),
+            1 => "the file in data.lock is still served, and its source changed nothing".to_owned(),
+            files => format!(
+                "all {} files in data.lock are still served, and their sources changed nothing",
+                units::grouped(files)
+            ),
+        };
+        output.done("Ok", &format!("{all}{}", but_waiting(report)));
         return;
     }
     let of_all = |count: u64| {
@@ -624,6 +621,9 @@ fn tell(output: &Output, report: &Report) {
             ),
         );
     }
+    if let Some(waiting) = waiting_unchecked(report) {
+        output.mark("Unchecked", &waiting);
+    }
     let helps = helps(report);
     for help in helps.iter().take(HINTS) {
         output.hint(help);
@@ -636,6 +636,41 @@ fn tell(output: &Output, report: &Report) {
     }
     if unserved == 0 && gone + moved.len() == 0 && helps.is_empty() {
         output.hint(probe::AGAIN);
+    }
+}
+
+/// the names of the datasets `report` audited that wait for their file lists, none of which was
+/// asked about.
+fn waiting_names(report: &Report) -> Vec<&str> {
+    report
+        .waiting
+        .iter()
+        .map(|waiting| waiting.name.as_str())
+        .collect()
+}
+
+/// the end of a closing line that found nothing, for the datasets that wait for their file lists:
+/// their pins stand, but nothing of them was asked.
+fn but_waiting(report: &Report) -> String {
+    match waiting_names(report).as_slice() {
+        [] => String::new(),
+        [one] => format!(", but {one} waits for its file list and was not asked"),
+        many => format!(
+            ", but {} wait for their file lists and were not asked",
+            units::listed(many, "and")
+        ),
+    }
+}
+
+/// the `Unchecked` line for the datasets that wait for their file lists, when any does.
+fn waiting_unchecked(report: &Report) -> Option<String> {
+    match waiting_names(report).as_slice() {
+        [] => None,
+        [one] => Some(format!("{one}, which waits for its file list")),
+        many => Some(format!(
+            "{}, which wait for their file lists",
+            units::listed(many, "and")
+        )),
     }
 }
 
