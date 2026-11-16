@@ -77,6 +77,9 @@ struct Dataset {
     /// why its source did not say what it holds now; none when it did, and for an import, which
     /// no source lists.
     unlisted: Option<Unlisted>,
+    /// where data.toml names the version data.lock pins, a newer one its source names, which a
+    /// person takes by changing the ref; none otherwise.
+    latest: Option<Latest>,
     /// the version data.lock pins, as `zenodo:3608990`.
     #[serde(skip)]
     pinned: String,
@@ -106,6 +109,7 @@ impl Dataset {
             newer: None,
             changed: Vec::new(),
             unlisted: None,
+            latest: None,
             pinned: pinned.to_owned(),
             mirrors: BTreeSet::new(),
             locked: String::new(),
@@ -175,6 +179,15 @@ impl Change {
             format!("{} {} → {}", self.field, self.pinned, self.now)
         }
     }
+}
+
+/// a newer version than the one data.toml names, as its source names it.
+#[derive(Debug, Serialize)]
+struct Latest {
+    /// the reference that names it, as `zenodo:3608991`.
+    version: String,
+    /// its page, where its source has one.
+    link: Option<String>,
 }
 
 /// why a source did not say what a dataset holds now.
@@ -250,6 +263,8 @@ struct Asked {
     pinned: String,
     /// data.toml's ref, which `lock --upgrade` resolves, when it may name another version.
     upgrade: Option<String>,
+    /// the pinned version itself, when data.toml names it, whose source may name a newer one.
+    named: Option<Reference>,
     select: Vec<Glob>,
     words: Words,
     access: Access,
@@ -257,7 +272,19 @@ struct Asked {
 
 /// what a source lists now: at the pinned version, and at the version `lock --upgrade` would pin
 /// when that may be another.
-type Listed = (Result<Listing, Error>, Option<Result<Listing, Error>>);
+struct Listed {
+    now: Result<Listing, Error>,
+    newest: Option<Result<Listing, Error>>,
+    /// for a version data.toml names, the newest its source names.
+    latest: Option<Result<Reference, Error>>,
+}
+
+/// one answer [`listings`] waits for.
+enum Asking {
+    Now(Result<Listing, Error>),
+    Newest(Result<Listing, Error>),
+    Latest(Option<Result<Reference, Error>>),
+}
 
 /// audits the datasets `args` names, or every one, failing as `--check` asks. it asks nobody
 /// offline.
@@ -324,8 +351,8 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
         );
         gathered(context, &mut report, &pinned, found?);
         tell_modified(output, &report);
-        for ((index, asked), (now, newest)) in asks.iter().zip(listed?) {
-            judge(&mut report.datasets[*index], asked, now, newest);
+        for ((index, asked), listed) in asks.iter().zip(listed?) {
+            judge(&mut report.datasets[*index], asked, listed);
         }
     }
     tell(output, &report);
@@ -369,13 +396,19 @@ fn pinned<'l>(
             continue;
         }
         // only a pin that answers data.toml's entry is one an upgrade replaces
-        let upgrade = (pin.drift(entry).is_none() && source.reference != pin.resolved)
-            .then(|| source.reference.clone());
+        let answers = pin.drift(entry).is_none();
+        let upgrade =
+            (answers && source.reference != pin.resolved).then(|| source.reference.clone());
+        let named = (answers && source.reference == pin.resolved)
+            .then(|| Reference::parse(&pin.resolved).ok())
+            .flatten()
+            .map(|parsed| parsed.reference);
         asks.push((
             report.datasets.len() - 1,
             Asked {
                 pinned: pin.resolved.clone(),
                 upgrade,
+                named,
                 select: source.select.clone(),
                 words,
                 access: pin.access,
@@ -385,11 +418,18 @@ fn pinned<'l>(
     (pinned, asks)
 }
 
-/// what each of `asks` lists now, in their order: at its pinned version, and at the version
-/// `lock --upgrade` would pin when that may be another. fails at a stop.
+/// what each of `asks` lists now, in their order: at its pinned version, at the version `lock
+/// --upgrade` would pin when that may be another, and, for a version data.toml names, the newest
+/// its source names. fails at a stop.
 async fn listings(net: &Arc<Net>, asks: &[(usize, Asked)]) -> Result<Vec<Listed>, Error> {
-    let mut now: Vec<Option<Result<Listing, Error>>> = asks.iter().map(|_| None).collect();
-    let mut newest: Vec<Option<Result<Listing, Error>>> = asks.iter().map(|_| None).collect();
+    let mut listed: Vec<Listed> = asks
+        .iter()
+        .map(|_| Listed {
+            now: Err(Error::new(Kind::LocalIo, "not asked")),
+            newest: None,
+            latest: None,
+        })
+        .collect();
     let mut tasks = JoinSet::new();
     for (at, (_, asked)) in asks.iter().enumerate() {
         for (upgrade, text) in [(false, Some(&asked.pinned)), (true, asked.upgrade.as_ref())] {
@@ -402,48 +442,64 @@ async fn listings(net: &Arc<Net>, asks: &[(usize, Asked)]) -> Result<Vec<Listed>
                     Ok(parsed) => parsed.reference.resolve_in(&*net, &select).await,
                     Err(error) => Err(error),
                 };
-                (at, upgrade, listing)
+                let asking = if upgrade {
+                    Asking::Newest(listing)
+                } else {
+                    Asking::Now(listing)
+                };
+                (at, asking)
             });
+        }
+        if let Some(named) = asked.named.clone() {
+            let net = Arc::clone(net);
+            tasks.spawn(async move { (at, Asking::Latest(named.newest_version(&*net).await)) });
         }
     }
     while let Some(joined) = tasks.join_next().await {
-        let (at, upgrade, listing) = joined.map_err(|err| {
+        let (at, asking) = joined.map_err(|err| {
             Error::new(
                 Kind::LocalIo,
                 format!("a check of a source stopped unexpectedly: {err}"),
             )
         })?;
-        let listing = match listing {
-            Err(error) if error.kind == Kind::Interrupted => {
-                tasks.abort_all();
-                return Err(error);
-            }
-            listing => listing,
-        };
-        if upgrade {
-            newest[at] = Some(listing);
-        } else {
-            now[at] = Some(listing);
+        if let Asking::Now(Err(error))
+        | Asking::Newest(Err(error))
+        | Asking::Latest(Some(Err(error))) = &asking
+            && error.kind == Kind::Interrupted
+        {
+            tasks.abort_all();
+            return Err(error.clone());
+        }
+        match asking {
+            Asking::Now(listing) => listed[at].now = listing,
+            Asking::Newest(listing) => listed[at].newest = Some(listing),
+            Asking::Latest(latest) => listed[at].latest = latest,
         }
     }
-    Ok(now
-        .into_iter()
-        .zip(newest)
-        .map(|(now, newest)| {
-            let now = now.unwrap_or_else(|| Err(Error::new(Kind::LocalIo, "not asked")));
-            (now, newest)
-        })
-        .collect())
+    Ok(listed)
 }
 
-/// fills in what `dataset`'s source lists now: `now` at the pinned version, `newest` at the
-/// version `lock --upgrade` would pin.
-fn judge(
-    dataset: &mut Dataset,
-    asked: &Asked,
-    now: Result<Listing, Error>,
-    newest: Option<Result<Listing, Error>>,
-) {
+/// fills in what `dataset`'s source lists now: at the pinned version, at the version `lock
+/// --upgrade` would pin, and the newest version its source names for one data.toml names.
+fn judge(dataset: &mut Dataset, asked: &Asked, listed: Listed) {
+    let Listed {
+        now,
+        newest,
+        latest,
+    } = listed;
+    match latest {
+        Some(Ok(latest)) if latest.to_string() != asked.pinned => {
+            dataset.latest = Some(Latest {
+                link: latest.page(),
+                version: latest.to_string(),
+            });
+        }
+        // a version the person chose stands whatever the answer, so this only informs
+        Some(Err(error)) => {
+            tracing::debug!(error = %error.message, "the newest version is not known");
+        }
+        _ => {}
+    }
     match now {
         Ok(listing) => dataset.changed = changes(asked, &listing),
         Err(error) => dataset.unlisted = Some(Unlisted::of(error)),
@@ -610,6 +666,7 @@ fn tell(output: &Output, report: &Report) {
         .map(|_| SHOWN);
     for dataset in &report.datasets {
         tell_dataset(output, dataset, shown);
+        tell_latest(output, dataset);
     }
     let unserved = report.files - report.served - report.unchecked;
     let gone = report.gone().count();
@@ -688,6 +745,26 @@ fn tell(output: &Output, report: &Report) {
     if unserved == 0 && gone + moved.len() == 0 && helps.is_empty() {
         output.hint(probe::AGAIN);
     }
+}
+
+/// a line on stderr for a newer version than the one data.toml names: information, since the
+/// person chose that version, and changing the ref takes the newer one.
+fn tell_latest(output: &Output, dataset: &Dataset) {
+    let Some(latest) = &dataset.latest else {
+        return;
+    };
+    let at = latest
+        .link
+        .as_ref()
+        .map(|link| format!(", at {link}"))
+        .unwrap_or_default();
+    output.step(
+        "Newest",
+        &format!(
+            "{} · {}{at}, while data.toml names {}: change its ref to take it",
+            dataset.name, latest.version, dataset.pinned
+        ),
+    );
 }
 
 /// the names of the datasets `report` audited that wait for their file lists, none of which was
@@ -1101,6 +1178,7 @@ mod tests {
         let asked = Asked {
             pinned: "zenodo:1".to_owned(),
             upgrade: None,
+            named: None,
             select: Vec::new(),
             words: Words {
                 title: Some("Iris".to_owned()),

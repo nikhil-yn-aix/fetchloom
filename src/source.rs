@@ -655,6 +655,38 @@ impl Reference {
         check(self, listing, api.most_files())
     }
 
+    /// the version its source names as the newest of the record this reference pins one version
+    /// of: zenodo's and other invenioRDM installs' records by their `versions/latest` answer, and
+    /// dryad, figshare and dataverse datasets by what each lists without the version. none for a
+    /// reference that pins no version of such a record.
+    pub(crate) async fn newest_version(&self, api: &impl Api) -> Option<Result<Reference, Error>> {
+        match self {
+            Reference::Invenio(record) => {
+                let api =
+                    access::Scoped::new(api, self.access(), self.written_origin(), self.shown());
+                Some(record.latest(&api).await.map(Reference::Invenio))
+            }
+            Reference::Dryad(_) | Reference::Figshare(_) | Reference::Dataverse(_) => {
+                let named = self.to_string();
+                let (base, _) = named.rsplit_once('@')?;
+                if !Reference::version_left_out(&named, base) {
+                    return None;
+                }
+                let base = Reference::parse(base).ok()?.reference;
+                Some(base.resolve(api).await.map(|listing| listing.resolved))
+            }
+            _ => None,
+        }
+    }
+
+    /// the web page where a person sees the dataset, for a source that has one per dataset.
+    pub(crate) fn page(&self) -> Option<String> {
+        match self {
+            Reference::Invenio(record) => Some(record.page()),
+            _ => None,
+        }
+    }
+
     /// asks this reference's own source, which may ask only the origins its descriptor names. a
     /// link to a record's page on an invenioRDM install is that record once one request for it
     /// there says so, and otherwise the plain link it is.

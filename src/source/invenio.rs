@@ -181,6 +181,25 @@ impl Record {
         self.listing(super::json(self, &response)?)
     }
 
+    /// the newest version of the record, as its install's `versions/latest` answer names it:
+    /// zenodo's id is a number, another install's an id it makes.
+    pub(super) async fn latest(&self, api: &impl Api) -> Result<Record, Error> {
+        let response = api.get(&self.url(&["versions", "latest"])?).await?;
+        let answer: Newest = super::json(self, &response)?;
+        let id = match (&self.host, answer.id) {
+            (None, serde_json::Value::Number(id)) => {
+                id.as_u64().filter(|id| *id > 0).map(|id| id.to_string())
+            }
+            (Some(_), serde_json::Value::String(id)) => Some(id).filter(|id| is_id(id)),
+            _ => None,
+        }
+        .ok_or_else(|| invalid(self, "its newest version has no id"))?;
+        Ok(Record {
+            host: self.host.clone(),
+            id,
+        })
+    }
+
     /// the listing of the record this candidate names when its install's answer, to one request
     /// for the record at its origin, is an invenioRDM record of that id and of `doi`, where a
     /// DOI's page named it; none for another answer. a refusal names the key that may lift it.
@@ -380,7 +399,7 @@ impl Record {
     }
 
     /// the record's page on its install.
-    fn page(&self) -> String {
+    pub(super) fn page(&self) -> String {
         let host = self.host.as_deref().unwrap_or(ZENODO);
         format!("https://{host}/records/{}", self.id)
     }
@@ -496,6 +515,12 @@ impl File {
             etag: None,
         })
     }
+}
+
+/// the id of the newest version, in either form of the answer.
+#[derive(Deserialize)]
+struct Newest {
+    id: serde_json::Value,
 }
 
 /// zenodo's record, in zenodo's own form.

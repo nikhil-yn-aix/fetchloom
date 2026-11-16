@@ -684,3 +684,63 @@ fn a_file_checked_by_size_alone_says_so_and_a_later_change_warns() -> Result {
     }
     Ok(())
 }
+
+/// a record data.toml pins by its version, `zenodo:101`, whose source names a newer one,
+/// `zenodo:102`, gets a line naming that version and its page, with nothing for `--check` to
+/// fail, since the person chose the version; a record that is its newest gets none.
+#[test]
+fn a_record_pinned_by_its_version_names_a_newer_one() -> Result {
+    let sandbox = Sandbox::new()?;
+    let content = "/zenodo.org/api/records/101/files/iris.csv/content";
+    let latest = "/zenodo.org/api/records/101/versions/latest";
+    let routes = Routes::start(vec![
+        (
+            "/zenodo.org/api/records/101".to_owned(),
+            record(101, "cc-by-4.0")?,
+        ),
+        (latest.to_owned(), record(101, "cc-by-4.0")?),
+        (content.to_owned(), file(IRIS, "\"i\"")),
+    ])?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()
+    };
+    ok(&run(&["add", "zenodo:101", "--as", "iris"])?)?;
+    let output = run(&["audit"])?;
+    ok(&output)?;
+    assert!(
+        !text(&output.stderr)?.contains("Newest"),
+        "{}",
+        text(&output.stderr)?
+    );
+    routes.change(vec![
+        (
+            "/zenodo.org/api/records/101".to_owned(),
+            record(101, "cc-by-4.0")?,
+        ),
+        (latest.to_owned(), record(102, "cc-by-4.0")?),
+        (content.to_owned(), file(IRIS, "\"i\"")),
+    ]);
+    let output = run(&["audit"])?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("Newest iris · zenodo:102, at https://zenodo.org/records/102, while data.toml names zenodo:101: change its ref to take it"),
+        "{stderr}"
+    );
+    let output = run(&["--json", "audit", "--check"])?;
+    ok(&output)?;
+    let document = json(&output)?;
+    assert_eq!(
+        dataset(&document, "iris")?["latest"],
+        serde_json::json!({ "version": "zenodo:102", "link": "https://zenodo.org/records/102" }),
+        "{document}"
+    );
+    assert_eq!(
+        dataset(&document, "iris")?["newer"],
+        serde_json::Value::Null
+    );
+    Ok(())
+}

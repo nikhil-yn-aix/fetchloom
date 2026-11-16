@@ -430,3 +430,14 @@ fn figshare_portal_dois_do_not_fetch_unsupported_pages() {
     assert_eq!(error.kind, Kind::ReferenceUnresolved);
     assert_eq!(recorded.asked(), [handle]);
 }
+
+/// the newest version of an article pinned at one is the version the article lists without one.
+#[test]
+fn the_newest_version_is_the_one_the_article_names_without_one() {
+    let recorded =
+        Recorded::default().on(ARTICLE, 200, changed(|value| value["version"] = 2.into()));
+    let pinned = Reference::parse("figshare:34744689@1").unwrap().reference;
+    let newest = block_on(pinned.newest_version(&recorded)).unwrap().unwrap();
+    assert_eq!(newest.to_string(), "figshare:34744689@2");
+    assert_eq!(recorded.asked(), [ARTICLE]);
+}
