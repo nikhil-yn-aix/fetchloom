@@ -898,9 +898,10 @@ fn mark(project: &crate::project::Project, freeing: &BTreeSet<String>) -> Result
     project.write_state(&state)
 }
 
-/// drops `freeing`: removes their unchanged files from the data folder, marks them dropped in the
-/// state, then frees the cache files nothing else needs, under the cache's own lock, as gc does.
-/// a file whose copy on a folder mirror changed since it hashed stays in the cache.
+/// drops `freeing`: reads what the cache must keep for everything else, then marks them dropped
+/// in the state, removes their unchanged files from the data folder, and frees the cache files
+/// nothing else needs, under the cache's own lock, as gc does. a file whose copy on a folder
+/// mirror changed since it hashed stays in the cache.
 fn free(
     context: &Context,
     project: &crate::project::Project,
@@ -924,6 +925,19 @@ fn free(
     let (without, unpinned) = without(manifest, lock, freeing);
     let scope = Scope::Only(freeing.clone());
     let placing = place::Placing::new(project, &without, &unpinned, &cache, false, &scope, survey)?;
+    // what the cache keeps for every other dataset and project is read before anything changes,
+    // so a record that cannot be read refuses the drop with nothing dropped
+    let objects = held(&cache, lock, freeing);
+    let mut dropped = project.dropped();
+    dropped.extend(freeing.iter().cloned());
+    let current = kept_here(lock.clone(), &dropped);
+    let needed = super::cache::needed_besides(
+        &cache,
+        (&project.root, &current),
+        &objects.archives,
+        context.threads,
+        &context.stop,
+    )?;
     // the last look for a stop: once files go, the drop runs to its end
     context.stop.check()?;
     context.stop.finish();
@@ -939,15 +953,6 @@ fn free(
         .filter(|(path, _)| !native(&project.root, path).exists())
         .map(|(_, size)| size)
         .sum();
-    let objects = held(&cache, lock, freeing);
-    let current = kept_here(lock.clone(), &project.dropped());
-    let needed = super::cache::needed_besides(
-        &cache,
-        (&project.root, &current),
-        &objects.archives,
-        context.threads,
-        &crate::stop::Stop::default(),
-    )?;
     let mut digests: Vec<(&Sha256, &u64)> = objects.sizes.iter().collect();
     digests.sort();
     let (mut freed, mut bytes) = (0, 0);

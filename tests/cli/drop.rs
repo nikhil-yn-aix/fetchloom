@@ -133,6 +133,34 @@ fn an_add_of_a_dropped_dataset_brings_it_back() -> Result {
     Ok(())
 }
 
+/// a drop that cannot read what the cache must keep for other projects, as a record no fetchloom
+/// wrote stops it, refuses before it changes anything: the dataset stays placed and undropped.
+#[test]
+fn a_drop_refused_for_a_cache_record_changes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = iris(&sandbox)?;
+    let placed = sandbox.work().join("data/iris/iris.csv");
+    let projects = sandbox.cache().join("projects");
+    fs::create_dir_all(&projects)?;
+    fs::write(projects.join("planted"), vec![b'x'; 100 << 10])?;
+    let output = sandbox.run(&["--yes", "drop", "iris"])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+    let told = text(&output.stderr)?;
+    assert!(
+        told.contains("is larger than any record of a project"),
+        "{told}"
+    );
+    assert!(
+        placed.exists(),
+        "the refused drop removed {}",
+        placed.display()
+    );
+    assert_eq!(fs::read(&placed)?, IRIS);
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["dropped"], json!([]), "{status}");
+    Ok(())
+}
+
 /// a line of a list naming a dropped dataset brings it back too, as the same link typed does.
 #[test]
 fn a_list_line_naming_a_dropped_dataset_brings_it_back() -> Result {
