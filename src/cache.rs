@@ -268,13 +268,41 @@ fn tag(root: &Path, write: impl FnOnce(&Path, &[u8]) -> io::Result<()>) -> io::R
     }
 }
 
-/// writes `bytes` over the start of the file at `path`, made if missing, never through a link. a
-/// tag a stopped run cut short holds the start of the same bytes, so the file never holds others,
-/// whichever runs write it at once.
+/// writes `bytes` over the start of the file at `path`, made if missing, never through a link nor
+/// into a file with another name. a tag a stopped run cut short holds the start of the same bytes,
+/// so the file never holds others, whichever runs write it at once.
 fn write_over(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = open_unfollowed(path, true)?;
+    // a co-user of an empty shared cache, where anyone may link any file, could link one of yours
+    if name_count(&file)? > 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{} has another name, as a hardlink to a file elsewhere does, so fetchloom never writes it",
+                path.display()
+            ),
+        ));
+    }
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+/// how many names the open `file` has.
+fn name_count(file: &File) -> io::Result<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(file.metadata()?.nlink())
+    }
+    #[cfg(windows)]
+    {
+        Ok(winapi_util::file::information(file)?.number_of_links())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        Ok(1)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1525,6 +1553,28 @@ pub(crate) mod tests {
         let refused = super::tag(&cache.root, |_, _| Err(denied())).unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
         assert!(!tag.exists());
+    }
+
+    /// a tag that has another name, as a hardlink a co-user of an empty shared cache put there
+    /// to a file of this user's would, is never written, so the other file stays as it was.
+    #[test]
+    fn a_tag_with_another_name_is_never_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = dir.path().join("mine.txt");
+        fs::write(&mine, b"").unwrap();
+        let root = dir.path().join("cache");
+        fs::create_dir(&root).unwrap();
+        if fs::hard_link(&mine, root.join("CACHEDIR.TAG")).is_err() {
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+        }
+
+        let refused = Cache::open(root).err().unwrap();
+
+        assert!(
+            refused.to_string().contains("has another name"),
+            "{refused}"
+        );
+        assert_eq!(fs::read(&mine).unwrap(), b"");
     }
 
     #[test]
