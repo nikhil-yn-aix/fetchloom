@@ -47,7 +47,7 @@ class HelperOptions(unittest.TestCase):
                     if command == "path":
                         arguments += ["--", "iris/data.csv"]
                     self.assertEqual(actual, Path("resolved"))
-                    self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C", "project", *arguments])
+                    self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C=project", *arguments])
 
     def test_options_are_keyword_only(self):
         with self.assertRaises(TypeError):
@@ -71,7 +71,23 @@ class HelperOptions(unittest.TestCase):
                         with self.assertRaises(fetchloom.Error) as raised:
                             fetchloom.path(name, "p", yes=True)
                 self.assertEqual(raised.exception.message, f'data.toml has no dataset called "{name}"')
-                self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C", "p", "path", "--yes", "--", name])
+                self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C=p", "path", "--yes", "--", name])
+
+    def test_a_project_folder_like_an_option_stays_the_folder(self):
+        # after -C as a word of its own, fetchloom reads -proj as its options -p, -r, -o and -j,
+        # and --help as a request for help, which answers with no path
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": {"path": "p", "project": "p"}, "warnings": []}), ""
+        )
+        for project in ["-proj", "--help"]:
+            with self.subTest(project=project):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom, "_call", return_value=response) as run:
+                        fetchloom.path("iris", project)
+                        fetchloom.sync(project)
+                for call in run.call_args_list:
+                    self.assertEqual(call.args[0][3], f"-C={project}")
+                self.assertIn(f"or run `fetchloom -C={project} add <link>` to start", fetchloom._no_project(project))
 
     def test_sync_verify_hashes_every_placed_file_as_the_cli_does(self):
         response = subprocess.CompletedProcess(
@@ -84,7 +100,7 @@ class HelperOptions(unittest.TestCase):
                         fetchloom.sync("p", names="iris", locked=True, verify=verify)
                 self.assertEqual(
                     run.call_args.args[0],
-                    ["fetchloom", "--json", "--progress", "-C", "p", "sync", *flags, "--", "iris"],
+                    ["fetchloom", "--json", "--progress", "-C=p", "sync", *flags, "--", "iris"],
                 )
 
     def test_sync_names_the_datasets_it_asks_for_after_its_flags(self):
@@ -103,7 +119,7 @@ class HelperOptions(unittest.TestCase):
                         self.assertEqual(fetchloom.sync("p", names=names, yes=True), Path("p"))
                 self.assertEqual(
                     run.call_args.args[0],
-                    ["fetchloom", "--json", "--progress", "-C", "p", "sync", "--yes", *named],
+                    ["fetchloom", "--json", "--progress", "-C=p", "sync", "--yes", *named],
                 )
 
     def test_strict_sync_fails_as_sync_strict_does(self):
@@ -143,7 +159,7 @@ class HelperOptions(unittest.TestCase):
                     self.assertEqual(fetchloom.sync("p"), Path("/work/p"))
                 with self.assertWarns(UserWarning), self.assertRaises(fetchloom.Error) as raised:
                     fetchloom.sync("p", strict=True)
-        self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C", "p", "sync", "--strict"])
+        self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C=p", "sync", "--strict"])
         self.assertEqual((raised.exception.kind, raised.exception.code), ("data.not_ready", 1))
         self.assertEqual(raised.exception.details, error["details"])
 
@@ -226,7 +242,7 @@ class GetOptions(unittest.TestCase):
         )
         self.assertEqual(actual, Path("/work/data.csv"))
         self.assertEqual(argv, [
-            "fetchloom", "--json", "--progress", "-C", ".", "get", "--output=data.csv", f"--sha256={digest}",
+            "fetchloom", "--json", "--progress", "-C=.", "get", "--output=data.csv", f"--sha256={digest}",
             "--force", "--yes", "--offline", "--", "https://example.org/iris.csv",
         ])
 
@@ -236,23 +252,23 @@ class GetOptions(unittest.TestCase):
             with self.subTest(folder=folder):
                 actual, argv = self.run_get(result, "zenodo:3608990", folder=folder)
                 self.assertEqual(actual, Path("/work/flowers"))
-                self.assertEqual(argv, ["fetchloom", "--json", "--progress", "-C", ".", "get", *flags, "--", "zenodo:3608990"])
+                self.assertEqual(argv, ["fetchloom", "--json", "--progress", "-C=.", "get", *flags, "--", "zenodo:3608990"])
 
     def test_a_home_folder_in_a_path_is_expanded_as_pandas_does(self):
         home = str(Path.home())
         result = {"file": "/f", "folder": "/d", "files": [], "items": []}
         _, argv = self.run_get(result, "https://example.org/~iris.csv", "~/data/iris.csv")
-        self.assertEqual(argv[6], f"--output={home}/data/iris.csv")
+        self.assertEqual(argv[5], f"--output={home}/data/iris.csv")
         self.assertEqual(argv[-1], "https://example.org/~iris.csv")
         _, argv = self.run_get(result, "zenodo:3608990", folder=Path("~", "flowers"))
-        self.assertEqual(argv[6], f"--dir={Path(home, 'flowers')}")
+        self.assertEqual(argv[5], f"--dir={Path(home, 'flowers')}")
         response = subprocess.CompletedProcess(
             [], 0, json.dumps({"status": "ok", "result": {"path": "p"}, "warnings": []}), ""
         )
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
             with patch.object(fetchloom, "_call", return_value=response) as run:
                 fetchloom.path("~iris", "~/project")
-        self.assertEqual(run.call_args.args[0][4:], [f"{home}/project", "path", "--", "~iris"])
+        self.assertEqual(run.call_args.args[0][3:], [f"-C={home}/project", "path", "--", "~iris"])
 
     def test_get_takes_a_path_or_a_folder_not_both(self):
         with patch.object(fetchloom, "_call") as run:
@@ -334,17 +350,17 @@ class Errors(unittest.TestCase):
             ),
             (
                 lambda: fetchloom.path("iris", "analysis"),
-                "unset FETCHLOOM_OFFLINE, then run `fetchloom --json --progress -C analysis path iris`",
-                "unset FETCHLOOM_OFFLINE, then run `fetchloom -C analysis path iris`",
+                "unset FETCHLOOM_OFFLINE, then run `fetchloom --json --progress -C=analysis path iris`",
+                "unset FETCHLOOM_OFFLINE, then run `fetchloom -C=analysis path iris`",
             ),
             (
                 lambda: fetchloom.sync(names=["irs"]),
-                "run `fetchloom --json --progress -C . sync -- iris` again",
+                "run `fetchloom --json --progress -C=. sync -- iris` again",
                 "run `fetchloom sync iris` again",
             ),
             (
                 lambda: fetchloom.sync(names=["-irs"]),
-                "did you mean `fetchloom --json --progress -C . sync -- -iris`?",
+                "did you mean `fetchloom --json --progress -C=. sync -- -iris`?",
                 "did you mean `fetchloom sync -- -iris`?",
             ),
         ]
@@ -355,7 +371,8 @@ class Errors(unittest.TestCase):
                 "warnings": [{"kind": "build.unbuilt", "message": "refused", "details": [], "help": said}],
             }
             response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
-            with self.subTest(said=said, shown=shown):
+            # as fetchloom says them on linux and macos: on windows it quotes "-C=."
+            with self.subTest(said=said, shown=shown), patch.object(fetchloom, "_WINDOWS", False):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
                     with patch.object(fetchloom, "_call", return_value=response):
                         with patch.object(fetchloom.os, "getcwd", return_value="/work/study"):
@@ -369,19 +386,19 @@ class Errors(unittest.TestCase):
         for call, typed, shown in [
             (
                 lambda: fetchloom.path("irs"),
-                "fetchloom --json --progress -C . path -- iris",
+                "fetchloom --json --progress -C=. path -- iris",
                 'fetchloom.path("iris")',
             ),
             # fetchloom repeats the command line as typed, so the folder after -C is the one given
             (
                 lambda: fetchloom.path("irs", "study", offline=True),
-                "fetchloom --json --progress -C study path --offline -- iris",
+                "fetchloom --json --progress -C=study path --offline -- iris",
                 'fetchloom.path("iris", project="study", offline=True)',
             ),
             # a name a shell needs quoted stays the command a person types
             (
                 lambda: fetchloom.path("my dat"),
-                'fetchloom --json --progress -C . path -- "my data"',
+                'fetchloom --json --progress -C=. path -- "my data"',
                 'fetchloom path "my data"',
             ),
         ]:
@@ -396,7 +413,8 @@ class Errors(unittest.TestCase):
                 "warnings": [],
             }
             response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
-            with self.subTest(typed=typed):
+            # as fetchloom says them on linux and macos: on windows it quotes "-C=."
+            with self.subTest(typed=typed), patch.object(fetchloom, "_WINDOWS", False):
                 with patch.object(fetchloom, "_program", return_value="fetchloom"):
                     with patch.object(fetchloom, "_call", return_value=response):
                         with self.assertRaises(fetchloom.Error) as raised:
@@ -433,14 +451,30 @@ class Errors(unittest.TestCase):
                 )
                 self.assertEqual((raised.help, raised.details), ("`fetchloom build clean` makes it", []))
 
+    # the -C=<folder> word the helper gives fetchloom, as fetchloom retypes it on windows
+    GIVEN = [
+        (r"C:\data\R&D", '"<name>"', [r"<name> is -C=C:\data\R&D, which no command here can hold safely"]),
+        (r"C:\data\study", '"-C=C:\\data\\study"', []),
+    ]
+
+    def test_the_working_folder_fetchloom_quotes_on_windows_leaves_the_call(self):
+        # powershell splits a bare word starting with one - at its dot, so fetchloom quotes "-C=."
+        raised = self.run_on_windows(lambda: fetchloom.path("irs"), {
+            "kind": "usage",
+            "message": 'data.toml has no dataset called "irs"',
+            "details": [],
+            "help": 'did you mean `fetchloom --json --progress "-C=." path -- iris`?',
+        })
+        self.assertEqual(raised.help, 'did you mean `fetchloom.path("iris")`?')
+
     def test_a_mistyped_name_in_a_windows_folder_is_suggested_as_the_call_that_finds_it(self):
-        for project, shown, named in self.FOLDERS:
+        for project, shown, named in self.GIVEN:
             with self.subTest(project=project):
                 raised = self.run_on_windows(lambda: fetchloom.path("irs", project), {
                     "kind": "usage",
                     "message": 'data.toml has no dataset called "irs"',
                     "details": named,
-                    "help": f"did you mean `fetchloom --json --progress -C {shown} path -- iris`?",
+                    "help": f"did you mean `fetchloom --json --progress {shown} path -- iris`?",
                 })
                 call = f"fetchloom.path(\"iris\", project={json.dumps(project)})"
                 self.assertEqual((raised.help, raised.details), (f"did you mean `{call}`?", []))
@@ -449,12 +483,12 @@ class Errors(unittest.TestCase):
         # fetchloom withholds a word holding the marks it puts around a withheld word on every
         # system, and writes the marks out in the line naming it
         project = "p\uf8e0q"
-        named = r"<name> is p\u{f8e0}q, which no command here can hold safely"
+        named = r"<name> is -C=p\u{f8e0}q, which no command here can hold safely"
         answer = {"status": "error", "warnings": [], "errors": [{
             "kind": "usage",
             "message": 'data.toml has no dataset called "irs"',
             "details": [named],
-            "help": 'did you mean `fetchloom --json --progress -C "<name>" path -- iris`?',
+            "help": 'did you mean `fetchloom --json --progress "<name>" path -- iris`?',
         }]}
         response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
         with patch.object(fetchloom, "_WINDOWS", False), patch.object(fetchloom, "_program", return_value="fetchloom"), \
@@ -471,7 +505,7 @@ class Errors(unittest.TestCase):
             "kind": "usage",
             "message": 'data.toml has no dataset called "irs"',
             "details": [],
-            "help": 'did you mean `fetchloom --json --progress -C "a -- b" path -- iris`?',
+            "help": 'did you mean `fetchloom --json --progress "-C=a -- b" path -- iris`?',
         }]}
         response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
         with patch.object(fetchloom, "_WINDOWS", False), patch.object(fetchloom, "_program", return_value="fetchloom"), \
@@ -482,9 +516,9 @@ class Errors(unittest.TestCase):
         self.assertEqual(raised.exception.help, f"did you mean `{call}`?")
 
     def test_a_windows_folder_without_a_project_is_named_as_fetchloom_names_it(self):
-        for project, shown, _ in self.FOLDERS:
+        for project, given in [(r"C:\data\R&D", '-C "<folder>"'), (r"C:\data\study", '"-C=C:\\data\\study"')]:
             with self.subTest(project=project), patch.object(fetchloom, "_WINDOWS", True):
-                self.assertIn(f"or run `fetchloom -C {shown} add <link>` to start a project in ",
+                self.assertIn(f"or run `fetchloom {given} add <link>` to start a project in ",
                               fetchloom._no_project(project))
 
     def test_a_withheld_folder_a_command_still_shows_is_named_word_for_word(self):
@@ -525,13 +559,13 @@ class Errors(unittest.TestCase):
                 f"{start}, or give -C the folder of a project outside this repository, "
                 "as in `fetchloom -C <folder> <command>`",
                 "give project= the folder that holds data.toml, "
-                f"or run `fetchloom -C elsewhere add <link>` to start a project in {elsewhere}",
+                f"or run `fetchloom -C=elsewhere add <link>` to start a project in {elsewhere}",
             ),
             (
                 lambda: fetchloom.path("processed", "elsewhere"),
                 "data.toml is not valid TOML: unclosed table, expected `]`",
-                "fix that line, then run `fetchloom --json --progress -C elsewhere path -- processed` again",
-                "fix that line, then run `fetchloom -C elsewhere path processed` again",
+                "fix that line, then run `fetchloom --json --progress -C=elsewhere path -- processed` again",
+                "fix that line, then run `fetchloom -C=elsewhere path processed` again",
             ),
         ]:
             answer = {
@@ -749,24 +783,24 @@ class Errors(unittest.TestCase):
         for call, help, shown in [
             (
                 lambda: fetchloom.sync("study", names="irs", offline=True),
-                "did you mean `fetchloom --json --progress -C study sync --offline -- iris`?",
+                "did you mean `fetchloom --json --progress -C=study sync --offline -- iris`?",
                 'did you mean `fetchloom.sync("study", names="iris", offline=True)`?',
             ),
             (
                 lambda: fetchloom.sync(names=["irs", "penguins"]),
-                "did you mean `fetchloom --json --progress -C . sync -- iris penguins`?",
+                "did you mean `fetchloom --json --progress -C=. sync -- iris penguins`?",
                 'did you mean `fetchloom.sync(names=["iris", "penguins"])`?',
             ),
             (
                 lambda: fetchloom.get("zenodo.org/records/3608990", "py-iris.csv", yes=True),
-                "did you mean `fetchloom --json --progress -C . get --output=py-iris.csv --yes -- "
+                "did you mean `fetchloom --json --progress -C=. get --output=py-iris.csv --yes -- "
                 "https://zenodo.org/records/3608990`? a link starts with https://",
                 'did you mean `fetchloom.get("https://zenodo.org/records/3608990", "py-iris.csv", yes=True)`? '
                 "a link starts with https://",
             ),
             (
                 lambda: fetchloom.get("zenodo.org/records/1?download=1", folder="out"),
-                'did you mean `fetchloom --json --progress -C . get --dir=out -- "https://zenodo.org/records/1?download=1"`?',
+                'did you mean `fetchloom --json --progress -C=. get --dir=out -- "https://zenodo.org/records/1?download=1"`?',
                 'did you mean `fetchloom.get("https://zenodo.org/records/1?download=1", folder="out")`?',
             ),
         ]:
@@ -775,7 +809,7 @@ class Errors(unittest.TestCase):
 
     def test_a_backtick_in_the_project_folder_still_gives_the_call(self):
         folder = "/work/back`id`tick"
-        help = f"did you mean `fetchloom --json --progress -C '{folder}' path -- iris`?"
+        help = f"did you mean `fetchloom --json --progress '-C={folder}' path -- iris`?"
         call = f'fetchloom.path("iris", project="{folder}")'
         self.assertEqual(self.mistyped(lambda: fetchloom.path("irs", folder), help), f"did you mean `{call}`?")
 
@@ -836,7 +870,7 @@ class Progress(unittest.TestCase):
                 with patch.object(fetchloom.subprocess, "Popen", side_effect=standing_in(child)) as popen:
                     with patch.object(fetchloom.sys, "stderr", Watched()) as shown:
                         answer = fetchloom.path("big", "p")
-        self.assertEqual(answer, Path("--json --progress -C p path -- big"))
+        self.assertEqual(answer, Path("--json --progress -C=p path -- big"))
         self.assertEqual(shown.getvalue(), "Downloading big.bin - 1.9 MiB\n")
         self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
 

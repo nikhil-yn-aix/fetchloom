@@ -326,7 +326,8 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
     each warning goes on as a python warning, and an error raises :class:`Error`. their texts
     name the ``keywords`` the caller takes in place of the flags those set.
     """
-    finished = _call([_program(), "--json", "--progress", "-C", _local(project), *arguments])
+    # one word, so a folder such as -proj or --help is never read as options
+    finished = _call([_program(), "--json", "--progress", f"-C={_local(project)}", *arguments])
     try:
         answer = json.loads(finished.stdout)
     except ValueError:
@@ -379,7 +380,7 @@ def _named(details: list[str], *texts: str | None) -> list[str]:
 
 def _still_named(details: list[str], *texts: str | None) -> list[str]:
     """``details`` without a line naming a withheld word whose placeholder neither ``texts`` nor the
-    other details still show, as once the helper takes ``-C <folder>`` out of a command."""
+    other details still show, as once the helper takes ``-C=<folder>`` out of a command."""
     kept = [detail for detail in details if not _WITHHELD.fullmatch(detail)]
     named = _named(details, *texts, *kept)
     return [detail for detail in details if detail in kept or detail in named]
@@ -397,28 +398,40 @@ def _folder_shown(folder: str, placeholders: dict[str, str]) -> str | None:
     return _shell_word(folder)
 
 
+def _given(project: str | os.PathLike[str], placeholders: dict[str, str]) -> str | None:
+    """the ``-C=<folder>`` word the helper gives fetchloom for ``project``, as fetchloom repeats it in
+    a command line it retypes: quoted as :func:`_shell_word` quotes it, or by the placeholder
+    ``placeholders`` gives it where fetchloom withholds it, or None for one withheld without one."""
+    return _folder_shown(f"-C={_local(project)}", placeholders)
+
+
 def _as_typed(text: str, project: str | os.PathLike[str], placeholders: dict[str, str]) -> str:
     """``text`` with each ``fetchloom`` command in backticks as a person types it at a terminal.
 
     fetchloom words them with the arguments the helper gave it, so each leaves out the
     ``--json`` and ``--progress`` the helper passes, the ``-C`` that names the working folder
-    when ``project`` is that folder, as ``.``, as fetchloom spells it out or by the placeholder
+    when ``project`` is that folder, as the helper gave it, as ``-C=.``, or as fetchloom names the
+    folder a run worked in before each command it suggests, spelled out or by the placeholder
     ``placeholders`` gives it, and the ``--`` the helper puts before names, unless a name after it
     starts with ``-``.
     """
+    given = _given(project, placeholders)
+    # how fetchloom names the folder a run worked in: this one, or the project given whole
+    named, whole = [
+        None if shown is None else f"-C {shown}"
+        for shown in (_folder_shown(folder, placeholders) for folder in [os.getcwd(), _local(project)])
+    ]
 
     def typed(match: re.Match[str]) -> str:
         words = match.group(1)
         for own in ["--json --progress ", "--json ", "--progress "]:
             words = words.removeprefix(own)
         if os.fspath(project) == ".":
-            for folder in [".", os.getcwd()]:
-                shown = _folder_shown(folder, placeholders)
-                if shown is not None:
-                    words = words.removeprefix(f"-C {hidden.get(shown, shown)} ")
-        # the folder after -C may hold " -- " itself, so the helper's own comes after it
-        shown = _folder_shown(_local(project), placeholders)
-        folder = "" if shown is None else f"-C {hidden.get(shown, shown)} "
+            for folder in [given, named]:
+                if folder is not None:
+                    words = words.removeprefix(f"{hidden.get(folder, folder)} ")
+        # the folder after -C= may hold " -- " itself, so the helper's own comes after it
+        folder = "" if given is None else f"{hidden.get(given, given)} "
         if not words.startswith(folder):
             folder = ""
         before, separator, names = words[len(folder):].partition(" -- ")
@@ -429,15 +442,14 @@ def _as_typed(text: str, project: str | os.PathLike[str], placeholders: dict[str
     # a folder holding a backtick would end its command's backticks early, so a mark without one
     # stands in for it while the commands are read
     hidden: dict[str, str] = {}
-    for folder in [".", os.getcwd(), _local(project)]:
-        shown = _folder_shown(folder, placeholders)
-        if shown is not None and "`" in shown and shown not in hidden:
-            hidden[shown] = f"\0{len(hidden)}\0"
-    for shown, mark in hidden.items():
-        text = text.replace(f"-C {shown} ", f"-C {mark} ")
+    for folder in [given, named, whole]:
+        if folder is not None and "`" in folder and folder not in hidden:
+            hidden[folder] = f"\0{len(hidden)}\0"
+    for folder, mark in hidden.items():
+        text = text.replace(f"{folder} ", f"{mark} ")
     text = _COMMAND.sub(typed, text)
-    for shown, mark in hidden.items():
-        text = text.replace(mark, shown)
+    for folder, mark in hidden.items():
+        text = text.replace(mark, folder)
     return text
 
 
@@ -483,12 +495,12 @@ def _meant_link(help: str | None) -> tuple[str, str] | None:
 
 
 def _typed_folder(project: str | os.PathLike[str], placeholders: dict[str, str]) -> str | None:
-    """``-C`` and ``project`` as fetchloom repeats them in a command line typed with them, with
-    the space after, nothing for the working folder, or None for a folder it withholds."""
+    """the ``-C=<folder>`` word for ``project`` as fetchloom repeats it in a command line typed with
+    it, with the space after, nothing for the working folder, or None for a folder it withholds."""
     if os.fspath(project) == ".":
         return ""
-    shown = _folder_shown(_local(project), placeholders)
-    return None if shown is None else f"-C {shown} "
+    given = _given(project, placeholders)
+    return None if given is None else f"{given} "
 
 
 def _path_call(name: str, project: str | os.PathLike[str], switches: dict[str, bool]) -> str:
@@ -579,8 +591,8 @@ def _no_project(project: str | os.PathLike[str]) -> str:
     """the help for a ``project`` that holds no data.toml, and has none above it. a folder windows
     commands cannot hold is shown as ``"<folder>"``, which the end of the help names."""
     folder = _local(project)
-    shown = _folder_shown(folder, {}) or '"<folder>"'
-    add = "fetchloom add <link>" if os.fspath(project) == "." else f"fetchloom -C {shown} add <link>"
+    given = _given(project, {}) or '-C "<folder>"'
+    add = "fetchloom add <link>" if os.fspath(project) == "." else f"fetchloom {given} add <link>"
     return (
         "give project= the folder that holds data.toml, "
         f"or run `{add}` to start a project in {os.path.abspath(folder)}"
