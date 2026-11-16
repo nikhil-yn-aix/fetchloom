@@ -1204,7 +1204,7 @@ pub(crate) struct Export {
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Push {
     /// the datasets to push, by their names in data.toml; every dataset sync places when none
-    /// is named
+    /// is named, leaving out one no sync downloaded yet
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) names: Vec<String>,
 

@@ -605,6 +605,92 @@ fn a_dataset_not_pinned_yet_is_refused() -> Result {
     Ok(())
 }
 
+/// a push of every dataset leaves out one only its source's MD5 pins, as `add --no-sync` leaves
+/// it, and pushes the rest, as it leaves out one waiting for its list: a warning names it, why,
+/// and the sync that makes it pushable. with nothing else to push, the push says no dataset can be
+/// pushed yet. `push late` still stops at it.
+#[test]
+fn a_push_of_every_dataset_leaves_out_one_its_source_alone_pins() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![
+        (
+            "/zenodo.org/api/records/101".to_owned(),
+            crate::audit::record(101, "cc-by-4.0")?,
+        ),
+        (
+            "/zenodo.org/api/records/101/files/iris.csv/content".to_owned(),
+            file(IRIS, "\"i\""),
+        ),
+        (
+            "/zenodo.org/api/records/303".to_owned(),
+            crate::audit::record(303, "cc-by-4.0")?,
+        ),
+    ])?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()
+    };
+    let root = sandbox.folder("mirror")?;
+    let mirror = root.to_string_lossy().into_owned();
+    ok(&run(&["add", "zenodo:303", "--as", "late", "--no-sync"])?)?;
+    let alone = run(&["push", "--to", &mirror, "--yes"])?;
+    let stderr = text(&alone.stderr)?;
+    assert_eq!(alone.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr
+            .contains("Ok no dataset in data.toml can be pushed yet, so there is nothing to push"),
+        "{stderr}"
+    );
+    ok(&run(&["add", "zenodo:101", "--as", "iris"])?)?;
+    for args in [
+        &["--json", "push", "--to", &*mirror, "--dry-run"][..],
+        &["--json", "push", "--to", &*mirror, "--yes"],
+    ] {
+        let pushed = run(args)?;
+        let document = json(&pushed)?;
+        assert_eq!(pushed.status.code(), Some(0), "{args:?}: {document}");
+        assert_eq!(
+            document["result"]["datasets"],
+            serde_json::json!(["iris"]),
+            "{args:?}: {document}"
+        );
+        let left: Vec<&Value> = document["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|warning| warning["kind"] == "push.left_out")
+            .collect();
+        assert_eq!(left.len(), 1, "{args:?}: {document}");
+        assert_eq!(
+            (&left[0]["message"], &left[0]["help"], &left[0]["details"]),
+            (
+                &Value::from(
+                    "late is pinned by its source's MD5 until a sync downloads it, so the push leaves it out"
+                ),
+                &Value::from(
+                    "run `fetchloom sync late` where the data can download, then push again"
+                ),
+                &serde_json::json!(["late"]),
+            ),
+            "{args:?}"
+        );
+    }
+    assert!(
+        crate::support::object(&root, IRIS).is_file(),
+        "iris's file is on the mirror"
+    );
+    let named = run(&["--json", "push", "late", "--to", &mirror])?;
+    let document = json(&named)?;
+    assert_eq!(named.status.code(), Some(1), "{document}");
+    assert_eq!(
+        document["errors"][0]["message"],
+        "late is pinned by its source's MD5 until a sync downloads it"
+    );
+    Ok(())
+}
+
 /// alice pushes to her `push_to` folder, and bob's settings make it his only mirror.
 #[test]
 fn a_cold_clone_syncs_from_what_a_push_left_with_no_other_request() -> Result {

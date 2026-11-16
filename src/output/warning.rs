@@ -117,6 +117,9 @@ pub(crate) enum Warning {
     ProjectNotRestored,
     /// `.fetchloom/owner` held no record fetchloom writes, so taking the project removed it.
     ProjectOwnerRemoved,
+    /// a push of every dataset leaves out one only its source's digests pin, until a sync
+    /// downloads it.
+    PushLeftOut,
     /// a catalog did not answer a search, or its search failed.
     SearchPartial,
     /// the settings file `settings set` or `unset` changed still holds a problem every run stops
@@ -199,6 +202,7 @@ impl Warning {
             Warning::PlaceUnportable => "place.unportable",
             Warning::ProjectNotRestored => "project.not_restored",
             Warning::ProjectOwnerRemoved => "project.owner_removed",
+            Warning::PushLeftOut => "push.left_out",
             Warning::SearchPartial => "search.partial",
             Warning::SettingsBroken => "settings.broken",
             Warning::SettingsColorsUnread => "settings.colors_unread",
@@ -286,6 +290,7 @@ mod tests {
             PlaceUnportable,
             ProjectNotRestored,
             ProjectOwnerRemoved,
+            PushLeftOut,
             SearchPartial,
             SettingsBroken,
             SettingsColorsUnread,

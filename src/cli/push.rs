@@ -22,9 +22,10 @@ use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Failed, Fault, Item, Put, Refused, State, Target, There};
 use crate::mirror::s3::{self, Pusher};
 use crate::mirror::{Location, OBJECTS, TREES};
+use crate::output::{Output, Warning};
 use crate::project::Project;
 use crate::project::lock::archives::Archive;
-use crate::project::lock::{Lock, LockedFile};
+use crate::project::lock::{self, Lock, LockedFile, Stated};
 use crate::project::manifest::Manifest;
 use crate::source::Access;
 use crate::stop::Stop;
@@ -277,7 +278,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     let lock = project.lock()?;
     let datasets = pushed(context, &manifest, &args.names, lock.as_ref())?;
     if datasets.is_empty() {
-        context.output.done("Ok", &everything(&datasets));
+        context.output.done("Ok", &nothing(&manifest));
         let target = match target {
             Location::Folder(root) => reached(root).display().to_string(),
             other => other.to_string(),
@@ -501,8 +502,9 @@ fn reached(target: PathBuf) -> PathBuf {
 }
 
 /// the datasets a push of `names` pushes, every one when it names none: of every one, those
-/// waiting for their lists in `lock` are left out with a warning, as a sync places the rest, while
-/// one named waits, as for every command that needs its files; one not downloaded yet waits too.
+/// waiting for their lists in `lock` and those not downloaded yet are left out with a warning, as
+/// a sync places the rest, while one named stops the push, as for every command that needs its
+/// files.
 fn pushed(
     context: &Context,
     manifest: &Manifest,
@@ -514,12 +516,37 @@ fn pushed(
         if names.is_empty() {
             let waiting: Vec<_> = lock.still_waiting().cloned().collect();
             super::project::tell_waiting(&context.output, &waiting, &Scope::All);
-            datasets.retain(|name| lock.waits(name).is_none());
+            let unfetched: Vec<&Stated> = lock
+                .stated
+                .iter()
+                .filter(|stated| datasets.iter().any(|name| name == stated.name()))
+                .collect();
+            tell_unfetched(&context.output, &unfetched);
+            datasets.retain(|name| lock.waits(name).is_none() && lock.stated(name).is_none());
         }
         lock.refuse_waiting(datasets.iter().map(String::as_str))?;
         lock.refuse_stated(datasets.iter().map(String::as_str))?;
     }
     Ok(datasets)
+}
+
+/// warns that a push of every dataset leaves out `unfetched`, which only what their sources state
+/// pins until a sync downloads them, naming that sync.
+fn tell_unfetched(output: &Output, unfetched: &[&Stated]) {
+    let Some(error) = lock::stated_error(unfetched) else {
+        return;
+    };
+    let names: Vec<&str> = unfetched.iter().map(|stated| stated.name()).collect();
+    let them = if names.len() == 1 { "it" } else { "them" };
+    output.warn_detailed(
+        Warning::PushLeftOut,
+        &format!("{}, so the push leaves {them} out", error.message),
+        Some(&format!(
+            "run `{}` where the data can download, then push again",
+            super::project::command(&format!("sync {}", names.join(" ")))
+        )),
+        &names,
+    );
 }
 
 /// the datasets a push sends: `names`, else every dataset in data.toml.
@@ -1747,6 +1774,16 @@ fn tell_dry(context: &Context, planned: &Planned, report: &Report) {
     let nothing = report.copied == 0 && report.trees == 0 && !report.started && download.is_empty();
     let everything = everything(&planned.datasets);
     super::project::dry_run_done(output, nothing.then_some(everything.as_str()));
+}
+
+/// the closing line of a push with nothing to push: data.toml names no dataset, or the push leaves
+/// out every one it names.
+fn nothing(manifest: &Manifest) -> String {
+    if manifest.datasets.is_empty() {
+        everything(&[])
+    } else {
+        "no dataset in data.toml can be pushed yet, so there is nothing to push".to_owned()
+    }
 }
 
 /// the closing line of a push of `datasets`: every file they need is on the mirror.
