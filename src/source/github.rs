@@ -411,8 +411,8 @@ impl Repo {
                         &format!(
                             "it gives \"{}\" a kind of entry git has not: {} {}",
                             entry.path.escape_debug(),
-                            entry.kind,
-                            entry.mode
+                            entry.kind.escape_debug(),
+                            entry.mode.escape_debug()
                         ),
                     )
                 })?;

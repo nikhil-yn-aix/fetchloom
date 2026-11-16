@@ -72,15 +72,7 @@ impl Release {
     /// a pasted link to a release's page on another gitlab server, over https, known by gitlab's
     /// `/-/releases/` in its path alone. it is read after every other source's links.
     pub(super) fn from_server_link(url: &Url) -> Option<Release> {
-        let host = url.host_str()?;
-        if url.scheme() != "https" || host == GITLAB_COM {
-            return None;
-        }
-        let named = match url.port() {
-            Some(port) => format!("{host}:{port}"),
-            None => host.to_owned(),
-        };
-        Release::from_page(Some(server(&named)?), url)
+        Release::from_page(Some(server_of(url)?), url)
     }
 
     /// the release a page of `url`'s project names: `/-/releases/<tag>` or the newest release's
@@ -322,18 +314,10 @@ impl Project {
     /// the project whose page `url` is a page of, `parts` being its path's parts before gitlab's
     /// `-`: on gitlab.com, or on another server over https.
     pub(super) fn of_page(url: &Url, parts: &[&str]) -> Option<Project> {
-        let host = url.host_str()?;
-        if host == GITLAB_COM {
+        if url.host_str()? == GITLAB_COM {
             return Project::named(None, parts);
         }
-        if url.scheme() != "https" {
-            return None;
-        }
-        let named = match url.port() {
-            Some(port) => format!("{host}:{port}"),
-            None => host.to_owned(),
-        };
-        Project::named(Some(server(&named)?), parts)
+        Project::named(Some(server_of(url)?), parts)
     }
 
     /// the origin of another server, where every request for the project goes; none for
@@ -512,8 +496,8 @@ impl Project {
                         &format!(
                             "it gives \"{}\" a kind of entry git has not: {} {}",
                             entry.path.escape_debug(),
-                            entry.kind,
-                            entry.mode
+                            entry.kind.escape_debug(),
+                            entry.mode.escape_debug()
                         ),
                     )
                 })?;
@@ -579,6 +563,20 @@ impl Project {
 /// port when that is not 443, as `auth login` saves a key for it.
 fn server(text: &str) -> Option<String> {
     crate::auth::site::host(text)
+}
+
+/// the server another gitlab server's link names, over https: its host, with its port when that
+/// is not 443; none for gitlab.com.
+fn server_of(url: &Url) -> Option<String> {
+    let host = url.host_str()?;
+    if url.scheme() != "https" || host == GITLAB_COM {
+        return None;
+    }
+    let named = match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    };
+    server(&named)
 }
 
 /// the command that saves a token for the gitlab server at `host`, for it alone.
