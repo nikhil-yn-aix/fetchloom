@@ -174,6 +174,9 @@ pub(crate) enum Event {
     /// the bytes kept are no longer as the download left them on this disk, as when they no
     /// longer hash as recorded or were made read-only, so it starts over from the first byte.
     Spoiled,
+    /// the file's link is gone, so it is looked up again and comes from a new link, which goes on
+    /// from nothing kept of the old one: no later run asks the old link again.
+    Moved,
     /// an earlier run kept `bytes` of the file, which the download goes on from when the server
     /// allows it, and what its record says a later run can do with them.
     Kept {
@@ -579,6 +582,7 @@ impl Reach {
             Event::Waiting
             | Event::Lockless
             | Event::Spoiled
+            | Event::Moved
             | Event::Kept { .. }
             | Event::WebPage { .. }
             | Event::Named(_)

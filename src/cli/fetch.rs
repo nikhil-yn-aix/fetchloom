@@ -675,6 +675,24 @@ impl<'a> Watch<'a> {
         }
     }
 
+    /// says once that what the download holds cannot be continued, since its link is gone, and
+    /// promises none of it to a later run, which gets the file from its new link.
+    fn moved(&self) {
+        let held = self.held.bytes.load(Ordering::Relaxed);
+        if held > 0 && !self.restarted.swap(true, Ordering::Relaxed) {
+            self.output.mark(
+                "Restarting",
+                &format!(
+                    "{} · the {} downloaded so far cannot be continued, since its link is gone",
+                    self.job.label,
+                    units::size(held)
+                ),
+            );
+        }
+        self.held.keep(0, Resumable::Maybe);
+        self.earlier.store(0, Ordering::Relaxed);
+    }
+
     /// stops a download of no stated size once `received` passes the room it may take, before
     /// writing the bytes that just arrived, so the disk is left near full and the budget kept. a
     /// person at a terminal may let it go on. --yes goes on past the budget, as a yes there does,
@@ -921,6 +939,7 @@ impl<'a> Watch<'a> {
             }
             Event::Lockless => self.held.lockless.store(true, Ordering::Relaxed),
             Event::Spoiled => self.spoiled.store(true, Ordering::Relaxed),
+            Event::Moved => self.moved(),
             // no new bar: the download may still wait for a free slot. a lone download's bar,
             // already showing, says what it goes on from
             Event::Kept { bytes, resumable } => {
@@ -2878,6 +2897,53 @@ mod tests {
             watch.bar().told().as_deref(),
             Some("big/big.bin · 900 B kept from an earlier run")
         );
+    }
+
+    /// a download whose link is gone says once that what it holds cannot be continued, and a stop
+    /// then promises none of it, since a later run gets the file from its new link.
+    #[test]
+    fn a_link_gone_promises_its_bytes_to_no_later_run() {
+        let job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/gone.csv").unwrap()),
+            label: "iris/data.csv".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        );
+        let (overall, approval, held) = (overall(), Approval::new(u64::MAX), Held::default());
+        let watch = Watch::new(&job, &output, &overall, &approval, true, &held);
+        let earlier = Event::Kept {
+            bytes: 1700,
+            resumable: Resumable::Maybe,
+        };
+        watch.on(&earlier).unwrap();
+        watch.on(&Event::Moved).unwrap();
+        let restarting: Vec<String> = output
+            .said()
+            .into_iter()
+            .filter(|line| line.contains("Restarting"))
+            .collect();
+        assert_eq!(
+            restarting,
+            [
+                " Restarting iris/data.csv - the 1.7 KiB downloaded so far cannot be continued, since its link is gone"
+            ]
+        );
+        drop(watch);
+        let stopped = kept(Error::new(Kind::Interrupted, "stopped"), &[held]);
+        assert!(stopped.details.is_empty(), "{:?}", stopped.details);
     }
 
     /// a resume that drops a kept range that no longer hashes as recorded still goes on from the

@@ -61,6 +61,7 @@ pub(super) async fn recover(
     if failed.kind != Kind::ReferenceUnresolved {
         return Err(failed);
     }
+    on(Event::Moved)?;
     // data.lock's link may hold a token, so messages show it masked
     let resolved = crate::shown::mask_query(&again.resolved);
     let listing = match listings.get(net, &again.resolved).await {
@@ -193,6 +194,43 @@ mod tests {
             !format!("{} {:?}", error.message, error.details).contains("s3cr3t"),
             "{error:?}"
         );
+    }
+
+    /// bytes an earlier run kept of the dead link come from a link no later run downloads from
+    /// either, so once the file is looked up again, a stop promises none of them.
+    #[test]
+    fn a_dead_link_s_kept_bytes_are_promised_to_no_later_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let net = context.net();
+        let job = Job {
+            fetch: Fetch::new(url::Url::parse("https://example.org/gone.csv").unwrap()),
+            label: "iris/data.csv".to_owned(),
+            dataset: Some("iris".to_owned()),
+            again: Some(Again {
+                resolved: "zenodo:3608990".to_owned(),
+                path: "data.csv".to_owned(),
+                alone: true,
+            }),
+        };
+        let moved = std::sync::atomic::AtomicBool::new(false);
+        let on = |event: Event| {
+            if let Event::Moved = event {
+                moved.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            Ok(())
+        };
+        let _ = block_on(recover(
+            &net,
+            &cache,
+            &context.output,
+            &Listings::default(),
+            &job,
+            Error::new(Kind::ReferenceUnresolved, "recorded URL returned 404"),
+            &on,
+        ));
+        assert!(moved.into_inner());
     }
 
     #[test]
