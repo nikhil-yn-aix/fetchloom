@@ -133,8 +133,10 @@ pub(crate) struct Response {
     pub(crate) status: u16,
     /// where the answer came from, after redirects.
     pub(crate) url: Url,
-    /// the `rel="next"` target of a `Link` header, for listings sent in pages.
-    pub(crate) next: Option<Url>,
+    /// the `rel="next"` target of a `Link` header, for listings sent in pages: the next page on
+    /// the origin that answered, or the refusal of one named on another, which a listing never
+    /// asks, since that host would get this one's request and its key.
+    pub(crate) next: Option<Result<Url, Error>>,
     /// how many items a listing sent in parts holds in all, as a `Content-Range` header counts
     /// them: 47 for `items 0-46/47`.
     pub(crate) total: Option<u64>,
@@ -175,6 +177,16 @@ impl Response {
 
     pub(crate) fn text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.body)
+    }
+
+    /// the next page of a listing sent in pages, none after its last.
+    ///
+    /// # Errors
+    ///
+    /// the answer named its next page on another origin, which fetchloom never asks, so the
+    /// listing stops rather than end short.
+    pub(crate) fn next_page(&self) -> Result<Option<Url>, Error> {
+        self.next.clone().transpose()
     }
 }
 
@@ -476,24 +488,27 @@ impl Net {
             .as_ref()
             .filter(|endpoint| endpoint.holds(url))
             .cloned();
-        let next = response
+        let answered = super::answered(&response);
+        let named = response
             .headers()
             .get_all(header::LINK)
             .iter()
             .filter_map(|value| value.to_str().ok())
             .filter_map(next_link)
-            .find_map(|link| response.url().join(&link).ok());
+            .find_map(|link| answered.join(&link).ok());
         // a next page stays with the server that named it, so a listing cannot send the next
-        // request, with that host's key, to another host. a mirror's page is the hub's page it
-        // stands for, which goes to the mirror again, as a hub's page it passed on does
-        let next = match &endpoint {
-            Some(endpoint) => next.and_then(|next| {
-                endpoint
-                    .written(&next)
-                    .or_else(|| endpoint.rewrite(&next).map(|_| next))
-            }),
-            None => next.filter(|next| next.origin() == response.url().origin()),
-        };
+        // request, with that host's key, to another host, and a page named elsewhere ends the
+        // listing in an error, never short. a mirror's page is the hub's page it stands for, which
+        // goes to the mirror again, as a hub's page it passed on does
+        let next = named.map(|named| {
+            let kept = match &endpoint {
+                Some(endpoint) => endpoint
+                    .written(&named)
+                    .or_else(|| endpoint.rewrite(&named).map(|_| named.clone())),
+                None => (named.origin() == answered.origin()).then(|| named.clone()),
+            };
+            kept.ok_or_else(|| elsewhere_next(&answered, &named))
+        });
         let total = text(header::CONTENT_RANGE).as_deref().and_then(items_total);
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let remaining = text(header::HeaderName::from_static("x-ratelimit-remaining"))
@@ -691,6 +706,23 @@ fn items_total(value: &str) -> Option<u64> {
     total.trim().parse().ok()
 }
 
+/// the refusal of `next`, the next page of a listing `answered` named on another origin.
+fn elsewhere_next(answered: &Url, next: &Url) -> Error {
+    let (here, there) = (
+        answered.origin().ascii_serialization(),
+        next.origin().ascii_serialization(),
+    );
+    Error::new(
+        Kind::NetworkRefused,
+        format!(
+            "{here} named its next page on {there}; fetchloom follows a listing only on the host that answered, so it stops rather than pin part of it"
+        ),
+    )
+    .help(format!(
+        "a server behind a proxy may name its pages on another address than the one asked: if {there} is the server's own, use links on it; otherwise its owner can correct the address it writes"
+    ))
+}
+
 /// the target of the `rel="next"` link in a `Link` header.
 fn next_link(value: &str) -> Option<String> {
     link_fields(value, ',').find_map(|link| {
@@ -782,26 +814,44 @@ mod tests {
         net
     }
 
-    /// a next page on another origin than the page that named it is no next page.
+    /// a next page on another origin than the page that named it, by its scheme, its host or
+    /// its port, is never asked, and a listing that reads it stops with both origins named,
+    /// rather than end short.
     #[test]
-    fn a_next_page_on_another_origin_is_dropped() {
-        let (url, _) = serve(vec![reply(
-            "200 OK",
-            &[(
-                "Link",
-                "<https://api.github.com/repos/org/private/contents/>; rel=next",
-            )],
-            b"[]",
-        )]);
-        let net = net(&url);
-        let response = block_on(net.get(&url)).unwrap();
-        assert_eq!(response.status, 200);
-        assert_eq!(response.next, None);
+    fn a_next_page_on_another_origin_is_refused_and_never_asked() {
+        for elsewhere in [
+            "https://api.github.com/repos/org/private/contents/",
+            "https://127.0.0.1/next",
+            "http://127.0.0.1:1/next",
+        ] {
+            let (url, asked) = serve(vec![reply(
+                "200 OK",
+                &[("Link", &format!("<{elsewhere}>; rel=next"))],
+                b"[]",
+            )]);
+            let net = net(&url);
+            let response = block_on(net.get(&url)).unwrap();
+            assert_eq!(response.status, 200);
+            let error = response.next_page().unwrap_err();
+            assert_eq!(error.kind, Kind::NetworkRefused, "{elsewhere}");
+            let there = Url::parse(elsewhere)
+                .unwrap()
+                .origin()
+                .ascii_serialization();
+            assert_eq!(
+                error.message,
+                format!(
+                    "{} named its next page on {there}; fetchloom follows a listing only on the host that answered, so it stops rather than pin part of it",
+                    url.origin().ascii_serialization()
+                )
+            );
+            assert_eq!(asked.lock().unwrap().len(), 1, "{elsewhere}");
+        }
     }
 
     /// a listing through the hugging face mirror goes on with the hub's next page, whether the
-    /// mirror names it at its own address or passes the hub's on, and never elsewhere; hugging
-    /// face's token stays home.
+    /// mirror names it at its own address or passes the hub's on, and stops at one elsewhere;
+    /// hugging face's token stays home.
     #[test]
     fn a_mirrors_next_page_is_the_hubs_next_page() {
         let first =
@@ -818,6 +868,7 @@ mod tests {
             ("<https://elsewhere.example/api?cursor=2>; rel=next", None),
             ("</other/api?cursor=2>; rel=next", None),
         ] {
+            // a page named neither on the hub nor below the mirror stops the listing
             let (url, asked) = serve(vec![reply("200 OK", &[("Link", link)], b"[]")]);
             let endpoint = crate::net::Endpoint::at(&format!("{url}hf"));
             let hf = |name: &str| (name == "HF_TOKEN").then(|| "hf-test".into());
@@ -835,7 +886,18 @@ mod tests {
             .with_hf_endpoint(Some(endpoint.clone()));
             let response = block_on(net.get(&first)).unwrap();
             assert_eq!(response.endpoint, Some(endpoint), "{link}");
-            assert_eq!(response.next.as_ref().map(Url::as_str), next, "{link}");
+            match next {
+                Some(wanted) => assert_eq!(
+                    response.next_page().unwrap().as_ref().map(Url::as_str),
+                    Some(wanted),
+                    "{link}"
+                ),
+                None => assert_eq!(
+                    response.next_page().unwrap_err().kind,
+                    Kind::NetworkRefused,
+                    "{link}"
+                ),
+            }
             let heads = asked.lock().unwrap();
             assert!(
                 heads[0].starts_with("GET /hf/api/datasets/x/y/tree/c?recursive=true "),
@@ -863,7 +925,7 @@ mod tests {
         assert_eq!(response.status, 200);
         assert_eq!(response.url, url.join("listing/page1").unwrap());
         assert_eq!(
-            response.next,
+            response.next_page().unwrap(),
             Some(url.join("listing/page2?cursor=abc").unwrap())
         );
         let listing: serde_json::Value = response.json().unwrap();
@@ -1091,7 +1153,10 @@ mod tests {
             b"[]",
         )]);
         let response = block_on(net(&url).get(&url)).unwrap();
-        assert_eq!(response.next, Some(url.join("page2").unwrap()));
+        assert_eq!(
+            response.next_page().unwrap(),
+            Some(url.join("page2").unwrap())
+        );
     }
 
     #[test]

@@ -150,7 +150,7 @@ impl Recorded {
             .answers
             .get_mut(&key)
             .unwrap_or_else(|| panic!("record {url} before its next page"));
-        answer.next = Some(Url::parse(next).unwrap());
+        answer.next = Some(Ok(Url::parse(next).unwrap()));
         self
     }
 

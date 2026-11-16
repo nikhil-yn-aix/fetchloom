@@ -122,7 +122,11 @@ fn response_bytes(response: &Response) -> usize {
     std::mem::size_of::<Response>()
         + response.body.capacity()
         + response.url.as_str().len()
-        + response.next.as_ref().map_or(0, |url| url.as_str().len())
+        + response
+            .next
+            .as_ref()
+            .and_then(|next| next.as_ref().ok())
+            .map_or(0, |url| url.as_str().len())
         + response.region.as_ref().map_or(0, String::len)
         + keyed_bytes(response.keyed.as_ref())
         + authorized_bytes(response.authorized.as_ref())

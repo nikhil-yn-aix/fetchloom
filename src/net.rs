@@ -993,6 +993,8 @@ impl Net {
                     response.extensions_mut().insert(Carried);
                 }
                 response.extensions_mut().insert(Answering(answering));
+                #[cfg(debug_assertions)]
+                response.extensions_mut().insert(Written(written_hop));
                 return Ok(response);
             };
             written_hop = written_next;
@@ -1475,6 +1477,22 @@ async fn unanswered(
 /// a redirect may name the download even when the final storage response does not.
 #[derive(Clone, Debug)]
 struct RedirectName(String);
+
+/// the link an answer came from as written, before a test server stood in for its host, which
+/// links the answer names are read against, as on the host itself.
+#[cfg(debug_assertions)]
+#[derive(Clone, Debug)]
+struct Written(Url);
+
+/// the link `response` came from as written: its own, but in debug builds the one a test server
+/// stood in for.
+fn answered(response: &reqwest::Response) -> Url {
+    #[cfg(debug_assertions)]
+    if let Some(Written(written)) = response.extensions().get::<Written>() {
+        return written.clone();
+    }
+    response.url().clone()
+}
 
 /// marks an answer whose request, or a hop before it, carried a credential of this machine: a
 /// saved key, a `.netrc` login, a site's sign-in or the cookies it set, an S3 signature or a

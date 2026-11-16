@@ -1061,6 +1061,91 @@ fn a_listed_file_its_server_has_no_bytes_for_is_left_out_by_name() -> Result {
     Ok(())
 }
 
+/// gitlab lists a folder in pages, each naming the next in a `Link` header: a page on the host
+/// that answered is asked, and the folder pins whole; one on any other origin, by its scheme, its
+/// host or its port, stops the add with both named, and is never asked, rather than pin part of
+/// the folder.
+#[test]
+fn a_listings_next_page_on_another_origin_stops_the_add() -> Result {
+    let sandbox = Sandbox::new()?;
+    let api = "gitlab.com/api/v4/projects/lab%2Fgroup%2Fsurvey";
+    let query = format!("path=data&ref={FIRST}&recursive=true&per_page=100&pagination=keyset");
+    let first = format!("/{api}/repository/tree?{query}");
+    let second = format!("/{api}/repository/tree?page_token=b2Zm&{query}");
+    let entry = |path: &str, bytes: &[u8]| serde_json::json!({"id": blob_id(bytes), "name": path.rsplit('/').next(), "type": "blob", "path": path, "mode": "100644"});
+    let paged = |origin: &str| -> Result<Vec<(String, Vec<Part>)>> {
+        let link = format!(
+            "<{origin}{}>; rel=\"next\"",
+            &second[1 + "gitlab.com".len()..]
+        );
+        Ok(vec![(
+            first.clone(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/json"), ("Link", &link)],
+                &serde_json::to_vec(&serde_json::json!([
+                    {"id": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "name": "2020", "type": "tree", "path": "data/2020", "mode": "040000"},
+                    entry("data/rows.csv", ROWS)
+                ]))?,
+            ),
+        )])
+    };
+    let mut served = vec![
+        (
+            format!("/{api}/repository/commits/main"),
+            answer(&serde_json::json!({"id": FIRST, "short_id": &FIRST[..8]}))?,
+        ),
+        (
+            second.clone(),
+            answer(&serde_json::json!([entry("data/2020/notes.txt", NOTES)]))?,
+        ),
+    ];
+    for (path, bytes) in [("data/rows.csv", ROWS), ("data/2020/notes.txt", NOTES)] {
+        served.push((
+            format!("/gitlab.com/lab/group/survey/-/raw/{FIRST}/{path}"),
+            file(bytes, "\"git\""),
+        ));
+    }
+    let routes = Routes::start(served)?;
+    let link = "https://gitlab.com/lab/group/survey/-/tree/main/data";
+    for origin in [
+        "http://gitlab.com",
+        "https://gitlab.com:8443",
+        "https://elsewhere.example",
+    ] {
+        routes.change(paged(origin)?);
+        let asked = routes.targets().len();
+        let folder = sandbox.folder(&format!("other-{}", origin.len()))?;
+        let output = sandbox
+            .command_in(&folder, &["add", link, "--as", "survey"])
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(10), "{origin}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "error: https://gitlab.com named its next page on {origin}; fetchloom follows a listing only on the host that answered, so it stops rather than pin part of it\n"
+            )),
+            "{origin}: {stderr}"
+        );
+        assert!(!folder.join("data.toml").exists(), "{origin}");
+        assert!(
+            routes.targets()[asked..]
+                .iter()
+                .all(|target| !target.contains("page_token")),
+            "{origin}: {:?}",
+            &routes.targets()[asked..]
+        );
+    }
+    routes.change(paged("https://gitlab.com")?);
+    ok(&run(&sandbox, &routes, &["add", link, "--as", "survey"])?)?;
+    assert_eq!(
+        placed(&sandbox.work().join("data/survey"))?,
+        ["2020/notes.txt", "rows.csv"]
+    );
+    Ok(())
+}
+
 /// a folder on gitlab.com, pasted with the `ref_type` gitlab's own links carry, is pinned at the
 /// commit its branch names from a listing in pages; a teammate's sync asks no api.
 #[test]

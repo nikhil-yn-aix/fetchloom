@@ -559,7 +559,7 @@ impl Project {
                 ));
             }
             // a page goes on only to the next page of this listing, on the same server
-            next = match response.next {
+            next = match response.next_page()? {
                 Some(page) if page.origin() == start.origin() && page.path() == start.path() => {
                     Some(page)
                 }

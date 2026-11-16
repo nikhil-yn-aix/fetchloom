@@ -93,7 +93,10 @@ fn listing_urls_and_page_metadata_stay_separate() {
                 response.text(),
                 format!("/listing?{}", page.query().unwrap())
             );
-            assert_eq!(response.next, Some(url.join("next?cursor=more").unwrap()));
+            assert_eq!(
+                response.next_page().unwrap(),
+                Some(url.join("next?cursor=more").unwrap())
+            );
         }
     });
     assert_eq!(asked.lock().unwrap().len(), 2);
