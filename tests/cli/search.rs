@@ -923,28 +923,47 @@ fn a_local_path_or_name_is_refused_without_a_request() -> Result {
 }
 
 /// a name of a folder here never goes out as search words in the quotes a shell kept, and, where `\`
-/// is no separator, a windows-style path to it gets the near name with `/`.
+/// is no separator, a windows-style path to it gets the near name with `/`. a path pasted with its
+/// own quotes, as windows' copy as path gives one inside a string, is told so, with the line meant.
 #[test]
 fn a_folder_here_in_quotes_or_backslashes_never_reaches_a_catalog() -> Result {
     let sandbox = Sandbox::new()?;
     let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
     std::fs::create_dir_all(sandbox.work().join("flowers"))?;
-    let mut cases = vec![(
-        "\"flowers\"",
-        "\"flowers\" is a folder here, so fetchloom did not search for it",
-        "run `fetchloom add ./flowers` to pin it, or `fetchloom search flowers` to search",
-    )];
+    let whole = sandbox.work().join("flowers").display().to_string();
+    let quoted_whole = format!("\"{whole}\"");
+    let pasted = |path: &str| {
+        (
+            format!("the path {path} came with quotes around it"),
+            format!(
+                "quotes typed inside a quoted word stay in it: did you mean `fetchloom --json add {path}`?"
+            ),
+        )
+    };
+    let (relative, relative_help) = pasted("./flowers");
+    let (absolute, absolute_help) = pasted(&whole);
+    let mut cases = vec![
+        (
+            "\"flowers\"",
+            "\"flowers\" is a folder here, so fetchloom did not search for it".to_owned(),
+            "run `fetchloom add ./flowers` to pin it, or `fetchloom search flowers` to search"
+                .to_owned(),
+        ),
+        ("'./flowers'", relative, relative_help),
+    ];
+    // a windows path may need quotes of its own in the line meant
     if cfg!(not(windows)) {
         cases.extend([
+            (quoted_whole.as_str(), absolute, absolute_help),
             (
                 ".\\flowers",
-                "there is no file or folder \".\\flowers\"",
-                "did you mean `fetchloom --json add ./flowers`?",
+                "there is no file or folder \".\\flowers\"".to_owned(),
+                "did you mean `fetchloom --json add ./flowers`?".to_owned(),
             ),
             (
                 "flowers\\",
-                "there is no file or folder \"flowers\\\" here",
-                "did you mean `fetchloom --json add ./flowers`? or run `fetchloom search flowers` to search for these words",
+                "there is no file or folder \"flowers\\\" here".to_owned(),
+                "did you mean `fetchloom --json add ./flowers`? or run `fetchloom search flowers` to search for these words".to_owned(),
             ),
         ]);
     }

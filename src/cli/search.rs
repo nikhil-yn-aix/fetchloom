@@ -101,6 +101,28 @@ pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
     let typed = text.trim();
     // quotes a shell passed on, as `'"flowers"'` does, are no part of a name here
     let unquoted = typed.trim_matches(['"', '\'']);
+    // a path pasted with its own quotes, as windows' copy as path gives one inside a string,
+    // names no file with them
+    if unquoted != typed
+        && !unquoted.is_empty()
+        && (local::is_path(unquoted) || local::reads_as_path(unquoted))
+    {
+        if !pins {
+            return Err(local::refused(unquoted));
+        }
+        let line = super::meant(
+            &[text],
+            &[unquoted],
+            super::project::command(&format!("add {}", super::shell_word(unquoted))),
+        );
+        return Err(Error::new(
+            Kind::Usage,
+            format!("the path {unquoted} came with quotes around it"),
+        )
+        .help(format!(
+            "quotes typed inside a quoted word stay in it: did you mean `{line}`?"
+        )));
+    }
     let word =
         if unquoted != typed && !unquoted.is_empty() && local::here(unquoted, &here).is_some() {
             unquoted
