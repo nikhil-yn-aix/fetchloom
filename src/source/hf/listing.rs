@@ -149,6 +149,7 @@ mod tests {
             .unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         };
         assert_eq!(
             listing.files,

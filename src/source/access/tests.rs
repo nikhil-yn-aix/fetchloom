@@ -76,6 +76,7 @@ fn a_file_linked_outside_its_sources_files_is_refused() {
             url: Url::parse(link).unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }],
         unavailable: Vec::new(),
         warnings: Vec::new(),

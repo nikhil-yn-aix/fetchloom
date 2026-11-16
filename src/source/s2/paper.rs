@@ -144,6 +144,7 @@ impl Paper {
                 url: pdf_url,
                 named_by_server: false,
                 etag: None,
+                blob: None,
             }],
             unavailable: Vec::new(),
             warnings: Vec::new(),

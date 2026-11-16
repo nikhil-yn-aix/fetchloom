@@ -802,11 +802,7 @@ impl<'a> Loop<'a> {
             .map(|((draft, _), _)| *draft)
             .collect();
         let batch = self.download_with(jobs, ahead).await?;
-        for ((draft, file), fetched) in slots.into_iter().zip(&batch.fetched) {
-            if let Some(file) = file {
-                drafts[draft].learn(file, fetched, &self.cache);
-            }
-        }
+        self.learn_fetched(&mut drafts, slots, &batch.fetched)?;
         if let Some((digests, started)) = batch.ahead {
             *self.ahead.lock().unwrap_or_else(PoisonError::into_inner) = Some(Ahead {
                 digests,
@@ -836,6 +832,31 @@ impl<'a> Loop<'a> {
         let (mut lock, kept) = settled(&others, kept, drafted);
         let gone = carried.back(&mut lock);
         Ok((lock, Before::new(existed, others, gone, kept, renamed)))
+    }
+
+    /// tells each draft what the download of its file in `slots` fetched, then records the blobs
+    /// of git repositories those downloads brought.
+    fn learn_fetched(
+        &self,
+        drafts: &mut [Draft],
+        slots: Vec<(usize, Option<usize>)>,
+        fetched: &[Fetched],
+    ) -> Result<(), Error> {
+        let mut learned = Vec::new();
+        for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
+            if let Some(file) = file {
+                drafts[draft].learn(file, fetched, &self.cache);
+                if let Some(blob) = drafts[draft].blob(file) {
+                    learned.push((blob.clone(), fetched.digest, fetched.size));
+                }
+            }
+        }
+        draft::remember_blobs(
+            &self.cache,
+            &learned,
+            self.context.threads,
+            &self.context.stop,
+        )
     }
 
     /// the lock [`Loop::relock`] would make, found without downloading or unpacking, and that work;
@@ -968,7 +989,7 @@ impl<'a> Loop<'a> {
             let entry = &manifest.datasets[&name];
             let source = &entry.source;
             self.note_unlisted(&name, source, &listing);
-            let draft = Draft::new(
+            let mut draft = Draft::new(
                 &name,
                 entry,
                 source,
@@ -977,6 +998,7 @@ impl<'a> Loop<'a> {
                 upgrade.includes(&name),
                 &self.cache,
             )?;
+            draft.recall_blobs(&self.cache, self.context.threads, &self.context.stop)?;
             // an upgrade of an unchanged entry told its hint when it was new
             if others
                 .get(&name)
@@ -3472,6 +3494,7 @@ mod tests {
             url: Url::parse(&format!("https://example.org/{index}.csv")).unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         };
         let listing = Listing {
             within: Vec::new(),

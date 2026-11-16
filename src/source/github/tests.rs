@@ -44,6 +44,7 @@ fn lists_a_releases_files_with_the_sha256_github_states() {
             .unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }
     );
     assert!(listing.files.iter().all(|file| file.sha256.is_some()));

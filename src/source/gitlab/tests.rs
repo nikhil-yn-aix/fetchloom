@@ -44,6 +44,7 @@ fn lists_a_releases_links_at_the_paths_the_release_gives_them() {
             .unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }
     );
     assert_eq!(
@@ -365,6 +366,7 @@ fn a_release_on_another_server_is_listed_from_its_own_api() {
             .unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }]
     );
     assert_eq!(recorded.asked(), [DAV1D]);

@@ -236,6 +236,7 @@ impl Dandiset {
             url,
             named_by_server: false,
             etag: None,
+            blob: None,
         }))
     }
 

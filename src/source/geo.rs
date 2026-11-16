@@ -411,6 +411,7 @@ fn remote(path: String, url: Url) -> Remote {
         url,
         named_by_server: false,
         etag: None,
+        blob: None,
     }
 }
 

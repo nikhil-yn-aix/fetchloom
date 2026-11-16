@@ -965,6 +965,7 @@ fn listing(list: &List, entries: Vec<Entry>, folder: Option<&Url>) -> Result<Lis
             url,
             named_by_server: false,
             etag: None,
+            blob: None,
         });
     }
     Ok(Listing {

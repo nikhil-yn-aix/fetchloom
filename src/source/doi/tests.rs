@@ -132,6 +132,7 @@ fn bare_prefixed_and_web_dois_return_the_complete_dataset() {
                     .unwrap(),
                 named_by_server: false,
                 etag: None,
+                blob: None,
             }]
         );
         assert_eq!(recorded.asked(), [HANDLE, RECORD]);

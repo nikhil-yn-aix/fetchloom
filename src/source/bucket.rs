@@ -294,6 +294,7 @@ impl Prefix {
             url: object.url,
             named_by_server: false,
             etag: object.etag,
+            blob: None,
         };
         let folder = if self.key.is_empty() || self.key.ends_with('/') {
             self.key.clone()

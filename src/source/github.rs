@@ -12,7 +12,7 @@ use url::Url;
 use super::git::{Entry, Held, Listed};
 use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::account::Account;
-use crate::digest::Sha256;
+use crate::digest::{BlobId, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Extra, Response};
 
@@ -551,7 +551,7 @@ impl TreeEntry {
             ("tree", _) => Held::Folder(self.sha.clone()),
             ("commit", _) => Held::Submodule,
             ("blob", "120000") => Held::Link,
-            ("blob", _) => Held::File(self.size),
+            ("blob", _) => Held::File(self.size, BlobId::from_hex(&self.sha)),
             _ => return None,
         })
     }
@@ -621,6 +621,7 @@ impl Asset {
             url,
             named_by_server: false,
             etag: None,
+            blob: None,
         })
     }
 }

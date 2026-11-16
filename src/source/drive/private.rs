@@ -268,6 +268,7 @@ impl Walk {
                     url: file_url(&entry.id, None)?,
                     named_by_server: false,
                     etag: None,
+                    blob: None,
                     path,
                 });
             }

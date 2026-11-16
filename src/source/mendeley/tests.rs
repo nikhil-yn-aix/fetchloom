@@ -96,6 +96,7 @@ fn lists_a_version_with_the_sha256_mendeley_states() {
         .unwrap(),
         named_by_server: false,
         etag: None,
+        blob: None,
     };
     assert_eq!(
         listing.files,

@@ -76,6 +76,7 @@ impl Link {
                 url: self.url.clone(),
                 named_by_server: true,
                 etag: None,
+                blob: None,
             }],
         }
     }

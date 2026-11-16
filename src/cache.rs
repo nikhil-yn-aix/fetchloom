@@ -1,5 +1,6 @@
 //! the content-addressed cache: one read-only file per object, named by its SHA-256.
 
+mod blobs;
 mod changed;
 mod deferred;
 mod failure;

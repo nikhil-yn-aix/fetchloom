@@ -123,6 +123,7 @@ fn lists_a_series_files_with_the_sizes_its_filelist_states() {
             url: Url::parse(&format!("{SERIES}matrix/GSE1000_series_matrix.txt.gz")).unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }
     );
     assert!(listing.warnings.is_empty(), "{:?}", listing.warnings);

@@ -219,6 +219,7 @@ impl Competition {
             url,
             named_by_server: false,
             etag: None,
+            blob: None,
         })
     }
 
@@ -364,6 +365,7 @@ mod tests {
             url: download(path),
             named_by_server: false,
             etag: None,
+            blob: None,
         }
     }
 

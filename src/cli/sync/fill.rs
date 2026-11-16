@@ -174,6 +174,7 @@ fn listing(stated: &Stated) -> Result<Listing, Error> {
                 url,
                 named_by_server: false,
                 etag: None,
+                blob: None,
             })
         })
         .collect::<Result<_, Error>>()?;

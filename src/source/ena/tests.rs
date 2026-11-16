@@ -69,6 +69,7 @@ fn lists_a_runs_fastq_with_the_md5_and_size_ena_states() {
         .unwrap(),
         named_by_server: false,
         etag: None,
+        blob: None,
     };
     assert_eq!(
         listing.files,
@@ -126,6 +127,7 @@ fn submitted_files_are_the_ones_the_submitter_sent() {
             .unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }]
     );
 }

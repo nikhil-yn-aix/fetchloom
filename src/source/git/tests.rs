@@ -400,6 +400,49 @@ fn only_a_file_too_large_for_a_pointer_keeps_githubs_size() {
     );
 }
 
+/// each file's blob as its listing says it: the repository's page and the id the tree states,
+/// which github calls `sha` and gitlab `id`; an id of a repository of SHA-256 ids gives none.
+fn blobs(listing: &Listing) -> Vec<Option<(String, String)>> {
+    listing
+        .files
+        .iter()
+        .map(|file| {
+            let blob = file.blob.as_ref()?;
+            Some((blob.repository.to_string(), blob.id.hex()))
+        })
+        .collect()
+}
+
+/// each file carries its blob in its own repository, by the id the tree states, which a later
+/// listing's file of that id is taken from the cache by.
+#[test]
+fn each_file_carries_its_blob_in_its_own_repository() {
+    let id = "ab6cbfe20b8e805f6b37252a0cbdc2f1c5dc2cdf";
+    let mut rows = blob("rows.csv", 19);
+    rows["sha"] = id.into();
+    let mut wide = blob("wide.csv", 19);
+    wide["sha"] = "ab".repeat(32).into();
+    let recorded = Recorded::default()
+        .on(&format!("{API}/commits/main"), 200, COMMIT)
+        .on(
+            &format!("{API}/git/trees/{COMMIT}?recursive=1"),
+            200,
+            tree(&serde_json::json!([rows, wide]), false),
+        );
+    let link = "https://github.com/lab/survey/tree/main";
+    let listing = block_on(folder(link).listing(&recorded, false)).unwrap();
+    let page = "https://github.com/lab/survey".to_owned();
+    assert_eq!(blobs(&listing), [Some((page, id.to_owned())), None]);
+
+    let page = serde_json::json!([entry("data/rows.csv", "blob", "100644")]).to_string();
+    let recorded = commit(PROJECT).on(FIRST_PAGE, 200, page);
+    let link = "https://gitlab.com/lab/group/survey/-/tree/main/data";
+    let listing = block_on(folder(link).listing(&recorded, false)).unwrap();
+    let page = "https://gitlab.com/lab/group/survey".to_owned();
+    let empty = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391".to_owned();
+    assert_eq!(blobs(&listing), [Some((page, empty))]);
+}
+
 /// past its limits github cuts a tree's answer short, so the folders on the way to the one
 /// asked for are listed one by one, then its subtrees whole, each cut short one in turn.
 #[test]

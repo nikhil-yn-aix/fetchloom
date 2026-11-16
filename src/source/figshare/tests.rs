@@ -43,6 +43,7 @@ fn lists_every_field_without_requesting_files_twice() {
                 url: Url::parse("https://ndownloader.figshare.com/files/70482987").unwrap(),
                 named_by_server: false,
                 etag: None,
+                blob: None,
             },
             Remote {
                 path: "labt_a_2743468_sm3771.docx".to_owned(),
@@ -52,6 +53,7 @@ fn lists_every_field_without_requesting_files_twice() {
                 url: Url::parse("https://ndownloader.figshare.com/files/70482990").unwrap(),
                 named_by_server: false,
                 etag: None,
+                blob: None,
             },
         ]
     );

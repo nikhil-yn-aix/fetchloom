@@ -45,6 +45,7 @@ fn lists_an_items_files_with_the_size_and_md5_it_states() {
             url: Url::parse("https://archive.org/download/iris_20240626/iris.csv").unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }]
     );
     assert!(listing.warnings.is_empty(), "{:?}", listing.warnings);

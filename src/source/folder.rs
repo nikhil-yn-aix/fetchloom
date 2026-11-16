@@ -572,6 +572,7 @@ impl Walk<'_> {
                     url: entry.link,
                     named_by_server: false,
                     etag: None,
+                    blob: None,
                 });
             }
             if self.files.len() + self.counted > self.most {

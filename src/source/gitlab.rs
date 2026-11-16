@@ -13,6 +13,7 @@ use url::Url;
 use super::git::{Entry, Held, Listed};
 use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::account::Account;
+use crate::digest::BlobId;
 use crate::error::{Error, Kind};
 use crate::net::Api;
 
@@ -222,6 +223,7 @@ impl Release {
                     url,
                     named_by_server: false,
                     etag: None,
+                    blob: None,
                 }),
                 Err(reason) => unavailable.push(Unavailable {
                     path,
@@ -632,7 +634,7 @@ impl TreeEntry {
             ("tree", _) => Held::Folder(self.id.clone()),
             ("commit", _) => Held::Submodule,
             ("blob", "120000") => Held::Link,
-            ("blob", _) => Held::File(None),
+            ("blob", _) => Held::File(None, BlobId::from_hex(&self.id)),
             _ => return None,
         })
     }

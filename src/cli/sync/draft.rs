@@ -2,6 +2,7 @@
 //! filled in from earlier locks or from the bytes themselves.
 
 use std::collections::{HashMap, HashSet};
+use std::io;
 
 use url::Url;
 
@@ -9,7 +10,7 @@ use super::super::fetch::{self, Job};
 use super::unpack::Unpack;
 use crate::archive::{self, Packed, parts};
 use crate::cache::{Cache, UrlRecord, parts_key};
-use crate::digest::Sha256;
+use crate::digest::{BlobId, Sha256};
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
@@ -17,7 +18,9 @@ use crate::net::{Expect, Fetch, Fetched};
 use crate::plan::Patterns;
 use crate::project::lock::{self, Locked, LockedFile};
 use crate::project::manifest::{Entry, Source};
-use crate::source::{self, Access, Listing, Remote};
+use crate::source::{self, Access, Blob, Listing, Remote};
+use crate::stop::Stop;
+use crate::threads::Threads;
 use crate::units;
 
 pub(super) struct Draft {
@@ -170,6 +173,51 @@ impl Draft {
         Ok(draft)
     }
 
+    /// knows each file of a git repository whose blob a download here brought before, without a
+    /// download: the cache's record of the blob names the object, whose bytes must still be that
+    /// blob. the records are looked up first, then the bytes they name checked at once.
+    pub(super) fn recall_blobs(
+        &mut self,
+        cache: &Cache,
+        threads: Threads,
+        stop: &Stop,
+    ) -> Result<(), Error> {
+        let recorded: Vec<(usize, BlobId, Sha256, u64)> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter_map(|(index, file)| {
+                let blob = file.remote.blob.as_ref().filter(|_| file.known.is_none())?;
+                let (sha256, size) = cache.blob_record(&blob.repository, &blob.id)?;
+                let sized = file.remote.size.is_none_or(|listed| listed == size);
+                sized.then_some((index, blob.id, sha256, size))
+            })
+            .collect();
+        let bytes = recorded
+            .iter()
+            .fold(0_u64, |sum, (.., size)| sum.saturating_add(*size));
+        let held =
+            crate::place::run_hashes(&recorded, bytes, threads, None, |(_, id, sha256, size)| {
+                cache.holds_blob(id, sha256, *size, stop)
+            });
+        for ((index, _, sha256, size), held) in recorded.into_iter().zip(held) {
+            match held {
+                Ok(true) => self.files[index].known = Some((sha256, size)),
+                Ok(false) => {
+                    tracing::debug!(path = %self.files[index].path, "the cache holds no bytes of its blob");
+                }
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => return Err(Stop::stopped()),
+                Err(err) => tracing::debug!(%err, "could not check the cached bytes of a blob"),
+            }
+        }
+        Ok(())
+    }
+
+    /// the blob in a git repository file `index` is, as its tree states.
+    pub(super) fn blob(&self, index: usize) -> Option<&Blob> {
+        self.files[index].remote.blob.as_ref()
+    }
+
     /// knows the parts of each split archive no checksum pins by the records of what their links
     /// served, while the listing's strong `ETag`s and sizes match them all and the files those
     /// parts unpacked to are in the cache, as a lone archive is known once its own bytes are gone.
@@ -293,6 +341,7 @@ impl Draft {
                     url: link(&locked.name, file)?,
                     named_by_server: false,
                     etag: None,
+                    blob: None,
                 };
                 Ok(DraftFile {
                     remote,
@@ -838,6 +887,33 @@ fn renamed_by_download(file: &DraftFile) -> bool {
             || (source::may_wrap(&file.remote.url) && archive::by_name(&file.path).is_none()))
 }
 
+/// records each blob of `learned` as the object a download brought for it, all at once, where
+/// the object's bytes prove to be that blob. a record only spares a later download, so one that
+/// cannot be written costs nothing more.
+pub(super) fn remember_blobs(
+    cache: &Cache,
+    learned: &[(Blob, Sha256, u64)],
+    threads: Threads,
+    stop: &Stop,
+) -> Result<(), Error> {
+    let bytes = learned
+        .iter()
+        .fold(0_u64, |sum, (_, _, size)| sum.saturating_add(*size));
+    let remembered =
+        crate::place::run_hashes(learned, bytes, threads, None, |(blob, sha256, size)| {
+            cache.remember_blob(&blob.repository, &blob.id, *sha256, *size, stop)
+        });
+    for (result, (blob, ..)) in remembered.into_iter().zip(learned) {
+        match result {
+            Ok(true) => {}
+            Ok(false) => tracing::debug!(id = %blob.id, "the bytes downloaded are not the blob"),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => return Err(Stop::stopped()),
+            Err(err) => tracing::debug!(%err, "could not record a downloaded blob"),
+        }
+    }
+    Ok(())
+}
+
 /// the bytes an earlier download of this link proved match the MD5 its source states, and the
 /// S3 version they were.
 fn stated(cache: &Cache, remote: &Remote) -> Option<crate::cache::Stated> {
@@ -1262,6 +1338,7 @@ mod tests {
                 url: url.clone(),
                 named_by_server: false,
                 etag: None,
+                blob: None,
             }],
         };
         let locked = Locked {
@@ -1388,6 +1465,7 @@ mod tests {
                     url: Url::parse(link).unwrap(),
                     named_by_server,
                     etag: None,
+                    blob: None,
                 }],
             };
             let draft =
@@ -1414,6 +1492,7 @@ mod tests {
             url: Url::parse(&format!("https://example.org/files/{path}")).unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         };
         let drafted = |files: Vec<Remote>, previous: Option<&Locked>| {
             let listing = Listing {
@@ -1524,6 +1603,7 @@ mod tests {
                     url: Url::parse(&url(path)).unwrap(),
                     named_by_server: false,
                     etag: listed.then(|| etag(bytes)),
+                    blob: None,
                 })
                 .collect();
             let listing = Listing {
@@ -1563,6 +1643,7 @@ mod tests {
             url: Url::parse(&format!("https://example.org/files/{path}")).unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         };
         let listing = || Listing {
             within: Vec::new(),
@@ -1728,6 +1809,7 @@ mod tests {
                 url: url.clone(),
                 named_by_server: false,
                 etag: None,
+                blob: None,
             }],
         };
         let locked = |unpacks_to| Locked {
@@ -1800,6 +1882,7 @@ mod tests {
             url: url.clone(),
             named_by_server: false,
             etag: None,
+            blob: None,
         };
         let by_url = HashMap::from([(locked.files[0].url.clone(), vec![&locked.files[0]])]);
         assert!(carried(&by_url, &remote("900150983cd24fb0d6963f7d28e17f72")).is_some());
@@ -1856,6 +1939,7 @@ mod tests {
                 url: url.clone(),
                 named_by_server: false,
                 etag: None,
+                blob: None,
             }],
         };
         let entry = &manifest.datasets["d"];
@@ -2051,6 +2135,7 @@ mod tests {
                 url: link.clone(),
                 named_by_server: false,
                 etag: None,
+                blob: None,
             }],
         };
         let manifest = Manifest::parse("[datasets.raw]\nref = \"s3://lab-raw/raw/\"\n").unwrap();
@@ -2322,6 +2407,7 @@ mod tests {
                     url: Url::parse(link).unwrap(),
                     named_by_server: false,
                     etag: Some(etag.to_owned()),
+                    blob: None,
                 }],
             };
             let draft =
@@ -2365,6 +2451,7 @@ mod tests {
                     url: Url::parse(&format!("https://example.org/{path}")).unwrap(),
                     named_by_server: false,
                     etag: None,
+                    blob: None,
                 })
                 .collect(),
         };

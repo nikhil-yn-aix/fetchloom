@@ -126,6 +126,7 @@ impl Walk {
                     url: file_url(&key.id, key.resource.as_deref())?,
                     named_by_server: false,
                     etag: None,
+                    blob: None,
                 }),
             }
             if self.files.len() + self.unavailable.len() > self.most {

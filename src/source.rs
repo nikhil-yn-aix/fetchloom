@@ -49,6 +49,8 @@ use crate::glob::Glob;
 use crate::name;
 use crate::net::{self, Api, Fetch, Response};
 
+pub(crate) use git::Blob;
+
 /// about the memory one listed file takes while a run works, from its listing to its placing,
 /// which sizes the most files a dataset may list from the memory a run may use.
 pub(crate) const PER_FILE: u64 = 2 << 10;
@@ -379,6 +381,9 @@ pub(crate) struct Remote {
     /// the `ETag` the listing gives, as the service sends it with the bytes: a relock reuses an
     /// earlier download of the link while the listing gives the `ETag` and size the cache recorded.
     pub(crate) etag: Option<String>,
+    /// the file's blob in the git repository it is listed from, which a relock takes from the
+    /// cache while an earlier download's bytes there are that blob.
+    pub(crate) blob: Option<Blob>,
 }
 
 /// the prefixes [`Reference::parse`] reads before a `:`, which a guess at a typo picks from.
@@ -1225,6 +1230,7 @@ fn single(url: &Url) -> Listing {
             url: url.clone(),
             named_by_server: true,
             etag: None,
+            blob: None,
         }],
     }
 }

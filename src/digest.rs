@@ -1,5 +1,6 @@
-//! SHA-256, a file's identity in the cache and in `data.lock`, and MD5, which some sources state
-//! and which is checked, never trusted as an identity.
+//! SHA-256, a file's identity in the cache and in `data.lock`, MD5, which some sources state
+//! and which is checked, never trusted as an identity, and git's blob ids, which a repository's
+//! tree states.
 
 use std::fmt;
 use std::fs::File;
@@ -16,6 +17,14 @@ pub(crate) struct Sha256([u8; 32]);
 /// the MD5 of a file's bytes, as zenodo, figshare and dataverse state it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct Md5([u8; 16]);
+
+/// the id git gives a file's bytes in a repository of SHA-1 ids: the SHA-1 of `blob`, the
+/// bytes' count in decimal, a zero byte and the bytes, as a github or gitlab tree states it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct BlobId([u8; 20]);
+
+/// hashes a file's bytes as git does, for a count of bytes known before the first.
+pub(crate) struct BlobHasher(sha1::Sha1);
 
 impl Sha256 {
     /// reads 64 hex digits, in either case.
@@ -112,6 +121,51 @@ impl Md5 {
     }
 }
 
+impl BlobId {
+    /// reads 40 hex digits, in either case.
+    pub(crate) fn from_hex(text: &str) -> Option<BlobId> {
+        from_hex(text).map(BlobId)
+    }
+
+    pub(crate) fn hex(&self) -> String {
+        hex(&self.0)
+    }
+
+    /// the id of `bytes`.
+    pub(crate) fn of_bytes(bytes: &[u8]) -> BlobId {
+        let mut hasher = BlobHasher::new(bytes.len() as u64);
+        hasher.update(bytes);
+        hasher.finish()
+    }
+
+    /// the id of the pointer git-lfs puts in a repository for a file of `size` bytes hashing to
+    /// `sha256`, which it keeps apart.
+    pub(crate) fn of_lfs_pointer(sha256: &Sha256, size: u64) -> BlobId {
+        let pointer = format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize {size}\n",
+            sha256.hex()
+        );
+        Self::of_bytes(pointer.as_bytes())
+    }
+}
+
+impl BlobHasher {
+    /// a hasher for a file of `size` bytes; bytes of another count give another id.
+    pub(crate) fn new(size: u64) -> BlobHasher {
+        let mut hasher = sha1::Sha1::default();
+        sha1::Digest::update(&mut hasher, format!("blob {size}\0").as_bytes());
+        BlobHasher(hasher)
+    }
+
+    pub(crate) fn update(&mut self, bytes: &[u8]) {
+        sha1::Digest::update(&mut self.0, bytes);
+    }
+
+    pub(crate) fn finish(self) -> BlobId {
+        BlobId(sha1::Digest::finalize(self.0).into())
+    }
+}
+
 fn from_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
     let bytes = text.as_bytes();
     if bytes.len() != 2 * N {
@@ -170,6 +224,17 @@ macro_rules! text_forms {
 
 text_forms!(Sha256, "SHA-256", "64");
 text_forms!(Md5, "MD5", "32");
+impl fmt::Display for BlobId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.hex())
+    }
+}
+
+impl fmt::Debug for BlobId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "git blob {}", self.hex())
+    }
+}
 
 /// hashes computed while bytes stream past: always SHA-256, and MD5 when one will be checked.
 #[derive(Clone, Default)]
@@ -257,6 +322,28 @@ mod tests {
         assert_eq!(digest, sha256(&bytes));
         let block = block as u64;
         assert_eq!(told.into_inner(), [block, block, 3]);
+    }
+
+    /// ids `git hash-object` gives: a file, an empty one, and the pointer git-lfs keeps for the
+    /// file's bytes, which only their SHA-256 and size make.
+    #[test]
+    fn blob_ids_match_the_ids_git_gives() {
+        let rows = b"site,count\na,1\nb,2\n";
+        for (bytes, id) in [
+            (&b"hello\n"[..], "ce013625030ba8dba906f756967f9e9ca394464a"),
+            (b"", "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"),
+            (rows, "ab6cbfe20b8e805f6b37252a0cbdc2f1c5dc2cdf"),
+        ] {
+            assert_eq!(BlobId::of_bytes(bytes).hex(), id);
+        }
+        assert_eq!(
+            BlobId::of_lfs_pointer(&sha256(rows), rows.len() as u64).hex(),
+            "ae226b637685f1fbb6726d2f2c0ed20550b87c04"
+        );
+        let mut split = BlobHasher::new(rows.len() as u64);
+        split.update(&rows[..4]);
+        split.update(&rows[4..]);
+        assert_eq!(split.finish(), BlobId::of_bytes(rows));
     }
 
     #[test]

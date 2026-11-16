@@ -22,6 +22,7 @@ fn expected_file() -> Remote {
         url: Url::parse("https://osf.io/download/sejcv/?version=1").unwrap(),
         named_by_server: false,
         etag: None,
+        blob: None,
     }
 }
 

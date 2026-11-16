@@ -31,6 +31,7 @@ fn listed(path: &str, size: u64, md5: &str, id: u64) -> Remote {
         url: Url::parse(&format!("https://datadryad.org/api/v2/files/{id}/download")).unwrap(),
         named_by_server: false,
         etag: None,
+        blob: None,
     }
 }
 

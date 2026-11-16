@@ -528,6 +528,7 @@ fn file(dataset: &Dataset, path: String, entry: &Entry) -> Result<Remote, Error>
         url,
         named_by_server: false,
         etag: None,
+        blob: None,
     })
 }
 

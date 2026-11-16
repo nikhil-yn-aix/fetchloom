@@ -7,12 +7,14 @@
 //! submodules, are left out by name.
 
 use std::fmt;
+use std::sync::Arc;
 
 use percent_encoding::percent_decode_str;
 use url::Url;
 
 use super::access::{self, Access};
 use super::{Listing, Reference, Remote, github, gitlab};
+use crate::digest::BlobId;
 use crate::error::{Error, Kind};
 use crate::net::Api;
 
@@ -125,11 +127,21 @@ enum Host {
     GitLab(gitlab::Project),
 }
 
+/// a file's blob in a repository, by the id the repository's tree states for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Blob {
+    /// the repository's page, as `https://github.com/<owner>/<repo>`: an id vouches for bytes in
+    /// its own repository alone.
+    pub(crate) repository: Arc<str>,
+    pub(crate) id: BlobId,
+}
+
 /// what git holds at a path of a tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Held {
-    /// a file, of the size the host states when it states one.
-    File(Option<u64>),
+    /// a file, of the size the host states when it states one, and its blob's id when it is a
+    /// SHA-1 id, as all but a repository of SHA-256 ids give.
+    File(Option<u64>, Option<BlobId>),
     /// a folder, by its tree's id.
     Folder(String),
     /// a symbolic link: a name that points at another path.
@@ -298,11 +310,18 @@ impl Folder {
             Listed::Missing => return Err(self.missing(&reference, &folder)),
             Listed::NotAFolder => return Err(self.not_a_folder(&reference, &folder)),
         };
+        let repository: Arc<str> = self.page().into();
         let mut files = Vec::new();
         let mut left: Vec<(String, &str)> = Vec::new();
         for Entry { path, held } in entries {
             match held {
-                Held::File(size) => files.push(self.remote(&commit, &folder, path, size)),
+                Held::File(size, id) => {
+                    let blob = id.map(|id| Blob {
+                        repository: Arc::clone(&repository),
+                        id,
+                    });
+                    files.push(self.remote(&commit, &folder, path, size, blob));
+                }
                 Held::Folder(_) => {}
                 Held::Link => left.push((path, "symbolic link")),
                 Held::Submodule => left.push((path, "submodule")),
@@ -399,8 +418,15 @@ impl Folder {
         }
     }
 
-    /// a file of the folder at `path` inside it, of `size` when the host states one.
-    fn remote(&self, commit: &str, folder: &str, path: String, size: Option<u64>) -> Remote {
+    /// a file of the folder at `path` inside it, of `size` when the host states one, and of `blob`.
+    fn remote(
+        &self,
+        commit: &str,
+        folder: &str,
+        path: String,
+        size: Option<u64>,
+        blob: Option<Blob>,
+    ) -> Remote {
         let whole = if folder.is_empty() {
             path.clone()
         } else {
@@ -418,6 +444,7 @@ impl Folder {
             url,
             named_by_server: false,
             etag: None,
+            blob,
         }
     }
 

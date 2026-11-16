@@ -34,6 +34,7 @@ fn lists_every_field_of_iris_in_one_request() {
                 .unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }]
     );
     assert_eq!(recorded.asked(), [IRIS]);
@@ -308,6 +309,7 @@ fn a_record_on_another_install_pins_with_the_md5_it_states() {
             .unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }]
     );
     assert_eq!(recorded.asked(), [CALTECH]);

@@ -151,6 +151,7 @@ impl Item {
                 url: file_url(&self.id, self.resource.as_deref())?,
                 named_by_server: true,
                 etag: None,
+                blob: None,
             }],
         })
     }

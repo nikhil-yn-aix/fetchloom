@@ -77,6 +77,7 @@ fn a_file_is_listed_as_one_file_of_its_dataset_in_one_request() {
             .unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }]
     );
     assert_eq!(recorded.asked(), [FILE]);

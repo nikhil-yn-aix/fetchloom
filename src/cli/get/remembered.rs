@@ -86,6 +86,7 @@ pub(super) fn file(
         url: Url::parse(&parsed.reference.to_string()).ok()?,
         named_by_server: false,
         etag: None,
+        blob: None,
     })
 }
 

@@ -2005,6 +2005,7 @@ pub(crate) mod tests {
             url: url::Url::parse(url).unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }
     }
 

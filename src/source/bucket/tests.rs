@@ -289,6 +289,7 @@ fn s3_pages_follow_continuation_tokens_through_the_path_for_dotted_buckets() {
             .unwrap(),
             named_by_server: false,
             etag: Some("\"1beeac62f1ded905f45c6d6d20a4688b\"".to_owned()),
+            blob: None,
         }
     );
     let participants = listing
@@ -1147,6 +1148,7 @@ fn gcs_pages_list_generations_and_md5_hashes() {
             url: Url::parse("https://storage.googleapis.com/cloud-samples-data/bigquery/us-states/2021-07-02T16%3A04%3A48_70344/2021-07-02T16%3A04%3A48_70344.overall_export_metadata?generation=1625246960472434").unwrap(),
             named_by_server: false,
             etag: None,
+            blob: None,
         }
     );
     let csv = listing
