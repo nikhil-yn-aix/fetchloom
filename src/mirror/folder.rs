@@ -710,13 +710,19 @@ impl Target {
     fn publish(&self, temp: &mut Temporary<'_>, item: &Item, there: There) -> Result<Put, Fault> {
         let name = place(&self.root, item.folder, &item.digest);
         let aside = match there {
-            There::Damaged => match self.placer.move_aside(&name) {
+            There::Damaged => match self.move_aside(&name) {
                 Ok(aside) => Some(aside),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => None,
                 Err(err) => return Err(Fault::Mirror(err)),
             },
             There::Absent | There::Present => None,
         };
+        #[cfg(test)]
+        if aside.is_some() && tests::killed_aside() {
+            return Err(Fault::Mirror(io::Error::other(
+                "killed between the renames",
+            )));
+        }
         let named = self.placer.move_back(&temp.path, &name);
         if named.is_ok() {
             temp.named = true;
@@ -735,6 +741,21 @@ impl Target {
             Ok(()) => Ok(Put::Copied),
             Err(_) if taken && holds(&name, item.size) => Ok(Put::Present),
             Err(err) => Err(Fault::Mirror(err)),
+        }
+    }
+
+    /// moves the damaged copy at `name` into `tmp/` under a name of this push's unfinished files,
+    /// so a kill before it goes leaves it where the next push's sweep removes it.
+    fn move_aside(&self, name: &Path) -> io::Result<PathBuf> {
+        loop {
+            let aside =
+                self.root
+                    .join(TMP)
+                    .join(format!(".{}-{:016x}.part", self.id, fastrand::u64(..)));
+            match self.placer.move_aside_to(name, &aside) {
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                moved => return moved.map(|()| aside),
+            }
         }
     }
 
@@ -1317,6 +1338,14 @@ pub(crate) mod tests {
         /// what another push does to a mirror's folder between a look that found none and the
         /// next, once.
         static BETWEEN_LOOKS: Cell<Option<fn(&Path)>> = const { Cell::new(None) };
+        /// whether a push is killed once it moved a damaged copy aside, before the new copy takes
+        /// its name.
+        static KILLED_ASIDE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// whether a test kills the push between moving a damaged copy aside and naming the new one.
+    pub(super) fn killed_aside() -> bool {
+        KILLED_ASIDE.get()
     }
 
     /// runs what a test has another push do between two looks at `root`.
@@ -1837,6 +1866,38 @@ pub(crate) mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, [wrong_name.file_name().unwrap()]);
+    }
+
+    /// a push killed after it moved a damaged copy aside leaves it where the next push's sweep
+    /// finds it, as it finds the rest a stopped push left, never beside the mirror's objects.
+    #[test]
+    fn a_damaged_copy_a_killed_push_moved_aside_goes_with_its_files() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        mirror(&root, &[b"good"]);
+        let wrong = item(b"wrong");
+        let wrong_name = place(&root, OBJECTS, &wrong.digest);
+        fs::create_dir_all(wrong_name.parent().unwrap()).unwrap();
+        fs::write(&wrong_name, b"wrong, and longer").unwrap();
+        let (mut killed, _) = Target::open(&root, Arc::default()).unwrap();
+        killed.prepare(&[wrong]).unwrap();
+        KILLED_ASIDE.set(true);
+        let put = put_one(&killed, &wrong, b"wrong", There::Damaged);
+        KILLED_ASIDE.set(false);
+        assert!(put.is_err());
+        // a kill lets go of the push's lock and leaves its file
+        let (_, lock) = killed.held.take().unwrap();
+        drop(lock);
+        drop(killed);
+        let (mut next, _) = Target::open(&root, Arc::default()).unwrap();
+        next.prepare(&[wrong]).unwrap();
+        let swept = next.sweep(SystemTime::now());
+        assert_eq!(swept, (1, 17));
+        let fan: Vec<_> = fs::read_dir(wrong_name.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(fan, Vec::<std::ffi::OsString>::new());
     }
 
     /// when two pushes of one file run at once, the second to finish keeps the first one's copy.
