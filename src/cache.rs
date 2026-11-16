@@ -354,34 +354,42 @@ fn exposed_on(root: &Path) -> Option<String> {
 }
 
 /// what keeps the cache at `root`, which its group shares, from staying one the group may add to:
-/// a folder in it that lets only its owner write to it, as one another program or an account
-/// outside the group made may, since a run gives the group its write on each folder it makes
-/// there. none for a cache that is no group's, whose folder is not setgid and writable by its
-/// group, as the clusters guide makes a lab's.
+/// the folders in it that let only their owners write to them, as one another program or an
+/// account outside the group made may, since a run gives the group its write on each folder it
+/// makes there; a few of them named, and how many more. none for a cache that is no group's, whose
+/// folder is not setgid and writable by its group, as the clusters guide makes a lab's.
 #[cfg(unix)]
 pub(crate) fn unshared(root: &Path) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     if fs::metadata(root).ok()?.mode() & 0o2020 != 0o2020 {
         return None;
     }
-    let fans = ["objects", "keyed"]
+    let mut fans: Vec<PathBuf> = ["objects", "keyed"]
         .iter()
         .flat_map(|top| fs::read_dir(root.join(top)).into_iter().flatten().flatten())
-        .map(|fan| fan.path());
-    let closed = FOLDERS
+        .map(|fan| fan.path())
+        .collect();
+    fans.sort();
+    let closed: Vec<String> = FOLDERS
         .iter()
         .map(|name| root.join(name))
         .chain(fans)
-        .find(|folder| {
+        .filter(|folder| {
             fs::symlink_metadata(folder)
                 .is_ok_and(|found| found.is_dir() && found.mode() & 0o020 == 0)
-        });
-    closed.map(|folder| {
-        format!(
-            "the folder {} in the cache lets only its owner write to it, though a group shares the cache, so the group's other members cannot add to it",
-            folder.display()
-        )
-    })
+        })
+        .map(|folder| folder.display().to_string())
+        .collect();
+    match closed.as_slice() {
+        [] => None,
+        [folder] => Some(format!(
+            "the folder {folder} in the cache lets only its owner write to it, though a group shares the cache, so the group's other members cannot add to it"
+        )),
+        many => Some(format!(
+            "the folders {} in the cache let only their owners write to them, though a group shares the cache, so the group's other members cannot add to them",
+            crate::units::some_of(many, 3)
+        )),
+    }
 }
 
 /// [`exposed`] for a folder of `owner` with `mode`, as `user` sees it; `shared` when a group
@@ -2453,6 +2461,52 @@ pub(crate) mod tests {
         }
         wrong.sort();
         wrong
+    }
+
+    /// in a cache its group shares, each folder only its owner may write keeps the group's other
+    /// members from adding there, so the warning names every one of them, and past three, how many
+    /// more there are.
+    #[cfg(unix)]
+    #[test]
+    fn every_folder_the_group_cannot_write_is_named() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let (_dir, cache) = cache();
+        let root = &cache.root;
+        let set = |name: &str, mode| {
+            fs::set_permissions(root.join(name), fs::Permissions::from_mode(mode)).unwrap();
+        };
+        fs::set_permissions(root, fs::Permissions::from_mode(0o2770)).unwrap();
+        if fs::metadata(root).unwrap().mode() & 0o7777 != 0o2770 {
+            return crate::test_skips::skip("permissions", "this disk keeps no setgid folder");
+        }
+        for name in FOLDERS {
+            set(name, 0o2770);
+        }
+        assert_eq!(unshared(root), None);
+        let told = |names: &str| {
+            format!(
+                "the folders {names} in the cache let only their owners write to them, though a group shares the cache, so the group's other members cannot add to them"
+            )
+        };
+        let shown = |name: &str| root.join(name).display().to_string();
+        // as `chmod g-w objects urls` leaves them
+        set("objects", 0o2750);
+        set("urls", 0o2750);
+        assert_eq!(
+            unshared(root),
+            Some(told(&format!("{} and {}", shown("objects"), shown("urls"))))
+        );
+        set("tmp", 0o2750);
+        set("keyed", 0o2750);
+        assert_eq!(
+            unshared(root),
+            Some(told(&format!(
+                "{}, {}, {} and 1 more",
+                shown("objects"),
+                shown("urls"),
+                shown("tmp")
+            )))
+        );
     }
 
     #[test]
