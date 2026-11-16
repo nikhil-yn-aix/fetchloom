@@ -14,7 +14,7 @@ use super::project::{
 use super::sync::disk::{Survey, is_inside};
 use super::sync::place::Seen;
 use super::sync::{Loop, Scope};
-use super::{Context, open_cache};
+use super::{Context, open_cache, peek_cache};
 use crate::cache::Cache;
 use crate::digest;
 use crate::error::{Error, Kind};
@@ -91,8 +91,9 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                             &scope,
                         )?;
                     }
-                    let cache = cache.map_or_else(open_cache, Ok)?;
-                    let work = Loop::new(context, &project, Arc::new(context.net()), cache)
+                    // the ready check only peeked at the cache; a sync opens it, made if missing
+                    drop(cache.take());
+                    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
                         .within(scope.clone())
                         .filling();
                     let seen = Seen {
@@ -339,7 +340,9 @@ fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
 }
 
 /// the answer when the files it names are in place, from one read of data.lock and one plan,
-/// without holding the project; none when a sync must place them first.
+/// without holding the project; none when a sync must place them first. it reads the cache's
+/// records as status does, making no cache, so a job whose cache folder is gone or mistyped still
+/// gets the path of data in place.
 fn ready_path(
     context: &Context,
     project: &Project,
@@ -361,7 +364,7 @@ fn ready_path(
     }
     let cache = match cache {
         Some(cache) => cache,
-        slot @ None => slot.insert(open_cache()?),
+        slot @ None => slot.insert(peek_cache()?),
     };
     let planned = plan::from_cache(manifest, lock, cache)?;
     if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {

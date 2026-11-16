@@ -167,6 +167,27 @@ fn path_syncs_first_when_the_files_are_not_there() -> Result {
     Ok(())
 }
 
+/// a dataset in place is answered without the cache, as status reads it, so a job whose cache
+/// folder cannot be made or was mistyped still gets its path, and no cache grows where none was.
+#[test]
+fn a_ready_path_needs_no_cache_and_makes_none() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let nowhere = sandbox.work().join("not-mounted").join("cache");
+    let output = sandbox
+        .command(&["--offline", "path", "iris"])
+        .env("FETCHLOOM_CACHE", &nowhere)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        text(&output.stdout)?,
+        format!("{}\n", sandbox.work().join("data").join("iris").display())
+    );
+    assert!(!sandbox.work().join("not-mounted").exists());
+    Ok(())
+}
+
 /// a dataset added to data.toml by hand fails as it would under `sync --locked`, before any
 /// request, while one already in place still answers.
 #[test]
@@ -255,12 +276,19 @@ fn ready_paths_read_and_plan_once() -> Result {
         let stderr = text(&output.stderr)?;
         assert!(output.status.success(), "{stderr}");
         let events: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&trace)?)?;
-        for name in ["read_manifest", "read_lock", "plan", "open_cache", "scan"] {
+        // a ready path reads the cache's records as status does, never opening, so making, it
+        for (name, once) in [
+            ("read_manifest", 1),
+            ("read_lock", 1),
+            ("plan", 1),
+            ("open_cache", 0),
+            ("scan", 1),
+        ] {
             let calls = events
                 .iter()
                 .filter(|event| event["ph"] == "B" && event["name"] == name)
                 .count();
-            assert_eq!(calls, 1, "{target}: {name}\n{stderr}");
+            assert_eq!(calls, once, "{target}: {name}\n{stderr}");
         }
     }
     assert_eq!(server.requests().len(), 1);
