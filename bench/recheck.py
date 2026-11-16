@@ -145,17 +145,25 @@ def prepare(root, arm, binary, signature, origin):
         if done.returncode:
             raise RuntimeError(f"{arm}: fetchloom {' '.join(map(str, args))} exited {done.returncode}: {done.stderr.strip()}")
 
+    def one_each(project, cache, listing):
+        """a project with a dataset for each link of the list, pinned by `lock`, as several links
+        typed for one add make them."""
+        project.mkdir(parents=True, exist_ok=True)
+        links = (src / listing).read_text().split()
+        (project / "data.toml").write_text("".join(f'[datasets.{Path(link).stem}]\nref = "{link}"\n\n' for link in links))
+        fetchloom(project, cache, "lock")
+
     for name in ("files", "tiny"):
         fetchloom(folder / "big", "big-cache", "add", src / name)
     fetchloom(folder / "tiny", "tiny-cache", "add", src / "tiny")
     fetchloom(folder / "tiny", "tiny-cache", "sync")
     fetchloom(folder / "large", "large-cache", "add", src / "large")
-    fetchloom(folder / "many", "many-cache", "add", "-i", src / "many.txt")
+    one_each(folder / "many", "many-cache", "many.txt")
     (folder / "zip").mkdir()
     (folder / "zip" / "data.toml").write_text(f'[datasets.members]\nref = "{origin}/members.zip"\n')
     fetchloom(folder / "zip", "zip-cache", "lock")
     for side in ("ours", "theirs"):
-        fetchloom(folder / side, "merge-cache", "add", "-i", src / f"{side}.txt")
+        one_each(folder / side, "merge-cache", f"{side}.txt")
     for name in ("data.toml", "data.lock"):
         write(folder / "merge" / name, conflict((folder / "ours" / name).read_text(),
                                                 (folder / "theirs" / name).read_text()).encode())
@@ -197,7 +205,7 @@ def cases(root, arm, binary, folder, origin):
         verify=dict(argv=[fl, "--json", "status", "--verify"], cwd=folder / "large", env=env(folder / "large-cache")),
         place=dict(argv=[fl, "-q", "--yes", "sync"], cwd=work / "place", env=env(folder / "many-cache"),
                    prep=lambda: fresh(work / "place", folder / "many"), post=emptied(work / "place")),
-        add_links=dict(argv=[fl, "-q", "--yes", "add", "-i", str(root / "src" / "links.txt")], cwd=work / "links",
+        add_links=dict(argv=[fl, "-q", "--yes", "add", *(root / "src" / "links.txt").read_text().split()], cwd=work / "links",
                        env=env(work / "links-cache"), post=emptied(work / "links", work / "links-cache"),
                        prep=lambda: (work / "links").mkdir(parents=True, exist_ok=True)),
         zip=dict(argv=[fl, "-q", "--yes", "sync"], cwd=work / "zip", env=env(work / "zip-cache"),

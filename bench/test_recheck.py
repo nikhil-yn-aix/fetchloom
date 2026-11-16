@@ -113,7 +113,7 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(folder, self.root / "fx/fetchloom-candidate")
         self.assertEqual(recheck.exclude_paths(folder / "exclude"), [f"data/p0000{index}/remove.bin" for index in range(3)])
         merged = (folder / "merge/data.toml").read_text()
-        self.assertTrue(merged.startswith("<<<<<<< ours\n[datasets.ours]") and "=======\n[datasets.theirs]" in merged, merged)
+        self.assertTrue(merged.startswith("<<<<<<< ours\n[datasets.o00000]") and "=======\n[datasets.t00000]" in merged, merged)
         marker = (folder / "ready.json").stat().st_mtime_ns
         recheck.prepare(self.root, "fetchloom+candidate", binary, self.signature, "http://127.0.0.1:9")
         self.assertEqual((folder / "ready.json").stat().st_mtime_ns, marker)
