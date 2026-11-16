@@ -6,6 +6,12 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: tests runs the test lanes alone, for a branch that leaves releases, the action, the installers and r/ as they are
+        type: choice
+        options: [full, tests]
+        default: full
 
 permissions:
   contents: read
@@ -42,13 +48,17 @@ jobs:
       - name: require every prerequisite
         env:
           RESULTS: ${{ toJSON(needs) }}
+          SCOPE: ${{ inputs.scope }}
         run: |
           python3 - <<'PY'
           import json, os
           results = json.loads(os.environ['RESULTS'])
+          left_out = {'artifacts', 'action', 'r'} if os.environ['SCOPE'] == 'tests' else set()
           for name, result in results.items():
               print(f"{name}: {result['result']}")
-          if not results or any(result['result'] != 'success' for result in results.values()):
+          if not results or any(result['result'] != 'success'
+                                 and not (name in left_out and result['result'] == 'skipped')
+                                 for name, result in results.items()):
               raise SystemExit('every required job must succeed')
           PY
 
@@ -160,6 +170,7 @@ jobs:
           lychee --offline --include-fragments=anchor-only --no-ignore --index-files index.html --root-dir "$RUNNER_TEMP/pages" 'site/**/*.html'
 
   artifacts:
+    if: inputs.scope != 'tests'
     uses: $/.github/workflows/artifacts.yml
 
   test:
@@ -423,6 +434,7 @@ jobs:
   # removed and no network, from the cache the first run saved
   action:
     name: action on ${{ matrix.os }}
+    if: inputs.scope != 'tests'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -482,6 +494,7 @@ jobs:
   # the R package in r/, checked by R CMD check against the fetchloom this job builds; the check
   # fails on a warning, and a skipped test fails the job too
   r:
+    if: inputs.scope != 'tests'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
