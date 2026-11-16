@@ -95,6 +95,45 @@ fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
     }
 }
 
+/// no key goes to a plain http mirror of huggingface.co, not even one saved for its host on this
+/// machine, where a key may otherwise go over http; the same mirror over https gets its key.
+#[test]
+fn no_key_goes_to_a_plain_http_hugging_face_mirror() {
+    let saved = |host: &str| Credential {
+        host: host.to_owned(),
+        header: "authorization",
+        value: "Bearer mirror-test".to_owned(),
+        every_hop: false,
+        every_port: false,
+    };
+    let mirrored = Url::parse("http://127.0.0.1:8080/api/datasets/x/y").unwrap();
+    let plain = carrying(vec![saved("127.0.0.1:8080")]);
+    let request = plain
+        .request(any_client(&plain), &mirrored, true)
+        .build()
+        .unwrap();
+    assert_eq!(
+        request.headers()[header::AUTHORIZATION],
+        "Bearer mirror-test"
+    );
+    let net = carrying(vec![saved("127.0.0.1:8080")])
+        .with_hf_endpoint(Some(crate::net::Endpoint::at("http://127.0.0.1:8080")));
+    let request = net
+        .request(any_client(&net), &mirrored, true)
+        .build()
+        .unwrap();
+    assert!(!request.headers().contains_key(header::AUTHORIZATION));
+    let net = carrying(vec![saved("hf-mirror.example")])
+        .with_hf_endpoint(Some(crate::net::Endpoint::at("https://hf-mirror.example")));
+    let client = any_client(&net);
+    let mirrored = Url::parse("https://hf-mirror.example/api/datasets/x/y").unwrap();
+    let request = net.request(client, &mirrored, true).build().unwrap();
+    assert_eq!(
+        request.headers()[header::AUTHORIZATION],
+        "Bearer mirror-test"
+    );
+}
+
 /// a semantic scholar key goes to its API alone: never to the links on S3 the API gives for
 /// dataset files, to its website, or over http.
 #[test]

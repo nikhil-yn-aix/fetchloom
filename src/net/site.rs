@@ -537,8 +537,18 @@ impl Net {
         self
     }
 
-    /// whether a saved credential may go with a request for `url`, as [`carried`] judges.
+    /// whether a saved credential may go with a request for `url`, as [`carried`] judges, and
+    /// never over plain http to the mirror of huggingface.co `HF_ENDPOINT` names, which every
+    /// request for huggingface.co reaches.
     pub(crate) fn carries(&self, url: &Url) -> bool {
+        if url.scheme() == "http"
+            && self
+                .hf_endpoint
+                .as_ref()
+                .is_some_and(|endpoint| endpoint.holds(url))
+        {
+            return false;
+        }
         url.scheme() == "https"
             || self
                 .wire()
