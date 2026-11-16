@@ -767,7 +767,12 @@ impl<'a> Loop<'a> {
                 .iter()
                 .map(|draft| draft.foreseen(&self.cache))
                 .collect();
-            plan::foresee(manifest, kept.iter().chain(&foreseen), &self.cache)?;
+            plan::foresee(
+                manifest,
+                kept.iter().chain(&foreseen),
+                &self.cache,
+                &self.told,
+            )?;
             if self.places.load(Ordering::Relaxed) && !self.net.offline().enabled() {
                 // placing downloads each SHA-256 once
                 let mut seen: HashSet<Sha256> = jobs

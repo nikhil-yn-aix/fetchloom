@@ -1,7 +1,7 @@
 //! where every locked file lands in the project, checked for clashes before anything is written,
 //! with names compared as a disk that ignores case does, so a lock placing here places on windows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::archive;
 use crate::cache::{Cache, Member};
@@ -95,14 +95,7 @@ pub(crate) fn from_cache_adding<'a>(
     cache: &Cache,
     added: &[String],
 ) -> Result<Plan<'a>, Error> {
-    let added: HashSet<&str> = added.iter().map(String::as_str).collect();
-    let patterns = |dataset: &str| {
-        if added.contains(dataset) {
-            Patterns::OnCommandLine
-        } else {
-            Patterns::InDataToml
-        }
-    };
+    let patterns = adding(added.iter().map(String::as_str).collect());
     let mut plan = planned(
         manifest,
         &lock.datasets,
@@ -122,16 +115,31 @@ fn waiting(lock: &Lock) -> Vec<&str> {
 
 /// refuses, before anything downloads, a clash among the files of `datasets` the cache's records
 /// already place. an archive with no record is checked once it is unpacked, before any placing.
+/// a clash in a dataset of `added`, whose patterns came from an add's command line, names its
+/// options, as [`from_cache_adding`] does.
 pub(crate) fn foresee<'a>(
     manifest: &Manifest,
     datasets: impl IntoIterator<Item = &'a Locked>,
     cache: &Cache,
+    added: &BTreeSet<String>,
 ) -> Result<(), Error> {
     // in data.lock's order, so a clash names its datasets as the later check does
     let mut datasets: Vec<&Locked> = datasets.into_iter().collect();
     datasets.sort_by(|a, b| a.name.cmp(&b.name));
     let members = |archive: &Archive<'_>| archive.recorded(cache);
-    planned(manifest, datasets, &members, &|_| Patterns::InDataToml).map(drop)
+    let patterns = adding(added.iter().map(String::as_str).collect());
+    planned(manifest, datasets, &members, &patterns).map(drop)
+}
+
+/// where each dataset's patterns were written, in a run that adds `added` from its command line.
+fn adding(added: HashSet<&str>) -> impl Fn(&str) -> Patterns + '_ {
+    move |dataset| {
+        if added.contains(dataset) {
+            Patterns::OnCommandLine
+        } else {
+            Patterns::InDataToml
+        }
+    }
 }
 
 /// every file the lock places for data.toml's datasets, archives as `members` recorded them, or
@@ -915,6 +923,18 @@ fn fix(
         .map(|target| target.file);
     if let (Some(member), Some(listed)) = (unpacked, listed) {
         return beside(member, listed, targets, patterns);
+    }
+    if unpacked.is_none() && patterns == Patterns::OnCommandLine {
+        let others: Vec<&str> = targets
+            .iter()
+            .filter(|target| target.dataset == second.dataset && target.file != second.file)
+            .map(|target| target.file.path.as_str())
+            .collect();
+        return format!(
+            "leave {} out with {}",
+            name::spelled(&second.path),
+            glob::exclusion_flag_among(&second.file.path, &others)
+        );
     }
     let left_out = leave_out("one of them", unpacked.unwrap_or(second), patterns);
     match (first.archive(), second.archive()) {

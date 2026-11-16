@@ -314,8 +314,30 @@ pub(crate) fn exclusion_flag(path: &str) -> String {
 /// [`shell_word_for`] quotes a word, and in double quotes where it needs none, as data.toml
 /// shows a pattern.
 fn exclusion_flag_for(path: &str, windows: bool) -> String {
-    let pattern = escape(path);
-    let quoted = match shell_word_for(&pattern, windows) {
+    quoted_exclusion(&escape(path), windows)
+}
+
+/// [`exclusion_flag`] for `path`, with each of its characters beyond ascii written as `?` where
+/// that pattern leaves out none of `others`: a name in two unicode spellings, or with a code
+/// point that prints as nothing, then gets a flag that shows what it matches and that a terminal
+/// copies as it is.
+pub(crate) fn exclusion_flag_among(path: &str, others: &[&str]) -> String {
+    let pattern: String = escape(path)
+        .chars()
+        .map(|c| if c.is_ascii() { c } else { '?' })
+        .collect();
+    let alone = Glob::new(&pattern)
+        .is_ok_and(|glob| glob.matches(path) && !others.iter().any(|other| glob.matches(other)));
+    if pattern != escape(path) && alone {
+        quoted_exclusion(&pattern, cfg!(windows))
+    } else {
+        exclusion_flag(path)
+    }
+}
+
+/// `--exclude` with `pattern`, quoted as [`exclusion_flag_for`] quotes it.
+fn quoted_exclusion(pattern: &str, windows: bool) -> String {
+    let quoted = match shell_word_for(pattern, windows) {
         Cow::Borrowed(plain) => format!("\"{plain}\""),
         Cow::Owned(quoted) => quoted,
     };
@@ -462,6 +484,24 @@ mod tests {
         }
         assert!(!matches(&escape("data[1].csv"), "data1.csv"));
         assert!(!matches(&escape("a*.csv"), "abc.csv"));
+    }
+
+    /// a name beyond ascii gets a pattern of `?` in its place where that leaves out no other
+    /// file, and the flag for exactly the name where it would.
+    #[test]
+    fn an_exclusion_among_others_leaves_out_one_file() {
+        assert_eq!(
+            exclusion_flag_among("a\u{200c}b.csv", &["ab.csv"]),
+            "--exclude \"a?b.csv\""
+        );
+        assert_eq!(
+            exclusion_flag_among("a\u{200c}b.csv", &["ab.csv", "aXb.csv"]),
+            exclusion_flag("a\u{200c}b.csv")
+        );
+        assert_eq!(
+            exclusion_flag_among("ab.csv", &[]),
+            exclusion_flag("ab.csv")
+        );
     }
 
     #[test]

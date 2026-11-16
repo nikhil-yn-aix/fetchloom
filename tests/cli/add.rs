@@ -966,6 +966,67 @@ fn a_home_folder_refusal_repeats_the_command_for_the_new_folder() -> Result {
     Ok(())
 }
 
+/// a clash an add finds between two spellings of one name says which file to leave out and the
+/// `--exclude` that does it, which the add then takes: a name in two unicode spellings, and one
+/// with a code point hfs+ ignores, each kept alone.
+#[test]
+fn a_clash_in_an_add_gives_the_exclude_that_ends_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![
+        ("/a/na%C3%AFve.csv".to_owned(), file(b"composed\n", "\"c\"")),
+        (
+            "/a/nai%CC%88ve.csv".to_owned(),
+            file(b"decomposed\n", "\"d\""),
+        ),
+        ("/a/ab.csv".to_owned(), file(b"plain\n", "\"p\"")),
+        ("/a/a%E2%80%8Cb.csv".to_owned(), file(b"joined\n", "\"j\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    let url = &routes.url;
+    fs::write(
+        sandbox.work().join("spelled.txt"),
+        format!("{url}/a/na%C3%AFve.csv\n{url}/a/nai%CC%88ve.csv\n"),
+    )?;
+    fs::write(
+        sandbox.work().join("joined.txt"),
+        format!("{url}/a/ab.csv\n{url}/a/a%E2%80%8Cb.csv\n"),
+    )?;
+    for (list, help, kept) in [
+        (
+            "list:spelled.txt",
+            "leave data/spelled/na\u{ef}ve.csv out with --exclude \"na?ve.csv\"",
+            "nai\u{308}ve.csv",
+        ),
+        (
+            "list:joined.txt",
+            "leave data/joined/a\\u{200c}b.csv out with --exclude \"a?b.csv\"",
+            "ab.csv",
+        ),
+    ] {
+        let refused = sandbox.run(&["--json", "add", list])?;
+        assert_eq!(
+            refused.status.code(),
+            Some(50),
+            "{}",
+            text(&refused.stdout)?
+        );
+        let error = &json(&refused)?["errors"][0];
+        assert_eq!(error["help"], help, "{error}");
+        let pattern = help
+            .rsplit_once("--exclude ")
+            .map(|(_, pattern)| pattern.trim_matches(['\'', '"']))
+            .unwrap_or_default();
+        let added = sandbox.run(&["add", list, "--exclude", pattern])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+        let name = list.trim_start_matches("list:").trim_end_matches(".txt");
+        let placed: Vec<String> = fs::read_dir(sandbox.work().join("data").join(name))?
+            .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+            .collect::<std::io::Result<_>>()?;
+        assert_eq!(placed, [kept], "{list}");
+    }
+    Ok(())
+}
+
 /// a reference whose prefix is one typo from one fetchloom reads, or that comes inside <> or
 /// quotes, gets the line with it fixed.
 #[test]
