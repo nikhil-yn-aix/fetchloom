@@ -1093,11 +1093,12 @@ impl<'a> Loop<'a> {
                 continue;
             }
             let entry = &manifest.datasets[&name];
+            let parsed = Reference::parse(&text);
             // a list in the project is read from its file there, which needs no network
             if let Ok(Parsed {
                 reference: Reference::List(list),
                 ..
-            }) = Reference::parse(&text)
+            }) = &parsed
                 && list.in_project().is_some()
             {
                 let listing = list
@@ -1121,7 +1122,7 @@ impl<'a> Loop<'a> {
                 )));
             }
             let select = &entry.source.select;
-            let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
+            let parsed = parsed.map_err(|err| cite_place(err, entry, "ref"))?;
             if self.context.mirrors.mirrors.only
                 && !fetch::mirrors::resolves_at_hf_endpoint(self.context, &parsed.reference)
             {
