@@ -8,6 +8,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -15,6 +16,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+import zipfile
 from pathlib import Path
 
 
@@ -84,16 +86,16 @@ class LocalRelease(unittest.TestCase):
         with opener.open(self.url + "/", timeout=5) as response:
             self.assertEqual(response.status, 200)
 
-    def package(self, matching=True, exit_code=0, build=""):
+    def package(self, matching=True, exit_code=0, build="", said="fetchloom 0.1.0", flat=False):
         name = f"fetchloom-0.1.0-{self.target}"
         executable = (
             '#!/bin/sh\nprintf ran > "$HOME/executed"\n'
-            "printf 'fetchloom 0.1.0\\n'\n"
+            f"printf '{said}\\n'\n"
             f"exit {exit_code}\n# {build}\n"
         ).encode()
         archive = self.release / f"{name}.tar.gz"
         with tarfile.open(archive, "w:gz") as packed:
-            entry = tarfile.TarInfo(f"{name}/fetchloom")
+            entry = tarfile.TarInfo("fetchloom" if flat else f"{name}/fetchloom")
             entry.mode = 0o755
             entry.size = len(executable)
             packed.addfile(entry, io.BytesIO(executable))
@@ -101,14 +103,14 @@ class LocalRelease(unittest.TestCase):
         (self.release / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
         return executable
 
-    def install(self, modify_path=False, path=None, url=None):
+    def install(self, modify_path=False, path=None, url=None, version="0.1.0"):
         env = {name: value for name, value in os.environ.items()
                if not name.upper().startswith("FETCHLOOM_") and not name.upper().endswith("_PROXY")}
         env.update(HOME=str(self.home), FETCHLOOM_DOWNLOAD_URL=url or self.url, NO_PROXY="127.0.0.1",
                    PATH=os.pathsep.join(self.tools if path is None else path))
         if not modify_path:
             env["FETCHLOOM_NO_MODIFY_PATH"] = "1"
-        return subprocess.run(["sh", str(ROOT / "install.sh"), "0.1.0"], env=env,
+        return subprocess.run(["sh", str(ROOT / "install.sh"), *filter(None, [version])], env=env,
                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
 
 
@@ -132,6 +134,51 @@ class InstallerChecks(LocalRelease):
         self.assertFalse((self.home / "executed").exists())
         self.assertEqual(self.profile.read_text(), "# existing profile\n")
 
+    def test_a_program_that_is_not_the_version_named_is_refused(self):
+        self.package(said="fetchloom 0.0.9")
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("error: the downloaded fetchloom says it is fetchloom 0.0.9, not fetchloom 0.1.0. "
+                      "nothing was installed", result.stderr)
+        self.assertEqual(self.bin.read_bytes(), b"previous installation\n")
+
+    def test_an_archive_without_its_folder_names_where_the_program_belongs(self):
+        self.package(flat=True)
+        result = self.install()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"holds no fetchloom-0.1.0-{self.target}/fetchloom. nothing was installed", result.stderr)
+
+    def test_an_archive_name_that_is_no_plain_version_is_refused(self):
+        archive = self.release / f"fetchloom-0.1.0-{self.target}.tar.gz"
+        self.package()
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (self.release / "SHA256SUMS").write_text(
+            f"{digest}  fetchloom-0.1.0/../../trav-{self.target}.tar.gz\n", encoding="ascii")
+        result = self.install(version=None)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"SHA256SUMS lists no fetchloom archive for {self.target}", result.stderr)
+        self.assertEqual(self.bin.read_bytes(), b"previous installation\n")
+
+    def test_a_staging_folder_a_killed_run_left_is_removed(self):
+        self.package()
+        folder = self.bin.parent
+        # pid_max is at most 4194304, so no process has these
+        stale = folder / ".fetchloom-install-999999999"
+        (stale / "fetchloom-0.1.0").mkdir(parents=True)
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "kept").write_text("kept\n", encoding="utf-8")
+        linked = folder / ".fetchloom-install-999999998"
+        linked.symlink_to(outside, target_is_directory=True)
+        running = folder / f".fetchloom-install-{os.getpid()}"
+        running.mkdir()
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(os.path.lexists(stale))
+        self.assertFalse(os.path.lexists(linked))
+        self.assertEqual((outside / "kept").read_text(encoding="utf-8"), "kept\n")
+        self.assertTrue(running.is_dir())
+
     def test_failed_version_check_preserves_the_installed_program(self):
         self.package(exit_code=19)
         result = self.install()
@@ -146,6 +193,25 @@ class InstallerChecks(LocalRelease):
         profile = self.profile.read_text()
         self.assertTrue(profile.startswith("# existing profile\n"))
         self.assertEqual(profile.count('export PATH="$HOME/.local/bin:$PATH"'), 1)
+
+    def test_a_profile_it_cannot_write_is_named_and_the_others_still_change(self):
+        # a read-only ~/.bashrc, as a home-manager link into /nix/store is, stopped dash after
+        # fetchloom was installed, so ~/.zshrc and the next steps were left out
+        executable = self.package()
+        bashrc, zshrc = self.home / ".bashrc", self.home / ".zshrc"
+        bashrc.write_text("# managed elsewhere\n", encoding="utf-8")
+        bashrc.chmod(0o444)
+        self.addCleanup(bashrc.chmod, 0o644)
+        zshrc.write_text("# zsh\n", encoding="utf-8")
+        result = self.install(modify_path=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.bin.read_bytes(), executable)
+        self.assertIn("warning: could not add ~/.local/bin to PATH in ~/.bashrc", result.stderr)
+        self.assertEqual(bashrc.read_text(encoding="utf-8"), "# managed elsewhere\n")
+        for profile in [self.profile, zshrc]:
+            self.assertEqual(profile.read_text(encoding="utf-8").count('export PATH="$HOME/.local/bin:$PATH"'), 1)
+        self.assertIn("added", result.stdout)
+        self.assertIn("next: open a new terminal and run fetchloom to see the first steps", result.stdout)
 
     def test_a_wget_that_cannot_hold_to_https_is_refused_before_any_download(self):
         self.package()
@@ -340,3 +406,130 @@ class PowerShellDownloadUrl(unittest.TestCase):
                 self.assertIn(f"downloading {url}/SHA256SUMS", printed)
                 self.assertIn(f"could not download {url}/SHA256SUMS", said)
                 self.assertNotIn(REFUSED, said)
+
+
+@unittest.skipUnless(shutil.which("pwsh"), "install.ps1 runs in powershell 7 here")
+class PowerShellRelease(unittest.TestCase):
+    """install.ps1 against a private release on loopback, stopping before it runs anything it
+    downloaded unless a test says otherwise."""
+
+    # install.ps1 asks for the arm64 build on an arm64 system, as on an apple silicon mac
+    TARGET = ("aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64") + "-pc-windows-msvc"
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.local = self.root / "local"
+        self.release = self.root / "release"
+        self.release.mkdir()
+        self.programs = self.local / "Programs/fetchloom"
+        self.url = serve(self, self.release)
+
+    def package(self, program=b"not a program\n", inside=None):
+        """a release archive whose fetchloom.exe is ``program``, kept at ``inside``, and the
+        SHA256SUMS line naming it; returns the archive's SHA-256."""
+        name = f"fetchloom-0.1.0-{self.TARGET}"
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, "w") as packed:
+            packed.writestr(inside or f"{name}/fetchloom.exe", program)
+        (self.release / f"{name}.zip").write_bytes(data.getvalue())
+        digest = hashlib.sha256(data.getvalue()).hexdigest()
+        (self.release / "SHA256SUMS").write_text(f"{digest}  {name}.zip\n", encoding="ascii")
+        return digest
+
+    def install(self, version="0.1.0"):
+        env = {name: value for name, value in os.environ.items()
+               if not name.upper().startswith("FETCHLOOM_") and not name.upper().endswith("_PROXY")}
+        env.update(LOCALAPPDATA=str(self.local), FETCHLOOM_DOWNLOAD_URL=self.url, FETCHLOOM_NO_MODIFY_PATH="1",
+                   NO_PROXY="127.0.0.1")
+        command = [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                   "-File", str(ROOT / "install.ps1"), *(["-Version", version] if version else [])]
+        result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                timeout=120)
+        # powershell may color an error and wraps a long one across lines behind a | gutter
+        said = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.stderr).replace("|", " ").split())
+        return result, said
+
+    def test_an_archive_name_that_is_no_plain_version_is_refused_before_any_download(self):
+        digest = self.package()
+        # windows and .net read each .. against the folder before it, so this name led two
+        # folders above the staging folder
+        (self.release / f"trav-{self.TARGET}.zip").write_bytes((self.release / f"fetchloom-0.1.0-{self.TARGET}.zip").read_bytes())
+        (self.release / "SHA256SUMS").write_text(f"{digest}  fetchloom-../../../../trav-{self.TARGET}.zip\n",
+                                                 encoding="ascii")
+        result, said = self.install(version=None)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"SHA256SUMS lists no fetchloom archive for {self.TARGET}", said)
+        self.assertEqual(sorted(path.name for path in self.root.rglob(f"trav-{self.TARGET}.zip")),
+                         [f"trav-{self.TARGET}.zip"])
+
+    def test_an_archive_without_its_folder_names_where_the_program_belongs(self):
+        self.package(inside="fetchloom.exe")
+        result, said = self.install()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = f"fetchloom-0.1.0-{self.TARGET}.zip holds no fetchloom-0.1.0-{self.TARGET}\\fetchloom.exe. nothing was installed"
+        self.assertIn(expected, said)
+
+    def test_a_folder_in_the_programs_place_is_refused_before_any_download(self):
+        self.package()
+        destination = self.programs / "bin/fetchloom.exe"
+        destination.mkdir(parents=True)
+        result, said = self.install()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("fetchloom.exe is a folder or a link to one. nothing was installed", said)
+        self.assertNotIn("downloading", result.stdout)
+        self.assertEqual(list(destination.iterdir()), [])
+
+    def test_a_staging_folder_a_killed_run_left_is_removed(self):
+        stale = self.programs / "install-999999999"
+        (stale / "fetchloom-0.1.0").mkdir(parents=True)
+        aside = self.programs / "old-fl-12.exe"
+        aside.write_bytes(b"an old fl.exe a running program held\n")
+        running = self.programs / f"install-{os.getpid()}"
+        running.mkdir()
+        # the release holds nothing, so the run stops at its first download
+        result, said = self.install()
+        self.assertIn("could not download", said)
+        self.assertFalse(stale.exists())
+        self.assertFalse(aside.exists())
+        self.assertTrue(running.is_dir())
+
+    @unittest.skipUnless(os.path.isfile(r"C:\Windows\System32\curl.exe"), "needs windows' own curl.exe")
+    def test_a_program_that_is_not_the_version_named_is_refused(self):
+        installed = self.programs / "bin/fetchloom.exe"
+        installed.parent.mkdir(parents=True)
+        installed.write_bytes(b"previous installation\n")
+        self.package(program=Path(r"C:\Windows\System32\curl.exe").read_bytes())
+        result, said = self.install()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(said, r"the downloaded fetchloom\.exe says it is curl \S+ .*, not fetchloom 0\.1\.0\. nothing was installed")
+        self.assertIn("checking that the downloaded fetchloom.exe runs on this machine", result.stdout)
+        self.assertEqual(installed.read_bytes(), b"previous installation\n")
+
+    @unittest.skipUnless(sys.platform == "win32" and (ROOT / "target/debug/fetchloom.exe").is_file(),
+                         "needs windows and a fetchloom.exe built here")
+    def test_a_running_fl_exe_goes_aside_so_an_upgrade_makes_it_again(self):
+        self.package(program=(ROOT / "target/debug/fetchloom.exe").read_bytes())
+        result, said = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        bin = self.programs / "bin"
+        # a listener that never answers keeps fl.exe waiting on its download, running
+        with socket.create_server(("127.0.0.1", 0)) as silent:
+            origin = f"http://127.0.0.1:{silent.getsockname()[1]}"
+            env = {**os.environ, "LOCALAPPDATA": str(self.local), "FETCHLOOM_ALLOWED_ORIGINS": origin,
+                   "FETCHLOOM_KEYRING": "0", "NO_PROXY": "127.0.0.1"}
+            running = subprocess.Popen([str(bin / "fl.exe"), "get", "--dir", str(self.root / "out"), f"{origin}/slow"],
+                                       env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+            self.addCleanup(running.wait)
+            self.addCleanup(running.kill)
+            silent.settimeout(60)
+            held, _ = silent.accept()
+            with held:
+                result, said = self.install()
+                self.assertIsNone(running.poll())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("fl.exe was not made", said)
+        self.assertTrue(os.path.samefile(bin / "fl.exe", bin / "fetchloom.exe"))
+        self.assertEqual(len(list(self.programs.glob("old-fl-*.exe"))), 1)

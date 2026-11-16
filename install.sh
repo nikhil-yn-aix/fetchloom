@@ -107,8 +107,8 @@ esac
 version=${1:-${FETCHLOOM_VERSION:-}}
 version=${version#v}
 case $version in
-    '' | [0-9]*) ;;
-    *) fail "$version is not a version. give one such as 0.1.0" ;;
+    '') ;;
+    [0-9]*[!0-9A-Za-z.+-]* | [!0-9]*) fail "$version is not a version. give one such as 0.1.0" ;;
 esac
 
 protocols='=https'
@@ -132,6 +132,17 @@ check_destination
 mkdir -p "$bin_dir"
 # staged beside the destination, so moving each program into place is a rename
 work=$bin_dir/.fetchloom-install-$$
+# a run that was killed leaves its staging folder: one whose run is gone goes, and rm takes a link
+# itself, never what it leads to
+for stale in "$bin_dir"/.fetchloom-install-*; do
+    pid=${stale##*-}
+    case $pid in
+        '' | *[!0-9]*) continue ;;
+    esac
+    if [ "$pid" != $$ ] && ! kill -0 "$pid" 2> /dev/null; then
+        rm -rf "$stale"
+    fi
+done
 rm -rf "$work"
 mkdir "$work"
 trap 'rm -rf "$work"' EXIT
@@ -139,7 +150,8 @@ trap 'exit 1' HUP INT TERM
 
 echo "downloading $release/SHA256SUMS"
 download "$release/SHA256SUMS" "$work/SHA256SUMS" || fail "could not download $release/SHA256SUMS"
-line=$(grep -E '^[0-9a-f]{64} [ *]fetchloom-[^ ]+-'"$target"'\.tar\.gz$' "$work/SHA256SUMS" | head -n 1)
+# a plain version, so the archive's name cannot lead outside the staging folder
+line=$(grep -E '^[0-9a-f]{64} [ *]fetchloom-[0-9][0-9A-Za-z.+-]*-'"$target"'\.tar\.gz$' "$work/SHA256SUMS" | head -n 1)
 [ -n "$line" ] || fail "$release/SHA256SUMS lists no fetchloom archive for $target"
 expected=${line%% *}
 asset=${line##*[ *]}
@@ -161,11 +173,15 @@ fi
 
 tar -xzf "$work/$asset" -C "$work"
 folder=$work/${asset%.tar.gz}
-[ -f "$folder/fetchloom" ] || fail "$asset holds no fetchloom. nothing was installed"
+[ -f "$folder/fetchloom" ] || fail "$asset holds no ${asset%.tar.gz}/fetchloom. nothing was installed"
 # run the staged program, which sits in the destination folder, before it replaces anything: a
 # noexec disk or a build this machine cannot run fails here, leaving a working fetchloom in place
 installed=$("$folder/fetchloom" --version) ||
     fail "the downloaded fetchloom does not run on this machine. nothing was installed"
+installed=$(printf '%s\n' "$installed" | head -n 1)
+if [ "$installed" != "fetchloom $found" ]; then
+    fail "the downloaded fetchloom says it is ${installed:-nothing}, not fetchloom $found. nothing was installed"
+fi
 check_destination
 mv -f "$folder/fetchloom" "$bin_dir/fetchloom"
 echo "installed $installed in $bin_dir"
@@ -215,8 +231,13 @@ case ":$PATH:" in
                 *) [ -f "$profile" ] || continue ;;
             esac
             if ! grep -qsxF "$export_line" "$profile"; then
-                printf '\n# added by the fetchloom installer\n%s\n' "$export_line" >> "$profile"
-                changed="$changed ~/${profile##*/}"
+                # a profile this user cannot write, as a link into /nix/store is, keeps its own
+                # lines; the others still change and the install stands
+                if { printf '\n# added by the fetchloom installer\n%s\n' "$export_line" >> "$profile"; } 2> /dev/null; then
+                    changed="$changed ~/${profile##*/}"
+                else
+                    echo "warning: could not add ~/.local/bin to PATH in ~/${profile##*/}, which this user cannot write. add $export_line to it yourself" >&2
+                fi
             fi
         done
         if [ -n "$changed" ]; then
