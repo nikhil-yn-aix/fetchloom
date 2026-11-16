@@ -69,6 +69,8 @@ a step's program is found as cmd.exe finds it: in the folders of `PATH`, in orde
 
 a `.bat` or `.cmd` program runs through cmd.exe, which reads its arguments again. fetchloom leaves the quoting to rust, which quotes each argument so the program gets it as written, `%` and `&` included, and refuses one it cannot pass safely, such as an argument with a line break; that step does not start.
 
+fetchloom shows a step's output under `Running` as UTF-8 text. a program that writes in the windows code page instead, as python does when its output goes to a pipe rather than a console, shows a letter outside ASCII, such as `ü`, as `�` there, while the step's log in `.fetchloom/builds` keeps its bytes as written. for a python step, `env = { PYTHONUTF8 = "1" }` in the recipe makes python write UTF-8; like any `env`, it enters the recipe's key, so the step runs again once.
+
 a step reaches `{out}` and the copies of what it reads by path, so while it runs fetchloom holds those folders, and the ones above them, open: no one, the step included, can rename or delete one of them, so another account cannot put a junction to another folder in its place when the cache is outside your profile. a step writes into `{out}` as it is; one that deletes `{out}` to make it again fails. a folder the step makes inside `{out}` is not held until fetchloom takes the result in, so on a machine other accounts share, keep the cache inside your profile, as [cache folder](../reference/cache-folder.md) says.
 
 ## company proxies
