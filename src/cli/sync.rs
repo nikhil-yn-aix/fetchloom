@@ -365,33 +365,38 @@ impl<'a> Loop<'a> {
         self.ask_room(lock, &placing)?;
         // the first failure that leaves files for a later run waits until the rest is in
         let mut failed = None;
-        let unknown = archives::of(lock, placing.unknown());
-        if !unknown.is_empty() {
-            let unknown = fetch::mirrors::trees(self.context, &self.net, &self.cache, unknown)
+        let mut unknown = archives::of(lock, placing.unknown());
+        let unpacks = !unknown.is_empty();
+        if unpacks {
+            unknown = fetch::mirrors::trees(self.context, &self.net, &self.cache, unknown)
                 .await
                 .map_err(|error| self.as_left(error))?;
+        }
+        let mut missing = None;
+        if self.net.offline().enabled() || self.context.mirrors.mirrors.only {
+            if unpacks {
+                placing = self.placed_again(manifest, lock, force, placing)?;
+            }
+            let found = self
+                .missing_after_fill(manifest, &placing, &unknown)
+                .await?;
+            failed = first_left(
+                failed,
+                self.refuse_lacking(manifest, lock, &unknown, &found),
+            )?;
+            // with no archive to unpack first, placing and what it lacks stay as they are
+            missing = (!unpacks).then_some(found);
+        }
+        if unpacks {
             let unpacked = self.unpack_locked(manifest, lock, &unknown).await;
             failed = first_left(failed, unpacked)?;
-            let survey = placing.into_survey();
-            placing = Placing::new(
-                self.project,
-                manifest,
-                lock,
-                &self.cache,
-                force,
-                &self.scope,
-                survey,
-            )?;
-            placing.listed(self.unlisted());
+            placing = self.placed_again(manifest, lock, force, placing)?;
         }
-        let folder = DataFolder::found(self.project, manifest, placing.holding());
-        fetch::mirrors::fill(self.context, &self.net, &self.cache, &folder, || {
-            placing.wanted(&self.cache)
-        })
-        .await
-        .map_err(|error| self.as_left(error))?;
-        let (unpacking, files): (Vec<_>, Vec<_>) = placing
-            .missing(&self.cache)?
+        let missing = match missing {
+            Some(missing) => missing,
+            None => self.missing_after_fill(manifest, &placing, &[]).await?,
+        };
+        let (unpacking, files): (Vec<_>, Vec<_>) = missing
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
         let cached = crate::place::run_all(&files, self.context.threads, |(_, file)| {
@@ -417,6 +422,100 @@ impl<'a> Loop<'a> {
             Some(error) => Err(*error),
             None => Ok(placing),
         }
+    }
+
+    /// `placing` made again from what the cache now knows, as once an archive's list of files
+    /// came, so its files are placed too.
+    fn placed_again<'p>(
+        &'p self,
+        manifest: &'p Manifest,
+        lock: &'p Lock,
+        force: bool,
+        placing: Placing<'p>,
+    ) -> Result<Placing<'p>, Error> {
+        let survey = placing.into_survey();
+        let mut placing = Placing::new(
+            self.project,
+            manifest,
+            lock,
+            &self.cache,
+            force,
+            &self.scope,
+            survey,
+        )?;
+        placing.listed(self.unlisted());
+        Ok(placing)
+    }
+
+    /// takes in from the data folder, the reuse folders and the mirrors what `placing` and the
+    /// archives `unknown`, whose lists of files no mirror gave, need, and returns what placing
+    /// still lacks: whole files, and archives whose files it lacks.
+    async fn missing_after_fill<'f>(
+        &self,
+        manifest: &Manifest,
+        placing: &Placing<'f>,
+        unknown: &[(String, Archive<'_>)],
+    ) -> Result<Vec<(String, &'f LockedFile)>, Error> {
+        let folder = DataFolder::found(self.project, manifest, placing.holding());
+        fetch::mirrors::fill(self.context, &self.net, &self.cache, &folder, || {
+            let mut wanted = placing.wanted(&self.cache);
+            for (dataset, archive) in unknown {
+                let files = archive.files().into_iter();
+                wanted.extend(files.filter(|file| !self.holds(file)).map(|file| {
+                    crate::mirror::Wanted {
+                        digest: file.sha256,
+                        size: file.size,
+                        label: format!("{dataset}/{}", file.path),
+                        link: (!file.url.is_empty()).then(|| file.url.clone()),
+                    }
+                }));
+            }
+            wanted
+        })
+        .await
+        .map_err(|error| self.as_left(error))?;
+        placing.missing(&self.cache)
+    }
+
+    /// refuses at once every file that no download may fetch and the cache still lacks: of the
+    /// archives `unknown`, whose lists of files no mirror gave, and of `missing`, what placing
+    /// lacks. a run that may ask no source thus names them all, as its dry run does, not only
+    /// those of the first step that needs one.
+    fn refuse_lacking<'f>(
+        &self,
+        manifest: &Manifest,
+        lock: &'f Lock,
+        unknown: &[(String, Archive<'f>)],
+        missing: &[(String, &'f LockedFile)],
+    ) -> Result<(), Error> {
+        let (unpacking, files): (Vec<_>, Vec<_>) = missing
+            .iter()
+            .cloned()
+            .partition(|(_, file)| file.unpacks_to.is_some());
+        let unpacking = archives::of(lock, unpacking);
+        let mut seen = HashSet::new();
+        let lacking: Vec<(&str, &LockedFile)> = unknown
+            .iter()
+            .chain(&unpacking)
+            .flat_map(|(dataset, archive)| {
+                let files = archive.files().into_iter();
+                files.map(move |file| (dataset.as_str(), file))
+            })
+            .chain(
+                files
+                    .iter()
+                    .map(|(dataset, file)| (dataset.as_str(), *file)),
+            )
+            .filter(|(dataset, file)| {
+                !self.holds(file) && seen.insert((*dataset, file.path.as_str()))
+            })
+            .collect();
+        self.refuse_unfetchable(manifest, &lacking)
+    }
+
+    /// whether the cache holds the bytes of `file`.
+    fn holds(&self, file: &LockedFile) -> bool {
+        self.cache.find(&file.sha256, Some(file.size)).is_some()
     }
 
     /// keeps the exclude patterns of `name` that match no path `listing` names, for placing.

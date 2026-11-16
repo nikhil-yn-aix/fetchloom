@@ -776,6 +776,49 @@ fn a_mirror_that_answered_is_told_by_its_answer() -> Result {
     Ok(())
 }
 
+/// a run that may ask no source, offline or mirror-only, names every file it lacks in one refusal,
+/// as its dry run counts them: the archive whose list no mirror gave and the csv file alike, not
+/// only those of the first step that needed one.
+#[test]
+fn a_run_that_may_ask_no_source_names_every_file_it_lacks() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = project(&sandbox)?;
+    let empty = sandbox.folder("lab")?.join("empty");
+    fs::create_dir_all(&empty)?;
+    fs::write(empty.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
+    let empty = empty.display().to_string();
+    for (case, args, said) in [
+        (
+            "offline",
+            ["--json", "--offline", "sync"].as_slice(),
+            "offline, and 2 files data.lock names are not in the cache",
+        ),
+        (
+            "mirrors-only",
+            ["--json", "sync", "--mirror", &empty].as_slice(),
+            "2 files data.lock names are on no mirror, and mirrors_only lets fetchloom ask its mirrors alone",
+        ),
+    ] {
+        let (folder, cache) = cold(&sandbox, case)?;
+        let output = sandbox
+            .command_in(&folder, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .env(
+                "FETCHLOOM_MIRRORS_ONLY",
+                (case == "mirrors-only").to_string(),
+            )
+            .output()?;
+        let document = json(&output)?;
+        let error = &document["errors"][0];
+        assert_eq!(error["message"], said, "{case}: {document}");
+        let details = error["details"].to_string();
+        for file in ["dataset/dataset.zip", "iris/iris.csv"] {
+            assert!(details.contains(file), "{case}: {file} in {details}");
+        }
+    }
+    Ok(())
+}
+
 /// a mirror that asks to wait an hour answered, so it is called busy, not unreachable, and the run
 /// goes to the sources at once.
 #[test]
