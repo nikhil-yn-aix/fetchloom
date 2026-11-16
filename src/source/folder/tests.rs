@@ -176,6 +176,30 @@ fn only_links_into_the_folder_are_entries() {
     );
 }
 
+/// a link to the folder's own path on another host, scheme or port is no entry: a listing could
+/// otherwise have fetchloom pin files another server gives under the folder's name.
+#[test]
+fn the_folders_path_on_another_origin_is_no_entry() {
+    let page = r#"<html><head><title>Index of /data/</title></head><body><pre>
+<a href="../">../</a> <a href="iris.csv">iris.csv</a>
+<a href="https://other.example/data/x.csv">x.csv</a>
+<a href="http://example.org/data/y.csv">y.csv</a>
+<a href="https://example.org:8443/data/z.csv">z.csv</a>
+<a href="//other.example/data/w.csv">w.csv</a>
+</pre></body></html>"#;
+    let index = read_at(page, DATA).unwrap();
+    assert_eq!(names(&index), [("iris.csv", false)]);
+    assert_eq!(
+        index.elsewhere,
+        [
+            "https://other.example/data/x.csv",
+            "http://example.org/data/y.csv",
+            "https://example.org:8443/data/z.csv",
+            "https://other.example/data/w.csv",
+        ]
+    );
+}
+
 /// an entry's name with a separator, a control character or a step up once its percent escapes
 /// are undone, or bytes that are no text, is no name a file may have.
 #[test]
