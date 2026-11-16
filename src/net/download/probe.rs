@@ -17,12 +17,13 @@ use crate::work::Work;
 #[derive(Debug)]
 pub(crate) enum Probed {
     /// the file or its first byte: the whole file's size when the answer states it, whether the
-    /// answer is a web page that names no file, and the name the server gives the file, which a
-    /// download of the link takes.
+    /// answer is a web page that names no file, the name the server gives the file, which a
+    /// download of the link takes, and for such a page, the first bytes a [`Net::peek`] read.
     File {
         total: Option<u64>,
         page: bool,
         name: Option<String>,
+        head: Vec<u8>,
     },
     /// an answer that is no file, with the error a download would end with: a refusal with its
     /// sign-in hint, nothing at the link, or another status.
@@ -48,8 +49,18 @@ impl Net {
     ///
     /// only a stop, `Interrupted`; every other end is a [`Probed`].
     pub(crate) async fn probe(&self, fetch: &Fetch) -> Result<Probed, Error> {
+        self.peek(fetch, 1).await
+    }
+
+    /// [`Net::probe`] asking for the file's first `most` bytes, which an answer that is a web page
+    /// brings in its `head`, so a page can be told from data by its bytes, as a download tells it.
+    ///
+    /// # Errors
+    ///
+    /// only a stop, `Interrupted`; every other end is a [`Probed`].
+    pub(crate) async fn peek(&self, fetch: &Fetch, most: usize) -> Result<Probed, Error> {
         let span = tracing::debug_span!("probe", url = %Shown(&fetch.url));
-        let probed = tracing::Instrument::instrument(self.first_byte(fetch), span).await?;
+        let probed = tracing::Instrument::instrument(self.first_byte(fetch, most), span).await?;
         let refused = matches!(&probed, Probed::Answered { error, .. } if unreadable(error));
         // a pinned S3 version may be gone, or kept from a reader without a key, while the object
         // there now is the pinned file, which a download then takes once its hash says so
@@ -65,13 +76,13 @@ impl Net {
             from,
             ..fetch.clone()
         };
-        match self.first_byte(&now).await? {
+        match self.first_byte(&now, most).await? {
             served @ Probed::File { .. } => Ok(served),
             _ => Ok(probed),
         }
     }
 
-    async fn first_byte(&self, fetch: &Fetch) -> Result<Probed, Error> {
+    async fn first_byte(&self, fetch: &Fetch, most: usize) -> Result<Probed, Error> {
         if self.offline.enabled() {
             return Ok(Probed::Unanswered(failure::offline(
                 &fetch.url,
@@ -102,7 +113,7 @@ impl Net {
         let mut retry = Retry::named(self, fetch);
         loop {
             self.keep_permit(&fetch.from, &mut permits).await?;
-            let failure = match self.ask_first_byte(&from, fetch, &mut permits).await {
+            let failure = match self.ask_first_byte(&from, fetch, &mut permits, most).await {
                 Ok(Step::Probed(probed)) => return Ok(probed),
                 Ok(Step::Divert(next)) => match self.divert(fetch, next, &mut diversions) {
                     Ok(next) => {
@@ -130,23 +141,25 @@ impl Net {
         }
     }
 
-    /// one try: the answer to `Range: bytes=0-0` at `from`, past the pages and refusals a
-    /// download's own checks read. a failure is one the request ended with before any answer, or
-    /// one worth another try.
+    /// one try: the answer to `Range: bytes=0-0` at `from`, or to the first `most` bytes, past the
+    /// pages and refusals a download's own checks read. a failure is one the request ended with
+    /// before any answer, or one worth another try.
     async fn ask_first_byte(
         &self,
         from: &Url,
         fetch: &Fetch,
         permits: &mut Option<Permits>,
+        most: usize,
     ) -> Result<Step, Failure> {
         let holding = Holding::new(&fetch.from, permits);
+        let range = format!("bytes=0-{}", most.saturating_sub(1));
         // the shared client keeps its connections, so many files of one host take a few
         let response = self
             .send_on(
                 Lane::Shared,
                 from,
                 fetch.mirror,
-                |request| request.header(header::RANGE, "bytes=0-0"),
+                |request| request.header(header::RANGE, range.as_str()),
                 Some(holding),
             )
             .await?;
@@ -183,15 +196,26 @@ impl Net {
                         }));
                     }
                 };
-                if status == StatusCode::PARTIAL_CONTENT {
-                    self.read_byte(from, response).await?;
-                }
-                Ok(Step::Probed(Probed::File { total, page, name }))
+                let head = if page && most > 1 {
+                    self.read_head(from, response, most).await?
+                } else {
+                    if status == StatusCode::PARTIAL_CONTENT {
+                        self.read_byte(from, response).await?;
+                    }
+                    Vec::new()
+                };
+                Ok(Step::Probed(Probed::File {
+                    total,
+                    page,
+                    name,
+                    head,
+                }))
             }
             _ if empty.is_some() => Ok(Step::Probed(Probed::File {
                 total: empty,
                 page: false,
                 name: served(&response).ok().flatten(),
+                head: Vec::new(),
             })),
             status => match self.status_refusal(from, status, &head) {
                 Failure::Final(error) => Ok(Step::Probed(Probed::Answered {
@@ -201,6 +225,32 @@ impl Net {
                 failure => Err(failure),
             },
         }
+    }
+
+    /// reads at most the first `most` bytes of an answer, as a page tells itself by them.
+    async fn read_head(
+        &self,
+        from: &Url,
+        mut response: reqwest::Response,
+        most: usize,
+    ) -> Result<Vec<u8>, Failure> {
+        let mut head = Vec::with_capacity(most);
+        while head.len() < most {
+            let chunk = tokio::select! {
+                chunk = tokio::time::timeout(self.idle, response.chunk()) => chunk,
+                () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(from))),
+            };
+            match chunk {
+                Ok(Ok(Some(chunk))) => {
+                    Work::add(&self.work.bytes_down, chunk.len() as u64);
+                    let take = chunk.len().min(most - head.len());
+                    head.extend_from_slice(&chunk[..take]);
+                }
+                // what came is all a page shows of itself
+                _ => break,
+            }
+        }
+        Ok(head)
     }
 
     /// reads the byte a part brings, so its connection can carry the next request, as one left

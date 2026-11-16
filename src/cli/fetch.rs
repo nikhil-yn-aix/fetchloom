@@ -38,7 +38,7 @@ pub(super) struct Job {
 }
 
 /// the first bytes of a file that came as a web page, which tell a page from data.
-const HEAD: usize = 1024;
+pub(in crate::cli) const HEAD: usize = 1024;
 
 /// the tags a page may open with that no data file does, as a sign-in redirect's script or
 /// refresh does, or a sign-in form does.
@@ -68,7 +68,7 @@ const PAGE_TAGS: [&[u8]; 20] = [
 /// whether `head`, a file's first bytes, is html: past a utf-8, utf-16 or utf-32 byte order mark,
 /// white space and comments, it opens with `<!doctype html` or a tag only a page opens with, or it
 /// holds `<html`, in any case.
-fn reads_as_html(head: &[u8]) -> bool {
+pub(in crate::cli) fn reads_as_html(head: &[u8]) -> bool {
     let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| -> Vec<u8> {
         let units = rest.as_chunks::<2>().0.iter().map(|&pair| unit(pair));
         char::decode_utf16(units)
@@ -123,6 +123,76 @@ pub(in crate::cli) fn page_entry(dataset: &str) -> String {
 
 /// [`page_entry`]'s words where no entry asks yet, as for a `get` or an add not written.
 pub(in crate::cli) const PAGE_FLAG: &str = "add --web-page";
+
+/// what a download makes of a web page the link of a job answered with, before its bytes are in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::cli) enum PageCall {
+    /// the file: the link names a page, data.toml asks for it, or hashes prove its bytes.
+    Taken,
+    /// a page that names no file under no data file's name: a sign-in page or a folder listing.
+    Refused,
+    /// a page under a data file's name, which its first bytes tell from data, as a server that
+    /// calls a csv a web page sends the csv.
+    ByBytes,
+    /// a page its server named as a file of another type, which comes with a warning.
+    Warned,
+}
+
+/// what a download of `job` makes of a web page its link answered with, whose server gave it the
+/// name `given` once made safe.
+pub(in crate::cli) fn page_call(job: &Job, given: Option<&str>) -> PageCall {
+    if job.fetch.page {
+        return PageCall::Taken;
+    }
+    let named = given.unwrap_or(&job.label);
+    let extension = std::path::Path::new(named)
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .filter(|extension| !extension.is_empty());
+    let names_a_page = matches!(extension.as_deref(), Some("htm" | "html" | "xhtml"));
+    // a page that names no file is a sign-in page, a folder listing or a site's page rather than
+    // data, unless the link names a page or hashes prove the bytes
+    if given.is_none() && !names_a_page && !job.fetch.expect.proves() {
+        if extension.is_none() {
+            PageCall::Refused
+        } else {
+            PageCall::ByBytes
+        }
+    } else if extension.is_some() && !names_a_page {
+        PageCall::Warned
+    } else {
+        PageCall::Taken
+    }
+}
+
+/// the refusal of a web page `job`'s link answered with where it expected a file, which `named`
+/// says the link's name promised, as `data.csv` does.
+pub(in crate::cli) fn page_refused(job: &Job, named: bool) -> Error {
+    let link = crate::shown::Shown(&job.fetch.url);
+    let asked = match &job.dataset {
+        Some(dataset) => page_entry(dataset),
+        None => PAGE_FLAG.to_owned(),
+    };
+    if named {
+        // a site's sign-in is kept for its host and port, as `auth login` takes them
+        let url = &job.fetch.url;
+        let host = match url.port() {
+            Some(port) => format!("{}:{port}", crate::net::host(url)),
+            None => crate::net::host(url).to_owned(),
+        };
+        let sign_in = crate::account::Account::Login(host).command();
+        return Error::new(
+            Kind::SourceInvalid,
+            format!("{link} answered with a web page, such as a sign-in page, not a data file"),
+        )
+        .help(format!("open it in a browser: a page that asks you to sign in needs `{sign_in}`, else look for a download or raw link. if the page itself is the data, {asked}"));
+    }
+    Error::new(
+        Kind::SourceInvalid,
+        format!("{link} answered with a web page, such as a folder listing, not a file"),
+    )
+    .help(format!("open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}"))
+}
 
 /// the batch facts retained while a validated job waits for an admission slot.
 pub(super) struct Description {
@@ -1014,30 +1084,7 @@ impl<'a> Watch<'a> {
     /// the refusal of a web page the job's link answered with where it expected a file, which
     /// `named` says the link's name promised, as `data.csv` does.
     fn page_refused(&self, named: bool) -> Error {
-        let link = crate::shown::Shown(&self.job.fetch.url);
-        let asked = match &self.job.dataset {
-            Some(dataset) => page_entry(dataset),
-            None => PAGE_FLAG.to_owned(),
-        };
-        if named {
-            // a site's sign-in is kept for its host and port, as `auth login` takes them
-            let url = &self.job.fetch.url;
-            let host = match url.port() {
-                Some(port) => format!("{}:{port}", crate::net::host(url)),
-                None => crate::net::host(url).to_owned(),
-            };
-            let sign_in = crate::account::Account::Login(host).command();
-            return Error::new(
-                Kind::SourceInvalid,
-                format!("{link} answered with a web page, such as a sign-in page, not a data file"),
-            )
-            .help(format!("open it in a browser: a page that asks you to sign in needs `{sign_in}`, else look for a download or raw link. if the page itself is the data, {asked}"));
-        }
-        Error::new(
-            Kind::SourceInvalid,
-            format!("{link} answered with a web page, such as a folder listing, not a file"),
-        )
-        .help(format!("open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}"))
+        page_refused(self.job, named)
     }
 
     fn on(&self, event: &Event) -> Result<(), Error> {
@@ -1070,24 +1117,16 @@ impl<'a> Watch<'a> {
                 resumed,
                 resumable,
             } => self.started(total, resumed, resumable)?,
-            Event::WebPage { .. } if self.job.fetch.page => {}
             Event::WebPage { ref name } => {
                 let given = name.as_deref().and_then(crate::name::sanitize);
-                let named = given.as_deref().unwrap_or(label);
-                let extension = std::path::Path::new(named)
-                    .extension()
-                    .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
-                    .filter(|extension| !extension.is_empty());
-                let names_a_page = matches!(extension.as_deref(), Some("htm" | "html" | "xhtml"));
-                // a page that names no file is a sign-in page, a folder listing or a site's page
-                // rather than data, unless the link names a page or hashes prove the bytes
-                if given.is_none() && !names_a_page && !self.job.fetch.expect.proves() {
-                    if extension.is_none() {
-                        return Err(self.page_refused(false));
+                match page_call(self.job, given.as_deref()) {
+                    PageCall::Taken => {}
+                    PageCall::Refused => return Err(self.page_refused(false)),
+                    PageCall::ByBytes => self.page.store(true, Ordering::Relaxed),
+                    PageCall::Warned => {
+                        let named = given.as_deref().unwrap_or(label);
+                        self.output.warn_with(Warning::DownloadWebPage, &format!("{named} came back as a web page, not a data file. the link may open a page instead of downloading"), "look for a download or raw link");
                     }
-                    self.page.store(true, Ordering::Relaxed);
-                } else if extension.is_some() && !names_a_page {
-                    self.output.warn_with(Warning::DownloadWebPage, &format!("{named} came back as a web page, not a data file. the link may open a page instead of downloading"), "look for a download or raw link");
                 }
             }
             Event::Named(ref given) => self.renamed(given),

@@ -1837,7 +1837,26 @@ pub(in crate::cli) async fn foresee_names(
             net.probe(&job.fetch).await?
         };
         match asked {
-            Probed::File { total, name, .. } => {
+            Probed::File {
+                total, name, page, ..
+            } => {
+                // a web page where a file was asked is judged as the download judges it, by its
+                // first bytes where its name promised data
+                if page {
+                    let given = name.as_deref().and_then(name::sanitize);
+                    match fetch::page_call(&job, given.as_deref()) {
+                        fetch::PageCall::Refused => return Err(fetch::page_refused(&job, false)),
+                        fetch::PageCall::ByBytes => {
+                            if let Probed::File { head, .. } =
+                                net.peek(&job.fetch, fetch::HEAD).await?
+                                && fetch::reads_as_html(&head)
+                            {
+                                return Err(fetch::page_refused(&job, true));
+                            }
+                        }
+                        fetch::PageCall::Taken | fetch::PageCall::Warned => {}
+                    }
+                }
                 if rename {
                     if let Some(given) = name.as_deref().and_then(name::sanitize) {
                         remote.path = given;

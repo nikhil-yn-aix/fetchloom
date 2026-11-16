@@ -988,3 +988,67 @@ fn a_dry_run_tells_a_download_the_disk_has_no_room_for() -> Result {
     assert!(stderr.contains(", which has 1000 B free\n"), "{stderr}");
     Ok(())
 }
+
+/// a dry add or get judges a web page where a file was asked as the download does, by the first
+/// bytes it asks for: a page under a data file's name and one that names no file fail as the add
+/// fails, while a csv its server calls a page, or a page `--web-page` asks for, is the file.
+#[test]
+fn a_dry_run_judges_a_web_page_as_the_download_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let page = b"<!doctype html><html><body>sign in</body></html>\n";
+    let length = page.len().to_string();
+    let html = [
+        ("Content-Type", "text/html; charset=utf-8"),
+        ("Content-Length", length.as_str()),
+    ];
+    let csv_length = IRIS.len().to_string();
+    let labelled = [
+        ("Content-Type", "text/html"),
+        ("Content-Length", csv_length.as_str()),
+    ];
+    let source = Routes::start(vec![
+        ("/page/x.csv".to_owned(), reply("200 OK", &html, page)),
+        ("/page/listing".to_owned(), reply("200 OK", &html, page)),
+        (
+            "/files/labelled.csv".to_owned(),
+            reply("200 OK", &labelled, IRIS),
+        ),
+    ])?;
+    sandbox.allow(&source.url);
+    let link = |path: &str| format!("{}{path}", source.url);
+    let signed = "answered with a web page, such as a sign-in page, not a data file";
+    let listing = "answered with a web page, such as a folder listing, not a file";
+    for (command, path, said) in [
+        ("add", "/page/x.csv", signed),
+        ("add", "/page/listing", listing),
+        ("get", "/page/x.csv", signed),
+        ("get", "/page/listing", listing),
+    ] {
+        let output = sandbox.run(&[command, &link(path), "--dry-run"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(10), "{command} {path}: {stderr}");
+        assert!(stderr.contains(said), "{command} {path}: {stderr}");
+    }
+    // the add itself fails the same way
+    let added = sandbox.run(&["add", &link("/page/x.csv")])?;
+    assert_eq!(added.status.code(), Some(10), "{}", text(&added.stderr)?);
+    assert!(text(&added.stderr)?.contains(signed));
+    for args in [
+        vec!["add", "--dry-run", "--web-page"],
+        vec!["get", "--dry-run", "--web-page"],
+    ] {
+        let mut args = args.clone();
+        let page_link = link("/page/x.csv");
+        args.push(&page_link);
+        let output = sandbox.run(&args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    let output = sandbox.run(&["add", &link("/files/labelled.csv"), "--dry-run"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(())
+}

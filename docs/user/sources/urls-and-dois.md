@@ -72,16 +72,19 @@ the rule holds for a page fetchloom kept before, too: a later run without `--web
 
 ## dry runs
 
-`add --dry-run` with a link asks its server for the file's first byte, where the add downloads the file, and reads no more. so it names the dataset and its file as the server names them, as the add then does, says the size the server states, and fails as the add would where the host does not answer, nothing is at the link, the server refuses it, or it is at a private address that `allowed_origins` does not name. offline, the link's last download the cache keeps answers, as it does for the add, or the dry run stops as the add does. what only the download tells waits for the real add: a web page in place of a file, and what an archive holds. so a dry run can end `Ok dry run` for a link the add then refuses, as the folder link above is refused. from a real run against a server on this machine, where `--json` counted 1 request:
+`add --dry-run` with a link asks its server for the file's first byte, where the add downloads the file, and reads no more. so it names the dataset and its file as the server names them, as the add then does, says the size the server states, and fails as the add would where the host does not answer, nothing is at the link, the server refuses it, or it is at a private address that `allowed_origins` does not name. a web page in place of a file is judged as the add judges it: one that names no file, as a folder link's listing, fails at once, and one under a data file's name is asked again for its first 1 KiB, which tells a page from data. offline, the link's last download the cache keeps answers, as it does for the add, or the dry run stops as the add does. what an archive holds waits for the real add. `get --dry-run` asks the same way. from real runs against a server on this machine:
 
 ```sh
-$ fetchloom add --dry-run http://127.0.0.1:8791/many/
-      Would pin many, new in data.lock: http://127.0.0.1:8791/many/ · 1 file · 232 B
-      Would fetch many/many · 232 B
-      Would place data/many · 1 file
+$ fetchloom add --dry-run http://127.0.0.1:47811/named/download
+      Would pin sepals, new in data.lock: http://127.0.0.1:47811/named/download · 1 file · 21 B
+      Would fetch sepals/sepals.csv · 21 B
+      Would place data/sepals · 1 file
       Would add data/ to .gitignore, since its files come from data.lock
-      Would add many to data.toml, its files in data/many
+      Would add sepals to data.toml, its files in data/sepals
          Ok dry run, nothing was changed
+$ fetchloom add --dry-run http://127.0.0.1:47811/page/listing/
+error: http://127.0.0.1:47811/page/listing/ answered with a web page, such as a folder listing, not a file
+  help: open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add --web-page
 ```
 
 ## pins
