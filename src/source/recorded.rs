@@ -19,6 +19,34 @@ pub(crate) struct Recorded {
     private: Option<crate::net::Private>,
     /// the most files one dataset may list, when the test sets fewer than a run's least.
     most: Option<usize>,
+    /// the errors the network gives in place of an answer, as for one too large to read.
+    failures: HashMap<String, Error>,
+    /// the status a link nothing was recorded for is answered with, where a test allows one.
+    otherwise: Option<u16>,
+    /// whether a link nothing was recorded for gets the answer of a recorded link of its path,
+    /// as a server that reads no page number sends its first page for every page.
+    echo: bool,
+    /// the most requests a test lets an adapter make, past which it counts as looping.
+    most_asked: Option<usize>,
+}
+
+/// what a recorded network panics with when an adapter asks more than its test allows.
+const LOOPING: &str = "asked more than its test allows";
+
+impl Clone for Recorded {
+    /// the same answers, with nothing asked yet.
+    fn clone(&self) -> Recorded {
+        Recorded {
+            answers: self.answers.clone(),
+            asked: Mutex::default(),
+            private: self.private,
+            most: self.most,
+            failures: self.failures.clone(),
+            otherwise: self.otherwise,
+            echo: self.echo,
+            most_asked: self.most_asked,
+        }
+    }
 }
 
 impl Recorded {
@@ -140,6 +168,94 @@ impl Recorded {
     pub(crate) fn asked(&self) -> Vec<String> {
         self.asked.lock().unwrap().clone()
     }
+
+    /// every link an answer was recorded for, in order.
+    pub(crate) fn links(&self) -> Vec<String> {
+        let mut links: Vec<String> = self.answers.keys().cloned().collect();
+        links.sort_unstable();
+        links
+    }
+
+    /// the body recorded for `url`.
+    pub(crate) fn body(&self, url: &str) -> &[u8] {
+        &self.answers[url].body
+    }
+
+    /// answers `url`, recorded before, with `status` and `body` instead, its headers kept.
+    pub(crate) fn answer(mut self, url: &str, status: u16, body: Vec<u8>) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        let answer = self
+            .answers
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("record {url} before changing it"));
+        answer.status = status;
+        answer.body = std::sync::Arc::new(body);
+        self
+    }
+
+    /// gives `error` for `url`, as the network does for an answer it would not read.
+    pub(crate) fn fail(mut self, url: &str, error: Error) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        self.failures.insert(key, error);
+        self
+    }
+
+    /// answers a link nothing was recorded for with `status` and no body.
+    pub(crate) fn otherwise(mut self, status: u16) -> Recorded {
+        self.otherwise = Some(status);
+        self
+    }
+
+    /// answers a link nothing was recorded for as the first recorded link of its path.
+    pub(crate) fn echo(mut self) -> Recorded {
+        self.echo = true;
+        self
+    }
+
+    /// panics with [`LOOPING`] at the request after the `most`th.
+    pub(crate) fn at_most(mut self, most: usize) -> Recorded {
+        self.most_asked = Some(most);
+        self
+    }
+
+    /// what the network answers for `url`, asked as `asked`, which is remembered.
+    fn reply(&self, url: &Url, asked: String) -> Result<Response, Error> {
+        let count = {
+            let mut log = self.asked.lock().unwrap();
+            log.push(asked);
+            log.len()
+        };
+        assert!(
+            self.most_asked.is_none_or(|most| count <= most),
+            "{LOOPING}: {count} requests, the last for {url}"
+        );
+        if let Some(error) = self.failures.get(url.as_str()) {
+            return Err(error.clone());
+        }
+        if let Some(answer) = self.answers.get(url.as_str()) {
+            return Ok(answer.clone());
+        }
+        let path = |link: &str| {
+            Url::parse(link)
+                .ok()
+                .map(|link| link[..url::Position::AfterPath].to_owned())
+        };
+        let echoed = self.echo.then(|| {
+            self.links()
+                .into_iter()
+                .find(|link| path(link).as_deref() == Some(&url[..url::Position::AfterPath]))
+        });
+        if let Some(Some(link)) = echoed {
+            return Ok(self.answers[&link].clone());
+        }
+        match self.otherwise {
+            Some(status) => {
+                let empty = Recorded::default().on(url.as_str(), status, Vec::new());
+                Ok(empty.answers[url.as_str()].clone())
+            }
+            None => panic!("nothing recorded for {url}"),
+        }
+    }
 }
 
 impl Api for Recorded {
@@ -148,13 +264,7 @@ impl Api for Recorded {
     }
 
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {
-        self.asked.lock().unwrap().push(url.to_string());
-        let answer = self
-            .answers
-            .get(url.as_str())
-            .cloned()
-            .unwrap_or_else(|| panic!("nothing recorded for {url}"));
-        ready(Ok(answer))
+        ready(self.reply(url, url.to_string()))
     }
 
     /// answers as [`Api::get`] does, and remembers the request as its link, then each header
@@ -168,16 +278,7 @@ impl Api for Recorded {
             .iter()
             .map(|(name, value)| format!("{name}: {value}"))
             .collect();
-        self.asked
-            .lock()
-            .unwrap()
-            .push(format!("{url} {}", carried.join(" ")));
-        let answer = self
-            .answers
-            .get(url.as_str())
-            .cloned()
-            .unwrap_or_else(|| panic!("nothing recorded for {url}"));
-        ready(Ok(answer))
+        ready(self.reply(url, format!("{url} {}", carried.join(" "))))
     }
 
     fn drive_refused<'a>(

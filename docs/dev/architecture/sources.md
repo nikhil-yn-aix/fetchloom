@@ -4,8 +4,8 @@
 
 ## invariants and traps
 
-- each source has one access descriptor in `src/source/access.rs`: the origins its resolver asks, where its file links point, the key it takes and its pacing. `Reference::resolve` holds every adapter to its descriptor through `Scoped`, and so do search, a key's check, a doi's lookup and drive's hooks; `check` refuses a listed link outside its source's files. `every_adapter_asks_and_links_only_inside_its_descriptor` resolves every adapter on recorded answers and checks each url it asked. a new adapter adds its descriptor and a case there.
-- keys have readers. a key goes with every request to its host, so an answer that carried a key may be parsed into further requests, file links or lock fields only by reviewed code in this crate: the adapters, search and `auth`. nothing a project, a server's answer or a definition carries is ever run or read as a source.
+- each source has one access descriptor in `src/source/access.rs`: the origins its resolver asks, where its file links point, the key it takes and its pacing. `Reference::resolve` holds every adapter to its descriptor through `Scoped`, and so do search, a key's check, a doi's lookup and drive's hooks; `check` refuses a listed link outside its source's files. `every_adapter_asks_and_links_only_inside_its_descriptor` resolves every adapter on recorded answers and checks each url it asked. a new adapter adds its descriptor and a row to the [conformance suite](#conformance-suite).
+- keys have readers. a key goes with every request to its host, so an answer that carried a key may be parsed into further requests, file links or lock fields only by reviewed code in this crate: the adapters, search and `auth`. nothing a project, a server's answer or a definition carries is ever run or read as a source. `every_key_is_read_by_its_own_source_alone` checks that every reference names a built-in descriptor and that a key goes only to hosts its own source asks or links its files at, never to one another source's resolver asks.
 - credentials come from the context, never a `Remote` field or a serialized lock. a key of one installation, as a dataverse key, is saved as that host's key in the header its source names (`KeyShape` in `src/account.rs`, with no host of its own); dataverse's refusals and restricted-file errors name that host's key, including the port when it is not 443, and `DATAVERSE_API_TOKEN` with `DATAVERSE_URL` gives the same kind of key. a new protocol with keys per installation adds its shape to `PER_HOST_KEYS`.
 - no static credential targets a storage host; `no_credential_is_kept_for_a_storage_host` checks `auth::credentials`. AWS keys sign only for buckets `s3_buckets` lists, after a refusal, and a SAS goes only to containers `azure_containers` lists, after one, and never reach `Keyed`, messages or logs beyond the key id's last four characters. a program that gives keys runs only for such a bucket, and nothing it prints, stdout or stderr, reaches an error, a log or a file. a google token goes only to buckets `gcs_buckets` lists, after a refusal; `Authorized` and messages name the account and its file, never the token, the key or the login's secrets. a github key goes to api.github.com alone, never to github.com, where release files are, or the storage github sends them on from, which `a_github_key_never_reaches_github_com_or_its_storage` checks; a gitlab key goes to gitlab.com and a dryad key to datadryad.org, and neither follows a download off its host.
 - project references reject recognized secret query and fragment keys. masking a URL is explicit through `Shown` or `shown`, not an invariant of `url::Url`.
@@ -32,7 +32,24 @@
 | `src/auth/google/tests.rs`, `src/auth/lease.rs`, `src/net/google/tests.rs`, `tests/cli/google.rs` | `cargo test --locked --lib auth::google::`; `cargo test --locked --lib auth::lease::`; `cargo test --locked --lib net::google::`; `cargo test --locked --test cli google::` |
 | `src/source/bucket/azure/tests.rs`, `src/net/azure/tests.rs`, `src/auth/azure.rs`, `src/net/azure/shared_key.rs`, `tests/cli/azure.rs` | `cargo test --locked --lib source::bucket::azure::`; `cargo test --locked --lib net::azure::`; `cargo test --locked --lib auth::azure::`; `cargo test --locked --test cli azure::` |
 
-replace the adapter name in the module selector for figshare, hugging face, kaggle or dropbox. there is no shared adapter conformance suite.
+replace the adapter name in the module selector for figshare, hugging face, kaggle or dropbox.
+
+### conformance suite
+
+every adapter runs one suite, `src/source/conformance.rs` (`cargo test --locked --lib source::conformance::`), so a source that answers in an odd or hostile way cannot make one adapter loop, panic, place a bad name or trust a bad digest while the others refuse. a row is a reference and the answers its own tests recorded, and each property resolves every row on those answers, as recorded or made hostile one at a time:
+
+| property | test | holds |
+|---|---|---|
+| origins | `every_adapter_asks_and_links_only_inside_its_descriptor` | each url it asks lies inside its source's descriptor, and each file link where its files are kept |
+| most files | `every_adapter_lists_at_most_the_files_a_run_allows` | a listing of one file more than `most_files` allows ends in the error that names the setting |
+| network refusals | `every_adapter_ends_in_the_error_the_network_gives` | an answer past 64 MiB or past ten redirects ends the listing in the network's error, or leaves out only what the listing does without |
+| pages | `every_adapter_stops_at_a_page_it_was_sent_before` | a page that names itself or an earlier page, by link, by token or by a count past any page, on a server that sends its first page for any page it lacks, ends the listing without a loop |
+| hostile names | `every_adapter_refuses_a_hostile_name` | a name such as `../x`, `/x`, `a\x`, `a//x`, `C:x`, a control character, `CON`, `x:y` or `.git`, where a file's name was, is refused, or listed as written for the checks before placing; never changed or left out without a word |
+| wrong answers | `every_adapter_ends_a_wrong_answer_in_an_error_with_help` | a sign-in page sent with 200, json cut short or of another kind, and each value missing, null or of another kind end in an error with help, never a panic or a loop, and a sign-in page is never read as a listing |
+| sizes and digests | `every_adapter_reads_sizes_and_digests_strictly` | a size that is negative, past u64, fractional or in exponent form, and a digest a digit short, a digit long or holding a letter no digest has, is refused or left unstated, never trusted |
+| keys | `every_key_is_read_by_its_own_source_alone` | the invariant that keys have readers, above |
+
+for these runs `Recorded` answers a link it never recorded with 404, and panics past 1,000 requests, which the suite reports as a loop. a name an adapter takes from its link, as gitlab's and semantic scholar's, is the link's own once parsed. a name refused only on some disks, as `CON` on windows, reaches the plan's check before placing as it was listed. a new source adds its descriptor and a row in `rows()`. a finding in a source another change is rewriting goes in `HANDED_OFF` with its reason, and its property fails once the finding is gone, so the line leaves with the fix.
 
 ## how it works
 

@@ -434,7 +434,7 @@ pub(crate) static LOCAL: Access = Access {
 };
 
 /// every source, in the order a link's page is matched to one.
-static ALL: [&Access; 24] = [
+pub(super) static ALL: [&Access; 24] = [
     &ZENODO,
     &DRYAD,
     &MENDELEY,

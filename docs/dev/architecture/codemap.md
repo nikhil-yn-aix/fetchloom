@@ -332,6 +332,7 @@ the cli tests run the real binary in a sandbox; [building and testing](../engine
 | `tests/support/ports.rs` | an address where every connection is refused, shared by unit and cli tests | `Refusing` |  |
 | `tests/support/skips.rs` | a skip that fails instead where `FETCHLOOM_TEST_REQUIRE` names the missing capability | `skip` |  |
 | `src/net/scripted.rs` | a local server that answers each connection with scripted bytes, for network unit tests | `serve` |  |
-| `src/source/recorded.rs` | answers recorded from real services, replayed in source unit tests, and the real network the `live_` tests reach | `Recorded` | `on`, `fixture`, `next`, `total`, `asked`, `block_on`, `live` |
+| `src/source/recorded.rs` | answers recorded from real services, replayed in source unit tests, and the real network the `live_` tests reach | `Recorded` | `on`, `fixture`, `next`, `total`, `asked`, `answer`, `fail`, `echo`, `at_most`, `block_on`, `live` |
+| `src/source/conformance.rs` | the conformance suite every source adapter runs: a row per source and the properties each row holds on hostile answers | `rows` | `Subject`, `HANDED_OFF` |
 | `src/archive/samples.rs` | archives built at test time, and a scratch cache to unpack them into | `Scratch` |  |
 | `src/output/screen.rs` | a terminal that records what progress bars draw, for tests that wait on a drawn line | `Screen` | `records`, `text`, `shows` |

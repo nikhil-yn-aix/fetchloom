@@ -5,6 +5,8 @@
 pub(crate) mod access;
 mod arxiv;
 mod bucket;
+#[cfg(test)]
+mod conformance;
 mod dandi;
 mod dataverse;
 mod doi;
