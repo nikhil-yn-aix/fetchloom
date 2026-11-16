@@ -928,7 +928,10 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         return preview_lock(context, &project, &manifest, old, &upgrade).await;
     }
     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?);
-    let (lock, before) = work.relock(&manifest, old, &upgrade, Vec::new()).await?;
+    let (lock, before) = work
+        .relock(&manifest, old, &upgrade, Vec::new())
+        .await
+        .map_err(|error| without_private_lfs(error, &manifest, &upgrade))?;
     // a stop asked while the datasets were resolved leaves data.lock as it was
     context.stop.check()?;
     context.stop.finish();
@@ -978,6 +981,66 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         placement: None,
         ..Report::default()
     })
+}
+
+/// `error` from relocking, whose downloads of new files git-lfs keeps for a private repository
+/// failed: its help names the patterns that leave them out of their dataset in data.toml and the
+/// command to run again, as an add names its `--exclude`.
+fn without_private_lfs(mut error: Error, manifest: &Manifest, upgrade: &Upgrade) -> Error {
+    let refused = |help: &str| help.starts_with(crate::source::PRIVATE_LFS);
+    let files: Vec<(&str, &str)> = error
+        .failures
+        .iter()
+        .filter(|failure| failure.help.as_deref().is_some_and(refused))
+        .filter_map(|failure| {
+            manifest.datasets.keys().find_map(|name| {
+                let path = failure
+                    .file
+                    .strip_prefix(name.as_str())?
+                    .strip_prefix('/')?;
+                Some((name.as_str(), path))
+            })
+        })
+        .collect();
+    let Some(&(name, _)) = files.first() else {
+        return error;
+    };
+    let paths: Vec<&str> = files
+        .iter()
+        .filter(|(dataset, _)| *dataset == name)
+        .map(|(_, path)| *path)
+        .collect();
+    let patterns: Vec<String> = paths
+        .iter()
+        .map(|path| format!("\"{}\"", crate::glob::escape(path)))
+        .collect();
+    let (verb, again) = match upgrade {
+        Upgrade::Nothing => ("pin", "lock".to_owned()),
+        _ => ("upgrade", format!("lock --upgrade {name}")),
+    };
+    let help = format!(
+        "git-lfs keeps {}, and {}. to {verb} {name} without {}, add {} to exclude in datasets.{name} in data.toml, then run `{}` again",
+        units::some_of(&paths, 5),
+        crate::source::PRIVATE_LFS,
+        if paths.len() == 1 { "it" } else { "them" },
+        units::listed(&patterns, "and"),
+        command(&again)
+    );
+    let prefix = format!("{name}/");
+    for failure in &mut error.failures {
+        if failure.file.starts_with(&prefix) && failure.help.as_deref().is_some_and(refused) {
+            failure.help = Some(help.clone());
+        }
+    }
+    for detail in &mut error.details {
+        if detail.strip_prefix("help: ").is_some_and(refused) {
+            *detail = format!("help: {help}");
+        }
+    }
+    if error.help.as_deref().is_some_and(refused) {
+        error = error.help(help);
+    }
+    error
 }
 
 fn tell_imports_kept(output: &Output, manifest: &Manifest) {

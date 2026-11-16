@@ -581,6 +581,13 @@ fn target(head: &str) -> &str {
 /// repository, which says it is private, the commit, the tree, and each file's blob, which git
 /// holds, a pointer for a file git-lfs keeps. github.com and its storage serve nothing of it.
 fn secret(held: &[(&str, Held)]) -> Result<Routes> {
+    let routes = Routes::start(secret_at(FIRST, held)?)?;
+    routes.keyed(SECRET_API, &key_line());
+    Ok(routes)
+}
+
+/// [`secret`]'s answers with `main` at `commit`.
+fn secret_at(commit: &str, held: &[(&str, Held)]) -> Result<Vec<(String, Vec<Part>)>> {
     let paths: Vec<&str> = held.iter().map(|(path, _)| *path).collect();
     let mut tree: Vec<serde_json::Value> = folders(&paths)
         .into_iter()
@@ -611,15 +618,13 @@ fn secret(held: &[(&str, Held)]) -> Result<Routes> {
         reply(
             "200 OK",
             &[("Content-Type", "application/vnd.github.sha; charset=utf-8")],
-            FIRST.as_bytes(),
+            commit.as_bytes(),
         ),
     ));
     routes.push((
-        format!("{SECRET_API}/git/trees/{FIRST}?recursive=1"),
-        answer(&serde_json::json!({"sha": FIRST, "tree": tree, "truncated": false}))?,
+        format!("{SECRET_API}/git/trees/{commit}?recursive=1"),
+        answer(&serde_json::json!({"sha": commit, "tree": tree, "truncated": false}))?,
     ));
-    let routes = Routes::start(routes)?;
-    routes.keyed(SECRET_API, &key_line());
     Ok(routes)
 }
 
@@ -997,6 +1002,59 @@ fn a_git_lfs_file_of_a_private_repository_is_refused_by_name() -> Result {
         "{:?}",
         routes.requests()
     );
+    Ok(())
+}
+
+/// an upgrade that meets a new file git-lfs keeps for a private repository says how to upgrade
+/// without it, as an add does: the pattern to add to the dataset's exclude in data.toml, which an
+/// upgrade then follows.
+#[test]
+fn an_upgrade_meeting_a_private_lfs_file_names_its_exclude() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let routes = added_secret(&sandbox, &big)?;
+    let model = large().repeat(3);
+    let files = secret_files(&big);
+    let mut held: Vec<(String, Held)> = files
+        .iter()
+        .map(|(path, bytes)| (format!("data/{path}"), Held::File(bytes)))
+        .collect();
+    held.push(("data/weights/model.bin".to_owned(), Held::Lfs(&model)));
+    let held: Vec<(&str, Held)> = held
+        .iter()
+        .map(|(path, kind)| (path.as_str(), *kind))
+        .collect();
+    routes.change(secret_at(SECOND, &held)?);
+    let upgrade = || {
+        sandbox
+            .command(&["lock", "--upgrade", "secret"])
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .env("GH_TOKEN", KEY)
+            .output()
+    };
+    let refused = upgrade()?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("help: git-lfs keeps weights/model.bin, and github serves the files git-lfs keeps for a private repository only through github.com, where fetchloom sends no github key. to upgrade secret without it, add \"weights/model.bin\" to exclude in datasets.secret in data.toml, then run `fetchloom lock --upgrade secret` again\n"),
+        "{stderr}"
+    );
+
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    let entry = "[datasets.secret]\n";
+    assert!(written.contains(entry), "{written}");
+    fs::write(
+        &manifest,
+        written.replace(
+            entry,
+            &format!("{entry}exclude = [\"weights/model.bin\"]\n"),
+        ),
+    )?;
+    ok(&upgrade()?)?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(SECOND), "{lock}");
+    assert!(!lock.contains("model.bin"), "{lock}");
     Ok(())
 }
 
