@@ -5,7 +5,8 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::support::{
-    Part, Result, Sandbox, Server, file, json, link_folder, partial_files, reply, text, zip_of,
+    Part, Result, Sandbox, Server, delete_folder, file, json, link_folder, partial_files, reply,
+    text, zip_of,
 };
 
 const IRIS: &[u8] =
@@ -2909,7 +2910,7 @@ fn a_locked_link_of_another_scheme_fails_at_once() -> Result {
         fs::write(&lock_path, changed)?;
         for folder in [sandbox.cache(), sandbox.work().join("data")] {
             if folder.exists() {
-                fs::remove_dir_all(folder)?;
+                delete_folder(&folder)?;
             }
         }
         let synced = sandbox
