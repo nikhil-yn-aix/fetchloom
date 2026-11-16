@@ -1640,17 +1640,22 @@ async fn again(
     if let Some(old) = &old {
         old.refuse_waiting([name])?;
     }
+    let back = work.project.dropped().contains(name);
     if dry_run {
         let outcome = preview_all(work, manifest, old, false, false, Vec::new(), None).await?;
         preview_ignore(work, manifest)?;
+        let back = if back {
+            " and would be back on this machine"
+        } else {
+            ""
+        };
         dry_run_done(
             &work.context.output,
-            Some(&format!("{name} is already in data.toml")),
+            Some(&format!("{name} is already in data.toml{back}")),
         );
         return Ok(Report::dry(work.project.root.clone(), Vec::new(), outcome));
     }
     let names = [name.to_owned()];
-    let back = work.project.dropped().contains(name);
     let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new())).await?;
     // a project that became a git repository after its first add gets its ignore rule now
     ignore_data(work, manifest, false)?;

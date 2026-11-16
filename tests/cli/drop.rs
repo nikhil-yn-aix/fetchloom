@@ -118,7 +118,17 @@ fn an_add_of_a_dropped_dataset_brings_it_back() -> Result {
     let placed = sandbox.work().join("data/iris/iris.csv");
     ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
     assert!(!placed.exists());
-    let output = sandbox.run(&["add", &format!("{}/files/iris.csv", source.url)])?;
+    // a dry run says so too, and brings nothing back
+    let link = format!("{}/files/iris.csv", source.url);
+    let output = sandbox.run(&["add", &link, "--dry-run"])?;
+    ok(&output)?;
+    let told = text(&output.stderr)?;
+    assert!(
+        told.contains("Ok iris is already in data.toml and would be back on this machine; dry run, nothing was changed"),
+        "{told}"
+    );
+    assert!(!placed.exists());
+    let output = sandbox.run(&["add", &link])?;
     ok(&output)?;
     let told = text(&output.stderr)?;
     assert!(
