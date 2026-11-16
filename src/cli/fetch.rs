@@ -482,6 +482,9 @@ struct Watch<'a> {
     earlier: AtomicU64,
     /// whether the download said it starts over, which it says once.
     restarted: AtomicBool,
+    /// whether the bytes kept were found no longer as the download left them on this disk, the
+    /// reason a start over that follows gives.
+    spoiled: AtomicBool,
     /// the furthest point the overall progress counted, so bytes fetched again after a retry or
     /// a fresh start count once.
     counted: AtomicU64,
@@ -531,6 +534,7 @@ impl<'a> Watch<'a> {
             held,
             earlier: AtomicU64::new(0),
             restarted: AtomicBool::new(false),
+            spoiled: AtomicBool::new(false),
             counted: AtomicU64::new(0),
             waiting: std::sync::Mutex::new(None),
             encoded: AtomicBool::new(false),
@@ -629,6 +633,7 @@ impl<'a> Watch<'a> {
     fn restarting(&self, resumed: u64, resumable: Resumable) {
         let earlier = self.earlier.load(Ordering::Relaxed);
         let held = self.held.bytes.load(Ordering::Relaxed);
+        let spoiled = self.spoiled.swap(false, Ordering::Relaxed);
         let lost = if resumed >= held {
             return;
         } else if held <= earlier {
@@ -637,12 +642,18 @@ impl<'a> Watch<'a> {
             if resumed > 0 {
                 return;
             }
+            let why = if spoiled {
+                format!(", since {SPOILED}")
+            } else {
+                String::new()
+            };
             format!(
-                "the {} an earlier run kept cannot be continued",
+                "the {} an earlier run kept cannot be continued{why}",
                 units::size(earlier)
             )
         } else {
             let why = match (self.held.resumable(), resumable) {
+                _ if spoiled => SPOILED.to_owned(),
                 (Resumable::Unproven(why), _) => format!(
                     "nothing shows they are the same file: {}",
                     unnamed(why, "the server")
@@ -909,6 +920,7 @@ impl<'a> Watch<'a> {
                 *self.waited() = Some(self.output.ticker("Waiting", what, [None]));
             }
             Event::Lockless => self.held.lockless.store(true, Ordering::Relaxed),
+            Event::Spoiled => self.spoiled.store(true, Ordering::Relaxed),
             // no new bar: the download may still wait for a free slot. a lone download's bar,
             // already showing, says what it goes on from
             Event::Kept { bytes, resumable } => {
@@ -1708,6 +1720,9 @@ fn kept(error: Error, held: &[Held]) -> Error {
     }
     error
 }
+
+/// why a download starts over from bytes it finds no longer as it left them on this disk.
+const SPOILED: &str = "they are no longer as the download left them on this disk";
 
 /// why a stop deletes the bytes downloads kept in a cache on a disk that cannot lock files.
 const LOCKLESS: &str = "the cache's disk cannot lock files, so no later run could find it";

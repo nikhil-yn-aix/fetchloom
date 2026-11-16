@@ -171,6 +171,9 @@ pub(crate) enum Event {
     /// the cache's disk cannot lock files, so the download keeps its bytes in a file of its own
     /// that no later run can find, and a stop deletes them.
     Lockless,
+    /// the bytes kept are no longer as the download left them on this disk, as when they no
+    /// longer hash as recorded or were made read-only, so it starts over from the first byte.
+    Spoiled,
     /// an earlier run kept `bytes` of the file, which the download goes on from when the server
     /// allows it, and what its record says a later run can do with them.
     Kept {
@@ -575,6 +578,7 @@ impl Reach {
             }
             Event::Waiting
             | Event::Lockless
+            | Event::Spoiled
             | Event::Kept { .. }
             | Event::WebPage { .. }
             | Event::Named(_)
@@ -1112,6 +1116,7 @@ impl Net {
             self.started(on, total, 0, resumable)?;
         }
         let Some(writer) = open(partial, body).await? else {
+            on(Event::Spoiled).map_err(Failure::Final)?;
             return Ok(Answer::StartOver);
         };
         let kept = writer.kept();
@@ -1226,6 +1231,7 @@ impl Net {
             hashing: self.hashing.clone(),
         };
         let Some(mut writer) = open(partial, body).await? else {
+            on(Event::Spoiled).map_err(Failure::Final)?;
             return Ok(Answer::StartOver);
         };
         self.started(on, Some(size), size, Resumable::Yes)?;

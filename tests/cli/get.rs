@@ -293,6 +293,68 @@ fn a_try_that_starts_over_says_why() -> Result {
     Ok(())
 }
 
+/// a try that finds the bytes an earlier try kept are no longer as it left them on this disk starts
+/// over, and says that is why, not that the file changed on the server.
+#[test]
+fn a_try_that_finds_its_bytes_changed_on_this_disk_says_so() -> Result {
+    let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
+    let length = body.len().to_string();
+    let cut = 150_000;
+    let sandbox = Sandbox::new()?;
+    let cache = sandbox.cache();
+    // after the first try kept its bytes, before the second reads its answer
+    let spoil = Part::Action(Box::new(move || {
+        for part in partial_files(&cache) {
+            if part
+                .extension()
+                .is_some_and(|extension| extension == "part")
+                && let Ok(mut bytes) = fs::read(&part)
+                && let Some(first) = bytes.first_mut()
+            {
+                *first ^= 0xff;
+                let _ = fs::write(&part, bytes);
+            }
+        }
+    }));
+    let rest = format!("bytes {cut}-{}/{length}", body.len() - 1);
+    let rest_length = (body.len() - cut).to_string();
+    let mut second = vec![spoil];
+    second.extend(reply(
+        "206 Partial Content",
+        &[
+            ("Content-Length", &rest_length),
+            ("Content-Range", &rest),
+            ("ETag", "\"v1\""),
+        ],
+        &body[cut..],
+    ));
+    let whole = [("Content-Length", length.as_str()), ("ETag", "\"v1\"")];
+    let server = Server::start(
+        "/big.bin",
+        vec![
+            reply("200 OK", &whole, &body[..cut]),
+            second,
+            reply("200 OK", &whole, &body),
+        ],
+    )?;
+    let output = sandbox.run(&["get", &server.url, "-o", "big.bin"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let restarts: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("Restarting"))
+        .collect();
+    assert_eq!(
+        restarts,
+        [
+            " Restarting big.bin · the 146.5 KiB downloaded so far cannot be continued, since they are no longer as the download left them on this disk"
+        ],
+        "{stderr}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("big.bin"))?, body);
+    Ok(())
+}
+
 /// how many files the cache's object store holds.
 fn objects(sandbox: &Sandbox) -> usize {
     fs::read_dir(sandbox.cache().join("objects"))
