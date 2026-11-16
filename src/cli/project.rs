@@ -455,11 +455,11 @@ async fn sync_plain(
     let old = lock.map(|(lock, _)| lock);
     let waiting = old.as_ref().map(waiting_in).unwrap_or_default();
     let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?).filling();
-    let survey = surveyed(&work, &plain.data_dir, false)?;
+    let mut survey = surveyed(&work, &plain.data_dir, false)?;
     let dropped = survey.state.dropped.clone();
     super::drop::tell_left_out(&context.output, plain, &Scope::All, &dropped);
     let plain = &*super::drop::placed_by(plain, &Scope::All, &dropped);
-    let (whole, outcome) = if let Some(outcome) = settle(&work, plain, &survey, &seen)? {
+    let (whole, outcome) = if let Some(outcome) = settle(&work, plain, &mut survey, &seen)? {
         (None, outcome)
     } else {
         let whole = Project::parse_manifest(text)?;
@@ -560,10 +560,13 @@ fn settled_named(
     disk::audit(project, &survey, &work.cache)?;
     let Some(placement) = place::untouched(project, manifest, &survey, &seen, true, scope)?
         .filter(|_| !survey.needs_writing)
-        .filter(|_| !place::links_copies(project, manifest, &survey, &work.cache, scope))
     else {
         return Ok(None);
     };
+    // a sync of named datasets reads only their records, so it notes nothing in the state
+    if place::links_copies(project, manifest, &mut survey, &work.cache, scope, false) {
+        return Ok(None);
+    }
     context
         .stop
         .check()
@@ -1314,7 +1317,7 @@ fn surveyed(work: &Loop<'_>, data_dir: &str, verify: bool) -> Result<Survey, Err
 fn settle(
     work: &Loop<'_>,
     manifest: &Manifest,
-    survey: &Survey,
+    survey: &mut Survey,
     seen: &Seen,
 ) -> Result<Option<Outcome<Placement>>, Error> {
     let Some(placement) =
@@ -1322,7 +1325,14 @@ fn settle(
     else {
         return Ok(None);
     };
-    if place::links_copies(work.project, manifest, survey, &work.cache, &work.scope) {
+    if place::links_copies(
+        work.project,
+        manifest,
+        survey,
+        &work.cache,
+        &work.scope,
+        true,
+    ) {
         return Ok(None);
     }
     // files hashing found unchanged settle with a state written now; a project folder
@@ -1368,7 +1378,7 @@ async fn sync_surveyed(
     let manifest = &*left_out;
     let seen = match read {
         Read::Settled(seen) => {
-            if let Some(outcome) = settle(work, manifest, &survey, seen)? {
+            if let Some(outcome) = settle(work, manifest, &mut survey, seen)? {
                 return Ok(outcome);
             }
             seen

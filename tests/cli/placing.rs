@@ -1865,6 +1865,25 @@ fn files_taken_into_an_empty_cache_are_linked_by_the_next_sync() -> Result {
     let stderr = text(&adopted.stderr)?;
     assert_eq!(adopted.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains("so it stays as it is"), "{stderr}");
+    // a settled sync looks for the copy's object once, notes that the cache lacks it, and the
+    // next looks at no object until the cache takes one
+    let traces = sandbox.folder("traces")?;
+    let looked = |name: &str| -> Result<bool> {
+        let trace = traces.join(name);
+        let settled = sandbox
+            .command_in(&moved, &["sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_TRACE", &trace)
+            .output()?;
+        let stderr = text(&settled.stderr)?;
+        assert!(stderr.contains("nothing to do"), "{stderr}");
+        Ok(fs::read_to_string(&trace)?.contains("\"name\":\"cached_copies\""))
+    };
+    let links = sandbox.links()?;
+    if links.hardlink || links.reflink {
+        assert!(looked("first.json")?);
+        assert!(!looked("second.json")?);
+    }
     let mirror_arg = mirror.to_string_lossy();
     let pushed = run(&["push", "--to", &mirror_arg, "--yes"])?;
     let stderr = text(&pushed.stderr)?;

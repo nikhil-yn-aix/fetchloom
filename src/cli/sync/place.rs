@@ -26,7 +26,7 @@ use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed, State, Synced};
+use crate::project::state::{Look, Placed, State, Synced, Uncached};
 use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::work::Work;
@@ -1400,15 +1400,20 @@ fn links_possible(folder: &Path, cache: &Path) -> bool {
 /// own, as [`is_copy`] tells, of a dataset placed by link, looking as recorded, whose object the
 /// cache holds out of doubt, where [`links_possible`]. the state and the survey tell which files
 /// may be such copies; a project with none pays nothing, and one that cannot link a look at two
-/// folders, before any object is looked at.
+/// folders. a cache found holding none of their objects is noted in the state when `remember`, so
+/// later syncs look at the folders those objects would sit in rather than at every object, until
+/// the cache takes one; a folder changed in the last two seconds may change again within its
+/// clock's tick, so it is not noted.
 pub(crate) fn links_copies(
     project: &Project,
     manifest: &Manifest,
-    survey: &Survey,
+    survey: &mut Survey,
     cache: &Cache,
     scope: &Scope,
+    remember: bool,
 ) -> bool {
-    let mut copies = survey
+    let found = &*survey;
+    let mut copies = found
         .state
         .files
         .iter()
@@ -1416,13 +1421,13 @@ pub(crate) fn links_copies(
             scope.includes(&placed.dataset)
                 && is_copy(
                     placed,
-                    placed.method == Method::Hardlink && survey.is_alone(path),
+                    placed.method == Method::Hardlink && found.is_alone(path),
                 )
                 && manifest
                     .datasets
                     .get(&placed.dataset)
                     .is_some_and(|entry| !entry.copy)
-                && survey.disk.get(*path) == Some(&placed.look)
+                && found.disk.get(*path) == Some(&placed.look)
         })
         .map(|(_, placed)| placed)
         .peekable();
@@ -1436,10 +1441,47 @@ pub(crate) fn links_copies(
     if !links_possible(&folder, cache.root()) {
         return false;
     }
+    let copies: Vec<&Placed> = copies.collect();
+    let uncached = Uncached {
+        cache: cache.root().to_string_lossy().into_owned(),
+        copies: summed(&copies),
+        newest: cache.newest_folder(copies.iter().map(|placed| &placed.sha256)),
+    };
+    if found.state.uncached.as_ref() == Some(&uncached) {
+        return false;
+    }
     let Ok(marks) = cache.doubts() else {
         return false;
     };
-    copies.any(|placed| cache.holds_trusted(&placed.sha256, placed.look.size, &marks))
+    let _span = tracing::debug_span!("cached_copies", copies = copies.len()).entered();
+    if copies
+        .iter()
+        .any(|placed| cache.holds_trusted(&placed.sha256, placed.look.size, &marks))
+    {
+        return true;
+    }
+    let settled = crate::units::nanos(std::time::SystemTime::now()).saturating_sub(uncached.newest)
+        >= SETTLED_FOLDER;
+    if remember && settled {
+        survey.state.uncached = Some(uncached);
+        survey.needs_writing = true;
+    }
+    false
+}
+
+/// how long a folder of objects must have stood unchanged before a sync notes its time: a change
+/// within the tick of a coarse clock, as two seconds on fat or a few milliseconds on ext4, can
+/// leave its time as it was.
+const SETTLED_FOLDER: u64 = 2_000_000_000;
+
+/// the copies `copies` summed up from their SHA-256 in their order, so the copies of another
+/// sync, as a data folder put back from a backup adds, sum up otherwise.
+fn summed(copies: &[&Placed]) -> u64 {
+    copies.iter().fold(0xcbf2_9ce4_8422_2325, |sum, placed| {
+        let mut head = [0; 8];
+        head.copy_from_slice(&placed.sha256.bytes()[..8]);
+        (sum ^ u64::from_le_bytes(head)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// links each file of `found` that the state still records as a copy of its own to the cache's

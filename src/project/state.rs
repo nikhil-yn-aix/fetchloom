@@ -63,6 +63,23 @@ pub(crate) struct State {
     /// removes any, so a run cut off at once leaves no later run saying someone deleted them.
     #[serde(default)]
     pub(crate) replacing: BTreeSet<String>,
+    /// that a sync found the cache holding none of the objects of this project's copies of cached
+    /// files, so a settled sync need not look for them again while nothing it notes has changed.
+    #[serde(default)]
+    pub(crate) uncached: Option<Uncached>,
+}
+
+/// what a sync noted when it found a cache holding none of the objects of a project's copies of
+/// cached files. while the cache, the copies and the folders their objects would sit in are as
+/// noted, the cache took none of those objects since: placing one changes its folder's time.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Uncached {
+    /// the cache's folder.
+    pub(crate) cache: String,
+    /// the copies, summed up from their SHA-256 in path order.
+    pub(crate) copies: u64,
+    /// the newest change of the folders their objects would sit in, in nanoseconds since 1970.
+    pub(crate) newest: u64,
 }
 
 /// which folder a state was written for: its file number, the inode on unix and the file index
@@ -329,6 +346,10 @@ impl State {
             out.extend_from_slice(br#","replacing":"#);
             serde_json::to_writer(&mut *out, &self.replacing)?;
         }
+        if let Some(uncached) = &self.uncached {
+            out.extend_from_slice(br#","uncached":"#);
+            serde_json::to_writer(&mut *out, uncached)?;
+        }
         out.extend_from_slice(br#","blocks":"#);
         serde_json::to_writer(&mut *out, &blocks)?;
         out.push(b'}');
@@ -359,8 +380,8 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         use serde::de::Error;
         let mut state = State::default();
         let (mut version, mut files, mut synced) = (None, false, false);
-        let (mut dropped, mut freeing, mut folder, mut aside, mut replacing) =
-            (false, false, false, false, false);
+        let (mut dropped, mut freeing, mut folder, mut aside, mut replacing, mut uncached) =
+            (false, false, false, false, false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -391,6 +412,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "replacing" => {
                     state.replacing = map.next_value()?;
                     std::mem::replace(&mut replacing, true)
+                }
+                "uncached" => {
+                    state.uncached = map.next_value()?;
+                    std::mem::replace(&mut uncached, true)
                 }
                 _ => {
                     map.next_value::<serde::de::IgnoredAny>()?;
@@ -476,8 +501,8 @@ impl serde::de::Visitor<'_> for Kept<'_> {
 type Block = (String, u64, u64);
 
 /// what follows the records: the settled sync, the dropped datasets and those
-/// whose drop has not freed the cache yet, the folder, the files kept aside, those being replaced
-/// and the blocks.
+/// whose drop has not freed the cache yet, the folder, the files kept aside, those being replaced,
+/// what the cache lacked of the copies and the blocks.
 #[derive(Deserialize)]
 struct Tail {
     #[serde(default)]
@@ -492,6 +517,8 @@ struct Tail {
     aside: BTreeMap<String, String>,
     #[serde(default)]
     replacing: BTreeSet<String>,
+    #[serde(default)]
+    uncached: Option<Uncached>,
     blocks: Vec<Block>,
 }
 
@@ -600,6 +627,7 @@ fn indexed(
         folder,
         aside,
         replacing,
+        uncached,
         blocks,
     } = match index(reading, ours)? {
         Indexed::Tail(tail) => *tail,
@@ -625,6 +653,7 @@ fn indexed(
         folder,
         aside,
         replacing,
+        uncached,
     })
 }
 
@@ -641,6 +670,7 @@ fn by_blocks(
         folder,
         aside,
         replacing,
+        uncached,
         blocks,
     } = match index(reading, ours)? {
         Indexed::Tail(tail) => *tail,
@@ -669,6 +699,7 @@ fn by_blocks(
         folder,
         aside,
         replacing,
+        uncached,
     })
 }
 
@@ -1316,6 +1347,11 @@ mod tests {
             "data/b/c".to_owned(),
         );
         state.replacing.insert("data/b/d".to_owned());
+        state.uncached = Some(Uncached {
+            cache: "/cache".to_owned(),
+            copies: 7,
+            newest: 42,
+        });
         state
     }
 
@@ -1340,6 +1376,7 @@ mod tests {
         assert_eq!(read.freeing, whole.freeing, "{case}");
         assert_eq!(read.aside, whole.aside, "{case}");
         assert_eq!(read.replacing, whole.replacing, "{case}");
+        assert_eq!(read.uncached, whole.uncached, "{case}");
         assert_eq!(read.version, whole.version, "{case}");
     }
 
@@ -1408,6 +1445,7 @@ mod tests {
             assert_same(&read, &State::parse(&bytes), &format!("blocks of {block}"));
             assert_eq!(read.aside, state.aside, "blocks of {block}");
             assert_eq!(read.replacing, state.replacing, "blocks of {block}");
+            assert_eq!(read.uncached, state.uncached, "blocks of {block}");
             for folders in FOLDERS {
                 let folders: Vec<String> = folders.iter().map(|&folder| folder.into()).collect();
                 let case = format!("{folders:?} in blocks of {block}");

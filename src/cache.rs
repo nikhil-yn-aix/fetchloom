@@ -906,6 +906,25 @@ impl Cache {
         self.root.join("objects").join(&hex[..2]).join(&hex[2..])
     }
 
+    /// the newest change, in nanoseconds since 1970, of the folders the objects for `digests`
+    /// would sit in, by one look at each, none of which counts as 0. placing or removing an
+    /// object changes its folder's time, so while this stays the same no object came or went.
+    pub(crate) fn newest_folder<'d>(&self, digests: impl IntoIterator<Item = &'d Sha256>) -> u64 {
+        let mut fans = [false; 256];
+        for digest in digests {
+            fans[usize::from(digest.bytes()[0])] = true;
+        }
+        let objects = self.root.join("objects");
+        fans.iter()
+            .enumerate()
+            .filter(|(_, wanted)| **wanted)
+            .filter_map(|(fan, _)| fs::symlink_metadata(objects.join(format!("{fan:02x}"))).ok())
+            .filter_map(|folder| folder.modified().ok())
+            .map(crate::units::nanos)
+            .max()
+            .unwrap_or(0)
+    }
+
     /// the object's path, when the cache holds it. a known size must match, and writable,
     /// marked or retimed objects must still hash to their names.
     pub(crate) fn find(&self, digest: &Sha256, size: Option<u64>) -> Option<PathBuf> {
