@@ -1343,7 +1343,14 @@ impl<'a> Loop<'a> {
                 )));
             }
             let select = &entry.source.select;
-            let parsed = parsed.map_err(|err| cite_place(err, entry, "ref"))?;
+            let parsed = parsed.map_err(|err| {
+                let err = if crate::source::is_sftp(&text) {
+                    err.help(crate::source::sftp_help(Some(&name)))
+                } else {
+                    err
+                };
+                cite_place(err, entry, "ref")
+            })?;
             if self.context.mirrors.mirrors.only
                 && !fetch::mirrors::resolves_at_hf_endpoint(self.context, &parsed.reference)
             {

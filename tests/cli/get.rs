@@ -3132,6 +3132,49 @@ fn an_sftp_link_says_fetchloom_does_not_speak_sftp() -> Result {
     Ok(())
 }
 
+/// an sftp link written in data.toml gets help that puts the copy in place of its entry, by the
+/// two commands it gives, after which a sync has nothing left to fetch.
+#[test]
+fn an_sftp_entry_is_told_to_make_way_for_its_copy() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.iris]\nref = \"sftp://lab.example.org/data/iris.csv\"\n",
+    )?;
+    let refused = sandbox.run(&["--json", "sync"])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(10),
+        "{}",
+        text(&refused.stdout)?
+    );
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "fetchloom does not speak sftp, so it cannot fetch sftp://lab.example.org/data/iris.csv"
+    );
+    let help = error["help"].as_str().unwrap_or_default();
+    assert_eq!(
+        help,
+        "copy the file or folder with sftp or rclone, then put the copy in place of this entry: `fetchloom remove iris`, then `fetchloom add <path> --as iris`"
+    );
+    fs::create_dir(sandbox.work().join("copied"))?;
+    fs::write(sandbox.work().join("copied").join("iris.csv"), IRIS)?;
+    for line in help.split('`').skip(1).step_by(2) {
+        let line = line.replace("<path>", "./copied");
+        let words: Vec<&str> = line.split(' ').skip(1).collect();
+        let ran = sandbox.run(&words)?;
+        assert_eq!(ran.status.code(), Some(0), "{line}: {}", text(&ran.stderr)?);
+    }
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    Ok(())
+}
+
 /// a data.lock link of a scheme fetchloom never asks fails at once, with no retry, and offers no
 /// `allowed_origins` value that would then be refused.
 #[cfg(debug_assertions)]

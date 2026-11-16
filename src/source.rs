@@ -1398,10 +1398,31 @@ fn sftp(text: &str) -> Error {
         Kind::ReferenceInvalid,
         format!("fetchloom does not speak sftp, so it cannot fetch {text}"),
     )
-    .help(format!(
-        "copy the file or folder with sftp or rclone, then add the copy with `{}`",
-        crate::suggested::command("add <path>")
-    ))
+    .help(sftp_help(None))
+}
+
+/// whether `text` is an sftp link, which [`Reference::parse`] refuses.
+pub(crate) fn is_sftp(text: &str) -> bool {
+    text.trim()
+        .split_once(':')
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("sftp"))
+}
+
+/// how to get what an sftp link names: a copy made with a tool that speaks sftp, added by its
+/// path, in place of `entry`, the dataset whose data.toml entry holds the link, if one does.
+pub(crate) fn sftp_help(entry: Option<&str>) -> String {
+    let copy = "copy the file or folder with sftp or rclone";
+    match entry {
+        None => format!(
+            "{copy}, then add the copy with `{}`",
+            crate::suggested::command("add <path>")
+        ),
+        Some(name) => format!(
+            "{copy}, then put the copy in place of this entry: `{}`, then `{}`",
+            crate::suggested::command(&format!("remove {name}")),
+            crate::suggested::command(&format!("add <path> --as {name}"))
+        ),
+    }
 }
 
 /// the error for a malformed id after a known prefix, such as `zenodo:abc`.
