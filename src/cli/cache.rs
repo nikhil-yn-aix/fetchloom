@@ -1090,26 +1090,21 @@ fn needed_focused(
     for root in cache.registered_projects(stop)? {
         stop.check()?;
         let project = Project { root };
-        let manifest = project.manifest_path();
-        let text = match read_manifest(&manifest) {
-            Ok(text) => text,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+        let text = match manifest_of(cache, &project) {
+            Ok(Some(text)) => text,
+            Ok(None) => {
                 if collect_stale {
                     stale_projects.push(project.root);
                 }
                 complete = false;
                 continue;
             }
-            Err(err) => {
-                let error = Error::io(format!("cannot read {}", manifest.display()), &err);
-                let error = theirs(&project.root, error);
-                if uses == Uses::Told {
-                    unread.push(error);
-                    complete = false;
-                    continue;
-                }
-                return Err(error);
+            Err(error) if uses == Uses::Told => {
+                unread.push(error);
+                complete = false;
+                continue;
             }
+            Err(error) => return Err(error),
         };
         // data.toml that does not read counts as one without members tables: more is kept
         let kept = std::str::from_utf8(&text)
@@ -1179,6 +1174,42 @@ fn needed_focused(
         groups,
         unread,
     })
+}
+
+/// the text of the data.toml of `project`, a registered one, or none when it is gone, as from a
+/// folder that moved: an error when it cannot be read, or when the project is out of reach.
+fn manifest_of(cache: &Cache, project: &Project) -> Result<Option<Vec<u8>>, Error> {
+    let manifest = project.manifest_path();
+    match read_manifest(&manifest) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if cache.out_of_reach(&project.root) {
+                Err(out_of_reach(cache, &project.root))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(err) => {
+            let error = Error::io(format!("cannot read {}", manifest.display()), &err);
+            Err(theirs(&project.root, error))
+        }
+    }
+}
+
+/// the refusal of the registered project at `root`, which is not there and whose disk may only be
+/// not connected: gc frees nothing it may need.
+fn out_of_reach(cache: &Cache, root: &Path) -> Error {
+    Error::new(
+        Kind::LocalIo,
+        format!(
+            "cannot reach {}: the disk it was on is not there, as when a drive is not connected",
+            root.display()
+        ),
+    )
+    .help(format!(
+        "connect that disk, then run the command again; until then gc keeps every file in the cache. if the project is gone for good, delete {}, its record in the cache",
+        cache.registration(root).display()
+    ))
 }
 
 /// `error`, from reading the registered project at `root`, with help that names whose project it
@@ -2166,6 +2197,44 @@ mod tests {
         let needed = needed_by_all(&cache, None, &Stop::default()).unwrap();
 
         assert!(needed.objects.contains(&stored["clean"].digest));
+    }
+
+    /// a registered project gone from its folder whose disk the folder above it is not on, as
+    /// when the drive it was on is not connected, is out of reach, not gone: gc keeps it and every
+    /// file in the cache, where it would forget it and free what only it needed.
+    #[test]
+    fn a_project_whose_disk_is_not_there_is_out_of_reach() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let root = folder.path().join("drive").join("project");
+        fs::create_dir_all(&root).unwrap();
+        cache.register(&root).unwrap();
+        // as a project registers from a disk with a number of its own, which the drive's
+        // folder, now empty, is not on
+        let record = fs::read_dir(cache.root().join("projects"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let mut written: serde_json::Value =
+            serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        written["disk"] = serde_json::json!(1);
+        crate::volume::set_read_only(&record, false).unwrap();
+        fs::write(&record, serde_json::to_vec(&written).unwrap()).unwrap();
+        fs::remove_dir_all(folder.path().join("drive")).unwrap();
+
+        let walked = needed_with(&cache, None, &Stop::default(), true, Uses::Untold);
+
+        let refused = walked.map(|found| found.stale_projects).unwrap_err();
+        assert!(
+            refused
+                .message
+                .starts_with(&format!("cannot reach {}", root.display())),
+            "{}",
+            refused.message
+        );
+        assert!(record.exists(), "its record stays");
     }
 
     /// a registered project's data.toml that a clone or someone sharing the cache made a fifo, a

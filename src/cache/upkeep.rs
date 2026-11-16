@@ -172,6 +172,34 @@ pub(crate) struct Checked {
 #[derive(Serialize, Deserialize)]
 struct Registration {
     root: PathBuf,
+    /// the disk the project registered from, by the number it keeps while connected, which tells a
+    /// project on a drive not connected now from one deleted: none where the number may change
+    /// with each mount, as a network or memory disk's does, or a registration made before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    disk: Option<u64>,
+}
+
+/// the number of the disk `path` is on, where it stays the disk's while it is connected: a device
+/// number of its own on unix, which a network or memory disk does not have, and the volume's serial
+/// number on windows.
+fn disk_of(path: &Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let device = fs::metadata(path).ok()?.dev();
+        (rustix::fs::major(device) != 0).then_some(device)
+    }
+    #[cfg(windows)]
+    {
+        let handle = winapi_util::Handle::from_path_any(path).ok()?;
+        let information = winapi_util::file::information(&handle).ok()?;
+        Some(information.volume_serial_number())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 /// the most bytes a project's registration may hold: its folder's path, as json.
@@ -202,6 +230,7 @@ impl Cache {
         let path = self.registration(root);
         let text = serde_json::to_vec(&Registration {
             root: root.to_path_buf(),
+            disk: disk_of(root),
         })
         .map_err(io::Error::other)?;
         match fs::symlink_metadata(&path) {
@@ -302,6 +331,23 @@ impl Cache {
         }
         roots.sort();
         Ok(roots)
+    }
+
+    /// whether the project registered at `root`, gone from it, is out of reach rather than
+    /// deleted: the folder nearest `root` that is there is on another disk than the one the
+    /// project registered from, or on none, as a drive not connected leaves it. false for a
+    /// project deleted from a disk that is there, and for one whose registration names no disk.
+    pub(crate) fn out_of_reach(&self, root: &Path) -> bool {
+        let Some(disk) = read_registration(&self.registration(root))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Registration>(&bytes).ok())
+            .and_then(|registered| registered.disk)
+        else {
+            return false;
+        };
+        root.ancestors()
+            .find(|folder| fs::metadata(folder).is_ok())
+            .is_none_or(|nearest| disk_of(nearest) != Some(disk))
     }
 
     /// removes `path`, refusing when a folder between it and the cache root was swapped for a
@@ -787,7 +833,7 @@ impl Cache {
         Ok(checked)
     }
 
-    fn registration(&self, root: &Path) -> PathBuf {
+    pub(crate) fn registration(&self, root: &Path) -> PathBuf {
         let key = digest::sha256(root.as_os_str().as_encoded_bytes()).hex();
         self.root.join("projects").join(format!("{key}.json"))
     }
@@ -1348,6 +1394,7 @@ mod tests {
         let record = |root: &Path| {
             serde_json::to_vec(&Registration {
                 root: root.to_path_buf(),
+                disk: None,
             })
             .unwrap()
         };
