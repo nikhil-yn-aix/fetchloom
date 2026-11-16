@@ -179,6 +179,42 @@ fn summed(log: &mut [u8], page_size: usize) {
 /// a log whose page size is not the database's adds nothing: one SQLite wrote for a database
 /// of other pages, or this database's own frames under a header that names another size. SQLite
 /// before 3.54.0 read such a pair into memory it had not filled (CVE-2026-119375).
+/// a browser that checkpoints its log into its file and starts a new log between the reads of
+/// the two leaves pages of two moments, which hold the rows of neither; the read goes again.
+#[test]
+fn a_log_restarted_while_the_file_was_read_is_read_again() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("cookies.sqlite");
+    let wal = folder.path().join("cookies.sqlite-wal");
+    let db = written(&path, 1024, "WAL");
+    insert(&db, 0..40);
+    db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+    insert(&db, 40..80);
+    let before = (std::fs::read(&path).unwrap(), std::fs::read(&wal).unwrap());
+    db.execute_batch("PRAGMA wal_checkpoint(RESTART)").unwrap();
+    insert(&db, 80..120);
+    let after = (std::fs::read(&path).unwrap(), std::fs::read(&wal).unwrap());
+    // the browser checkpoints and writes the moment the file has been read
+    let moment = std::cell::Cell::new(0);
+    let read = |asked: &Path| {
+        let (file, log) = if moment.get() == 0 { &before } else { &after };
+        if asked == path {
+            moment.set(1);
+            Ok(Some(file.clone()))
+        } else {
+            Ok(Some(log.clone()))
+        }
+    };
+    let rows = Database::open_with(&path, read)
+        .and_then(|database| {
+            database
+                .rows("cookies", &["name"])
+                .map_err(|Broken(why)| std::io::Error::other(why))
+        })
+        .map(|rows| rows.len());
+    assert_eq!(rows.as_ref().ok(), Some(&120), "{rows:?}");
+}
+
 #[test]
 fn a_log_of_another_page_size_adds_nothing() {
     let folder = tempfile::tempdir().unwrap();

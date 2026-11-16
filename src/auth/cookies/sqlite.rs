@@ -7,6 +7,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// how often the file and its log are read before a browser that keeps changing them counts as
+/// too busy to read.
+const READS: usize = 3;
 /// the most of a browser's cookie file read, with its log: a profile of years takes a few MiB.
 const LARGEST: u64 = 256 << 20;
 /// the deepest a table's tree may go: a cookie table of millions of rows is five pages deep.
@@ -136,12 +139,35 @@ impl Database {
     ///
     /// when the file cannot be read, or is no SQLite database this reader takes.
     pub(crate) fn open(path: &Path) -> Result<Database, std::io::Error> {
-        let file = read(path)?.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
-        let mut log = path.as_os_str().to_owned();
-        log.push("-wal");
-        let log = read(Path::new(&log))?;
-        Database::parse(file, log.as_deref())
-            .map_err(|Broken(why)| std::io::Error::new(std::io::ErrorKind::InvalidData, why))
+        Database::open_with(path, read)
+    }
+
+    /// [`Database::open`], reading each file with `read`. a browser that checkpoints its log
+    /// into its file and starts a new log while they are read leaves pages of two moments, so
+    /// the log's header is read before and after the file, and the read goes again when the log
+    /// was started anew between them.
+    fn open_with(
+        path: &Path,
+        mut read: impl FnMut(&Path) -> Result<Option<Vec<u8>>, std::io::Error>,
+    ) -> Result<Database, std::io::Error> {
+        let mut log_path = path.as_os_str().to_owned();
+        log_path.push("-wal");
+        let log_path = std::path::PathBuf::from(log_path);
+        let header = |log: Option<&[u8]>| log.and_then(|log| log.get(..32)).map(<[u8]>::to_vec);
+        for _ in 0..READS {
+            let before = header(read(&log_path)?.as_deref());
+            let file =
+                read(path)?.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+            let log = read(&log_path)?;
+            if header(log.as_deref()) != before {
+                continue;
+            }
+            return Database::parse(file, log.as_deref())
+                .map_err(|Broken(why)| std::io::Error::new(std::io::ErrorKind::InvalidData, why));
+        }
+        Err(std::io::Error::other(
+            "the browser kept changing it while it was read; close the browser, or try again",
+        ))
     }
 
     /// the database `file` holds, with the committed pages of its write-ahead `log`.
