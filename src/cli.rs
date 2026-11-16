@@ -25,6 +25,7 @@ mod push;
 mod remove;
 mod search;
 mod settings;
+mod share;
 mod status;
 mod sync;
 mod typed;

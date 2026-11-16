@@ -168,6 +168,9 @@ pub(in crate::cli) fn page_call(job: &Job, given: Option<&str>) -> PageCall {
 /// the refusal of a web page `job`'s link answered with where it expected a file, which `named`
 /// says the link's name promised, as `data.csv` does.
 pub(in crate::cli) fn page_refused(job: &Job, named: bool) -> Error {
+    if let Some(refused) = super::share::page_refused(&job.fetch.url) {
+        return refused;
+    }
     let link = crate::shown::Shown(&job.fetch.url);
     let asked = match &job.dataset {
         Some(dataset) => page_entry(dataset),

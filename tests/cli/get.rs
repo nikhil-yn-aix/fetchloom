@@ -1965,6 +1965,171 @@ fn a_link_that_answers_with_a_web_page_is_refused_before_the_cache() -> Result {
     Ok(())
 }
 
+/// the help for the page of a share on onedrive, sharepoint or box.
+#[cfg(debug_assertions)]
+const SAVED_IN_A_BROWSER: &str = "download the file from that page in a browser, then add the file it saved with `fetchloom add <file>`";
+
+/// shares on each service, whose links answer with a page, and two nextcloud or owncloud shares
+/// whose links with /download answer with the file, through `FETCHLOOM_TEST_HOSTS`.
+#[cfg(debug_assertions)]
+fn shares() -> Result<crate::support::Routes> {
+    let page = || {
+        reply(
+            "200 OK",
+            &[("Content-Type", "text/html; charset=utf-8")],
+            b"<!doctype html><html><body>shared with you</body></html>",
+        )
+    };
+    let length = IRIS.len().to_string();
+    let shared = || {
+        reply(
+            "200 OK",
+            &[
+                ("Content-Length", &length),
+                ("Content-Disposition", "attachment; filename=\"iris.csv\""),
+            ],
+            IRIS,
+        )
+    };
+    crate::support::Routes::start(vec![
+        ("/1drv.ms/u/s!AbCdEf".to_owned(), page()),
+        (
+            "/contoso.sharepoint.com/:x:/g/personal/ada/EAbC?e=x1".to_owned(),
+            page(),
+        ),
+        (
+            "/contoso.sharepoint.com/sites/lab/Shared%20Documents/iris.csv".to_owned(),
+            page(),
+        ),
+        ("/app.box.com/s/abc123".to_owned(), page()),
+        ("/cloud.example.org/s/AbCdEf123".to_owned(), page()),
+        (
+            "/cloud.example.org/s/AbCdEf123/download".to_owned(),
+            shared(),
+        ),
+        (
+            "/lab.example.org/owncloud/index.php/s/XyZ789/".to_owned(),
+            page(),
+        ),
+        (
+            "/lab.example.org/owncloud/index.php/s/XyZ789/download".to_owned(),
+            shared(),
+        ),
+    ])
+}
+
+/// the page a link to a share on onedrive, sharepoint or box answers with is not its file: the
+/// refusal names the service and says to save the file from a browser and add it by its path. a
+/// nextcloud or owncloud share's help adds the same link with /download, given whole.
+#[cfg(debug_assertions)]
+#[test]
+fn a_shares_page_is_told_apart_from_its_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let hosts = shares()?;
+    let cloud = |download: &str| {
+        format!(
+            "{SAVED_IN_A_BROWSER}. if it is a nextcloud or owncloud share, the same link with /download gives the file: {download}"
+        )
+    };
+    for (link, message, help) in [
+        (
+            "https://1drv.ms/u/s!AbCdEf",
+            "https://1drv.ms/u/s!AbCdEf answered with a OneDrive page, not the file",
+            SAVED_IN_A_BROWSER.to_owned(),
+        ),
+        (
+            "https://contoso.sharepoint.com/:x:/g/personal/ada/EAbC?e=x1",
+            "https://contoso.sharepoint.com/:x:/g/personal/ada/EAbC?e=*** answered with a SharePoint page, not the file",
+            SAVED_IN_A_BROWSER.to_owned(),
+        ),
+        (
+            "https://contoso.sharepoint.com/sites/lab/Shared%20Documents/iris.csv",
+            "https://contoso.sharepoint.com/sites/lab/Shared%20Documents/iris.csv answered with a SharePoint page, not the file",
+            SAVED_IN_A_BROWSER.to_owned(),
+        ),
+        (
+            "https://app.box.com/s/abc123",
+            "https://app.box.com/s/abc123 answered with a Box page, not the file",
+            SAVED_IN_A_BROWSER.to_owned(),
+        ),
+        (
+            "https://cloud.example.org/s/AbCdEf123",
+            "https://cloud.example.org/s/AbCdEf123 answered with a web page, such as a nextcloud share's page, not the file",
+            cloud("https://cloud.example.org/s/AbCdEf123/download"),
+        ),
+        (
+            "https://lab.example.org/owncloud/index.php/s/XyZ789/",
+            "https://lab.example.org/owncloud/index.php/s/XyZ789/ answered with a web page, such as a nextcloud share's page, not the file",
+            cloud("https://lab.example.org/owncloud/index.php/s/XyZ789/download"),
+        ),
+    ] {
+        for args in [
+            &["--json", "add", link][..],
+            &["--json", "add", link, "--dry-run"],
+            &["--json", "get", link],
+        ] {
+            let output = sandbox
+                .command(args)
+                .env("FETCHLOOM_TEST_HOSTS", &hosts.url)
+                .output()?;
+            assert_eq!(
+                output.status.code(),
+                Some(10),
+                "{args:?}: {}",
+                text(&output.stderr)?
+            );
+            let error = &json(&output)?["errors"][0];
+            assert_eq!(error["kind"], "source.invalid", "{args:?}: {error}");
+            assert_eq!(error["message"], message, "{args:?}: {error}");
+            assert_eq!(error["help"], help, "{args:?}: {error}");
+        }
+    }
+    Ok(())
+}
+
+/// what a share's refusal offers works as it reads: `get` and `add` fetch a nextcloud or owncloud
+/// share's link with /download, and the file a browser saved is added by the line the help gives.
+#[cfg(debug_assertions)]
+#[test]
+fn what_a_shares_refusal_offers_gets_its_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let hosts = shares()?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &hosts.url)
+            .output()
+    };
+    for (download, saved) in [
+        ("https://cloud.example.org/s/AbCdEf123/download", "a.csv"),
+        (
+            "https://lab.example.org/owncloud/index.php/s/XyZ789/download",
+            "b.csv",
+        ),
+    ] {
+        let got = run(&["get", download, "-o", saved])?;
+        assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+        assert_eq!(fs::read(sandbox.work().join(saved))?, IRIS);
+    }
+    let added = run(&["add", "https://cloud.example.org/s/AbCdEf123/download"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    fs::write(sandbox.work().join("saved.csv"), IRIS)?;
+    let line = SAVED_IN_A_BROWSER.split('`').nth(1).unwrap_or_default();
+    let line = line.replace("<file>", "./saved.csv");
+    let words: Vec<&str> = line.split(' ').skip(1).collect();
+    let saved = run(&words)?;
+    assert_eq!(saved.status.code(), Some(0), "{}", text(&saved.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("saved").join("saved.csv"))?,
+        IRIS
+    );
+    Ok(())
+}
+
 #[test]
 fn repository_file_pages_report_the_raw_link_before_downloading() -> Result {
     let sandbox = Sandbox::new()?;
