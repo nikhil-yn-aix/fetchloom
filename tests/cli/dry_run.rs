@@ -747,27 +747,40 @@ fn a_file_already_in_place_is_not_called_different_before_the_download() -> Resu
     Ok(())
 }
 
-/// a dry get, like a dry add, tells an unstated size and an archive's files as unknown, makes no
-/// cache folder or request, and fails offline as the get would.
+/// a dry get, like a dry add, asks each link's server for the file's first byte, where the get
+/// downloads it, so it tells the size the server states and fails where the get would, as for a
+/// link with nothing behind it; an archive's files stay unknown, it makes no cache folder, and it
+/// fails offline as the get would.
 #[test]
 fn get_dry_run_tells_what_it_would_fetch_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
-    let csv = Server::start(PATH, Vec::new())?;
-    let zip = Server::start("/files/flowers.zip", Vec::new())?;
+    let csv = Server::start(PATH, vec![file(IRIS, "\"i\""), file(IRIS, "\"i\"")])?;
+    let zipped = b"PK\x03\x04 a zip as its server sends it";
+    let zip = Server::start("/files/flowers.zip", vec![file(zipped, "\"z\"")])?;
+    let gone = Server::start(
+        "/files/gone.csv",
+        vec![reply("404 Not Found", &[("Content-Length", "0")], b"")],
+    )?;
     let work = tree(&sandbox.work())?;
     let output = sandbox.run(&["get", &csv.url, "--dry-run"])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "      Would fetch iris.csv · size unknown\n      Would put 1 file in iris\n         Ok dry run, nothing was changed\n"
+        format!(
+            "      Would fetch iris.csv · {} B\n      Would put 1 file in iris\n         Ok dry run, nothing was changed\n",
+            IRIS.len()
+        )
     );
     let output = sandbox.run(&["get", &zip.url, "-n"])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "      Would fetch flowers.zip · size unknown\n      Would open flowers.zip\n  hint: an archive's files are known once it is unpacked, so they are not counted\n      Would put its files in flowers\n         Ok dry run, nothing was changed\n"
+        format!(
+            "      Would fetch flowers.zip · {} B\n      Would open flowers.zip\n  hint: an archive's files are known once it is unpacked, so they are not counted\n      Would put its files in flowers\n         Ok dry run, nothing was changed\n",
+            zipped.len()
+        )
     );
     let document = json(&sandbox.run(&["--json", "get", &csv.url, "-n", "-o", "iris.csv"])?)?;
     let result = &document["result"];
@@ -782,12 +795,16 @@ fn get_dry_run_tells_what_it_would_fetch_and_changes_nothing() -> Result {
             "place": ["iris.csv"],
             "replace": [],
             "remove": [],
-            "download": [{"path": "iris.csv", "size": null}],
+            "download": [{"path": "iris.csv", "size": IRIS.len()}],
             "unpack": [],
-            "to_download": {"files": 1, "bytes": 0, "sizes_unknown": 1, "time": null},
+            "to_download": {"files": 1, "bytes": IRIS.len(), "sizes_unknown": 0, "time": null},
         })
     );
     assert_eq!(result["files"], serde_json::json!([]));
+    let missing = sandbox.run(&["get", &gone.url, "-n"])?;
+    let stderr = text(&missing.stderr)?;
+    assert_eq!(missing.status.code(), Some(10), "{stderr}");
+    assert!(stderr.contains("has nothing at"), "{stderr}");
     let offline = sandbox.run(&["--json", "--offline", "get", &csv.url, "-n"])?;
     assert_eq!(
         offline.status.code(),
@@ -798,7 +815,15 @@ fn get_dry_run_tells_what_it_would_fetch_and_changes_nothing() -> Result {
     assert_eq!(json(&offline)?["errors"][0]["kind"], "offline.missing");
     assert_eq!(tree(&sandbox.work())?, work, "nothing was written");
     assert!(!sandbox.cache().exists(), "no cache folder was made");
-    assert!(csv.requests().is_empty() && zip.requests().is_empty());
+    assert_eq!(
+        (
+            csv.requests().len(),
+            zip.requests().len(),
+            gone.requests().len()
+        ),
+        (2, 1, 1),
+        "a first byte for each dry run"
+    );
     Ok(())
 }
 

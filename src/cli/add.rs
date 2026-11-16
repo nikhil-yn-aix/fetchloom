@@ -1784,11 +1784,12 @@ async fn learn_names(
 }
 
 /// asks the server of each lone file whose name only its server knows for the file's first byte,
-/// where an add downloads it to learn that name: a dry run then names the dataset and its file as
-/// the add would, with the size the server states, and fails where the add would. offline, the
-/// last download of the link the cache keeps answers instead, as it does for the add. with
-/// `rename` false, as patterns written against the link's own name ask, the file keeps that name.
-async fn foresee_names(
+/// where an add or a get downloads it to learn that name: a dry run then names the dataset and
+/// its file as the command would, with the size the server states, and fails where it would.
+/// offline, the last download of the link the cache keeps answers instead, as it does for the
+/// command. with `rename` false, as patterns written against the link's own name ask, the file
+/// keeps that name.
+pub(in crate::cli) async fn foresee_names(
     context: &Context,
     net: &Net,
     cache: &crate::cache::Cache,

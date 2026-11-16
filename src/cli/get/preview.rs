@@ -57,7 +57,24 @@ pub(super) async fn run(
             links[0] = search::pick(context, net.as_ref(), &links[0], "get").await?;
         }
     }
-    let resolved = resolve_all(context, net, &cache, args, &links).await?;
+    let mut resolved = resolve_all(context, net, &cache, args, &links).await?;
+    // as a dry add does, each lone link's server is asked for the file's first byte, where the
+    // get downloads it, so the file is named as the get names it, and fails where the get would
+    for found in &mut resolved {
+        let Ok((_, listing, files)) = found else {
+            continue;
+        };
+        if !matches!(files.as_slice(), [remote] if remote.named_by_server) {
+            continue;
+        }
+        let extract = (!args.no_extract, args.web_page);
+        match crate::cli::add::foresee_names(context, net, &cache, vec![listing], extract, true)
+            .await
+        {
+            Ok(()) => files.clone_from(&listing.files),
+            Err(error) => *found = Err(error),
+        }
+    }
     let mut taken = Taken::default();
     let mut plans = Vec::with_capacity(links.len());
     for (asked, resolved) in asked.iter().zip(resolved) {

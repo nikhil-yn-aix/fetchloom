@@ -194,11 +194,11 @@ error: cows.csv does not match --sha256
 
 ## dry run
 
-`--dry-run` resolves each link as get does, so a source may be asked what it holds, then tells what get would fetch and where the files would land, and stops there. it downloads no file's bytes and writes nothing: no folder, no file and no cache folder. a size the source does not state reads `size unknown`, and an archive this machine never unpacked keeps its files unknown, so they are not counted. from a real run:
+`--dry-run` resolves each link as get does, so a source may be asked what it holds, then tells what get would fetch and where the files would land, and stops there. a link whose file only its server names, as a plain link's, is asked for the file's first byte, as `add --dry-run` asks it, so the file gets the name and size its server gives, and the dry run fails as get would where nothing is at the link or the host does not answer. it downloads no file's bytes and writes nothing: no folder, no file and no cache folder. a size the source does not state reads `size unknown`, and an archive this machine never unpacked keeps its files unknown, so they are not counted. from a real run:
 
 ```text
-$ fetchloom get http://127.0.0.1:19430/flowers.zip --dry-run
-      Would fetch flowers.zip · size unknown
+$ fetchloom get http://127.0.0.1:47811/real/flowers.zip --dry-run
+      Would fetch flowers.zip · 246 B
       Would open flowers.zip
   hint: an archive's files are known once it is unpacked, so they are not counted
       Would put its files in flowers
