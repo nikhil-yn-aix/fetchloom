@@ -354,8 +354,10 @@ fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
         .map(|(name, _)| name.clone())
         .collect();
     let names = lock.datasets.iter().map(|dataset| &dataset.name);
+    // one waiting for its list goes from data.lock too once data.toml no longer has it
     let removed = names
         .chain(lock.stated.iter().map(|stated| &stated.pin.name))
+        .chain(lock.still_waiting().map(|waiting| &waiting.name))
         .filter(|name| !manifest.datasets.contains_key(*name))
         .cloned()
         .collect();

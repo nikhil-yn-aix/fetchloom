@@ -4785,3 +4785,47 @@ fn an_upgrade_names_a_waiting_dataset_it_did_not_ask() -> Result {
     assert_eq!(fs::read(clone.join("data.lock"))?, lock);
     Ok(())
 }
+
+/// big, waiting for its list, taken out of data.toml by hand: status says the next sync takes it
+/// out of data.lock, as for any dataset data.toml no longer has, and that sync does, so no later
+/// run warns that it waits.
+#[test]
+fn a_waiting_dataset_taken_out_of_data_toml_goes_at_the_next_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (clone, _) = clone_without_big(&sandbox)?;
+    let synced = listing_in(&sandbox, &clone, &["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let manifest = clone.join("data.toml");
+    let kept: String = fs::read_to_string(&manifest)?
+        .split_inclusive("\n\n")
+        .filter(|table| !table.contains("[datasets.big]"))
+        .collect();
+    assert!(kept.contains("[datasets.small]"), "{kept}");
+    fs::write(&manifest, kept)?;
+    let status = listing_in(&sandbox, &clone, &["--json", "status"])?;
+    let document = json(&status)?;
+    assert_eq!(
+        document["result"]["removed"],
+        serde_json::json!(["big"]),
+        "{document}"
+    );
+    let status = listing_in(&sandbox, &clone, &["status"])?;
+    let shown = text(&status.stdout)?;
+    assert!(
+        shown.contains(
+            "Removed big · not in data.toml, so `fetchloom sync` takes it out of data.lock"
+        ),
+        "{shown}"
+    );
+    let synced = listing_in(&sandbox, &clone, &["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Removed big from data.lock"), "{stderr}");
+    assert!(!fs::read_to_string(clone.join("data.lock"))?.contains("name = \"big\""));
+    let again = listing_in(&sandbox, &clone, &["sync"])?;
+    let stderr = text(&again.stderr)?;
+    assert!(!stderr.contains("waits"), "{stderr}");
+    let checked = listing_in(&sandbox, &clone, &["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stdout)?);
+    Ok(())
+}
