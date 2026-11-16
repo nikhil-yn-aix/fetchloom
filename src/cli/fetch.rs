@@ -2037,11 +2037,18 @@ fn cause(message: &str, label: &str) -> String {
 /// it. a pinned link with nothing at it now may still be on such a mirror. `damaged` is a folder
 /// mirror this run found a damaged copy of the file on.
 fn explain(error: Error, job: &Job, damaged: Option<std::path::PathBuf>) -> Error {
-    if job.again.is_some() && error.help.as_deref() == Some(crate::net::MOVED_HELP) {
-        return error.help(format!(
-            "{} if the file moved, put its new link as ref in data.toml",
-            keep_pinned(damaged)
-        ));
+    if let Some(again) = &job.again
+        && error.help.as_deref() == Some(crate::net::MOVED_HELP)
+    {
+        // a new link as ref would make a record of many files that one file
+        let on = match &job.dataset {
+            Some(dataset) if !again.alone => format!(
+                "to pin the files its source lists now instead, run `{}`",
+                super::project::command(&format!("lock --upgrade {dataset}"))
+            ),
+            _ => "if the file moved, put its new link as ref in data.toml".to_owned(),
+        };
+        return error.help(format!("{} {on}", keep_pinned(damaged)));
     }
     // an MD5 mismatch comes with its own help, since the source contradicts itself, unless
     // data.lock pinned that MD5, as `add --no-sync` does, and the file changed since
@@ -3375,6 +3382,18 @@ mod tests {
             explain(gone(), &job, None).help.as_deref(),
             Some(
                 "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. if the file moved, put its new link as ref in data.toml"
+            )
+        );
+        // one file of a record of many: its link as ref would make the dataset that file alone
+        job.again = Some(Again {
+            resolved: "zenodo:3608990".to_owned(),
+            path: "data.csv".to_owned(),
+            alone: false,
+        });
+        assert_eq!(
+            explain(gone(), &job, None).help.as_deref(),
+            Some(
+                "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run this command again with `--mirror <folder>`. to pin the files its source lists now instead, run `fetchloom lock --upgrade iris`"
             )
         );
     }
