@@ -265,6 +265,54 @@ fn a_dry_run_states_the_sizes_the_tree_states() -> Result {
     Ok(())
 }
 
+/// a repository's own link leaves out git's own files, which hold no data: `.gitignore` and
+/// `.gitattributes` at any depth, and at its top `.gitmodules`, `.github/`, `.gitlab/` and
+/// `.gitlab-ci.yml`, which a folder inside it holds as data; the dry run names what it leaves out,
+/// and a select pattern keeps one.
+#[test]
+fn a_repository_link_leaves_out_gits_own_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let held = [
+        (".github/workflows/scrape.yml", Held::File(b"on: push\n")),
+        (".gitignore", Held::File(b"*.tmp\n")),
+        (".gitlab-ci.yml", Held::File(b"test:\n")),
+        (".gitmodules", Held::File(b"[submodule]\n")),
+        ("data/.gitignore", Held::File(b"*\n")),
+        ("data/.github/notes.yml", Held::File(NOTES)),
+        ("data/rows.csv", Held::File(ROWS)),
+        ("requirements.txt", Held::File(b"pandas\n")),
+    ];
+    let routes = Routes::start(github("HEAD", FIRST, &held)?)?;
+    let link = "https://github.com/lab/survey";
+    let dry = run(&sandbox, &routes, &["add", link, "--dry-run"])?;
+    let stderr = text(&dry.stderr)?;
+    assert_eq!(dry.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "hint: git's own files hold no data, so these are left out unless a select pattern keeps them: .github/workflows/scrape.yml, .gitignore, .gitlab-ci.yml, .gitmodules and data/.gitignore\n"
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains(" · 3 of 8 files"), "{stderr}");
+    ok(&run(&sandbox, &routes, &["add", link])?)?;
+    assert_eq!(
+        placed(&sandbox.work().join("data/survey"))?,
+        [
+            "data/.github/notes.yml",
+            "data/rows.csv",
+            "requirements.txt"
+        ]
+    );
+    let kept = sandbox.folder("kept")?;
+    let output = sandbox
+        .command_in(&kept, &["add", link, "--select", ".gitignore"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?;
+    ok(&output)?;
+    assert_eq!(placed(&kept.join("data/survey"))?, [".gitignore"]);
+    Ok(())
+}
+
 /// a pasted folder link at a branch pins the folder's every file, subfolders included, at the
 /// commit the branch names, with two requests to github's api; a teammate's sync asks no api.
 #[test]

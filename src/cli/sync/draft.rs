@@ -1070,7 +1070,7 @@ fn only_unselected(name: &str, patterns: Patterns, unselected: &[&str]) -> Error
             units::listed(unselected, "and")
         ),
     )
-    .detail("fetchloom leaves out .gitattributes unless a select pattern keeps it: it tells git how to store files and holds no data")
+    .detail("fetchloom leaves out git's own files unless a select pattern keeps them: they tell git or the repository's host how to store, ignore or build files and hold no data")
     .help(format!("to keep {first} anyway, add {keep}"))
 }
 
@@ -2505,7 +2505,7 @@ mod tests {
             assert_eq!(
                 error.details,
                 [
-                    "fetchloom leaves out .gitattributes unless a select pattern keeps it: it tells git how to store files and holds no data"
+                    "fetchloom leaves out git's own files unless a select pattern keeps them: they tell git or the repository's host how to store, ignore or build files and hold no data"
                 ]
             );
             assert_eq!(error.help.as_deref(), Some(help));

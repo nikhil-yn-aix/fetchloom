@@ -2738,6 +2738,24 @@ pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
 /// when they are fewer than it lists, as `1 of 4 files`, with their size alone.
 pub(super) fn tell_kept(output: &Output, listing: &Listing, kept: &[Remote]) {
     tell_facts(output, listing, kept);
+    // a hugging face repository's .gitattributes, which every one holds, goes unsaid
+    if matches!(listing.resolved, Reference::GitFolder(_)) {
+        let unselected: Vec<&str> = listing
+            .files
+            .iter()
+            .filter(|file| {
+                listing.kept_only_if_selected(&file.path)
+                    && !kept.iter().any(|held| held.path == file.path)
+            })
+            .map(|file| file.path.as_str())
+            .collect();
+        if !unselected.is_empty() {
+            output.hint(&format!(
+                "git's own files hold no data, so these are left out unless a select pattern keeps them: {}",
+                units::some_of(&unselected, 10)
+            ));
+        }
+    }
     for warning in &listing.warnings {
         output.warn(Warning::SourcePartial, warning);
     }

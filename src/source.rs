@@ -328,14 +328,26 @@ impl Listing {
         }
     }
 
-    /// whether the file at `path` stays out of a dataset unless a select pattern keeps it: the
-    /// `.gitattributes` of a hugging face, openneuro, github or gitlab repository, which tells
-    /// git, or git-annex, how to store the files and holds no data.
+    /// whether the file at `path` stays out of a dataset unless a select pattern keeps it: git's
+    /// own files, which tell git, git-annex or a repository's host how to store, ignore or build
+    /// the files and hold no data. that is the `.gitattributes` of a hugging face, openneuro,
+    /// github or gitlab repository, the `.gitignore` of a github or gitlab one, and at its top
+    /// folder its `.gitmodules`, `.gitlab-ci.yml` and what `.github/` and `.gitlab/` hold.
     pub(crate) fn kept_only_if_selected(&self, path: &str) -> bool {
-        matches!(
-            self.resolved,
-            Reference::HuggingFace(_) | Reference::OpenNeuro(_) | Reference::GitFolder(_)
-        ) && path.rsplit('/').next() == Some(".gitattributes")
+        match &self.resolved {
+            Reference::HuggingFace(_) | Reference::OpenNeuro(_) => {
+                path.rsplit('/').next() == Some(".gitattributes")
+            }
+            Reference::GitFolder(folder) => {
+                let name = path.rsplit('/').next();
+                matches!(name, Some(".gitattributes" | ".gitignore"))
+                    || folder.is_top()
+                        && (matches!(path, ".gitmodules" | ".gitlab-ci.yml")
+                            || path.starts_with(".github/")
+                            || path.starts_with(".gitlab/"))
+            }
+            _ => false,
+        }
     }
 
     /// the paths select and exclude can match, including entries without downloadable bytes.
@@ -2450,7 +2462,8 @@ mod tests {
     }
 
     /// a repository's `.gitattributes` is git's or git-annex's, at hugging face and openneuro
-    /// alike; a file of that name elsewhere is data like any other.
+    /// alike, and a github or gitlab repository's files of git's and its host's are theirs too; a
+    /// file of such a name elsewhere is data like any other.
     #[test]
     fn a_gitattributes_file_is_kept_only_if_selected() {
         let url = Url::parse("https://example.org/x").unwrap();
@@ -2471,6 +2484,38 @@ mod tests {
                 );
             }
             assert!(!listing.kept_only_if_selected("README.md"), "{reference}");
+        }
+        // a repository's own files of git's, at any depth or at its top alone
+        for (reference, kept_out, kept_in) in [
+            (
+                "https://github.com/lab/survey",
+                &[
+                    ".gitignore",
+                    "data/.gitignore",
+                    ".gitattributes",
+                    ".gitmodules",
+                    ".gitlab-ci.yml",
+                    ".github/workflows/scrape.yml",
+                    ".gitlab/issue_templates/bug.md",
+                ][..],
+                &["README.md", ".githubx/notes.txt", "data/.gitmodules"][..],
+            ),
+            (
+                "https://gitlab.com/lab/group/survey/-/tree/main/data",
+                &[".gitignore", "raw/.gitattributes"][..],
+                &[".gitmodules", ".gitlab-ci.yml", ".github/notes.yml"][..],
+            ),
+        ] {
+            let listing = Listing {
+                resolved: parse(reference).reference,
+                ..single(&url)
+            };
+            for path in kept_out {
+                assert!(listing.kept_only_if_selected(path), "{reference} {path}");
+            }
+            for path in kept_in {
+                assert!(!listing.kept_only_if_selected(path), "{reference} {path}");
+            }
         }
     }
 

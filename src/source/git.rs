@@ -264,6 +264,11 @@ impl Folder {
         }
     }
 
+    /// whether the folder is the repository's top folder, as its own link names it.
+    pub(super) fn is_top(&self) -> bool {
+        self.rest.len() <= 1
+    }
+
     /// whether the link names a commit by its full id, which no push changes.
     pub(super) fn is_at_commit(&self) -> bool {
         self.rest
