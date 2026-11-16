@@ -12,7 +12,6 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
 use crate::plan;
-use crate::project::Project;
 use crate::project::lock;
 use crate::project::manifest::{self, Entry, Manifest};
 use crate::stop::Stop;
@@ -24,9 +23,11 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     let names = distinct(args.names);
     let project = find(&context.output)?;
     let dry_run = args.dry.dry_run;
-    if !dry_run {
-        // asked before the project is held, so other runs never wait on the answer
-        ask_import(context, &project, &names)?;
+    if !dry_run && let Ok((_, manifest)) = project.manifest() {
+        // the names first, so no yes is asked for a removal a typo then stops; asked before the
+        // project is held, so other runs never wait on the answer
+        named(&manifest, &names)?;
+        ask_import(context, &manifest, &names)?;
     }
     let _held = if dry_run {
         None
@@ -210,11 +211,27 @@ fn distinct(asked: Vec<String>) -> Vec<String> {
 }
 
 /// refuses the first of `names` data.toml does not have; a path in the data folder is answered
-/// with the dataset it names or with `exclude`.
+/// with the dataset it names or with `exclude`, and a name near none, given with others, with the
+/// command line that leaves it out.
 fn named(manifest: &Manifest, names: &[String]) -> Result<(), Error> {
     for name in names {
         known(manifest, name, "remove").map_err(|error| match exclusion(manifest, name) {
             Some(help) => error.help(help),
+            None if names.len() > 1
+                && crate::name::closest(name, manifest.datasets.keys().map(String::as_str))
+                    .is_none() =>
+            {
+                let others: Vec<&str> = names
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|other| other != name)
+                    .collect();
+                let instead = format!("fetchloom remove {}", others.join(" "));
+                error.help(format!(
+                    "leave it out, as in `{}`",
+                    super::meant(&[name], &[], instead)
+                ))
+            }
             None => error,
         })?;
     }
@@ -272,13 +289,10 @@ fn stop_for_tests(_: &Stop, _: usize) {}
 
 /// asks before removing the imports among `names`, whose files no source can give back once gc
 /// frees them from the cache; with nobody to ask it refuses, unless `--yes`.
-fn ask_import(context: &Context, project: &Project, names: &[String]) -> Result<(), Error> {
+fn ask_import(context: &Context, manifest: &Manifest, names: &[String]) -> Result<(), Error> {
     if context.yes {
         return Ok(());
     }
-    let Ok((_, manifest)) = project.manifest() else {
-        return Ok(());
-    };
     let imports: Vec<&str> = names
         .iter()
         .filter(|name| {
@@ -300,7 +314,7 @@ fn ask_import(context: &Context, project: &Project, names: &[String]) -> Result<
     };
     let folders: Vec<String> = imports
         .iter()
-        .map(|import| crate::plan::folder(&manifest, import))
+        .map(|import| crate::plan::folder(manifest, import))
         .collect();
     let why = format!("{name} {was} imported from files, and no source can give them back");
     let cancel = format!("the removal of {name}");

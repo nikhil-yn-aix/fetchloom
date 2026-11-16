@@ -263,6 +263,35 @@ fn removing_an_import_needs_a_yes() -> Result {
     Ok(())
 }
 
+/// an import named with a name data.toml lacks: the name is refused before any yes is asked for,
+/// with help that leaves it out, and the command that help gives asks for the yes the import needs.
+#[test]
+fn a_typo_beside_an_import_is_refused_before_the_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    imported(&sandbox)?;
+    let work = sandbox.work();
+    let before = fs::read(work.join("data.toml"))?;
+    let refused = sandbox.run(&["--json", "remove", "precious", "typo"])?;
+    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stdout)?);
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["message"], "data.toml has no dataset called \"typo\"");
+    assert_eq!(
+        error["help"],
+        "leave it out, as in `fetchloom --json remove precious`"
+    );
+    assert_eq!(fs::read(work.join("data.toml"))?, before);
+    let asked = sandbox.run(&["--json", "remove", "precious"])?;
+    assert_eq!(asked.status.code(), Some(1), "{}", text(&asked.stdout)?);
+    assert_eq!(
+        json(&asked)?["errors"][0]["help"],
+        "answer yes at a terminal, or run `fetchloom remove precious --yes` once you keep its files elsewhere"
+    );
+    let removed = sandbox.run(&["remove", "precious", "--yes"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert!(!work.join("data/precious").exists());
+    Ok(())
+}
+
 /// at a terminal the removal of an import asks first: a no changes nothing, and a yes or --yes
 /// removes it.
 #[cfg(target_os = "linux")]
