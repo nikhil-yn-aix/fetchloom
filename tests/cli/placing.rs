@@ -56,6 +56,21 @@ fn folders_refuse_files(sandbox: &Sandbox) -> Result<bool> {
     Ok(!made)
 }
 
+/// whether a file no one may read refuses its own owner here, as on every disk but exfat on macos,
+/// which takes a chmod and keeps the file readable.
+#[cfg(unix)]
+fn files_refuse_reads(sandbox: &Sandbox) -> Result<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = sandbox.folder(".unreadable")?;
+    let probe = folder.join("probe");
+    fs::write(&probe, b"refused")?;
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o000))?;
+    let read = fs::read(&probe).is_ok();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o644))?;
+    fs::remove_dir_all(folder)?;
+    Ok(!read)
+}
+
 fn copy_iris(sandbox: &Sandbox, server: &Server) -> Result {
     sandbox.allow(&server.url);
     fs::write(
@@ -2393,6 +2408,9 @@ fn a_file_force_could_not_put_back_is_named_until_it_is_moved() -> Result {
         return skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
+    if !files_refuse_reads(&sandbox)? {
+        return skipped("permissions", "this disk keeps no file from being read");
+    }
     let (document, hidden) = kept_aside(&sandbox)?;
     let told = |document: &serde_json::Value| {
         let found = warning(document, "place.set_aside");
@@ -2445,6 +2463,9 @@ fn remove_names_a_file_force_kept_aside() -> Result {
         return skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
+    if !files_refuse_reads(&sandbox)? {
+        return skipped("permissions", "this disk keeps no file from being read");
+    }
     let (_, hidden) = kept_aside(&sandbox)?;
 
     let removed = sandbox.run(&["--json", "remove", "d"])?;
@@ -2490,6 +2511,12 @@ fn a_file_force_kept_aside_stays_named_when_the_last_state_write_fails() -> Resu
         return skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
+    if !files_refuse_reads(&sandbox)? {
+        return skipped("permissions", "this disk keeps no file from being read");
+    }
+    if !folders_refuse_files(&sandbox)? {
+        return skipped("permissions", "this disk keeps no folder from new files");
+    }
     let bytes = zip_of(&[
         ("top.csv", b"top\n"),
         ("sub/a.csv", b"first\n"),
@@ -2980,6 +3007,9 @@ fn a_failed_replacement_is_placed_later_without_blaming_anyone() -> Result {
         return skipped("unprivileged", "root ignores file permissions");
     }
     let sandbox = Sandbox::new()?;
+    if !files_refuse_reads(&sandbox)? {
+        return skipped("permissions", "this disk keeps no file from being read");
+    }
     let server = Server::start(
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V2, "\"v2\"")],
