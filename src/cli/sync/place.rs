@@ -414,9 +414,6 @@ pub(crate) struct Placing<'a> {
     /// were settled before the run, as [`Placing::vouch_rest`] says. only then does placing every
     /// file settle the project.
     vouched: bool,
-    /// files of the data folder this run read and found holding their pinned bytes, as taking
-    /// them into the cache does, so linking them to the cache reads none again.
-    proven: HashSet<String>,
 }
 
 impl<'a> Placing<'a> {
@@ -496,7 +493,6 @@ impl<'a> Placing<'a> {
             scope: scope.clone(),
             unlisted: plan::Unlisted::new(),
             vouched: *scope == Scope::All,
-            proven: HashSet::new(),
         })
     }
 
@@ -511,17 +507,6 @@ impl<'a> Placing<'a> {
     /// as reaching into an archive, since data.lock keeps no file an exclude left out.
     pub(crate) fn listed(&mut self, unlisted: plan::Unlisted) {
         self.unlisted = unlisted;
-    }
-
-    /// notes the files of the data folder this run read and found holding their pinned bytes, as
-    /// taking them into the cache reads them, so linking them to the cache reads none again.
-    pub(crate) fn proven(&mut self, paths: HashSet<String>) {
-        self.proven.extend(paths);
-    }
-
-    /// the files [`Placing::proven`] noted, for a placing decided again from the same survey.
-    pub(crate) fn take_proven(&mut self) -> HashSet<String> {
-        std::mem::take(&mut self.proven)
     }
 
     /// what the data folder held when this placing was decided, to decide again from.
@@ -1028,7 +1013,6 @@ impl<'a> Placing<'a> {
             scope,
             unlisted,
             vouched,
-            proven,
         } = self;
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
@@ -1052,7 +1036,7 @@ impl<'a> Placing<'a> {
         let folders = swept(&scope, &targets, &actions);
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
         let adding = told.map(|names| added_here(names, &targets, &actions));
-        let found = copies_to_link(&targets, &actions, &survey, &proven);
+        let found = copies_to_link(&targets, &actions, &survey);
         placement.notice(
             manifest, &targets, &actions, &survey, &scope, &unknown, &unlisted,
         );
@@ -1332,13 +1316,11 @@ struct ToLink<'t, 'a> {
 
 /// the files of `targets` that may be copies of their own sync can link to the cache, as
 /// `actions` leave them: kept files the state records as copies or as hardlinks that lost their
-/// other name, and files this run read and took as placed. `proven` names the files this run took
-/// into the cache, which it read too.
+/// other name, and files this run read and took as placed.
 fn copies_to_link<'t, 'a>(
     targets: &'t [Target<'a>],
     actions: &[Action],
     survey: &Survey,
-    proven: &HashSet<String>,
 ) -> Vec<ToLink<'t, 'a>> {
     targets
         .iter()
@@ -1350,7 +1332,7 @@ fn copies_to_link<'t, 'a>(
                 is_copy(placed, alone).then(|| ToLink {
                     target,
                     seen: placed.look,
-                    proven: placed.racy_intact.get().is_some() || proven.contains(&target.path),
+                    proven: placed.racy_intact.get().is_some(),
                     alone,
                 })
             }
@@ -1537,6 +1519,9 @@ fn link_copies(
         return changed;
     }
     let _span = tracing::debug_span!("link_copies", files = chosen.len()).entered();
+    // so a CLI test can change a copy between what proved its bytes and its link
+    #[cfg(debug_assertions)]
+    crate::stop::hold("FETCHLOOM_TEST_HOLD_LINK");
     let relinked = placer.relink_all(
         chosen.len(),
         |index| place::Relink {
@@ -3144,7 +3129,6 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
-            proven: HashSet::new(),
         };
 
         placing
@@ -3340,7 +3324,6 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
-            proven: HashSet::new(),
         };
         placing
             .apply(
@@ -3410,7 +3393,6 @@ mod tests {
                 scope: Scope::All,
                 unlisted: plan::Unlisted::new(),
                 vouched: true,
-                proven: HashSet::new(),
             };
 
             let placed = placing.apply(
@@ -3484,7 +3466,6 @@ mod tests {
                 scope: Scope::All,
                 unlisted: plan::Unlisted::new(),
                 vouched: true,
-                proven: HashSet::new(),
             };
 
             let placed = placing.apply(
@@ -3563,7 +3544,6 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
-            proven: HashSet::new(),
         };
 
         placing
@@ -3722,7 +3702,6 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
-            proven: HashSet::new(),
         };
         let holding: Vec<String> = placing
             .holding()

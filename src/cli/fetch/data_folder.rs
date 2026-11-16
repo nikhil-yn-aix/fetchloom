@@ -42,9 +42,6 @@ pub(in crate::cli) struct DataFolder {
     /// the time before which the project's state vouches for a file that still looks as it
     /// records, as sync trusts it.
     before: u64,
-    /// the paths whose files [`DataFolder::take`] read and took into the cache, holding their
-    /// pinned bytes.
-    taken: std::sync::Mutex<HashSet<String>>,
 }
 
 /// a path below the project folder, with `/` between folders, that may hold an object, with what
@@ -155,7 +152,6 @@ impl DataFolder {
             name: manifest.data_dir.clone(),
             paths,
             before: 0,
-            taken: std::sync::Mutex::default(),
         }
     }
 
@@ -245,17 +241,6 @@ impl DataFolder {
         Ok(wanted)
     }
 
-    /// the paths whose files this run read and took into the cache, each holding its pinned
-    /// bytes when read.
-    pub(in crate::cli) fn taken(&self) -> HashSet<String> {
-        std::mem::take(
-            &mut self
-                .taken
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
-    }
-
     /// says with `verb` that `files` of `bytes` come from the data folder into the cache.
     pub(in crate::cli) fn tell(&self, output: &Output, verb: &str, files: u64, bytes: u64) {
         output.step(
@@ -322,13 +307,7 @@ impl DataFolder {
                 continue;
             }
             match cache.copy_in(&path, &want.digest, want.size, flush, stop)? {
-                Copied::Sealed(object) => {
-                    self.taken
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(place.path.clone());
-                    return Ok(Some(object));
-                }
+                Copied::Sealed(object) => return Ok(Some(object)),
                 Copied::OtherSize | Copied::OtherBytes | Copied::NotPlain => {
                     tracing::debug!(path = %path.display(), "holds other bytes than data.lock pins");
                 }

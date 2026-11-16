@@ -2097,6 +2097,73 @@ fn a_drive_that_links_nothing_says_files_were_copied() -> Result {
     Ok(())
 }
 
+/// a file sync takes from the data folder into a cache that lacks its bytes, for another path
+/// that needs them, is read again before sync links it, as any copy is: an edit made since the
+/// take, though it kept the file's size and time, stays.
+#[test]
+fn a_file_taken_into_the_cache_is_read_again_before_it_is_linked() -> Result {
+    use crate::support::{Running, wait_until};
+    let sandbox = Sandbox::new()?;
+    // only a placed hardlink can lose its link and be linked again; a clone or a copy stays
+    if !sandbox.links()?.hardlinks_read_only() {
+        return skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
+    }
+    let routes = crate::support::Routes::start(vec![
+        ("/iris.csv".to_owned(), file(V1, "\"v1\"")),
+        ("/twin.csv".to_owned(), file(V1, "\"v1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.iris]\nref = \"{0}/iris.csv\"\n\n[datasets.twin]\nref = \"{0}/twin.csv\"\n",
+            routes.url
+        ),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    // a later state vouches for the files, so no read of a file as new as it proves one
+    let state = sandbox.work().join(".fetchloom").join("state");
+    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
+    let settled = sandbox.run(&["sync"])?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+    let data = sandbox.work().join("data");
+    let backup = sandbox.folder("backup")?;
+    crate::support::copy_apart(&data, &backup)?;
+    delete_folder(&data)?;
+    crate::support::copy_apart(&backup, &data)?;
+    let iris = data.join("iris").join("iris.csv");
+    let twin = data.join("twin").join("twin.csv");
+    delete(&twin)?;
+    let empty = sandbox.folder("empty cache")?;
+    let release = sandbox.folder("hold")?.join("release");
+    let held = sandbox.folder("hold")?.join("release.held");
+    let mut command = sandbox.command(&["sync", "--offline"]);
+    command
+        .env("FETCHLOOM_CACHE", &empty)
+        .env("FETCHLOOM_TEST_HOLD_LINK", &release);
+    let running = Running::start(&mut command)?;
+    wait_until("sync to link the copies", || Ok(held.exists()))?;
+    edit_keeping_look(&iris, b"sepal_length,species\n5.1,SETOSA\n")?;
+    fs::write(&release, b"")?;
+    let output = running.finish()?;
+
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("from data into the cache"), "{stderr}");
+    assert_eq!(fs::read(&twin)?, V1, "{stderr}");
+    assert_eq!(
+        fs::read(&iris)?,
+        b"sepal_length,species\n5.1,SETOSA\n",
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Linked data/iris"), "{stderr}");
+    Ok(())
+}
+
 /// a program reading a copy while sync links it keeps reading the bytes it opened: the link takes
 /// the copy's name in one step, and the copy lasts while it is open.
 #[test]
