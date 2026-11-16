@@ -46,7 +46,7 @@ pub(crate) use staging::{
 pub(crate) use unpacked::{Member, members_of, parts_key, tree, tree_hash};
 #[cfg(test)]
 pub(crate) use upkeep::Object;
-pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Supply, Use};
+pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Supply, Unfinished, Use};
 
 use crate::digest::{self, Block, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};

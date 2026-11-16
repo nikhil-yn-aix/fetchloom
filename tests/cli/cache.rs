@@ -1389,6 +1389,41 @@ fn gc_names_each_project_it_forgets() -> Result {
     Ok(())
 }
 
+/// bytes a download kept without their record, as one stopped before its first record leaves,
+/// are continued only by a run that knows the file's hash, which checks them, so the report says
+/// so rather than promise to continue them.
+#[test]
+fn an_unfinished_download_without_its_record_is_told_to_start_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    sandbox.make_cache(&sandbox.cache())?;
+    let partial = sandbox.cache().join("partial");
+    let at =
+        |key: &str, extension: &str| partial.join(&key[..1]).join(format!("{key}.{extension}"));
+    let recorded = "ab".repeat(32);
+    let bare = "cd".repeat(32);
+    for key in [&recorded, &bare] {
+        fs::create_dir_all(partial.join(&key[..1]))?;
+        fs::write(at(key, "part"), vec![7_u8; 1000])?;
+        fs::write(at(key, "lock"), b"")?;
+    }
+    fs::write(at(&recorded, "json"), b"{}")?;
+
+    let told = text(&sandbox.run(&["cache"])?.stderr)?;
+    assert!(
+        told.contains("; a later run continues 1 where the server allows, and starts the other again from its first byte unless it knows its hash\n"),
+        "{told}"
+    );
+    fs::remove_file(at(&recorded, "json"))?;
+    let told = text(&sandbox.run(&["cache"])?.stderr)?;
+    assert!(
+        told.contains(
+            ", which a later run starts again from the first byte unless it knows the file's hash\n"
+        ),
+        "{told}"
+    );
+    Ok(())
+}
+
 /// an interrupted download keeps its bytes so a later run can continue it where the server
 /// allows; `--now` frees them however new, but never those a running fetchloom holds.
 #[test]

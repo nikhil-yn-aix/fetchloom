@@ -130,6 +130,9 @@ pub(crate) struct Unfinished {
     pub(crate) downloads: u64,
     /// what their files take on the disk.
     pub(crate) bytes: u64,
+    /// of them, those with the record of their bytes beside them, which a run may continue: one
+    /// stopped before its first record, or a small one, which keeps none, starts again.
+    pub(crate) recorded: u64,
 }
 
 /// what a sweep removed, or a dry run would remove, and what it kept.
@@ -254,6 +257,8 @@ impl Cache {
                 {
                     unfinished.downloads += 1;
                     unfinished.bytes += on_disk(&metadata);
+                    let record = fs::symlink_metadata(folder.join(format!("{key}.json")));
+                    unfinished.recorded += u64::from(record.is_ok_and(|found| found.is_file()));
                 }
             }
         }
@@ -630,8 +635,13 @@ impl Cache {
                 continue;
             }
             let mut kept = false;
+            // the bytes go first, and their record only with them: bytes kept without it, as
+            // windows keeps a file another program holds open, could never be continued
             for leftover in [bytes, folder.join(format!("{key}.json"))] {
                 stop.check()?;
+                if kept {
+                    break;
+                }
                 let size = fs::symlink_metadata(&leftover).map_or(0, |metadata| on_disk(&metadata));
                 let removal = self.remove_inside(&leftover);
                 kept |= removal
@@ -1553,6 +1563,8 @@ mod tests {
             lock.exists(),
             "the lock a later sweep finds the bytes by is gone"
         );
+        // bytes kept without their record could never be continued, though a report counts them
+        assert!(record.exists(), "the record of the bytes kept is gone");
         cache.volume = free;
         cache.sweep(&Needed::default(), later);
         assert_eq!(fs::read_dir(&shard).unwrap().count(), 0);

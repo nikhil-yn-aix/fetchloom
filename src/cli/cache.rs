@@ -15,7 +15,9 @@ use serde::Serialize;
 
 use self::usage::Usage;
 use super::{Context, open_cache};
-use crate::cache::{Access, Cache, Checked, Failure, Freed, Member, Needed, Scan, Supply, Use};
+use crate::cache::{
+    Access, Cache, Checked, Failure, Freed, Member, Needed, Scan, Supply, Unfinished, Use,
+};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
@@ -99,14 +101,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     tell_projects(output, &projects);
     let unfinished = cache.unfinished();
     if unfinished.downloads > 0 {
-        output.label(
-            "Unfinished",
-            &format!(
-                "{} · {}, which a later run continues where the server allows",
-                units::count(unfinished.downloads, "download", "downloads"),
-                units::size(unfinished.bytes)
-            ),
-        );
+        output.label("Unfinished", &unfinished_line(&unfinished));
     }
     tell_usage(output, &usage, projects.len(), blocked);
     if unfinished.downloads > 0 {
@@ -121,6 +116,29 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         unfinished_downloads: unfinished.downloads,
         unfinished_bytes: unfinished.bytes,
     })
+}
+
+/// the downloads runs left unfinished, and which of them a later run continues: those with the
+/// record of their bytes, and any other only when it knows the file's hash, which then checks it.
+fn unfinished_line(unfinished: &Unfinished) -> String {
+    let what = format!(
+        "{} · {}",
+        units::count(unfinished.downloads, "download", "downloads"),
+        units::size(unfinished.bytes)
+    );
+    let unnoted = unfinished.downloads.saturating_sub(unfinished.recorded);
+    match (unfinished.recorded, unnoted) {
+        (_, 0) => format!("{what}, which a later run continues where the server allows"),
+        (0, _) => format!(
+            "{what}, which a later run starts again from the first byte unless it knows the file's hash"
+        ),
+        (recorded, 1) => format!(
+            "{what}; a later run continues {recorded} where the server allows, and starts the other again from its first byte unless it knows its hash"
+        ),
+        (recorded, unnoted) => format!(
+            "{what}; a later run continues {recorded} where the server allows, and starts the other {unnoted} again from the first byte unless it knows their hashes"
+        ),
+    }
 }
 
 /// what the cache's files take of `budget`, on disk where the system says, and by how much they
