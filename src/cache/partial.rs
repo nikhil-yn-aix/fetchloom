@@ -410,10 +410,12 @@ impl Partial {
             permissions.set_mode(permissions.mode() | 0o200);
             file.set_permissions(permissions)
         };
+        // windows changes attributes only through a handle that may write them, which checks the
+        // file it changes again itself
         #[cfg(windows)]
         let unsealed = {
             drop(file);
-            crate::volume::set_read_only(&self.bytes, false)
+            crate::volume::unseal_alone(&self.bytes, offset).map(drop)
         };
         if let Err(err) = unsealed {
             tracing::debug!(%err, "could not open a sealed download to publish it");

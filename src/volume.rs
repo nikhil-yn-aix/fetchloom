@@ -396,6 +396,22 @@ pub(crate) fn set_read_only(path: &Path, read_only: bool) -> io::Result<()> {
     })
 }
 
+/// makes the read-only plain file at `path` writable again when it is `len` bytes long and has no
+/// other name, so no other file's bytes become writable through it. the checks and the change go
+/// through one handle, so no file put in its place between them is changed. says whether it was.
+#[cfg(windows)]
+pub(crate) fn unseal_alone(path: &Path, len: u64) -> io::Result<bool> {
+    let file = open_attributes(path)?;
+    let metadata = file.metadata()?;
+    let alone = winapi_util::file::information(&file)?.number_of_links() == 1;
+    let sealed = is_plain(&metadata) && metadata.permissions().readonly();
+    if !(alone && sealed && metadata.len() == len) {
+        return Ok(false);
+    }
+    file.set_permissions(writable(metadata.permissions()))?;
+    Ok(true)
+}
+
 /// opens `path` only to read and change its attributes, never following a link at its end.
 fn open_attributes(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
@@ -799,6 +815,28 @@ mod tests {
 
     fn probes_left(dir: &Path) -> usize {
         fs::read_dir(dir.join("tmp")).unwrap().count()
+    }
+
+    /// a sealed part is made writable again only while it has no other name and is as long as
+    /// its record says: a part hardlinked to an object, or of another length, stays read-only.
+    #[cfg(windows)]
+    #[test]
+    fn a_sealed_part_is_unsealed_only_alone_and_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let part = dir.path().join("a.part");
+        sealed(&part);
+        assert!(!unseal_alone(&part, 4).unwrap(), "another length");
+        assert!(fs::metadata(&part).unwrap().permissions().readonly());
+        let object = dir.path().join("object");
+        fs::hard_link(&part, &object).unwrap();
+        assert!(!unseal_alone(&part, 3).unwrap(), "a second name");
+        assert!(fs::metadata(&object).unwrap().permissions().readonly());
+        // windows keeps one read-only flag for every name of a file, and removes no read-only one
+        set_read_only(&object, false).unwrap();
+        fs::remove_file(&object).unwrap();
+        seal(&part);
+        assert!(unseal_alone(&part, 3).unwrap());
+        assert!(!fs::metadata(&part).unwrap().permissions().readonly());
     }
 
     /// a dry run removes nothing and keeps each removal, in the order made, for a sweep to ask
