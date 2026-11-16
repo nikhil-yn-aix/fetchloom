@@ -796,9 +796,17 @@ fn cache_root() -> Result<std::path::PathBuf, Error> {
     })
 }
 
-/// why fetchloom cannot start in `folder`, as `-C` asks. windows refuses a working folder whose
-/// path passes 258 characters, so a project deeper than that is named with its length.
-fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
+/// why fetchloom cannot start in `folder`, as `-C` asks in the run `typed` gives, on `windows` or
+/// not. windows calls a name it refuses invalid, as it calls a working folder whose path passes 258
+/// characters too long, so a refused character is named there, and a project deeper than that is
+/// named with its length.
+fn unusable(
+    folder: &std::path::Path,
+    err: &std::io::Error,
+    typed: impl IntoIterator<Item = std::ffi::OsString>,
+    windows: bool,
+) -> Error {
+    let exists = "give -C a folder that exists and that you may open";
     if err.kind() != std::io::ErrorKind::InvalidFilename {
         return Error::new(
             Kind::Usage,
@@ -808,9 +816,25 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
                 crate::error::said(err)
             ),
         )
-        .help("give -C a folder that exists and that you may open");
+        .help(exists);
     }
     let path = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let typed: Vec<std::ffi::OsString> = typed.into_iter().collect();
+    if let Some(refused) = typed::refused_in_name(&path).filter(|_| windows) {
+        return Error::new(
+            Kind::Usage,
+            format!(
+                "cannot work in {}: windows takes no {refused} in a folder's name",
+                path.display()
+            ),
+        )
+        .help(typed::refused_help(
+            refused,
+            &folder.to_string_lossy(),
+            &typed,
+            exists,
+        ));
+    }
     let length = path.as_os_str().to_string_lossy().chars().count();
     Error::new(
         Kind::Usage,
@@ -819,7 +843,7 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
             path.display()
         ),
     )
-    .help(match moved_command(std::env::args_os().skip(1)) {
+    .help(match moved_command(typed.into_iter()) {
         Some(command) => {
             format!("move the project to a folder with a shorter path, then run `{command}` there")
         }
@@ -896,7 +920,8 @@ pub(crate) fn run() -> ExitCode {
     let _command = tracing::debug_span!("command", name).entered();
     if let Some(folder) = &global.directory {
         if let Err(err) = std::env::set_current_dir(folder) {
-            return finish::<()>(&context, name, Err(unusable(folder, &err)), started);
+            let error = unusable(folder, &err, std::env::args_os().skip(1), cfg!(windows));
+            return finish::<()>(&context, name, Err(error), started);
         }
         // the folder as the system names it, which a pasted command finds from any folder
         let worked_in = std::env::current_dir().unwrap_or_else(|_| folder.clone());
@@ -1703,6 +1728,72 @@ mod tests {
         };
         context.take_settings(settings);
         assert!(context.rate.is_some());
+    }
+
+    /// windows calls a working folder whose name holds a character it refuses invalid, as it does
+    /// a path too long, so the character is named, and a `"` left by a backslash before a closing
+    /// quote, with the words it took, is told as that slip with the line meant. only a name with
+    /// none of them is too long.
+    #[test]
+    fn a_folder_windows_refuses_names_its_character_not_its_length() {
+        let invalid = std::io::Error::from(std::io::ErrorKind::InvalidFilename);
+        let typed = |folder: &str| {
+            ["--json", "-C", folder]
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+        let root = std::path::absolute("/").unwrap();
+        let slipped = root.join("lab").join("renamed proj\" status");
+        let error = unusable(&slipped, &invalid, typed(&slipped.to_string_lossy()), true);
+        assert_eq!(
+            error.message,
+            format!(
+                "cannot work in {}: windows takes no \" in a folder's name",
+                slipped.display()
+            )
+        );
+        let meant = format!(
+            "fetchloom --json -C {} status",
+            crate::suggested::shell_word(&root.join("lab").join("renamed proj").to_string_lossy())
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                format!(
+                    "a backslash right before a closing quote, as in \"C:\\my data\\\", keeps the quote in the path, with the words after it: did you mean `{meant}`?"
+                )
+                .as_str()
+            )
+        );
+        let starred = root.join("lab").join("a*b");
+        let error = unusable(&starred, &invalid, typed(&starred.to_string_lossy()), true);
+        assert_eq!(
+            error.message,
+            format!(
+                "cannot work in {}: windows takes no * in a folder's name",
+                starred.display()
+            )
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("give -C a folder that exists and that you may open")
+        );
+        // a name too long elsewhere may hold what windows refuses
+        let deep = root
+            .join("lab")
+            .join(format!("2026-11-16T08:43:{}", "x".repeat(300)));
+        for windows in [false, true] {
+            let error = unusable(&deep, &invalid, typed(&deep.to_string_lossy()), windows);
+            assert_eq!(
+                error
+                    .message
+                    .ends_with("its path is too long for a working folder"),
+                !windows,
+                "{}",
+                error.message
+            );
+        }
     }
 
     /// a stop asked after the command marked its work finished leaves it finished, and one asked

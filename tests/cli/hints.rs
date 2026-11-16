@@ -120,6 +120,56 @@ fn a_folder_that_is_not_there_or_a_data_toml_that_does_not_parse_says_what_to_do
     Ok(())
 }
 
+/// windows calls a folder name holding a character it refuses invalid, as it calls a path too
+/// long, so -C names the character, and the `"` a backslash before a closing quote leaves, with
+/// the words after it, gets the line meant; add reads the same slip in its path as one, exit 2.
+#[cfg(windows)]
+#[test]
+fn a_folder_name_windows_refuses_is_named_for_its_character() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("renamed proj")?;
+    // what cmd and powershell pass for -C "<folder>\" status
+    let slipped = format!("{}\" status", folder.display());
+    let starred = folder.join("a*b").display().to_string();
+    for (given, refused, meant) in [
+        (
+            slipped.as_str(),
+            "\"",
+            Some(format!(
+                "did you mean `fetchloom -C \"{}\" status`?",
+                folder.display()
+            )),
+        ),
+        (starred.as_str(), "*", None),
+    ] {
+        let output = sandbox.run(&["-C", given])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(
+            stderr.contains(&format!("windows takes no {refused} in a folder's name"))
+                && !stderr.contains("too long"),
+            "{stderr}"
+        );
+        if let Some(meant) = meant {
+            assert!(stderr.contains(&meant), "{stderr}");
+        }
+    }
+    // add takes the same slip in the path it reads, as exit 2, never a fault of the disk
+    let data = sandbox.folder("my data")?;
+    let output = sandbox.run(&["add", &format!("{}\" --dry-run", data.display())])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("windows takes no \" in a name")
+            && stderr.contains(&format!(
+                "did you mean `fetchloom add \"{}\" --dry-run`?",
+                data.display()
+            )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_name_add_cannot_use_is_refused_before_any_request() -> Result {
     let sandbox = Sandbox::new()?;

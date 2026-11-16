@@ -311,6 +311,45 @@ pub(in crate::cli) fn meant(typed: &[&str], meant: &[&str], instead: String) -> 
         .unwrap_or(instead)
 }
 
+/// the first character in a name in `path` that windows takes in no file or folder name: one of
+/// `"*?<>|:` or a control character. a drive's `:` and a `\\?\` start are no name's.
+pub(in crate::cli) fn refused_in_name(path: &std::path::Path) -> Option<char> {
+    path.components().find_map(|part| match part {
+        std::path::Component::Normal(name) => name
+            .to_string_lossy()
+            .chars()
+            .find(|c| matches!(c, '"' | '*' | '?' | '<' | '>' | '|' | ':') || c.is_control()),
+        _ => None,
+    })
+}
+
+/// the help for `word`, a path on the command line `line` whose name holds `refused`, which
+/// windows takes in no name, or `otherwise`. cmd and powershell read a backslash right before a
+/// closing quote as a quote, which leaves a `"` in the word with every word after it, so the
+/// line meant ends the word before the `"` and gives back each word after it.
+pub(in crate::cli) fn refused_help(
+    refused: char,
+    word: &str,
+    line: &[std::ffi::OsString],
+    otherwise: &str,
+) -> String {
+    let meant = word
+        .split_once('"')
+        .filter(|_| refused == '"')
+        .and_then(|(before, after)| {
+            let words: Vec<&str> = std::iter::once(before)
+                .chain(after.split_whitespace())
+                .collect();
+            retyped(line, &[word], &words)
+        });
+    match meant {
+        Some(meant) => format!(
+            "a backslash right before a closing quote, as in \"C:\\my data\\\", keeps the quote in the path, with the words after it: did you mean `{meant}`?"
+        ),
+        None => otherwise.to_owned(),
+    }
+}
+
 /// [`meant`]'s line from `line`: the words `typed` change where they stand last, alone or beside
 /// an `=`, as in `--limt=5`. none when they stand nowhere or the line cannot be repeated.
 fn retyped(line: &[std::ffi::OsString], typed: &[&str], meant: &[&str]) -> Option<String> {

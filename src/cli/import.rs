@@ -712,6 +712,10 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
         here.join(typed)
     };
     std::fs::canonicalize(&path).map_err(|err| {
+        let line = super::TYPED.get().map_or(&[][..], Vec::as_slice);
+        if let Some(refused) = refused_name(typed, &path, &err, line, cfg!(windows)) {
+            return refused;
+        }
         if err.kind() != std::io::ErrorKind::NotFound {
             return Error::io(format_args!("could not find {typed}"), &err);
         }
@@ -738,6 +742,34 @@ pub(super) fn located(typed: &str, here: &Path, home: Option<&Path>) -> Result<P
             None => error.help("check the path"),
         }
     })
+}
+
+/// the refusal of `typed`, a path given to add on the command line `line` that leads to `path`,
+/// which windows, as `windows` says, could not open with `err` since a name in it holds a
+/// character windows takes in none: a typing slip, not a fault of the disk.
+fn refused_name(
+    typed: &str,
+    path: &Path,
+    err: &std::io::Error,
+    line: &[std::ffi::OsString],
+    windows: bool,
+) -> Option<Error> {
+    if !windows || err.kind() != std::io::ErrorKind::InvalidFilename {
+        return None;
+    }
+    let refused = super::typed::refused_in_name(path)?;
+    Some(
+        Error::new(
+            Kind::Usage,
+            format!("there is no file or folder \"{typed}\": windows takes no {refused} in a name"),
+        )
+        .help(super::typed::refused_help(
+            refused,
+            typed,
+            line,
+            "check the path",
+        )),
+    )
 }
 
 /// the most names [`near`] reads in one folder; more gets no guess rather than a slow one.
@@ -1606,6 +1638,41 @@ fn first_other_bytes(copied: &[LockedFile], pinned: &[LockedFile]) -> Option<Str
 mod tests {
     use super::*;
     use crate::project::manifest::Manifest;
+
+    /// on windows a path holding a character windows takes in no name is a typing slip, exit 2,
+    /// not a fault of the disk; a `"` there is what a backslash before a closing quote leaves, with
+    /// the words after it, so the help gives the line meant. elsewhere such a name is a name.
+    #[test]
+    fn a_name_windows_refuses_is_a_slip_on_the_command_line() {
+        let invalid = std::io::Error::from(std::io::ErrorKind::InvalidFilename);
+        let root = std::path::absolute("/").unwrap();
+        let typed = root.join("lab").join("my data\" --dry-run");
+        let typed = typed.to_string_lossy();
+        let line: Vec<std::ffi::OsString> = ["add", &*typed].iter().map(Into::into).collect();
+        let error = refused_name(&typed, Path::new(&*typed), &invalid, &line, true).unwrap();
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(
+            error.message,
+            format!("there is no file or folder \"{typed}\": windows takes no \" in a name")
+        );
+        let meant =
+            crate::suggested::shell_word(&root.join("lab").join("my data").to_string_lossy())
+                .into_owned();
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                format!(
+                    "a backslash right before a closing quote, as in \"C:\\my data\\\", keeps the quote in the path, with the words after it: did you mean `fetchloom add {meant} --dry-run`?"
+                )
+                .as_str()
+            )
+        );
+        let starred = root.join("lab").join("a*b");
+        let starred = starred.to_string_lossy();
+        let error = refused_name(&starred, Path::new(&*starred), &invalid, &line, true).unwrap();
+        assert_eq!(error.help.as_deref(), Some("check the path"));
+        assert!(refused_name(&typed, Path::new(&*typed), &invalid, &line, false).is_none());
+    }
 
     /// the current folder spelled otherwise than the project's real path, as windows spells one
     /// without the `\\?\` its real path has, still counts its folders up to the project: a
