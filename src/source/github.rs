@@ -142,12 +142,24 @@ impl Release {
         };
         match repository {
             Ok(response) if (200..300).contains(&response.status) => {
-                let message = match &self.tag {
-                    Some(tag) => format!("{} has no release at the tag {tag}", self.page()),
-                    None => format!("{} has no published release", self.page()),
+                let (message, instead) = match &self.tag {
+                    Some(tag) => (
+                        format!("{} has no release at the tag {tag}", self.page()),
+                        format!(
+                            "to pin the repository's own files at that tag instead, run `{}`",
+                            self.repo.adding(&["tree", tag])
+                        ),
+                    ),
+                    None => (
+                        format!("{} has no published release", self.page()),
+                        format!(
+                            "to pin the repository's own files at its default branch instead, run `{}`",
+                            self.repo.adding(&[])
+                        ),
+                    ),
                 };
                 Error::new(Kind::ReferenceUnresolved, message).help(format!(
-                    "check the releases at {}/releases; a tag without a release has no files to list",
+                    "check the releases at {}/releases; a tag without a release has no files to list. {instead}",
                     self.page()
                 ))
             }
@@ -214,6 +226,22 @@ impl Repo {
     /// the repository's page on github.com.
     pub(super) fn page(&self) -> String {
         format!("https://github.com/{}/{}", self.owner, self.name)
+    }
+
+    /// the command that adds the repository's page with `more` path segments after it, as
+    /// `tree` and a tag: its own files at that tag, or at the default branch without any.
+    fn adding(&self, more: &[&str]) -> String {
+        let mut link = Url::parse(&self.page())
+            .unwrap_or_else(|_| unreachable!("a repository's page is a link"));
+        if let Ok(mut segments) = link.path_segments_mut() {
+            for part in more {
+                segments.extend(part.split('/'));
+            }
+        }
+        crate::suggested::command(&format!(
+            "add {}",
+            crate::suggested::shell_word(link.as_str())
+        ))
     }
 
     /// the repository's URL in github's API, with `more` path segments after it, each one segment

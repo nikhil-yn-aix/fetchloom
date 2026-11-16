@@ -127,19 +127,22 @@ fn an_asset_still_uploading_is_listed_as_unavailable() {
 }
 
 /// github answers 404 alike for a missing release and a missing or private repository, so the
-/// repository's own answer tells them apart.
+/// repository's own answer tells them apart. most data repositories publish no release, so the
+/// help names the link that pins the repository's own files.
 #[test]
 fn a_missing_release_of_a_repository_github_shows_is_unresolved() {
-    for (reference, url, message) in [
+    for (reference, url, message, instead) in [
         (
             "jqlang/jq@jq-1.8.2",
             RELEASE,
             "https://github.com/jqlang/jq has no release at the tag jq-1.8.2",
+            "to pin the repository's own files at that tag instead, run `fetchloom add https://github.com/jqlang/jq/tree/jq-1.8.2`",
         ),
         (
             "jqlang/jq",
             LATEST,
             "https://github.com/jqlang/jq has no published release",
+            "to pin the repository's own files at its default branch instead, run `fetchloom add https://github.com/jqlang/jq`",
         ),
     ] {
         let recorded = Recorded::default()
@@ -148,6 +151,15 @@ fn a_missing_release_of_a_repository_github_shows_is_unresolved() {
         let error = block_on(release(reference).resolve(&recorded)).unwrap_err();
         assert_eq!(error.kind, Kind::ReferenceUnresolved, "{reference}");
         assert_eq!(error.message, message);
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                format!(
+                    "check the releases at https://github.com/jqlang/jq/releases; a tag without a release has no files to list. {instead}"
+                )
+                .as_str()
+            )
+        );
         assert!(error.need.is_none());
         assert_eq!(recorded.asked(), [url, REPOSITORY]);
     }

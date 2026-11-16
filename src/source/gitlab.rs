@@ -272,12 +272,24 @@ impl Release {
     }
 
     fn no_release(&self) -> Error {
-        let message = match &self.tag {
-            Some(tag) => format!("{} has no release at the tag {tag}", self.page()),
-            None => format!("{} has no release", self.page()),
+        let (message, instead) = match &self.tag {
+            Some(tag) => (
+                format!("{} has no release at the tag {tag}", self.page()),
+                format!(
+                    "to pin the project's own files at that tag instead, run `{}`",
+                    self.project.adding(Some(tag))
+                ),
+            ),
+            None => (
+                format!("{} has no release", self.page()),
+                format!(
+                    "to pin the project's own files at its default branch instead, run `{}`",
+                    self.project.adding(None)
+                ),
+            ),
         };
         Error::new(Kind::ReferenceUnresolved, message).help(format!(
-            "check the releases at {}/-/releases; a tag without a release has no files to list",
+            "check the releases at {}/-/releases; a tag without a release has no files to list. {instead}",
             self.page()
         ))
     }
@@ -425,6 +437,28 @@ impl Project {
     /// the project's page on its server.
     pub(super) fn page(&self) -> String {
         format!("https://{}/{}", self.host(), self.path)
+    }
+
+    /// the command that adds the project's own files at `tag`, or at its default branch: on
+    /// gitlab.com its page, which names that branch, and elsewhere its tree at `HEAD`, since
+    /// nothing in a bare link to another server says it runs gitlab.
+    fn adding(&self, tag: Option<&str>) -> String {
+        let mut link =
+            Url::parse(&self.page()).unwrap_or_else(|_| unreachable!("a project's page is a link"));
+        let reference = match tag {
+            Some(tag) => Some(tag),
+            None if self.is_elsewhere() => Some(super::git::DEFAULT_BRANCH),
+            None => None,
+        };
+        if let Some(reference) = reference
+            && let Ok(mut segments) = link.path_segments_mut()
+        {
+            segments.extend(["-", "tree"]).extend(reference.split('/'));
+        }
+        crate::suggested::command(&format!(
+            "add {}",
+            crate::suggested::shell_word(link.as_str())
+        ))
     }
 
     /// the commit `reference`, a branch, a tag or a commit, names in the project, or none when it

@@ -167,7 +167,7 @@ fn a_link_that_is_not_https_or_holds_a_secret_is_unavailable() {
 }
 
 /// gitlab's message tells a missing release from a project it does not show, which may be
-/// private.
+/// private. a project without a release is pinned by its own files, which the help names.
 #[test]
 fn a_missing_release_and_a_hidden_project_say_which_they_are() {
     let recorded = Recorded::default().on(RELEASE, 404, fixture_bytes("gitlab/missing.json"));
@@ -177,6 +177,26 @@ fn a_missing_release_and_a_hidden_project_say_which_they_are() {
     assert_eq!(
         error.message,
         "https://gitlab.com/gitlab-org/gitlab-runner has no release at the tag v19.3.6"
+    );
+    let releases = "check the releases at https://gitlab.com/gitlab-org/gitlab-runner/-/releases; a tag without a release has no files to list";
+    assert_eq!(
+        error.help.as_deref(),
+        Some(format!("{releases}. to pin the project's own files at that tag instead, run `fetchloom add https://gitlab.com/gitlab-org/gitlab-runner/-/tree/v19.3.6`").as_str())
+    );
+    let recorded = Recorded::default().on(LATEST, 404, fixture_bytes("gitlab/missing.json"));
+    let error = block_on(release("gitlab-org/gitlab-runner").resolve(&recorded)).unwrap_err();
+    assert_eq!(
+        error.message,
+        "https://gitlab.com/gitlab-org/gitlab-runner has no release"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(format!("{releases}. to pin the project's own files at its default branch instead, run `fetchloom add https://gitlab.com/gitlab-org/gitlab-runner`").as_str())
+    );
+    let elsewhere = Release::parse("//code.videolan.org/videolan/dav1d").unwrap();
+    assert_eq!(
+        elsewhere.no_release().help.as_deref(),
+        Some("check the releases at https://code.videolan.org/videolan/dav1d/-/releases; a tag without a release has no files to list. to pin the project's own files at its default branch instead, run `fetchloom add https://code.videolan.org/videolan/dav1d/-/tree/HEAD`")
     );
 
     let recorded = Recorded::default().on(RELEASE, 404, fixture_bytes("gitlab/no-project.json"));

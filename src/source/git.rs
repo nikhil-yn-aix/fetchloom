@@ -23,7 +23,7 @@ use crate::net::Api;
 const MOST_REF_PARTS: usize = 5;
 
 /// the ref both hosts' apis read as the default branch, whatever it is called.
-const DEFAULT_BRANCH: &str = "HEAD";
+pub(super) const DEFAULT_BRANCH: &str = "HEAD";
 
 /// github.com's own pages whose link starts as a repository's would, as `/topics/<topic>`: no
 /// account holds these names, so none owns a repository.
