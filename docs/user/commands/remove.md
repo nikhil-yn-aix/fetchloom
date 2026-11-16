@@ -46,6 +46,8 @@ warning: data/pets still holds 2 files fetchloom did not place, such as data/pet
   help: `fetchloom status` lists them as extra; delete them when you no longer need them
 ```
 
+a file of yours that a `sync --force` kept under a hidden name, as `.fetchloom-<hex>.old`, keeps its folder too, and remove names it with the path it had, as sync does.
+
 files a system writes into a folder by itself, such as finder's `.DS_Store` or windows' `Thumbs.db`, keep no folder: one left holding only them goes, and they go with it.
 
 removing a table also removes its comments; other entries stay. commit `data.toml` and `data.lock` afterwards.

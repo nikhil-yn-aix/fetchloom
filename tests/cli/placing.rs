@@ -2334,18 +2334,13 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     Ok(())
 }
 
-/// a person's file `--force` moved out of the way cannot go back once a folder took its name, so
-/// the run, and each sync and status after it, say where it is until the person moves it.
+/// a project whose dataset d places a folder `data/d/sub` where a person's file stood, after a
+/// `sync --force` moved the file aside and failed once a folder took its name: the forced run's
+/// json and the hidden name, in the project, the file is kept under.
 #[cfg(unix)]
-#[test]
-fn a_file_force_could_not_put_back_is_named_until_it_is_moved() -> Result {
+fn kept_aside(sandbox: &Sandbox) -> Result<(serde_json::Value, String)> {
     use std::os::unix::fs::PermissionsExt;
 
-    use crate::support::warning;
-    if rustix::process::geteuid().is_root() {
-        return skipped("unprivileged", "root ignores file permissions");
-    }
-    let sandbox = Sandbox::new()?;
     let bytes = zip_of(&[
         ("top.csv", b"top\n"),
         ("sub/a.csv", b"first\n"),
@@ -2382,10 +2377,23 @@ fn a_file_force_could_not_put_back_is_named_until_it_is_moved() -> Result {
         })
         .collect();
     let [hidden] = hidden.as_slice() else {
-        panic!("one file moved aside: {hidden:?}");
+        return Err(format!("not one file moved aside: {hidden:?}").into());
     };
     assert_eq!(fs::read(folder.join(hidden))?, b"my notes\n");
-    let hidden = format!("data/d/{hidden}");
+    Ok((document, format!("data/d/{hidden}")))
+}
+
+/// a person's file `--force` moved out of the way cannot go back once a folder took its name, so
+/// the run, and each sync and status after it, say where it is until the person moves it.
+#[cfg(unix)]
+#[test]
+fn a_file_force_could_not_put_back_is_named_until_it_is_moved() -> Result {
+    use crate::support::warning;
+    if rustix::process::geteuid().is_root() {
+        return skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let (document, hidden) = kept_aside(&sandbox)?;
     let told = |document: &serde_json::Value| {
         let found = warning(document, "place.set_aside");
         assert_eq!(found["details"], serde_json::json!([hidden]), "{document}");
@@ -2422,6 +2430,33 @@ fn a_file_force_could_not_put_back_is_named_until_it_is_moved() -> Result {
     assert_eq!(
         warning(&document, "place.set_aside"),
         &serde_json::Value::Null,
+        "{document}"
+    );
+    Ok(())
+}
+
+/// `remove` of the dataset a person's file was kept aside in says where the file is, as each sync
+/// and status do, rather than only naming the hidden name in a folder that stays.
+#[cfg(unix)]
+#[test]
+fn remove_names_a_file_force_kept_aside() -> Result {
+    use crate::support::warning;
+    if rustix::process::geteuid().is_root() {
+        return skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let (_, hidden) = kept_aside(&sandbox)?;
+
+    let removed = sandbox.run(&["--json", "remove", "d"])?;
+
+    let document = json(&removed)?;
+    assert_eq!(removed.status.code(), Some(0), "{document}");
+    let found = warning(&document, "place.set_aside");
+    assert_eq!(found["details"], serde_json::json!([hidden]), "{document}");
+    assert!(
+        found["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("data/d/sub")),
         "{document}"
     );
     Ok(())

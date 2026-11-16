@@ -1249,11 +1249,14 @@ impl<'a> Placing<'a> {
         )?;
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
         survey.smudge_edited();
+        let (_, moved_away) = track_aside(&project.root, &mut survey.state, Vec::new());
         let forgot = survey.state.synced.take().is_some();
-        let dropped = survey.state.forget_removed(manifest);
+        let dropped = survey.state.forget_removed(manifest) || moved_away;
         if removed || forgot || dropped || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
+        // a person's file kept aside may be what keeps a folder, so it is named as sync names it
+        tell::set_aside(output, manifest, &survey.state.aside);
         if told {
             tell(
                 output,
