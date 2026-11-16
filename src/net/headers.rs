@@ -168,6 +168,16 @@ fn range_bounds(headers: &HeaderMap) -> Option<(&str, &str)> {
     range.split_once('-')
 }
 
+/// whether a range answer says its server does not know the whole file's length, as
+/// `Content-Range: bytes 100-199/*` does.
+pub(super) fn length_unknown(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.rsplit_once('/'))
+        .is_some_and(|(_, total)| total.trim() == "*")
+}
+
 /// whether a server says it answers requests for byte ranges.
 pub(super) fn accepts_ranges(headers: &HeaderMap) -> bool {
     headers

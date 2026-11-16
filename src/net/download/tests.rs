@@ -874,6 +874,36 @@ fn a_file_kept_whole_asks_only_for_its_last_byte() {
     }
 }
 
+/// a server may answer the request for the last byte of a part kept whole with `Content-Range:
+/// bytes N-N/*`, a length it does not know: a part that names the kept version itself still says
+/// the bytes kept are the file, since one version has one length. one that names none proves
+/// nothing, so the file starts over.
+#[test]
+fn a_last_byte_of_no_stated_length_finishes_a_part_of_the_same_version() {
+    let body = pattern(0, (1 << 20) + 7);
+    let total = body.len();
+    let last = format!("bytes {}-{}/*", total - 1, total - 1);
+    for (tag, moved) in [(Some("\"v1\""), 0), (None, total)] {
+        let mut head = vec![("Content-Range", last.as_str())];
+        head.extend(tag.map(|tag| ("ETag", tag)));
+        let (url, asked) = serve(vec![
+            reply("206 Partial Content", &head, &body[total - 1..]),
+            reply("200 OK", &[("ETag", "\"v1\"")], &body),
+        ]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        kept_whole(&cache, &url, &body, Some(total as u64), false);
+        let fetch = Fetch::new(url.clone());
+        let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+        assert_eq!(fetched.digest, crate::digest::sha256(&body), "{tag:?}");
+        assert_eq!(
+            (fetched.moved, lines(&asked).len()),
+            (moved as u64, if moved == 0 { 1 } else { 2 }),
+            "{tag:?}"
+        );
+    }
+}
+
 /// a server that says nothing lies past the bytes kept, and that the file is that long, says
 /// they are all of it, even where no earlier answer stated the length.
 #[test]

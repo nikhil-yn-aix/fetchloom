@@ -1729,9 +1729,20 @@ fn confirmed(
             && !headers::changed(kept, validators);
         return ((hashed || named) && length.is_none_or(|length| length == total)).then_some(total);
     }
-    // a refused range states the size as a part does
-    let total = headers::total_length(head, StatusCode::PARTIAL_CONTENT)
-        .filter(|total| *total == received && *total > 0)?;
+    // a refused range states the size as a part does. a part of a length its server does not
+    // know is of the kept length when it names the kept version itself: one version, one length
+    let total = match headers::total_length(head, StatusCode::PARTIAL_CONTENT) {
+        Some(total) => total,
+        None if status == StatusCode::PARTIAL_CONTENT
+            && headers::length_unknown(head)
+            && if_range(&headers::validators(head))
+                .is_some_and(|named| if_range(kept) == Some(named)) =>
+        {
+            received
+        }
+        None => return None,
+    };
+    let total = Some(total).filter(|total| *total == received && *total > 0)?;
     let alone = match (status, length) {
         (StatusCode::PARTIAL_CONTENT, Some(length)) => {
             length == total && headers::range_start(head) == Some(total - 1)
