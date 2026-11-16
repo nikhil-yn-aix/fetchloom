@@ -854,7 +854,7 @@ impl<'a> Building<'a> {
             &self.context.stop,
             &self.context.work,
         )
-        .map_err(|fault| taken(name, fault))?;
+        .map_err(|fault| published(name, fault, cache))?;
         if expected.is_none_or(|expected| expected == found.tree) {
             cache.record_result(&key, &found.members).map_err(|err| {
                 Error::io(
@@ -1478,6 +1478,36 @@ fn taken(name: &str, fault: Fault) -> Error {
     Error::new(Kind::BuildFailed, message).help(help)
 }
 
+/// the error for a result of `name` that could not be put in `cache`: a disk or a quota that ran
+/// out is the cache's, which is said, since the step may have written on another, TMPDIR's.
+fn published(name: &str, fault: Fault, cache: &Cache) -> Error {
+    let full = |err: &io::Error| {
+        matches!(
+            err.kind(),
+            io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded
+        )
+    };
+    let err = match fault {
+        Fault::Io(err) if full(&err) => err,
+        fault => return taken(name, fault),
+    };
+    let help = if err.kind() == io::ErrorKind::QuotaExceeded {
+        "free some of your files on the disk holding the cache, or ask for a larger disk quota there, then run the command again"
+    } else {
+        "free some space on the disk holding the cache, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the command again"
+    };
+    let err = cache.explained(cache.root(), err);
+    Error::new(
+        Kind::LocalIo,
+        format!(
+            "could not take in what {name} wrote, copying it into the cache at {}: {}",
+            cache.root().display(),
+            crate::error::said(&err)
+        ),
+    )
+    .help(help)
+}
+
 /// how many of the files data.lock pins a rerun made as they are, with `against` after the count,
 /// then how many it made that data.lock does not pin: `9,998 of 10,000 files match data.lock`,
 /// `1 of 1 file matches, and 1 file is new`.
@@ -1566,6 +1596,38 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a disk or a quota that runs out while a result is taken in is said to be the cache's, with
+    /// what to do there, since the step may have written on another disk, TMPDIR's.
+    #[test]
+    fn a_full_cache_is_named_when_a_result_is_taken_in() {
+        let (_dir, cache) = crate::cache::tests::cache();
+        for (kind, said, help) in [
+            (
+                io::ErrorKind::QuotaExceeded,
+                "disk quota exceeded",
+                "free some of your files on the disk holding the cache, or ask for a larger disk quota there, then run the command again",
+            ),
+            (
+                io::ErrorKind::StorageFull,
+                "no space left on device",
+                "free some space on the disk holding the cache, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the command again",
+            ),
+        ] {
+            let full = io::Error::new(kind, said);
+
+            let error = published("bigout", Fault::Io(full), &cache);
+
+            assert_eq!(
+                error.message,
+                format!(
+                    "could not take in what bigout wrote, copying it into the cache at {}: {said}",
+                    cache.root().display()
+                )
+            );
+            assert_eq!(error.help.as_deref(), Some(help));
+        }
+    }
 
     /// a step runs in the project folder, so a relative TMPDIR, which fetchloom would take from its
     /// own working folder, would name another folder there, and an empty one names none: both count
