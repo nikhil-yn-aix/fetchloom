@@ -284,6 +284,16 @@ pub(crate) fn peak(steps: &[Needs], clones: bool) -> u64 {
     stays.saturating_add(copies)
 }
 
+/// the most one step of a build of `steps` may take on another disk than the cache's, where its
+/// folder is: its copies of what it reads, which no disk clones from another, and its result.
+pub(crate) fn step_peak(steps: &[Needs]) -> u64 {
+    steps
+        .iter()
+        .map(|step| step.inputs.saturating_add(step.result.unwrap_or(0)))
+        .max()
+        .unwrap_or(0)
+}
+
 /// how far `needed` bytes pass what a disk has `free`, none when they fit or the disk does not say.
 pub(crate) fn short(needed: u64, free: Option<u64>) -> Option<u64> {
     free.and_then(|free| needed.checked_sub(free))
@@ -352,6 +362,10 @@ mod tests {
         assert_eq!(peak(&steps, true), 75);
         assert_eq!(peak(&steps, false), 375);
         assert_eq!(peak(&[], false), 0);
+        // on another disk only the step that runs there takes room: its copies and its result
+        assert_eq!(step_peak(&steps), 300);
+        assert_eq!(step_peak(&steps[..1]), 120);
+        assert_eq!(step_peak(&[]), 0);
     }
 
     /// a floor set is kept as it is; otherwise it is 1% of the disk, never under 1 GiB.

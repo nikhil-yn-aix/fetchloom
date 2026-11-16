@@ -38,8 +38,15 @@ const WAITING_LINES: usize = 10_000;
 /// started that left its group can hold them open for ever.
 const DRAIN: Duration = Duration::from_secs(2);
 
-/// how often a running step's watch looks at the free space on the disk holding the cache.
+/// how often a running step's watch looks at the free space on the disk holding its folder.
 const FLOOR_EVERY: Duration = Duration::from_secs(2);
+
+#[cfg(test)]
+thread_local! {
+    /// whether a running step's watch skips every look but the one as the step ends, as a step
+    /// that ends before the first look or between two would have it.
+    static UNWATCHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 pub(crate) struct Command<'a> {
     /// the program and its arguments, each folder in place.
@@ -50,7 +57,8 @@ pub(crate) struct Command<'a> {
     pub(crate) env: &'a BTreeMap<String, String>,
 }
 
-/// the least free space a running step may leave on the cache's disk, and how to read it.
+/// the least free space a running step may leave on the disk holding its folder, and how to read
+/// it.
 pub(crate) struct Floor<'a> {
     pub(crate) bytes: u64,
     /// the bytes free now, none when the system does not say.
@@ -69,6 +77,16 @@ fn due(looked: Option<Instant>, now: Instant) -> bool {
     looked.is_none_or(|looked| now.saturating_duration_since(looked) >= FLOOR_EVERY)
 }
 
+/// how a step that ended as `ended` counts once the watch looks at the free space a last time:
+/// below `floor`, it ended low, whatever it exited with, since what it wrote passed the floor,
+/// though it ended between two looks or before the first.
+fn finished(ended: Ended, floor: &Floor<'_>) -> Ended {
+    match floor.breached() {
+        Some(free) => Ended::Low { free },
+        None => ended,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ended {
     /// it exited with this code.
@@ -78,7 +96,8 @@ pub(crate) enum Ended {
     Signaled(i32),
     /// a stop was asked, so fetchloom ended it.
     Stopped,
-    /// the cache's disk had less free than the floor, `free` bytes, so fetchloom ended it.
+    /// the disk holding its folder had less free than the floor, `free` bytes, while it ran, so
+    /// fetchloom ended it, or once it ended.
     Low { free: u64 },
 }
 
@@ -111,7 +130,7 @@ pub(crate) fn words(run: &[Template], folder: &dyn Fn(Slot<'_>) -> OsString) -> 
     run.iter().map(|word| word.expand(folder)).collect()
 }
 
-/// runs `command` until it ends, `stop` asks or the cache's disk falls below `floor`, its outputs
+/// runs `command` until it ends, `stop` asks or its folder's disk falls below `floor`, its outputs
 /// in a new log at `log`, each line handed to `forward`, and its group ended with it. the step gets
 /// `building` as `FETCHLOOM_BUILDING`. it fails when the program cannot start, `NotFound` when none
 /// of its name is on PATH, or the log cannot be written.
@@ -209,7 +228,7 @@ fn watch(
     loop {
         hand_on(lines, forward);
         if let Some(status) = group.try_wait()? {
-            return Ok(ended(status));
+            return Ok(finished(ended(status), floor));
         }
         if stop.is_asked() {
             group.end();
@@ -217,6 +236,10 @@ fn watch(
             return Ok(Ended::Stopped);
         }
         let now = Instant::now();
+        #[cfg(test)]
+        if UNWATCHED.get() {
+            looked = Some(now);
+        }
         if due(looked, now) {
             looked = Some(now);
             if let Some(free) = floor.breached() {
@@ -575,6 +598,62 @@ mod tests {
         assert!(due(None, start));
         assert!(!due(Some(start), start + Duration::from_millis(1999)));
         assert!(due(Some(start), start + FLOOR_EVERY));
+    }
+
+    /// a step that ends below the floor, between two looks or before the first, counts as one the
+    /// floor stopped, whatever it exited with; above it, or on a disk that does not say, it ended
+    /// as it did.
+    #[test]
+    fn a_step_that_ends_below_the_floor_ended_low() {
+        let ended = |status: Ended, free: Option<u64>| {
+            let free = move || free;
+            finished(
+                status,
+                &Floor {
+                    bytes: 100,
+                    free: &free,
+                },
+            )
+        };
+        assert_eq!(ended(Ended::Exited(0), Some(99)), Ended::Low { free: 99 });
+        assert_eq!(ended(Ended::Exited(1), Some(0)), Ended::Low { free: 0 });
+        assert_eq!(ended(Ended::Exited(0), Some(100)), Ended::Exited(0));
+        assert_eq!(ended(Ended::Exited(3), None), Ended::Exited(3));
+    }
+
+    /// a step that ends before the watch looks, as one quicker than the first look or that ends
+    /// between two, is looked at as it ends, so one that took the disk below the floor is stopped.
+    #[test]
+    fn a_step_is_looked_at_as_it_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let words = ["true"];
+        #[cfg(windows)]
+        let words = ["cmd", "/c", "exit 0"];
+        let env = BTreeMap::new();
+        let command = Command {
+            words: words.iter().map(OsString::from).collect(),
+            folder: dir.path(),
+            env: &env,
+        };
+        let below = || Some(0);
+        let floor = Floor {
+            bytes: 100,
+            free: &below,
+        };
+
+        UNWATCHED.set(true);
+        let ran = run(
+            &command,
+            dir.path(),
+            &dir.path().join("step.log"),
+            None,
+            &Stop::default(),
+            &floor,
+        );
+        UNWATCHED.set(false);
+
+        assert_eq!(ran.unwrap().ended, Ended::Low { free: 0 });
     }
 
     /// a step that exits 0 after a stop keeps its result; a failure with no stop stays a failure.

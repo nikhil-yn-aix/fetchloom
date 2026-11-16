@@ -846,6 +846,7 @@ impl<'a> Building<'a> {
             .map_err(|err| taken(name, err.into()))?;
         let found = capture::read(&out, most, threads, &self.context.stop)
             .map_err(|fault| taken(name, fault))?;
+        self.room_for(name, found.copies(cache))?;
         capture::publish(
             cache,
             &found,
@@ -938,6 +939,36 @@ impl<'a> Building<'a> {
             #[cfg(unix)]
             ended @ Ended::Signaled(_) => Err(failed(name, program, ended, &ran, &folder)),
         }
+    }
+
+    /// fails when taking `bytes` of the result of `name` into the cache, as copies, would leave
+    /// less free on the cache's disk than the floor: a step in TMPDIR wrote on another disk, which
+    /// the step's own watch looked at, and windows copies every file of a result in.
+    fn room_for(&self, name: &str, bytes: u64) -> Result<(), Error> {
+        let cache = self.work.cache.root();
+        let free = crate::space::free(cache);
+        let Some(free) = free.filter(|free| bytes > 0 && *free < bytes.saturating_add(self.floor))
+        else {
+            return Ok(());
+        };
+        Err(Error::new(
+            Kind::LocalIo,
+            format!(
+                "stopped {name}: taking in the {} it made would leave the disk holding the cache less than the {} build_floor keeps free",
+                units::size(bytes),
+                units::size(self.floor)
+            ),
+        )
+        .detail(format!(
+            "{} is free on the disk holding {}",
+            units::size(free),
+            cache.display()
+        ))
+        .help(format!(
+            "free space on that disk, or {}; data.lock and {} are as they were",
+            room::LOWER_FLOOR,
+            plan::folder(&self.manifest, name)
+        )))
     }
 
     /// fails when `step` changed its own code while it ran, since its result would answer code

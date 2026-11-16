@@ -164,6 +164,11 @@ impl Staging {
         self.scratch.as_deref()
     }
 
+    /// the folder TMPDIR names, when the step's folder is there, on another disk than the cache.
+    pub(crate) fn elsewhere(&self) -> Option<&Path> {
+        self.scratch().filter(|_| self.elsewhere)
+    }
+
     pub(crate) fn input(&self, name: &str) -> PathBuf {
         self.folder.join("in").join(name)
     }

@@ -2170,6 +2170,93 @@ fn a_build_below_the_floor_stops_before_any_step() -> Result {
     Ok(())
 }
 
+/// a step in a cache others may write runs in the folder TMPDIR names: when that is on another
+/// disk than the cache, the build says what its steps may take there too, their copies of what
+/// they read and their results, as it does for the cache's disk.
+#[cfg(unix)]
+#[test]
+fn a_build_says_what_it_takes_on_tmpdirs_disk() -> Result {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let sandbox = Sandbox::new()?;
+    let other = Path::new("/dev/shm");
+    let another = fs::metadata(other).is_ok_and(|found| {
+        found.is_dir() && fs::metadata(sandbox.work()).is_ok_and(|work| work.dev() != found.dev())
+    });
+    if !another {
+        return crate::support::skipped("another-disk", "/dev/shm is no other disk here");
+    }
+    let scratch = tempfile::tempdir_in(other)?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    fs::set_permissions(sandbox.cache(), fs::Permissions::from_mode(0o770))?;
+
+    let output = building_in(&sandbox, &sandbox.work(), &["--yes", "build"])?
+        .env("TMPDIR", scratch.path())
+        .env("FETCHLOOM_TEST_FREE", "1000")
+        .env("FETCHLOOM_BUILD_FLOOR", "1B")
+        .output()?;
+
+    let told = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains(
+            "      Needs what clean writes on the disk holding the cache, which has 1000 B free\n"
+        ),
+        "{told}"
+    );
+    assert!(
+        told.contains("      Needs up to 32 B, besides what clean writes, on the disk holding TMPDIR, which has 1000 B free\n"),
+        "{told}"
+    );
+    Ok(())
+}
+
+/// a result copied into the cache, as a step's is in a cache others may write, where the step
+/// runs in TMPDIR, and every step's is on windows, is weighed against `build_floor` before it is
+/// taken in: one that would leave less free on the cache's disk stops the build, as the floor
+/// stops a step, and data.lock stays as it was.
+#[test]
+fn a_result_that_would_pass_the_floor_is_not_taken_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(
+        &sandbox,
+        &server,
+        &recipe(&["write", "made.csv", "made by the step"]),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(sandbox.cache(), fs::Permissions::from_mode(0o770))?;
+    }
+    let pinned = pins(&sandbox.work())?;
+
+    let output = building_in(&sandbox, &sandbox.work(), &["--json", "--yes", "build"])?
+        .env("FETCHLOOM_TEST_FREE", "100")
+        .env("FETCHLOOM_BUILD_FLOOR", "90B")
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, details, help, _) = error(&document);
+    assert_eq!(kind, "local.io", "{message}");
+    assert_eq!(
+        message,
+        "stopped clean: taking in the 16 B it made would leave the disk holding the cache less than the 90 B build_floor keeps free"
+    );
+    let free = format!(
+        "100 B is free on the disk holding {}",
+        sandbox.cache().display()
+    );
+    assert_eq!(details, [free.as_str()]);
+    assert!(
+        help.ends_with("data.lock and data/clean are as they were"),
+        "{help}"
+    );
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    Ok(())
+}
+
 /// sends `signal`, such as `-TERM`, to the process `pid` with `kill`.
 #[cfg(unix)]
 fn signal(pid: u32, signal: &str) -> Result {

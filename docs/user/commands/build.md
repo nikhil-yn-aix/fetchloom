@@ -37,7 +37,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 
 1. find the project and take its lock, which the build holds until it ends.
 2. pin the fetched datasets the steps read, resolving those whose entry changed as `sync` would, without writing `data.lock` yet. with `--locked`, a fetched dataset whose entry changed, a recipe never built or changed since it was built, or a pin building would change, as one of a recipe `data.toml` no longer has, stops the build with `lock.outdated`, exit 1, before anything is fetched or run.
-3. say how much room the steps that will run may take on the disk holding the cache, as `Needs up to 91 B on the disk holding the cache, which has 341.3 GiB free`: the files they read that the cache lacks, their results as `data.lock` last pinned them and, where the disk does not clone files, copies of what the largest step reads. a result never built is named instead, since its size is unknown. when that plus the `build_floor` [setting](settings.md) passes the free space, the build asks first, and with no one to ask stops with `unconfirmed`, exit 1, unless `--yes` is given. a disk already below `build_floor` stops the build with `local.io`, exit 50, even with `--yes`, as [the step](../reference/recipes.md#the-step) shows.
+3. say how much room the steps that will run may take on the disk holding the cache, as `Needs up to 91 B on the disk holding the cache, which has 341.3 GiB free`: the files they read that the cache lacks, their results as `data.lock` last pinned them and, where the disk does not clone files, copies of what the largest step reads. when the steps run in `TMPDIR` on another disk, as in a cache others may write, a second line says what the largest of them may take there, its copies and its result, and that disk is weighed the same way. a result never built is named instead, since its size is unknown. when that plus the `build_floor` [setting](settings.md) passes the free space, the build asks first, and with no one to ask stops with `unconfirmed`, exit 1, unless `--yes` is given. a disk already below `build_floor` stops the build with `local.io`, exit 50, even with `--yes`, as [the step](../reference/recipes.md#the-step) shows.
 4. take each recipe in order, each after the datasets it is made from, ties by name:
     - `Up to date` when `data.lock` pins what building it now would make and the cache holds those files;
     - `Fetched` when `data.lock` pins what building it now would make and the data folder or a [mirror](../guides/mirrors.md) holds the files the cache lacks, which it copies into the cache;
@@ -176,7 +176,7 @@ with a mirror holding every result, as `fetchloom --mirror ../mirror build --dry
 | 1 | `lock.outdated` | with `--locked` or `--check`, `data.lock` does not pin what the steps need as `data.toml` asks |
 | 1 | `unconfirmed` | the build is short of room and cannot ask |
 | 2 | `usage` | a name that is not a recipe, or an `--accept` that finds nothing to pin |
-| 50 | `local.io` | the disk has less free than `build_floor`, before a step runs or while it does, or code cannot be read |
+| 50 | `local.io` | the disk has less free than `build_floor`, before a step runs, while it does, when it ends or when its result would be copied into the cache, or code cannot be read |
 | 50 | `project.invalid` | code is missing, a link or a special file |
 | 60 | `build.failed` | a step cannot start, fails or writes what a result cannot hold |
 | 60 | `build.differs` | a step makes other files than `data.lock` pins for its key |

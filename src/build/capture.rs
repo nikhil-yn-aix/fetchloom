@@ -399,6 +399,36 @@ fn take(
     })
 }
 
+impl Found {
+    /// the bytes taking it into `cache` adds on the cache's disk: of the files copied rather than
+    /// moved in, those whose bytes the cache lacks. a file that moves is on that disk already.
+    pub(crate) fn copies(&self, cache: &Cache) -> u64 {
+        self.files
+            .iter()
+            .filter(|file| !self.moves || !movable(file))
+            .filter(|file| {
+                cache
+                    .find(&file.member.sha256, Some(file.member.size))
+                    .is_none()
+            })
+            .map(|file| file.member.size)
+            .fold(0, u64::saturating_add)
+    }
+}
+
+/// whether `file` may move into the cache, its folder being on the cache's disk.
+fn movable(file: &Taken) -> bool {
+    #[cfg(unix)]
+    {
+        file.seen.movable
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        false
+    }
+}
+
 /// puts every file of `found` in `cache`, each on the disk before any takes its name in
 /// `objects/`, counting new objects in `work`. it fails on a file changed since it was read, a
 /// cache that cannot take it, or a stop.
