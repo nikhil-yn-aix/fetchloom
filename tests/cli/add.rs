@@ -998,12 +998,68 @@ fn a_mistyped_prefix_names_the_one_meant() -> Result {
             &["--json", "add", "“zenodoo:3608990”", "--offline"],
             "fetchloom --json add zenodo:3608990 --offline",
         ),
+        // the marks with what prose puts after them, nested ones, and one whose partner is gone
+        (
+            &[
+                "--json",
+                "add",
+                "<https://zenodo.org/records/3608990>.",
+                "--offline",
+            ],
+            "fetchloom --json add https://zenodo.org/records/3608990 --offline",
+        ),
+        (
+            &[
+                "--json",
+                "add",
+                "(https://zenodo.org/records/3608990),",
+                "--offline",
+            ],
+            "fetchloom --json add https://zenodo.org/records/3608990 --offline",
+        ),
+        (
+            &[
+                "--json",
+                "add",
+                "[https://zenodo.org/records/3608990]",
+                "--offline",
+            ],
+            "fetchloom --json add https://zenodo.org/records/3608990 --offline",
+        ),
+        (
+            &["--json", "add", "“zenodo:3608990”.", "--offline"],
+            "fetchloom --json add zenodo:3608990 --offline",
+        ),
+        (
+            &["--json", "add", "<<zenodo:3608990>>", "--offline"],
+            "fetchloom --json add zenodo:3608990 --offline",
+        ),
+        (
+            &["--json", "add", "\"<zenodoo:3608990>\"", "--offline"],
+            "fetchloom --json add zenodo:3608990 --offline",
+        ),
+        (
+            &[
+                "--json",
+                "add",
+                "<https://zenodo.org/records/3608990",
+                "--offline",
+            ],
+            "fetchloom --json add https://zenodo.org/records/3608990 --offline",
+        ),
     ] {
         let output = sandbox.run(args)?;
         assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
         let error = &json(&output)?["errors"][0];
         assert_eq!(error["kind"], "reference.invalid");
         assert_eq!(error["help"], format!("did you mean `{meant}`?"));
+        // the line it means reads, so it gets as far as offline lets it
+        let words: Vec<&str> = meant.split(' ').skip(1).collect();
+        let again = json(&sandbox.run(&words)?)?;
+        assert_eq!(
+            again["errors"][0]["kind"], "offline.missing",
+            "{meant}: {again}"
+        );
     }
     assert_eq!(listed(&sandbox.work())?, Vec::<String>::new());
     Ok(())

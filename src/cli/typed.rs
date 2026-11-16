@@ -266,6 +266,13 @@ pub(in crate::cli) fn scheme_meant(
             let Some((scheme, rest)) = inner.unwrap_or(typed).trim().split_once(':') else {
                 return error;
             };
+            // a mark is no typo of a letter, so a guess never drops one whose partner stays
+            if !scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            {
+                return error;
+            }
             let lowered = scheme.to_ascii_lowercase();
             if crate::source::SCHEMES.contains(&lowered.as_str()) {
                 return error;
@@ -284,22 +291,49 @@ pub(in crate::cli) fn scheme_meant(
     error.help(format!("did you mean `{line}`?"))
 }
 
-/// the text inside one pair of the marks an email, markdown or a quote put around a link, as in
-/// `<https://zenodo.org/records/3608990>`.
+/// the text inside the marks an email, markdown, a quote or prose put around a link, as in
+/// `<https://zenodo.org/records/3608990>.`: each pair goes from both ends, nested ones too, a
+/// mark whose partner the text lacks goes alone, and the punctuation a sentence puts after a
+/// closing mark goes with it. none when nothing goes.
 fn unwrapped(text: &str) -> Option<&str> {
-    const PAIRS: [(char, char); 6] = [
+    const PAIRS: [(char, char); 8] = [
         ('<', '>'),
         ('"', '"'),
         ('\'', '\''),
         ('`', '`'),
         ('“', '”'),
         ('‘', '’'),
+        ('(', ')'),
+        ('[', ']'),
     ];
-    PAIRS
-        .iter()
-        .find_map(|&(open, close)| text.strip_prefix(open)?.strip_suffix(close))
-        .map(str::trim)
-        .filter(|inner| !inner.is_empty())
+    let closing = |c: char| PAIRS.iter().any(|&(_, close)| close == c);
+    let whole = text.trim();
+    let mut inner = whole;
+    loop {
+        let before = inner;
+        let unpunctuated = inner.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if unpunctuated.ends_with(closing) {
+            inner = unpunctuated;
+        }
+        for &(open, close) in &PAIRS {
+            if let Some(rest) = inner.strip_prefix(open) {
+                match rest.strip_suffix(close) {
+                    Some(middle) => inner = middle.trim(),
+                    None if !rest.contains(close) => inner = rest.trim(),
+                    None => {}
+                }
+            }
+            if let Some(rest) = inner.strip_suffix(close)
+                && !rest.contains(open)
+            {
+                inner = rest.trim();
+            }
+        }
+        if inner == before {
+            break;
+        }
+    }
+    (inner.len() < whole.len() && !inner.is_empty()).then_some(inner)
 }
 
 /// the command line as typed with the words `typed` changed to `meant`, so a flag such as
