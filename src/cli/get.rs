@@ -1579,8 +1579,9 @@ fn unwrapped(files: &[Remote], names: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// where the files go: the folder asked for, else one named after the file or the dataset,
-/// inside the folder asked for when there are several links.
+/// where the files go: the folder asked for, else one named after the file when the link names one
+/// file or the dataset holds only it, else after the dataset, inside the folder asked for when
+/// there are several links.
 fn folder_for(
     chosen: Option<&Path>,
     parent: Option<&Path>,
@@ -1591,8 +1592,10 @@ fn folder_for(
     if let Some(chosen) = chosen {
         return chosen.to_path_buf();
     }
+    // the one file a select kept of several is still the dataset's
+    let one_file = parsed.file.is_some() || (listing.files.len() == 1 && listing.within.is_empty());
     let name = match paths {
-        [only] if listing.names_its_file() => {
+        [only] if one_file && listing.names_its_file() => {
             name::folder_for(only.rsplit('/').next().unwrap_or(only))
         }
         _ => listing

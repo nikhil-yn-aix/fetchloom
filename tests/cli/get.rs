@@ -28,6 +28,79 @@ fn a_link_lands_in_a_folder_named_after_its_file() -> Result {
     Ok(())
 }
 
+/// `--select` keeping one file of a dataset puts it in a folder named after the dataset, as a get
+/// of the whole dataset does, and the dry run says the same folder, also when the source listed
+/// only the selected file's folder; a link to that one file still names the folder after the
+/// file, as any link to one file does.
+#[cfg(debug_assertions)]
+#[test]
+fn a_file_selected_from_a_dataset_lands_in_the_datasets_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let card = b"# flowers\n".as_slice();
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let answer = |body: serde_json::Value| {
+        reply(
+            "200 OK",
+            &[("Content-Type", "application/json")],
+            body.to_string().as_bytes(),
+        )
+    };
+    let hub = crate::support::Routes::start(vec![
+        (
+            "/api/datasets/lab/flowers/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData".to_owned(),
+            answer(serde_json::json!({"id": "lab/flowers", "sha": commit, "tags": []})),
+        ),
+        (
+            format!("/api/datasets/lab/flowers/tree/{commit}?recursive=true"),
+            answer(serde_json::json!([
+                {"type": "file", "oid": "1", "size": card.len(), "path": "README.md"},
+                {"type": "file", "oid": "2", "size": IRIS.len(), "path": "Iris.csv"},
+                {"type": "file", "oid": "3", "size": IRIS.len(), "path": "data/train.csv"},
+            ])),
+        ),
+        (
+            format!("/api/datasets/lab/flowers/tree/{commit}/data?recursive=true"),
+            answer(serde_json::json!([
+                {"type": "file", "oid": "3", "size": IRIS.len(), "path": "data/train.csv"},
+            ])),
+        ),
+    ])?;
+    let files = crate::support::Routes::start(vec![(
+        format!("/huggingface.co/datasets/lab/flowers/resolve/{commit}/Iris.csv"),
+        file(IRIS, "\"r\""),
+    )])?;
+    let folder = |args: &[&str]| -> Result<String> {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_HOSTS", &files.url)
+            .output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {document}");
+        Ok(document["result"]["folder"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned())
+    };
+    let dataset = "hf:datasets/lab/flowers";
+    let flowers = sandbox.work().join("flowers");
+    for select in ["Iris.csv", "data/train.csv"] {
+        let dry = ["--json", "get", dataset, "--select", select, "--dry-run"];
+        assert_eq!(folder(&dry)?, flowers.display().to_string(), "{select}");
+    }
+    let selected = ["--json", "get", dataset, "--select", "Iris.csv"];
+    assert_eq!(folder(&selected)?, flowers.display().to_string());
+    assert_eq!(fs::read(flowers.join("Iris.csv"))?, IRIS);
+    let link = "https://huggingface.co/datasets/lab/flowers/blob/main/Iris.csv";
+    let named = sandbox.work().join("Iris");
+    assert_eq!(
+        folder(&["--json", "get", link])?,
+        named.display().to_string()
+    );
+    assert_eq!(fs::read(named.join("Iris.csv"))?, IRIS);
+    Ok(())
+}
+
 #[test]
 fn a_file_with_the_same_size_and_time_but_other_bytes_is_not_taken_for_it() -> Result {
     let sandbox = Sandbox::new()?;
