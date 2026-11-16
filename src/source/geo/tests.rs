@@ -7,9 +7,8 @@ use crate::source::{Access, Reference};
 
 const SERIES: &str = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/";
 
-/// the size `suppl/filelist.txt` states for GSE1000's tar of every sample's files, and its own.
+/// the size `suppl/filelist.txt` states for GSE1000's tar of every sample's files.
 const RAW_TAR: u64 = 35_307_520;
-const FILELIST: u64 = 621;
 
 /// GSE1000's folder, the four folders in it and its filelist, as NCBI's file server answers them.
 fn series() -> Recorded {
@@ -77,19 +76,23 @@ fn paths(listing: &Listing) -> Vec<&str> {
 }
 
 /// an index in the form NCBI's file server writes one, linking to `entries`.
-fn index(entries: &[&str]) -> Vec<u8> {
+fn index(folder: &str, entries: &[&str]) -> Vec<u8> {
+    let parent = Url::parse(folder).unwrap().join("..").unwrap();
     let links = entries
         .iter()
         .map(|entry| format!("<a href=\"{entry}\">{entry}</a>  2026-10-05 16:24  1.3M\n"))
         .collect::<Vec<_>>()
         .concat();
-    format!("<pre><a href=\"/geo/series/GSE1nnn/\">Parent Directory</a>\n{links}</pre>")
-        .into_bytes()
+    format!(
+        "<pre><a href=\"{}\">Parent Directory</a>\n{links}</pre>",
+        parent.path()
+    )
+    .into_bytes()
 }
 
 /// each file goes by its path below the series' folder, in index order. NCBI's indexes round sizes,
 /// as `1.3M`, so a file's size comes from `suppl/filelist.txt`, which states the tar of every
-/// sample's files exactly, or is left for its download to tell.
+/// sample's files exactly, or is left for its download to tell, as the filelist's own is.
 #[test]
 fn lists_a_series_files_with_the_sizes_its_filelist_states() {
     let recorded = series();
@@ -103,7 +106,7 @@ fn lists_a_series_files_with_the_sizes_its_filelist_states() {
             ("miniml/GSE1000_family.xml.tgz", None),
             ("soft/GSE1000_family.soft.gz", None),
             ("suppl/GSE1000_RAW.tar", Some(RAW_TAR)),
-            ("suppl/filelist.txt", Some(FILELIST)),
+            ("suppl/filelist.txt", None),
         ]
     );
     assert_eq!(
@@ -244,7 +247,10 @@ fn a_refused_listing_with_nothing_named_says_to_try_again_later() {
 #[test]
 fn a_filelist_names_only_the_archives_its_rows_state() {
     let text = String::from_utf8(fixture_bytes("geo/filelist.txt")).unwrap();
-    assert_eq!(archives(&text), [("GSE1000_RAW.tar".to_owned(), RAW_TAR)]);
+    assert_eq!(
+        archives(&text),
+        Some(vec![("GSE1000_RAW.tar".to_owned(), RAW_TAR)])
+    );
     let header = "#Archive/File\tName\tTime\tSize\tType";
     let rows = [
         "Archive\tGSE1_RAW.tar\t01/17/2013 13:28:57\t10\tTAR",
@@ -256,14 +262,20 @@ fn a_filelist_names_only_the_archives_its_rows_state() {
     ];
     assert_eq!(
         archives(&format!("{header}\n{}\n", rows.join("\n"))),
-        [
+        Some(vec![
             ("GSE1_RAW.tar".to_owned(), 10),
             ("GSE1_last.tar".to_owned(), 20)
-        ]
+        ])
     );
     for unread in [rows.join("\n"), "collected in 2020\n".to_owned()] {
-        assert_eq!(archives(&unread), Vec::new(), "{unread}");
+        assert_eq!(archives(&unread), None, "{unread}");
     }
+    let cut = format!("{header}\nArchive\tGSE1_RAW.tar\t01/17/2013 13:28:57\t3530");
+    assert_eq!(
+        archives(&cut),
+        Some(Vec::new()),
+        "a row cut short states no size"
+    );
 }
 
 #[test]
@@ -332,11 +344,13 @@ fn an_accession_geo_keeps_no_files_for_is_unresolved() {
     );
     assert_eq!(recorded.asked(), [missing]);
 
-    let recorded = Recorded::default().on(SERIES, 200, index(&["suppl/"])).on(
-        &format!("{SERIES}suppl/"),
-        200,
-        index(&[]),
-    );
+    let recorded = Recorded::default()
+        .on(SERIES, 200, index(SERIES, &["suppl/"]))
+        .on(
+            &format!("{SERIES}suppl/"),
+            200,
+            index(&format!("{SERIES}suppl/"), &[]),
+        );
     let error = block_on(accession("GSE1000").resolve(&recorded)).unwrap_err();
     assert_eq!(error.message, "GEO keeps no files for GSE1000");
 }
@@ -361,8 +375,28 @@ fn an_index_that_cannot_be_trusted_says_why() {
             &["a%0Ab.txt"][..],
             "names an entry that is no file name",
         ),
+        (
+            "an empty name",
+            &[""][..],
+            "names an entry that is no file name",
+        ),
+        (
+            "a name a step up",
+            &[".."][..],
+            "names an entry that is no file name",
+        ),
+        (
+            "a link away",
+            &["../GSE1001/"][..],
+            "names an entry that is no file name",
+        ),
+        (
+            "a name holding a drive",
+            &["C:hostile.csv"][..],
+            "links away",
+        ),
     ] {
-        let recorded = Recorded::default().on(SERIES, 200, index(entries));
+        let recorded = Recorded::default().on(SERIES, 200, index(SERIES, entries));
         let Err(error) = block_on(accession("GSE1000").resolve(&recorded)) else {
             panic!("{row}: the index was used");
         };
@@ -370,11 +404,13 @@ fn an_index_that_cannot_be_trusted_says_why() {
         assert!(error.message.contains(reason), "{row}: {}", error.message);
         assert!(error.help.is_some(), "{row}");
     }
-    let recorded = Recorded::default().on(SERIES, 200, index(&["suppl/"])).on(
-        &format!("{SERIES}suppl/"),
-        404,
-        fixture_bytes("geo/missing.html"),
-    );
+    let recorded = Recorded::default()
+        .on(SERIES, 200, index(SERIES, &["suppl/"]))
+        .on(
+            &format!("{SERIES}suppl/"),
+            404,
+            fixture_bytes("geo/missing.html"),
+        );
     let error = block_on(accession("GSE1000").resolve(&recorded)).unwrap_err();
     assert!(
         error
@@ -383,32 +419,61 @@ fn an_index_that_cannot_be_trusted_says_why() {
         "{}",
         error.message
     );
+    let sign_in = b"<!DOCTYPE html><html><body><form action=\"/login\"></form></body></html>";
+    for (link, reason) in [
+        (
+            format!("{SERIES}matrix/"),
+            "it sent a page that is no index of its folder",
+        ),
+        (
+            format!("{SERIES}suppl/filelist.txt"),
+            "its suppl/filelist.txt is in another form than GEO's",
+        ),
+    ] {
+        let recorded = series().on(&link, 200, sign_in.to_vec());
+        let error = block_on(accession("GSE1000").resolve(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid, "{link}");
+        assert!(error.message.contains(reason), "{}", error.message);
+    }
 }
 
-/// a link that is no entry is never followed.
+/// an index's entries are the links inside its listing past the one to the folder above, each
+/// for the listing's checks to judge; a link the page puts elsewhere, as its footer's, is none,
+/// and a page without the link above is no index.
 #[test]
-fn links_away_from_the_folder_are_not_entries() {
-    let html = r#"<a href="/geo/series/GSE1nnn/">Parent Directory</a>
-<a href="../GSE1001/">x</a> <a href="https://example.org/x.gz">x</a> <a href="?C=M;O=A">Last modified</a>
-<a href="data.txt">data.txt</a>"#;
-    assert_eq!(entries(html), ["data.txt"]);
+fn the_entries_of_an_index_are_the_links_in_its_listing() {
+    let parent = "/geo/series/GSE1nnn/";
+    let html = r#"<pre><a href="/geo/series/GSE1nnn/">Parent Directory</a>
+<a href="../GSE1001/">x</a> <a href="?C=M;O=A">Last modified</a> <a href="data.txt">data.txt</a></pre>
+<a href="https://www.hhs.gov/vulnerability-disclosure-policy/index.html">HHS</a>"#;
+    assert_eq!(
+        entries(html, parent),
+        Some(vec!["../GSE1001/".to_owned(), "data.txt".to_owned()])
+    );
+    for page in [
+        html.replace(parent, "/elsewhere/"),
+        "<!DOCTYPE html><form action=\"/login\"></form>".to_owned(),
+    ] {
+        assert_eq!(entries(&page, parent), None, "{page}");
+    }
 }
 
 /// a link with a raw `?` or `#` asks for another file than its name says, as `a?b.txt` asks for
 /// `a`, so it names no entry; the escaped name is one.
 #[test]
 fn a_link_with_a_query_or_fragment_is_no_entry() {
-    let html = r#"<a href="a?b.txt">a?b.txt</a><a href="c#d.txt">c#d.txt</a><a href="a%3Fb.txt">a?b.txt</a>"#;
-    assert_eq!(entries(html), ["a%3Fb.txt"]);
+    let html = r#"<pre><a href="/p/">Parent Directory</a><a href="a?b.txt">a?b.txt</a><a href="c#d.txt">c#d.txt</a><a href="a%3Fb.txt">a?b.txt</a></pre>"#;
+    assert_eq!(entries(html, "/p/"), Some(vec!["a%3Fb.txt".to_owned()]));
 }
 
 #[test]
 fn more_folders_than_a_listing_reads_are_refused() {
     let names: Vec<String> = (0..MOST_FOLDERS).map(|n| format!("f{n}/")).collect();
     let links: Vec<&str> = names.iter().map(String::as_str).collect();
-    let mut recorded = Recorded::default().on(SERIES, 200, index(&links));
+    let mut recorded = Recorded::default().on(SERIES, 200, index(SERIES, &links));
     for name in &names {
-        recorded = recorded.on(&format!("{SERIES}{name}"), 200, index(&[]));
+        let folder = format!("{SERIES}{name}");
+        recorded = recorded.on(&folder, 200, index(&folder, &[]));
     }
     let error = block_on(accession("GSE1000").resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);

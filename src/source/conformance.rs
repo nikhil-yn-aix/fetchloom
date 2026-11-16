@@ -653,34 +653,13 @@ fn subjects() -> Vec<Subject> {
 /// findings in sources other builders are changing, handed to them: the property, the row, a
 /// part of the change and the start of the problem. a fix deletes its line, which the property
 /// then holds; a line no finding matches fails, so it cannot outlive its fix.
-const HANDED_OFF: [(&str, &str, &str, &str); 4] = [
-    // geo reads any page sent with 200 as a folder's index, an empty one when it is no index
-    (
-        "wrong answers",
-        "geo:GSE1000",
-        "a sign-in page",
-        "read a sign-in page as a listing",
-    ),
-    // geo takes any answer for suppl/filelist.txt as the filelist, and its length as its size
-    (
-        "wrong answers",
-        "geo:GSE1000",
-        "suppl/filelist.txt",
-        "trusted",
-    ),
+const HANDED_OFF: [(&str, &str, &str, &str); 1] = [
     // geo reads an index's links without its html entities, so `a&amp;b` names another file
     (
         "hostile names",
         "geo:GSE1000",
         " as hostile<x>.csv in its links",
         "listed",
-    ),
-    // geo's index reader leaves out an entry that starts with `.` or holds `:` without a word
-    (
-        "hostile names",
-        "geo:GSE1000",
-        " as ",
-        "left a file out without refusing its name",
     ),
 ];
 

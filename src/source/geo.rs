@@ -1,9 +1,9 @@
 //! GEO, NCBI's gene expression omnibus: the files of a series, a sample or a platform, as NCBI's
 //! file server indexes list them. NCBI states no hashes and its indexes round sizes, so the lock's
-//! SHA-256 names the bytes, and only a series' `suppl/filelist.txt` states sizes; GEO remakes a
-//! series' SOFT, `MINiML` and matrix files, so a pin can go stale. NCBI refuses a program the
-//! listing of its folders at times while it serves their files, so a refused folder is listed by
-//! the names GEO gives every accession's files.
+//! SHA-256 names the bytes, and only a series' `suppl/filelist.txt` states sizes, its tars'; GEO
+//! remakes a series' SOFT, `MINiML` and matrix files, so a pin can go stale. NCBI refuses a
+//! program the listing of its folders at times while it serves their files, so a refused folder
+//! is listed by the names GEO gives every accession's files.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -174,7 +174,15 @@ impl Accession {
                 continue;
             }
             let html = self.index(&response, path.is_empty())?;
-            for entry in entries(&html) {
+            let parent = url.join("..").map(|parent| parent.path().to_owned());
+            let found = parent.ok().and_then(|parent| entries(&html, &parent));
+            let Some(found) = found else {
+                return Err(invalid(
+                    self,
+                    "it sent a page that is no index of its folder",
+                ));
+            };
+            for entry in found {
                 let (name, folder) = match entry.strip_suffix('/') {
                     Some(name) => (name, true),
                     None => (entry.as_str(), false),
@@ -233,7 +241,7 @@ impl Accession {
         if !unlisted && files.iter().all(|file| file.path != FILELIST) {
             return Ok(());
         }
-        let Some((size, archives)) = self.filelist(api, top).await? else {
+        let Some(archives) = self.filelist(api, top).await? else {
             return Ok(());
         };
         if unlisted {
@@ -253,8 +261,8 @@ impl Accession {
                 .iter()
                 .find(|(name, _)| file.path.strip_prefix("suppl/") == Some(name.as_str()))
                 .map(|(_, size)| *size);
-            if let Some(size) = stated.or((file.path == FILELIST).then_some(size)) {
-                file.size = Some(size);
+            if stated.is_some() {
+                file.size = stated;
             }
         }
         Ok(())
@@ -300,19 +308,18 @@ impl Accession {
         }
     }
 
-    /// the size of the series' `suppl/filelist.txt` and each tar it names with its size, read
-    /// whole; none when GEO keeps no filelist or refuses it.
+    /// each tar the series' `suppl/filelist.txt` names, with its size; none when GEO keeps no
+    /// filelist or refuses it. an answer in another form, as a sign-in page, is no filelist.
     async fn filelist(
         &self,
         api: &impl Api,
         top: &Url,
-    ) -> Result<Option<(u64, Vec<(String, u64)>)>, Error> {
+    ) -> Result<Option<Vec<(String, u64)>>, Error> {
         let response = api.get(&self.link(top, "suppl", "filelist.txt")?).await?;
         match response.status {
-            200..=299 => Ok(Some((
-                response.body.len() as u64,
-                archives(&response.text()),
-            ))),
+            200..=299 => archives(&response.text()).map(Some).ok_or_else(|| {
+                invalid(self, "its suppl/filelist.txt is in another form than GEO's")
+            }),
             401 | 403 | 404 | 410 => Ok(None),
             status => Err(self.status(&response, status)),
         }
@@ -419,24 +426,31 @@ fn remote(path: String, url: Url) -> Remote {
     }
 }
 
-/// the links of an index of GEO's file server that name its entries: files, and folders ending
-/// in `/`. the link to the folder above, and links to other sites, name none, nor a link with a
-/// raw `?` or `#`, which the server writes `%3F` and `%23` in a name: it would fetch another file.
-fn entries(html: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    let mut rest = html;
+/// the links of an index of GEO's file server that name its entries, files and folders ending in
+/// `/`: those inside its `<pre>` block, past the link to the folder above, `parent`. a link with
+/// a raw `?` or `#` names none; any other is an entry for the listing's checks to judge, so a
+/// name no file may have is refused rather than left out. none for a page that is no such index.
+fn entries(html: &str, parent: &str) -> Option<Vec<String>> {
+    let (_, block) = html.split_once("<pre>")?;
+    let (block, _) = block.split_once("</pre>")?;
+    let mut links = Vec::new();
+    let mut rest = block;
     while let Some(at) = rest.find("<a href=\"") {
         rest = &rest[at + "<a href=\"".len()..];
-        let Some(end) = rest.find('"') else {
-            break;
-        };
-        let link = &rest[..end];
+        let end = rest.find('"')?;
+        links.push(&rest[..end]);
         rest = &rest[end..];
-        if !link.is_empty() && !link.starts_with(['/', '.']) && !link.contains([':', '?', '#']) {
-            found.push(link.to_owned());
-        }
     }
-    found
+    if !links.contains(&parent) {
+        return None;
+    }
+    Some(
+        links
+            .into_iter()
+            .filter(|link| *link != parent && !link.contains(['?', '#']))
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 /// a name one entry of a folder may have: not empty, not a step up, with no separator.
@@ -447,12 +461,16 @@ fn is_name(name: &str) -> bool {
 }
 
 /// the tars a filelist names, each once with its size in bytes: its `Archive` rows below the
-/// header GEO writes. a row that names no file or no whole size, or a list in another form, names
-/// none.
-fn archives(text: &str) -> Vec<(String, u64)> {
-    let mut lines = text.lines();
+/// header GEO writes. a row that names no file or no whole size names none, nor does one a line
+/// break does not end, as an answer cut short leaves its last; a text in another form is no
+/// filelist.
+fn archives(text: &str) -> Option<Vec<(String, u64)>> {
+    let mut lines = text
+        .split_inclusive('\n')
+        .filter_map(|line| line.strip_suffix('\n'))
+        .map(|line| line.strip_suffix('\r').unwrap_or(line));
     if lines.next() != Some(FILELIST_HEADER) {
-        return Vec::new();
+        return None;
     }
     let mut found: Vec<(String, u64)> = Vec::new();
     for line in lines {
@@ -467,7 +485,7 @@ fn archives(text: &str) -> Vec<(String, u64)> {
             found.push(((*name).to_owned(), size));
         }
     }
-    found
+    Some(found)
 }
 
 impl fmt::Display for Accession {

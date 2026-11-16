@@ -1010,10 +1010,13 @@ fn bytes_that_differ_from_enas_md5_are_refused() -> Result {
 
 const GEO_SERIES: &str = "/ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000";
 
+/// a filelist in the form GEO writes, naming no tar.
+const GEO_FILELIST: &[u8] = b"#Archive/File\tName\tTime\tSize\tType\n";
+
 /// NCBI's file server for GSE1000: its folder, and the folders in it holding `(path, bytes)`
 /// files, as `matrix/GSE1000_series_matrix.txt.gz`, each index rounding sizes as NCBI's do.
 fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
-    let index = |entries: &[String]| -> Vec<Part> {
+    let index = |parent: &str, entries: &[String]| -> Vec<Part> {
         let links = entries
             .iter()
             .map(|entry| format!("<a href=\"{entry}\">{entry}</a>  2026-10-05 16:24  1.3M\n"))
@@ -1022,8 +1025,7 @@ fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
         reply(
             "200 OK",
             &[("Content-Type", "text/html;charset=UTF-8")],
-            format!("<pre><a href=\"/geo/series/GSE1nnn/\">Parent Directory</a>\n{links}</pre>")
-                .as_bytes(),
+            format!("<pre><a href=\"{parent}\">Parent Directory</a>\n{links}</pre>").as_bytes(),
         )
     };
     let mut folders: Vec<String> = Vec::new();
@@ -1036,6 +1038,7 @@ fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
     let mut routes = vec![(
         format!("{GEO_SERIES}/"),
         index(
+            "/geo/series/GSE1nnn/",
             &folders
                 .iter()
                 .map(|folder| format!("{folder}/"))
@@ -1047,7 +1050,10 @@ fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
             .iter()
             .filter_map(|(path, _)| path.strip_prefix(&format!("{folder}/")).map(str::to_owned))
             .collect();
-        routes.push((format!("{GEO_SERIES}/{folder}/"), index(&names)));
+        routes.push((
+            format!("{GEO_SERIES}/{folder}/"),
+            index("/geo/series/GSE1nnn/GSE1000/", &names),
+        ));
     }
     for (path, body) in files {
         routes.push((format!("{GEO_SERIES}/{path}"), file(body, "\"v1\"")));
@@ -1062,7 +1068,7 @@ fn a_geo_series_is_pinned_by_its_bytes_and_synced_from_the_lock() -> Result {
     let sandbox = Sandbox::new()?;
     let routes = geo(&[
         ("matrix/GSE1000_series_matrix.txt.gz", ROWS),
-        ("suppl/filelist.txt", NOTES),
+        ("suppl/filelist.txt", GEO_FILELIST),
     ])?;
     let page = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE1000";
     let output = command(&sandbox, &routes, &["add", page, "--as", "gse1000"]).output()?;
@@ -1084,7 +1090,7 @@ fn a_geo_series_is_pinned_by_its_bytes_and_synced_from_the_lock() -> Result {
     );
     assert_eq!(
         fs::read(work.join("data/gse1000/suppl/filelist.txt"))?,
-        NOTES
+        GEO_FILELIST
     );
 
     let listed = routes.targets().len();
@@ -1108,13 +1114,13 @@ fn get_takes_the_folder_a_pasted_geo_link_names() -> Result {
     let sandbox = Sandbox::new()?;
     let routes = geo(&[
         ("matrix/GSE1000_series_matrix.txt.gz", ROWS),
-        ("suppl/filelist.txt", NOTES),
+        ("suppl/filelist.txt", GEO_FILELIST),
     ])?;
     let folder = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/suppl/";
     let output = command(&sandbox, &routes, &["get", folder, "--dir", "gse1000"]).output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let got = sandbox.work().join("gse1000");
-    assert_eq!(fs::read(got.join("suppl/filelist.txt"))?, NOTES);
+    assert_eq!(fs::read(got.join("suppl/filelist.txt"))?, GEO_FILELIST);
     assert!(!got.join("matrix").exists());
     Ok(())
 }

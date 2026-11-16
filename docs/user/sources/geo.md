@@ -35,7 +35,7 @@ select by folder, as `--select "matrix/*"`; some files are large, such as GPL96'
 
 ## pins
 
-`resolved` is the reference itself, as `geo:GSE1000`; each file's `url` is its link on ftp.ncbi.nlm.nih.gov. NCBI states no checksums for these files, so the SHA-256 the lock records is all that names their bytes. its indexes round sizes, as `1.3M`, so a file's size comes from its download rather than from the index, except where a series' `suppl/filelist.txt` states it: the tar of every sample's files, and the filelist itself.
+`resolved` is the reference itself, as `geo:GSE1000`; each file's `url` is its link on ftp.ncbi.nlm.nih.gov. NCBI states no checksums for these files, so the SHA-256 the lock records is all that names their bytes. its indexes round sizes, as `1.3M`, so a file's size comes from its download rather than from the index, except where a series' `suppl/filelist.txt` states it: the tar of every sample's files. an index or a filelist in another form, as a sign-in page sent in its place, stops the listing with `source.invalid`, and a name in an index that no file may have is refused, never left out.
 
 GEO remakes a series' SOFT, MINiML and matrix files from time to time, as the dates in their folders show, so a file pinned once can stop matching. a sync that receives other bytes stops with `integrity.mismatch`, exit 30, and places nothing; [push](../commands/push.md) the pinned bytes to a mirror to keep them, or run [`lock --upgrade`](../commands/lock.md#upgrading) to take the new ones. `access` is `public`.
 
