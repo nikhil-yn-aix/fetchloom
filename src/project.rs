@@ -240,19 +240,6 @@ impl Drop for Held {
     }
 }
 
-/// a project fetchloom could not lock, named as the project. an owner record fetchloom cannot read
-/// as its own is named, so a person can delete it once no other fetchloom works there.
-fn not_locked(owner: &Path, err: &io::Error) -> Error {
-    let error = Error::io("could not lock the project", err);
-    if err.kind() == io::ErrorKind::InvalidData {
-        return error.help(format!(
-            "if no other fetchloom is working in this project, delete {}, then run the command again",
-            owner.display()
-        ));
-    }
-    error
-}
-
 fn remove_stale_owner(path: &Path, bytes: &[u8], modified: SystemTime) -> io::Result<()> {
     let (current, written) = match read_owner(path) {
         Ok(read) => read,
@@ -719,6 +706,23 @@ impl Project {
 
     /// the error for `doing`, which failed with `err`: one naming the project folder when that
     /// folder is read-only for this user, as that is what to fix.
+    /// the project, which fetchloom could not lock at its owner record `owner`, named with it. an
+    /// owner record fetchloom cannot read as its own is told, so a person can delete it once no
+    /// other fetchloom works there.
+    fn not_locked(&self, owner: &Path, err: &io::Error) -> Error {
+        let error = self.refused(
+            format_args!("could not lock the project with {}", owner.display()),
+            err,
+        );
+        if err.kind() == io::ErrorKind::InvalidData {
+            return error.help(format!(
+                "if no other fetchloom is working in this project, delete {}, then run the command again",
+                owner.display()
+            ));
+        }
+        error
+    }
+
     fn refused(&self, doing: impl std::fmt::Display, err: &io::Error) -> Error {
         if read_only(&self.root, err) {
             return Error::new(
@@ -813,10 +817,15 @@ impl Project {
         // every command that holds the project may write or sweep the lists, so a linked
         // data.lock.d stops it before anything changes
         lock::lists::folder(&self.root)?;
-        let opening = |err: io::Error| Error::io("could not lock the project", &err);
         for _ in 0..TRIES {
             let folder = self.inner()?;
             let path = folder.join("lock");
+            let opening = |err: io::Error| {
+                self.refused(
+                    format_args!("could not lock the project with {}", path.display()),
+                    &err,
+                )
+            };
             let file = match crate::volume::open_unfollowed(&path, true) {
                 Ok(file) => file,
                 // a command that set out to start this project, and did not, removed the folder
@@ -857,7 +866,7 @@ impl Project {
                 removed: None,
             }
             .claim(&owner, command, now)
-            .map_err(|err| not_locked(&owner, &err))?;
+            .map_err(|err| self.not_locked(&owner, &err))?;
             if matches!(hold, Hold::Held(_)) {
                 self.sweep_staged();
             }

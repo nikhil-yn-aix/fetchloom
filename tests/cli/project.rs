@@ -3274,6 +3274,41 @@ fn a_read_only_project_with_nothing_to_do_syncs() -> Result {
     Ok(())
 }
 
+/// a synced checkout that must place a file again, on a mount it may not write, names the folder
+/// it cannot write, as one never synced does.
+#[cfg(unix)]
+#[test]
+fn a_read_only_synced_project_that_must_write_names_its_folder() -> Result {
+    if rustix::process::geteuid().is_root() {
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let work = sandbox.work();
+    delete(&work.join("data").join("iris").join("iris.csv"))?;
+    writable(&work, false)?;
+    let output = sandbox.run(&["--json", "sync"]);
+    writable(&work, true)?;
+    let output = output?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        format!(
+            "could not lock the project with {}: the project folder {} is read-only",
+            work.join(".fetchloom").join("lock").display(),
+            work.display()
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        error["help"],
+        "make that folder writable for you, then run `fetchloom --json sync` again"
+    );
+    Ok(())
+}
+
 /// an add places what it adds alone, and a project settled before it stays settled, so a sync
 /// on a checkout it may not write has nothing to do.
 #[cfg(unix)]
