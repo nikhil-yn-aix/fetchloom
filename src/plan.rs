@@ -858,6 +858,8 @@ fn clash(
     patterns: &dyn Fn(&str) -> Patterns,
 ) -> Error {
     let datasets = format!("datasets {} and {}", first.dataset, second.dataset);
+    let spellings = first.path != second.path && name::same_composed(&first.path, &second.path);
+    let (one, other) = (name::spelled(&first.path), name::spelled(&second.path));
     let message = match (first.path == second.path, first.dataset == second.dataset) {
         (true, true) => match (first.archive(), second.archive()) {
             (Some(one), Some(other)) if one != other => format!(
@@ -867,6 +869,12 @@ fn clash(
             _ => format!("two files would land on {}", first.path),
         },
         (true, false) => format!("{datasets} would both place {}", first.path),
+        (false, true) if spellings => format!(
+            "{one} and {other} are one name in two unicode spellings, which macos disks take for one file"
+        ),
+        (false, false) if spellings => format!(
+            "{datasets} would place {one} and {other}, one name in two unicode spellings, which macos disks take for one file"
+        ),
         (false, true) => format!(
             "{} and {} would be the same file on a disk that ignores case",
             first.path, second.path

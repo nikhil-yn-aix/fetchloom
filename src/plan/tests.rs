@@ -659,6 +659,33 @@ fn a_clash_between_datasets_names_both_and_the_path() {
     }
 }
 
+/// two names that differ only in how their unicode is composed print alike: the clash says so,
+/// writing out the code points of the one not composed, rather than blaming a disk's case.
+#[test]
+fn a_clash_of_two_unicode_spellings_says_so() {
+    let error = targets(
+        &manifest(ONE),
+        &lock(&[("a", &["caf\u{e9}.csv", "cafe\u{301}.csv"])]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.message,
+        "data/a/caf\u{e9}.csv and data/a/cafe\\u{301}.csv are one name in two unicode spellings, which macos disks take for one file"
+    );
+    let flat = manifest(
+        "[datasets.a]\nref = \"x\"\npath = \".\"\n[datasets.b]\nref = \"y\"\npath = \".\"\n",
+    );
+    let error = targets(
+        &flat,
+        &lock(&[("a", &["cafe\u{301}.csv"]), ("b", &["caf\u{e9}.csv"])]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.message,
+        "datasets a and b would place data/cafe\\u{301}.csv and data/caf\u{e9}.csv, one name in two unicode spellings, which macos disks take for one file"
+    );
+}
+
 /// of two clashes the first by path is named, whatever order a hash map would keep them in.
 #[test]
 fn of_two_clashes_the_first_by_path_is_named() {

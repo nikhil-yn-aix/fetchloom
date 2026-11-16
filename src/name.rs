@@ -610,6 +610,25 @@ pub(crate) fn same_composed(a: &str, b: &str) -> bool {
     nfc.normalize(a) == nfc.normalize(b)
 }
 
+/// `path` as it prints, but with its non-ascii characters written as code points when its unicode
+/// is not composed, as `cafe\u{301}.csv`, so two spellings of one name that print alike read apart.
+pub(crate) fn spelled(path: &str) -> Cow<'_, str> {
+    if path.is_ascii() || ComposingNormalizerBorrowed::new_nfc().is_normalized(path) {
+        return Cow::Borrowed(path);
+    }
+    Cow::Owned(
+        path.chars()
+            .map(|c| {
+                if c.is_ascii() {
+                    c.to_string()
+                } else {
+                    c.escape_unicode().to_string()
+                }
+            })
+            .collect(),
+    )
+}
+
 /// `name` as this machine's disks tell names apart: composed on macos, whose filesystems see
 /// composed and decomposed unicode as one name, and unchanged elsewhere.
 pub(crate) fn as_disk_sees(name: &str) -> std::borrow::Cow<'_, str> {

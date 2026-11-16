@@ -87,7 +87,7 @@ warning: path = "train.csv" makes a folder named train.csv, so the file is data/
   help: path names a folder; to put the file at data/train.csv, set path = "." on datasets.train in data.toml
 ```
 
-datasets may share a folder, and one may sit in the data folder itself while others sit in folders below it, as long as no two files land on the same path. names are compared the way a disk that ignores case compares them, so `README` from one dataset and `readme` from another clash on every system, and so do two files with the same bytes. a clash names both datasets and the path:
+datasets may share a folder, and one may sit in the data folder itself while others sit in folders below it, as long as no two files land on the same path. names are compared the way a disk that ignores case compares them, so `README` from one dataset and `readme` from another clash on every system, and so do two files with the same bytes, and two spellings of one name in unicode, as `café` with one `é` and with `e` and an accent, which macos disks take for one file; the one not composed is shown by its code points, as `cafe\u{301}`. a clash names both datasets and the path:
 
 ```text
 error: datasets test and train would both place data/splits/README
