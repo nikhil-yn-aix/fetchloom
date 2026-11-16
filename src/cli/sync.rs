@@ -2236,7 +2236,25 @@ fn lock_lines(
         .iter()
         .map(|dataset| (verbs.pinned, first_pin(output, dataset, sizeless)))
         .collect();
-    again.extend(&first[shown..]);
+    // the first pins past those told are counted as first pins, never as pinned again
+    let more = &first[shown..];
+    if !more.is_empty() {
+        let files: usize = more.iter().map(|dataset| dataset.files.len()).sum();
+        lines.push((
+            verbs.pinned,
+            format!(
+                "{} more {}, new in {} · {}",
+                units::grouped(more.len() as u64),
+                if more.len() == 1 {
+                    "dataset"
+                } else {
+                    "datasets"
+                },
+                lock::FILE,
+                units::count(files as u64, "file", "files")
+            ),
+        ));
+    }
     let files: usize = again.iter().map(|dataset| dataset.files.len()).sum();
     let which = match again.as_slice() {
         [] => None,
@@ -3274,9 +3292,13 @@ mod tests {
             "set-00, new in data.lock: zenodo:2 · 1 file · size unknown"
         );
         assert!(lines[..20].iter().all(|(verb, _)| *verb == "Would pin"));
+        // the rest are pinned for the first time too, never told as locked again
         assert_eq!(
             lines[20],
-            ("Would lock", "5 datasets · 5 files in data.lock".to_owned())
+            (
+                "Would pin",
+                "5 more datasets, new in data.lock · 5 files".to_owned()
+            )
         );
     }
 
