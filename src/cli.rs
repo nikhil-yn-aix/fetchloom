@@ -809,10 +809,6 @@ fn share(settings: &Settings) {
     sync::disk::set_level(settings.resources.value);
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the arguments, settings and output are set up in the order each needs the last"
-)]
 pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
     let _ = TYPED.set(std::env::args_os().skip(1).collect());
@@ -879,9 +875,7 @@ pub(crate) fn run() -> ExitCode {
         }
         // the folder as the system names it, which a pasted command finds from any folder
         let worked_in = std::env::current_dir().unwrap_or_else(|_| folder.clone());
-        crate::suggested::set_directory(
-            crate::suggested::shell_folder(&worked_in.to_string_lossy()).into_owned(),
-        );
+        crate::suggested::set_directory(crate::suggested::shell_folder_path(&worked_in));
     }
     match Threads::read(&var) {
         Ok(threads) => context.threads = threads,

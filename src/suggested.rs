@@ -141,6 +141,15 @@ pub(crate) fn shell_folder(word: &str) -> Cow<'_, str> {
     shell_word(word)
 }
 
+/// [`shell_folder`] for a folder as the system names it: one whose name is not UTF-8 text is
+/// withheld, since a command could only name another, and its line shows it as near as text can.
+pub(crate) fn shell_folder_path(folder: &std::path::Path) -> String {
+    match folder.to_str() {
+        Some(folder) => shell_folder(folder).into_owned(),
+        None => withhold(FOLDER, &folder.to_string_lossy()),
+    }
+}
+
 /// every word withheld so far, between its marks, as [`withhold`] wrote it: marks a name in a
 /// listing or a project file holds outside a command are text, which [`withheld`] leaves be.
 static SPANS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());

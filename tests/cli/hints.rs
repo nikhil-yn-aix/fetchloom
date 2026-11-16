@@ -302,6 +302,41 @@ fn errors_messages_json_help_survives_non_unicode_arguments() -> Result {
     Ok(())
 }
 
+/// a command that names a folder whose name is not UTF-8 text could only name another, so a help
+/// after `-C` gives that folder a placeholder and a line naming it, as for a name no shell holds.
+#[cfg(unix)]
+#[test]
+fn a_folder_named_in_no_utf_8_is_withheld_from_commands() -> Result {
+    use std::os::unix::ffi::OsStrExt as _;
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.work().join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+    // macos keeps every name in utf-8, so it refuses one that is not
+    if fs::create_dir(&folder).is_err() {
+        return Ok(());
+    }
+    fs::write(
+        folder.join("data.toml"),
+        "[datasets.iris]\nref = \"zenodo:3608990\"\n",
+    )?;
+    let output = sandbox
+        .command(&["-C"])
+        .arg(&folder)
+        .args(["--offline", "status"])
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(r#"`fetchloom -C "<folder>" lock`"#),
+        "{stderr}"
+    );
+    let named = format!(
+        "<folder> is {}, which no command here can hold safely",
+        folder.to_string_lossy()
+    );
+    assert!(stderr.contains(&named), "{stderr}");
+    Ok(())
+}
+
 /// a name or a value data.toml holds may spell out a command between backticks, which its help
 /// then quotes: a members key, a variable's value and a from name. the json fix is only ever a
 /// command fetchloom wrote, so a cloned data.toml never chooses what a script runs next.
