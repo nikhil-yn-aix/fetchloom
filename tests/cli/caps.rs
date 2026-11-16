@@ -101,13 +101,9 @@ fn settings_show_each_value_and_where_it_came_from() -> Result {
     Ok(())
 }
 
-/// moving the cache says the one before keeps what it cached and what deleting it frees, which a
-/// project's link to a cached file keeps; a folder of a person's own files, which the setting
-/// named by mistake, was never a cache and gets no such word.
-#[test]
-fn a_moved_cache_says_what_deleting_the_old_one_frees() -> Result {
-    let sandbox = Sandbox::new()?;
-    let path = settings_file(&sandbox)?;
+/// a cache as fetchloom lays one out, in the sandbox's old-cache folder: 13 bytes a project's
+/// data/ links to, and 11 no other name holds.
+fn old_cache(sandbox: &Sandbox) -> Result<PathBuf> {
     let old = sandbox.folder("old-cache")?;
     for (bytes, linked) in [(&b"kept in data/"[..], true), (&b"only cached"[..], false)] {
         let hex = sha256_hex(bytes);
@@ -123,6 +119,30 @@ fn a_moved_cache_says_what_deleting_the_old_one_frees() -> Result {
         old.join("CACHEDIR.TAG"),
         "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n",
     )?;
+    Ok(old)
+}
+
+/// `settings set cache <folder>` with the settings file at `path` holding `before` as its cache:
+/// its stderr, once it saved.
+fn moved(sandbox: &Sandbox, path: &std::path::Path, before: &str, folder: &str) -> Result<String> {
+    std::fs::write(path, format!("cache = '{before}'\n"))?;
+    let moved = sandbox
+        .command(&["settings", "set", "cache", folder])
+        .env_remove("FETCHLOOM_CACHE")
+        .output()?;
+    let stderr = text(&moved.stderr)?;
+    assert_eq!(moved.status.code(), Some(0), "{stderr}");
+    Ok(stderr)
+}
+
+/// moving the cache says the one before keeps what it cached and what deleting it frees, which a
+/// project's link to a cached file keeps; a folder of a person's own files, which the setting
+/// named by mistake, was never a cache and gets no such word.
+#[test]
+fn a_moved_cache_says_what_deleting_the_old_one_frees() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    let old = old_cache(&sandbox)?;
     let documents = sandbox.folder("documents")?;
     std::fs::write(documents.join("thesis.tex"), b"mine\n")?;
     let new = sandbox.folder("place")?.join("new-cache");
@@ -136,18 +156,80 @@ fn a_moved_cache_says_what_deleting_the_old_one_frees() -> Result {
         ),
         (&documents, None),
     ] {
-        std::fs::write(&path, format!("cache = '{}'\n", before.display()))?;
-        let moved = sandbox
-            .command(&["settings", "set", "cache", &new.display().to_string()])
-            .env_remove("FETCHLOOM_CACHE")
-            .output()?;
-        let stderr = text(&moved.stderr)?;
-        assert_eq!(moved.status.code(), Some(0), "{stderr}");
+        let stderr = moved(
+            &sandbox,
+            &path,
+            &before.display().to_string(),
+            &new.display().to_string(),
+        )?;
         match told {
             Some(told) => assert!(stderr.contains(&told), "{stderr}"),
             None => assert!(!stderr.contains("keeps"), "{stderr}"),
         }
     }
+    Ok(())
+}
+
+/// another spelling of the cache in use, through `x/..`, a link to it or, on windows, other
+/// letter case, moves nothing, so deleting it is never offered; a cache holding the only copy of
+/// bytes imported from files says deleting it would lose them, as gc and remove ask first.
+#[test]
+fn a_cache_in_use_or_holding_imports_is_never_called_free_to_delete() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    let old = old_cache(&sandbox)?;
+    std::fs::create_dir(old.join("x"))?;
+    let shown = old.display().to_string();
+    let mut spellings = vec![old.join("x").join("..").display().to_string()];
+    #[cfg(unix)]
+    {
+        let link = sandbox.folder("place")?.join("link");
+        std::os::unix::fs::symlink(&old, &link)?;
+        spellings.push(link.display().to_string());
+    }
+    #[cfg(windows)]
+    spellings.push(shown.to_uppercase());
+    for spelled in spellings {
+        let stderr = moved(&sandbox, &path, &shown, &spelled)?;
+        assert!(!stderr.contains("keeps"), "{spelled}: {stderr}");
+    }
+    // the 11 bytes no other name holds were imported from files
+    let list = format!("{}\n", sha256_hex(b"only cached"));
+    std::fs::create_dir_all(old.join("imported"))?;
+    std::fs::write(old.join("imported").join(sha256_hex(list.as_bytes())), list)?;
+    let new = sandbox.folder("place")?.join("new-cache");
+    let stderr = moved(&sandbox, &path, &shown, &new.display().to_string())?;
+    assert!(
+        stderr.contains(&format!(
+            "hint: {shown} keeps the 24 B it cached, since fetchloom moves no cache; 11 B of it was imported from files, which no source gives back, so deleting it would lose those bytes unless a data/ folder holds a copy: move it to {} instead, before a run makes a new cache there\n",
+            new.display()
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a relative cache folder in a settings file reached through a link, as from a folder of
+/// dotfiles, is taken from the link's folder, as every run takes it, so the cache runs used is
+/// the one told about.
+#[cfg(unix)]
+#[test]
+fn a_relative_cache_in_a_linked_settings_file_is_the_one_runs_used() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    let dotfiles = sandbox.folder("dotfiles")?;
+    std::fs::write(dotfiles.join("settings.toml"), "")?;
+    std::os::unix::fs::symlink(dotfiles.join("settings.toml"), &path)?;
+    let folder = path.parent().ok_or("no settings folder")?;
+    let old = old_cache(&sandbox)?;
+    std::fs::rename(&old, folder.join("cache"))?;
+    let new = sandbox.folder("place")?.join("new-cache");
+    let stderr = moved(&sandbox, &path, "cache", &new.display().to_string())?;
+    // shown from the home folder, as ~/.config/fetchloom/cache on linux
+    assert!(
+        stderr.contains("fetchloom/cache keeps the 24 B it cached"),
+        "{stderr}"
+    );
     Ok(())
 }
 

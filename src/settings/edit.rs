@@ -28,6 +28,9 @@ pub(crate) struct Changed {
     pub(crate) key: String,
     /// the settings file, past a link to it.
     pub(crate) path: PathBuf,
+    /// where runs find the settings file: a link's own path, whose folder a relative folder in
+    /// it is taken from, not the folder of the file it names.
+    pub(crate) found_at: PathBuf,
     /// the key's value as the file held it, and as it holds it now; none where it holds none.
     pub(crate) before: Option<toml_edit::Value>,
     pub(crate) after: Option<toml_edit::Value>,
@@ -62,6 +65,7 @@ pub(crate) fn set(
     let after = written_as(key, &value);
     let Opened {
         path,
+        found_at,
         text,
         found,
         held: _held,
@@ -72,6 +76,7 @@ pub(crate) fn set(
     let mut changed = Changed {
         key: key.to_owned(),
         path,
+        found_at,
         before: before.clone(),
         after: Some(after.clone()),
         written: false,
@@ -80,7 +85,7 @@ pub(crate) fn set(
         missing: missing(key, &value),
     };
     if before.is_some() && before.as_ref().and_then(read_as) == read_as(&after) {
-        changed.broken = whole(&changed.path, &text, &text, usable)?;
+        changed.broken = whole(&changed.found_at, &text, &text, usable)?;
         return Ok(changed);
     }
     match document.get_mut(key) {
@@ -94,7 +99,7 @@ pub(crate) fn set(
         None => appended(&mut document, key, after),
     }
     let written = document.to_string();
-    changed.broken = whole(&changed.path, &text, &written, usable)?;
+    changed.broken = whole(&changed.found_at, &text, &written, usable)?;
     write(&changed.path, &written, found)?;
     changed.written = true;
     Ok(changed)
@@ -106,6 +111,7 @@ pub(crate) fn set(
 pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Changed, Error> {
     let Opened {
         path,
+        found_at,
         text,
         found,
         held: _held,
@@ -121,6 +127,7 @@ pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Chan
     let mut changed = Changed {
         key: name.to_owned(),
         path,
+        found_at,
         before,
         after: None,
         written: false,
@@ -129,11 +136,11 @@ pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Chan
         missing: Vec::new(),
     };
     if !removed(&mut document, name) {
-        changed.broken = whole(&changed.path, &text, &text, usable)?;
+        changed.broken = whole(&changed.found_at, &text, &text, usable)?;
         return Ok(changed);
     }
     let written = document.to_string();
-    changed.broken = whole(&changed.path, &text, &written, usable)?;
+    changed.broken = whole(&changed.found_at, &text, &written, usable)?;
     write(&changed.path, &written, found)?;
     changed.written = true;
     Ok(changed)
@@ -363,6 +370,8 @@ fn from(key: &str, text: String, places: Places<'_>) -> Result<String, Error> {
 struct Opened {
     /// where it is, past a link to it.
     path: PathBuf,
+    /// where runs find it, a link's own path.
+    found_at: PathBuf,
     /// its text, empty while it is not there.
     text: String,
     found: bool,
@@ -383,6 +392,7 @@ fn open(var: Var<'_>, making: bool) -> Result<Opened, Error> {
         )
         .help("set FETCHLOOM_SETTINGS to the file to keep the settings in")
     })?;
+    let found_at = path.clone();
     // a link, as from a folder of dotfiles, stays a link, and the file it names changes
     let path = match fs::symlink_metadata(&path) {
         Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(&path).map_err(|err| {
@@ -412,6 +422,7 @@ fn open(var: Var<'_>, making: bool) -> Result<Opened, Error> {
     };
     Ok(Opened {
         path,
+        found_at,
         text,
         found,
         held,

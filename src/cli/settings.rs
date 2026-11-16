@@ -286,15 +286,18 @@ fn tell_changed(
 }
 
 /// after the cache moved, that the one before keeps what it cached, since fetchloom moves no
-/// cache, and what deleting it frees: data/ holds its own links or copies, and a link there keeps
-/// its bytes. a folder that is no cache, as a person's own a setting named by mistake, is not told.
+/// cache, and what deleting it frees or loses: data/ holds its own links or copies, a link there
+/// keeps its bytes, and no source gives back bytes imported from files. a folder that is no cache,
+/// as a person's own a setting named by mistake, or the cache in use named another way, is not
+/// told.
 fn tell_old_cache(context: &Context, changed: &crate::settings::edit::Changed) {
+    // a relative folder is taken from where runs find the settings file, as runs take it
     let folder = |value: Option<&toml_edit::Value>| {
         value
             .and_then(toml_edit::Value::as_str)
             .map(|folder| {
                 let folder = std::path::PathBuf::from(folder);
-                match changed.path.parent() {
+                match changed.found_at.parent() {
                     Some(parent) if folder.is_relative() => parent.join(folder),
                     _ => folder,
                 }
@@ -306,48 +309,102 @@ fn tell_old_cache(context: &Context, changed: &crate::settings::edit::Changed) {
     else {
         return;
     };
-    if folder(changed.after.as_ref()).as_deref() == Some(before.as_path()) {
+    let after = folder(changed.after.as_ref());
+    // a link to it, a path through `..` or other letter case names the cache runs use now
+    if after.as_deref().is_some_and(|after| {
+        after == before || same_file::is_same_file(after, &before).unwrap_or(false)
+    }) {
         return;
     }
-    let held = crate::cache::Cache::unopened(before.clone())
-        .ok()
+    let cache = crate::cache::Cache::unopened(before.clone()).ok();
+    let imported = cache
+        .as_ref()
+        .map(crate::cache::Cache::imported)
+        .unwrap_or_default();
+    let held = cache
         .and_then(|cache| cache.scan_objects(context.threads, &context.stop).ok())
         .filter(|scan| scan.unreadable.is_empty())
         .map(|scan| {
-            scan.objects.iter().fold((0, 0), |(bytes, linked), object| {
-                let shared = if object.has_other_names() {
-                    object.size
-                } else {
-                    0
-                };
-                (bytes + object.size, linked + shared)
-            })
+            scan.objects
+                .iter()
+                .fold(Held::default(), |mut held, object| {
+                    held.bytes += object.size;
+                    if object.has_other_names() {
+                        held.linked += object.size;
+                    } else if imported.contains_key(&object.digest) {
+                        held.imported += object.size;
+                    }
+                    held
+                })
         });
-    if let Some(hint) = old_cache(&units::path(&before), held) {
+    // a folder no run has made yet can take the old cache whole
+    let moved_to = after
+        .filter(|after| std::fs::symlink_metadata(after).is_err())
+        .map(|after| units::path(&after));
+    let told = Told {
+        held,
+        imports: !imported.is_empty(),
+        moved_to: moved_to.as_deref(),
+    };
+    if let Some(hint) = old_cache(&units::path(&before), &told) {
         context.output.hint(&hint);
     }
 }
 
-/// what the cache `shown` a move left keeps and what deleting it frees, from `held`: the bytes of
-/// its files and of those a name outside the cache shares, as a project's hardlink does, when
-/// they could be counted. a clone in data/ shares blocks no name counts, so it frees up to that.
-fn old_cache(shown: &str, held: Option<(u64, u64)>) -> Option<String> {
+/// what an old cache's files hold, in bytes: all of them, those a name outside the cache shares,
+/// as a project's hardlink does, and those imported from files that no other name holds.
+#[derive(Clone, Copy, Debug, Default)]
+struct Held {
+    bytes: u64,
+    linked: u64,
+    imported: u64,
+}
+
+/// what [`old_cache`] tells of a cache a move left: what it holds, when its files could be
+/// counted, whether it holds bytes imported from files at all, and the folder it could be moved
+/// to whole, where none is yet.
+struct Told<'a> {
+    held: Option<Held>,
+    imports: bool,
+    moved_to: Option<&'a str>,
+}
+
+/// what the cache `shown` a move left keeps and what deleting it frees, from `told`. a clone in
+/// data/ shares blocks no name counts, so it frees up to that; bytes imported from files that no
+/// name outside the cache holds would be lost, since no source gives them back.
+fn old_cache(shown: &str, told: &Told<'_>) -> Option<String> {
     let kept = "since fetchloom moves no cache";
     let working = "the data/ folders placed from it keep working without it";
-    Some(match held {
+    let lost = "which no source gives back, so deleting it would lose those bytes unless a data/ folder holds a copy";
+    let instead = told.moved_to.map_or_else(String::new, |to| {
+        format!(": move it to {to} instead, before a run makes a new cache there")
+    });
+    Some(match told.held {
+        None if told.imports => format!(
+            "{shown} keeps what it cached, {kept}; some of it was imported from files, {lost}{instead}"
+        ),
         None => format!(
             "{shown} keeps what it cached, {kept}; {working}, though a file there linked to it keeps its bytes when it is deleted"
         ),
-        Some((0, _)) => return None,
-        Some((bytes, 0)) => format!(
+        Some(Held { bytes: 0, .. }) => return None,
+        Some(Held {
+            bytes, imported, ..
+        }) if imported > 0 => format!(
+            "{shown} keeps the {} it cached, {kept}; {} of it was imported from files, {lost}{instead}",
+            units::size(bytes),
+            units::size(imported)
+        ),
+        Some(Held {
+            bytes, linked: 0, ..
+        }) => format!(
             "{shown} keeps the {} it cached, {kept}; {working}, so deleting it frees up to that",
             units::size(bytes)
         ),
-        Some((bytes, linked)) if linked >= bytes => format!(
+        Some(Held { bytes, linked, .. }) if linked >= bytes => format!(
             "{shown} keeps the {} it cached, {kept}; all of it is linked outside the cache too, so deleting it would free nothing",
             units::size(bytes)
         ),
-        Some((bytes, linked)) => format!(
+        Some(Held { bytes, linked, .. }) => format!(
             "{shown} keeps the {} it cached, {kept}; {} of it is linked outside the cache too, so deleting it frees up to {}, and {working}",
             units::size(bytes),
             units::size(linked),
@@ -959,19 +1016,45 @@ mod tests {
     #[test]
     fn the_old_cache_says_what_deleting_it_frees() {
         let old = "~/.cache/fetchloom";
+        let told = |bytes, linked, imported| Told {
+            held: Some(Held {
+                bytes,
+                linked,
+                imported,
+            }),
+            imports: imported > 0,
+            moved_to: None,
+        };
         assert_eq!(
-            old_cache(old, Some((17_613, 17_613))).as_deref(),
+            old_cache(old, &told(17_613, 17_613, 0)).as_deref(),
             Some(
                 "~/.cache/fetchloom keeps the 17.2 KiB it cached, since fetchloom moves no cache; all of it is linked outside the cache too, so deleting it would free nothing"
             )
         );
         assert_eq!(
-            old_cache(old, Some((17_613, 0))).as_deref(),
+            old_cache(old, &told(17_613, 0, 0)).as_deref(),
             Some(
                 "~/.cache/fetchloom keeps the 17.2 KiB it cached, since fetchloom moves no cache; the data/ folders placed from it keep working without it, so deleting it frees up to that"
             )
         );
-        assert_eq!(old_cache(old, Some((0, 0))), None);
+        assert_eq!(old_cache(old, &told(0, 0, 0)), None);
+        assert_eq!(
+            old_cache(old, &told(17_613, 0, 1_024)).as_deref(),
+            Some(
+                "~/.cache/fetchloom keeps the 17.2 KiB it cached, since fetchloom moves no cache; 1.0 KiB of it was imported from files, which no source gives back, so deleting it would lose those bytes unless a data/ folder holds a copy"
+            )
+        );
+        let uncounted = Told {
+            held: None,
+            imports: true,
+            moved_to: Some("/scratch/fetchloom"),
+        };
+        assert_eq!(
+            old_cache(old, &uncounted).as_deref(),
+            Some(
+                "~/.cache/fetchloom keeps what it cached, since fetchloom moves no cache; some of it was imported from files, which no source gives back, so deleting it would lose those bytes unless a data/ folder holds a copy: move it to /scratch/fetchloom instead, before a run makes a new cache there"
+            )
+        );
     }
 
     /// a run given `flagged` with `--mirror`, whose mirrors setting lists `listed` from `origin`.
