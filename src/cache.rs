@@ -2162,7 +2162,12 @@ pub(crate) mod tests {
             Err(io::ErrorKind::Interrupted.into())
         });
         assert!(stopped.is_err());
-        assert_eq!(entries(&root), [PathBuf::from("CACHEDIR.TAG")]);
+        // macos also marks a new cache for spotlight to skip, with a file, not a folder
+        let made: Vec<PathBuf> = entries(&root)
+            .into_iter()
+            .filter(|name| name.as_os_str() != NEVER_INDEX)
+            .collect();
+        assert_eq!(made, [PathBuf::from("CACHEDIR.TAG")]);
         Cache::open(root.clone()).unwrap();
         assert_eq!(fs::read_to_string(root.join("CACHEDIR.TAG")).unwrap(), TAG);
     }
