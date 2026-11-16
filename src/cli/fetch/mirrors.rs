@@ -769,7 +769,9 @@ async fn from_web(
         .collect();
     let started = Instant::now();
     let results = super::apart(context, net, cache, jobs).await?;
-    let elapsed = Fetched::transfer(results.iter().flatten(), started);
+    let elapsed = context
+        .output
+        .took(Fetched::transfer(results.iter().flatten(), started));
     let mut stored = HashSet::new();
     let mut fetched = Vec::new();
     let mut damaged = Vec::new();
