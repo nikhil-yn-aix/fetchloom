@@ -3834,6 +3834,47 @@ fn an_archive_that_cannot_be_got_stops_no_other_download() -> Result {
     Ok(())
 }
 
+/// one archive that cannot be got keeps no other archive of the same run packed: the one that
+/// came is unpacked and its dataset placed, and only the missing one's dataset waits.
+#[test]
+fn an_archive_that_cannot_be_got_keeps_no_other_archive_packed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let kept = zip_of(&[("a.csv", b"a\n"), ("b.csv", b"b\n")])?;
+    let lost = zip_of(&[("c.csv", b"c\n"), ("d.csv", b"d\n")])?;
+    let gone = reply("404 Not Found", &[("Content-Length", "0")], b"");
+    let first = Server::start(
+        "/first.zip",
+        vec![file(&kept, "\"k\""), file(&kept, "\"k\"")],
+    )?;
+    let second = Server::start("/second.zip", vec![file(&lost, "\"l\""), gone])?;
+    for server in [&first, &second] {
+        sandbox.allow(&server.url);
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+
+    let (fresh, output) = synced_fresh(&sandbox)?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(10), "{document}");
+    assert_eq!(
+        fs::read(fresh.join("data/first/a.csv"))?,
+        b"a\n",
+        "{document}"
+    );
+    let result = &document["result"];
+    assert_eq!(
+        result["datasets"],
+        serde_json::json!(["first"]),
+        "{document}"
+    );
+    assert_eq!(
+        result["waiting"],
+        serde_json::json!(["second"]),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// an import this machine lacks waits with its own error, and the other files still download.
 #[test]
 fn an_import_the_cache_lacks_stops_no_other_download() -> Result {

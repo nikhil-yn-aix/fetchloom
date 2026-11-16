@@ -683,16 +683,31 @@ impl Loop<'_> {
         let jobs = lacking()
             .map(|(dataset, file)| job(manifest, lock, dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
-        self.download(jobs).await?;
-        let unpacks = archives
+        let downloaded = self.download(jobs).await;
+        // an archive that came is unpacked though another failed, so its dataset can be placed
+        let came: Vec<&(String, Archive<'f>)> = if downloaded.is_ok() {
+            archives.iter().collect()
+        } else {
+            archives
+                .iter()
+                .filter(|(_, archive)| {
+                    archive
+                        .files()
+                        .into_iter()
+                        .all(|file| self.cache.find(&file.sha256, Some(file.size)).is_some())
+                })
+                .collect()
+        };
+        let unpacks = came
             .iter()
             .map(|(dataset, archive)| {
                 Unpack::pinned(archive, format!("{dataset}/{}", archive.file.path))
             })
             .collect();
         let trees = self.unpack(unpacks).await?;
-        Ok(archives
-            .iter()
+        downloaded?;
+        Ok(came
+            .into_iter()
             .zip(trees)
             .filter(|((_, archive), tree)| *tree != archive.file.unpacks_to)
             .map(|(archive, _)| archive.clone())
