@@ -480,7 +480,11 @@ pub(crate) fn look(root: &Path) -> Result<State, Refused> {
     }
     let mut names = Vec::new();
     for entry in fs::read_dir(root).map_err(Refused::Failed)? {
-        names.push(entry.map_err(Refused::Failed)?.file_name());
+        let name = entry.map_err(Refused::Failed)?.file_name();
+        // finder and explorer write these into any folder opened, a usb disk's root holds others
+        if !name.to_str().is_some_and(crate::name::made_by_system) {
+            names.push(name);
+        }
     }
     let tmp = || fs::symlink_metadata(root.join(TMP)).is_ok_and(|found| found.is_dir());
     if names.is_empty() || (names.len() == 1 && names[0] == TMP && tmp()) {
@@ -1693,6 +1697,21 @@ pub(crate) mod tests {
             look(&folder.path().join("file")),
             Err(Refused::NotAFolder)
         ));
+    }
+
+    /// what a system writes by itself, as finder's `.DS_Store` once the folder is opened or a usb
+    /// disk's own folders, leaves a folder that looks empty in finder or explorer new.
+    #[test]
+    fn a_folder_holding_only_what_the_system_wrote_is_new() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("usb");
+        fs::create_dir_all(root.join(".Spotlight-V100")).unwrap();
+        fs::create_dir_all(root.join(".fseventsd")).unwrap();
+        fs::write(root.join(".DS_Store"), b"finder").unwrap();
+        fs::write(root.join("Thumbs.db"), b"explorer").unwrap();
+        assert_eq!(look(&root).unwrap(), State::New);
+        fs::write(root.join("notes.txt"), b"mine").unwrap();
+        assert!(matches!(look(&root), Err(Refused::NotEmpty)));
     }
 
     /// another push makes the folder, or the whole mirror, between this one's looks; this one takes

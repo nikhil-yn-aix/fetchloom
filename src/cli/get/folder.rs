@@ -55,6 +55,7 @@ pub(super) fn check(folder: &Path, paths: Option<&[String]>) -> Result<(), Error
                 || !crate::place::is_copy_temporary(&entry.file_name().to_string_lossy())
         })
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| !crate::name::made_by_system(name))
         .filter(|name| !tops.contains(&crate::name::as_disk_sees(name)))
         .collect();
     if others.is_empty() {
@@ -535,6 +536,21 @@ mod tests {
         );
         assert_eq!(fs::read(&leftover).unwrap(), b"a partial copy");
         fs::write(folder.path().join(".fetchloom-not-a-copy.copy"), b"keep").unwrap();
+        assert_eq!(
+            check(folder.path(), Some(&paths)).unwrap_err().kind,
+            Kind::LocalNotEmpty
+        );
+    }
+
+    /// a folder that looks empty in finder or explorer holds only what the system wrote there.
+    #[test]
+    fn a_folder_holding_only_what_the_system_wrote_takes_a_get() {
+        let folder = tempfile::tempdir().unwrap();
+        fs::write(folder.path().join(".DS_Store"), b"finder").unwrap();
+        fs::write(folder.path().join("desktop.ini"), b"explorer").unwrap();
+        let paths = ["iris.csv".to_owned()];
+        assert!(check(folder.path(), Some(&paths)).is_ok());
+        fs::write(folder.path().join("notes.txt"), b"mine").unwrap();
         assert_eq!(
             check(folder.path(), Some(&paths)).unwrap_err().kind,
             Kind::LocalNotEmpty
