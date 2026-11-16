@@ -1019,8 +1019,9 @@ fn output_refuses_a_file_holding_other_bytes_until_force() -> Result {
     Ok(())
 }
 
-/// the first run trickles for over a second, so the checkpoint it writes once a second keeps a
-/// range for the second run to continue from.
+/// the first run trickles for over a second and is killed once its once-a-second save records
+/// 1 MiB, so the second run continues with a range from that save. bytes on disk alone can come
+/// from a full buffer before any save, which no rerun can go on from.
 #[test]
 fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
     let body: Vec<u8> = (0..1_048_576u32).flat_map(u32::to_le_bytes).collect();
@@ -1032,12 +1033,13 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    let on_disk = part_reaches(&sandbox, &server, 1024 * 1024, &mut child)?;
+    let saved = download_reaches(&sandbox, &server, &mut child, (1024 * 1024, bytes_saved))?;
+    let on_disk = bytes_on_disk(&sandbox);
     child.kill()?;
     child.wait()?;
     assert!(
-        on_disk >= 1024 * 1024,
-        "the first run ended before the kill"
+        saved >= 1024 * 1024 && on_disk >= saved,
+        "the first run ended before the kill: {saved} bytes saved, {on_disk} on disk"
     );
 
     let output = sandbox.run(&["--json", "get", &server.url])?;
@@ -1046,8 +1048,8 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
     assert_eq!(work["resumes"], 1, "{work}");
     let continued = body.len() as u64 - work["bytes_down"].as_u64().unwrap_or_default();
     assert!(
-        continued > 0 && on_disk.saturating_sub(continued) <= 2 * 640 * 1024,
-        "{on_disk} bytes were on disk and the download continued from {continued}"
+        continued >= saved && on_disk.saturating_sub(continued) <= 2 * 640 * 1024,
+        "{on_disk} bytes were on disk, {saved} saved, and the download continued from {continued}"
     );
     let asked = &server.requests()[1];
     assert!(
@@ -1072,7 +1074,7 @@ fn a_stopped_get_says_so_in_a_plain_line() -> Result {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
-    let arrived = part_reaches(&sandbox, &server, 1, &mut child)?;
+    let arrived = download_reaches(&sandbox, &server, &mut child, (1, bytes_on_disk))?;
     let sent = std::process::Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .status()?;
@@ -1126,7 +1128,7 @@ fn a_stop_promises_only_what_the_server_allows() -> Result {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
-    let arrived = part_reaches(&sandbox, &server, 1, &mut child)?;
+    let arrived = download_reaches(&sandbox, &server, &mut child, (1, bytes_on_disk))?;
     let sent = std::process::Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .status()?;
@@ -1161,28 +1163,54 @@ fn a_stop_promises_only_what_the_server_allows() -> Result {
     Ok(())
 }
 
-/// waits until `server` has the run's request, then until an unfinished download in the cache
-/// holds `size` bytes, or the run ends, and says how many it holds. a slow start counts against
-/// the first wait only.
-fn part_reaches(sandbox: &Sandbox, server: &Server, size: u64, run: &mut Child) -> Result<u64> {
+/// waits until `server` has the run's request, then until `count` finds `size` bytes of an
+/// unfinished download in the cache, or the run ends, and says how many it found. a slow start
+/// counts against the first wait only.
+fn download_reaches(
+    sandbox: &Sandbox,
+    server: &Server,
+    run: &mut Child,
+    (size, count): (u64, fn(&Sandbox) -> u64),
+) -> Result<u64> {
     server.wait_for_requests(1)?;
-    let mut on_disk = 0;
-    wait_until(&format!("{size} bytes of the download on disk"), || {
-        // the size a folder listing shows lags behind a file another process still writes on
-        // windows, so each file is asked directly
-        on_disk = partial_files(&sandbox.cache())
-            .into_iter()
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "part")
-            })
-            .filter_map(|path| fs::metadata(path).ok())
-            .map(|metadata| metadata.len())
-            .max()
-            .unwrap_or_default();
-        Ok(on_disk >= size || run.try_wait()?.is_some())
+    let mut found = 0;
+    wait_until(&format!("{size} bytes of the download"), || {
+        found = count(sandbox);
+        Ok(found >= size || run.try_wait()?.is_some())
     })?;
-    Ok(on_disk)
+    Ok(found)
+}
+
+/// the most bytes the file of an unfinished download in the cache holds.
+fn bytes_on_disk(sandbox: &Sandbox) -> u64 {
+    // the size a folder listing shows lags behind a file another process still writes on
+    // windows, so each file is asked directly
+    partial_files(&sandbox.cache())
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "part")
+        })
+        .filter_map(|path| fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+        .max()
+        .unwrap_or_default()
+}
+
+/// the most bytes the record of an unfinished download in the cache counts, which only its
+/// once-a-second save writes, so a rerun can go on from them.
+fn bytes_saved(sandbox: &Sandbox) -> u64 {
+    partial_files(&sandbox.cache())
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .filter_map(|path| fs::read(path).ok())
+        .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .filter_map(|record| record["received"].as_u64())
+        .max()
+        .unwrap_or_default()
 }
 
 #[test]
