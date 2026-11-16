@@ -1976,6 +1976,12 @@ fn copies_asked_for_and_hidden_edits_are_never_linked() -> Result {
     )?;
     let synced = sandbox.run(&["sync"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    // sync reads a file as new as the state, which finds an edit by its bytes, so the edit below
+    // is hidden only once a later sync has vouched for the files
+    let state_file = sandbox.work().join(".fetchloom").join("state");
+    sandbox.wait_for_a_later_time(fs::metadata(&state_file)?.modified()?)?;
+    let settled = sandbox.run(&["sync"])?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
     let data = sandbox.work().join("data");
     let backup = sandbox.folder("backup")?;
     crate::support::copy_apart(&data, &backup)?;
@@ -2002,8 +2008,7 @@ fn copies_asked_for_and_hidden_edits_are_never_linked() -> Result {
     assert!(!fs::metadata(&iris)?.permissions().readonly(), "{stderr}");
     assert_eq!(fs::read(&penguins)?, b"bill,99\n", "{stderr}");
     assert!(!stderr.contains("Linked "), "{stderr}");
-    let state: serde_json::Value =
-        serde_json::from_slice(&fs::read(sandbox.work().join(".fetchloom").join("state"))?)?;
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&state_file)?)?;
     assert_eq!(
         state["files"]["data/iris/iris.csv"]["method"],
         copied.as_str()
