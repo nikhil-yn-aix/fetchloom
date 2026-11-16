@@ -17,7 +17,8 @@ use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::net::Net;
 use crate::output::Output;
-use crate::project::lock::{Waiting, Words};
+use crate::project::lock::{Lock, Waiting, Words};
+use crate::project::manifest::Manifest;
 use crate::source::{Access, Listing, Reference};
 use crate::units;
 
@@ -264,7 +265,12 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
         project: project.root.clone(),
         ..Report::default()
     };
-    let Some(lock) = project.lock()? else {
+    let lock = project.lock()?;
+    // a dataset waiting for its file list has no file to ask about
+    if let Some(lock) = &lock {
+        lock.refuse_waiting(args.names.iter().map(String::as_str))?;
+    }
+    let Some(lock) = lock else {
         report.lockless = true;
         tell(output, &report);
         if args.check {
@@ -280,6 +286,45 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
     super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
     // a sync carries a pin over to the name data.toml gives it now, as status reads it
     let (lock, _) = super::sync::rename::forecast(&manifest, lock);
+    let (pinned, asks) = pinned(&manifest, &lock, &wanted, &mut report);
+    if !report.datasets.is_empty() {
+        let net = Arc::new(context.net());
+        let places = if context.mirrors.mirrors.list.is_empty() {
+            "their sources"
+        } else {
+            "their sources and mirrors"
+        };
+        let _waiting = output.wait(
+            "Checking",
+            format!(
+                "{} at {places}",
+                units::count(pinned.len() as u64, "file", "files")
+            ),
+        );
+        let (found, listed) = tokio::join!(
+            probe::find(context, &net, &pinned, Ask::Sources),
+            listings(&net, &asks),
+        );
+        gathered(context, &mut report, &pinned, found?);
+        for ((index, asked), (now, newest)) in asks.iter().zip(listed?) {
+            judge(&mut report.datasets[*index], asked, now, newest);
+        }
+    }
+    tell(output, &report);
+    if args.check {
+        ready(&report).map_err(|error| error.with_report(&report))?;
+    }
+    Ok(report)
+}
+
+/// the files data.lock pins for the datasets `wanted` names, to ask about, and what to ask each
+/// dataset's source, by its place in `report`, which gets a record for each.
+fn pinned<'l>(
+    manifest: &'l Manifest,
+    lock: &'l Lock,
+    wanted: &dyn Fn(&str) -> bool,
+    report: &mut Report,
+) -> (Vec<Pinned<'l>>, Vec<(usize, Asked)>) {
     let mut pinned = Vec::new();
     let mut asks = Vec::new();
     for (name, entry) in &manifest.datasets {
@@ -316,34 +361,7 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
             },
         ));
     }
-    if !report.datasets.is_empty() {
-        let net = Arc::new(context.net());
-        let places = if context.mirrors.mirrors.list.is_empty() {
-            "their sources"
-        } else {
-            "their sources and mirrors"
-        };
-        let _waiting = output.wait(
-            "Checking",
-            format!(
-                "{} at {places}",
-                units::count(pinned.len() as u64, "file", "files")
-            ),
-        );
-        let (found, listed) = tokio::join!(
-            probe::find(context, &net, &pinned, Ask::Sources),
-            listings(&net, &asks),
-        );
-        gathered(context, &mut report, &pinned, found?);
-        for ((index, asked), (now, newest)) in asks.iter().zip(listed?) {
-            judge(&mut report.datasets[*index], asked, now, newest);
-        }
-    }
-    tell(output, &report);
-    if args.check {
-        ready(&report).map_err(|error| error.with_report(&report))?;
-    }
-    Ok(report)
+    (pinned, asks)
 }
 
 /// what each of `asks` lists now, in their order: at its pinned version, and at the version

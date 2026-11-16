@@ -4345,6 +4345,27 @@ fn a_clone_missing_a_fetched_list_never_asks_its_source() -> Result {
     assert_eq!(routes.requests().len(), asked, "{:?}", routes.requests());
     assert_eq!(fs::read(clone.join("data/b/b.csv"))?, b"b\n");
     assert!(!clone.join("data/iris").exists());
+    // an audit asks about b's file alone, and one of iris stops with the warning's words
+    let audited = listing_in(&sandbox, &clone, &["--json", "audit"])?;
+    assert_eq!(audited.status.code(), Some(0), "{}", text(&audited.stderr)?);
+    assert_eq!(json(&audited)?["result"]["files"], 1);
+    assert_eq!(
+        routes.requests().len(),
+        asked + 1,
+        "{:?}",
+        routes.requests()
+    );
+    let audited = listing_in(&sandbox, &clone, &["--json", "audit", "iris"])?;
+    assert_eq!(
+        audited.status.code(),
+        Some(50),
+        "{}",
+        text(&audited.stderr)?
+    );
+    assert_eq!(
+        json(&audited)?["errors"][0]["message"],
+        format!("data.lock names {part}, the file list of iris, which is not there")
+    );
     checked_missing(&sandbox, &clone, "iris", &part)
 }
 
