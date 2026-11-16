@@ -28,14 +28,10 @@ fn a_link_lands_in_a_folder_named_after_its_file() -> Result {
     Ok(())
 }
 
-/// `--select` keeping one file of a dataset puts it in a folder named after the dataset, as a get
-/// of the whole dataset does, and the dry run says the same folder, also when the source listed
-/// only the selected file's folder; a link to that one file still names the folder after the
-/// file, as any link to one file does.
+/// a hugging face dataset, `lab/flowers`, holding a card, `Iris.csv` and `data/train.csv`: its
+/// hub, which lists the whole tree or the `data` folder alone, and the server of `Iris.csv`.
 #[cfg(debug_assertions)]
-#[test]
-fn a_file_selected_from_a_dataset_lands_in_the_datasets_folder() -> Result {
-    let sandbox = Sandbox::new()?;
+pub(crate) fn flowers() -> Result<(crate::support::Routes, crate::support::Routes)> {
     let card = b"# flowers\n".as_slice();
     let commit = "0123456789abcdef0123456789abcdef01234567";
     let answer = |body: serde_json::Value| {
@@ -69,6 +65,18 @@ fn a_file_selected_from_a_dataset_lands_in_the_datasets_folder() -> Result {
         format!("/huggingface.co/datasets/lab/flowers/resolve/{commit}/Iris.csv"),
         file(IRIS, "\"r\""),
     )])?;
+    Ok((hub, files))
+}
+
+/// `--select` keeping one file of a dataset puts it in a folder named after the dataset, as a get
+/// of the whole dataset does, and the dry run says the same folder, also when the source listed
+/// only the selected file's folder; a link to that one file still names the folder after the
+/// file, as any link to one file does.
+#[cfg(debug_assertions)]
+#[test]
+fn a_file_selected_from_a_dataset_lands_in_the_datasets_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (hub, files) = flowers()?;
     let folder = |args: &[&str]| -> Result<String> {
         let output = sandbox
             .command(args)

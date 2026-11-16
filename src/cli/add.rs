@@ -1934,7 +1934,8 @@ fn choose_name(
     rename: &str,
 ) -> Result<String, Error> {
     let single = match (listing.files.as_slice(), &parsed.file) {
-        ([only], _) if listing.names_its_file() => Some(
+        // the one file of a folder a select had the source list alone is still the dataset's
+        ([only], _) if listing.names_its_file() && listing.within.is_empty() => Some(
             only.path
                 .rsplit('/')
                 .next()

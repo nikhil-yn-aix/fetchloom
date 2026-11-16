@@ -2135,6 +2135,37 @@ fn a_hugging_face_gitattributes_is_left_out_until_selected() -> Result {
     Ok(())
 }
 
+/// a file `--select` keeps of a dataset names the dataset after the dataset, also when the hub
+/// lists only that file's folder, as get names its folder.
+#[cfg(debug_assertions)]
+#[test]
+fn a_file_selected_from_a_dataset_names_it_after_the_dataset() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (hub, files) = crate::get::flowers()?;
+    for select in ["Iris.csv", "data/train.csv"] {
+        let output = sandbox
+            .command(&[
+                "--json",
+                "add",
+                "hf:datasets/lab/flowers",
+                "--select",
+                select,
+                "--dry-run",
+            ])
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_HOSTS", &files.url)
+            .output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(0), "{select}: {document}");
+        assert_eq!(
+            document["result"]["datasets"],
+            serde_json::json!(["flowers"]),
+            "{select}"
+        );
+    }
+    Ok(())
+}
+
 /// a dry run of links data.toml has already says so.
 #[test]
 fn a_dry_run_add_of_links_already_there_says_so() -> Result {
