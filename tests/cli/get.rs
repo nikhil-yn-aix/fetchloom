@@ -2916,6 +2916,55 @@ fn an_ftp_link_is_taken_over_https_when_its_host_serves_it() -> Result {
     Ok(())
 }
 
+/// an sftp link is refused in plain words: fetchloom does not speak sftp, and the help names what
+/// works, a copy made with sftp or rclone and added by its path, which runs here as it reads.
+#[test]
+fn an_sftp_link_says_fetchloom_does_not_speak_sftp() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut help = String::new();
+    for (args, shown) in [
+        (
+            &["--json", "add", "sftp://lab.example.org/data/iris.csv"][..],
+            "sftp://lab.example.org/data/iris.csv",
+        ),
+        (
+            &[
+                "--json",
+                "get",
+                "SFTP://me:secret@lab.example.org:2222/data/",
+            ],
+            "SFTP://***@lab.example.org:2222/data/",
+        ),
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "reference.invalid", "{error}");
+        assert_eq!(
+            error["message"],
+            format!("fetchloom does not speak sftp, so it cannot fetch {shown}"),
+            "{error}"
+        );
+        help = error["help"].as_str().unwrap_or_default().to_owned();
+        assert_eq!(
+            help,
+            "copy the file or folder with sftp or rclone, then add the copy with `fetchloom add <path>`"
+        );
+    }
+    fs::create_dir(sandbox.work().join("copied"))?;
+    fs::write(sandbox.work().join("copied").join("iris.csv"), IRIS)?;
+    let line = help.split('`').nth(1).unwrap_or_default();
+    let line = line.replace("<path>", "./copied");
+    let words: Vec<&str> = line.split(' ').skip(1).collect();
+    let added = sandbox.run(&words)?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("copied").join("iris.csv"))?,
+        IRIS
+    );
+    Ok(())
+}
+
 /// a data.lock link of a scheme fetchloom never asks fails at once, with no retry, and offers no
 /// `allowed_origins` value that would then be refused.
 #[cfg(debug_assertions)]

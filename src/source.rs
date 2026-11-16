@@ -481,6 +481,7 @@ impl Reference {
                     secret,
                 })
             }
+            "sftp" => Err(sftp(text)),
             other => Err(match site_named(other) {
                 Some(prefix) => unknown(text).help(format!(
                     "did you mean {}?",
@@ -1306,6 +1307,20 @@ fn unknown(text: &str) -> Error {
     let text = crate::shown::mask_query(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
         .help("use a name to search for, the link of the dataset's page, such as https://huggingface.co/datasets/scikit-learn/iris, a DOI, or an id such as kaggle:uciml/iris")
+}
+
+/// the error for an sftp link, an account on a server rather than published data: a tool that
+/// logs in there copies the files, and the copy is added by its path.
+fn sftp(text: &str) -> Error {
+    let text = crate::shown::mask_typed(text);
+    Error::new(
+        Kind::ReferenceInvalid,
+        format!("fetchloom does not speak sftp, so it cannot fetch {text}"),
+    )
+    .help(format!(
+        "copy the file or folder with sftp or rclone, then add the copy with `{}`",
+        crate::suggested::command("add <path>")
+    ))
 }
 
 /// the error for a malformed id after a known prefix, such as `zenodo:abc`.
