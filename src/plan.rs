@@ -37,6 +37,12 @@ impl<'a> Target<'a> {
     fn archive(&self) -> Option<&'a str> {
         self.unpacked().then_some(self.file.path.as_str())
     }
+
+    /// the link data.lock downloads the target's bytes from on their own: none for a file an
+    /// archive holds, or one no link fetches.
+    pub(crate) fn link(&self) -> Option<&'a str> {
+        (!self.unpacked() && !self.file.url.is_empty()).then_some(self.file.url.as_str())
+    }
 }
 
 /// every file a lock places, and the archives whose files this machine does not know yet.

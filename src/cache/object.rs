@@ -49,6 +49,8 @@ pub(crate) struct Sealed {
     temp: Temporary,
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
+    /// whether the bytes are a clone of the file they came from, sharing its room on the disk.
+    pub(crate) cloned: bool,
 }
 
 /// the name of a file this process made in `tmp/`. dropped before the file is published, it
@@ -123,6 +125,10 @@ impl Cache {
         stop: &Stop,
     ) -> io::Result<Copied> {
         let most = size.saturating_add(1);
+        #[cfg(target_os = "macos")]
+        if let Some(object) = self.clone_of(&input, most, stop)? {
+            return Self::checked(object, true, digest, size, flush);
+        }
         let mut object = self.new_object()?;
         #[cfg(target_os = "linux")]
         let cloned = object.clone_from(&input, most, most, stop)?;
@@ -135,13 +141,68 @@ impl Cache {
                 Err(Fault::Cache(err)) => return Err(err),
             }
         }
+        Self::checked(object, cloned, digest, size, flush)
+    }
+
+    /// `object`, all of it written, sealed when its bytes are the `size` bytes `digest` pins.
+    fn checked(
+        object: NewObject,
+        cloned: bool,
+        digest: &Sha256,
+        size: u64,
+        flush: bool,
+    ) -> io::Result<Copied> {
         if object.written != size {
             return Ok(Copied::OtherSize);
         }
         if object.hasher.sha256_so_far() != *digest {
             return Ok(Copied::OtherBytes);
         }
-        object.seal(flush).map(Copied::Sealed)
+        let mut sealed = object.seal(flush)?;
+        sealed.cloned = cloned;
+        Ok(Copied::Sealed(sealed))
+    }
+
+    /// a new object in `tmp/` that clones `source`, hashed from the clone itself, at most `most`
+    /// bytes, and read-only as every object is. none when the disk makes no clone of it, as
+    /// another volume or a disk other than apfs.
+    #[cfg(target_os = "macos")]
+    fn clone_of(&self, source: &File, most: u64, stop: &Stop) -> io::Result<Option<NewObject>> {
+        let folder = self.root.join("tmp");
+        let name = format!("{:016x}.new", fastrand::u64(..));
+        let parent = File::open(&folder)?;
+        if let Err(err) =
+            rustix::fs::fclonefileat(source, &parent, &name, rustix::fs::CloneFlags::empty())
+        {
+            tracing::debug!(%err, "no clone, so the bytes are copied");
+            return Ok(None);
+        }
+        let temp = Temporary {
+            path: folder.join(&name),
+            volume: Arc::clone(&self.volume),
+            published: false,
+            staging: None,
+        };
+        // a clone takes its source's mode, which another tool may have left writable
+        let file = crate::volume::read_unfollowed(&temp.path)?;
+        rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(0o444))?;
+        let begun = begun(&file);
+        let mut object = NewObject {
+            file,
+            temp,
+            hasher: Hasher::default(),
+            written: 0,
+            begun,
+        };
+        let mut clone = crate::volume::read_unfollowed(&object.temp.path)?;
+        let (hasher, written) = (&mut object.hasher, &mut object.written);
+        each_block(&mut clone, most, Block::sized(most), stop, |block| {
+            hasher.update(block);
+            *written += block.len() as u64;
+            Ok(())
+        })
+        .map_err(|(Fault::Source(err) | Fault::Cache(err))| err)?;
+        Ok(Some(object))
     }
 
     pub(super) fn new_object_in(
@@ -212,8 +273,18 @@ pub(crate) fn holds_pinned(
     size: u64,
     stop: &Stop,
 ) -> io::Result<bool> {
+    Ok(sha256_of(source, size, stop)? == Some(*digest))
+}
+
+/// the SHA-256 of the file at `source` when it is a plain file of `size` bytes, read as
+/// [`Cache::copy_in`] reads it but writing nothing. a file that cannot be read has none.
+///
+/// # Errors
+///
+/// `Interrupted` when `stop` asks.
+pub(crate) fn sha256_of(source: &Path, size: u64, stop: &Stop) -> io::Result<Option<Sha256>> {
     let Ok(mut input) = opened(source, size) else {
-        return Ok(false);
+        return Ok(None);
     };
     let (mut hasher, mut read) = (Hasher::default(), 0_u64);
     let most = size.saturating_add(1);
@@ -223,8 +294,8 @@ pub(crate) fn holds_pinned(
         Ok(())
     });
     match ended {
-        Ok(()) => Ok(read == size && hasher.sha256_so_far() == *digest),
-        Err(Fault::Source(_)) => Ok(false),
+        Ok(()) => Ok((read == size).then(|| hasher.sha256_so_far())),
+        Err(Fault::Source(_)) => Ok(None),
         Err(Fault::Cache(err)) => Err(err),
     }
 }
@@ -408,6 +479,7 @@ impl NewObject {
             temp,
             digest,
             size: written,
+            cloned: false,
         })
     }
 }
@@ -419,6 +491,7 @@ impl Sealed {
             mut temp,
             digest,
             size,
+            ..
         } = self;
         if let Some(staging) = &temp.staging {
             staging.check_member_parent(&temp.path)?;

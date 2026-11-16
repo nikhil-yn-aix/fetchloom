@@ -4,6 +4,7 @@
 mod again;
 pub(super) mod data_folder;
 pub(super) mod mirrors;
+pub(super) mod reuse;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};

@@ -732,6 +732,7 @@ fn wanted(needed: &Needed) -> crate::mirror::Wanted {
         digest: needed.item.digest,
         size: needed.item.size,
         label: needed.label.clone(),
+        link: None,
     }
 }
 

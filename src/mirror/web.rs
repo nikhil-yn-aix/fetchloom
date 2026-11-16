@@ -90,6 +90,7 @@ mod tests {
             digest: crate::digest::sha256(b"pets"),
             size: 4,
             label: "pets/a.png".to_owned(),
+            link: None,
         };
         let hex = wanted.digest.hex();
         let fetch = object(&base, &wanted);

@@ -30,6 +30,10 @@ pub(crate) struct Work {
     /// their bytes.
     pub(crate) data_folder_objects: AtomicU64,
     pub(crate) data_folder_bytes: AtomicU64,
+    /// pinned files the cache lacked that another tool's cache or a reuse folder held, now in the
+    /// cache, and their bytes.
+    pub(crate) reused_objects: AtomicU64,
+    pub(crate) reused_bytes: AtomicU64,
     /// the objects the run wrote, by the first 8 bytes of each digest, so placing tells them from
     /// objects the cache held. no clock can: a disk keeping whole seconds or a file server's clock
     /// may date a new one before the run began. a million objects clash by a chance near one in 37
@@ -54,6 +58,8 @@ pub(crate) struct Counts {
     pub(crate) mirror_bytes: u64,
     pub(crate) data_folder_objects: u64,
     pub(crate) data_folder_bytes: u64,
+    pub(crate) reused_objects: u64,
+    pub(crate) reused_bytes: u64,
 }
 
 impl Work {
@@ -100,6 +106,8 @@ impl Work {
             mirror_bytes: read(&self.mirror_bytes),
             data_folder_objects: read(&self.data_folder_objects),
             data_folder_bytes: read(&self.data_folder_bytes),
+            reused_objects: read(&self.reused_objects),
+            reused_bytes: read(&self.reused_bytes),
         }
     }
 }

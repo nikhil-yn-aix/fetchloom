@@ -675,6 +675,7 @@ impl<'a> Placing<'a> {
                 digest: target.sha256,
                 size: target.size,
                 label: target.path.clone(),
+                link: target.link().map(str::to_owned),
             })
             .collect()
     }

@@ -388,6 +388,7 @@ mod tests {
             digest: crate::digest::sha256(PINNED),
             size: PINNED.len() as u64,
             label: "weather/weather.csv".to_owned(),
+            link: None,
         }
     }
 
@@ -639,6 +640,7 @@ mod tests {
                 digest: file.sha256,
                 size: file.size,
                 label: file.path.clone(),
+                link: None,
             })
             .collect();
         let counted =

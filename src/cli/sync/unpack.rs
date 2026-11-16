@@ -671,6 +671,7 @@ impl Loop<'_> {
                     digest: file.sha256,
                     size: file.size,
                     label: format!("{dataset}/{}", file.path),
+                    link: (!file.url.is_empty()).then(|| file.url.clone()),
                 })
                 .collect()
         })

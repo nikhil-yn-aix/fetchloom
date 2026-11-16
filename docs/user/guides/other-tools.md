@@ -75,6 +75,23 @@ for each file `dvc import-url` brought in, run `fetchloom add` with the link its
 
 fetchloom hosts no data and keeps no accounts. [limits](../reference/limits.md) lists what else it leaves to other tools.
 
+## reusing other caches
+
+a file another tool already downloaded need not come down again. when a pinned file is missing from fetchloom's cache, `sync`, `add` and `push` look for it in the folders the `reuse` setting names, after the data folder and before any mirror or source, offline too. unset, `reuse` names hugging face's cache and kagglehub's, where they are on this machine. they look in this order:
+
+- in hugging face's cache, the blob named by the pinned SHA-256 in any repository, then, for a file pinned from hugging face, its entry in the snapshot of the pinned commit: a link to its blob, or the file itself where hugging face makes no links.
+- in kagglehub's cache, a kaggle file in its version's folder, once kagglehub marked that version or that file complete.
+- then any plain file of the pinned size below those folders, as one `hf download --local-dir`, torchvision, tfds or pooch left, or a file on a usb disk. only files of that size are read, and links are never followed.
+
+a file comes in only once its bytes hash to its pin: as a clone where the disk makes one, on btrfs, xfs or apfs, which takes no more room, else as a copy. the run then says where the other copy stays, with the `hf cache rm` that frees it for hugging face's cache, so you can delete it if nothing else needs it:
+
+```text
+     Copied 2 files · 2.9 KiB from the hugging face cache into the cache
+  hint: the hugging face cache at /home/ada/.cache/huggingface/hub keeps its own copy of these 2.9 KiB; `hf cache rm dataset/lab/rows` frees it there if nothing else needs it
+```
+
+fetchloom never writes, moves, deletes or links to anything in those folders, so their files keep their modes and `hf cache rm` works afterwards, and deleting them leaves every project whole. `fetchloom settings set reuse /mnt/usb/datasets` names a folder of your own; name hugging face's cache there too to keep reading it. `FETCHLOOM_REUSE=` with nothing after it reads no folder for one run.
+
 ## dvc, git-lfs and datalad
 
 these tools version files: they keep each version of what you make or change, and the history to go back to. fetchloom pins published files and places them, so each works on its own files beside the other.

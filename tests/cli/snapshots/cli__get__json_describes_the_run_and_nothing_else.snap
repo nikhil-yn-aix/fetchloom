@@ -57,6 +57,8 @@ expression: pretty
     "reflinks": "[varies]",
     "requests": 1,
     "resumes": 0,
-    "retries": 0
+    "retries": 0,
+    "reused_bytes": 0,
+    "reused_objects": 0
   }
 }

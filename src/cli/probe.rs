@@ -94,6 +94,7 @@ impl<'a> Pinned<'a> {
             digest: self.sha256?,
             size: self.size,
             label: self.label(),
+            link: None,
         })
     }
 

@@ -18,6 +18,7 @@ mod output;
 mod place;
 mod plan;
 mod project;
+mod reuse;
 mod settings;
 mod shown;
 mod source;

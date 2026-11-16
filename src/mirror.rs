@@ -195,6 +195,9 @@ pub(crate) struct Wanted {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
     pub(crate) label: String,
+    /// the link data.lock downloads the file from on its own, by which another tool's cache may
+    /// keep it: none for a file an archive holds.
+    pub(crate) link: Option<String>,
 }
 
 #[cfg(test)]

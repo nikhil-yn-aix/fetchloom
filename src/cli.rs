@@ -80,6 +80,8 @@ struct Context {
     cautioned: Arc<std::sync::atomic::AtomicBool>,
     /// the mirrors asked for pinned files before their sources, and what they answered.
     mirrors: fetch::mirrors::Mirrored,
+    /// the folders read for pinned files before any mirror, such as hugging face's cache.
+    reuse: fetch::reuse::Reused,
     /// the parts of file lists this run wrote anew into a project's data.lock.d, with the
     /// project's folder, so the run can end by naming those git does not have.
     lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
@@ -124,6 +126,7 @@ impl Context {
             unsaved: std::sync::Mutex::default(),
             cautioned: Arc::default(),
             mirrors: fetch::mirrors::Mirrored::default(),
+            reuse: fetch::reuse::Reused::default(),
             lists: std::sync::Mutex::default(),
             speeds: net::speeds::Speeds::default(),
             projectless: false,
@@ -137,6 +140,7 @@ impl Context {
         if let Some(threads) = settings.threads {
             self.threads = self.threads.at_most(threads.value);
         }
+        self.reuse = fetch::reuse::Reused::new(settings.reuse.value.clone());
         share(&settings);
         self.rate = settings
             .rate

@@ -430,6 +430,7 @@ async fn on_folders(
                 digest: locked[*at].1.sha256,
                 size: locked[*at].1.size,
                 label: pinned[*at].label(),
+                link: None,
             })
             .collect();
         let held = tokio::task::block_in_place(|| {
@@ -506,6 +507,7 @@ fn unpacked_on(
             digest: member.sha256,
             size: member.size,
             label: format!("{dataset}/{}", member.path),
+            link: None,
         })
         .collect();
     let held = folder::check_all(root, &wanted, context.threads, &|_| {}, &context.stop)?;

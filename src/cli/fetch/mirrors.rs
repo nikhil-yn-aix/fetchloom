@@ -583,15 +583,17 @@ pub(in crate::cli) fn pinned(jobs: &[Job], cache: &Cache) -> Vec<Wanted> {
                 digest,
                 size,
                 label: job.label.clone(),
+                link: Some(job.fetch.url.to_string()),
             })
         })
         .collect()
 }
 
-/// puts into the cache what the data folder and then each mirror in order hold of the files
-/// `wanted` lists; a damaged copy on a mirror is told and left for a later one or the source.
-/// `wanted` runs only when one may hold something, since listing what the cache lacks reads every
-/// file. fails at a stop, a cache write, or `unconfirmed` past what a person agreed to download.
+/// puts into the cache what the data folder, then the reuse folders, then each mirror in order hold
+/// of the files `wanted` lists; a damaged copy on a mirror is told and left for a later one or the
+/// source. `wanted` runs only when one may hold something, since listing what the cache lacks
+/// reads every file. fails at a stop, a cache write, or `unconfirmed` past what a person agreed to
+/// download.
 pub(in crate::cli) async fn fill(
     context: &Context,
     net: &Arc<Net>,
@@ -600,7 +602,7 @@ pub(in crate::cli) async fn fill(
     wanted: impl FnOnce() -> Vec<Wanted>,
 ) -> Result<(), Error> {
     let mirrored = &context.mirrors;
-    if mirrored.mirrors.list.is_empty() && folder.is_empty() {
+    if mirrored.mirrors.list.is_empty() && folder.is_empty() && context.reuse.is_empty() {
         return Ok(());
     }
     let mut seen = HashSet::new();
@@ -608,7 +610,8 @@ pub(in crate::cli) async fn fill(
         .into_iter()
         .filter(|want| seen.insert(want.digest))
         .collect();
-    let mut wanted = tokio::task::block_in_place(|| folder.take(context, cache, wanted))?;
+    let wanted = tokio::task::block_in_place(|| folder.take(context, cache, wanted))?;
+    let mut wanted = tokio::task::block_in_place(|| context.reuse.take(context, cache, wanted))?;
     for (index, location) in mirrored.mirrors.list.iter().enumerate() {
         let ask: Vec<Wanted> = wanted
             .iter()

@@ -222,6 +222,14 @@ fn tell_changed(
                 &format!("the folder {shown} does not exist yet, so the first push makes it"),
                 "check its name before you push",
             );
+        } else if key == "reuse" {
+            output.warn_with(
+                Warning::SettingsMissingFolder,
+                &format!(
+                    "the folder {shown} does not exist, so runs read nothing there until it does"
+                ),
+                "check its name, or mount the disk that holds it",
+            );
         } else {
             output.warn_with(
                 Warning::SettingsMissingFolder,
@@ -521,6 +529,15 @@ fn rows(context: &Context) -> Vec<Shown> {
         said: settings.mirrors_only.value.to_string(),
         only_variable: false,
     });
+    shown.push(list(
+        "reuse",
+        settings
+            .reuse
+            .value
+            .iter()
+            .map(|folder| folder.path.display().to_string()),
+        vec![settings.reuse.origin],
+    ));
     let push_to = settings.push_to.value.as_ref();
     shown.push(Shown {
         name: "push_to",

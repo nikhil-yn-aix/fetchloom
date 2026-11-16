@@ -1452,6 +1452,11 @@ fn work_line(counts: Counts, elapsed: Duration) -> String {
             "file from the data folder",
             "files from the data folder",
         ),
+        (
+            counts.reused_objects,
+            "file reused from this machine",
+            "files reused from this machine",
+        ),
         (counts.reflinks, "reflink", "reflinks"),
         (counts.hardlinks, "hardlink", "hardlinks"),
         (counts.copies, "copy", "copies"),

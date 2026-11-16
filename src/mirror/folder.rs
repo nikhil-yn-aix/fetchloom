@@ -244,6 +244,7 @@ pub(crate) fn check_items(
             digest: item.digest,
             size: item.size,
             label: String::new(),
+            link: None,
         };
         check(
             &placer,
@@ -1469,6 +1470,7 @@ pub(crate) mod tests {
             digest: crate::digest::sha256(bytes),
             size: bytes.len() as u64,
             label: String::from_utf8_lossy(bytes).into_owned(),
+            link: None,
         }
     }
 

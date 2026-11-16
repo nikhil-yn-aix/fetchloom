@@ -41,6 +41,7 @@ mod push;
 mod recovery;
 mod remove;
 mod repositories;
+mod reuse;
 mod scope;
 mod search;
 mod secrets;
