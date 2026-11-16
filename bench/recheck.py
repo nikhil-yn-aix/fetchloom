@@ -319,7 +319,8 @@ def main(argv=None):
     parser.add_argument("--baseline", required=True, type=Path, help="the last release's fetchloom")
     parser.add_argument("--candidate", required=True, type=Path, help="the build being checked")
     parser.add_argument("--root", required=True, type=Path,
-                        help="a folder for fixtures, projects and results, on the filesystem to measure")
+                        help="a new or empty folder, or one recheck.py made, for fixtures, projects and results, "
+                             "on the filesystem to measure")
     parser.add_argument("--cases", type=lambda text: text.split(","), default=list(ROUNDS),
                         help=f"comma-separated, from {','.join(ROUNDS)}")
     parser.add_argument("--rounds", type=int, help="measured rounds for every case, instead of each case's own")
@@ -335,6 +336,7 @@ def main(argv=None):
     if unknown or (args.rounds is not None and args.rounds < 1) or not 0 < args.scale <= 1:
         parser.error(f"cases are {', '.join(ROUNDS)}; rounds must be positive and scale in (0, 1]")
     root = args.root.resolve()
+    native.claim(root, "recheck.py")
     for folder in ("home", "tmp"):
         (root / folder).mkdir(parents=True, exist_ok=True)
     out = root / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

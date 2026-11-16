@@ -202,3 +202,40 @@ class TableTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RootTests(unittest.TestCase):
+    """native.py and recheck.py delete the src, www and work folders of their root, so they take
+    only a root that is new, empty or made by the same tool."""
+
+    def test_a_folder_the_tool_did_not_make_is_refused_untouched(self):
+        import recheck
+        for tool, main in [("native.py", native.main), ("recheck.py", recheck.main)]:
+            with self.subTest(tool=tool), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                for name in ["src", "www", "work"]:
+                    (root / name).mkdir()
+                    (root / name / "mine.txt").write_text("keep\n")
+                (root / "src" / "locked").mkdir()
+                (root / "src" / "locked").chmod(0o500)
+                try:
+                    with self.assertRaises(SystemExit) as stopped:
+                        main(["--baseline", "a", "--candidate", "b", "--root", str(root)])
+                    mode = stat.S_IMODE((root / "src" / "locked").stat().st_mode)
+                finally:
+                    (root / "src" / "locked").chmod(0o700)
+                self.assertEqual(str(stopped.exception),
+                                 f"refusing to use {root.resolve()}: it is not empty and {tool} did not make it. "
+                                 "give a new or empty folder")
+                self.assertEqual(sorted(path.relative_to(root).as_posix() for path in root.rglob("*")),
+                                 ["src", "src/locked", "src/mine.txt", "work", "work/mine.txt", "www", "www/mine.txt"])
+                self.assertEqual(mode, 0o500)
+
+    def test_an_empty_folder_becomes_the_tools_and_stays_so(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder, "bench")
+            native.claim(root, "native.py")
+            (root / "www").mkdir()
+            native.claim(root, "native.py")
+            with self.assertRaises(SystemExit):
+                native.claim(root, "recheck.py")

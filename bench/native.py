@@ -235,6 +235,19 @@ def digest(path):
     return hasher.hexdigest()
 
 
+def claim(root, tool):
+    """makes root this tool's folder, or stops: a missing or empty folder becomes the tool's, and
+    one the tool made before stays its. any other, such as a home or a project folder, would lose
+    its src, www and work folders to the tool's fixtures."""
+    marker = root / f".fl-bench-{tool}.json"
+    if marker.is_file():
+        return
+    if root.exists() and (not root.is_dir() or any(root.iterdir())):
+        raise SystemExit(f"refusing to use {root}: it is not empty and {tool} did not make it. give a new or empty folder")
+    root.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"tool": tool}) + "\n")
+
+
 def remove(path):
     """deletes a tree that fetchloom made read-only; windows refuses to delete read-only files."""
     path = Path(path)
@@ -264,7 +277,8 @@ def main(argv=None):
     parser.add_argument("--baseline", required=True, type=Path, help="the fetchloom build to compare against")
     parser.add_argument("--candidate", required=True, type=Path, help="the fetchloom build being measured")
     parser.add_argument("--root", required=True, type=Path,
-                        help="an empty folder on the filesystem to measure; fixtures, caches and projects go here")
+                        help="a new or empty folder, or one native.py made, on the filesystem to measure; "
+                             "fixtures, caches and projects go here")
     parser.add_argument("--scenarios", default="small,zip,large",
                         type=lambda text: [name for name in text.split(",") if name])
     parser.add_argument("--rounds", type=int, default=5)
@@ -276,6 +290,7 @@ def main(argv=None):
     if unknown or args.rounds < 1 or args.large_mib < 1:
         parser.error(f"scenarios are {', '.join(SCENARIOS)}; rounds and --large-mib must be positive")
     root = args.root.resolve()
+    claim(root, "native.py")
     out = (args.out or root / "results").resolve()
     out.mkdir(parents=True, exist_ok=True)
     binaries = {"baseline": args.baseline.resolve(strict=True), "candidate": args.candidate.resolve(strict=True)}
