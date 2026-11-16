@@ -118,6 +118,11 @@ fn every_servers_listing_reads_as_the_entries_it_shows() {
                 ("ghcnd_all.tar.gz".to_owned(), false),
             ],
         ),
+        (
+            "folder/lpdaac.html",
+            "https://e4ftl01.cr.usgs.gov/",
+            vec![("ASTT".to_owned(), true)],
+        ),
     ] {
         let html = String::from_utf8(fixture_bytes(fixture)).unwrap();
         let index = read_at(&html, folder).unwrap();
@@ -160,6 +165,23 @@ fn a_folder_linked_without_its_slash_is_listed_as_a_folder() {
     assert_eq!(paths(&listing), ["iris.csv", "sub/tips.csv"]);
     assert_eq!(listing.warnings, Vec::<String>::new());
     assert_eq!(recorded.asked(), [DATA.to_owned(), sub]);
+}
+
+/// the listing is the list that holds the folder's entries, whatever lists a page shows above
+/// it: a notice whose links lead elsewhere, or a trail of links to the folders above.
+#[test]
+fn the_listing_is_the_list_that_holds_the_entries() {
+    let sub = "https://example.org/data/sub/";
+    let page = r#"<html><head><title>Index of /data/sub/</title></head><body>
+<ul class="trail"><li><a href="/">home</a></li><li><a href="/data/">data</a></li></ul>
+<pre>please read <a href="https://example.org/terms.html">our terms</a> first</pre>
+<pre><a href="../">../</a>
+<a href="a.csv">a.csv</a>     16-Nov-2026 09:00     20
+<a href="b.csv">b.csv</a>     16-Nov-2026 09:00     20
+</pre></body></html>"#;
+    let index = read_at(page, sub).unwrap();
+    assert_eq!(names(&index), [("a.csv", false), ("b.csv", false)]);
+    assert_eq!(index.elsewhere, Vec::<String>::new());
 }
 
 /// a page no server made as a listing is none, though it links files below its folder: a site's

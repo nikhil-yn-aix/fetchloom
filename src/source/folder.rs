@@ -5,6 +5,7 @@
 //! the folder's own origin and below it are followed, each once, and a name no file may have
 //! stops it.
 
+use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -111,14 +112,26 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
         .collect();
     // the link to the folder above, as `../`, `..` or the parent's path
     let above = |link: &Link| parent.is_some() && link.url == parent;
-    // a header a server shows above its listing may be a list too, so the listing is the list
-    // that links the folder above, as apache's, nginx's and lighttpd's do, else the first with a
-    // link, as python's has no such link
+    let entries = |links: &[Link]| {
+        links
+            .iter()
+            .filter(|link| {
+                !above(link)
+                    && link
+                        .url
+                        .as_ref()
+                        .and_then(|url| below(url, folder))
+                        .is_some()
+            })
+            .count()
+    };
+    // a page may show lists above its listing, as a notice or a trail of the folders above, so
+    // the listing is the list with the most entries, then one that links the folder above
     let chosen = lists
         .iter()
-        .position(|links| links.iter().any(above))
-        .or_else(|| lists.iter().position(|links| !links.is_empty()))
-        .or_else(|| (!lists.is_empty()).then_some(0))
+        .enumerate()
+        .max_by_key(|(at, links)| (entries(links), links.iter().any(above), Reverse(*at)))
+        .map(|(at, _)| at)
         .ok_or(Unread::NoListing)?;
     let mut index = Index::default();
     let mut seen = HashSet::new();
@@ -137,24 +150,10 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
                 .push(crate::name::escaped(&each.href).into_owned());
             continue;
         };
-        let same_origin = link.scheme() == folder.scheme()
-            && link.host_str() == folder.host_str()
-            && link.port_or_known_default() == folder.port_or_known_default();
-        let rest = same_origin
-            .then(|| link.path().strip_prefix(folder.path()))
-            .flatten()
-            .filter(|rest| !rest.is_empty());
-        let Some((name, is_folder)) = rest.map(|rest| match rest.strip_suffix('/') {
-            Some(name) => (name, true),
-            None => (rest, false),
-        }) else {
+        let Some((name, is_folder)) = below(link, folder) else {
             index.elsewhere.push(Shown(link).to_string());
             continue;
         };
-        if name.contains('/') {
-            index.elsewhere.push(Shown(link).to_string());
-            continue;
-        }
         let decoded = percent_decode_str(name)
             .decode_utf8()
             .map_err(|_| Unread::Name(crate::name::escaped(href).into_owned()))?;
@@ -171,6 +170,24 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
         }
     }
     Ok(index)
+}
+
+/// the name, as `link` writes it, of the entry `link` makes of `folder`, and whether it is a
+/// folder, its link ending in `/`: one on the folder's own origin, one step below its path. none
+/// for any other link.
+fn below<'a>(link: &'a Url, folder: &Url) -> Option<(&'a str, bool)> {
+    let same_origin = link.scheme() == folder.scheme()
+        && link.host_str() == folder.host_str()
+        && link.port_or_known_default() == folder.port_or_known_default();
+    let rest = link
+        .path()
+        .strip_prefix(folder.path())
+        .filter(|rest| same_origin && !rest.is_empty())?;
+    let (name, is_folder) = match rest.strip_suffix('/') {
+        Some(name) => (name, true),
+        None => (rest, false),
+    };
+    (!name.contains('/')).then_some((name, is_folder))
 }
 
 /// whether the page's title says a server listed a folder there, as `Index of /data/` does.
