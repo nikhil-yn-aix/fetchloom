@@ -152,9 +152,10 @@ impl Mirrored {
             .join("; ")
     }
 
-    /// skips mirror `index` for the rest of the run, warning once.
+    /// skips mirror `index` for the rest of the run, warning once, though it was found there.
     fn skip(&self, context: &Context, index: usize, skip: Skip) {
         let mut answers = self.answers();
+        answers.up.remove(&index);
         if answers.down.contains_key(&index) {
             return;
         }
@@ -1025,6 +1026,46 @@ mod tests {
         }))
         .unwrap();
         assert!(!listed.load(Ordering::Relaxed));
+    }
+
+    /// a mirror skipped once it answered, as when its objects fail, is asked nothing more that
+    /// run: no later phase tries it again first, with its retries, before the next mirror.
+    #[test]
+    fn a_mirror_skipped_after_it_answered_is_asked_nothing_more() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(
+            folder.path().join(crate::mirror::MARKER),
+            "fetchloom mirror 1\n",
+        )
+        .unwrap();
+        let lab = Location::Folder(folder.path().to_path_buf());
+        let mirrored = Mirrored::new(Mirrors::new(Vec::new(), std::slice::from_ref(&lab), false));
+        let net = context.net();
+        assert!(block_on(mirrored.usable(&context, &net, 0, &lab)).unwrap());
+        let said = "failed: answered 500".to_owned();
+        let skip = Skip {
+            warning: None,
+            said: said.clone(),
+        };
+        mirrored.skip(&context, 0, skip);
+        assert!(!block_on(mirrored.usable(&context, &net, 0, &lab)).unwrap());
+        assert_eq!(
+            mirrored.said(Some(&crate::digest::sha256(b"x"))),
+            format!("{said} on {lab}")
+        );
     }
 
     /// pinned files no mirror had and unhashed new ones are refused together, counted apart.
