@@ -228,16 +228,16 @@ fn a_copy_within_the_root_is_its_own_file_and_replaces_nothing() {
     assert_eq!(fs::read_to_string(&to).unwrap(), "edited apart");
 }
 
-/// a clone keeps the permissions of the file it copies, even those the umask of whoever runs
-/// fetchloom clears from a new file.
+/// a clone keeps the read bits of the file it copies and the owner's write as asked, never a write
+/// bit for others, on a disk that clones.
 #[cfg(unix)]
 #[test]
-fn a_clone_keeps_permissions_the_umask_would_clear() {
+fn a_clone_takes_no_write_bit_for_others() {
     use std::os::unix::fs::PermissionsExt;
     let folder = TempDir::new().unwrap();
     let from = folder.path().join("iris.csv");
     fs::write(&from, CONTENTS).unwrap();
-    // every usual umask clears write for others
+    // write for others, which a clone must not keep
     fs::set_permissions(&from, fs::Permissions::from_mode(0o666)).unwrap();
     let to = folder.path().join("iris.csv.changed");
     let placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
@@ -247,7 +247,7 @@ fn a_clone_keeps_permissions_the_umask_would_clear() {
     }
 
     let mode = fs::metadata(&to).unwrap().permissions().mode();
-    assert_eq!(format!("{:o}", mode & 0o777), "666");
+    assert_eq!(format!("{:o}", mode & 0o777), "644");
 }
 
 /// a file holding an object's bytes is replaced by a hardlink to the object in one rename, only
