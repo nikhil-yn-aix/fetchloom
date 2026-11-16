@@ -2163,6 +2163,56 @@ fn a_teammate_who_synced_downloads_only_what_the_new_commit_changed() -> Result 
     Ok(())
 }
 
+/// a teammate who synced a private repository's folder upgrades it as one who synced a public
+/// folder does: each file whose blob the new commit keeps is proven from the cache, though every
+/// pin's link names a blob of the one repository, and only the changed file's blob is asked.
+#[test]
+fn a_teammate_who_synced_a_private_folder_downloads_only_what_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let routes = added_secret(&sandbox, &big)?;
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    let cache = sandbox.folder("teammate-cache")?;
+    let keyed = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(sandbox
+            .command_in(&teammate, args)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("GH_TOKEN", KEY)
+            .output()?)
+    };
+    ok(&keyed(&["sync", "--locked"])?)?;
+    let changed: &[u8] = b"site,count\na,1\nb,2\nc,3\n";
+    let held = [
+        ("data/rows.csv", Held::File(changed)),
+        ("data/2020/field notes.txt", Held::File(NOTES)),
+        ("data/big.bin", Held::File(&big)),
+    ];
+    routes.change(secret_at(SECOND, &held)?);
+    let before = routes.targets().len();
+    ok(&keyed(&["lock", "--upgrade"])?)?;
+    let blobs: Vec<String> = asked_since(&routes, before)
+        .into_iter()
+        .filter(|target| target.contains("/git/blobs/"))
+        .collect();
+    assert_eq!(
+        blobs,
+        [format!("{SECRET_API}/git/blobs/{}", blob_id(changed))]
+    );
+    let lock = fs::read_to_string(teammate.join("data.lock"))?;
+    for (path, bytes) in [
+        ("rows.csv", changed),
+        ("2020/field notes.txt", NOTES),
+        ("big.bin", &big),
+    ] {
+        assert!(lock.contains(&sha256_hex(bytes)), "{path}: {lock}");
+    }
+    Ok(())
+}
+
 /// data.lock's pins stand only for files of their own repository: a dataset whose link moves from
 /// a fork to the repository downloads each file again, though the fork holds the very same blobs,
 /// since one repository's ids never vouch for another's bytes.

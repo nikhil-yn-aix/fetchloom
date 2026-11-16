@@ -176,7 +176,8 @@ impl Draft {
     /// knows each file of a git repository whose blob a download here brought before, without a
     /// download: the cache's record of the blob names the object, else `previous`, data.lock's pin
     /// of the same file at its commit then, does, as a sync of data.lock brought its bytes, and the
-    /// object's bytes must still be that blob. the records are looked up first, then the bytes
+    /// object's bytes must still be that blob. a pin whose link names the blob itself, as a
+    /// private repository's at github's api does, is the same file at any commit. the records are looked up first, then the bytes
     /// they name checked at once; a pin's bytes found to be the blob are recorded when `recording`,
     /// as a download's are, so a later commit that moves the file finds them.
     pub(super) fn recall_blobs(
@@ -200,10 +201,13 @@ impl Draft {
                         let pins = pins.get_or_insert_with(|| {
                             let files = previous.iter().flat_map(|locked| &locked.files);
                             files
-                                .map(|file| (without_commit(&file.url), file))
+                                .flat_map(|file| {
+                                    [(file.url.clone(), file), (without_commit(&file.url), file)]
+                                })
                                 .collect()
                         });
-                        let pin = pins.get(&without_commit(file.remote.url.as_str()))?;
+                        let url = file.remote.url.as_str();
+                        let pin = pins.get(url).or_else(|| pins.get(&without_commit(url)))?;
                         (pin.sha256, pin.size, true)
                     };
                 let sized = file.remote.size.is_none_or(|listed| listed == size);
