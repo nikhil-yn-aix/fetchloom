@@ -201,8 +201,9 @@ impl Record {
     }
 
     /// the listing of the record this candidate names when its install's answer, to one request
-    /// for the record at its origin, is an invenioRDM record of that id and of `doi`, where a
-    /// DOI's page named it; none for another answer. a refusal names the key that may lift it.
+    /// for the record at its origin, is an invenioRDM record of that id, or the newest version an
+    /// id of every version redirects to, and of `doi`, where a DOI's page named it; none for
+    /// another answer. a refusal names the key that may lift it.
     pub(super) async fn recognized(
         &self,
         api: &impl Api,
@@ -225,7 +226,7 @@ impl Record {
                 .as_ref()
                 .is_some_and(|stated| stated.identifier.eq_ignore_ascii_case(doi))
         });
-        if answer.id != self.id || !named {
+        if !answer.is_of(&self.id) || !named {
             return Ok(None);
         }
         self.listing(answer).map(Some)
@@ -233,8 +234,7 @@ impl Record {
 
     /// the listing of another install's answer in invenioRDM's form.
     fn listing(&self, answer: Answer) -> Result<Listing, Error> {
-        let parent = answer.parent.as_ref().map(|parent| parent.id.as_str());
-        if answer.id != self.id && parent != Some(self.id.as_str()) {
+        if !answer.is_of(&self.id) {
             return Err(invalid(self, "the record or its parent id does not match"));
         }
         if !is_id(&answer.id) {
@@ -435,6 +435,14 @@ struct Answer {
 #[derive(Deserialize)]
 struct Parent {
     id: String,
+}
+
+impl Answer {
+    /// whether the answer is the record `id` names: that record, or a version of the record of
+    /// every version `id` names.
+    fn is_of(&self, id: &str) -> bool {
+        self.id == id || self.parent.as_ref().is_some_and(|parent| parent.id == id)
+    }
 }
 
 #[derive(Default, Deserialize)]

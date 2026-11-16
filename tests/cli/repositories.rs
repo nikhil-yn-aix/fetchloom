@@ -1450,12 +1450,16 @@ fn a_hugging_face_bucket_file_is_a_plain_link_pinned_by_its_bytes() -> Result {
 }
 
 const RDM_RECORD: &str = "/rdm.example.org/api/records/abcde-12345";
+const RDM_CONCEPT: &str = "/rdm.example.org/api/records/fghij-67890";
 
 /// an invenioRDM install at rdm.example.org holding record `abcde-12345`, registered as DOI
-/// `10.1234/abcde-12345`, whose one file `rows.csv` has bytes `body` and the MD5 `md5`.
+/// `10.1234/abcde-12345`, whose one file `rows.csv` has bytes `body` and the MD5 `md5`. it is the
+/// newest version of `fghij-67890`, whose page the install shows and whose answer in its api
+/// redirects to it, as invenioRDM does.
 fn invenio(body: &[u8], md5: &str) -> Result<Routes> {
     let mut record = fixture("invenio/caltech-record.json")?;
     record["id"] = "abcde-12345".into();
+    record["parent"]["id"] = "fghij-67890".into();
     record["pids"]["doi"]["identifier"] = "10.1234/abcde-12345".into();
     record["files"] = serde_json::json!({
         "enabled": true,
@@ -1467,6 +1471,25 @@ fn invenio(body: &[u8], md5: &str) -> Result<Routes> {
     let handle = r#"{"responseCode":1,"handle":"10.1234/abcde-12345","values":[{"index":1,"type":"URL","data":{"format":"string","value":"https://rdm.example.org/doi/10.1234/abcde-12345"}}]}"#;
     Routes::start(vec![
         (RDM_RECORD.to_owned(), answer(&record)?),
+        (
+            "/rdm.example.org/records/fghij-67890".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "text/html")],
+                b"<html><title>rows</title></html>",
+            ),
+        ),
+        (
+            RDM_CONCEPT.to_owned(),
+            reply(
+                "302 Found",
+                &[
+                    ("Location", &format!("https:/{RDM_RECORD}")),
+                    ("Content-Length", "0"),
+                ],
+                b"",
+            ),
+        ),
         (
             format!("{RDM_RECORD}/files/rows.csv/content"),
             file(body, "\"r1\""),
@@ -1552,6 +1575,36 @@ fn an_invenio_record_page_and_doi_are_known_by_one_request() -> Result {
             .collect();
         assert_eq!(resolving, wanted.iter().collect::<Vec<_>>(), "{reference}");
     }
+    Ok(())
+}
+
+/// a pasted page of a record's every version, whose api answer redirects to the newest one, is
+/// that newest record, and data.toml keeps the page, so an upgrade takes a newer one.
+#[test]
+fn an_invenio_page_of_every_version_pins_the_newest() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = invenio(ROWS, &md5_hex(ROWS))?;
+    let page = "https://rdm.example.org/records/fghij-67890";
+    let output = command(&sandbox, &routes, &["add", page, "--as", "rows"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        format!("[datasets.rows]\nref = \"{page}\"\n")
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(
+        lock.contains("resolved = \"invenio:rdm.example.org/abcde-12345\""),
+        "{lock}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("data/rows/rows.csv"))?, ROWS);
+    assert_eq!(
+        routes.targets(),
+        [
+            RDM_CONCEPT.to_owned(),
+            RDM_RECORD.to_owned(),
+            format!("{RDM_RECORD}/files/rows.csv/content")
+        ]
+    );
     Ok(())
 }
 
