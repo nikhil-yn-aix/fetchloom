@@ -50,9 +50,10 @@ pub(crate) struct Survey {
     /// copy every project shares open to an edit.
     pub(crate) writable: HashSet<String>,
     /// files read-only with no other name, as a copy of the data folder that kept no links leaves
-    /// a hardlink fetchloom placed: the scan's on unix, those of the hardlinks `look_through_links`
-    /// opens on windows.
-    alone: Vec<String>,
+    /// a hardlink fetchloom placed, each path ended by a nul, which no path holds: the scan's on
+    /// unix, those of the hardlinks `look_through_links` opens on windows. one buffer for all
+    /// costs a scan of thousands of clones or copies no allocation for each.
+    alone: String,
     /// `alone` as a set, gathered the first time a hardlink's record asks, and dropped when a path
     /// takes another spelling.
     alone_index: OnceLock<HashSet<String>>,
@@ -505,7 +506,7 @@ impl Survey {
             if winapi_util::file::information(&handle)
                 .is_ok_and(|information| information.number_of_links() == 1)
             {
-                self.alone.push(path.clone());
+                push_alone(&mut self.alone, path);
             }
         }
     }
@@ -706,14 +707,23 @@ impl Survey {
     /// is not, though a copy of it is.
     pub(crate) fn is_alone(&self, path: &str) -> bool {
         self.alone_index
-            .get_or_init(|| self.alone.iter().cloned().collect())
+            .get_or_init(|| {
+                self.alone
+                    .split_terminator('\0')
+                    .map(str::to_owned)
+                    .collect()
+            })
             .contains(path)
     }
 
     /// carries what the scan found of the file at `from` alone to `to`, its other spelling.
     fn moved_alone(&mut self, from: &str, to: &str) {
-        if let Some(at) = self.alone.iter().position(|path| path == from) {
-            to.clone_into(&mut self.alone[at]);
+        if self.is_alone(from) {
+            let mut moved = String::with_capacity(self.alone.len() + to.len());
+            for path in self.alone.split_terminator('\0') {
+                push_alone(&mut moved, if path == from { to } else { path });
+            }
+            self.alone = moved;
             self.alone_index.take();
         }
     }
@@ -1167,10 +1177,16 @@ struct Scanned {
     /// every other entry: folders, links and special files.
     entries: HashMap<String, Entry>,
     writable: HashSet<String>,
-    /// the read-only files with no other name, of which the survey keeps those the state records
-    /// as hardlinks. a hardlink that lost its other name stays read-only, while a dataset that
-    /// asks for copies has writable ones, so those cost nothing to list.
-    alone: Vec<String>,
+    /// the read-only files with no other name, as [`Survey`] keeps them. a hardlink that lost its
+    /// other name stays read-only, while a dataset that asks for copies has writable ones, so
+    /// those cost nothing to list.
+    alone: String,
+}
+
+/// adds `path` to `alone`, a list of paths each ended by a nul.
+fn push_alone(alone: &mut String, path: &str) {
+    alone.push_str(path);
+    alone.push('\0');
 }
 
 /// whether a file `metadata` describes is read-only with no other name. unix counts names in
@@ -1270,7 +1286,7 @@ fn scan_pending(
                 scanned.writable.insert(path.clone());
             }
             if alone {
-                scanned.alone.push(path.clone());
+                push_alone(&mut scanned.alone, &path);
             }
             scanned.found.insert(path, look);
         }
@@ -1318,7 +1334,7 @@ fn way_down(
                 scanned.writable.insert(path.clone());
             }
             if read_only_alone(&found) {
-                scanned.alone.push(path.clone());
+                push_alone(&mut scanned.alone, &path);
             }
             scanned.found.insert(path, Look::of(&found));
         } else if kind.is_symlink() {
