@@ -819,7 +819,12 @@ fn a_full_reply_replaces_saved_ranges_when_prefix_empty() {
 fn terminal_stream_failures_win_in_either_arrival_order() {
     let url = Url::parse("https://example.org/file").unwrap();
     for terminal_first in [false, true] {
-        let terminal = failure::refusal(&url, StatusCode::FORBIDDEN, &header::HeaderMap::new());
+        let terminal = failure::refusal(
+            &url,
+            StatusCode::FORBIDDEN,
+            &header::HeaderMap::new(),
+            |_| None,
+        );
         let transient = failure::transient("a connection broke".to_owned());
         let failures = if terminal_first {
             [terminal, transient]

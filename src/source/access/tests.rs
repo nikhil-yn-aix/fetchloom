@@ -471,3 +471,18 @@ fn a_refusal_names_the_account_whose_key_reaches_its_host() {
         assert_eq!(account_at(host), account, "{host}");
     }
 }
+
+/// a source's key goes to its own api, the first origin its resolver asks, or for an
+/// installation named by its reference, to that installation alone.
+#[test]
+fn every_key_goes_to_its_sources_own_api() {
+    for access in ALL {
+        let Some(key) = access.key else {
+            continue;
+        };
+        match key.host {
+            Some(host) => assert_eq!(access.api.hosts().next(), Some(host), "{}", access.name),
+            None => assert!(matches!(access.api, Origins::Written), "{}", access.name),
+        }
+    }
+}

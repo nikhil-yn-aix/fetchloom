@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use url::Url;
 
-use crate::account::Account;
+use crate::account::{self, Account, KeyShape};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Extra, Response};
 
@@ -22,7 +22,8 @@ pub(crate) struct Access {
     pub(crate) api: Origins,
     /// where each listed file's link may point.
     pub(crate) files: Origins,
-    pub(crate) key: Option<KeyShape>,
+    /// the key it takes, which goes to its api alone.
+    pub(crate) key: Option<&'static KeyShape>,
     /// hosts of the source's own site besides its api and the hosts its key goes to, such as
     /// its pages and download hosts, whose refusal names its account.
     pub(crate) sites: &'static [&'static str],
@@ -41,19 +42,6 @@ pub(crate) enum Origins {
     Written,
     /// anything the network's own checks let through, as a plain link's.
     Public,
-}
-
-/// the key a source takes: the header it goes in and how its value is made from the key. it goes
-/// to the source's first api origin and the hosts `every_hop` names.
-pub(crate) struct KeyShape {
-    pub(crate) header: &'static str,
-    pub(crate) value: fn(&str) -> String,
-    /// the variables that hold it, in the order they are read.
-    pub(crate) env: &'static [&'static str],
-    /// hosts the key goes to on every hop, besides the api's.
-    pub(crate) every_hop: &'static [&'static str],
-    /// the request on the api's origin that says whose key it is.
-    pub(crate) check: Option<&'static str>,
 }
 
 /// how requests to a source's hosts are spaced.
@@ -109,19 +97,11 @@ fn fixed_holds(origin: &str, url: &Url) -> bool {
 }
 
 impl Access {
-    /// the host a key for this source goes to: its api's own.
-    pub(crate) fn key_host(&self) -> Option<&'static str> {
-        self.api.hosts().next()
-    }
-
     /// whether a refusal from `host`, without a `www.` before it, is this source's: where its
     /// key goes, or its own site.
     fn answers_at(&self, host: &str) -> bool {
-        self.key_host() == Some(host)
-            || self
-                .key
-                .as_ref()
-                .is_some_and(|key| key.every_hop.contains(&host))
+        self.key
+            .is_some_and(|key| key.host == Some(host) || key.every_hop.contains(&host))
             || self.sites.contains(&host)
     }
 }
@@ -133,14 +113,6 @@ fn no_page(_: &Url) -> bool {
 /// whether `url`'s host is one of `hosts`.
 fn on(url: &Url, hosts: &[&str]) -> bool {
     url.host_str().is_some_and(|host| hosts.contains(&host))
-}
-
-fn bearer(token: &str) -> String {
-    format!("Bearer {token}")
-}
-
-fn raw(token: &str) -> String {
-    token.to_owned()
 }
 
 /// a link fetchloom downloads as it is.
@@ -169,13 +141,7 @@ pub(crate) static ZENODO: Access = Access {
     name: "zenodo",
     api: Origins::Fixed(&["https://zenodo.org"]),
     files: Origins::Fixed(&["https://zenodo.org"]),
-    key: Some(KeyShape {
-        header: "authorization",
-        value: bearer,
-        env: &["ZENODO_TOKEN"],
-        every_hop: &[],
-        check: Some("/api/deposit/depositions?size=1"),
-    }),
+    key: Some(&account::ZENODO_KEY),
     sites: &[],
     pages: |url| on(url, &["zenodo.org", "www.zenodo.org"]),
     pace: &[],
@@ -185,13 +151,7 @@ pub(crate) static DRYAD: Access = Access {
     name: "dryad",
     api: Origins::Fixed(&["https://datadryad.org"]),
     files: Origins::Fixed(&["https://datadryad.org"]),
-    key: Some(KeyShape {
-        header: "authorization",
-        value: bearer,
-        env: &["DRYAD_TOKEN"],
-        every_hop: &[],
-        check: Some("/api/v2/test"),
-    }),
+    key: Some(&account::DRYAD_KEY),
     sites: &[],
     pages: |url| on(url, &["datadryad.org", "www.datadryad.org"]),
     pace: &[],
@@ -212,14 +172,7 @@ pub(crate) static GITHUB: Access = Access {
     // only the API, never github.com or the storage a download is sent on to
     api: Origins::Fixed(&["https://api.github.com"]),
     files: Origins::Fixed(&["https://github.com"]),
-    key: Some(KeyShape {
-        header: "authorization",
-        value: bearer,
-        env: &["GH_TOKEN", "GITHUB_TOKEN"],
-        every_hop: &[],
-        // any key may read the limits, an installation's key from a CI run too
-        check: Some("/rate_limit"),
-    }),
+    key: Some(&account::GITHUB_KEY),
     sites: &[],
     pages: no_page,
     pace: &[],
@@ -230,13 +183,7 @@ pub(crate) static GITLAB: Access = Access {
     api: Origins::Fixed(&["https://gitlab.com"]),
     // a release links its files on any host
     files: Origins::Public,
-    key: Some(KeyShape {
-        header: "authorization",
-        value: bearer,
-        env: &["GITLAB_TOKEN"],
-        every_hop: &[],
-        check: Some("/api/v4/user"),
-    }),
+    key: Some(&account::GITLAB_KEY),
     sites: &[],
     pages: no_page,
     pace: &[],
@@ -314,13 +261,7 @@ pub(crate) static FIGSHARE: Access = Access {
     api: Origins::Fixed(&["https://api.figshare.com"]),
     // an article's files download from wherever its answer says
     files: Origins::Public,
-    key: Some(KeyShape {
-        header: "authorization",
-        value: |token| format!("token {token}"),
-        env: &["FIGSHARE_TOKEN"],
-        every_hop: &[],
-        check: Some("/v2/account"),
-    }),
+    key: Some(&account::FIGSHARE_KEY),
     sites: &["figshare.com", "ndownloader.figshare.com"],
     pages: |url| {
         url.host_str().is_some_and(super::figshare::is_portal)
@@ -333,13 +274,7 @@ pub(crate) static DATAVERSE: Access = Access {
     name: "dataverse",
     api: Origins::Written,
     files: Origins::Written,
-    key: Some(KeyShape {
-        header: "x-dataverse-key",
-        value: raw,
-        env: &["DATAVERSE_API_TOKEN"],
-        every_hop: &[],
-        check: Some("/api/users/:me"),
-    }),
+    key: Some(&account::DATAVERSE_KEY),
     sites: &[],
     pages: no_page,
     pace: &[],
@@ -349,15 +284,7 @@ pub(crate) static OSF: Access = Access {
     name: "osf",
     api: Origins::Fixed(&["https://api.osf.io"]),
     files: Origins::Fixed(&["https://osf.io", "https://files.osf.io"]),
-    // osf's download links sit on osf.io and send a person on to files.osf.io, both osf's own,
-    // which need the key for a private file
-    key: Some(KeyShape {
-        header: "authorization",
-        value: bearer,
-        env: &["OSF_TOKEN"],
-        every_hop: &["osf.io", "files.osf.io"],
-        check: Some("/v2/users/me/"),
-    }),
+    key: Some(&account::OSF_KEY),
     sites: &[],
     pages: |url| on(url, &["osf.io", "www.osf.io"]),
     pace: &[],
@@ -367,13 +294,7 @@ pub(crate) static HUGGING_FACE: Access = Access {
     name: "hugging face",
     api: Origins::Fixed(&["https://huggingface.co"]),
     files: Origins::Fixed(&["https://huggingface.co"]),
-    key: Some(KeyShape {
-        header: "authorization",
-        value: bearer,
-        env: &["HF_TOKEN"],
-        every_hop: &[],
-        check: Some("/api/whoami-v2"),
-    }),
+    key: Some(&account::HUGGING_FACE_KEY),
     sites: &["hf.co"],
     pages: |url| on(url, &["huggingface.co", "www.huggingface.co", "hf.co"]),
     pace: &[],
@@ -383,14 +304,7 @@ pub(crate) static KAGGLE: Access = Access {
     name: "kaggle",
     api: Origins::Fixed(&["https://api.kaggle.com"]),
     files: Origins::Fixed(&["https://api.kaggle.com"]),
-    // a legacy key goes with its username, so kaggle's own reading makes the value
-    key: Some(KeyShape {
-        header: "authorization",
-        value: bearer,
-        env: &["KAGGLE_API_TOKEN"],
-        every_hop: &[],
-        check: Some("/v1/hello"),
-    }),
+    key: Some(&account::KAGGLE_KEY),
     sites: &["kaggle.com"],
     pages: |url| on(url, &["kaggle.com", "www.kaggle.com"]),
     pace: &[],
@@ -461,14 +375,7 @@ pub(crate) static S2: Access = Access {
     // a paper's pdf is wherever its answer links, a dataset's files on S3 with a signature
     files: Origins::Public,
     // the API alone: the links it gives to its files on S3 carry their own signature
-    key: Some(KeyShape {
-        header: "x-api-key",
-        value: raw,
-        env: &["S2_API_KEY"],
-        every_hop: &[],
-        // any request with a key it does not know is refused with 403
-        check: Some("/datasets/v1/release/latest"),
-    }),
+    key: Some(&account::S2_KEY),
     sites: &[],
     pages: |url| {
         on(

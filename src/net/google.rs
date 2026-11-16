@@ -631,7 +631,12 @@ impl Net {
         super::pace::Paces::heard(ticket, limits, Instant::now());
         let status = response.status();
         if failure::is_transient(status) {
-            return Err(failure::refusal(url, status, response.headers()));
+            return Err(failure::refusal(
+                url,
+                status,
+                response.headers(),
+                self.rules.account_at,
+            ));
         }
         let body = self
             .read_body(

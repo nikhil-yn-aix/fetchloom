@@ -1366,7 +1366,7 @@ impl Net {
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
             && response.url().origin() != from.origin()
             && (self.rules.refused_download)(from, status.as_u16()).is_none()
-            && crate::source::access::account_at(host(from)).is_none()
+            && (self.rules.account_at)(host(from)).is_none()
         {
             let carried = response.extensions().get::<super::site::Sent>().is_some();
             return Err(Failure::Final(failure::moved_refusal(
@@ -1375,6 +1375,7 @@ impl Net {
                 status,
                 response.headers(),
                 carried,
+                self.rules.account_at,
             )));
         }
         Ok(Ok(response))

@@ -342,7 +342,7 @@ impl Net {
         {
             return Failure::Final(error);
         }
-        refusal(url, status, headers)
+        refusal(url, status, headers, self.rules.account_at)
     }
 
     /// how often a request that stops making progress is tried again, as `FETCHLOOM_RETRIES`
@@ -435,7 +435,12 @@ pub(super) fn broke(url: &Url, what: &str, err: &reqwest::Error) -> Failure {
 
 /// a status that ends the download, or a transient failure to retry. a 429 whose limit resets
 /// soon is waited out; one that resets later asks for that wait, which fails as a rate limit.
-pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Failure {
+pub(super) fn refusal(
+    url: &Url,
+    status: StatusCode,
+    headers: &HeaderMap,
+    account_at: fn(&str) -> Option<crate::account::Account>,
+) -> Failure {
     let code = status.as_u16();
     if is_transient(status) {
         let reason = format!("{} answered {code}", host(url));
@@ -469,7 +474,7 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
                 format!("{host} refused access to {} ({code})", Shown(url)),
             );
             // any other website is offered its own sign-in by `Net::refused` before this
-            match crate::source::access::account_at(&host) {
+            match account_at(&host) {
                 Some(_) if url.scheme() != "https" => error.help(
                     "fetchloom sends a key only over https, so none goes with this http link: ask its owner for an https one",
                 ),
@@ -521,6 +526,7 @@ pub(super) fn moved_refusal(
     status: StatusCode,
     headers: &HeaderMap,
     carried: bool,
+    account_at: fn(&str) -> Option<crate::account::Account>,
 ) -> Error {
     let named = |url: &Url| {
         let host = host(url).to_ascii_lowercase();
@@ -552,7 +558,7 @@ pub(super) fn moved_refusal(
         .and_then(|value| value.split_whitespace().next())
         .is_some_and(|scheme| scheme.trim_end_matches(',').eq_ignore_ascii_case("bearer"));
     let command = crate::account::Account::Login(refusing.clone()).command();
-    let sign_in = if let Some(account) = crate::source::access::account_at(host(answered)) {
+    let sign_in = if let Some(account) = account_at(host(answered)) {
         format!(
             "if it needs an account, sign in with `{}`",
             account.command()
@@ -1207,7 +1213,12 @@ mod tests {
             StatusCode::TEMPORARY_REDIRECT,
             StatusCode::PERMANENT_REDIRECT,
         ] {
-            let Failure::Final(error) = refusal(&url, status, &HeaderMap::new()) else {
+            let Failure::Final(error) = refusal(
+                &url,
+                status,
+                &HeaderMap::new(),
+                crate::source::access::account_at,
+            ) else {
                 panic!("a {status} with no address must not be retried");
             };
             assert_eq!(error.kind, Kind::NetworkRefused, "{status}");
@@ -1223,8 +1234,12 @@ mod tests {
                 Some("ask its owner for a direct download link")
             );
         }
-        let Failure::Final(error) = refusal(&url, StatusCode::NOT_MODIFIED, &HeaderMap::new())
-        else {
+        let Failure::Final(error) = refusal(
+            &url,
+            StatusCode::NOT_MODIFIED,
+            &HeaderMap::new(),
+            crate::source::access::account_at,
+        ) else {
             panic!("a 304 is no redirect");
         };
         assert_eq!(error.kind, Kind::NetworkStatus);
@@ -1237,7 +1252,12 @@ mod tests {
         for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
             let refused = |link: &str| {
                 let url = Url::parse(link).unwrap();
-                let Failure::Final(error) = refusal(&url, status, &HeaderMap::new()) else {
+                let Failure::Final(error) = refusal(
+                    &url,
+                    status,
+                    &HeaderMap::new(),
+                    crate::source::access::account_at,
+                ) else {
                     panic!("a {status} to {link} must not be retried");
                 };
                 assert_eq!(error.kind, Kind::AuthRequired, "{link}");
@@ -1303,7 +1323,12 @@ mod tests {
         let url = Url::parse("https://example.org/data.csv").unwrap();
         for code in [400, 402, 418, 422, 451] {
             let status = StatusCode::from_u16(code).unwrap();
-            let Failure::Final(error) = refusal(&url, status, &HeaderMap::new()) else {
+            let Failure::Final(error) = refusal(
+                &url,
+                status,
+                &HeaderMap::new(),
+                crate::source::access::account_at,
+            ) else {
                 panic!("a permanent HTTP {code} must not be retried");
             };
             assert_eq!(error.kind, Kind::NetworkStatus);
@@ -1349,7 +1374,7 @@ mod tests {
                 reason,
                 retry_after,
                 ..
-            } = refusal(&url, status, &headers)
+            } = refusal(&url, status, &headers, crate::source::access::account_at)
             else {
                 panic!("HTTP {code} must retry");
             };
@@ -1366,7 +1391,9 @@ mod tests {
         ] {
             let status = StatusCode::from_u16(code).unwrap();
             assert!(!is_transient(status), "{code}");
-            let Failure::Final(error) = refusal(&url, status, &headers) else {
+            let Failure::Final(error) =
+                refusal(&url, status, &headers, crate::source::access::account_at)
+            else {
                 panic!("HTTP {code} must not retry");
             };
             assert_eq!(error.kind, kind);
@@ -1381,7 +1408,12 @@ mod tests {
         assert!(is_transient(StatusCode::TOO_MANY_REQUESTS));
         let mut headers = HeaderMap::new();
         assert!(matches!(
-            refusal(&url, StatusCode::TOO_MANY_REQUESTS, &headers),
+            refusal(
+                &url,
+                StatusCode::TOO_MANY_REQUESTS,
+                &headers,
+                crate::source::access::account_at
+            ),
             Failure::Transient {
                 retry_after: None,
                 ..
@@ -1389,13 +1421,21 @@ mod tests {
         ));
         headers.insert(header::RETRY_AFTER, "120".parse().unwrap());
         assert!(matches!(
-            refusal(&url, StatusCode::TOO_MANY_REQUESTS, &headers),
+            refusal(
+                &url,
+                StatusCode::TOO_MANY_REQUESTS,
+                &headers,
+                crate::source::access::account_at
+            ),
             Failure::Limited { .. }
         ));
         headers.insert(header::RETRY_AFTER, "121".parse().unwrap());
-        let Failure::Transient { retry_after, .. } =
-            refusal(&url, StatusCode::TOO_MANY_REQUESTS, &headers)
-        else {
+        let Failure::Transient { retry_after, .. } = refusal(
+            &url,
+            StatusCode::TOO_MANY_REQUESTS,
+            &headers,
+            crate::source::access::account_at,
+        ) else {
             panic!("a reset beyond the rate limit budget must not wait");
         };
         assert_eq!(retry_after, Some(Duration::from_secs(121)));

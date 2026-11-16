@@ -711,7 +711,7 @@ impl Net {
         let code = status.as_u16();
         let host = url.host_str()?.to_ascii_lowercase();
         if (self.rules.refused_download)(url, code).is_some()
-            || crate::source::access::account_at(&host).is_some()
+            || (self.rules.account_at)(&host).is_some()
         {
             return None;
         }

@@ -372,8 +372,8 @@ impl Account {
         }
     }
 
-    /// the header this account's key travels in, and the host it may go to, as the source's
-    /// descriptor names them.
+    /// the header this account's key travels in, and the host it may go to, as its key's shape
+    /// names them.
     pub(crate) fn credential(&self, found: &Found) -> Option<Credential> {
         let token = found.secret.trim();
         let (host, header, value, every_hop) = match self {
@@ -387,7 +387,7 @@ impl Account {
                 (host.to_owned(), "authorization", value, false)
             }
             Account::Dataverse(host) => {
-                let key = crate::source::access::DATAVERSE.key.as_ref()?;
+                let key = self.key()?;
                 (host.clone(), key.header, (key.value)(token), false)
             }
             // a login answers its host on every hop, and every port of it from a line without
@@ -402,14 +402,8 @@ impl Account {
                 )
             }
             source => {
-                let access = crate::source::access::of_account(source)?;
-                let key = access.key.as_ref()?;
-                (
-                    access.key_host()?.to_owned(),
-                    key.header,
-                    (key.value)(token),
-                    false,
-                )
+                let key = source.key()?;
+                (key.host?.to_owned(), key.header, (key.value)(token), false)
             }
         };
         let every_port = matches!(self, Account::Login(host) if !names_a_port(host));
@@ -430,15 +424,13 @@ impl Account {
         })
     }
 
-    /// every host this account's key goes to: its api's, and the hosts its source's descriptor
-    /// sends it to on every hop, as osf's download hosts.
+    /// every host this account's key goes to: its own, and the hosts its key's shape sends it to
+    /// on every hop, as osf's download hosts.
     pub(crate) fn credentials(&self, found: &Found) -> Vec<Credential> {
         let Some(credential) = self.credential(found) else {
             return Vec::new();
         };
-        let every_hop = crate::source::access::of_account(self)
-            .and_then(|access| access.key.as_ref())
-            .map_or(&[][..], |key| key.every_hop);
+        let every_hop = self.key().map_or(&[][..], |key| key.every_hop);
         let mut all = vec![credential.clone()];
         all.extend(every_hop.iter().map(|host| Credential {
             host: (*host).to_owned(),
@@ -448,7 +440,7 @@ impl Account {
         all
     }
 
-    /// a request that proves a key works, where the source has one, at the path its descriptor
+    /// a request that proves a key works, where the source has one, at the path its key's shape
     /// names, and how to read who the key belongs to.
     pub(crate) fn check(&self) -> Option<Check> {
         let who: fn(&serde_json::Value) -> Option<String> = match self {
@@ -470,21 +462,14 @@ impl Account {
             Account::Zenodo | Account::GitHub | Account::S2 | Account::Login(_) => |_| None,
         };
         let url = match self {
-            Account::Dataverse(host) => format!(
-                "https://{host}{}",
-                crate::source::access::DATAVERSE.key.as_ref()?.check?
-            ),
+            Account::Dataverse(host) => format!("https://{host}{}", self.key()?.check?),
             Account::Login(host) if host == EARTHDATA => {
                 "https://urs.earthdata.nasa.gov/api/users/tokens".to_owned()
             }
             Account::Login(_) => return None,
             source => {
-                let access = crate::source::access::of_account(source)?;
-                format!(
-                    "https://{}{}",
-                    access.key_host()?,
-                    access.key.as_ref()?.check?
-                )
+                let key = source.key()?;
+                format!("https://{}{}", key.host?, key.check?)
             }
         };
         Some(Check {
@@ -524,8 +509,7 @@ impl Account {
             })
         };
         let named = || {
-            crate::source::access::of_account(self)
-                .and_then(|access| access.key.as_ref())
+            self.key()
                 .and_then(|key| key.env.iter().find_map(|name| set(name)))
         };
         match self {

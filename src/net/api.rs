@@ -376,7 +376,12 @@ impl Net {
         let status = response.status();
         tracing::debug!(url = %crate::shown::Shown(url), status = status.as_u16(), "answer");
         if failure::is_transient(status) {
-            return Err(failure::refusal(url, status, response.headers()));
+            return Err(failure::refusal(
+                url,
+                status,
+                response.headers(),
+                self.rules.account_at,
+            ));
         }
         let text = |name| {
             response

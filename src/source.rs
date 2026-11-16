@@ -718,6 +718,7 @@ pub(crate) fn rules() -> net::Rules {
                 Ok(drive::file(&net, id).await?.name)
             })
         },
+        account_at: access::account_at,
     }
 }
 

@@ -786,7 +786,9 @@ fn a_websites_refusal_offers_a_sign_in_where_a_key_could_go() {
         origins: vec![Url::parse("http://lab.example:8080").unwrap().origin()],
         ..Allowed::default()
     };
-    let net = net(Vec::new()).with_allowed_origins(allowed);
+    let net = net(Vec::new())
+        .with_allowed_origins(allowed)
+        .with_rules(crate::source::rules());
     let asking = |scheme: &str| {
         let mut headers = HeaderMap::new();
         if !scheme.is_empty() {

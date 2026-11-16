@@ -9,6 +9,7 @@ use url::Url;
 
 use super::google::DriveId;
 use super::{Net, Response};
+use crate::account::Account;
 use crate::error::Error;
 
 /// the answer of a rule that asks the network again before it can say.
@@ -43,6 +44,8 @@ pub(crate) struct Rules {
     pub(crate) drive_search: for<'a> fn(&'a Net, &'a DriveId) -> Asking<'a, ()>,
     /// the name drive's api gives a file, by its id.
     pub(crate) drive_name: for<'a> fn(&'a Net, &'a str) -> Asking<'a, String>,
+    /// the account whose source answered from a host, for a refusal that names no account.
+    pub(crate) account_at: fn(&str) -> Option<Account>,
 }
 
 /// a file a source links only for a while, by the stable link data.lock keeps: the request that
@@ -75,6 +78,7 @@ impl Default for Rules {
             lfs_link: |_| None,
             drive_search: unsearched,
             drive_name: unnamed,
+            account_at: |_| None,
         }
     }
 }
