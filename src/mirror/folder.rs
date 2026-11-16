@@ -582,6 +582,8 @@ pub(crate) struct Target {
     /// `tmp/` under them while it writes, which tells a later push whether it stopped.
     id: String,
     held: Option<(PathBuf, File)>,
+    /// the mirror's disk gives no locks, so this push writes without one, as add and sync do.
+    lockless: bool,
 }
 
 impl Target {
@@ -597,6 +599,7 @@ impl Target {
             sharded: false,
             id: push_id(),
             held: None,
+            lockless: false,
         };
         if state == State::Mirror {
             return Ok((target, false));
@@ -674,7 +677,7 @@ impl Target {
     /// name, as one started at the same moment can draw the same id, this push takes a new id and
     /// leaves the other's lock as it is.
     fn hold(&mut self) -> io::Result<()> {
-        if self.held.is_some() {
+        if self.held.is_some() || self.lockless {
             return Ok(());
         }
         loop {
@@ -682,8 +685,16 @@ impl Target {
             match self.placer.create_file(&lock, false) {
                 Ok(file) => {
                     // a push that sweeps may hold it a moment to see whether it is free
-                    file.lock()?;
-                    self.held = Some((lock, file));
+                    match crate::volume::lock(&file) {
+                        Ok(()) => self.held = Some((lock, file)),
+                        // its files then go by their age alone, as a stopped push's do
+                        Err(err) if crate::volume::gives_no_locks(&err) => {
+                            drop(file);
+                            let _ = self.placer.delete_file(&lock);
+                            self.lockless = true;
+                        }
+                        Err(err) => return Err(err),
+                    }
                     return Ok(());
                 }
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
@@ -1027,7 +1038,13 @@ fn is_id(text: &str) -> bool {
 
 /// whether nobody holds the lock at `path`, so the push that took it stopped without removing it.
 fn unlocked(path: &Path) -> bool {
-    read_unfollowed(path).is_ok_and(|file| file.try_lock().is_ok())
+    // nfs and smb lock byte ranges, so an exclusive lock needs a handle open to write; another
+    // account's lock file only opens to read, which is enough on a local disk
+    let file = match crate::volume::open_unfollowed(path, false) {
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => read_unfollowed(path),
+        opened => opened,
+    };
+    file.is_ok_and(|file| crate::volume::try_lock(&file).is_ok())
 }
 
 /// whether `name` is a plain file of `size` bytes, which a mirror's reader takes for its bytes
@@ -1930,6 +1947,42 @@ pub(crate) mod tests {
             ]
         );
         drop(held);
+    }
+
+    /// nfs and smb lock byte ranges, so a lock through a handle open only to read is refused: a
+    /// stopped push's lock is taken through one open to write, and its files still go at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_pushs_files_go_where_locks_need_a_writer() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        let (mut target, _) = Target::open(&root, std::sync::Arc::default()).unwrap();
+        target.prepare(&[]).unwrap();
+        let tmp = root.join(TMP);
+        let stopped = "0123456789abcdef";
+        fs::write(tmp.join(format!(".{stopped}{LOCK}")), b"").unwrap();
+        let part = tmp.join(format!(".{stopped}-00000000000000aa.part"));
+        fs::write(&part, b"0123456789").unwrap();
+        crate::volume::LOCKS_NEED_A_WRITER.set(true);
+        let swept = target.sweep(SystemTime::now());
+        crate::volume::LOCKS_NEED_A_WRITER.set(false);
+        assert_eq!(swept, (1, 10));
+        assert!(!part.exists());
+    }
+
+    /// a disk that gives no locks, as lustre mounted with noflock, takes a push as add and sync
+    /// run there: without its lock, rather than failing to write anything.
+    #[test]
+    fn a_push_writes_on_a_disk_that_gives_no_locks() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        let (mut target, _) = Target::open(&root, std::sync::Arc::default()).unwrap();
+        crate::volume::NO_LOCKS.set(true);
+        let prepared = target.prepare(&[]);
+        crate::volume::NO_LOCKS.set(false);
+        prepared.unwrap();
+        let lock = root.join(TMP).join(format!(".{}{LOCK}", target.id));
+        assert!(!lock.exists());
     }
 
     /// a push that drew the id of a push still writing, as two started together can, takes

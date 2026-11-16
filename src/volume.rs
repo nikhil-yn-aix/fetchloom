@@ -467,6 +467,49 @@ pub(crate) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
     open_plain(path, &mut options)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// whether [`try_lock`] and [`lock`] act as a disk that gives no locks does, as lustre
+    /// mounted with noflock answers every flock.
+    pub(crate) static NO_LOCKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    /// whether [`try_lock`] acts as nfs and smb do, whose flock locks byte ranges and so refuses
+    /// an exclusive lock through a handle open only to read.
+    pub(crate) static LOCKS_NEED_A_WRITER: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// takes an exclusive lock on `lock` at once, as [`File::try_lock`] does.
+pub(crate) fn try_lock(lock: &File) -> Result<(), std::fs::TryLockError> {
+    #[cfg(test)]
+    if NO_LOCKS.get() {
+        return Err(std::fs::TryLockError::Error(
+            io::ErrorKind::Unsupported.into(),
+        ));
+    }
+    #[cfg(all(test, unix))]
+    if LOCKS_NEED_A_WRITER.get()
+        && rustix::fs::fcntl_getfl(lock).is_ok_and(|flags| {
+            !flags.intersects(rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::RDWR)
+        })
+    {
+        return Err(std::fs::TryLockError::Error(rustix::io::Errno::BADF.into()));
+    }
+    lock.try_lock()
+}
+
+/// takes an exclusive lock on `lock`, waiting for it, as [`File::lock`] does.
+pub(crate) fn lock(lock: &File) -> io::Result<()> {
+    #[cfg(test)]
+    if NO_LOCKS.get() {
+        return Err(io::ErrorKind::Unsupported.into());
+    }
+    lock.lock()
+}
+
 /// shares the no-follow checks so reading an object never needs write access to its bytes.
 pub(crate) fn read_unfollowed(path: &Path) -> io::Result<File> {
     open_plain(path, OpenOptions::new().read(true))
