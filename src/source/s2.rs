@@ -28,21 +28,16 @@ const FORMS: &str = "s2:<paper id>, or an id from another index after its prefix
 /// what to give for a page of semantic scholar's that is no paper's, as its search page.
 pub(super) const PAGES: &str = "paste a paper's page, as https://www.semanticscholar.org/paper/12b056fd90c1300c44c4a8cff9f01f0c7a75cab4, or write its id, as s2:DOI:10.1371/journal.pcbi.1003285";
 
-/// how far apart requests paced as `name` start: semantic scholar's API takes one a second from a
-/// key, its documented rate, and fetchloom asks three seconds apart without one, since every
-/// program without a key shares one pool.
-pub(super) fn spacing(name: &str) -> Option<Duration> {
-    (name == S2_HOST).then(|| spaced(keyed()))
+/// how far apart requests to semantic scholar's API start: it takes one a second from a key, its
+/// documented rate, and fetchloom asks three seconds apart without one, since every program
+/// without a key shares one pool.
+pub(super) fn spacing_now() -> Duration {
+    spaced(keyed())
 }
 
 /// the spacing of requests to semantic scholar's API, with a key or without one.
 fn spaced(keyed: bool) -> Duration {
     Duration::from_secs(if keyed { 1 } else { 3 })
-}
-
-/// how many requests paced as `name` may run at once: one for semantic scholar's API.
-pub(super) fn most_at_once(name: &str) -> Option<usize> {
-    (name == S2_HOST).then_some(1)
 }
 
 /// whether requests to semantic scholar's API carry a key, read once.

@@ -177,13 +177,32 @@ impl Catalog {
         }
     }
 
-    /// the catalog's first `limit` matches for `words`, in its own order.
+    /// what the catalog's source may ask.
+    fn access(self) -> &'static super::access::Access {
+        use super::access;
+        match self {
+            Catalog::Hf => &access::HUGGING_FACE,
+            Catalog::Kaggle => &access::KAGGLE,
+            Catalog::Zenodo => &access::ZENODO,
+            Catalog::Ena => &access::ENA,
+            Catalog::Geo => &access::GEO,
+            Catalog::Dandi => &access::DANDI,
+            Catalog::OpenNeuro => &access::OPENNEURO,
+            Catalog::Arxiv => &access::ARXIV,
+            Catalog::S2 => &access::S2,
+        }
+    }
+
+    /// the catalog's first `limit` matches for `words`, in its own order, asked only of its
+    /// source's own origins.
     async fn find(
         self,
         api: &impl Api,
         words: &str,
         limit: usize,
     ) -> Result<Vec<Candidate>, Error> {
+        let subject = format!("a search of {}", self.label());
+        let api = &super::access::Scoped::new(api, self.access(), None, subject);
         match self {
             Catalog::Hf => hugging_face(api, words, limit).await,
             Catalog::Kaggle => kaggle(api, words, limit).await,
@@ -612,6 +631,7 @@ pub(crate) async fn near(api: &impl Api, reference: &Reference) -> Option<Near> 
         _ => return None,
     };
     let url = url.ok()?;
+    let api = super::access::Scoped::new(api, reference.access(), None, reference.shown());
     let response = api.get_once(&url).await.ok()?;
     let ids: Vec<String> = match reference {
         Reference::HuggingFace(_) => super::json::<Vec<Owned>>(&url, &response)

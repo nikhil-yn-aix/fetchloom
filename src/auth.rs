@@ -234,24 +234,6 @@ impl Account {
         Ok(account)
     }
 
-    /// the source whose API answered from `host`, for a refusal that names no account.
-    pub(crate) fn from_host(host: &str) -> Option<Account> {
-        let host = host.to_ascii_lowercase();
-        let bare = host.trim_start_matches("www.");
-        Some(match bare {
-            "huggingface.co" | "hf.co" => Account::HuggingFace,
-            "kaggle.com" | "api.kaggle.com" => Account::Kaggle,
-            "zenodo.org" => Account::Zenodo,
-            "api.figshare.com" | "figshare.com" | "ndownloader.figshare.com" => Account::Figshare,
-            "api.osf.io" | "osf.io" | "files.osf.io" => Account::Osf,
-            "datadryad.org" => Account::Dryad,
-            "api.github.com" => Account::GitHub,
-            "gitlab.com" => Account::GitLab,
-            S2_HOST => Account::S2,
-            _ => return None,
-        })
-    }
-
     /// the name the index and the credential store use.
     pub(crate) fn id(&self) -> String {
         match self {
@@ -390,16 +372,11 @@ impl Account {
         }
     }
 
-    /// the header this account's key travels in, and the host it may go to.
+    /// the header this account's key travels in, and the host it may go to, as the source's
+    /// descriptor names them.
     pub(crate) fn credential(&self, found: &Found) -> Option<Credential> {
         let token = found.secret.trim();
         let (host, header, value, every_hop) = match self {
-            Account::HuggingFace => (
-                "huggingface.co".to_owned(),
-                "authorization",
-                bearer(token),
-                false,
-            ),
             Account::Kaggle => {
                 let (host, value) = kaggle::pasted(token)?;
                 // a legacy key goes with its username, as downloads send it
@@ -409,46 +386,10 @@ impl Account {
                     .map_or(value, |login| basic(login, token));
                 (host.to_owned(), "authorization", value, false)
             }
-            Account::Zenodo => (
-                "zenodo.org".to_owned(),
-                "authorization",
-                bearer(token),
-                false,
-            ),
-            Account::Figshare => (
-                "api.figshare.com".to_owned(),
-                "authorization",
-                format!("token {token}"),
-                false,
-            ),
-            Account::Osf => (
-                "api.osf.io".to_owned(),
-                "authorization",
-                bearer(token),
-                false,
-            ),
-            Account::Dryad => (
-                "datadryad.org".to_owned(),
-                "authorization",
-                bearer(token),
-                false,
-            ),
-            // only the API, never github.com or the storage a download is sent on to
-            Account::GitHub => (
-                "api.github.com".to_owned(),
-                "authorization",
-                bearer(token),
-                false,
-            ),
-            Account::GitLab => (
-                "gitlab.com".to_owned(),
-                "authorization",
-                bearer(token),
-                false,
-            ),
-            // the API alone: the links it gives to its files on S3 carry their own signature
-            Account::S2 => (S2_HOST.to_owned(), "x-api-key", token.to_owned(), false),
-            Account::Dataverse(host) => (host.clone(), "x-dataverse-key", token.to_owned(), false),
+            Account::Dataverse(host) => {
+                let key = crate::source::access::DATAVERSE.key.as_ref()?;
+                (host.clone(), key.header, (key.value)(token), false)
+            }
             // a login answers its host on every hop, and every port of it from a line without
             // one, as curl reads netrc: earthdata sends a person through urs.earthdata.nasa.gov
             Account::Login(host) => {
@@ -458,6 +399,16 @@ impl Account {
                     "authorization",
                     basic(login, &found.secret),
                     true,
+                )
+            }
+            source => {
+                let access = crate::source::access::of_account(source)?;
+                let key = access.key.as_ref()?;
+                (
+                    access.key_host()?.to_owned(),
+                    key.header,
+                    (key.value)(token),
+                    false,
                 )
             }
         };
@@ -479,70 +430,62 @@ impl Account {
         })
     }
 
-    /// every host this account's key goes to. osf's download links sit on osf.io and send a
-    /// person on to files.osf.io, both osf's own, which need the key for a private file.
+    /// every host this account's key goes to: its api's, and the hosts its source's descriptor
+    /// sends it to on every hop, as osf's download hosts.
     pub(crate) fn credentials(&self, found: &Found) -> Vec<Credential> {
         let Some(credential) = self.credential(found) else {
             return Vec::new();
         };
-        let mut all = Vec::new();
-        if *self == Account::Osf {
-            for host in ["osf.io", "files.osf.io"] {
-                all.push(Credential {
-                    host: host.to_owned(),
-                    every_hop: true,
-                    ..credential.clone()
-                });
-            }
-        }
-        all.insert(0, credential);
+        let every_hop = crate::source::access::of_account(self)
+            .and_then(|access| access.key.as_ref())
+            .map_or(&[][..], |key| key.every_hop);
+        let mut all = vec![credential.clone()];
+        all.extend(every_hop.iter().map(|host| Credential {
+            host: (*host).to_owned(),
+            every_hop: true,
+            ..credential.clone()
+        }));
         all
     }
 
-    /// a request that proves a key works, where the source has one.
+    /// a request that proves a key works, where the source has one, at the path its descriptor
+    /// names, and how to read who the key belongs to.
     pub(crate) fn check(&self) -> Option<Check> {
-        let (url, who): (String, fn(&serde_json::Value) -> Option<String>) = match self {
-            Account::HuggingFace => ("https://huggingface.co/api/whoami-v2".into(), |v| {
-                text(&v["name"])
-            }),
-            Account::Zenodo => (
-                "https://zenodo.org/api/deposit/depositions?size=1".into(),
-                |_| None,
-            ),
-            Account::Figshare => ("https://api.figshare.com/v2/account".into(), |v| {
-                text(&v["email"]).or_else(|| text(&v["first_name"]))
-            }),
-            Account::Osf => ("https://api.osf.io/v2/users/me/".into(), |v| {
-                text(&v["data"]["attributes"]["full_name"])
-            }),
-            // any key may read the limits, an installation's key from a CI run too
-            Account::GitHub => ("https://api.github.com/rate_limit".into(), |_| None),
-            Account::GitLab => ("https://gitlab.com/api/v4/user".into(), |v| {
-                text(&v["username"])
-            }),
-            Account::Dryad => ("https://datadryad.org/api/v2/test".into(), |v| {
+        let who: fn(&serde_json::Value) -> Option<String> = match self {
+            Account::HuggingFace => |v| text(&v["name"]),
+            Account::Figshare => |v| text(&v["email"]).or_else(|| text(&v["first_name"])),
+            Account::Osf => |v| text(&v["data"]["attributes"]["full_name"]),
+            Account::GitLab => |v| text(&v["username"]),
+            Account::Dryad => |v| {
                 text(&v["message"]).map(|said| {
                     said.trim_start_matches("Welcome application owner ")
                         .to_owned()
                 })
-            }),
-            Account::Dataverse(host) => (format!("https://{host}/api/users/:me"), |v| {
-                text(&v["data"]["displayName"]).or_else(|| text(&v["data"]["identifier"]))
-            }),
-            Account::Login(host) if host == EARTHDATA => (
-                "https://urs.earthdata.nasa.gov/api/users/tokens".into(),
-                |_| None,
+            },
+            Account::Dataverse(_) => {
+                |v| text(&v["data"]["displayName"]).or_else(|| text(&v["data"]["identifier"]))
+            }
+            Account::Kaggle => |v| text(&v["userName"]),
+            // zenodo's, github's and semantic scholar's answers name nobody
+            Account::Zenodo | Account::GitHub | Account::S2 | Account::Login(_) => |_| None,
+        };
+        let url = match self {
+            Account::Dataverse(host) => format!(
+                "https://{host}{}",
+                crate::source::access::DATAVERSE.key.as_ref()?.check?
             ),
-            Account::Kaggle => ("https://api.kaggle.com/v1/hello".into(), |v| {
-                text(&v["userName"])
-            }),
-            // any request with a key it does not know is refused with 403, and the answer names
-            // nobody
-            Account::S2 => (
-                format!("https://{S2_HOST}/datasets/v1/release/latest"),
-                |_| None,
-            ),
+            Account::Login(host) if host == EARTHDATA => {
+                "https://urs.earthdata.nasa.gov/api/users/tokens".to_owned()
+            }
             Account::Login(_) => return None,
+            source => {
+                let access = crate::source::access::of_account(source)?;
+                format!(
+                    "https://{}{}",
+                    access.key_host()?,
+                    access.key.as_ref()?.check?
+                )
+            }
         };
         Some(Check {
             url: Url::parse(&url).ok()?,
@@ -580,18 +523,14 @@ impl Account {
                 login: None,
             })
         };
+        let named = || {
+            crate::source::access::of_account(self)
+                .and_then(|access| access.key.as_ref())
+                .and_then(|key| key.env.iter().find_map(|name| set(name)))
+        };
         match self {
-            Account::HuggingFace => set("HF_TOKEN").or_else(|| hf_file(var).and_then(file)),
+            Account::HuggingFace => named().or_else(|| hf_file(var).and_then(file)),
             Account::Kaggle => kaggle::locate(var),
-            Account::Zenodo => set("ZENODO_TOKEN").or_else(|| stored(&self.id())),
-            Account::Figshare => set("FIGSHARE_TOKEN").or_else(|| stored(&self.id())),
-            Account::Osf => set("OSF_TOKEN").or_else(|| stored(&self.id())),
-            Account::Dryad => set("DRYAD_TOKEN").or_else(|| stored(&self.id())),
-            Account::GitHub => set("GH_TOKEN")
-                .or_else(|| set("GITHUB_TOKEN"))
-                .or_else(|| stored(&self.id())),
-            Account::GitLab => set("GITLAB_TOKEN").or_else(|| stored(&self.id())),
-            Account::S2 => set("S2_API_KEY").or_else(|| stored(&self.id())),
             Account::Dataverse(host) => {
                 let named = var("DATAVERSE_URL")
                     .and_then(|value| value.into_string().ok())
@@ -613,6 +552,7 @@ impl Account {
                     login: Some(entry.login),
                 })
             }
+            _ => named().or_else(|| stored(&self.id())),
         }
     }
 
@@ -647,16 +587,11 @@ pub(crate) enum Home {
 
 /// every key fetchloom found, as the network sends them: each to its own host only.
 pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
-    let mut accounts = vec![
-        Account::HuggingFace,
-        Account::Zenodo,
-        Account::Figshare,
-        Account::Osf,
-        Account::Dryad,
-        Account::GitHub,
-        Account::GitLab,
-        Account::S2,
-    ];
+    // kaggle's keys are read below, a legacy key with its username
+    let mut accounts: Vec<Account> = Account::SOURCES
+        .into_iter()
+        .filter(|account| *account != Account::Kaggle)
+        .collect();
     // the index of saved keys is read once here, rather than again for each account
     let saved = store::saved(var);
     accounts.extend(
@@ -708,17 +643,7 @@ fn saved_dataverses(var: Var<'_>, saved: &BTreeMap<String, store::Place>) -> Vec
 /// every account worth listing in `auth`: the sources, and each dataverse and login host
 /// a key is known for.
 pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
-    let mut accounts = vec![
-        Account::HuggingFace,
-        Account::Kaggle,
-        Account::Zenodo,
-        Account::Figshare,
-        Account::Osf,
-        Account::Dryad,
-        Account::GitHub,
-        Account::GitLab,
-        Account::S2,
-    ];
+    let mut accounts = Account::SOURCES.to_vec();
     accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
     let mut logins: Vec<String> = netrc::read(var)
         .into_iter()
@@ -829,10 +754,6 @@ fn installation(url: &Url) -> Option<String> {
         Some(port) => format!("{host}:{port}"),
         None => host,
     })
-}
-
-fn bearer(token: &str) -> String {
-    format!("Bearer {token}")
 }
 
 pub(crate) fn basic(login: &str, password: &str) -> String {

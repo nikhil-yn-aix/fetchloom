@@ -21,12 +21,7 @@ const MOST_FOLDERS: usize = 64;
 
 /// NCBI asks a program without a key to send no more than 3 requests a second, so requests to
 /// its hosts start this far apart.
-const SPACING: Duration = Duration::from_millis(334);
-
-/// how far apart requests to `host` start, for a host that asks them to: NCBI's.
-pub(super) fn spacing(host: &str) -> Option<Duration> {
-    (host == "ncbi.nlm.nih.gov" || host.ends_with(".ncbi.nlm.nih.gov")).then_some(SPACING)
-}
+pub(super) const SPACING: Duration = Duration::from_millis(334);
 
 /// a GEO series, sample or platform, by its accession.
 #[derive(Clone, Debug, PartialEq, Eq)]

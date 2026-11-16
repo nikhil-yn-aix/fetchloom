@@ -394,7 +394,7 @@ async fn find(
 fn expected(context: &Context, candidate: &Candidate) -> Option<crate::net::estimate::Time> {
     use crate::net::estimate;
     let size = candidate.size?;
-    let hosts = candidate.reference.download_hosts();
+    let hosts: Vec<&str> = candidate.reference.access().files.hosts().collect();
     let name = crate::source::paced_as(hosts.first()?);
     let speed = hosts
         .iter()
@@ -404,8 +404,8 @@ fn expected(context: &Context, candidate: &Candidate) -> Option<crate::net::esti
         bytes: size,
         largest: candidate.largest.unwrap_or_default(),
         speed: Some(speed),
-        spacing: crate::source::spacing(&name),
-        most: crate::source::most_at_once(&name),
+        spacing: crate::source::access::spacing(&name),
+        most: crate::source::access::most_at_once(&name),
         ..estimate::Host::default()
     };
     estimate::time(&[host], super::fetch::limits(context))

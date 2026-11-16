@@ -190,11 +190,15 @@ fn arxivs_hosts_are_paced_together_and_others_alone() {
         let name = crate::source::paced_as(host);
         assert_eq!(name, "arxiv.org", "{host}");
         assert_eq!(
-            crate::source::spacing(&name),
+            crate::source::access::spacing(&name),
             Some(Duration::from_secs(3)),
             "{host}"
         );
-        assert_eq!(crate::source::most_at_once(&name), Some(1), "{host}");
+        assert_eq!(
+            crate::source::access::most_at_once(&name),
+            Some(1),
+            "{host}"
+        );
     }
     for host in [
         "storage.googleapis.com",
@@ -203,8 +207,8 @@ fn arxivs_hosts_are_paced_together_and_others_alone() {
     ] {
         let name = crate::source::paced_as(host);
         assert_eq!(name, host);
-        assert_eq!(crate::source::spacing(&name), None, "{host}");
-        assert_eq!(crate::source::most_at_once(&name), None, "{host}");
+        assert_eq!(crate::source::access::spacing(&name), None, "{host}");
+        assert_eq!(crate::source::access::most_at_once(&name), None, "{host}");
     }
 }
 

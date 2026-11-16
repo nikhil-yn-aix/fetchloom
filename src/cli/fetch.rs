@@ -1087,8 +1087,8 @@ fn hosts(
     }
     for (name, host) in &mut hosts {
         host.speed = context.speeds.speed(name);
-        host.spacing = source::spacing(name);
-        host.most = source::most_at_once(name);
+        host.spacing = source::access::spacing(name);
+        host.most = source::access::most_at_once(name);
     }
     hosts
 }

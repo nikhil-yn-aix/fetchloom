@@ -29,30 +29,15 @@ const MIRROR: &str = "arxiv-dataset";
 
 /// arXiv's terms ask a program for one request every three seconds, on one connection, across
 /// its API, its OAI-PMH interface and its pages alike.
-const SPACING: Duration = Duration::from_secs(3);
+pub(super) const SPACING: Duration = Duration::from_secs(3);
 /// the name requests to every arXiv host are paced under, since its terms limit them together.
-const PACED_AS: &str = "arxiv.org";
+pub(super) const PACED_AS: &str = "arxiv.org";
 
 /// what to write for a reference that is no arXiv id, month or category.
 const FORMS: &str = "arxiv:1706.03762, with @v7 to pin a version, arxiv:2401 for a month's papers or arxiv:cs.LG/2401 for one category's";
 
 /// what to give for a page of arXiv's that is no paper's, as its list of a category's month.
 pub(super) const PAGES: &str = "paste a paper's page or its pdf link, as https://arxiv.org/abs/1706.03762, or write arxiv:2401 for a month's papers or arxiv:cs.LG/2401 for one category's";
-
-/// the name a request to `host` is paced under, when it is one of arXiv's.
-pub(super) fn paced_as(host: &str) -> Option<&'static str> {
-    (host == PACED_AS || host.ends_with(".arxiv.org")).then_some(PACED_AS)
-}
-
-/// how far apart requests paced as `name` start: arXiv's, three seconds.
-pub(super) fn spacing(name: &str) -> Option<Duration> {
-    (name == PACED_AS).then_some(SPACING)
-}
-
-/// how many requests paced as `name` may run at once: one for arXiv's.
-pub(super) fn most_at_once(name: &str) -> Option<usize> {
-    (name == PACED_AS).then_some(1)
-}
 
 /// reads the part after `arxiv:`: a paper, `1706.03762` or `hep-th/9901001`, with `v7` or `@v7`
 /// for a version; a month, `2401`; or a category in a month, `cs.LG/2401`.

@@ -18,7 +18,7 @@ const PORTAL: &str = "https://www.ebi.ac.uk/ena/portal/api";
 
 /// every field one report asks for: each kind's files, so a run without the kind asked for can
 /// say which it has, and what tells a run under controlled access.
-const FIELDS: &str = "run_accession,fastq_ftp,fastq_md5,fastq_bytes,submitted_ftp,submitted_md5,submitted_bytes,submitted_format,sra_ftp,sra_md5,sra_bytes,study_title";
+pub(super) const FIELDS: &str = "run_accession,fastq_ftp,fastq_md5,fastq_bytes,submitted_ftp,submitted_md5,submitted_bytes,submitted_format,sra_ftp,sra_md5,sra_bytes,study_title";
 
 /// the fields that tell a search which kinds of file a run has, and whether it is under
 /// controlled access.

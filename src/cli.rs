@@ -334,7 +334,7 @@ impl RetryLines {
     /// whether a retry to `host` at `now` gets a line: the first, then one every [`RETRY_LINES`]
     /// while trouble lasts, and each of a host taking one request at a time, seconds apart.
     fn tell(&self, host: &str, now: Instant) -> bool {
-        if crate::source::most_at_once(&crate::source::paced_as(host)) == Some(1) {
+        if crate::source::access::most_at_once(&crate::source::paced_as(host)) == Some(1) {
             return true;
         }
         let mut told = self

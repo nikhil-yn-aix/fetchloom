@@ -300,14 +300,18 @@ fn ncbi_hosts_ask_their_requests_to_start_a_third_of_a_second_apart() {
         "www.ncbi.nlm.nih.gov",
         "ncbi.nlm.nih.gov",
     ] {
-        assert_eq!(spacing(host), Some(Duration::from_millis(334)), "{host}");
+        assert_eq!(
+            crate::source::access::spacing(host),
+            Some(Duration::from_millis(334)),
+            "{host}"
+        );
     }
     for host in [
         "ncbi.nlm.nih.gov.example.org",
         "ftp.sra.ebi.ac.uk",
         "nih.gov",
     ] {
-        assert_eq!(spacing(host), None, "{host}");
+        assert_eq!(crate::source::access::spacing(host), None, "{host}");
     }
 }
 

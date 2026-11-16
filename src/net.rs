@@ -33,7 +33,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
 pub(crate) use address::Allowed;
-pub(crate) use api::{Api, MOST_FILES, Response};
+pub(crate) use api::{Api, Extra, MOST_FILES, Response};
 #[cfg(test)]
 pub(crate) use azure::Given;
 #[cfg(debug_assertions)]

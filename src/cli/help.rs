@@ -812,6 +812,7 @@ mod tests {
             include_str!("../auth/kaggle.rs"),
             include_str!("../auth/netrc.rs"),
             include_str!("../net/roots.rs"),
+            include_str!("../source/access.rs"),
         ];
         let read: std::collections::BTreeSet<&str> =
             code.into_iter().flat_map(quoted_variables).collect();

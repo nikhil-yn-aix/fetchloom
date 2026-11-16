@@ -114,7 +114,7 @@ impl Doi {
         let parsed = Reference::parse(location).map_err(|_| {
             let known = Url::parse(location)
                 .ok()
-                .and_then(|url| Some((super::known_host(&url)?, url)));
+                .and_then(|url| Some((super::access::page_of(&url)?, url)));
             match known {
                 Some((source, url)) => Self::unresolved(&format!(
                     "{self} points to a {source} page fetchloom cannot list: {}",

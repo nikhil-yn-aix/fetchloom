@@ -20,3 +20,18 @@ pub(crate) enum Account {
     /// a username and password for one host, kept in `.netrc`, as for nasa earthdata or physionet.
     Login(String),
 }
+
+impl Account {
+    /// the sources' own accounts, each with the key its source takes.
+    pub(crate) const SOURCES: [Account; 9] = [
+        Account::HuggingFace,
+        Account::Kaggle,
+        Account::Zenodo,
+        Account::Figshare,
+        Account::Osf,
+        Account::Dryad,
+        Account::GitHub,
+        Account::GitLab,
+        Account::S2,
+    ];
+}

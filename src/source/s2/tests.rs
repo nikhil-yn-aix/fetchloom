@@ -274,10 +274,19 @@ fn a_refused_s2_key_says_where_it_came_from() {
 fn only_the_api_is_asked_one_request_at_a_time_and_spaced_by_its_key() {
     assert_eq!(spaced(true), Duration::from_secs(1));
     assert_eq!(spaced(false), Duration::from_secs(3));
-    assert_eq!(spacing(S2_HOST), Some(spaced(keyed())));
-    assert_eq!(most_at_once(S2_HOST), Some(1));
-    assert_eq!(spacing("www.semanticscholar.org"), None);
-    assert_eq!(most_at_once("www.semanticscholar.org"), None);
+    assert_eq!(
+        crate::source::access::spacing(S2_HOST),
+        Some(spaced(keyed()))
+    );
+    assert_eq!(crate::source::access::most_at_once(S2_HOST), Some(1));
+    assert_eq!(
+        crate::source::access::spacing("www.semanticscholar.org"),
+        None
+    );
+    assert_eq!(
+        crate::source::access::most_at_once("www.semanticscholar.org"),
+        None
+    );
 }
 
 /// the search finds the paper first, offers it by its corpus id and tells papers add would refuse.

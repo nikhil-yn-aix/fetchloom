@@ -2,6 +2,7 @@
 //! download and how to check it. file bodies are left to the downloader, but kaggle reads a
 //! competition's smallest file to learn whether its rules were accepted.
 
+pub(crate) mod access;
 mod arxiv;
 mod bucket;
 mod dandi;
@@ -564,7 +565,8 @@ impl Reference {
         let listing = async {
             match self {
                 Reference::Doi(doi) => {
-                    let target = doi.locate(api).await?;
+                    let scoped = access::Scoped::new(api, &access::DOI, None, self.shown());
+                    let target = doi.locate(&scoped).await?;
                     let mut listing = target.resolve_direct(api, select).await?;
                     listing.doi.get_or_insert_with(|| doi.name().to_owned());
                     Ok(listing)
@@ -588,7 +590,9 @@ impl Reference {
         check(self, listing, api.most_files())
     }
 
+    /// asks this reference's own source, which may ask only the origins its descriptor names.
     async fn resolve_direct(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
+        let api = &access::Scoped::new(api, self.access(), self.written_origin(), self.shown());
         match self {
             Reference::Url(url) => Ok(single(url)),
             Reference::Doi(doi) => Err(Error::new(
@@ -695,15 +699,25 @@ pub(crate) fn byline(authors: &[String], year: Option<&str>) -> Option<String> {
 /// what the sources say about requests to their hosts, for the network to follow.
 pub(crate) fn rules() -> net::Rules {
     net::Rules {
-        paced_as: arxiv::paced_as,
-        spacing,
-        most_at_once,
+        paced_as: access::paced_as,
+        spacing: access::spacing,
+        most_at_once: access::most_at_once,
         relink,
         link_expired,
         refused_download,
         lfs_link,
-        drive_search: |net, root| Box::pin(drive::search(net, root)),
-        drive_name: |net, id| Box::pin(async move { Ok(drive::file(net, id).await?.name) }),
+        drive_search: |net, root| {
+            Box::pin(async move {
+                let net = access::Scoped::new(net, &access::DRIVE, None, root.to_string());
+                drive::search(&net, root).await
+            })
+        },
+        drive_name: |net, id| {
+            Box::pin(async move {
+                let net = access::Scoped::new(net, &access::DRIVE, None, format!("drive:{id}"));
+                Ok(drive::file(&net, id).await?.name)
+            })
+        },
     }
 }
 
@@ -723,7 +737,9 @@ pub(crate) fn fetch_plan(url: &Url) -> Fetch {
 /// a file of a source's dataset whose download link the source gives only for a while, as
 /// semantic scholar's, by the stable link data.lock keeps: the request for a fresh link to it.
 fn relink(url: &Url) -> Option<Box<dyn net::Relink>> {
-    s2::relink(url).map(|relink| Box::new(relink) as Box<dyn net::Relink>)
+    s2::relink(url)
+        .filter(|relink| access::S2.api.holds(net::Relink::asked(relink), None))
+        .map(|relink| Box::new(relink) as Box<dyn net::Relink>)
 }
 
 /// whether a signed link a source gave for a while expires before `now`, or too soon after it.
@@ -738,23 +754,31 @@ pub(crate) fn may_wrap(url: &Url) -> bool {
 }
 
 impl Reference {
-    /// the hosts a search match's files download from, as its source knows before listing them,
-    /// the usual one first; none where they vary by file, as a paper's pdf from semantic scholar,
-    /// or for a source search does not ask.
-    pub(crate) fn download_hosts(&self) -> &'static [&'static str] {
+    /// what this reference's source may ask and link to, and the key it takes.
+    pub(crate) fn access(&self) -> &'static access::Access {
         match self {
-            Reference::HuggingFace(_) => &["huggingface.co"],
-            Reference::Kaggle(_) | Reference::KaggleCompetition(_) => &["api.kaggle.com"],
-            Reference::Zenodo(_) => &["zenodo.org"],
-            Reference::Ena(_) => &["ftp.sra.ebi.ac.uk", "ftp.ebi.ac.uk"],
-            Reference::Geo(_) => &["ftp.ncbi.nlm.nih.gov"],
-            Reference::Dandi(_) => &["dandiarchive.s3.amazonaws.com"],
-            Reference::OpenNeuro(_) => &["s3.amazonaws.com"],
-            // arXiv's bucket holds most papers; the rest come from arXiv itself
-            Reference::Arxiv(_) | Reference::ArxivMonth(_) => {
-                &["storage.googleapis.com", "arxiv.org"]
-            }
-            _ => &[],
+            Reference::Url(_) => &access::LINK,
+            Reference::Doi(_) => &access::DOI,
+            Reference::Zenodo(_) => &access::ZENODO,
+            Reference::Dryad(_) => &access::DRYAD,
+            Reference::Mendeley(_) => &access::MENDELEY,
+            Reference::GitHub(_) => &access::GITHUB,
+            Reference::GitLab(_) => &access::GITLAB,
+            Reference::Ena(_) => &access::ENA,
+            Reference::Geo(_) => &access::GEO,
+            Reference::Dandi(_) => &access::DANDI,
+            Reference::OpenNeuro(_) => &access::OPENNEURO,
+            Reference::Figshare(_) => &access::FIGSHARE,
+            Reference::Dataverse(_) => &access::DATAVERSE,
+            Reference::Osf(_) => &access::OSF,
+            Reference::HuggingFace(_) => &access::HUGGING_FACE,
+            Reference::Kaggle(_) | Reference::KaggleCompetition(_) => &access::KAGGLE,
+            Reference::Drive(_) => &access::DRIVE,
+            Reference::Dropbox(_) => &access::DROPBOX,
+            Reference::Bucket(_) => &access::BUCKET,
+            Reference::Arxiv(_) | Reference::ArxivMonth(_) => &access::ARXIV,
+            Reference::S2Paper(_) | Reference::S2Dataset(_) => &access::S2,
+            Reference::Local => &access::LOCAL,
         }
     }
 }
@@ -762,21 +786,7 @@ impl Reference {
 /// the name requests to `host` are paced and counted under: the host, or for hosts whose source
 /// limits them together, as arXiv's terms do its hosts, the name they share.
 pub(crate) fn paced_as(host: &str) -> String {
-    arxiv::paced_as(host).map_or_else(|| host.to_owned(), str::to_owned)
-}
-
-/// how far apart requests paced as `name` start, for a host that asks for that, as NCBI's,
-/// arXiv's and semantic scholar's do.
-pub(crate) fn spacing(name: &str) -> Option<std::time::Duration> {
-    geo::spacing(name)
-        .or_else(|| arxiv::spacing(name))
-        .or_else(|| s2::spacing(name))
-}
-
-/// how many requests paced as `name` may run at once, for hosts that ask for fewer than the
-/// network allows, as arXiv's and semantic scholar's ask for one.
-pub(crate) fn most_at_once(name: &str) -> Option<usize> {
-    arxiv::most_at_once(name).or_else(|| s2::most_at_once(name))
+    access::paced_as(host).map_or_else(|| host.to_owned(), str::to_owned)
 }
 
 /// a source's own error for a download it refused, when it says more than the status.
@@ -879,7 +889,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
             bucket::Prefix::from_link(&url).map(|prefix| parsed(Reference::Bucket(prefix), None))
         });
     let Some(routed) = routed else {
-        if let Some(source) = known_host(&url) {
+        if let Some(source) = access::page_of(&url) {
             return Err(Error::new(
                 Kind::ReferenceInvalid,
                 format!(
@@ -995,38 +1005,6 @@ fn other_page_help(source: &str) -> &'static str {
     }
 }
 
-/// the source a host belongs to, for links to its pages that are not datasets. downloading such a
-/// page would only give its HTML.
-fn known_host(url: &Url) -> Option<&'static str> {
-    Some(match url.host_str()? {
-        "zenodo.org" | "www.zenodo.org" => "zenodo",
-        "datadryad.org" | "www.datadryad.org" => "dryad",
-        "data.mendeley.com" if !url.path().starts_with("/public-files/") => "mendeley data",
-        "www.ncbi.nlm.nih.gov" | "ncbi.nlm.nih.gov" if url.path().starts_with("/geo/") => "geo",
-        "dandiarchive.org" | "www.dandiarchive.org" => "dandi",
-        "openneuro.org" | "www.openneuro.org" if !url.path().starts_with("/crn/") => "openneuro",
-        "www.ebi.ac.uk" | "ebi.ac.uk"
-            if ["/ena/browser/view/", "/ena/data/view/"]
-                .iter()
-                .any(|page| url.path().starts_with(page)) =>
-        {
-            "ena"
-        }
-        host if figshare::is_portal(host) && !url.path().starts_with("/ndownloader/") => "figshare",
-        "osf.io" | "www.osf.io" => "osf",
-        "huggingface.co" | "www.huggingface.co" | "hf.co" => "hugging face",
-        "kaggle.com" | "www.kaggle.com" => "kaggle",
-        "drive.google.com" | "docs.google.com" => "google drive",
-        "dropbox.com" | "www.dropbox.com" => "dropbox",
-        "doi.org" | "www.doi.org" | "dx.doi.org" => "doi",
-        "arxiv.org" | "www.arxiv.org" | "export.arxiv.org" => "arXiv",
-        "www.semanticscholar.org" | "semanticscholar.org" | "api.semanticscholar.org" => {
-            "semantic scholar"
-        }
-        _ => return None,
-    })
-}
-
 /// a plain link: one file, named by its last path segment until the server names it.
 fn single(url: &Url) -> Listing {
     Listing {
@@ -1050,9 +1028,10 @@ fn single(url: &Url) -> Listing {
     }
 }
 
-/// a listing is hostile input: every path must stay inside the dataset and appear once, and it
-/// holds at most `most` files. one of only its readme and git files is told, since its data has
-/// usually moved elsewhere. its title loses the spaces around it.
+/// a listing is hostile input: every path must stay inside the dataset and appear once, every
+/// file's link must point where its source's files come from, and it holds at most `most` files.
+/// one of only its readme and git files is told, since its data has usually moved elsewhere. its
+/// title loses the spaces around it.
 fn check(reference: &Reference, mut listing: Listing, most: usize) -> Result<Listing, Error> {
     listing.title = listing
         .title
@@ -1080,6 +1059,23 @@ fn check(reference: &Reference, mut listing: Listing, most: usize) -> Result<Lis
             reference,
             most,
             "select the folders you need with --select",
+        ));
+    }
+    let from = listing.resolved.access();
+    let written = listing.resolved.written_origin();
+    if let Some(file) = listing
+        .files
+        .iter()
+        .find(|file| !from.files.holds(&file.url, written.as_ref()))
+    {
+        return Err(invalid(
+            &reference,
+            &format!(
+                "it links \"{}\" at {}, where {}'s files are not kept",
+                file.path.escape_debug(),
+                file.url.origin().ascii_serialization(),
+                from.name
+            ),
         ));
     }
     let mut seen = HashSet::with_capacity(count);
@@ -1173,7 +1169,7 @@ pub(crate) fn refused(host: &str, reference: &str) -> Error {
         Kind::AuthRequired,
         format!("{host} refused access to {reference}"),
     );
-    match crate::account::Account::from_host(host) {
+    match access::account_at(host) {
         Some(account) => error
             .help(format!(
                 "if the dataset is private or restricted, sign in with `{}`, then run the same command again",

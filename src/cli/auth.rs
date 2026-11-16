@@ -729,7 +729,15 @@ async fn check(
     if chosen && let Account::Dataverse(_) = account {
         net.trust([check.url.origin()]);
     }
-    match net.get(&check.url).await {
+    // the check's answer is read as the source's own, so it goes only where its source asks
+    let asked = match crate::source::access::of_account(account) {
+        Some(access) => {
+            let scoped = crate::source::access::Scoped::new(&net, access, None, title(account));
+            scoped.get(&check.url).await
+        }
+        None => net.get(&check.url).await,
+    };
+    match asked {
         Ok(response) if (200..300).contains(&response.status) => {
             let user = response
                 .json::<serde_json::Value>()
@@ -1314,8 +1322,16 @@ async fn named_here(context: &Context, account: &Account) -> Option<String> {
         let Ok(parsed) = Reference::parse(&source.reference) else {
             continue;
         };
-        if let Reference::Doi(doi) = &parsed.reference
-            && let Ok(Reference::Dataverse(dataset)) = doi.locate(&net).await
+        let Reference::Doi(doi) = &parsed.reference else {
+            continue;
+        };
+        let scoped = crate::source::access::Scoped::new(
+            &net,
+            &crate::source::access::DOI,
+            None,
+            doi.to_string(),
+        );
+        if let Ok(Reference::Dataverse(dataset)) = doi.locate(&scoped).await
             && dataset.account() == *account
         {
             return Some(format!(

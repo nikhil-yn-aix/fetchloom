@@ -469,7 +469,7 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
                 format!("{host} refused access to {} ({code})", Shown(url)),
             );
             // any other website is offered its own sign-in by `Net::refused` before this
-            match crate::account::Account::from_host(&host) {
+            match crate::source::access::account_at(&host) {
                 Some(_) if url.scheme() != "https" => error.help(
                     "fetchloom sends a key only over https, so none goes with this http link: ask its owner for an https one",
                 ),
@@ -538,9 +538,7 @@ pub(super) fn moved_refusal(
         .and_then(|value| value.split_whitespace().next())
         .is_some_and(|scheme| scheme.trim_end_matches(',').eq_ignore_ascii_case("bearer"));
     let command = crate::account::Account::Login(refusing.clone()).command();
-    let sign_in = if let Some(account) =
-        crate::account::Account::from_host(&host(answered).to_ascii_lowercase())
-    {
+    let sign_in = if let Some(account) = crate::source::access::account_at(host(answered)) {
         format!(
             "if it needs an account, sign in with `{}`",
             account.command()
