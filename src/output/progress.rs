@@ -825,7 +825,8 @@ impl Shared {
 }
 
 /// how long a batch runs before its first plain line, or none for no lines. debug builds take
-/// `FETCHLOOM_TEST_TICKER` from tests: `off` drops the lines, any other value waits 0.1 s.
+/// `FETCHLOOM_TEST_TICKER` from tests: `off` drops the lines and a slow disk's time in a
+/// download's closing line, any other value waits 0.1 s.
 #[cfg_attr(
     not(debug_assertions),
     expect(

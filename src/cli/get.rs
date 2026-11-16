@@ -28,7 +28,7 @@ use crate::digest::{Block, Sha256};
 use crate::error::{Error, FileFailure, Kind};
 use crate::name;
 use crate::net::{self, Fetched, Net, Origin};
-use crate::output::Warning;
+use crate::output::{Output, Warning};
 use crate::place::Method;
 use crate::plan::{self, Patterns, Plan};
 use crate::project::lock::LockedFile;
@@ -1611,7 +1611,7 @@ fn tell_fetched(
     files: &[Remote],
     started: Option<Instant>,
 ) {
-    let (verb, text) = fetched_step(paths, fetched, files, started);
+    let (verb, text) = fetched_step(&context.output, paths, fetched, files, started);
     context.output.step(verb, &text);
     if let [fetched] = fetched {
         context.output.detail(&format!("sha256 {}", fetched.digest));
@@ -1621,15 +1621,16 @@ fn tell_fetched(
 /// the step telling what one link's downloads brought, timed from `started` to their last byte, not
 /// the disk's time after; without `started`, beside other links, by its own downloads alone.
 fn fetched_step(
+    output: &Output,
     paths: &[String],
     fetched: &[Fetched],
     files: &[Remote],
     started: Option<Instant>,
 ) -> (&'static str, String) {
-    let took = match started {
+    let took = output.took(match started {
         Some(started) => Fetched::transfer(fetched, started),
         None => Fetched::transfer_alone(fetched),
-    };
+    });
     if let ([path], [fetched], [remote]) = (paths, fetched, files) {
         return match fetched.origin {
             Origin::Network => (
@@ -1761,6 +1762,7 @@ mod tests {
         };
         assert_eq!(
             fetched_step(
+                &approval_context().output,
                 &["iris.csv".to_owned()],
                 &[fetched],
                 &[remote],
@@ -1799,7 +1801,13 @@ mod tests {
             etag: None,
         };
         assert_eq!(
-            fetched_step(&["0.bin".to_owned()], &[fetched], &[remote], None),
+            fetched_step(
+                &approval_context().output,
+                &["0.bin".to_owned()],
+                &[fetched],
+                &[remote],
+                None
+            ),
             ("Downloaded", "0.bin · 97.7 KiB in 500 ms".to_owned())
         );
     }

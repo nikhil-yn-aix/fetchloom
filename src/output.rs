@@ -87,7 +87,8 @@ pub(crate) struct Output {
     drawn: Mutex<Vec<indicatif::WeakProgressBar>>,
     /// how long work that is usually quick goes untold at a terminal.
     untold: Duration,
-    /// how long a batch runs before its first plain line, or none when a test turns them off.
+    /// how long a batch runs before its first plain line, or none when a test turns off what only
+    /// the machine's speed decides: those lines, and a slow disk's time in a download's closing line.
     moment: Option<Duration>,
     /// the last closing line, such as `Added iris`, and whether a finishing ctrl-c came after it: a
     /// terminal drops what it had not yet shown at a ctrl-c, so the line is told again at the end.
@@ -943,6 +944,15 @@ impl Output {
                 None => write_line(color, &line),
             }
         })
+    }
+
+    /// how long downloads `took`, as their closing line tells it: where a test turned off what
+    /// only the machine's speed decides, without the time a slow disk took after the last byte.
+    pub(crate) fn took(&self, took: units::Took) -> units::Took {
+        match self.moment {
+            Some(_) => took,
+            None => units::Took::from(took.arrived),
+        }
     }
 
     /// asks a yes or no question on the terminal. none when nobody can answer, as in CI or a pipe.

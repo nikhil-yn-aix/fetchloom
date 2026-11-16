@@ -1575,3 +1575,32 @@ fn rows_on_stdout_name_a_withheld_folder_once() {
     );
     assert_eq!(output.answered(&row), [shown.to_owned()]);
 }
+
+/// a download's closing line names the time a slow disk took after its last byte, unless a test
+/// turned off what only the machine's speed decides, as `FETCHLOOM_TEST_TICKER=off` does.
+#[test]
+fn a_slow_disk_is_named_unless_a_test_turned_timed_lines_off() {
+    let style = Style {
+        color: false,
+        unicode: false,
+        interactive: false,
+        watched: false,
+        links: false,
+        accessible: false,
+    };
+    let mut output = Output::new(style, Level::Normal, false, false);
+    let took = crate::units::Took {
+        arrived: Duration::from_secs(1),
+        all: Duration::from_secs(3),
+    };
+    output.moment = Some(Duration::from_secs(2));
+    assert_eq!(
+        crate::units::downloaded([(81, 81)], output.took(took)),
+        "81 B in 3.0 s, 2.0 s of it waiting for the disk · 81 B/s"
+    );
+    output.moment = None;
+    assert_eq!(
+        crate::units::downloaded([(81, 81)], output.took(took)),
+        "81 B in 1.0 s · 81 B/s"
+    );
+}
