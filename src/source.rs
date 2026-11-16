@@ -15,6 +15,7 @@ mod dropbox;
 mod dryad;
 mod ena;
 mod figshare;
+pub(crate) mod folder;
 mod geo;
 mod git;
 mod github;
@@ -32,6 +33,7 @@ mod osf;
 pub(crate) mod recorded;
 mod s2;
 pub(crate) mod search;
+pub(crate) mod share;
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -181,6 +183,8 @@ pub(crate) enum Reference {
     S2Paper(s2::Paper),
     /// the files a list names, a checksum list or a list of links, at a link or in the project.
     List(list::List),
+    /// the files a web server lists in a folder and the folders inside it, by the folder's link.
+    Folder(folder::Folder),
     /// a dataset of a semantic scholar release, at that release or the newest.
     S2Dataset(s2::Dataset),
     /// files imported from a machine with `fetchloom add <path>`, which no source lists: data.lock
@@ -288,8 +292,8 @@ impl Listing {
     /// whether a generated name may come from the one file the listing holds. a paper is known by
     /// its title, and its file only by an id, as `1706.03762v7.pdf`; an arXiv month and a
     /// semantic scholar dataset by their reference, and their files by ids and times; a dandiset
-    /// by its title, its files by subject, as `sub-RAT123.nwb`; a bucket's folder and a
-    /// repository's by their path, since folders often hold objects of one name, as
+    /// by its title, its files by subject, as `sub-RAT123.nwb`; a bucket's folder, a repository's
+    /// and a web server's by their path, since folders often hold objects of one name, as
     /// `part_0000.gz`.
     pub(crate) fn names_its_file(&self) -> bool {
         match &self.resolved {
@@ -299,7 +303,8 @@ impl Listing {
             | Reference::S2Dataset(_)
             | Reference::Dandi(_)
             | Reference::List(_)
-            | Reference::GitFolder(_) => false,
+            | Reference::GitFolder(_)
+            | Reference::Folder(_) => false,
             Reference::Bucket(prefix) => !prefix.names_a_folder(),
             _ => true,
         }
@@ -509,6 +514,7 @@ impl Reference {
             Reference::GitFolder(folder) => folder.origin(),
             Reference::Bucket(prefix) => prefix.written_origin(),
             Reference::List(list) => list.written_origin(),
+            Reference::Folder(folder) => Some(folder.link().origin()),
             _ => None,
         }
     }
@@ -584,12 +590,22 @@ impl Reference {
     }
 
     /// the text a dataset's name is made from when no file or title names it: the reference
-    /// itself, or for a list its folder or its own name.
+    /// itself, for a list its folder or its own name, for a folder its path.
     pub(crate) fn naming(&self) -> String {
         match self {
             Reference::List(list) => list.naming(),
             Reference::GitFolder(folder) => folder.naming(),
+            Reference::Folder(folder) => folder.naming(),
             other => other.to_string(),
+        }
+    }
+
+    /// this reference as a dataset that keeps the web page its link answers with, as `page`
+    /// says, reads it: a folder's link is then the plain link it is.
+    pub(crate) fn taking_page(self, page: bool) -> Reference {
+        match self {
+            Reference::Folder(folder) if page => Reference::Url(folder.link().clone()),
+            other => other,
         }
     }
 
@@ -597,6 +613,7 @@ impl Reference {
     pub(crate) fn shown(&self) -> String {
         match self {
             Reference::Url(url) => crate::shown::Shown(url).to_string(),
+            Reference::Folder(folder) => crate::shown::Shown(folder.link()).to_string(),
             Reference::List(list::List::Link(url)) => format!("list:{}", crate::shown::Shown(url)),
             other => crate::shown::mask_query(&other.to_string()).into_owned(),
         }
@@ -703,22 +720,29 @@ impl Reference {
         }
     }
 
-    /// the web page where a person sees the dataset, for a source that has one per dataset.
+    /// the web page where a person sees the dataset, for a source that has one per dataset, as
+    /// a folder's listing is.
     pub(crate) fn page(&self) -> Option<String> {
         match self {
             Reference::Invenio(record) => Some(record.page()),
             Reference::HuggingFace(repo) => Some(repo.page()),
             Reference::Kaggle(dataset) => Some(dataset.page()),
             Reference::InternetArchive(item) => Some(item.page()),
+            Reference::Folder(folder) => Some(folder.link().to_string()),
             _ => None,
         }
     }
 
     /// asks this reference's own source, which may ask only the origins its descriptor names. a
     /// link to a record's page on an invenioRDM install is that record once one request for it
-    /// there says so, and otherwise the plain link it is.
+    /// there says so, and otherwise the plain link or the folder it is.
     async fn resolve_direct(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
-        if let Reference::Url(url) = self
+        let page = match self {
+            Reference::Url(url) => Some(url),
+            Reference::Folder(folder) => Some(folder.link()),
+            _ => None,
+        };
+        if let Some(url) = page
             && let Some((record, named)) = invenio::Record::behind(url)
         {
             let scoped = access::Scoped::new(api, &access::INVENIO, record.origin(), self.shown());
@@ -762,6 +786,7 @@ impl Reference {
             Reference::S2Paper(paper) => paper.resolve(api).await,
             Reference::S2Dataset(dataset) => dataset.resolve(api).await,
             Reference::List(list) => list.resolve(api).await,
+            Reference::Folder(folder) => folder.resolve(api, select).await,
             Reference::Local => Err(local::unlisted()),
         }
     }
@@ -797,6 +822,7 @@ impl fmt::Display for Reference {
             Reference::S2Paper(paper) => write!(f, "{paper}"),
             Reference::S2Dataset(dataset) => write!(f, "{dataset}"),
             Reference::List(list) => write!(f, "{list}"),
+            Reference::Folder(folder) => write!(f, "{folder}"),
             Reference::Local => f.write_str(local::IMPORTED),
         }
     }
@@ -924,6 +950,7 @@ impl Reference {
             Reference::Arxiv(_) | Reference::ArxivMonth(_) => &access::ARXIV,
             Reference::S2Paper(_) | Reference::S2Dataset(_) => &access::S2,
             Reference::List(_) => &access::LIST,
+            Reference::Folder(_) => &access::FOLDER,
             Reference::Local => &access::LOCAL,
         }
     }
@@ -1034,7 +1061,10 @@ fn link(text: &str) -> Result<Parsed, Error> {
             )
             .help(other_page_help(source)));
         }
-        return Ok(parsed(plain_link(url), None));
+        // a folder's link names the files its server lists in it
+        let reference =
+            folder::Folder::from_link(&url).map_or_else(|| plain_link(url), Reference::Folder);
+        return Ok(parsed(reference, None));
     };
     Ok(routed)
 }

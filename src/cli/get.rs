@@ -411,8 +411,9 @@ async fn one_link(
     if is_search(&link) {
         link = super::search::pick(context, net.as_ref(), &link, "get").await?;
     }
-    let parsed =
+    let mut parsed =
         Reference::parse(&link).map_err(|error| super::typed::scheme_meant(error, &link, "get"))?;
+    parsed.reference = parsed.reference.taking_page(args.web_page);
     engine::tell_raw(&context.output, &link, &parsed.reference);
     let cache = open_cache()?;
     let key = remembered::key(args, &parsed);
@@ -628,13 +629,14 @@ async fn resolve_all(
     let mut tasks = JoinSet::new();
     let mut asked = Vec::new();
     for (index, link) in links.iter().enumerate() {
-        let parsed = match Reference::parse(link) {
+        let mut parsed = match Reference::parse(link) {
             Ok(parsed) => parsed,
             Err(error) => {
                 results[index] = Some(Err(error));
                 continue;
             }
         };
+        parsed.reference = parsed.reference.taking_page(args.web_page);
         engine::tell_raw(&context.output, link, &parsed.reference);
         // offline, what the link kept last time stands in for a listing only its source can give
         if let Some(listing) = remembered::key(args, &parsed)

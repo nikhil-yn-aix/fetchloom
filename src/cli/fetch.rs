@@ -23,6 +23,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
 use crate::net::{Event, Expect, Fetch, Fetched, Net, NoVersion, Origin, Resumable, estimate};
 use crate::output::{Bar, Output, Ticker, Warning};
+use crate::source::folder::PAGE_FLAG;
 use crate::source::{self, Remote};
 use crate::stop::Stop;
 use crate::units;
@@ -121,8 +122,17 @@ pub(in crate::cli) fn page_entry(dataset: &str) -> String {
     format!("add web_page = true to [datasets.{dataset}] in data.toml")
 }
 
-/// [`page_entry`]'s words where no entry asks yet, as for a `get` or an add not written.
-pub(in crate::cli) const PAGE_FLAG: &str = "add --web-page";
+/// `error`, which a source gave while resolving data.toml's entry `dataset`, with its help saying
+/// to ask for a web page through that entry rather than the flag of an add or a get.
+pub(in crate::cli) fn page_in_entry(mut error: Error, dataset: &str) -> Error {
+    if let Some(help) = error.help.as_deref()
+        && help.contains(PAGE_FLAG)
+    {
+        let help = help.replace(PAGE_FLAG, &page_entry(dataset));
+        error = error.help(help);
+    }
+    error
+}
 
 /// what a download makes of a web page the link of a job answered with, before its bytes are in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,6 +199,9 @@ pub(in crate::cli) fn page_refused(job: &Job, named: bool) -> Error {
             format!("{link} answered with a web page, such as a sign-in page, not a data file"),
         )
         .help(format!("open it in a browser: a page that asks you to sign in needs `{sign_in}`, else look for a download or raw link. if the page itself is the data, {asked}"));
+    }
+    if job.fetch.url.path().ends_with('/') {
+        return source::folder::no_listing(&job.fetch.url, &asked);
     }
     Error::new(
         Kind::SourceInvalid,
@@ -3411,22 +3424,33 @@ mod tests {
     }
 
     /// a page that names no file, at a link that names none either, is a folder listing or a
-    /// site's page, refused before its bytes; a link that names a page, a file the server names,
-    /// pinned bytes, and a link named as data, whose first bytes decide, are not.
+    /// site's page, refused before its bytes, one at a folder's link as no listing fetchloom
+    /// reads; a link that names a page, a file the server names, pinned bytes, and a link named
+    /// as data, whose first bytes decide, are not.
     #[test]
     fn a_web_page_that_names_no_file_is_refused_before_its_bytes() {
         let pinned = Some(crate::digest::sha256(b"a pinned listing"));
         let refused = [
-            ("http://lab.example/shards/", "shards"),
-            ("http://lab.example/", "download"),
+            (
+                "http://lab.example/shards",
+                "shards",
+                "answered with a web page, such as a folder listing, not a file",
+            ),
+            (
+                "http://lab.example/shards/",
+                "shards",
+                "answered with a web page, not a file or a folder listing fetchloom reads",
+            ),
+            (
+                "http://lab.example/",
+                "download",
+                "answered with a web page, not a file or a folder listing fetchloom reads",
+            ),
         ];
-        for (link, label) in refused {
+        for (link, label, said) in refused {
             let error = on_page(link, label, None, None).unwrap_err();
             assert_eq!(error.kind, Kind::SourceInvalid);
-            assert_eq!(
-                error.message,
-                format!("{link} answered with a web page, such as a folder listing, not a file")
-            );
+            assert_eq!(error.message, format!("{link} {said}"));
             let advice = error.help.unwrap_or_default();
             assert!(
                 advice.ends_with("if the page itself is the data, add --web-page"),

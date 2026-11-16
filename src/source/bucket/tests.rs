@@ -212,8 +212,10 @@ fn an_object_link_names_the_bucket_holding_it() {
     }
 }
 
+/// a single object's link, and a link to a storage service no bucket is read at, stays a plain
+/// link, or a folder a web server lists when it ends in `/`.
 #[test]
-fn single_objects_and_other_storage_links_stay_plain_links() {
+fn single_objects_and_other_storage_links_are_no_buckets() {
     for text in [
         "https://openneuro.org.s3.amazonaws.com/ds000001/participants.tsv",
         "https://s3.amazonaws.com/openneuro.org/ds000001/participants.tsv",
@@ -228,7 +230,10 @@ fn single_objects_and_other_storage_links_stay_plain_links() {
         "https://example.org/folder/",
     ] {
         let parsed = Reference::parse(text).unwrap();
-        assert!(matches!(parsed.reference, Reference::Url(_)), "{text}");
+        assert!(
+            matches!(parsed.reference, Reference::Url(_) | Reference::Folder(_)),
+            "{text}"
+        );
     }
 }
 

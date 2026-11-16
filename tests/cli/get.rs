@@ -2049,7 +2049,7 @@ fn a_link_that_answers_with_a_web_page_is_refused_before_the_cache() -> Result {
         assert_eq!(
             document["errors"][0]["message"],
             format!(
-                "{} answered with a web page, such as a folder listing, not a file",
+                "{} answered with a web page, not a file or a folder listing fetchloom reads",
                 server.url
             )
         );

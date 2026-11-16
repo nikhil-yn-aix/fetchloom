@@ -9,10 +9,9 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::time::Duration;
 
-use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::drive::html::unescape;
+use super::folder::{Unread, is_name};
 use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Extra, Response};
@@ -175,54 +174,39 @@ impl Accession {
                 continue;
             }
             let html = self.index(&response, path.is_empty())?;
-            let parent = url.join("..").map(|parent| parent.path().to_owned());
-            let found = parent.ok().and_then(|parent| entries(&html, &parent));
-            let Some(found) = found else {
+            let index = match super::folder::read(&html, &url, &url) {
+                Ok(index) => index,
+                Err(Unread::NoListing) => {
+                    return Err(invalid(
+                        self,
+                        "it sent a page that is no index of its folder",
+                    ));
+                }
+                Err(Unread::Name(name)) => {
+                    return Err(invalid(
+                        self,
+                        &format!(
+                            "its index names an entry that is no file name: {}",
+                            name.escape_debug()
+                        ),
+                    ));
+                }
+            };
+            if let Some(away) = index.elsewhere.first() {
                 return Err(invalid(
                     self,
-                    "it sent a page that is no index of its folder",
+                    &format!("its index links away: {}", away.escape_debug()),
                 ));
-            };
-            for (entry, size) in found {
-                let (name, folder) = match entry.strip_suffix('/') {
-                    Some(name) => (name, true),
-                    None => (entry.as_str(), false),
-                };
-                let decoded = percent_decode_str(name)
-                    .decode_utf8()
-                    .ok()
-                    .filter(|decoded| is_name(decoded))
-                    .ok_or_else(|| {
-                        invalid(
-                            self,
-                            &format!(
-                                "its index names an entry that is no file name: {}",
-                                name.escape_debug()
-                            ),
-                        )
-                    })?;
-                let at = if path.is_empty() {
-                    decoded.into_owned()
-                } else {
-                    format!("{path}/{decoded}")
-                };
-                let link = url
-                    .join(&entry)
-                    .ok()
-                    .filter(|link| link.as_str().starts_with(top.as_str()))
-                    .ok_or_else(|| {
-                        invalid(
-                            self,
-                            &format!("its index links away: {}", entry.escape_debug()),
-                        )
-                    })?;
-                if folder {
-                    folders.push_back((at, link));
+            }
+            for entry in index.entries {
+                let at = crate::name::joined(&path, &entry.name);
+                if entry.folder {
+                    folders.push_back((at, entry.link));
                     continue;
                 }
                 files.push(Remote {
-                    size,
-                    ..remote(at, link)
+                    size: entry.size,
+                    ..remote(at, entry.link)
                 });
                 if files.len() > api.most_files() {
                     return Err(self.too_many(api, top));
@@ -428,50 +412,6 @@ fn remote(path: String, url: Url) -> Remote {
         named_by_server: false,
         etag: None,
     }
-}
-
-/// the links of an index of GEO's file server that name its entries, files and folders ending in
-/// `/`: those inside its `<pre>` block, past the link to the folder above, `parent`, read as html
-/// writes them, so `a&amp;b.csv` links to `a&b.csv`. a link with a raw `?` or `#` names none; any
-/// other is an entry for the listing's checks to judge, so a name no file may have is refused
-/// rather than left out. each goes with the size its row ends with when that is in bytes, as NCBI
-/// writes a file's under 973 bytes, rounding any other, as `1.3M`. none for a page that is no
-/// such index.
-fn entries(html: &str, parent: &str) -> Option<Vec<(String, Option<u64>)>> {
-    let (_, block) = html.split_once("<pre>")?;
-    let (block, _) = block.split_once("</pre>")?;
-    let mut links = Vec::new();
-    let mut rest = block;
-    while let Some(at) = rest.find("<a href=\"") {
-        rest = &rest[at + "<a href=\"".len()..];
-        let end = rest.find('"')?;
-        let link = unescape(&rest[..end]);
-        rest = &rest[end..];
-        let size = rest
-            .find('<')
-            .and_then(|at| rest[at..].strip_prefix("</a>"))
-            .map(|row| &row[..row.find(['<', '\n']).unwrap_or(row.len())])
-            .and_then(|row| row.trim_end().rsplit(' ').next())
-            .filter(|size| size.bytes().all(|byte| byte.is_ascii_digit()))
-            .and_then(|size| size.parse().ok());
-        links.push((link, size));
-    }
-    if !links.iter().any(|(link, _)| link == parent) {
-        return None;
-    }
-    Some(
-        links
-            .into_iter()
-            .filter(|(link, _)| link != parent && !link.contains(['?', '#']))
-            .collect(),
-    )
-}
-
-/// a name one entry of a folder may have: not empty, not a step up, with no separator.
-fn is_name(name: &str) -> bool {
-    !matches!(name, "" | "." | "..")
-        && !name.contains(['/', '\\'])
-        && !name.chars().any(char::is_control)
 }
 
 /// the tars a filelist names, each once with its size in bytes: its `Archive` rows below the

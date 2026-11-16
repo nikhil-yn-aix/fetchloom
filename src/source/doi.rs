@@ -157,7 +157,8 @@ impl Doi {
                 None => self.invalid("the URL value is not a dataset link"),
             }
         })?;
-        match parsed.reference {
+        // a record's link is its page, never a folder to list on a host no person named
+        match parsed.reference.taking_page(true) {
             // a page of a record on an invenioRDM install, which its answer may confirm
             Reference::Url(url) if super::invenio::Record::behind(&url).is_some() => {
                 Ok(Reference::Url(url))

@@ -453,6 +453,18 @@ pub(crate) static LIST: Access = Access {
     pace: &[],
 };
 
+/// a folder a web server lists, at its link: its listings and its files on the folder's own
+/// origin alone, and no key goes with them for the folder's sake.
+pub(crate) static FOLDER: Access = Access {
+    name: "a folder listing",
+    api: Origins::Written,
+    files: Origins::Written,
+    key: None,
+    sites: &[],
+    pages: no_page,
+    pace: &[],
+};
+
 /// files imported from a machine, which no source lists.
 pub(crate) static LOCAL: Access = Access {
     name: "imported files",
@@ -465,7 +477,7 @@ pub(crate) static LOCAL: Access = Access {
 };
 
 /// every source, in the order a link's page is matched to one.
-pub(super) static ALL: [&Access; 26] = [
+pub(super) static ALL: [&Access; 27] = [
     &ZENODO,
     &INVENIO,
     &DRYAD,
@@ -491,6 +503,7 @@ pub(super) static ALL: [&Access; 26] = [
     &BUCKET,
     &LINK,
     &LIST,
+    &FOLDER,
     &LOCAL,
 ];
 

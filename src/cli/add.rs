@@ -32,6 +32,7 @@ use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest, Source};
 use crate::project::state::Synced;
 use crate::project::{Held, Project};
+use crate::source::folder::PAGE_FLAG;
 use crate::source::{Listing, Parsed, Reference, Remote, local};
 use crate::units;
 use several::add_several_held;
@@ -438,9 +439,14 @@ fn several(args: &Add, links: Vec<String>) -> Result<Several, Error> {
             super::project::command("add <link> --select \"*.csv\"")
         )));
     }
-    Ok(Several {
-        links: links::typed(links)?,
-    })
+    let links = links::typed(links)?
+        .into_iter()
+        .map(|(link, mut parsed)| {
+            parsed.reference = parsed.reference.taking_page(args.web_page);
+            (link, parsed)
+        })
+        .collect();
+    Ok(Several { links })
 }
 
 /// what an add settles before it holds the project: whether to start one in `root`, and which
@@ -922,7 +928,7 @@ fn page_by_flag(mut error: Error, name: &str) -> Error {
     let entry = super::fetch::page_entry(name);
     let flagged = |help: &str| {
         help.contains(&entry)
-            .then(|| help.replace(&entry, super::fetch::PAGE_FLAG))
+            .then(|| help.replace(&entry, PAGE_FLAG))
     };
     if let Some(help) = error.help.as_deref().and_then(flagged) {
         error = error.help(help);
@@ -1007,8 +1013,9 @@ fn validate_add(
     args: &Add,
     link: &str,
 ) -> Result<Parsed, Error> {
-    let parsed =
+    let mut parsed =
         Reference::parse(link).map_err(|error| super::typed::scheme_meant(error, link, "add"))?;
+    parsed.reference = parsed.reference.taking_page(args.web_page);
     engine::tell_raw(&context.output, link, &parsed.reference);
     parsed.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable. the dataset of

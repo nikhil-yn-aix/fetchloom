@@ -266,6 +266,8 @@ struct Asked {
     /// the pinned version itself, when data.toml names it, whose source may name a newer one.
     named: Option<Reference>,
     select: Vec<Glob>,
+    /// whether data.toml keeps the web page the dataset's link answers with.
+    page: bool,
     words: Words,
     access: Access,
 }
@@ -410,6 +412,7 @@ fn pinned<'l>(
                 upgrade,
                 named,
                 select: source.select.clone(),
+                page: source.web_page,
                 words,
                 access: pin.access,
             },
@@ -437,9 +440,13 @@ async fn listings(net: &Arc<Net>, asks: &[(usize, Asked)]) -> Result<Vec<Listed>
                 continue;
             };
             let (net, text, select) = (Arc::clone(net), text.clone(), asked.select.clone());
+            let page = asked.page;
             tasks.spawn(async move {
                 let listing = match Reference::parse(&text) {
-                    Ok(parsed) => parsed.reference.resolve_in(&*net, &select).await,
+                    Ok(parsed) => {
+                        let reference = parsed.reference.taking_page(page);
+                        reference.resolve_in(&*net, &select).await
+                    }
                     Err(error) => Err(error),
                 };
                 let asking = if upgrade {
@@ -1180,6 +1187,7 @@ mod tests {
             upgrade: None,
             named: None,
             select: Vec::new(),
+            page: false,
             words: Words {
                 title: Some("Iris".to_owned()),
                 license: None,

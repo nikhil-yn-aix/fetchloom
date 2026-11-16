@@ -889,6 +889,11 @@ mod tests {
                 "https://archive.org/details/iris_20240626",
                 None,
             ),
+            (
+                "https://example.org/iris/".to_owned(),
+                "https://example.org/iris/",
+                None,
+            ),
         ] {
             let mut pin = locked("iris", Some("Iris"), None);
             pin.resolved = resolved;

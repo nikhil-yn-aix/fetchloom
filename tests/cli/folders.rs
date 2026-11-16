@@ -1,0 +1,338 @@
+//! a folder a web server lists, as apache, nginx, lighttpd and python's http.server do, as one
+//! dataset: every file below it, each pinned by its SHA-256, its listing read again only by
+//! `lock --upgrade`.
+
+use std::fs;
+
+use crate::lists::pinned;
+use crate::support::{Part, Result, Routes, Sandbox, file, json, reply, sha256_hex, text, warning};
+
+const IRIS: &[u8] = b"sepal,petal\n5.1,1.4\n";
+const TIPS: &[u8] = b"bill,tip\n16.99,1.01\n";
+const NEW: &[u8] = b"petal\n0.2\n";
+
+/// a listing of `folder` that links each of `entries`, a folder's link ending in `/`, as one
+/// server writes it.
+type Lister = fn(&str, &[&str]) -> Vec<Part>;
+
+/// a listing as python's http.server writes it.
+fn python(folder: &str, entries: &[&str]) -> Vec<Part> {
+    let items = entries
+        .iter()
+        .map(|entry| format!("<li><a href=\"{entry}\">{entry}</a></li>\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    page(&format!(
+        "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for {folder}</title>\n</head>\n<body>\n<h1>Directory listing for {folder}</h1>\n<hr>\n<ul>\n{items}</ul>\n<hr>\n</body>\n</html>\n"
+    ))
+}
+
+/// a listing as nginx's autoindex writes it, as dwd's opendata server sends it.
+fn nginx(folder: &str, entries: &[&str]) -> Vec<Part> {
+    let rows = entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "<a href=\"{entry}\">{entry}</a>{:>40}{:>20}\r\n",
+                "16-Nov-2026 09:00:07", "-"
+            )
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    page(&format!(
+        "<html>\r\n<head><title>Index of {folder}</title></head>\r\n<body>\r\n<h1>Index of {folder}</h1><hr><pre><a href=\"../\">../</a>\r\n{rows}</pre><hr></body>\r\n</html>\r\n"
+    ))
+}
+
+/// a web page answered with 200.
+fn page(html: &str) -> Vec<Part> {
+    reply(
+        "200 OK",
+        &[
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Content-Length", &html.len().to_string()),
+        ],
+        html.as_bytes(),
+    )
+}
+
+/// a server with iris.csv in its `/data` folder and tips.csv in `/data/sub`, each folder listed
+/// as `lister` writes it.
+fn served(lister: Lister) -> Result<Routes> {
+    Routes::start(vec![
+        ("/data/".to_owned(), lister("/data/", &["iris.csv", "sub/"])),
+        ("/data/sub/".to_owned(), lister("/data/sub/", &["tips.csv"])),
+        ("/data/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/data/sub/tips.csv".to_owned(), file(TIPS, "\"t1\"")),
+    ])
+}
+
+/// the data.lock line that pins `path`, at `url`, to `bytes`.
+fn pin(path: &str, bytes: &[u8], url: &str) -> String {
+    format!(
+        "{{ path = \"{path}\", size = {}, sha256 = \"{}\", url = \"{url}\" }},",
+        bytes.len(),
+        sha256_hex(bytes)
+    )
+}
+
+/// `add` of a folder's link pins every file below it, those of its folders at their paths in
+/// it, each by its SHA-256, as one dataset named after the folder; a clone syncs from data.lock
+/// alone and never asks for a listing.
+#[test]
+fn a_listed_folder_is_one_dataset_of_every_file_below_it() -> Result {
+    for lister in [python as Lister, nginx] {
+        let sandbox = Sandbox::new()?;
+        let server = served(lister)?;
+        let folder = format!("{}/data/", server.url);
+        let output = sandbox.run(&["--json", "add", &folder])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        assert_eq!(
+            json(&output)?["result"]["datasets"],
+            serde_json::json!(["data"])
+        );
+        let work = sandbox.work();
+        assert_eq!(
+            fs::read_to_string(work.join("data.toml"))?,
+            format!("[datasets.data]\nref = \"{folder}\"\n")
+        );
+        let lock = fs::read_to_string(work.join("data.lock"))?;
+        assert_eq!(
+            pinned(&lock, "data"),
+            [
+                pin("iris.csv", IRIS, &format!("{folder}iris.csv")),
+                pin("sub/tips.csv", TIPS, &format!("{folder}sub/tips.csv")),
+            ]
+        );
+        assert_eq!(fs::read(work.join("data/data/iris.csv"))?, IRIS);
+        assert_eq!(fs::read(work.join("data/data/sub/tips.csv"))?, TIPS);
+
+        let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+        sandbox.allow(&server.url);
+        let asked = server.targets().len();
+        let synced = sandbox
+            .command_in(&clone, &["sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+        assert_eq!(fs::read(clone.join("data/data/iris.csv"))?, IRIS);
+        assert_eq!(fs::read(clone.join("data/data/sub/tips.csv"))?, TIPS);
+        let later = &server.targets()[asked..];
+        assert!(
+            !later.iter().any(|target| target.ends_with('/')),
+            "a clone needs data.lock alone: {later:?}"
+        );
+    }
+    Ok(())
+}
+
+/// `--select` narrows a folder as it narrows any dataset, and only the folders a pattern can
+/// reach are listed: a pattern of top files asks for no listing of a folder inside. `get` of the
+/// link fetches every file into one folder named after it.
+#[test]
+fn select_lists_only_the_folders_a_pattern_reaches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(nginx)?;
+    let folder = format!("{}/data/", server.url);
+    let narrowed = sandbox.run(&["add", &folder, "--as", "tips", "--select", "sub/*"])?;
+    assert_eq!(
+        narrowed.status.code(),
+        Some(0),
+        "{}",
+        text(&narrowed.stderr)?
+    );
+    let before = server.targets().len();
+    let top = sandbox.run(&["add", &folder, "--as", "top", "--select", "*.csv"])?;
+    assert_eq!(top.status.code(), Some(0), "{}", text(&top.stderr)?);
+    let asked = &server.targets()[before..];
+    assert!(asked.contains(&"/data/".to_owned()), "{asked:?}");
+    assert!(
+        !asked.contains(&"/data/sub/".to_owned()),
+        "no folder inside is listed: {asked:?}"
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(
+        pinned(&lock, "tips"),
+        [pin("sub/tips.csv", TIPS, &format!("{folder}sub/tips.csv"))]
+    );
+    assert_eq!(
+        pinned(&lock, "top"),
+        [pin("iris.csv", IRIS, &format!("{folder}iris.csv"))]
+    );
+
+    let elsewhere = Sandbox::new()?;
+    let got = elsewhere.run(&["get", &folder])?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    let out = elsewhere.work().join("data");
+    assert_eq!(fs::read(out.join("iris.csv"))?, IRIS);
+    assert_eq!(fs::read(out.join("sub").join("tips.csv"))?, TIPS);
+    Ok(())
+}
+
+/// a listing's links to the folder above, a column's sort link with a query, a link to another
+/// host and one that climbs out of the folder once percent-decoded are never asked for. the add
+/// pins the files below the folder and says which links it left out; the parent and sort links
+/// every listing has go unsaid.
+#[test]
+fn links_that_leave_the_folder_are_never_followed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let other = Routes::start(vec![("/x.csv".to_owned(), file(TIPS, "\"x1\""))])?;
+    let away = format!("{}/x.csv", other.url);
+    let server = Routes::start(vec![
+        (
+            "/data/".to_owned(),
+            nginx(
+                "/data/",
+                &["?C=M;O=A", "/", &away, "%2e%2e/secret.csv", "iris.csv"],
+            ),
+        ),
+        ("/data/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/secret.csv".to_owned(), file(TIPS, "\"s1\"")),
+        ("/data/?C=M;O=A".to_owned(), nginx("/data/", &["iris.csv"])),
+    ])?;
+    let folder = format!("{}/data/", server.url);
+    let output = sandbox.run(&["--json", "add", &folder])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(
+        pinned(&lock, "data"),
+        [pin("iris.csv", IRIS, &format!("{folder}iris.csv"))]
+    );
+    let targets = server.targets();
+    for never in ["/", "/secret.csv", "/data/?C=M;O=A"] {
+        assert!(!targets.contains(&never.to_owned()), "{never}: {targets:?}");
+    }
+    assert_eq!(other.targets(), Vec::<String>::new());
+    assert_eq!(
+        warning(&json(&output)?, "source.partial")["message"],
+        format!(
+            "the listing at {folder} links {away} and {}/secret.csv outside its folder, which fetchloom leaves out",
+            server.url
+        )
+    );
+    Ok(())
+}
+
+/// a page at a link ending in / that no server made as a listing, as a lab's own page, is
+/// refused before any download, as a web page where a file was expected always is; `--web-page`
+/// keeps the page itself.
+#[test]
+fn a_page_that_is_no_listing_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![(
+        "/lab/".to_owned(),
+        page(
+            "<!DOCTYPE html><html><head><title>Our lab</title></head><body><ul><li><a href=\"data.csv\">our data</a></li></ul></body></html>",
+        ),
+    )])?;
+    let link = format!("{}/lab/", server.url);
+    let output = sandbox.run(&["--json", "add", &link])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "source.invalid", "{document}");
+    assert_eq!(
+        error["message"],
+        format!("{link} answered with a web page, not a file or a folder listing fetchloom reads")
+    );
+    assert_eq!(
+        error["help"],
+        "fetchloom reads the folder listings apache, nginx, lighttpd and python's http.server make, and this page is none of them. open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add --web-page"
+    );
+    assert_eq!(server.targets(), ["/lab/"]);
+    assert!(!sandbox.work().join("data.toml").exists());
+
+    let kept = sandbox.run(&["add", &link, "--web-page"])?;
+    assert_eq!(kept.status.code(), Some(0), "{}", text(&kept.stderr)?);
+    let toml = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    assert!(toml.contains("web_page = true"), "{toml}");
+    Ok(())
+}
+
+/// a sync keeps the files data.lock pins without asking for the listing, and `lock --upgrade`
+/// reads it again, pinning a file the folder gained since.
+#[test]
+fn lock_upgrade_pins_a_file_the_folder_gained() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(python)?;
+    let folder = format!("{}/data/", server.url);
+    let added = sandbox.run(&["add", &folder])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    server.change(vec![
+        (
+            "/data/".to_owned(),
+            python("/data/", &["iris.csv", "new.csv", "sub/"]),
+        ),
+        ("/data/new.csv".to_owned(), file(NEW, "\"n1\"")),
+    ]);
+    sandbox.allow(&server.url);
+    let work = sandbox.work();
+    let asked = server.targets().len();
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert!(
+        server.targets()[asked..].is_empty(),
+        "{:?}",
+        server.targets()
+    );
+    assert!(!work.join("data/data/new.csv").exists());
+
+    let upgraded = sandbox.run(&["lock", "--upgrade"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert_eq!(
+        pinned(&lock, "data"),
+        [
+            pin("iris.csv", IRIS, &format!("{folder}iris.csv")),
+            pin("new.csv", NEW, &format!("{folder}new.csv")),
+            pin("sub/tips.csv", TIPS, &format!("{folder}sub/tips.csv")),
+        ]
+    );
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(work.join("data/data/new.csv"))?, NEW);
+    Ok(())
+}
+
+/// a dry run of an add tells the files the add then pins and places, and fails where the add
+/// fails, as at a page that is no listing.
+#[test]
+fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(python)?;
+    server.change(vec![(
+        "/lab/".to_owned(),
+        page("<!DOCTYPE html><html><head><title>Our lab</title></head><body></body></html>"),
+    )]);
+    let folder = format!("{}/data/", server.url);
+    let dry = sandbox.run(&["--json", "add", &folder, "--dry-run"])?;
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stdout)?);
+    let planned = json(&dry)?["result"]["changes"]["place"].clone();
+    assert_eq!(
+        planned,
+        serde_json::json!(["data/data/iris.csv", "data/data/sub/tips.csv"])
+    );
+    let added = sandbox.run(&["add", &folder])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    for path in planned.as_array().into_iter().flatten() {
+        let path = path.as_str().unwrap_or_default();
+        assert!(sandbox.work().join(path).is_file(), "{path}");
+    }
+    for link in [format!("{}/lab/", server.url)] {
+        let dry = sandbox.run(&["--json", "add", &link, "--as", "page", "--dry-run"])?;
+        let run = sandbox.run(&["--json", "add", &link, "--as", "page"])?;
+        assert_eq!(run.status.code(), Some(10), "{}", text(&run.stdout)?);
+        assert_eq!(dry.status.code(), run.status.code(), "{link}");
+        assert_eq!(
+            json(&dry)?["errors"][0]["message"],
+            json(&run)?["errors"][0]["message"],
+            "{link}"
+        );
+    }
+    Ok(())
+}

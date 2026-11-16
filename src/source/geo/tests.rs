@@ -77,14 +77,16 @@ fn paths(listing: &Listing) -> Vec<&str> {
 
 /// an index in the form NCBI's file server writes one, linking to `entries`.
 fn index(folder: &str, entries: &[&str]) -> Vec<u8> {
-    let parent = Url::parse(folder).unwrap().join("..").unwrap();
+    let folder = Url::parse(folder).unwrap();
+    let parent = folder.join("..").unwrap();
     let links = entries
         .iter()
         .map(|entry| format!("<a href=\"{entry}\">{entry}</a>  2026-10-05 16:24  1.3M\n"))
         .collect::<Vec<_>>()
         .concat();
     format!(
-        "<pre><a href=\"{}\">Parent Directory</a>\n{links}</pre>",
+        "<html><head><title>Index of {}</title></head><body><pre><a href=\"{}\">Parent Directory</a>\n{links}</pre>",
+        folder.path().trim_end_matches('/'),
         parent.path()
     )
     .into_bytes()
@@ -383,21 +385,9 @@ fn an_index_that_cannot_be_trusted_says_why() {
             &["a%0Ab.txt"][..],
             "names an entry that is no file name",
         ),
-        (
-            "an empty name",
-            &[""][..],
-            "names an entry that is no file name",
-        ),
-        (
-            "a name a step up",
-            &[".."][..],
-            "names an entry that is no file name",
-        ),
-        (
-            "a link away",
-            &["../GSE1001/"][..],
-            "names an entry that is no file name",
-        ),
+        ("an empty name", &[""][..], "links away"),
+        ("a name a step up", &[".."][..], "links away"),
+        ("a link away", &["../GSE1001/"][..], "links away"),
         (
             "a name holding a drive",
             &["C:hostile.csv"][..],
@@ -445,54 +435,26 @@ fn an_index_that_cannot_be_trusted_says_why() {
     }
 }
 
-/// an index's entries are the links inside its listing past the one to the folder above, each
-/// for the listing's checks to judge; a link the page puts elsewhere, as its footer's, is none,
-/// and a page without the link above is no index.
-#[test]
-fn the_entries_of_an_index_are_the_links_in_its_listing() {
-    let parent = "/geo/series/GSE1nnn/";
-    let html = r#"<pre><a href="/geo/series/GSE1nnn/">Parent Directory</a>
-<a href="../GSE1001/">x</a> <a href="?C=M;O=A">Last modified</a> <a href="data.txt">data.txt</a></pre>
-<a href="https://www.hhs.gov/vulnerability-disclosure-policy/index.html">HHS</a>"#;
-    assert_eq!(
-        entries(html, parent),
-        Some(vec![
-            ("../GSE1001/".to_owned(), None),
-            ("data.txt".to_owned(), None)
-        ])
-    );
-    for page in [
-        html.replace(parent, "/elsewhere/"),
-        "<!DOCTYPE html><form action=\"/login\"></form>".to_owned(),
-    ] {
-        assert_eq!(entries(&page, parent), None, "{page}");
-    }
-}
-
-/// a link with a raw `?` or `#` asks for another file than its name says, as `a?b.txt` asks for
-/// `a`, so it names no entry; the escaped name is one.
-#[test]
-fn a_link_with_a_query_or_fragment_is_no_entry() {
-    let html = r#"<pre><a href="/p/">Parent Directory</a><a href="a?b.txt">a?b.txt</a><a href="c#d.txt">c#d.txt</a><a href="a%3Fb.txt">a?b.txt</a></pre>"#;
-    assert_eq!(
-        entries(html, "/p/"),
-        Some(vec![("a%3Fb.txt".to_owned(), None)])
-    );
-}
-
 /// an index row ends with the size of its file, in bytes under 973 bytes and rounded from there,
 /// as `34M`, so only a size in bytes is the file's own; a folder's row states none.
 #[test]
 fn an_index_row_states_a_size_in_bytes_alone() {
-    let html = "<pre><a href=\"/p/\">Parent Directory</a>   -\n<a href=\"filelist.txt\">filelist.txt</a>  2013-01-17 13:28  621   \n<a href=\"a.tar\">a.tar</a>  2013-01-17 13:28   34M  \n<a href=\"b.gz\">b.gz</a>  2013-01-17 13:28  1.0K  \n<a href=\"suppl/\">suppl/</a>  2014-06-02 17:34    -   \n</pre>";
+    let folder = Url::parse("https://ftp.ncbi.nlm.nih.gov/p/x/").unwrap();
+    let html = "<title>Index of /p/x</title><pre><a href=\"/p/\">Parent Directory</a>   -\n<a href=\"filelist.txt\">filelist.txt</a>  2013-01-17 13:28  621   \n<a href=\"a.tar\">a.tar</a>  2013-01-17 13:28   34M  \n<a href=\"b.gz\">b.gz</a>  2013-01-17 13:28  1.0K  \n<a href=\"suppl/\">suppl/</a>  2014-06-02 17:34    -   \n</pre>";
+    let index = super::super::folder::read(html, &folder, &folder).unwrap();
+    let sizes: Vec<(&str, Option<u64>)> = index
+        .entries
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.size))
+        .collect();
     assert_eq!(
-        entries(html, "/p/"),
-        Some(vec![
-            ("filelist.txt".to_owned(), Some(621)),
-            ("a.tar".to_owned(), None),
-            ("b.gz".to_owned(), None),
-            ("suppl/".to_owned(), None),
-        ])
+        sizes,
+        [
+            ("filelist.txt", Some(621)),
+            ("a.tar", None),
+            ("b.gz", None),
+            ("suppl", None),
+        ]
     );
 }
 

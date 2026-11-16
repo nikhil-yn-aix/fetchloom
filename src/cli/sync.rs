@@ -1365,8 +1365,9 @@ impl<'a> Loop<'a> {
             }
             let net = self.net.clone();
             let select = select.clone();
+            let reference = parsed.reference.taking_page(entry.source.web_page);
             tasks.spawn(async move {
-                let listing = parsed.reference.resolve_in(&*net, &select).await;
+                let listing = reference.resolve_in(&*net, &select).await;
                 (name, listing)
             });
         }
@@ -1386,7 +1387,7 @@ impl<'a> Loop<'a> {
                     format!("resolving stopped unexpectedly: {err}"),
                 )
             })?;
-            let listing = listing?;
+            let listing = listing.map_err(|error| fetch::page_in_entry(error, &name))?;
             // the files the dataset keeps, counted as an add counts them
             match filter(&name, &manifest.datasets[&name], &listing) {
                 Ok(kept) => tell_kept(&self.context.output, &listing, &kept),

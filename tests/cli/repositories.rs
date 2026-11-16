@@ -1016,7 +1016,7 @@ const GEO_FILELIST: &[u8] = b"#Archive/File\tName\tTime\tSize\tType\n";
 /// NCBI's file server for GSE1000: its folder, and the folders in it holding `(path, bytes)`
 /// files, as `matrix/GSE1000_series_matrix.txt.gz`, each index rounding sizes as NCBI's do.
 fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
-    let index = |parent: &str, entries: &[String]| -> Vec<Part> {
+    let index = |folder: &str, parent: &str, entries: &[String]| -> Vec<Part> {
         let links = entries
             .iter()
             .map(|entry| format!("<a href=\"{entry}\">{entry}</a>  2026-10-05 16:24  1.3M\n"))
@@ -1025,7 +1025,7 @@ fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
         reply(
             "200 OK",
             &[("Content-Type", "text/html;charset=UTF-8")],
-            format!("<pre><a href=\"{parent}\">Parent Directory</a>\n{links}</pre>").as_bytes(),
+            format!("<html><head><title>Index of {folder}</title></head><body><pre><a href=\"{parent}\">Parent Directory</a>\n{links}</pre>").as_bytes(),
         )
     };
     let mut folders: Vec<String> = Vec::new();
@@ -1038,6 +1038,7 @@ fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
     let mut routes = vec![(
         format!("{GEO_SERIES}/"),
         index(
+            "/geo/series/GSE1nnn/GSE1000",
             "/geo/series/GSE1nnn/",
             &folders
                 .iter()
@@ -1052,7 +1053,11 @@ fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
             .collect();
         routes.push((
             format!("{GEO_SERIES}/{folder}/"),
-            index("/geo/series/GSE1nnn/GSE1000/", &names),
+            index(
+                &format!("/geo/series/GSE1nnn/GSE1000/{folder}"),
+                "/geo/series/GSE1nnn/GSE1000/",
+                &names,
+            ),
         ));
     }
     for (path, body) in files {

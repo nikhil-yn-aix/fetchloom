@@ -33,16 +33,22 @@ type Asked = Result<Arc<Listing>, Error>;
 pub(super) struct Listings(Arc<Mutex<HashMap<String, Asked>>>);
 
 impl Listings {
-    async fn get(&self, net: &impl net::Api, resolved: &str) -> Asked {
+    /// what `resolved` lists, for a dataset that keeps the web page its link answers with when
+    /// `page` says so.
+    async fn get(&self, net: &impl net::Api, resolved: &str, page: bool) -> Asked {
         let mut known = self.0.lock().await;
-        if let Some(listing) = known.get(resolved) {
+        let key = format!("{page} {resolved}");
+        if let Some(listing) = known.get(&key) {
             return listing.clone();
         }
         let listing = match Reference::parse(resolved) {
-            Ok(parsed) => parsed.reference.resolve(net).await.map(Arc::new),
+            Ok(parsed) => {
+                let reference = parsed.reference.taking_page(page);
+                reference.resolve(net).await.map(Arc::new)
+            }
             Err(err) => Err(err),
         };
-        known.insert(resolved.to_owned(), listing.clone());
+        known.insert(key, listing.clone());
         listing
     }
 }
@@ -67,7 +73,7 @@ pub(super) async fn recover(
     on(Event::Moved)?;
     // data.lock's link may hold a token, so messages show it masked
     let resolved = crate::shown::mask_query(&again.resolved);
-    let listing = match listings.get(net, &again.resolved).await {
+    let listing = match listings.get(net, &again.resolved, job.fetch.page).await {
         Ok(listing) => listing,
         Err(error) if error.kind == Kind::Interrupted => return Err(error),
         Err(error) => {
@@ -264,7 +270,7 @@ mod tests {
             );
             block_on(async {
                 let listings = Listings::default();
-                assert!(listings.get(&source, resolved).await.is_err());
+                assert!(listings.get(&source, resolved, false).await.is_err());
                 for _ in 0..2 {
                     let error = recover(
                         &net,

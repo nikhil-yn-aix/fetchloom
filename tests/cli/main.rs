@@ -20,6 +20,7 @@ mod drop;
 mod dry_run;
 mod exclude;
 mod export;
+mod folders;
 mod get;
 mod git_folders;
 mod google;

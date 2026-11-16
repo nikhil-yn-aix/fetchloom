@@ -30,7 +30,7 @@ fn gnu() -> String {
 }
 
 /// the files data.lock pins for `name`: each file's path, SHA-256 and link, as written.
-fn pinned(lock: &str, name: &str) -> Vec<String> {
+pub(crate) fn pinned(lock: &str, name: &str) -> Vec<String> {
     let entry = lock
         .split("[[dataset]]")
         .find(|entry| entry.contains(&format!("name = \"{name}\"")))
