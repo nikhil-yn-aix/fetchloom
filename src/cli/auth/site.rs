@@ -666,7 +666,10 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
     let left = site::kept_out(var, host);
     let origin = site::save(var, host, saved, store::Place::File).map_err(failed)?;
     if left {
-        super::tell_left_in_store(&context.output, &format!("what was saved for {host}"));
+        super::tell_left_in_store(
+            &context.output,
+            &format!("what was saved for {host} before"),
+        );
     }
     if !asked {
         context.output.warn(
@@ -787,16 +790,6 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
     };
     let var = &crate::machine::env;
     let output = &context.output;
-    if !site::hosts(var).contains(&host) {
-        if named {
-            return Ok(None);
-        }
-        output.done("Ok", &format!("nothing was saved for {host}"));
-        return Ok(Some(Report::Logout {
-            account: format!("site:{host}"),
-            removed_from: None,
-        }));
-    }
     if site::kept_out(var, &host) {
         let what = format!("what is saved for {host}");
         return Err(super::left_in_store(&what, &logout.account));
@@ -807,6 +800,10 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
         let doing = format!("could not remove what was saved for {host}");
         super::not_removed(&doing, &logout.account, &err)
     })?;
+    // a login's host with nothing saved here may have a login in .netrc
+    if removed.is_none() && named {
+        return Ok(None);
+    }
     let removed_from = removed.map(|origin| {
         output.done(
             "Signed out",
@@ -814,6 +811,9 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
         );
         origin.to_string()
     });
+    if removed_from.is_none() {
+        output.done("Ok", &format!("nothing was saved for {host}"));
+    }
     if let Some(left) = Account::Login(host.clone()).find(var) {
         output.warn_with(
             Warning::AuthKeyRemains,

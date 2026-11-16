@@ -58,10 +58,12 @@ impl Keyring {
         (self.answers)()
     }
 
-    /// removes the key saved for `id`. no key there, or no store at all, leaves nothing to remove.
-    fn delete(&self, id: &str) -> io::Result<()> {
+    /// removes the key saved for `id`, and says whether one was there. no key there, or no store
+    /// at all, leaves nothing to remove.
+    fn delete(&self, id: &str) -> io::Result<bool> {
         match (self.remove)(id) {
-            None | Some(Ok(()) | Err(keyring::Error::NoEntry)) => Ok(()),
+            Some(Ok(())) => Ok(true),
+            None | Some(Err(keyring::Error::NoEntry)) => Ok(false),
             Some(Err(err)) => Err(io::Error::other(err)),
         }
     }
@@ -229,7 +231,9 @@ fn save_with(
     }
     match before {
         // with the store off, the key saved there before stays, out of the index
-        Some(Place::Keyring) if place != Place::Keyring && allowed => keyring.delete(id)?,
+        Some(Place::Keyring) if place != Place::Keyring && allowed => {
+            keyring.delete(id)?;
+        }
         Some(Place::File) if place != Place::File => edit_file(&folder, |keys| {
             keys.remove(id);
         })?,
@@ -247,30 +251,42 @@ fn edit_file(folder: &Path, change: impl FnOnce(&mut BTreeMap<String, String>)) 
     write_private(&path, &json(&keys)?)
 }
 
-/// removes what was saved for `id`. returns whether anything was.
-pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
+/// removes what was saved for `id`. returns where a key was, or none when none was, as when
+/// the credential store lost it outside fetchloom.
+pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<Option<Place>> {
     forget_with(&KEYRING, var, id)
 }
 
 /// [`forget`], with `keyring` as the credential store.
-fn forget_with(keyring: &Keyring, var: Var<'_>, id: &str) -> io::Result<bool> {
+fn forget_with(keyring: &Keyring, var: Var<'_>, id: &str) -> io::Result<Option<Place>> {
     let Some(folder) = crate::machine::settings_folder(var) else {
-        return Ok(false);
+        return Ok(None);
     };
     let _held = hold_in(&folder)?;
-    let mut index: BTreeMap<String, Place> = load(&folder.join("accounts.json"))?;
-    let Some(place) = index.remove(id) else {
-        return Ok(false);
-    };
-    match place {
-        Place::Keyring if !keyring_allowed(var) => return Err(kept_out_of_store()),
-        Place::Keyring => keyring.delete(id)?,
-        Place::File => edit_file(&folder, |keys| {
-            keys.remove(id);
-        })?,
+    let index_path = folder.join("accounts.json");
+    let mut index: BTreeMap<String, Place> = load(&index_path)?;
+    let listed = index.remove(id);
+    let mut removed = None;
+    match listed {
+        Some(Place::Keyring) if !keyring_allowed(var) => return Err(kept_out_of_store()),
+        Some(Place::Keyring) => {
+            removed = keyring.delete(id)?.then_some(Place::Keyring);
+        }
+        Some(Place::File) => {
+            let mut held = false;
+            edit_file(&folder, |keys| held = keys.remove(id).is_some())?;
+            removed = held.then_some(Place::File);
+        }
+        None => {}
     }
-    write_private(&folder.join("accounts.json"), &json(&index)?)?;
-    Ok(true)
+    // a key saved while FETCHLOOM_KEYRING was off leaves the store's copy out of the index
+    if listed != Some(Place::Keyring) && keyring.usable(var) && keyring.delete(id)? {
+        removed = removed.or(Some(Place::Keyring));
+    }
+    if listed.is_some() {
+        write_private(&index_path, &json(&index)?)?;
+    }
+    Ok(removed)
 }
 
 fn file(var: Var<'_>) -> BTreeMap<String, String> {
@@ -523,8 +539,8 @@ mod tests {
             saved(&var).keys().map(String::as_str).collect::<Vec<_>>(),
             ["dataverse:demo.dataverse.org", "zenodo"]
         );
-        assert!(forget(&var, "zenodo").unwrap());
-        assert!(!forget(&var, "zenodo").unwrap());
+        assert!(forget(&var, "zenodo").unwrap().is_some());
+        assert!(forget(&var, "zenodo").unwrap().is_none());
         assert_eq!(saved_key("zenodo"), None);
         assert_eq!(
             saved_key("dataverse:demo.dataverse.org").as_deref(),
@@ -613,7 +629,7 @@ mod tests {
             );
             at_once(&|n, id| {
                 if n % 2 == 0 {
-                    assert!(forget(&var, id).unwrap());
+                    assert!(forget(&var, id).unwrap().is_some());
                 } else {
                     save(&var, id, "again", Place::File).unwrap();
                 }
@@ -630,7 +646,7 @@ mod tests {
                 "round {round}, half forgotten"
             );
             for id in odd {
-                assert!(forget(&var, id).unwrap());
+                assert!(forget(&var, id).unwrap().is_some());
             }
         }
     }
@@ -733,6 +749,59 @@ mod tests {
         },
         ..KEYRING
     };
+
+    /// [`MEMORY`] as a store a desktop session reaches.
+    const REACHED: Keyring = Keyring {
+        needs_bus: false,
+        answers: || true,
+        ..MEMORY
+    };
+
+    /// a key saved with `FETCHLOOM_KEYRING` off leaves the store's copy out of the index, and a
+    /// sign-out with the store on removes that copy too, never saying nothing was saved; a key the
+    /// store lost outside fetchloom reads as none removed.
+    #[test]
+    fn a_sign_out_removes_the_stores_copy_the_index_lost_and_only_what_is_there() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().as_os_str().to_owned();
+        let on = |name: &str| match name {
+            "HOME" | "USERPROFILE" | "APPDATA" | "XDG_CONFIG_HOME" => Some(root.clone()),
+            _ => None,
+        };
+        let off = |name: &str| match name {
+            "FETCHLOOM_KEYRING" => Some("false".into()),
+            other => on(other),
+        };
+        let held = || HELD.with_borrow(|held| held.get("site:lab.example.org").cloned());
+        save_with(
+            &REACHED,
+            &on,
+            "site:lab.example.org",
+            "kept",
+            Place::Keyring,
+        )
+        .unwrap();
+        save_with(&REACHED, &off, "site:lab.example.org", "filed", Place::File).unwrap();
+        assert_eq!(held().as_deref(), Some("kept"), "the store's copy stays");
+        assert_eq!(
+            forget_with(&REACHED, &off, "site:lab.example.org").unwrap(),
+            Some(Place::File)
+        );
+        assert_eq!(saved(&on).get("site:lab.example.org"), None);
+        assert_eq!(
+            forget_with(&REACHED, &on, "site:lab.example.org").unwrap(),
+            Some(Place::Keyring)
+        );
+        assert_eq!(held(), None, "the copy the index lost is gone");
+        assert_eq!(
+            forget_with(&REACHED, &on, "site:lab.example.org").unwrap(),
+            None
+        );
+        save_with(&REACHED, &on, "zenodo", "z", Place::Keyring).unwrap();
+        HELD.with_borrow_mut(|held| held.remove("zenodo"));
+        assert_eq!(forget_with(&REACHED, &on, "zenodo").unwrap(), None);
+        assert_eq!(saved(&on).get("zenodo"), None, "the index forgets it too");
+    }
 
     /// saved again where it is, a key replaces itself; saved somewhere new, it leaves no copy
     /// where it was.

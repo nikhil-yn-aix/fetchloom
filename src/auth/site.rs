@@ -281,12 +281,7 @@ pub(crate) fn kept_out(var: Var<'_>, host: &str) -> bool {
 ///
 /// when the store or the file cannot be changed.
 pub(crate) fn forget(var: Var<'_>, host: &str) -> std::io::Result<Option<Origin>> {
-    let id = id(host);
-    let Some(place) = store::saved(var).get(&id).copied() else {
-        return Ok(None);
-    };
-    store::forget(var, &id)?;
-    Ok(Some(Origin::saved(var, place)))
+    Ok(store::forget(var, &id(host))?.map(|place| Origin::saved(var, place)))
 }
 
 /// every website's saved credential, each with the host it goes to alone.

@@ -435,6 +435,65 @@ fn with_the_keyring_off_its_keys_stay_there_untouched() -> Result {
     Ok(())
 }
 
+/// a site's key saved again with `FETCHLOOM_KEYRING` off leaves its keyring copy behind, which the
+/// hint names once; signing out with the keyring on later removes that copy too, rather than
+/// saying nothing was saved while the keyring still holds it.
+#[test]
+fn a_keyring_copy_a_sign_in_with_the_keyring_off_left_is_signed_out_of() -> Result {
+    let sandbox = Sandbox::new()?;
+    let Some(keyring) = Keyring::start(&sandbox, true)? else {
+        return Ok(());
+    };
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    let site_key = ["service", "fetchloom", "username", &format!("site:{host}")];
+    let login = [
+        "auth",
+        "login",
+        &host,
+        "--token",
+        "--with-token",
+        "--offline",
+    ];
+    let on = keyring
+        .command(&sandbox, &login)
+        .output_with(Some(b"t-kept\n"))?;
+    assert_eq!(on.status.code(), Some(0), "{}", text(&on.stderr)?);
+    let off = |args: &[&str]| {
+        let mut command = sandbox.command(args);
+        command.env("DBUS_SESSION_BUS_ADDRESS", &keyring.address);
+        command
+    };
+    let again = off(&login).output_with(Some(b"t-filed\n"))?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "hint: what was saved for {host} before stays in the system keyring, since FETCHLOOM_KEYRING is off"
+        )),
+        "{stderr}"
+    );
+    let filed = off(&["auth", "logout", &host, "--yes"]).output()?;
+    assert_eq!(filed.status.code(), Some(0), "{}", text(&filed.stderr)?);
+    assert_eq!(
+        keyring.lookup(&site_key)?.as_deref(),
+        Some("{\"kind\":\"token\",\"token\":\"t-kept\"}")
+    );
+    let logout = keyring
+        .command(&sandbox, &["auth", "logout", &host, "--yes"])
+        .output()?;
+    let stderr = text(&logout.stderr)?;
+    assert_eq!(logout.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "Signed out of {host} · removed from the system keyring"
+        )),
+        "{stderr}"
+    );
+    assert_eq!(keyring.lookup(&site_key)?, None);
+    Ok(())
+}
+
 /// a locked keyring, which gnome keyring can only ask its password for on a screen, keeps the
 /// key: signing out says it could not remove it, rather than that none was saved, and signing in
 /// again says how to keep the key elsewhere. unlocked, the key is still there.

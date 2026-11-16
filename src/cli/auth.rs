@@ -842,7 +842,7 @@ fn save(
             let left = store::kept_out(var).contains(&id);
             store::save(var, &id, secret, store::Place::File).map_err(failed)?;
             if left {
-                tell_left_in_store(output, &format!("the {} key", title(account)));
+                tell_left_in_store(output, &format!("the {} key saved before", title(account)));
             }
             if told {
                 output.warn(
@@ -1053,7 +1053,7 @@ pub(super) fn left_in_store(what: &str, typed: &str) -> Error {
 /// which `FETCHLOOM_KEYRING` keeps fetchloom from removing.
 pub(super) fn tell_left_in_store(output: &crate::output::Output, what: &str) {
     output.hint(&format!(
-        "{what} saved before stays in {}, since FETCHLOOM_KEYRING is off",
+        "{what} stays in {}, since FETCHLOOM_KEYRING is off",
         auth::keyring_name()
     ));
 }
@@ -1108,20 +1108,25 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     let output = &context.output;
     let account = Account::parse(&logout.account, logout.host.as_deref())?;
     let var = &crate::machine::env;
-    let Some(origin) = kept(&account, var) else {
-        output.done("Ok", &format!("no {} key was saved", title(&account)));
-        return Ok(Report::Logout {
-            account: account.id(),
-            removed_from: None,
-        });
-    };
-    // a sign-out has nothing to stop, one key removed after a question at most, which a ctrl-c
-    // there cancels as a key, so a stop asked otherwise lets it finish
-    context.stop.finish();
     let failed = |err: std::io::Error| {
         let doing = format!("could not remove the {} key", title(&account));
         not_removed(&doing, &logout.account, &err)
     };
+    let Some(origin) = kept(&account, var) else {
+        // a key saved while FETCHLOOM_KEYRING was off leaves the store's copy out of the index
+        let forgotten = match account {
+            Account::Login(_) => None,
+            _ => store::forget(var, &account.id()).map_err(failed)?,
+        };
+        return Ok(signed_out(
+            output,
+            &account,
+            forgotten.map(|_| Origin::Keyring),
+        ));
+    };
+    // a sign-out has nothing to stop, one key removed after a question at most, which a ctrl-c
+    // there cancels as a key, so a stop asked otherwise lets it finish
+    context.stop.finish();
     let removed = match &origin {
         Origin::Variable(name) => {
             return Err(Error::new(
@@ -1135,8 +1140,12 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             return Err(left_in_store(&what, &logout.account));
         }
         Origin::Keyring => {
-            asking_store(output, || store::forget(var, &account.id())).map_err(failed)?;
-            auth::keyring_name().to_owned()
+            let forgotten =
+                asking_store(output, || store::forget(var, &account.id())).map_err(failed)?;
+            if forgotten.is_none() {
+                return Ok(signed_out(output, &account, None));
+            }
+            Origin::Keyring
         }
         Origin::File(path) => {
             let shared = account.shared_with();
@@ -1174,17 +1183,10 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
                 }
                 _ => std::fs::remove_file(path).map_err(failed)?,
             }
-            path.display().to_string()
+            Origin::File(path.clone())
         }
     };
-    output.done(
-        "Signed out",
-        &format!(
-            "of {} \u{b7} removed from {}",
-            login_name(&account),
-            units::path(std::path::Path::new(&removed))
-        ),
-    );
+    let report = signed_out(output, &account, Some(removed));
     // another configured location may still supply a key for the same source
     if let Some(left) = account.find(var) {
         output.warn_with(
@@ -1200,10 +1202,31 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             ),
         );
     }
-    Ok(Report::Logout {
+    Ok(report)
+}
+
+/// the sign-out of `account` once its key was removed from `removed`, as a line says, or once
+/// none was found to remove.
+fn signed_out(
+    output: &crate::output::Output,
+    account: &Account,
+    removed: Option<Origin>,
+) -> Report {
+    match &removed {
+        Some(origin) => output.done(
+            "Signed out",
+            &format!(
+                "of {} \u{b7} removed from {}",
+                login_name(account),
+                origin.shown()
+            ),
+        ),
+        None => output.done("Ok", &format!("no {} key was saved", title(account))),
+    }
+    Report::Logout {
         account: account.id(),
-        removed_from: Some(removed),
-    })
+        removed_from: removed.map(|origin| origin.to_string()),
+    }
 }
 
 /// offers a person at the terminal, after a command failed for want of an account, to sign in or
