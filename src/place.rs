@@ -176,6 +176,12 @@ enum Step {
 /// as a full disk does: the disk links nothing, or not across volumes, the object has as many
 /// names as the disk allows, or linux's `protected_hardlinks` or a permission refuses it.
 fn refuses_link(error: &io::Error) -> bool {
+    // macos answers a clone on a disk that makes none, as hfs+, with ENOTSUP, a code of its own
+    // there that std leaves uncategorized
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(rustix::io::Errno::NOTSUP.raw_os_error()) {
+        return true;
+    }
     refuses_links(error)
         || crosses_volumes(error)
         || matches!(

@@ -352,35 +352,64 @@ fn a_synced_folder_gets_no_relinked_hardlink() {
     assert!(matches!(relinked, Relinked::Linked(..)), "{relinked:?}");
 }
 
-/// a link the disk refuses for one file, as linux's `protected_hardlinks` refuses a link to
-/// another user's object, leaves that file as it is, unread, and says it is refused, so sync
-/// remembers it rather than reading it again at every run.
+/// the error a disk that makes no such link answers with: ENOTSUP, a code of its own on macos,
+/// where hfs+ answers a clone with it, or windows's `ERROR_NOT_SUPPORTED`.
+fn not_supported() -> io::Error {
+    #[cfg(unix)]
+    let code = rustix::io::Errno::NOTSUP.raw_os_error();
+    #[cfg(windows)]
+    let code = 50;
+    io::Error::from_raw_os_error(code)
+}
+
+/// a link that fails leaves the copy as it is, unread. one the disk refuses for good, as linux's
+/// `protected_hardlinks` refuses a link to another user's object, or a disk that makes no such
+/// link, is said to be refused, so sync remembers it rather than reading the file at every run,
+/// while one that fails for now, as on a full disk, is tried again by the next sync.
 #[test]
-fn a_refused_link_leaves_the_copy_unread() {
-    let (folder, object) = cache(true);
-    let destination = folder.path().join("found.csv");
-    fs::write(&destination, CONTENTS).unwrap();
-    let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
-    placer.link_refusal = Some(|| io::ErrorKind::PermissionDenied.into());
-    let read = std::sync::atomic::AtomicBool::new(false);
+fn a_failed_link_leaves_the_copy_unread() {
+    for (failure, refusal, for_good) in [
+        (
+            "denied",
+            (|| io::ErrorKind::PermissionDenied.into()) as fn() -> io::Error,
+            true,
+        ),
+        ("not supported", not_supported, true),
+        ("full disk", || io::ErrorKind::StorageFull.into(), false),
+    ] {
+        let (folder, object) = cache(true);
+        let destination = folder.path().join("found.csv");
+        fs::write(&destination, CONTENTS).unwrap();
+        let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
+        placer.link_refusal = Some(refusal);
+        let read = std::sync::atomic::AtomicBool::new(false);
 
-    let relinked = placer.relink_all(
-        1,
-        |_| Relink {
-            object: object.clone(),
-            destination: destination.clone(),
-        },
-        |_| {
-            read.store(true, std::sync::atomic::Ordering::Relaxed);
-            Some(true)
-        },
-        |_, _| true,
-    );
+        let relinked = placer.relink_all(
+            1,
+            |_| Relink {
+                object: object.clone(),
+                destination: destination.clone(),
+            },
+            |_| {
+                read.store(true, std::sync::atomic::Ordering::Relaxed);
+                Some(true)
+            },
+            |_, _| true,
+        );
 
-    assert!(matches!(relinked[..], [Relinked::Refused]), "{relinked:?}");
-    assert!(!read.load(std::sync::atomic::Ordering::Relaxed));
-    assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
-    assert_eq!(placed_names(folder.path()), ["found.csv"]);
+        let expected = if for_good {
+            matches!(relinked[..], [Relinked::Refused])
+        } else {
+            matches!(relinked[..], [Relinked::Kept])
+        };
+        assert!(expected, "{failure}: {relinked:?}");
+        assert!(
+            !read.load(std::sync::atomic::Ordering::Relaxed),
+            "{failure}"
+        );
+        assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+        assert_eq!(placed_names(folder.path()), ["found.csv"], "{failure}");
+    }
 }
 
 /// a crash can empty a clone whose blocks are not on disk yet, so a clone takes the place of a
