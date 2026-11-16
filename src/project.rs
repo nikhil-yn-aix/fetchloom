@@ -1256,8 +1256,9 @@ fn replace(temporary: &Path, path: &Path, _: Option<&fs::Permissions>) -> io::Re
     fs::rename(temporary, path)
 }
 
-/// renames `temporary` onto `path`, which windows refuses while `path` is read-only: one that is
-/// gets the attribute back on the new file.
+/// renames `temporary` onto `path`, which windows refuses while `path` is read-only, so one that
+/// is turns writable just before. the new file is read-only already, so no stop after the rename
+/// leaves it writable; only the old bytes can be left so, by a stop right before it.
 #[cfg(not(unix))]
 #[expect(
     clippy::permissions_set_readonly_false,
@@ -1269,15 +1270,21 @@ fn replace(temporary: &Path, path: &Path, kept: Option<&fs::Permissions>) -> io:
     };
     let mut writable = kept.clone();
     writable.set_readonly(false);
-    fs::set_permissions(path, writable)?;
-    if let Err(err) = fs::rename(temporary, path) {
-        let _ = fs::set_permissions(path, kept.clone());
-        return Err(err);
+    fs::set_permissions(temporary, kept.clone())?;
+    let renamed = fs::set_permissions(path, writable.clone()).and_then(|()| {
+        fs::rename(temporary, path).inspect_err(|_| {
+            let _ = fs::set_permissions(path, kept.clone());
+        })
+    });
+    if renamed.is_err() {
+        // windows removes no read-only file, and the caller removes this one
+        let _ = fs::set_permissions(temporary, writable);
     }
-    if let Err(err) = fs::set_permissions(path, kept.clone()) {
-        tracing::debug!(%err, path = %path.display(), "could not make a rewritten file read-only again");
+    #[cfg(test)]
+    if renamed.is_ok() {
+        tests::renamed(path);
     }
-    Ok(())
+    renamed
 }
 
 /// flushes the entries of the folder `path`, as [`crate::volume::sync_directory`] does, where
@@ -2572,6 +2579,41 @@ mod tests {
             Kind::ProjectInvalid
         );
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    }
+
+    #[cfg(not(unix))]
+    thread_local! {
+        /// a look at a rewritten file right as its new bytes take its name.
+        static RENAMED: std::cell::Cell<Option<fn(&Path)>> = const { std::cell::Cell::new(None) };
+    }
+
+    #[cfg(not(unix))]
+    pub(super) fn renamed(path: &Path) {
+        if let Some(look) = RENAMED.take() {
+            look(path);
+        }
+    }
+
+    /// a read-only file is read-only the moment its new bytes take its name, so no stop right
+    /// after the rename leaves it writable.
+    #[cfg(windows)]
+    #[test]
+    fn a_read_only_file_is_read_only_as_its_new_bytes_take_its_name() {
+        let (_dir, project) = project(&[("data.toml", "# before\n")]);
+        let path = project.root.join(manifest::FILE);
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+        RENAMED.set(Some(|path: &Path| {
+            assert!(
+                fs::metadata(path).unwrap().permissions().readonly(),
+                "{} was writable once renamed",
+                path.display()
+            );
+        }));
+        project.write(manifest::FILE, b"# after\n").unwrap();
+        assert!(RENAMED.take().is_none(), "the rename was not looked at");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# after\n");
     }
 
     #[cfg(unix)]
