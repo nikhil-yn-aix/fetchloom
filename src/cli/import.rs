@@ -1314,17 +1314,18 @@ fn sealed(
     flush_each: bool,
 ) -> Result<Sealing, Error> {
     let found = &walked.files;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     let beneath = Beneath::of(&walked.root).map_err(|err| {
         Error::io(
             format_args!("could not read {}", walked.root.display()),
             &err,
         )
     })?;
-    // a folder swapped for a link while the files are read is refused, not read through
-    #[cfg(unix)]
+    // a folder swapped for a link or a junction while the files are read is refused, not read
+    // through
+    #[cfg(any(unix, windows))]
     let open = |file: &Found| beneath.open(below(&walked.root, file)?);
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     let open = |file: &Found| {
         below(&walked.root, file)?;
         crate::volume::read_unfollowed(&file.source)
@@ -1408,17 +1409,11 @@ impl Beneath {
 
         use rustix::fs::{Mode, OFlags};
 
-        let refused = || {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "it is reached through a link, or is a link or a special file, which fetchloom never imports",
-            )
-        };
         let mut names = relative.components().peekable();
         let mut folder: Option<std::os::fd::OwnedFd> = None;
         while let Some(component) = names.next() {
             let std::path::Component::Normal(name) = component else {
-                return Err(refused());
+                return Err(unimportable());
             };
             let at = folder
                 .as_ref()
@@ -1427,7 +1422,7 @@ impl Beneath {
             if names.peek().is_some() {
                 let next = rustix::fs::openat(at, name, flags | OFlags::DIRECTORY, Mode::empty())
                     .map_err(|err| match err {
-                    rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR => refused(),
+                    rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR => unimportable(),
                     err => err.into(),
                 })?;
                 folder = Some(next);
@@ -1435,19 +1430,101 @@ impl Beneath {
                 // a fifo must not block opening before it can be refused
                 let file = rustix::fs::openat(at, name, flags | OFlags::NONBLOCK, Mode::empty())
                     .map_err(|err| match err {
-                        rustix::io::Errno::LOOP => refused(),
+                        rustix::io::Errno::LOOP => unimportable(),
                         err => err.into(),
                     })?;
                 let file = std::fs::File::from(file);
                 return if is_plain(&file.metadata()?) {
                     Ok(file)
                 } else {
-                    Err(refused())
+                    Err(unimportable())
                 };
             }
         }
-        Err(refused())
+        Err(unimportable())
     }
+}
+
+/// the folder an import reads, held, and each folder below it held once a file in it is opened,
+/// until the import ends: each is opened as itself, never through a link or a junction, and while
+/// held no one renames or replaces it, so no file is reached through one that appears meanwhile.
+#[cfg(windows)]
+struct Beneath {
+    root: PathBuf,
+    _held: std::fs::File,
+    /// the folders below `root` held so far, by their path below it.
+    folders: Mutex<HashMap<PathBuf, std::fs::File>>,
+}
+
+#[cfg(windows)]
+impl Beneath {
+    fn of(folder: &Path) -> std::io::Result<Beneath> {
+        Ok(Beneath {
+            root: folder.to_path_buf(),
+            _held: hold(folder, true)?,
+            folders: Mutex::default(),
+        })
+    }
+
+    fn open(&self, relative: &Path) -> std::io::Result<std::fs::File> {
+        let mut names = relative.components().peekable();
+        let (mut at, mut inside) = (self.root.clone(), PathBuf::new());
+        while let Some(component) = names.next() {
+            let std::path::Component::Normal(name) = component else {
+                return Err(unimportable());
+            };
+            at.push(name);
+            if names.peek().is_none() {
+                return crate::volume::read_unfollowed(&at);
+            }
+            inside.push(name);
+            let mut folders = self.folders.lock().unwrap_or_else(PoisonError::into_inner);
+            if !folders.contains_key(&inside) {
+                let folder = hold(&at, false)?;
+                folders.insert(inside.clone(), folder);
+            }
+        }
+        Err(unimportable())
+    }
+}
+
+/// `folder` open and held so no one renames or removes it: opened as itself unless `follow`, and
+/// refused when it is a link, a junction or no folder.
+#[cfg(windows)]
+fn hold(folder: &Path, follow: bool) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    // listing access records the handle's sharing, which reading attributes alone does not, so
+    // leaving out FILE_SHARE_DELETE then refuses a rename or a removal of the folder
+    const FILE_LIST_DIRECTORY: u32 = 0x1;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const FILE_SHARE_READ_WRITE: u32 = 0x3;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let flags = if follow {
+        FILE_FLAG_BACKUP_SEMANTICS
+    } else {
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
+    };
+    let held = std::fs::OpenOptions::new()
+        .access_mode(FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ_WRITE)
+        .custom_flags(flags)
+        .open(folder)?;
+    let found = held.metadata()?;
+    if found.file_type().is_symlink() || !found.is_dir() {
+        return Err(unimportable());
+    }
+    Ok(held)
+}
+
+/// the error for a file an import will not read: one reached through a link, or a link or a
+/// special file itself.
+#[cfg(any(unix, windows))]
+fn unimportable() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "it is reached through a link, or is a link or a special file, which fetchloom never imports",
+    )
 }
 
 /// the pin of `files` imported for `name`, naming no source to fetch from. relocking learns what
@@ -1819,6 +1896,39 @@ mod tests {
                 pin.path
             );
         }
+    }
+
+    /// on windows, a folder of an import swapped for a junction once it was walked, as another
+    /// account that can write the folder could, is never read through: the import refuses it, and
+    /// the file the junction leads to stays out of the cache.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_swapped_in_after_the_walk_is_never_read_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("flowers");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub").join("bait.csv"), b"what the folder held").unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("bait.csv"), b"someone's own bytes").unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = crate::cli::project::tests::offline_context();
+        let walked = walk(
+            &root,
+            "./flowers",
+            &entry(&[], &[]),
+            crate::net::MOST_FILES,
+            &context.stop,
+        )
+        .unwrap();
+        std::fs::rename(root.join("sub"), dir.path().join("moved")).unwrap();
+        if crate::test_links::link_folder(&outside, &root.join("sub")).is_err() {
+            return crate::test_skips::skip("junctions", "this disk makes no junctions");
+        }
+        let copied = into_cache(&context, &cache, &walked);
+        assert!(copied.is_err(), "the junction was read through");
+        let theirs = crate::digest::sha256(b"someone's own bytes");
+        assert!(cache.find(&theirs, None).is_none());
     }
 
     #[test]

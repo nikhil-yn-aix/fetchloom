@@ -12,7 +12,7 @@
 - a digest is read as what its source says it is. dandi's `dandi:dandi-etag` is S3's multipart tag, not an MD5, so only its `dandi:sha2-256` is checked. an OpenNeuro file's git-annex key states a SHA-256 for its `SHA256` backends and an MD5 for its `MD5` ones, and a chunk's key or another backend's states none.
 - an accession can name reads rather than bytes: ENA's FASTQ, a run's submitted files and its SRA file are different files. a reference lists one kind, so a lock never presents one as a mirror of another.
 - default tests use recorded responses or local servers. [ignored live tests](../engineering/ci.md#live-source-checks) check current services separately.
-- an import records no path and no link. its files are walked without following a link, opened below the folder one name at a time on unix, and copied into the cache, never hardlinked, since a link would seal the person's file read-only.
+- an import records no path and no link. its files are walked without following a link, opened below the folder one name at a time on unix, or on windows below folders each opened as itself and held without delete sharing until the copy ends, so a link or a junction swapped in after the walk is refused, never read through, and copied into the cache, never hardlinked, since a link would seal the person's file read-only.
 
 ## tests
 
