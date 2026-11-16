@@ -429,6 +429,11 @@ impl Wire {
             Lane::Shared | Lane::Metadata => builder,
             Lane::Apart => builder.http1_only(),
         };
+        let builder = if self.proxies.direct() {
+            builder.no_proxy()
+        } else {
+            builder
+        };
         #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
         let builder = builder.tls_backend_preconfigured(roots::tls(matches!(lane, Lane::Apart))?);
         builder.build().map_err(|err| {

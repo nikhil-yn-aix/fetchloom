@@ -383,6 +383,8 @@ fn is_unknown(err: &std::io::Error) -> bool {
 /// what looking up the hosts sent through them found.
 pub(crate) struct Proxies {
     matcher: Matcher,
+    /// `NO_PROXY` lists `*`, so every request goes straight to its host.
+    direct: bool,
     /// each variable that names a proxy, with the proxy it names, as the matcher reads them.
     named: Vec<(&'static str, http::Uri)>,
     /// what looking up each host found.
@@ -427,6 +429,20 @@ fn named(var: &dyn Fn(&str) -> Option<OsString>) -> Result<Vec<(&'static str, ht
         }
     }
     Ok(named)
+}
+
+/// whether `NO_PROXY`, or `no_proxy` when it is unset, lists `*`, which reaches every host
+/// without a proxy, as curl reads it.
+fn reaches_all(var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    ["NO_PROXY", "no_proxy"]
+        .into_iter()
+        .find_map(var)
+        .is_some_and(|value| {
+            value
+                .to_string_lossy()
+                .split(',')
+                .any(|entry| entry.trim() == "*")
+        })
 }
 
 /// the proxy `value` names, as the matcher reads a proxy variable: an http, https or socks
@@ -509,8 +525,16 @@ impl Proxies {
     ///
     /// `usage` for a proxy variable whose value is no proxy address.
     pub(crate) fn read(var: &dyn Fn(&str) -> Option<OsString>) -> Result<Proxies, Error> {
+        // the matcher takes `*` for every name but no address, as `127.0.0.1`
+        let direct = reaches_all(var);
+        let matcher = if direct {
+            Matcher::builder().build()
+        } else {
+            Matcher::from_system()
+        };
         Ok(Proxies {
-            matcher: Matcher::from_system(),
+            matcher,
+            direct,
             named: named(var)?,
             looked_up: Mutex::default(),
             checked: Mutex::default(),
@@ -566,6 +590,12 @@ impl Proxies {
         }
     }
 
+    /// whether every request goes straight to its host, as `NO_PROXY=*` says, so the client
+    /// must not route by the variables itself.
+    pub(super) fn direct(&self) -> bool {
+        self.direct
+    }
+
     #[cfg(test)]
     pub(super) fn with_lookup(
         proxy: &str,
@@ -573,6 +603,7 @@ impl Proxies {
     ) -> Proxies {
         Proxies {
             matcher: Matcher::builder().all(proxy.to_owned()).build(),
+            direct: false,
             named: Vec::new(),
             looked_up: Mutex::default(),
             checked: Mutex::default(),
@@ -590,6 +621,7 @@ impl Proxies {
     ) -> Proxies {
         Proxies {
             matcher: Matcher::builder().all(proxy.to_owned()).build(),
+            direct: false,
             named: proxy_address(proxy)
                 .map(|uri| vec![(variable, uri)])
                 .unwrap_or_default(),

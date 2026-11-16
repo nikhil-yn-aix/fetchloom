@@ -305,3 +305,23 @@ fn a_proxy_that_cannot_be_reached_is_named_and_not_tried_again() -> Result {
     assert!(!text(&output.stderr)?.contains("(try "));
     Ok(())
 }
+
+/// `NO_PROXY=*` reaches every host without the proxy, an address as a name, however it is
+/// written among other entries, and so sends no proxy login either.
+#[test]
+fn no_proxy_star_reaches_every_host_without_the_proxy() -> Result {
+    let sandbox = Sandbox::new()?;
+    let proxy = Proxy::start()?;
+    let server = Server::start("/iris.csv", (0..3).map(|_| file(IRIS, "\"v1\"")).collect())?;
+    let login = proxy.url.replace("http://", "http://who:secret@");
+    for (index, value) in ["*", " * ", "example.org,*"].into_iter().enumerate() {
+        let output = sandbox
+            .command(&["get", &server.url, "-o", &format!("iris-{index}.csv")])
+            .env("HTTP_PROXY", &login)
+            .env("NO_PROXY", value)
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    assert_eq!(proxy.asked(), Vec::<String>::new());
+    Ok(())
+}

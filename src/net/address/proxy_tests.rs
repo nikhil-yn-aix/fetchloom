@@ -228,6 +228,7 @@ fn proxies(pairs: &[(&'static str, &'static str)]) -> Proxies {
             .all(first(["ALL_PROXY", "all_proxy"]))
             .no(first(["NO_PROXY", "no_proxy"]))
             .build(),
+        direct: false,
         named: named(&var).unwrap(),
         looked_up: Mutex::default(),
         checked: Mutex::default(),
@@ -391,5 +392,30 @@ fn a_failed_connection_says_why_in_the_same_words_everywhere() {
         (ErrorKind::TimedOut, "no connection to it opened in time"),
     ] {
         assert_eq!(reach::why(&Error::from(kind)), said, "{kind:?}");
+    }
+}
+
+/// `*` among `NO_PROXY`'s entries, however spaced, sends every request straight to its host;
+/// `no_proxy` counts only when `NO_PROXY` is unset, as the proxy matcher reads them.
+#[test]
+fn a_star_in_no_proxy_reaches_every_host_directly() {
+    for (pairs, direct) in [
+        (&[("NO_PROXY", "*")][..], true),
+        (&[("NO_PROXY", " * ")], true),
+        (&[("NO_PROXY", "example.org,*")], true),
+        (&[("no_proxy", "*")], true),
+        (&[("NO_PROXY", ""), ("no_proxy", "*")], false),
+        (&[("NO_PROXY", "*.example.org")], false),
+        (&[("NO_PROXY", "example.org")], false),
+        (&[], false),
+    ] {
+        let var = env(pairs);
+        assert_eq!(super::reaches_all(&var), direct, "{pairs:?}");
+        let proxies = Proxies::read(&var).unwrap();
+        assert_eq!(proxies.direct(), direct, "{pairs:?}");
+        if direct {
+            let url = Url::parse("http://127.0.0.1:8790/f.bin").unwrap();
+            assert!(proxies.carrier(&url).is_none(), "{pairs:?}");
+        }
     }
 }
