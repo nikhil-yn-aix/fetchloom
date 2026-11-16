@@ -3133,10 +3133,10 @@ mod tests {
             again: None,
         };
         let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
-        let advice = watch.page_refused(true).help.unwrap_or_default();
+        let advice = watch.page_refused(true).told().help.unwrap_or_default();
         // windows withholds a name its shells would run and shows a placeholder instead
         let suggested = if cfg!(windows) {
-            "`fetchloom auth login <name>`"
+            "`fetchloom auth login \"<name>\"`"
         } else {
             "`fetchloom auth login 'x$(id).example'`"
         };

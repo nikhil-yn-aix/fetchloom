@@ -262,10 +262,12 @@ fn exclusion_hints_quote_shell_characters() {
     let body = String::from_utf8(fixture_bytes("drive/folder-select-mixed.html"))
         .unwrap()
         .replace(">gdown<", ">gdown&#39;s $notes&#96;extra<");
-    let error = filter("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
+    let error = filter("docs", &entry(&[], &[], true), &listing(body.into_bytes()))
+        .unwrap_err()
+        .told();
     // on windows no command there can hold `$` or a backtick safely, so a placeholder stands in
     let expected = if cfg!(windows) {
-        "--exclude <name>"
+        "--exclude \"<name>\""
     } else {
         r"--exclude 'gdown'\''s $notes`extra'"
     };
@@ -275,9 +277,11 @@ fn exclusion_hints_quote_shell_characters() {
     let body = String::from_utf8(fixture_bytes("drive/folder-select-mixed.html"))
         .unwrap()
         .replace(">gdown<", ">notes!v2<");
-    let error = filter("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
+    let error = filter("docs", &entry(&[], &[], true), &listing(body.into_bytes()))
+        .unwrap_err()
+        .told();
     let expected = if cfg!(windows) {
-        "--exclude <name>"
+        "--exclude \"<name>\""
     } else {
         "--exclude 'notes!v2'"
     };
