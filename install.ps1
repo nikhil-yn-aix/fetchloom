@@ -99,14 +99,14 @@ function Install-Fetchloom([string]$Version) {
     # staged beside the destination, so moving each program into place is a rename
     $work = Join-Path $root "install-$PID"
     New-Item -ItemType Directory -Force $bin | Out-Null
-    # a run that was killed leaves its staging folder, and a running fl.exe left aside its old
-    # link: a folder whose run is gone goes, never through a link, and a link that is free goes
+    # a run that was killed leaves its staging folder, and a running program left aside its old
+    # name: a folder whose run is gone goes, never through a link, and a name that is free goes
     foreach ($stale in Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue) {
         if ($stale.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
         if ($stale.PSIsContainer -and $stale.Name -match '^install-(\d{1,9})$' -and [int]$Matches[1] -ne $PID -and
             -not (Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue)) {
             Remove-Item -LiteralPath $stale.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        } elseif (-not $stale.PSIsContainer -and $stale.Name -match '^old-fl-\d+\.exe$') {
+        } elseif (-not $stale.PSIsContainer -and $stale.Name -match '^old-(fl|fetchloom)-\d+\.exe$') {
             Remove-Item -LiteralPath $stale.FullName -Force -ErrorAction SilentlyContinue
         }
     }
@@ -160,7 +160,34 @@ function Install-Fetchloom([string]$Version) {
             throw "the downloaded $name says it is $shown, not fetchloom $found. nothing was installed"
         }
         Test-Destination
-        Move-Item -Force $staged $destination
+        # windows replaces no file another program holds, and security software may hold either
+        # program a moment. Move-Item -Force deletes the old one first, so it goes aside (even a
+        # running one can) and comes back if the new one cannot take its place
+        $aside = Join-Path $root "old-fetchloom-$PID.exe"
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $told = $false
+        while ($true) {
+            try {
+                if (Test-Path -LiteralPath $destination) { Move-Item -LiteralPath $destination -Destination $aside }
+                Move-Item -LiteralPath $staged -Destination $destination
+                break
+            } catch {
+                if ((Test-Path -LiteralPath $aside) -and -not (Test-Path -LiteralPath $destination)) {
+                    Move-Item -LiteralPath $aside -Destination $destination
+                }
+                $busy = $_.Exception -is [IO.IOException] -and ($_.Exception.HResult -band 0xFFFF) -in (32, 33)
+                if (-not $busy) { throw }
+                if ($clock.Elapsed.TotalSeconds -ge 60) {
+                    throw "another program held $name for a minute, as security software checking it may. nothing was installed, and an installed fetchloom stays as it was. close what uses fetchloom, then run the installer again"
+                }
+                if (-not $told) {
+                    Write-Host "waiting for another program to let go of $name, as security software checking it may"
+                    $told = $true
+                }
+                Start-Sleep -Milliseconds 250
+            }
+        }
+        Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue
     } finally {
         Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
     }

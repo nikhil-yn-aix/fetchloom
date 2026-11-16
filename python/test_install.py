@@ -438,13 +438,18 @@ class PowerShellRelease(unittest.TestCase):
         (self.release / "SHA256SUMS").write_text(f"{digest}  {name}.zip\n", encoding="ascii")
         return digest
 
-    def install(self, version="0.1.0"):
+    def installer(self, version="0.1.0"):
+        """the command that runs install.ps1 against this release, and its environment."""
         env = {name: value for name, value in os.environ.items()
                if not name.upper().startswith("FETCHLOOM_") and not name.upper().endswith("_PROXY")}
         env.update(LOCALAPPDATA=str(self.local), FETCHLOOM_DOWNLOAD_URL=self.url, FETCHLOOM_NO_MODIFY_PATH="1",
                    NO_PROXY="127.0.0.1")
         command = [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                    "-File", str(ROOT / "install.ps1"), *(["-Version", version] if version else [])]
+        return command, env
+
+    def install(self, version="0.1.0"):
+        command, env = self.installer(version)
         result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                 timeout=120)
         # powershell may color an error and wraps a long one across lines behind a | gutter
@@ -506,6 +511,31 @@ class PowerShellRelease(unittest.TestCase):
         self.assertRegex(said, r"the downloaded fetchloom\.exe says it is curl \S+ .*, not fetchloom 0\.1\.0\. nothing was installed")
         self.assertIn("checking that the downloaded fetchloom.exe runs on this machine", result.stdout)
         self.assertEqual(installed.read_bytes(), b"previous installation\n")
+
+    @unittest.skipUnless(sys.platform == "win32" and (ROOT / "target/debug/fetchloom.exe").is_file(),
+                         "needs windows and a fetchloom.exe built here")
+    def test_an_upgrade_waits_while_another_program_holds_fetchloom_exe(self):
+        self.package(program=(ROOT / "target/debug/fetchloom.exe").read_bytes())
+        result, said = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # python opens a file without letting others delete it, as security software checking a
+        # program may, so windows cannot replace fetchloom.exe until this lets go
+        held = open(self.programs / "bin/fetchloom.exe", "rb")
+        self.addCleanup(held.close)
+        command, env = self.installer()
+        lines = []
+        with subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True) as upgrade:
+            for line in upgrade.stdout:
+                lines.append(line)
+                if line.startswith("waiting for another program"):
+                    held.close()
+            upgrade.wait(timeout=120)
+        said = "".join(lines)
+        self.assertTrue(held.closed, f"the installer never waited for fetchloom.exe:\n{said}")
+        self.assertEqual(upgrade.returncode, 0, said)
+        self.assertIn("installed fetchloom 0.1.0", said)
+        self.assertEqual(list(self.programs.glob("old-fetchloom-*.exe")), [])
 
     @unittest.skipUnless(sys.platform == "win32" and (ROOT / "target/debug/fetchloom.exe").is_file(),
                          "needs windows and a fetchloom.exe built here")
