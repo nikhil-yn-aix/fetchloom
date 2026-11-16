@@ -1,8 +1,10 @@
 //! which requests carry a google access token: those to storage.googleapis.com over https for a
 //! bucket `gcs_buckets` lists, once it refused one without, and those to drive's api [`drive`]
-//! lets through, each before any redirect.
+//! lets through, each before any redirect. the token is of google's application default
+//! credentials, else of this machine's service account, which [`machine`] asks for.
 
 mod drive;
+mod machine;
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -83,6 +85,20 @@ pub(crate) struct Google {
     /// in debug builds, a server on this machine that stands in for google's token endpoint.
     #[cfg(debug_assertions)]
     token_endpoint: Option<Url>,
+    /// this machine's metadata server, asked when no application default credentials are here:
+    /// google's address, a server on this machine that stands in for it in tests, or none.
+    machine_server: Option<Url>,
+    /// the email of this machine's service account, asked once a run when first needed: none
+    /// when no google metadata server answered.
+    machine: Lease<Option<Arc<str>>>,
+}
+
+/// where a run's google tokens come from.
+enum Source {
+    /// application default credentials.
+    Credentials(Arc<Credentials>),
+    /// this machine's service account, `account`, from the metadata server at `server`.
+    Machine { server: Url, account: Arc<str> },
 }
 
 /// the cloud storage bucket or drive item a request is for, as its link names it.
@@ -143,6 +159,13 @@ impl Google {
             drive: drive::Drive::default(),
             #[cfg(debug_assertions)]
             token_endpoint: None,
+            // a unit test never asks the metadata server of the machine it runs on
+            machine_server: if cfg!(test) {
+                None
+            } else {
+                Url::parse(machine::SERVER).ok()
+            },
+            machine: Lease::default(),
         }
     }
 
@@ -158,6 +181,25 @@ impl Google {
     #[cfg(debug_assertions)]
     pub(crate) fn with_token_endpoint(mut self, endpoint: Option<Url>) -> Google {
         self.token_endpoint = endpoint;
+        self
+    }
+
+    /// asks the server at `server` as this machine's metadata server, none for a machine without
+    /// one. only tests need it.
+    #[cfg(test)]
+    pub(crate) fn with_machine_server(mut self, server: Option<Url>) -> Google {
+        self.machine_server = server;
+        self
+    }
+
+    /// asks the metadata server `FETCHLOOM_TEST_GOOGLE_METADATA` names instead of google's: a
+    /// server on this machine that stands in for it, or none, as off google cloud, when it names
+    /// no such server. unset leaves google's own. only tests need it.
+    #[cfg(debug_assertions)]
+    pub(crate) fn with_test_machine_server(mut self) -> Google {
+        if std::env::var_os("FETCHLOOM_TEST_GOOGLE_METADATA").is_some() {
+            self.machine_server = super::api::local_test_server("FETCHLOOM_TEST_GOOGLE_METADATA");
+        }
         self
     }
 
@@ -199,7 +241,8 @@ impl Google {
     }
 
     /// the token a request for `located` carries: none until its bucket refused one without it
-    /// this run, none for a drive item [`drive`] keeps out, and none without credentials.
+    /// this run, none for a drive item [`drive`] keeps out, and none without credentials or a
+    /// machine's service account.
     ///
     /// # Errors
     ///
@@ -223,7 +266,7 @@ impl Google {
                 (&self.drive.token, DRIVE_READ)
             }
         };
-        let Some(credentials) = self.credentials()? else {
+        let Some(source) = self.source(net).await? else {
             return Ok(None);
         };
         #[cfg(debug_assertions)]
@@ -233,19 +276,30 @@ impl Google {
         // boxed, so the future of every request does not carry the token request's retries
         lease
             .get(Instant::now, || {
-                Box::pin(net.google_token(&credentials, scope, endpoint))
+                Box::pin(async move {
+                    match &source {
+                        Source::Credentials(credentials) => {
+                            net.google_token(credentials, scope, endpoint).await
+                        }
+                        Source::Machine { server, account } => {
+                            net.machine_bearer(server, account, scope).await
+                        }
+                    }
+                })
             })
             .await
             .map(Some)
     }
 
     /// learns from cloud storage refusing a request for `located` without a token: a listed
-    /// bucket is asked with one from now on. says whether credentials were found to ask with.
+    /// bucket is asked with one from now on. says whether credentials or a machine's service
+    /// account were found to ask with.
     ///
     /// # Errors
     ///
-    /// what reading the credentials found wrong, such as a file of another kind.
-    pub(crate) fn refused(&self, located: &Located) -> Result<bool, Error> {
+    /// what reading the credentials or asking the metadata server found wrong, such as a file
+    /// of another kind.
+    pub(crate) async fn refused(&self, net: &Net, located: &Located) -> Result<bool, Error> {
         let Asked::Bucket {
             bucket,
             listed: true,
@@ -254,7 +308,32 @@ impl Google {
             return Ok(false);
         };
         self.refused_buckets().insert(bucket.clone());
-        Ok(self.credentials()?.is_some())
+        Ok(self.source(net).await?.is_some())
+    }
+
+    /// where tokens come from: the application default credentials, else this machine's service
+    /// account, when google's metadata server answers, asked once a run. none without either.
+    ///
+    /// # Errors
+    ///
+    /// what reading the credentials or asking the metadata server found wrong.
+    async fn source(&self, net: &Net) -> Result<Option<Source>, Error> {
+        if let Some(credentials) = self.credentials()? {
+            return Ok(Some(Source::Credentials(credentials)));
+        }
+        let Some(server) = &self.machine_server else {
+            return Ok(None);
+        };
+        let account = self
+            .machine
+            .get(Instant::now, || {
+                Box::pin(async { Ok((net.machine_account(server).await?, None)) })
+            })
+            .await?;
+        Ok(account.map(|account| Source::Machine {
+            server: server.clone(),
+            account,
+        }))
     }
 
     /// forgets `bearer`, which google refused for `located` as no longer valid, so the next
@@ -521,9 +600,16 @@ impl Net {
         let status = response.status();
         if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
             match bearer {
-                None if self.google.refused(stored).map_err(Failure::Final)? => {
-                    tracing::debug!(url = %Shown(response.url()), "cloud storage refused the request without a token, so it goes again with one");
-                    return Ok(true);
+                None => {
+                    if self
+                        .google
+                        .refused(self, stored)
+                        .await
+                        .map_err(Failure::Final)?
+                    {
+                        tracing::debug!(url = %Shown(response.url()), "cloud storage refused the request without a token, so it goes again with one");
+                        return Ok(true);
+                    }
                 }
                 Some(sent)
                     if status == StatusCode::UNAUTHORIZED

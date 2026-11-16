@@ -223,6 +223,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/net/sign.rs` | AWS signature version 4: the canonical request and the authorization header, on `hmac` and `sha2`, so the secret itself is never sent | `authorization` | `Keys`, `Scope`, `Request`, `canonical`, `amz_date` |
 | `src/net/google.rs` | which requests carry a google token: listed buckets once refused, and the drive requests `drive` lets through; and the token request | `Google` | `Located`, `Bearer`, `Authorized`, `google_token`, `post_grant` |
 | `src/net/google/drive.rs` | which drive api requests carry a token: items `drive_folders` lists and what google lists inside them | `Drive` |  |
+| `src/net/google/machine.rs` | this machine's service account and its tokens from google's metadata server at 169.254.169.254, through a client of its own | `Net::machine_account`, `Net::machine_bearer` |  |
 | `src/net/azure.rs` | which azure blob requests carry a SAS, a key's signature or a token, never after a redirect | `Azure` | `Located`, `Sent`, `Blobbed` |
 | `src/net/azure/shared_key.rs` | azure's shared key signature; the key is never sent | `authorization` |  |
 | `src/net/azure/identity.rs` | the managed identity's token from 169.254.169.254, through a client of its own | `Net::identity_token` |  |

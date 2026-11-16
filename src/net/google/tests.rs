@@ -110,6 +110,11 @@ fn google_net(listed: &[&str], credentials: Option<&Path>, endpoint: &Url) -> Ne
         }),
     )
     .with_token_endpoint(Some(endpoint.clone()));
+    net_with(google)
+}
+
+/// a network that sends google tokens as `google` says.
+fn net_with(google: Google) -> Net {
     Net::new(
         Options {
             offline: Offline::No,
@@ -557,4 +562,261 @@ fn a_token_answer_is_read_whole_up_to_64_kib() {
         "gave up on 127.0.0.1 after 1 try: the connection to 127.0.0.1 broke partway through the answer"
     );
     assert_eq!(asked_for_tokens.lock().unwrap().len(), 4);
+}
+
+/// this machine's service account, as google's metadata server names it.
+const MACHINE: &str = "loader@lab-project.iam.gserviceaccount.com";
+/// the folder google's metadata server keeps the default service account in, lowercase as the
+/// test server keeps a request.
+const ACCOUNT: &str = "/computemetadata/v1/instance/service-accounts/default";
+
+/// google's metadata server for a machine whose service account is [`MACHINE`]: its email, and
+/// `machine-1`, `machine-2` and so on for each token asked, every answer saying it is google's.
+fn machine_server() -> (Url, Arc<Mutex<Vec<Asked>>>) {
+    server(|request, count| {
+        let target = request.line.split(' ').nth(1).unwrap_or_default();
+        let google = [("Metadata-Flavor", "Google")];
+        if target == format!("{ACCOUNT}/email") {
+            return reply("200 OK", &google, MACHINE.as_bytes());
+        }
+        if target.starts_with(&format!("{ACCOUNT}/token?")) {
+            let token = format!(
+                r#"{{"access_token":"machine-{count}","expires_in":3599,"token_type":"Bearer"}}"#
+            );
+            return reply("200 OK", &google, token.as_bytes());
+        }
+        reply("404 Not Found", &google, b"")
+    })
+}
+
+/// a network without application default credentials that sends google tokens for the
+/// `listed` buckets, on a machine whose metadata server is `machine`, none for one without.
+fn machine_net(listed: &[&str], endpoint: &Url, machine: Option<&Url>) -> Net {
+    let listed = listed
+        .iter()
+        .map(|text| GcsBucket::parse(text).unwrap())
+        .collect();
+    let google = Google::new(listed, Arc::new(|_: &str| None))
+        .with_token_endpoint(Some(endpoint.clone()))
+        .with_machine_server(machine.cloned());
+    net_with(google)
+}
+
+/// with no application default credentials, a listed bucket's refusal asks this machine's
+/// metadata server, through a client of its own with `Metadata-Flavor: Google` and nothing else,
+/// for its service account and a token of the storage scope, once for the run.
+#[test]
+fn a_listed_bucket_without_credentials_is_read_as_the_machines_service_account() {
+    let (endpoint, asked_for_tokens) = tokens();
+    let (machine, asked_machine) = machine_server();
+    let (local, asked) = server(|request, _| match request.authorization() {
+        Some("bearer machine-1") => reply("200 OK", &[], b"object"),
+        _ => reply("401 Unauthorized", &[], b"{}"),
+    });
+    let net = machine_net(&["lab-private"], &endpoint, Some(&machine));
+    let client = transport();
+    let link = |name: &str| format!("https://storage.googleapis.com/lab-private/raw/{name}");
+    for name in ["a.csv", "b.csv"] {
+        let answer = block_on(through(&net, &client, &local, &link(name)));
+        assert_eq!(answer.status(), 200);
+        assert_eq!(
+            answer.extensions().get::<Authorized>(),
+            Some(&Authorized::Token {
+                bucket: "lab-private".to_owned(),
+                identity: format!("this machine's service account {MACHINE}"),
+                lacks_scope: false,
+            })
+        );
+    }
+    let other = block_on(through(
+        &net,
+        &client,
+        &local,
+        "https://storage.googleapis.com/lab-other/raw/a.csv",
+    ));
+    assert_eq!(other.status(), 401);
+    let token = Some("bearer machine-1".to_owned());
+    assert_eq!(authorizations(&asked), [None, token.clone(), token, None]);
+    let machine_asked = asked_machine.lock().unwrap().clone();
+    let lines: Vec<&str> = machine_asked
+        .iter()
+        .map(|asked| asked.line.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            format!("get {ACCOUNT}/email http/1.1"),
+            format!(
+                "get {ACCOUNT}/token?scopes=https%3a%2f%2fwww.googleapis.com%2fauth%2fdevstorage.read_only http/1.1"
+            ),
+        ]
+    );
+    for asked in &machine_asked {
+        assert!(
+            asked.head.contains("\r\nmetadata-flavor: google\r\n"),
+            "{}",
+            asked.head
+        );
+        assert!(asked.authorization().is_none(), "{}", asked.head);
+        assert!(!asked.head.contains("cookie"), "{}", asked.head);
+    }
+    assert!(asked_for_tokens.lock().unwrap().is_empty());
+}
+
+/// a credentials file comes before the machine's metadata server, which is then never asked.
+#[test]
+fn application_default_credentials_come_before_the_machines_metadata_server() {
+    let (endpoint, _) = tokens();
+    let (machine, asked_machine) = machine_server();
+    let (local, _) = server(|request, _| match request.authorization() {
+        Some("bearer token-0") => reply("200 OK", &[], b"object"),
+        _ => reply("401 Unauthorized", &[], b"{}"),
+    });
+    let folder = tempfile::tempdir().unwrap();
+    let named = login(folder.path()).into_os_string();
+    let google = Google::new(
+        vec![GcsBucket::parse("lab-private").unwrap()],
+        Arc::new(move |name: &str| {
+            (name == "GOOGLE_APPLICATION_CREDENTIALS").then(|| named.clone())
+        }),
+    )
+    .with_token_endpoint(Some(endpoint))
+    .with_machine_server(Some(machine));
+    let net = net_with(google);
+    let link = "https://storage.googleapis.com/lab-private/raw/a.csv";
+    let answer = block_on(through(&net, &transport(), &local, link));
+    assert_eq!(answer.status(), 200);
+    assert!(asked_machine.lock().unwrap().is_empty());
+}
+
+/// off google cloud, where nothing answers at the metadata server's address or another cloud's
+/// service answers without saying it is google's, there are no credentials: the refusal says
+/// none were found, and the address is asked once a run.
+#[test]
+fn a_machine_without_googles_metadata_server_has_no_credentials() {
+    let (endpoint, _) = tokens();
+    let (local, asked) = server(|_, _| reply("401 Unauthorized", &[], b""));
+    let (elsewhere, asked_elsewhere) = server(|_, _| reply("404 Not Found", &[], b""));
+    let closed = {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap()
+    };
+    let client = transport();
+    let link = "https://storage.googleapis.com/lab-private/a.csv";
+    for machine in [Some(&elsewhere), Some(&closed), None] {
+        let net = machine_net(&["lab-private"], &endpoint, machine);
+        for _ in 0..2 {
+            let answer = block_on(through(&net, &client, &local, link));
+            assert_eq!(answer.status(), 401);
+            assert_eq!(
+                answer.extensions().get::<Authorized>(),
+                Some(&Authorized::Anonymous {
+                    bucket: "lab-private".to_owned(),
+                    listed: true,
+                })
+            );
+        }
+    }
+    assert_eq!(asked_elsewhere.lock().unwrap().len(), 1);
+    assert_eq!(authorizations(&asked), vec![None; 6]);
+}
+
+/// google's metadata server on a machine without a service account, or one that gives no token,
+/// stops the bucket's requests with what it said.
+#[test]
+fn a_machine_without_a_service_account_says_so() {
+    let (endpoint, _) = tokens();
+    let (local, asked) = server(|_, _| reply("401 Unauthorized", &[], b""));
+    let google = [("Metadata-Flavor", "Google")];
+    let (bare, _) = server(move |_, _| reply("404 Not Found", &google, b"Not Found\n"));
+    let (refusing, _) = server(move |request, _| {
+        if request.line.contains("/email ") {
+            reply("200 OK", &google, MACHINE.as_bytes())
+        } else {
+            reply("403 Forbidden", &google, b"forbidden")
+        }
+    });
+    let (elsewhere, asked_elsewhere) = machine_server();
+    let moved = format!("{elsewhere}computeMetadata/v1/instance/service-accounts/default/email");
+    let (sending, _) = server(move |_, _| {
+        reply(
+            "302 Found",
+            &[("Metadata-Flavor", "Google"), ("Location", &moved)],
+            b"",
+        )
+    });
+    let client = transport();
+    let link = "https://storage.googleapis.com/lab-private/a.csv";
+    for (machine, message) in [
+        (
+            &bare,
+            "this machine has no service account: google's metadata server named none".to_owned(),
+        ),
+        (
+            &refusing,
+            format!(
+                "google's metadata server gave no token for this machine's service account {MACHINE}"
+            ),
+        ),
+        (
+            &sending,
+            "google's metadata server answered 302 for this machine's service account".to_owned(),
+        ),
+    ] {
+        let net = machine_net(&["lab-private"], &endpoint, Some(machine));
+        let Err(Failure::Final(error)) = block_on(sent(&net, &client, &local, link)) else {
+            panic!("the bucket was asked without the machine's account");
+        };
+        assert_eq!(
+            (error.kind, error.message.as_str()),
+            (Kind::AuthRequired, message.as_str())
+        );
+    }
+    assert_eq!(authorizations(&asked), [None, None, None]);
+    assert!(asked_elsewhere.lock().unwrap().is_empty());
+}
+
+/// using the machine's service account trusts nothing: a link to the metadata server, by its
+/// address or by the name google gives it, is still refused before any request.
+#[test]
+fn a_link_to_the_metadata_server_stays_refused() {
+    let (endpoint, _) = tokens();
+    let (machine, asked_machine) = machine_server();
+    let (local, _) = server(|request, _| match request.authorization() {
+        Some("bearer machine-1") => reply("200 OK", &[], b"object"),
+        _ => reply("401 Unauthorized", &[], b"{}"),
+    });
+    let mut net = machine_net(&["lab-private"], &endpoint, Some(&machine));
+    net.lookups = Some(Arc::new(|host| {
+        assert_eq!(host, "metadata.google.internal");
+        Ok(vec![std::net::SocketAddr::from(([169, 254, 169, 254], 80))])
+    }));
+    let link = "https://storage.googleapis.com/lab-private/raw/a.csv";
+    let answer = block_on(through(&net, &transport(), &local, link));
+    assert_eq!(answer.status(), 200);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = crate::cache::Cache::open(folder.path().join("cache")).unwrap();
+    for (host, reason) in [
+        (
+            "169.254.169.254",
+            "it points at the private address 169.254.169.254",
+        ),
+        (
+            "metadata.google.internal",
+            "metadata.google.internal resolves only to private addresses",
+        ),
+    ] {
+        let url = Url::parse(&format!(
+            "http://{host}/computeMetadata/v1/instance/service-accounts/default/token"
+        ))
+        .unwrap();
+        let fetch = crate::net::Fetch::new(url.clone());
+        let error = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap_err();
+        assert_eq!(error.kind, Kind::NetworkRefused, "{}", error.message);
+        assert_eq!(
+            error.message,
+            format!("fetchloom will not follow {url}: {reason}")
+        );
+    }
+    assert_eq!(asked_machine.lock().unwrap().len(), 2);
 }

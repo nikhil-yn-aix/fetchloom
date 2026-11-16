@@ -238,7 +238,9 @@ impl Context {
         )
         .with_drive(self.settings.drive_folders.value.clone());
         #[cfg(debug_assertions)]
-        let google = google.with_token_endpoint(net::test_token_endpoint());
+        let google = google
+            .with_token_endpoint(net::test_token_endpoint())
+            .with_test_machine_server();
         let azure = net::Azure::new(
             self.settings.azure_containers.value.clone(),
             Arc::new(crate::machine::env),

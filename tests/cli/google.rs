@@ -31,6 +31,10 @@ const CLOUD_LOGIN: &str = "refresh-token-without-the-drive-scope";
 const CLOUD_TOKEN: &str = "ya29.cloud-token-of-the-test";
 /// the token the stand-in gives a service account that asked for the drive scope.
 const DRIVE_SERVICE_TOKEN: &str = "ya29.drive-service-token-of-the-test";
+/// the token google's metadata server gives this machine's service account.
+const MACHINE_TOKEN: &str = "ya29.machine-token-of-the-test";
+/// the folder google's metadata server keeps the default service account in.
+const ACCOUNT: &str = "/computeMetadata/v1/instance/service-accounts/default";
 const STORAGE_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_only";
 const DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive.readonly";
 /// the start every signed assertion has: `{"alg":"RS256",` in base64.
@@ -313,7 +317,7 @@ fn google() -> Result<Standin> {
         if carried == Some(&format!("Bearer {NARROW_TOKEN}")) {
             return narrow();
         }
-        let signed_in = [SERVICE_TOKEN, LOGIN_TOKEN]
+        let signed_in = [SERVICE_TOKEN, LOGIN_TOKEN, MACHINE_TOKEN]
             .iter()
             .any(|token| carried == Some(&format!("Bearer {token}")));
         match asked.target.as_str() {
@@ -330,6 +334,26 @@ fn google() -> Result<Standin> {
             }
             _ => respond("404 Not Found", b"{}"),
         }
+    })
+}
+
+/// google's metadata server on a machine whose service account is [`EMAIL`]: its email, and
+/// [`MACHINE_TOKEN`] for a token, each answer saying it is google's.
+fn machine() -> Result<Standin> {
+    Standin::start(|asked| {
+        let body = if asked.target == format!("{ACCOUNT}/email") {
+            EMAIL.to_owned()
+        } else if asked.target.starts_with(&format!("{ACCOUNT}/token?")) {
+            serde_json::json!({"access_token": MACHINE_TOKEN, "expires_in": 3599, "token_type": "Bearer"})
+                .to_string()
+        } else {
+            return respond("404 Not Found", b"");
+        };
+        format!(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nMetadata-Flavor: Google\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
     })
 }
 
@@ -405,6 +429,7 @@ fn assert_no_secret(surfaces: &[(String, Vec<u8>)]) {
             DRIVE_SERVICE_TOKEN,
             LOGIN_TOKEN,
             REFRESH_TOKEN,
+            MACHINE_TOKEN,
             CLOUD_LOGIN,
             CLOUD_TOKEN,
             CLIENT_SECRET,
@@ -489,6 +514,91 @@ fn a_listed_private_bucket_is_read_with_application_default_credentials() -> Res
     kept_files(&clone, &mut surfaces)?;
     kept_files(&sandbox.folder("teammate-cache")?, &mut surfaces)?;
     assert_no_secret(&surfaces);
+    Ok(())
+}
+
+/// on a google cloud machine whose only credential is its service account, a listed bucket is
+/// read with the token google's metadata server gives, asked with `Metadata-Flavor: Google`.
+#[test]
+fn a_listed_private_bucket_is_read_as_the_machines_service_account() -> Result {
+    let sandbox = Sandbox::new()?;
+    let standin = google()?;
+    let metadata = machine()?;
+    let output = command(
+        &sandbox,
+        &standin,
+        &sandbox.work(),
+        &["-vv", "add", "gs://lab-private/raw/", "--as", "raw"],
+    )
+    .env("FETCHLOOM_GCS_BUCKETS", "gs://lab-private")
+    .env("FETCHLOOM_TEST_GOOGLE_METADATA", &metadata.url)
+    .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let token = Some(MACHINE_TOKEN.to_owned());
+    assert_eq!(
+        standin.sent(),
+        [
+            ("GET".to_owned(), LISTING.to_owned(), None),
+            ("GET".to_owned(), LISTING.to_owned(), token.clone()),
+            ("GET".to_owned(), OBJECT.to_owned(), token),
+        ]
+    );
+    let asked = metadata.requests();
+    let targets: Vec<&str> = asked.iter().map(|asked| asked.target.as_str()).collect();
+    assert_eq!(
+        targets,
+        [
+            format!("{ACCOUNT}/email"),
+            format!(
+                "{ACCOUNT}/token?scopes=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdevstorage.read_only"
+            ),
+        ]
+    );
+    for asked in &asked {
+        assert_eq!(
+            asked.headers.get("metadata-flavor").map(String::as_str),
+            Some("Google")
+        );
+    }
+    let work = sandbox.work();
+    assert_eq!(fs::read(work.join("data/raw/a.csv"))?, PARTICIPANTS);
+    let mut surfaces = vec![
+        ("stdout".to_owned(), output.stdout),
+        ("stderr".to_owned(), output.stderr),
+    ];
+    kept_files(&work, &mut surfaces)?;
+    kept_files(&sandbox.cache(), &mut surfaces)?;
+    assert_no_secret(&surfaces);
+    Ok(())
+}
+
+/// a link data.toml gives to the metadata server is refused before any request, though the
+/// machine's account may be asked there for the buckets the person listed.
+#[test]
+fn a_cloned_project_cannot_reach_the_metadata_server() -> Result {
+    let sandbox = Sandbox::new()?;
+    let metadata = machine()?;
+    let link = "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token";
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.token]\nref = \"{link}\"\n"),
+    )?;
+    let output = sandbox
+        .command(&["--json", "sync"])
+        .env("FETCHLOOM_GCS_BUCKETS", "gs://lab-private")
+        .env("FETCHLOOM_TEST_GOOGLE_METADATA", &metadata.url)
+        .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.refused");
+    assert_eq!(
+        error["message"],
+        format!(
+            "fetchloom will not follow {link}: it points at the private address 169.254.169.254"
+        )
+    );
+    assert!(metadata.requests().is_empty());
     Ok(())
 }
 

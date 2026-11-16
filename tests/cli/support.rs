@@ -255,6 +255,9 @@ impl Sandbox {
             // file count as inside the profile, as a person's do
             .env("FETCHLOOM_TEST_PROFILE", std::env::temp_dir())
             .env("FETCHLOOM_TEST_TICKER", "off")
+            // no test asks this machine's own google metadata server; one that wants a stand-in
+            // names it
+            .env("FETCHLOOM_TEST_GOOGLE_METADATA", "none")
             // a build's floor would follow the free space of the disk the tests run on; a test
             // of the floor sets its own
             .env("FETCHLOOM_BUILD_FLOOR", "1B")

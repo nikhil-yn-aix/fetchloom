@@ -1,5 +1,6 @@
-//! google's application default credentials, found where google's own libraries look. other kinds
-//! are refused by name, never passed over for another identity; no metadata server is asked.
+//! google's application default credentials in a file, found where google's own libraries look.
+//! other kinds are refused by name, never passed over for another identity. the machine's
+//! metadata server, which those libraries ask last, is the network's to ask, in `net::google`.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

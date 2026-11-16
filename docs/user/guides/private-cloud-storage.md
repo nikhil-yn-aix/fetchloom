@@ -14,11 +14,11 @@ azure_containers = ["azure:lab/raw"]
 | store | list it in | sign in with |
 |---|---|---|
 | S3 and services that speak its API | `s3_buckets` | AWS keys: `aws configure`, `aws sso login`, a profile's `credential_process`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, or this machine's role through the AWS CLI |
-| google cloud storage | `gcs_buckets` | `gcloud auth application-default login`, or a service account's key in `GOOGLE_APPLICATION_CREDENTIALS` |
+| google cloud storage | `gcs_buckets` | `gcloud auth application-default login`, a service account's key in `GOOGLE_APPLICATION_CREDENTIALS`, or a google cloud machine's own service account |
 | google drive, shared with some people | `drive_folders` | the same google credentials, with drive's scope: a service account the folder is shared with, or your own login through an oauth client you make |
 | azure blob storage | `azure_containers` | `az login`, a SAS in `AZURE_STORAGE_SAS_TOKEN` or in the container's entry, an account key in `AZURE_STORAGE_KEY` with `AZURE_STORAGE_ACCOUNT`, or a virtual machine's managed identity with `AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential` |
 
-each request goes without a key first, so a public bucket never sees one, and the key follows only once the store refused. `fetchloom auth` shows the AWS keys, google credentials and azure credentials it would use, without running a program or asking a server, so keys only the AWS CLI's default chain would find are not shown. each store's page has the rest: [private S3 buckets](#private-s3-buckets), [private cloud storage buckets](#private-cloud-storage-buckets), [private drive files and folders](#private-google-drive-files) and [private azure containers](#private-containers).
+each request goes without a key first, so a public bucket never sees one, and the key follows only once the store refused. `fetchloom auth` shows the AWS keys, google credentials and azure credentials it would use, without running a program or asking a server, so keys only the AWS CLI's default chain would find, and a google cloud machine's own service account, are not shown. each store's page has the rest: [private S3 buckets](#private-s3-buckets), [private cloud storage buckets](#private-cloud-storage-buckets), [private drive files and folders](#private-google-drive-files) and [private azure containers](#private-containers).
 
 ## private S3 buckets
 
@@ -74,9 +74,9 @@ the `gcs_buckets` setting lists the cloud storage buckets fetchloom may send you
 gcs_buckets = ["gs://lab-private"]
 ```
 
-each run asks a bucket without credentials first, so a public bucket never sees them. when cloud storage refuses a listed bucket, with 401 or 403, fetchloom gets an access token from google's token endpoint, `https://oauth2.googleapis.com/token`, asks once more with it and sends it with that bucket's later requests. the token goes only to `https://storage.googleapis.com`, with the first request and never after a redirect, and a link that carries its own signature, as a signed URL does, never gets one.
+each run asks a bucket without credentials first, so a public bucket never sees them. when cloud storage refuses a listed bucket, with 401 or 403, fetchloom gets an access token from google's token endpoint, `https://oauth2.googleapis.com/token`, or from the machine's metadata server, asks once more with it and sends it with that bucket's later requests. the token goes only to `https://storage.googleapis.com`, with the first request and never after a redirect, and a link that carries its own signature, as a signed URL does, never gets one.
 
-the credentials are google's [application default credentials](../reference/credentials.md#google-application-default-credentials): a service account's JSON key that `GOOGLE_APPLICATION_CREDENTIALS` names, which signs a request for a token, else the login `gcloud auth application-default login` saved. a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. a token that expires or is refused with 401 is replaced. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, never what it signs with.
+the credentials are google's [application default credentials](../reference/credentials.md#google-application-default-credentials): a service account's JSON key that `GOOGLE_APPLICATION_CREDENTIALS` names, which signs a request for a token, else the login `gcloud auth application-default login` saved, else, on a google cloud virtual machine or another google cloud service, the machine's own service account, whose token google's metadata server gives, as for `gcloud storage cp` there. off google cloud nothing answers for it, so a listed bucket without a file or a login fails as it would without credentials. a service account asks for the read-only storage scope, `devstorage.read_only`; a login's token carries the scopes you granted when you signed in, cloud storage among them by default. a token that expires or is refused with 401 is replaced. messages name the identity, such as `the service account loader@lab-project.iam.gserviceaccount.com in /home/ada/keys/lab.json`, never what it signs with.
 
 the same credentials read the [private google drive folders and files](#private-google-drive-files) that `drive_folders` lists, with a scope of their own.
 
@@ -140,7 +140,7 @@ azure refuses a container that does not exist as it refuses a private one, so th
 
 ## private Google Drive files
 
-a file or folder shared with some people, not with anyone who has the link, is read through drive's api with google's [application default credentials](../reference/credentials.md#google-application-default-credentials): a service account's key, or a login of yours. a token that reads drive reads every file its account can see, so fetchloom sends it only where you said, never because data.toml or data.lock names something:
+a file or folder shared with some people, not with anyone who has the link, is read through drive's api with google's [application default credentials](../reference/credentials.md#google-application-default-credentials): a service account's key, a login of yours, or a google cloud machine's own service account. a token that reads drive reads every file its account can see, so fetchloom sends it only where you said, never because data.toml or data.lock names something:
 
 - the `drive_folders` setting, or `FETCHLOOM_DRIVE_FOLDERS`, lists the folders and files that may get the token, by id or by the link drive gives when you share them. a folder covers what is inside it.
 - every request goes without a token first, as anyone with the link would ask. only once drive refuses it does the token go to drive's api, `https://www.googleapis.com/drive/v3/files`, and never to the download host, a redirect or another host.
@@ -194,7 +194,7 @@ a login made with gcloud's own client, without the drive scope, is told apart: t
 | what you see | what it means |
 |---|---|
 | `... is not shared with anyone who has the link`, with help to add its id to `drive_folders` | no listed folder holds it. list it, or the folder it is in, if you trust it with your google credentials |
-| `..., and no google application default credentials were found` | it is listed, but neither `GOOGLE_APPLICATION_CREDENTIALS` nor a gcloud login is there |
+| `..., and no google application default credentials were found` | it is listed, but neither `GOOGLE_APPLICATION_CREDENTIALS` nor a gcloud login is there, and no google metadata server answered, as off google cloud |
 | `google drive has no file or folder ... that <account> can read` | the account has no access, or the item is gone: share it with that account |
 | `... its token lacks the drive.readonly scope` | a login made without a drive scope, such as with gcloud's own client |
 | `google drive's api is turned off in the google cloud project of ...` | turn on the google drive api in the project of the key or the oauth client |

@@ -418,7 +418,7 @@ fn refreshed_google_tokens_and_scopes_change_the_metadata_identity() {
                 crate::net::Private::Ready
             );
         } else {
-            assert!(net.google.refused(&located).unwrap());
+            assert!(block_on(net.google.refused(&net, &located)).unwrap());
         }
         let first = key(&net, &url);
         assert!(first != anonymous);

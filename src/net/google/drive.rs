@@ -496,7 +496,7 @@ impl Net {
             return Ok(Private::Unlisted);
         }
         drive.seen().refused.insert(id.to_owned());
-        if self.google.credentials()?.is_none() {
+        if self.google.source(self).await?.is_none() {
             return Ok(Private::Unsigned);
         }
         if !drive.covers(id) {
