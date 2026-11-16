@@ -861,7 +861,12 @@ mod tests {
         assert!(!unseal_alone(&part, 4).unwrap(), "another length");
         assert!(fs::metadata(&part).unwrap().permissions().readonly());
         let object = dir.path().join("object");
-        fs::hard_link(&part, &object).unwrap();
+        if fs::hard_link(&part, &object).is_err() {
+            // fat32 and exfat make no hardlinks, so only a part alone is left to check
+            assert!(unseal_alone(&part, 3).unwrap());
+            assert!(!fs::metadata(&part).unwrap().permissions().readonly());
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+        }
         assert!(!unseal_alone(&part, 3).unwrap(), "a second name");
         assert!(fs::metadata(&object).unwrap().permissions().readonly());
         // windows keeps one read-only flag for every name of a file, and removes no read-only one
