@@ -31,9 +31,17 @@ const GITIGNORE_CAP: u64 = 1 << 20;
 /// the most bytes of data.lock a read takes, far past what fetchloom writes: a planted file, or
 /// a link to a huge one, is refused before it fills memory.
 const LOCK_MOST: u64 = 1 << 30;
-/// in fetchloom's folder, the data.lock a command writes after data.toml, below the SHA-256 of
-/// that data.toml, from before the first write until the second is done.
+/// in fetchloom's folder, the data.lock a command writes after data.toml, below a [`Pending`]
+/// line, from before the first write until the second is done.
 const PENDING: &str = "pending-lock";
+
+/// the first line of a [`PENDING`] record: the data.toml the run wrote, by its SHA-256, and the
+/// project folder it wrote it in, so a record a clone or a copy brought along finishes nothing.
+#[derive(Serialize, Deserialize)]
+struct Pending {
+    manifest: String,
+    folder: Option<Folder>,
+}
 
 /// what the .gitignore of the git repository a project is in needs for its data folder.
 #[derive(Debug, PartialEq, Eq)]
@@ -525,9 +533,13 @@ impl Project {
     /// run cut short between the two writes leaves the next holder of the project what to finish.
     pub(crate) fn write_pending(&self, manifest: &[u8], lock: &str) -> Result<(), Error> {
         let path = self.inner()?.join(PENDING);
-        let record = format!("{}\n{lock}", crate::digest::sha256(manifest).hex());
-        write_atomically(&path, record.as_bytes())
-            .map_err(|err| self.refused(format_args!("could not write {}", path.display()), &err))
+        let refused = |err| self.refused(format_args!("could not write {}", path.display()), &err);
+        let head = serde_json::to_string(&Pending {
+            manifest: crate::digest::sha256(manifest).hex(),
+            folder: Folder::of(&self.root),
+        })
+        .map_err(|err| refused(err.into()))?;
+        write_atomically(&path, format!("{head}\n{lock}").as_bytes()).map_err(refused)
     }
 
     /// forgets the record [`Project::write_pending`] made, once both files are written.
@@ -541,9 +553,10 @@ impl Project {
     }
 
     /// writes the data.lock a run cut short between data.toml and data.lock recorded, when
-    /// data.toml is the one that run wrote, and forgets the record either way: a data.toml it
-    /// never wrote, or one edited since, keeps data.lock as it is. says whether it wrote data.lock.
-    /// a holder of the project calls it before it reads either file.
+    /// data.toml is the one that run wrote in this folder, and forgets the record either way: a
+    /// data.toml it never wrote, one edited since, or a record another folder's run left keeps
+    /// data.lock as it is. says whether it wrote data.lock. a holder of the project calls it before
+    /// it reads either file.
     pub(crate) fn finish_pending(&self) -> Result<bool, Error> {
         let path = self.own_folder().join(PENDING);
         let record = match read_capped(&path, LOCK_MOST) {
@@ -555,9 +568,17 @@ impl Project {
                 return Ok(false);
             }
         };
-        let written = record.split_once('\n').filter(|(manifest, _)| {
-            fs::read(self.manifest_path())
-                .is_ok_and(|bytes| crate::digest::sha256(&bytes).hex() == *manifest)
+        let here = Folder::of(&self.root);
+        let written = record.split_once('\n').filter(|(head, _)| {
+            let Ok(head) = serde_json::from_str::<Pending>(head) else {
+                return false;
+            };
+            let ours = head
+                .folder
+                .zip(here.as_ref())
+                .is_some_and(|(recorded, here)| recorded.matches(here));
+            ours && fs::read(self.manifest_path())
+                .is_ok_and(|bytes| crate::digest::sha256(&bytes).hex() == head.manifest)
         });
         if let Some((_, lock)) = written {
             self.write(lock::FILE, lock.as_bytes())?;
@@ -1543,6 +1564,37 @@ mod tests {
             assert!(!project.own_folder().join(PENDING).exists());
             assert!(!project.finish_pending().unwrap(), "the record is gone");
         }
+    }
+
+    /// a record another folder's run left, as a clone or a copy of the project holds it, finishes
+    /// nothing here though data.toml is the same: data.lock stays as committed, and the record
+    /// goes.
+    #[test]
+    fn a_pending_data_lock_of_another_folder_is_never_written() {
+        let manifest = "[datasets]\n# written\n";
+        let old_lock = "version = 1\n";
+        let (_dir, project) = project(&[("data.toml", manifest), ("data.lock", old_lock)]);
+        project
+            .write_pending(manifest.as_bytes(), "version = 1\n# another one\n")
+            .unwrap();
+        // the same record as another folder would hold it: another number and creation time,
+        // since two folders made at once on fat can share their creation time
+        let path = project.own_folder().join(PENDING);
+        let record = fs::read_to_string(&path).unwrap();
+        let (head, lock) = record.split_once('\n').unwrap();
+        let mut head: serde_json::Value = serde_json::from_str(head).unwrap();
+        for number in ["inode", "created"] {
+            if let Some(value) = head["folder"][number].as_u64() {
+                head["folder"][number] = (value + 1).into();
+            }
+        }
+        fs::write(&path, format!("{head}\n{lock}")).unwrap();
+        assert!(!project.finish_pending().unwrap());
+        assert_eq!(
+            fs::read_to_string(project.root.join(lock::FILE)).unwrap(),
+            old_lock
+        );
+        assert!(!path.exists());
     }
 
     /// links `path` to the file `target`, or false where no symbolic link can be made, as on
