@@ -394,8 +394,10 @@ mod tests {
     /// line one literal word for a shell.
     #[test]
     fn a_line_of_search_words_names_a_search_a_shell_reads_as_written() {
-        let error = parse("links.txt", "iris $(id) a;b&c it's\n").unwrap_err();
-        let help = error.help.unwrap_or_default();
+        let error = parse("links.txt", "iris $(id) a;b&c it's\n")
+            .unwrap_err()
+            .told();
+        let help = error.help.as_deref().unwrap_or_default();
         let search = help
             .strip_prefix("find its id with `")
             .and_then(|rest| rest.strip_suffix("`, then list that instead"))
@@ -403,7 +405,7 @@ mod tests {
         // no command on windows holds `$` or `&` safely, so placeholders stand in for them there
         if cfg!(windows) {
             assert_eq!(
-                search, "fetchloom search iris <name> <name 2> \"it's\"",
+                search, "fetchloom search iris \"<name>\" \"<name 2>\" \"it's\"",
                 "{help}"
             );
             for named in ["<name> is $(id), which", "<name 2> is a;b&c, which"] {

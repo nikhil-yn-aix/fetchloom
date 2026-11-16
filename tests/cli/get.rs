@@ -2367,6 +2367,46 @@ fn several_links_take_no_search_words_and_one_sha256_takes_one_link() -> Result 
     );
     Ok(())
 }
+/// a line of a list holding what a shell would run gets a search that runs none of it when pasted:
+/// on windows, where no command holds `$` or `&` safely, placeholders stand in and are named.
+#[test]
+fn a_listed_line_of_shell_words_suggests_a_search_that_runs_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(sandbox.work().join("links.txt"), "iris $(id) a;b&c it's\n")?;
+    let search = if cfg!(windows) {
+        r#"fetchloom search iris "<name>" "<name 2>" "it's""#
+    } else {
+        r#"fetchloom search iris '$(id)' "a;b&c" "it's""#
+    };
+    let help = format!("find its id with `{search}`, then list that instead");
+    let named = [
+        "<name> is $(id), which no command here can hold safely",
+        "<name 2> is a;b&c, which no command here can hold safely",
+    ];
+    let shown = sandbox.run(&["get", "-i", "links.txt"])?;
+    let stderr = text(&shown.stderr)?;
+    assert_eq!(shown.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains(&format!("help: {help}")), "{stderr}");
+    let output = sandbox.run(&["--json", "get", "-i", "links.txt"])?;
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["help"], help.as_str(), "{document}");
+    // a search changes nothing, so its words, quoted, make a fix; a placeholder makes none
+    let fix = if cfg!(windows) {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::from(search)
+    };
+    assert_eq!(error["fix"], fix, "{document}");
+    let details = error["details"].as_array().ok_or("no details")?;
+    for line in named {
+        let told = details.iter().any(|detail| detail == line);
+        assert_eq!(told, cfg!(windows), "{line}: {document}");
+        assert_eq!(stderr.contains(line), cfg!(windows), "{line}: {stderr}");
+    }
+    Ok(())
+}
+
 #[test]
 fn links_named_alike_each_get_their_own_folder() -> Result {
     let sandbox = Sandbox::new()?;
