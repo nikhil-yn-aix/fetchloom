@@ -10,7 +10,9 @@ use crate::support::{Result, Sandbox, Server, file, sha256_hex, text};
 
 /// the advice for a lock from a newer fetchloom, after `fetchloom --json <command>`.
 fn newer(command: &str) -> String {
-    format!("install a newer fetchloom, then run `fetchloom --json {command}` again")
+    format!(
+        "update fetchloom, as https://nikhil-yn-aix.github.io/fetchloom/user/start/install/ shows, then run `fetchloom --json {command}` again"
+    )
 }
 const BROKEN: &str = "restore data.lock from git, or delete it and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
 

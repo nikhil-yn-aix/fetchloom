@@ -20,6 +20,13 @@ commands, options, environment settings, exit codes, error kinds, JSON fields, m
 | [exit codes](../../user/reference/exit-codes.md) | stable kind-to-exit mappings; scripts use kinds rather than prose |
 | [python helper](../../user/reference/python-helper.md) | typed `path()`, `sync()` and `get()` functions around the executable's JSON interface |
 
+## how data.lock grows
+
+a clone outlives the fetchloom that wrote it, so a teammate on an older release meets every format a newer one writes. data.lock is read strictly, so these rules keep that meeting an update rather than a lost pin:
+
+- any new data.lock field, any new value of a field and any new column of a data.lock.d list bumps `version`, so an older fetchloom meets the higher version before anything it does not know.
+- a reader refuses a higher `version`, and a field, value or column it does not know, with words that say a newer fetchloom wrote it and to update. it never calls such a lock damaged, and never suggests deleting it and locking again, which resolves every dataset anew and may pin newer data. `src/project/lock.rs` (`VERSION`, `other_version`, `newer`) and `src/project/lock/lists.rs` (`newer_columns`) hold these words.
+
 ## internal formats
 
 | part | current boundary |

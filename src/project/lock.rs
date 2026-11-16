@@ -1429,16 +1429,21 @@ fn unread_version(text: &str) -> Option<Error> {
 }
 
 fn other_version(version: i64) -> Error {
-    let error = Error::new(
-        Kind::ProjectInvalid,
-        format!("data.lock is in format {version}, and this fetchloom reads format {VERSION}"),
-    );
     // no fetchloom ever wrote an older format, so one is a broken file
     if version > i64::from(VERSION) {
-        error.help("install a newer fetchloom, then run the same command again")
-    } else {
-        error.help(recovery())
+        return Error::new(
+            Kind::ProjectInvalid,
+            format!(
+                "data.lock is in format {version}, which a newer fetchloom wrote, and this one reads format {VERSION}"
+            ),
+        )
+        .help("update fetchloom, as https://nikhil-yn-aix.github.io/fetchloom/user/start/install/ shows, then run the same command again");
     }
+    Error::new(
+        Kind::ProjectInvalid,
+        format!("data.lock is in format {version}, and this fetchloom reads format {VERSION}"),
+    )
+    .help(recovery())
 }
 
 /// the error for a data.lock the toml reader refused: the line it stopped at, in plain words, with
@@ -2005,36 +2010,36 @@ mod tests {
 
     #[test]
     fn a_newer_format_asks_for_a_newer_fetchloom_and_zero_is_broken() {
+        let update = "update fetchloom, as https://nikhil-yn-aix.github.io/fetchloom/user/start/install/ shows, then run the same command again";
         for text in ["version = 2\n", "version = 2\n[[dataset]]\nwhatever = 1\n"] {
             let newer = Lock::parse(text).unwrap_err();
             assert_eq!(newer.kind, Kind::ProjectInvalid);
             assert_eq!(
                 newer.message,
-                "data.lock is in format 2, and this fetchloom reads format 1"
+                "data.lock is in format 2, which a newer fetchloom wrote, and this one reads format 1"
             );
-            assert_eq!(
-                newer.help.as_deref(),
-                Some("install a newer fetchloom, then run the same command again")
-            );
+            assert_eq!(newer.help.as_deref(), Some(update));
         }
         for text in ["version = 0\n", "version = 1\n[[dataset]]\nname = 3\n"] {
             let broken = Lock::parse(text).unwrap_err();
             assert_eq!(broken.kind, Kind::ProjectInvalid);
             assert_eq!(broken.help.as_deref(), Some(recovery().as_str()), "{text}");
         }
-        for (version, help) in [
+        for (version, message, help) in [
             (
                 "4294967296",
-                "install a newer fetchloom, then run the same command again",
+                "data.lock is in format 4294967296, which a newer fetchloom wrote, and this one reads format 1",
+                update,
             ),
-            ("-1", recovery().as_str()),
+            (
+                "-1",
+                "data.lock is in format -1, and this fetchloom reads format 1",
+                recovery().as_str(),
+            ),
         ] {
             let error = Lock::parse(&format!("version = {version}\n")).unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
-            assert_eq!(
-                error.message,
-                format!("data.lock is in format {version}, and this fetchloom reads format 1")
-            );
+            assert_eq!(error.message, message);
             assert_eq!(error.help.as_deref(), Some(help));
         }
         assert!(
