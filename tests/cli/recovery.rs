@@ -21,6 +21,9 @@ fn help(output: &Output) -> Result<String> {
     Ok(help.to_owned())
 }
 
+/// each way out of a lock fetchloom cannot read starts with a step for a person, a newer
+/// fetchloom, a restore from git or a delete, so `--json` offers no fix, least of all the command
+/// that just failed, which an agent would run again and again.
 #[test]
 fn a_lock_from_a_newer_fetchloom_or_a_broken_one_gets_advice_that_works() -> Result {
     let sandbox = Sandbox::new()?;
@@ -32,11 +35,14 @@ fn a_lock_from_a_newer_fetchloom_or_a_broken_one_gets_advice_that_works() -> Res
         (b"version = 1\n\xff\xfe\n", Some(BROKEN)),
     ] {
         fs::write(&path, contents)?;
-        for command in ["sync", "lock"] {
-            let output = sandbox.run(&["--json", command])?;
+        for command in ["sync", "lock", "status", "lock --check"] {
+            let words: Vec<&str> = command.split(' ').collect();
+            let output = sandbox.run(&[&["--json"][..], &words].concat())?;
             assert_eq!(output.status.code(), Some(50), "{command}");
             let advice = advice.map_or_else(|| newer(command), str::to_owned);
             assert_eq!(help(&output)?, advice, "{command}");
+            let document: Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(document["errors"][0]["fix"], Value::Null, "{command}");
         }
     }
     fs::remove_file(path)?;
