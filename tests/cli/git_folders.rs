@@ -728,6 +728,31 @@ fn a_private_github_folder_pins_at_the_api_and_the_key_goes_there_alone() -> Res
         json(&output)?["errors"][0]["message"],
         "github has no repository lab/secret, or this key cannot see it"
     );
+
+    let saved = sandbox.folder("saved")?;
+    let login = &["auth", "login", "github", "--with-token", "--offline"];
+    ok(&crate::auth::with_stdin(
+        sandbox.command_in(&saved, login),
+        "ghp_another_key_that_cannot_read_it\n",
+    )?)?;
+    let output = sandbox
+        .command_in(
+            &saved,
+            &[
+                "--json",
+                "add",
+                "https://github.com/lab/secret/tree/main/data",
+            ],
+        )
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["help"],
+        "check the name at https://github.com/lab/secret. if it is right, the key has no access to it: `fetchloom auth` shows where it comes from and whose it is"
+    );
+    assert_eq!(error["fix"], "fetchloom auth");
     Ok(())
 }
 
@@ -790,7 +815,11 @@ fn a_teammate_without_the_key_is_told_which_when_github_refuses() -> Result {
         "{stderr}"
     );
     assert!(
-        stderr.contains("help: check the name at https://github.com/lab/secret\n"),
+        stderr.contains("the key in GH_TOKEN went with the request\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: check the name at https://github.com/lab/secret. a private repository's files need a key that can read it: if the key in GH_TOKEN is old or wrong, set GH_TOKEN to a current one from https://github.com/settings/tokens\n"),
         "{stderr}"
     );
     assert!(!stderr.contains("if it moved"), "{stderr}");
@@ -1549,6 +1578,30 @@ fn a_folder_on_another_gitlab_server_asks_that_server_alone() -> Result {
     );
     let said = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
     assert!(!said.contains("never-printed"), "{said}");
+
+    routes.change(vec![(
+        "/code.example.org/api/v4/projects/lab%2Fgroup%2Fhidden/repository/commits/main".to_owned(),
+        reply(
+            "404 Not Found",
+            &[("Content-Type", "application/json")],
+            br#"{"message":"404 Project Not Found"}"#,
+        ),
+    )]);
+    let hidden = "https://code.example.org/lab/group/hidden/-/tree/main/data";
+    let output = run(&sandbox, &routes, &["add", hidden, "--as", "hidden"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(40), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: code.example.org has no project lab/group/hidden, or this key cannot see it\n"
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains("went with the request\n"), "{stderr}");
+    assert!(
+        stderr.contains("help: check the path at https://code.example.org/lab/group/hidden. a private project's files need a key that can read it: if the key saved for code.example.org is old or wrong, save a current one with `fetchloom auth login code.example.org --token`\n"),
+        "{stderr}"
+    );
     Ok(())
 }
 

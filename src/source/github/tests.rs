@@ -188,6 +188,20 @@ fn a_repository_github_does_not_show_may_be_private() {
         "github has no repository jqlang/jq, or this key cannot see it"
     );
     assert!(error.need.is_none(), "a key went already");
+    crate::source::TEST_VARIABLES.with_borrow_mut(|set| set.push(("GITHUB_TOKEN", "ghp_test")));
+    let error = release("jqlang/jq").hidden(true);
+    crate::source::TEST_VARIABLES.with_borrow_mut(Vec::clear);
+    assert_eq!(
+        error.details,
+        ["the key in GITHUB_TOKEN went with the request"]
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "check the name at https://github.com/jqlang/jq. a private repository's releases need a key that can read it: if the key in GITHUB_TOKEN is old or wrong, set GITHUB_TOKEN to a current one from https://github.com/settings/tokens"
+        )
+    );
+    assert!(error.need.is_none(), "a key went already");
 }
 
 /// a key that can read a private repository gets its release's assets at github's api, by their

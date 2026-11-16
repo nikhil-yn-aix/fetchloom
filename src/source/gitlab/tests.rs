@@ -222,6 +222,32 @@ fn a_missing_release_and_a_hidden_project_say_which_they_are() {
     assert!(keyed.need.is_none(), "a key went already");
 }
 
+/// a project gitlab.com shows no key it was sent names that key, as hugging face's refusal does,
+/// so a person checks the key as well as the path.
+#[test]
+fn a_hidden_project_names_the_key_that_went() {
+    crate::source::TEST_VARIABLES.with_borrow_mut(|set| set.push(("GITLAB_TOKEN", "glpat-test")));
+    let error = release("gitlab-org/gitlab-runner")
+        .project
+        .hidden(true, "releases");
+    crate::source::TEST_VARIABLES.with_borrow_mut(Vec::clear);
+    assert_eq!(
+        error.message,
+        "gitlab.com has no project gitlab-org/gitlab-runner, or this key cannot see it"
+    );
+    assert_eq!(
+        error.details,
+        ["the key in GITLAB_TOKEN went with the request"]
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "check the path at https://gitlab.com/gitlab-org/gitlab-runner. a private project's releases need a key that can read it: if the key in GITLAB_TOKEN is old or wrong, set GITLAB_TOKEN to a current one from https://gitlab.com/-/user_settings/personal_access_tokens"
+        )
+    );
+    assert!(error.need.is_none(), "a key went already");
+}
+
 /// a rate limit on a request without a key offers the key that lifts it: gitlab.com's account,
 /// or a key saved for another gitlab server, known by its raw links and its api; any other host's
 /// limit stays as the network said it.

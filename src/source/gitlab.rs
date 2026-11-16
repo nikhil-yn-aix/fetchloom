@@ -13,6 +13,7 @@ use url::Url;
 use super::git::{Entry, Held, Listed};
 use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::account::Account;
+use crate::auth::Origin;
 use crate::digest::BlobId;
 use crate::error::{Error, Kind};
 use crate::net::Api;
@@ -357,29 +358,61 @@ impl Project {
 
     /// whether a key for the project's server is on this machine and can go with a request.
     pub(super) fn signed_in(&self) -> bool {
+        self.sent_key().is_some()
+    }
+
+    /// where the key a request to the project's server takes comes from, when one is on this
+    /// machine and can go.
+    fn sent_key(&self) -> Option<Origin> {
         match &self.server {
-            Some(host) => crate::auth::site::find(&super::env, host).is_some(),
+            Some(host) => crate::auth::site::find(&super::env, host).map(|(_, origin)| origin),
             None => Account::GitLab
                 .find(&super::env)
-                .is_some_and(|found| Account::GitLab.sendable(&found)),
+                .filter(|found| Account::GitLab.sendable(found))
+                .map(|found| found.origin),
         }
     }
 
     /// gitlab's answer that it shows no project of this path, which may be private: a key that
-    /// can read it lifts that, to read its `what`.
+    /// can read it lifts that, to read its `what`. a key that went is named by where it comes
+    /// from, as hugging face's refusal names its own.
     fn hidden(&self, signed_in: bool, what: &str) -> Error {
         let page = self.page();
         let host = self.host();
         if signed_in {
-            return Error::new(
+            let error = Error::new(
                 Kind::AuthRequired,
                 format!(
                     "{host} has no project {}, or this key cannot see it",
                     self.path
                 ),
-            )
-            .help(format!("check the path at {page}"))
-            .unseen();
+            );
+            let need = format!(
+                "check the path at {page}. a private project's {what} need a key that can read it"
+            );
+            return match (self.sent_key(), &self.server) {
+                (Some(origin), Some(server)) => error
+                    .detail(format!("{} went with the request", origin.named()))
+                    .help(format!(
+                        "{need}: if the key saved for {server} is old or wrong, save a current one with `{}`",
+                        token_command(server)
+                    ))
+                    .unseen(),
+                // a sign-in saves a key the variable would still win over
+                (Some(Origin::Variable(variable)), None) => error
+                    .detail(format!("the key in {variable} went with the request"))
+                    .help(format!(
+                        "{need}: if the key in {variable} is old or wrong, set {variable} to a current one from {TOKENS}"
+                    ))
+                    .unseen(),
+                (Some(origin), None) => error
+                    .detail(format!("{} went with the request", origin.named()))
+                    .help(format!(
+                        "{need}: sign in again with `fetchloom auth login gitlab`"
+                    ))
+                    .needs_or_missing(Account::GitLab, page),
+                (None, _) => error.help(format!("check the path at {page}")).unseen(),
+            };
         }
         let error = Error::new(
             Kind::AuthRequired,
@@ -614,6 +647,9 @@ fn server_of(url: &Url) -> Option<String> {
     };
     server(&named)
 }
+
+/// where gitlab.com makes a key.
+const TOKENS: &str = "https://gitlab.com/-/user_settings/personal_access_tokens";
 
 /// the command that saves a token for the gitlab server at `host`, for it alone.
 fn token_command(host: &str) -> String {

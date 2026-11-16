@@ -15,6 +15,7 @@ use url::Url;
 use super::git::{Entry, Held, Listed};
 use super::{Access, Listing, Reference, Remote, Unavailable, invalid, malformed};
 use crate::account::Account;
+use crate::auth::Origin;
 use crate::digest::{BlobId, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Extra, Response};
@@ -187,12 +188,7 @@ impl Release {
         let name = self.repo.to_string();
         let page = self.page();
         if signed_in {
-            return Error::new(
-                Kind::AuthRequired,
-                format!("github has no repository {name}, or this key cannot see it"),
-            )
-            .help(format!("check the name at {page}"))
-            .unseen();
+            return unseen(&name, page, "releases");
         }
         Error::new(
             Kind::AuthRequired,
@@ -275,12 +271,7 @@ impl Repo {
     fn hidden(&self, signed_in: bool) -> Error {
         let page = self.page();
         if signed_in {
-            return Error::new(
-                Kind::AuthRequired,
-                format!("github has no repository {self}, or this key cannot see it"),
-            )
-            .help(format!("check the name at {page}"))
-            .unseen();
+            return unseen(&self.to_string(), page, "files");
         }
         Error::new(
             Kind::AuthRequired,
@@ -577,10 +568,48 @@ pub(super) fn keyless_limit(url: &Url) -> Option<Error> {
 
 /// whether a github key is on this machine and can go with a request.
 pub(super) fn signed_in() -> bool {
+    sent_key().is_some()
+}
+
+/// where the github key a request takes comes from, when one is on this machine and can go.
+fn sent_key() -> Option<Origin> {
     Account::GitHub
         .find(&super::env)
-        .is_some_and(|found| Account::GitHub.sendable(&found))
+        .filter(|found| Account::GitHub.sendable(found))
+        .map(|found| found.origin)
 }
+
+/// github's answer that it shows no repository `name` to the key that went, whose `what` a key
+/// that can read it would show: the key named by where it comes from, as hugging face's refusal
+/// names its own, so a person checks the key as well as the name at `page`.
+fn unseen(name: &str, page: String, what: &str) -> Error {
+    let error = Error::new(
+        Kind::AuthRequired,
+        format!("github has no repository {name}, or this key cannot see it"),
+    );
+    let need = format!(
+        "check the name at {page}. a private repository's {what} need a key that can read it"
+    );
+    match sent_key() {
+        // a sign-in saves a key the variable would still win over
+        Some(Origin::Variable(variable)) => error
+            .detail(format!("the key in {variable} went with the request"))
+            .help(format!(
+                "{need}: if the key in {variable} is old or wrong, set {variable} to a current one from {TOKENS}"
+            ))
+            .unseen(),
+        Some(origin) => error
+            .detail(format!("{} went with the request", origin.named()))
+            .help(format!(
+                "{need}: sign in again with `fetchloom auth login github`"
+            ))
+            .needs_or_missing(Account::GitHub, page),
+        None => error.help(format!("check the name at {page}")).unseen(),
+    }
+}
+
+/// where github makes a key.
+const TOKENS: &str = "https://github.com/settings/tokens";
 
 /// github's answer for `url`, asked with `headers`, or the error for its rate limit when the
 /// answer is that.
