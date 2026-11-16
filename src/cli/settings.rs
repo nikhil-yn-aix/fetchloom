@@ -12,6 +12,7 @@ use crate::error::{Error, Kind};
 use crate::mirror::Mirrors;
 use crate::net::Splitting;
 use crate::output::{Output, Warning};
+use crate::settings::edit::Stops;
 use crate::settings::{Origin, Set};
 use crate::units;
 
@@ -171,9 +172,11 @@ pub(super) fn change(
 }
 
 /// what every run checks of its settings once each is read: that the cache folder the settings
-/// file names is one a run can open, and that `mirrors_only` has a mirror to ask, where no
-/// `--mirror` gives one. a change that `sets_it` is told to keep a mirror first.
-fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Result<(), Error> {
+/// file names is one a run can open, which stops the runs that open the cache, and that
+/// `mirrors_only` has a mirror to ask, where no `--mirror` gives one, which stops every run. a
+/// change that `sets_it` is told to keep a mirror first.
+fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Vec<Stops> {
+    let mut stops = Vec::new();
     if let Some(folder) = settings.file.cache()
         && let Some(why) = crate::cache::refused(&folder)
     {
@@ -181,17 +184,24 @@ fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Result<(), Err
             Kind::Usage,
             format!("cache cannot take the folder {}: {why}", folder.display()),
         );
-        return Err(if let Some(put_back) = crate::cache::tag_back(&folder) {
+        let error = if let Some(put_back) = crate::cache::tag_back(&folder) {
             error.help(format!(
-                "{put_back}; if not, choose an empty folder outside it"
+                "{put_back}; if not, choose an empty folder outside it with `fetchloom settings set cache <folder>`"
             ))
         } else if folder.is_dir() && crate::cache::in_the_way(&folder).is_none() {
+            let inside = folder.join("fetchloom-cache");
             error.help(format!(
-                "choose an empty folder or a new one, such as {}",
-                folder.join("fetchloom-cache").display()
+                "choose an empty folder or a new one, as in `fetchloom settings set cache {}`",
+                crate::suggested::shell_folder(&inside.to_string_lossy())
             ))
         } else {
-            error.help("choose an empty folder or a new one")
+            error.help(
+                "choose an empty folder or a new one with `fetchloom settings set cache <folder>`",
+            )
+        };
+        stops.push(Stops {
+            error,
+            runs: "every run that opens the cache",
         });
     }
     let help = if sets_it {
@@ -199,9 +209,13 @@ fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Result<(), Err
     } else {
         "keep a mirror in `mirrors`, as `fetchloom settings set mirrors /mnt/lab/fetchloom` saves one, or run `fetchloom settings unset mirrors_only` first"
     };
-    super::fetch::mirrors::read(&[], settings, None)
-        .map(drop)
-        .map_err(|error| error.help(help))
+    if let Err(error) = super::fetch::mirrors::read(&[], settings, None) {
+        stops.push(Stops {
+            error: error.help(help),
+            runs: "every run",
+        });
+    }
+    stops
 }
 
 /// says what `changed` did: the key's value before and after, and in which file, then, when a
@@ -242,8 +256,11 @@ fn tell_changed(
         }
     }
     if let Some(broken) = &changed.broken {
-        let said = format!("{}, so every run still stops there", broken.message);
-        match &broken.help {
+        let said = format!(
+            "{}, so {} still stops there",
+            broken.error.message, broken.runs
+        );
+        match &broken.error.help {
             Some(help) => output.warn_with(Warning::SettingsBroken, &said, help),
             None => output.warn(Warning::SettingsBroken, &said),
         }

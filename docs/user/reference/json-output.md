@@ -153,7 +153,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `project.not_restored` | a stopped add could not put data.toml and data.lock back as they were |
 | `project.owner_removed` | `.fetchloom/owner` held something no fetchloom wrote, as a cloned project can, so taking the project removed it and the command went on; the message names the file |
 | `search.partial` | a search site did not answer in time, or its search failed; for a site that did not answer, `help` names the command that searches it alone |
-| `settings.broken` | `settings set` or `settings unset` changed a settings file that still holds a problem every run stops at, such as a key that is no setting, which the change did not bring |
+| `settings.broken` | `settings set` or `settings unset` changed a settings file that still holds a problem runs stop at, such as a key that is no setting, which stops every run, or a cache folder runs refuse, which stops every run that opens the cache; the change did not bring it, and a change that brings a problem of its own is refused |
 | `settings.colors_unread` | `FETCHLOOM_COLORS` holds entries fetchloom cannot read, which keep their default colors |
 | `settings.missing_folder` | `settings set` saved a mirror folder that does not exist, which runs skip until it does, or a push folder that does not exist yet, which the first push makes |
 | `settings.overridden` | `settings set` or `settings unset` changed a setting that a `FETCHLOOM_` variable set here gives its own value, so runs where it is set keep that value |

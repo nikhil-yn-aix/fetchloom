@@ -325,7 +325,7 @@ fn only_a_plain_settings_file_of_a_sensible_size_is_read() {
             "jobs",
             &["4".to_owned()],
             None,
-            &|_| Ok(()),
+            &|_| Vec::new(),
         ) else {
             panic!("{named} was changed as the settings file");
         };
@@ -360,7 +360,7 @@ fn a_table_in_the_settings_file_is_told_as_one() {
     std::fs::write(&path, "jobs = 4\n\n[mystuff]\na = 1\n").unwrap();
     let named = path.to_str().unwrap();
     edit::unset(&env(&[("FETCHLOOM_SETTINGS", named)]), "mystuff", &|_| {
-        Ok(())
+        Vec::new()
     })
     .unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "jobs = 4\n");

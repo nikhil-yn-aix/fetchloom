@@ -19,8 +19,16 @@ use crate::machine::{Machine, Var};
 const WORDS: [&str; 3] = ["cache", "push_to", "resources"];
 
 /// what a run checks of its settings past reading each one, as that `mirrors_only` has mirrors to
-/// ask, so a change that would leave every run stopping there is refused.
-pub(crate) type Usable<'a> = &'a dyn Fn(&Settings) -> Result<(), Error>;
+/// ask: each check that fails, so a change that would leave runs stopping there is refused.
+pub(crate) type Usable<'a> = &'a dyn Fn(&Settings) -> Vec<Stops>;
+
+/// a check of the settings that fails: what a run says, and which runs stop at it.
+#[derive(Debug)]
+pub(crate) struct Stops {
+    pub(crate) error: Error,
+    /// the runs it stops, as "every run" or "every run that opens the cache".
+    pub(crate) runs: &'static str,
+}
 
 /// what `set` or `unset` did to the settings file.
 #[derive(Debug)]
@@ -38,8 +46,8 @@ pub(crate) struct Changed {
     pub(crate) written: bool,
     /// whether the change made the file.
     pub(crate) created: bool,
-    /// what still stops every run reading the file, which was there before the change.
-    pub(crate) broken: Option<Error>,
+    /// what still stops runs reading the file, which was there before the change.
+    pub(crate) broken: Option<Stops>,
     /// the mirror or push folders the new value names that are not there.
     pub(crate) missing: Vec<PathBuf>,
 }
@@ -146,34 +154,66 @@ pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Chan
     Ok(changed)
 }
 
-/// what stops every run reading the settings file at `path` once it holds `after`, where it was
-/// there with `before` too, so a change cannot be blamed for it; a usage error where the change
-/// brings it, so nothing is written.
+/// what stops runs reading the settings file at `path` once it holds `after`, where it was there
+/// with `before` too, so a change cannot be blamed for it; a usage error where the change brings
+/// a stop of its own, though the file stopped runs for another reason before, so nothing is
+/// written.
 fn whole(
     path: &Path,
     before: &str,
     after: &str,
     usable: Usable<'_>,
-) -> Result<Option<Error>, Error> {
-    let Err(stops) = reads(path, after, usable) else {
+) -> Result<Option<Stops>, Error> {
+    let mut stops = reads(path, after, usable);
+    if stops.is_empty() {
         return Ok(None);
-    };
-    if before == after || reads(path, before, usable).is_err() {
-        return Ok(Some(stops));
     }
-    Err(stops.detail("nothing was saved, since every run would stop at this"))
+    // a stop the file had before is told, by what it says; one the change brings is refused
+    let brought = if before == after {
+        None
+    } else {
+        let had = reads(path, before, usable);
+        stops.iter().position(|stop| {
+            !had.iter()
+                .any(|old| old.error.message == stop.error.message)
+        })
+    };
+    match brought {
+        Some(at) => {
+            let stop = stops.swap_remove(at);
+            Err(stop.error.detail(format!(
+                "nothing was saved, since {} would stop at this",
+                stop.runs
+            )))
+        }
+        None => Ok(Some(stops.swap_remove(0))),
+    }
 }
 
 /// reads the settings as a run would from a settings file at `path` holding `text`, with no
-/// variable set, then checks them as `usable` does.
-fn reads(path: &Path, text: &str, usable: Usable<'_>) -> Result<(), Error> {
+/// variable set, then checks them as `usable` does: each check that fails. a file that does not
+/// read stops every run, and is checked no further.
+fn reads(path: &Path, text: &str, usable: Usable<'_>) -> Vec<Stops> {
+    let every = |error| {
+        vec![Stops {
+            error,
+            runs: "every run",
+        }]
+    };
+    let values = match parse(path, text) {
+        Ok(values) => values,
+        Err(error) => return every(error),
+    };
     let file = File {
         path: Some(path.to_owned()),
-        values: parse(path, text)?,
+        values,
         found: true,
         bypassed: None,
     };
-    usable(&Settings::read(&|_| None, file, Machine::default())?)
+    match Settings::read(&|_| None, file, Machine::default()) {
+        Ok(settings) => usable(&settings),
+        Err(error) => every(error),
+    }
 }
 
 /// the variable that gives `key` a value for this run in place of the settings file, when one is

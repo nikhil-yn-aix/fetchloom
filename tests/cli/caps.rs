@@ -244,24 +244,14 @@ fn a_cache_folder_runs_refuse_is_not_saved() -> Result {
     let blocker = sandbox.folder("place")?.join("blocker");
     std::fs::write(&blocker, b"a file\n")?;
     let other = "it holds other files and is not a fetchloom cache";
+    let inside = "choose an empty folder or a new one, as in `fetchloom settings set cache ";
     for (given, why, help) in [
-        (
-            "~".to_owned(),
-            other.to_owned(),
-            "choose an empty folder or a new one, such as".to_owned(),
-        ),
-        (
-            documents.display().to_string(),
-            other.to_owned(),
-            format!(
-                "choose an empty folder or a new one, such as {}",
-                documents.join("fetchloom-cache").display()
-            ),
-        ),
+        ("~".to_owned(), other.to_owned(), inside),
+        (documents.display().to_string(), other.to_owned(), inside),
         (
             blocker.join("cache").display().to_string(),
             format!("{} is a file, not a folder", blocker.display()),
-            "choose an empty folder or a new one\n".to_owned(),
+            "choose an empty folder or a new one with `fetchloom settings set cache <folder>`\n",
         ),
     ] {
         let set = sandbox
@@ -271,7 +261,12 @@ fn a_cache_folder_runs_refuse_is_not_saved() -> Result {
         let stderr = text(&set.stderr)?;
         assert_eq!(set.status.code(), Some(2), "{stderr}");
         assert!(
-            stderr.contains(&why) && stderr.contains("nothing was saved") && stderr.contains(&help),
+            stderr.contains(&why) && stderr.contains("nothing was saved") && stderr.contains(help),
+            "{stderr}"
+        );
+        assert_eq!(
+            help == inside,
+            stderr.contains("fetchloom-cache"),
             "{stderr}"
         );
         assert!(!path.exists(), "{stderr}");
@@ -998,6 +993,60 @@ fn settings_set_refuses_a_file_every_run_would_stop_at() -> Result {
         "{warned:?}"
     );
     assert_eq!(std::fs::read_to_string(&path)?, "jbos = 4\njobs = 8\n");
+    Ok(())
+}
+
+/// a cache folder runs refuse, named in the settings file, stops only the runs that open the
+/// cache, so a change of another key says so, with the command that moves it; a change that
+/// brings a failure of its own is refused, though the file stopped runs for another reason
+/// before, in either order of the two.
+#[test]
+fn settings_set_tells_a_new_stop_from_one_the_file_had() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    let documents = sandbox.folder("documents")?;
+    std::fs::write(documents.join("thesis.tex"), b"mine\n")?;
+    let refused_cache = format!("cache = '{}'\n", documents.display());
+    std::fs::write(&path, &refused_cache)?;
+    let saved = json(&sandbox.run(&["--json", "settings", "set", "jobs", "4"])?)?;
+    assert_eq!(saved["result"]["changed"], true, "{saved}");
+    let warning = crate::support::warning(&saved, "settings.broken");
+    assert_eq!(
+        warning["message"],
+        format!(
+            "cache cannot take the folder {}: it holds other files and is not a fetchloom cache, and fetchloom makes its cache only in an empty folder or a new one, so every run that opens the cache still stops there",
+            documents.display()
+        ),
+        "{saved}"
+    );
+    let help = warning["help"].as_str().unwrap_or_default();
+    assert!(
+        help.starts_with(
+            "choose an empty folder or a new one, as in `fetchloom settings set cache "
+        ) && help.contains("fetchloom-cache"),
+        "{help}"
+    );
+    for (before, key, value, told) in [
+        (
+            "mirrors_only = true\n".to_owned(),
+            "cache",
+            documents.display().to_string(),
+            "nothing was saved, since every run that opens the cache would stop at this",
+        ),
+        (
+            refused_cache,
+            "mirrors_only",
+            "true".to_owned(),
+            "mirrors_only in the settings file asks for mirrors alone, but no mirror is set\n  nothing was saved, since every run would stop at this",
+        ),
+    ] {
+        std::fs::write(&path, &before)?;
+        let refused = sandbox.run(&["settings", "set", key, &value])?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(2), "{key}: {stderr}");
+        assert!(stderr.contains(told), "{key}: {stderr}");
+        assert_eq!(std::fs::read_to_string(&path)?, before, "{key}");
+    }
     Ok(())
 }
 

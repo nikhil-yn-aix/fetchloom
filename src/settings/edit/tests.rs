@@ -24,7 +24,7 @@ fn settings(
 }
 
 /// a check past reading that every settings file passes.
-const FINE: Usable<'static> = &|_| Ok(());
+const FINE: Usable<'static> = &|_| Vec::new();
 
 fn values(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
