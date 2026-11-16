@@ -28,7 +28,7 @@ pub(crate) enum Access {
 impl Cache {
     /// this cache, held for `access` until its last clone is dropped, waiting out a conflicting
     /// run: `waiting` is called once, and `stop` gives [`io::ErrorKind::Interrupted`]. shared
-    /// access goes on unheld where locking is unsupported; every other lock error fails.
+    /// access goes on unheld on a disk that gives no locks; every other lock error fails.
     pub(crate) fn hold(self, access: Access, stop: &Stop, waiting: &dyn Fn()) -> io::Result<Cache> {
         self.hold_with(
             access,
@@ -69,14 +69,23 @@ impl Cache {
                 Ok(()) => break,
                 Err(TryLockError::WouldBlock) => {}
                 Err(TryLockError::Error(err))
-                    if access == Access::Shared && err.kind() == io::ErrorKind::Unsupported =>
+                    if access == Access::Shared && crate::volume::gives_no_locks(&err) =>
                 {
                     return Ok(self);
                 }
                 Err(TryLockError::Error(err)) if access == Access::Exclusive => {
+                    // a disk without locks stays one, whatever word its system used
+                    let kind = if crate::volume::gives_no_locks(&err) {
+                        io::ErrorKind::Unsupported
+                    } else {
+                        err.kind()
+                    };
                     return Err(io::Error::new(
-                        err.kind(),
-                        format!("cannot collect the cache without an exclusive cache lock: {err}"),
+                        kind,
+                        format!(
+                            "cannot collect the cache without an exclusive cache lock: {}",
+                            crate::error::said(&err)
+                        ),
                     ));
                 }
                 Err(TryLockError::Error(err)) => return Err(err),
@@ -260,6 +269,39 @@ mod tests {
             )
             .unwrap();
         assert!(held.held.is_none());
+    }
+
+    /// nfs whose lock manager is not running answers "no locks available": a disk without locks,
+    /// as lustre mounted with noflock is, which a run goes on without, and which gc, refusing,
+    /// says it is.
+    #[cfg(unix)]
+    #[test]
+    fn nfs_without_its_lock_manager_is_a_disk_without_locks() {
+        let take = |_: &File, _| Err(TryLockError::Error(rustix::io::Errno::NOLCK.into()));
+        let (_dir, shared) = cache();
+        let held = shared
+            .hold_with(
+                Access::Shared,
+                &Stop::default(),
+                &|| panic!("missing locks are not contention"),
+                take,
+                || panic!("missing locks must not be retried"),
+                open_lock,
+            )
+            .unwrap();
+        assert!(held.held.is_none());
+        let (_dir, collected) = cache();
+        let refused = collected
+            .hold_with(
+                Access::Exclusive,
+                &Stop::default(),
+                &|| panic!("missing locks are not contention"),
+                take,
+                || panic!("missing locks must not be retried"),
+                open_lock,
+            )
+            .unwrap_err();
+        assert!(crate::volume::gives_no_locks(&refused), "{refused}");
     }
 
     #[test]

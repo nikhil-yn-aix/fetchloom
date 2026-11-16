@@ -189,7 +189,7 @@ impl Shards {
         let urls = urls(root, true)?;
         let held = urls.open_or_make(&format!("{shard:x}.lock"))?;
         match lock(&held) {
-            Err(err) if err.kind() != io::ErrorKind::Unsupported => return Err(err),
+            Err(err) if !crate::volume::gives_no_locks(&err) => return Err(err),
             _ => {}
         }
         let mut log = urls.open_or_make(&records)?;

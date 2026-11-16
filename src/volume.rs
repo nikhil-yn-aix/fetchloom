@@ -293,6 +293,17 @@ impl Volume {
     }
 }
 
+/// whether `err`, from taking a file lock, says the disk gives none: one that cannot lock at all,
+/// as lustre mounted with noflock, or nfs whose lock manager is not running, which answers "no
+/// locks available" for every lock.
+pub(crate) fn gives_no_locks(err: &io::Error) -> bool {
+    #[cfg(unix)]
+    if err.raw_os_error() == Some(rustix::io::Errno::NOLCK.raw_os_error()) {
+        return true;
+    }
+    err.kind() == io::ErrorKind::Unsupported
+}
+
 /// whether `err`, from making a reflink or a hardlink, says the volume makes no such link: FAT32
 /// and exFAT answer code 1, `ERROR_INVALID_FUNCTION` or `EPERM`, though `EPERM` may refuse one file
 /// alone under linux's `protected_hardlinks`, which only a probe of fetchloom's own tells apart.

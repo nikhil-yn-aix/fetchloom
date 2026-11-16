@@ -567,6 +567,14 @@ fn hold_cache(
                 "stopped while waiting for another fetchloom",
             );
         }
+        // only gc needs the lock: other runs go on without one where the disk gives none
+        if crate::volume::gives_no_locks(&err) {
+            return Error::io(
+                format_args!("could not lock the cache at {}", root.display()),
+                &err,
+            )
+            .help("the disk under the cache gives no file locks, so gc cannot tell that no other run uses it: ask your admins to turn locks on there, or keep the cache on a disk that has them");
+        }
         moved_by_variable(
             Error::io(
                 format_args!("could not lock the cache at {}", root.display()),
