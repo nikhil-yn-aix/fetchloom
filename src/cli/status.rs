@@ -129,6 +129,14 @@ pub(super) struct Status {
     /// with whether data.lock pins it, so its entry in data.toml changed since.
     #[serde(skip)]
     imports: BTreeMap<String, bool>,
+    /// whether a plain sync is refused until an import is pinned, as one of `imports` is, or any
+    /// import of a project with no data.lock, so no row or hint names one, and `--check` names
+    /// the sync of each line's own dataset, which runs.
+    #[serde(skip)]
+    sync_refused: bool,
+    /// the dataset of each file and archive `--check` names while a plain sync is refused.
+    #[serde(skip)]
+    dataset_of: HashMap<String, String>,
     /// the objects of the files in place with the bytes data.lock pins there, which a sync takes
     /// into the cache from the data folder when it lacks them.
     #[serde(skip)]
@@ -181,50 +189,20 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
                 (_, true) => "places missing or updated files and reports any conflicts it keeps",
             };
             // a sync refuses while an import waits for the steps above
-            let then = if status.imports.is_empty() {
-                ""
-            } else {
-                "then "
-            };
+            let then = if status.sync_refused { "then " } else { "" };
             output.hint(&format!(
                 "{then}`{}` {does}",
                 super::project::command("sync")
             ));
         }
         tell_imported_elsewhere(output, &status.imported_elsewhere);
-        if !status.hashed_only.is_empty() {
-            output.hint(&format!(
-                "`{}` checks every file the same way and puts back those whose bytes changed",
-                super::project::command("sync --verify")
-            ));
-        }
-        if !status.edited.is_empty() || !status.untracked.is_empty() || !status.blocked.is_empty() {
-            output.hint(&format!(
-                "save any changes you need, then use `{}` to replace edited or conflicting files at paths in data.lock",
-                super::project::command("sync --force")
-            ));
-        }
-        if !status.unreadable.is_empty() {
-            let (files, its) = match status.unreadable.len() {
-                1 => ("1 file at a path data.lock places".to_owned(), "its"),
-                count => (
-                    format!(
-                        "{} files at paths data.lock places",
-                        units::grouped(count as u64)
-                    ),
-                    "their",
-                ),
-            };
-            output.hint(&format!(
-                "this account cannot read {files}: check {its} permissions, then run `{}`",
-                super::project::command("sync")
-            ));
-        }
+        tell_repairs(output, &status);
     }
     if status.unfinished > 0 {
         let them = if status.unfinished == 1 { "it" } else { "them" };
+        let first = if status.sync_refused { FIRST } else { "" };
         output.hint(&format!(
-            "the data folder holds {} from a stopped run; `{}` removes {them}",
+            "the data folder holds {} from a stopped run; {first}`{}` removes {them}",
             units::count(
                 status.unfinished as u64,
                 "unfinished copy",
@@ -234,9 +212,50 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         ));
     }
     if strict {
-        ready::ready(&ready::of_status(&status)).map_err(|error| error.with_report(&status))?;
+        ready::ready_by(&ready::of_status(&status), &|line| {
+            status.only_sync_of(line)
+        })
+        .map_err(|error| error.with_report(&status))?;
     }
     Ok(status)
+}
+
+/// what the hints that name a sync say first while one is refused, after the steps that pin an
+/// import.
+const FIRST: &str = "once the steps above are done, ";
+
+/// how a sync with more than its plain run sets right what `status` found: hashing every file,
+/// replacing a person's file, or reading one this account could not.
+fn tell_repairs(output: &Output, status: &Status) {
+    let first = if status.sync_refused { FIRST } else { "" };
+    if !status.hashed_only.is_empty() {
+        output.hint(&format!(
+            "{first}`{}` checks every file the same way and puts back those whose bytes changed",
+            super::project::command("sync --verify")
+        ));
+    }
+    if !status.edited.is_empty() || !status.untracked.is_empty() || !status.blocked.is_empty() {
+        output.hint(&format!(
+            "{first}save any changes you need, then use `{}` to replace edited or conflicting files at paths in data.lock",
+            super::project::command("sync --force")
+        ));
+    }
+    if !status.unreadable.is_empty() {
+        let (files, its) = match status.unreadable.len() {
+            1 => ("1 file at a path data.lock places".to_owned(), "its"),
+            count => (
+                format!(
+                    "{} files at paths data.lock places",
+                    units::grouped(count as u64)
+                ),
+                "their",
+            ),
+        };
+        output.hint(&format!(
+            "this account cannot read {files}: check {its} permissions, then {first}run `{}`",
+            super::project::command("sync")
+        ));
+    }
 }
 
 /// how to pin each import of `imports`, which no sync pins, by the words a sync refuses it with:
@@ -467,6 +486,46 @@ fn not_downloaded(
 }
 
 /// the datasets of data.toml that wait for their file list, by name.
+/// the imports among `unlocked` that no sync pins, since no source lists their files, each with
+/// whether `lock` pins it, and whether a plain sync is refused for them, as it is for any import
+/// of a project with no data.lock, as `lockless` says. a dataset of `apart`, waiting for its
+/// file list or renamed, is told as such.
+fn imports(
+    manifest: &Manifest,
+    (lock, lockless): (&Lock, bool),
+    unlocked: &[String],
+    apart: (&BTreeMap<String, Waiting>, &BTreeMap<String, String>),
+) -> (BTreeMap<String, bool>, bool) {
+    let imports: BTreeMap<String, bool> = unlocked
+        .iter()
+        .filter(|name| !lockless && !apart.0.contains_key(*name) && !apart.1.contains_key(*name))
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(manifest::Entry::is_import)
+        })
+        .map(|name| (name.clone(), lock.get(name).is_some()))
+        .collect();
+    let refused = !imports.is_empty()
+        || (lockless && manifest.datasets.values().any(manifest::Entry::is_import));
+    (imports, refused)
+}
+
+/// the dataset of each file and archive of `not_unpacked` that `planned` places.
+fn datasets_of(planned: &plan::Plan<'_>, not_unpacked: &[String]) -> HashMap<String, String> {
+    let archives = planned
+        .unknown
+        .iter()
+        .map(|(dataset, _)| (*dataset).to_owned());
+    planned
+        .targets
+        .iter()
+        .map(|target| (target.path.clone(), target.dataset.to_owned()))
+        .chain(not_unpacked.iter().cloned().zip(archives))
+        .collect()
+}
+
 fn waiting(lock: &Lock, manifest: &Manifest) -> BTreeMap<String, Waiting> {
     lock.still_waiting()
         .filter(|waiting| manifest.datasets.contains_key(&waiting.name))
@@ -506,20 +565,16 @@ fn check(
     unlocked.sort();
     unlocked.dedup();
     let (not_downloaded, pinned_by) = not_downloaded(&manifest, &lock, &unlocked);
-    let imports = unlocked
-        .iter()
-        .filter(|name| !lockless && !waiting.contains_key(*name) && !renamed.contains_key(*name))
-        .filter(|name| {
-            manifest
-                .datasets
-                .get(*name)
-                .is_some_and(manifest::Entry::is_import)
-        })
-        .map(|name| (name.clone(), lock.get(name).is_some()))
-        .collect();
+    let (imports, sync_refused) = imports(
+        &manifest,
+        (&lock, lockless),
+        &unlocked,
+        (&waiting, &renamed),
+    );
     let mut status = Status {
         project: project.root.clone(),
         verified: verify.is_some(),
+        sync_refused,
         lockless,
         unlocked,
         removed,
@@ -558,6 +613,9 @@ fn check(
         .iter()
         .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
         .collect();
+    if status.sync_refused {
+        status.dataset_of = datasets_of(&planned, &status.not_unpacked);
+    }
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &manifest, &survey, &planned)?;
     // a dataset dropped here whose files a drop cut short left is told in one line
@@ -789,8 +847,10 @@ fn compare(
     let going = going_now();
     // what fetchloom placed of a dataset whose archive's list this machine lacks may be that
     // archive's files, which only the list tells, and so may what it placed of a dataset waiting
-    // for its file list, so it is neither extra nor going
-    let unsure = place::unsure((&planned.unknown, &planned.waiting));
+    // for its file list, so it is neither extra nor going, and nor is what it placed of a dataset
+    // data.lock does not pin, which a sync pins before it places
+    let mut unsure = place::unsure((&planned.unknown, &planned.waiting));
+    unsure.extend(status.unlocked.iter().map(String::as_str));
     let unrecorded = unrecorded_folders(manifest, survey, &planned.unknown);
     (status.unneeded, status.extra) = extra(survey, &wanted)
         .into_iter()
@@ -870,11 +930,10 @@ fn set_aside(extra: &[String], survey: &Survey) -> HashMap<String, (String, bool
 
 /// the line for `path`, the hidden name `sync --force` kept a person's file `file` under: one a run
 /// cut off at once left, which sync moves back while `free`, or one that could not go back.
-fn set_aside_row(path: &str, (file, free): &(String, bool)) -> String {
+fn set_aside_row(path: &str, (file, free): &(String, bool), sync: &str) -> String {
     if *free {
         format!(
-            "{path} · {file}, which a `sync --force` cut off before its end moved out of the way: `{}` moves it back",
-            super::project::command("sync")
+            "{path} · {file}, which a `sync --force` cut off before its end moved out of the way: {sync} moves it back"
         )
     } else {
         format!(
@@ -959,11 +1018,41 @@ impl Status {
                 "Extra",
                 &self.unneeded,
                 Some(format!(
-                    "fetchloom placed it and no dataset needs it now, so `{}` removes it",
-                    super::project::command("sync")
+                    "fetchloom placed it and no dataset needs it now, so {} removes it",
+                    self.a_sync()
                 )),
             ),
         ]
+    }
+
+    /// a plain sync as a row names it: its command, or just "a sync" while one is refused, as the
+    /// hints then say what comes first.
+    fn a_sync(&self) -> String {
+        if self.sync_refused {
+            "a sync".to_owned()
+        } else {
+            format!("`{}`", super::project::command("sync"))
+        }
+    }
+
+    /// the dataset `line` of `--check` names, whose own sync sets it right while a plain sync is
+    /// refused; none where a plain sync runs.
+    fn only_sync_of(&self, line: &ready::Unready) -> Option<String> {
+        if !self.sync_refused {
+            return None;
+        }
+        if let ready::Unready::Unpinned(name) = line {
+            return Some(name.clone());
+        }
+        let path = line.path()?;
+        // a blocker may stand where a folder on a file's way belongs
+        self.dataset_of.get(path).cloned().or_else(|| {
+            let folder = format!("{path}/");
+            self.dataset_of
+                .iter()
+                .find(|(placed, _)| placed.starts_with(&folder))
+                .map(|(_, dataset)| dataset.clone())
+        })
     }
 
     fn needs_sync(&self) -> bool {
@@ -1069,9 +1158,9 @@ fn tell_adoptable(output: &Output, status: &Status) {
     output.faint_step(
         "In place",
         &format!(
-            "{} already {hold} the pinned bytes; `{}` records {them} as placed",
+            "{} already {hold} the pinned bytes; {} records {them} as placed",
             units::count(status.adoptable.len() as u64, "file", "files"),
-            super::project::command("sync")
+            status.a_sync()
         ),
     );
 }
@@ -1115,8 +1204,8 @@ fn tell_unlocked(output: &Output, status: &Status) {
         }
         let reason = match (status.renamed.get(name), status.imports.get(name)) {
             (Some(old), _) => format!(
-                "data.lock pins it as {old}, which data.toml does not have, and `{}` keeps that pin under this name without asking the source",
-                super::project::command("sync")
+                "data.lock pins it as {old}, which data.toml does not have, and {} keeps that pin under this name without asking the source",
+                status.a_sync()
             ),
             (None, Some(true)) => {
                 "imported from files, so a change to its entry in data.toml cannot pin other files"
@@ -1142,8 +1231,8 @@ fn list(output: &Output, status: &Status) {
         output.report(
             "Removed",
             &format!(
-                "{name} · not in data.toml, so `{}` takes it out of data.lock",
-                super::project::command("sync")
+                "{name} · not in data.toml, so {} takes it out of data.lock",
+                status.a_sync()
             ),
         );
     }
@@ -1171,7 +1260,7 @@ fn list(output: &Output, status: &Status) {
             } else if let Some(said) = &said {
                 rows.push((format!("{path} · {said}"), 1));
             } else if let Some(file) = status.set_aside.get(path) {
-                rows.push((set_aside_row(path, file), 1));
+                rows.push((set_aside_row(path, file, &status.a_sync()), 1));
             } else if let Some(file) = status.kept_copies.get(path) {
                 rows.push((
                     format!(

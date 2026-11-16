@@ -45,8 +45,22 @@ pub(in crate::cli) enum Unready {
 }
 
 impl Unready {
-    /// the line naming it and what makes it ready.
-    fn said(&self) -> String {
+    /// the file or archive it names, if it names one.
+    pub(super) fn path(&self) -> Option<&str> {
+        match self {
+            Unready::Kept { path, .. }
+            | Unready::Damaged { path, .. }
+            | Unready::Blocked(path)
+            | Unready::Unreadable(path)
+            | Unready::Missing(path)
+            | Unready::Outdated(path)
+            | Unready::Unpacked(path) => Some(path),
+            _ => None,
+        }
+    }
+
+    /// the line naming it and what makes it ready, `sync` being the words of the sync that does.
+    fn said(&self, sync: &str) -> String {
         match self {
             Unready::Kept { path, placed } => {
                 let what = if *placed {
@@ -56,33 +70,37 @@ impl Unready {
                 };
                 format!(
                     "{path} {what}: save what you need, then `{}` replaces it",
-                    command("sync --force")
+                    command(&format!("{sync} --force"))
                 )
             }
             Unready::Blocked(path) => format!(
                 "{path} is not in place, since something else is where it belongs: move that, then `{}` places it",
-                command("sync")
+                command(sync)
             ),
             Unready::Unreadable(path) => format!(
                 "{path} cannot be read, so what it holds is unknown: check its permissions, then run `{}`",
-                command("sync")
+                command(sync)
             ),
-            Unready::Missing(path) => format!("{path} is missing: `{}` places it", command("sync")),
+            Unready::Missing(path) => format!("{path} is missing: `{}` places it", command(sync)),
             Unready::Outdated(path) => format!(
                 "{path} is from an older data.lock: `{}` replaces it",
-                command("sync")
+                command(sync)
             ),
             Unready::Damaged { path, hashed } => format!(
                 "{path} no longer holds the pinned bytes: `{}` puts them back",
-                command(if *hashed { "sync --verify" } else { "sync" })
+                command(&if *hashed {
+                    format!("{sync} --verify")
+                } else {
+                    sync.to_owned()
+                })
             ),
             Unready::Unpacked(archive) => format!(
                 "{archive} is not unpacked on this machine, so its files are not in place: `{}` unpacks it",
-                command("sync")
+                command(sync)
             ),
             Unready::Unpinned(name) => format!(
                 "{name} is not pinned as data.toml asks: `{}` pins and places it",
-                command("sync")
+                command(sync)
             ),
             Unready::Import { name, pinned } => {
                 let refused = if *pinned {
@@ -126,10 +144,25 @@ impl Unready {
 /// makes all of it ready does the help name sync, so it never points at replacing an edit or
 /// repinning.
 pub(in crate::cli) fn ready(unready: &[Unready]) -> Result<(), Error> {
+    ready_by(unready, &|_| None)
+}
+
+/// [`ready`], with the sync each line names limited to the dataset `only` gives for it, where a
+/// plain sync is refused.
+pub(super) fn ready_by(
+    unready: &[Unready],
+    only: &dyn Fn(&Unready) -> Option<String>,
+) -> Result<(), Error> {
     if unready.is_empty() {
         return Ok(());
     }
-    let lines: Vec<String> = unready.iter().map(Unready::said).collect();
+    let lines: Vec<String> = unready
+        .iter()
+        .map(|line| match only(line) {
+            Some(dataset) => line.said(&format!("sync {dataset}")),
+            None => line.said("sync"),
+        })
+        .collect();
     let help = if unready.iter().all(Unready::placed_by_sync) {
         format!("run `{}` to put them in place", command("sync"))
     } else {

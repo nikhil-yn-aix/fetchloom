@@ -1137,3 +1137,86 @@ fn status_says_what_pins_an_import_no_sync_can_pin() -> Result {
     );
     Ok(())
 }
+
+/// while an import no sync pins blocks a plain sync, no line of status names a sync that is
+/// refused: what fetchloom placed for a dataset data.lock does not pin is no extra file, a row a
+/// sync acts on says so without a command, the hints give the order, and `--check` names the
+/// sync of each line's own dataset, which works then.
+#[test]
+fn an_unpinned_import_leaves_no_line_naming_a_refused_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    flowers(&sandbox)?;
+    let routes = crate::support::Routes::start(vec![
+        (
+            "/iris.csv".to_owned(),
+            crate::support::file(b"a\n1\n", "\"i\""),
+        ),
+        (
+            "/gone.csv".to_owned(),
+            crate::support::file(b"b\n2\n", "\"g\""),
+        ),
+    ])?;
+    sandbox.allow(&routes.url);
+    for name in ["iris", "gone"] {
+        crate::support::ok(&sandbox.run(&["add", &format!("{}/{name}.csv", routes.url)])?)?;
+    }
+    let work = sandbox.work();
+    let pinned_two = fs::read_to_string(work.join("data.lock"))?;
+    crate::support::ok(&sandbox.run(&["add", "../flowers", "--as", "src"])?)?;
+    fs::write(work.join("data.lock"), &pinned_two)?;
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    let gone = format!("[datasets.gone]\nref = \"{}/gone.csv\"\n\n", routes.url);
+    assert!(manifest.contains(&gone), "{manifest}");
+    fs::write(work.join("data.toml"), manifest.replace(&gone, ""))?;
+    crate::support::delete(&work.join("data/iris/iris.csv"))?;
+    let status = sandbox.run(&["status"])?;
+    let shown = format!("{}{}", text(&status.stdout)?, text(&status.stderr)?);
+    for row in [
+        "    Removed gone · not in data.toml, so a sync takes it out of data.lock\n",
+        "      Extra data/gone/gone.csv · fetchloom placed it and no dataset needs it now, so a sync removes it\n",
+    ] {
+        assert!(shown.contains(row), "{shown}");
+    }
+    assert!(!shown.contains("data/src/"), "{shown}");
+    let syncs: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.contains("`fetchloom sync"))
+        .collect();
+    assert_eq!(
+        syncs,
+        [
+            "  hint: then `fetchloom sync` places missing or updated files, removes those no dataset needs now and reports any conflicts it keeps"
+        ]
+    );
+    let check = sandbox.run(&["--json", "status", "--check"])?;
+    assert_eq!(check.status.code(), Some(1), "{}", text(&check.stderr)?);
+    let details = json(&check)?["errors"][0]["details"].clone();
+    let missing = "data/iris/iris.csv is missing: `fetchloom sync iris` places it";
+    assert!(
+        details
+            .as_array()
+            .is_some_and(|lines| lines.iter().any(|line| line == missing)),
+        "{details}"
+    );
+    crate::support::ok(&sandbox.run(&["sync", "iris"])?)?;
+    assert_eq!(fs::read(work.join("data/iris/iris.csv"))?, b"a\n1\n");
+    // the hints' order: the import pinned again, then a sync settles the rest
+    crate::support::ok(&sandbox.run(&["add", "../flowers", "--as", "src"])?)?;
+    crate::support::ok(&sandbox.run(&["sync"])?)?;
+    crate::support::ok(&sandbox.run(&["status", "--check"])?)?;
+    assert!(!work.join("data/gone").exists());
+    // with no data.lock, what fetchloom placed waits for its dataset's pin, not for removal
+    fs::remove_file(work.join("data.lock"))?;
+    let lockless = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        lockless["result"]["unneeded"],
+        serde_json::json!([]),
+        "{lockless}"
+    );
+    assert_eq!(
+        lockless["result"]["extra"],
+        serde_json::json!([]),
+        "{lockless}"
+    );
+    Ok(())
+}
