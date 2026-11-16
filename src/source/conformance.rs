@@ -346,6 +346,14 @@ fn rows() -> Vec<Row> {
             ),
         ],
     ));
+    rows.push(Row {
+        reference: "https://example.org/data/SHA256SUMS",
+        recorded: Recorded::default().on(
+            "https://example.org/data/SHA256SUMS",
+            200,
+            "e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b0  tips.csv\nSHA256 (sub/iris.csv) = 9cc1c345c71bcc9b486b74cbf6063fa66f4bb5e0f603a4b3c3471ec2e5e8e355\n",
+        ),
+    });
     rows.extend(walks());
     let azure = "https://azureopendatastorage.blob.core.windows.net/mnist?restype=container&comp=list&prefix=processedManifest%2F";
     rows.push(row(

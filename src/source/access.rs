@@ -435,6 +435,18 @@ pub(crate) static S2: Access = Access {
     }],
 };
 
+/// a list of files, at its link or in the project: its own link and the links it gives are plain
+/// links, trusted no more than any other, and no key goes with them for the list's sake.
+pub(crate) static LIST: Access = Access {
+    name: "a list",
+    api: Origins::Written,
+    files: Origins::Public,
+    key: None,
+    sites: &[],
+    pages: no_page,
+    pace: &[],
+};
+
 /// files imported from a machine, which no source lists.
 pub(crate) static LOCAL: Access = Access {
     name: "imported files",
@@ -447,7 +459,7 @@ pub(crate) static LOCAL: Access = Access {
 };
 
 /// every source, in the order a link's page is matched to one.
-pub(super) static ALL: [&Access; 25] = [
+pub(super) static ALL: [&Access; 26] = [
     &ZENODO,
     &INVENIO,
     &DRYAD,
@@ -472,6 +484,7 @@ pub(super) static ALL: [&Access; 25] = [
     &DATAVERSE,
     &BUCKET,
     &LINK,
+    &LIST,
     &LOCAL,
 ];
 

@@ -22,6 +22,7 @@ mod hf;
 mod ia;
 mod invenio;
 pub(crate) mod kaggle;
+pub(crate) mod list;
 pub(crate) mod local;
 mod mendeley;
 mod openneuro;
@@ -175,6 +176,8 @@ pub(crate) enum Reference {
     ArxivMonth(arxiv::Month),
     /// one paper semantic scholar knows, at the open-access pdf it links.
     S2Paper(s2::Paper),
+    /// the files a list names, a checksum list or a list of links, at a link or in the project.
+    List(list::List),
     /// a dataset of a semantic scholar release, at that release or the newest.
     S2Dataset(s2::Dataset),
     /// files imported from a machine with `fetchloom add <path>`, which no source lists: data.lock
@@ -226,7 +229,7 @@ impl Parsed {
             Reference::Url(url) if key == "key" => {
                 error.help(signing_in(url).unwrap_or_else(|| without.to_owned()))
             }
-            Reference::Url(_) | Reference::Dropbox(_) => error.help(without),
+            Reference::Url(_) | Reference::Dropbox(_) | Reference::List(_) => error.help(without),
             read => error.help(format!(
                 "leave {key} out of the link: fetchloom reads {read} without it, with your saved key where its source asks for one"
             )),
@@ -289,7 +292,8 @@ impl Listing {
             | Reference::ArxivMonth(_)
             | Reference::S2Paper(_)
             | Reference::S2Dataset(_)
-            | Reference::Dandi(_) => false,
+            | Reference::Dandi(_)
+            | Reference::List(_) => false,
             Reference::Bucket(prefix) => !prefix.names_a_folder(),
             _ => true,
         }
@@ -367,7 +371,7 @@ pub(crate) struct Remote {
 }
 
 /// the prefixes [`Reference::parse`] reads before a `:`, which a guess at a typo picks from.
-pub(crate) const SCHEMES: [&str; 25] = [
+pub(crate) const SCHEMES: [&str; 26] = [
     "http",
     "https",
     "doi",
@@ -393,6 +397,7 @@ pub(crate) const SCHEMES: [&str; 25] = [
     "s3",
     "gs",
     "azure",
+    "list",
 ];
 
 impl Reference {
@@ -467,6 +472,15 @@ impl Reference {
                 bucket::Store::Azure,
                 rest,
             )?)),
+            "list" => {
+                let (list, secret) = list::List::parse(rest)?;
+                Ok(Parsed {
+                    reference: Reference::List(list),
+                    file: None,
+                    folder: None,
+                    secret,
+                })
+            }
             other => Err(match site_named(other) {
                 Some(prefix) => unknown(text).help(format!(
                     "did you mean {}?",
@@ -486,6 +500,7 @@ impl Reference {
             Reference::Invenio(record) => record.origin(),
             Reference::GitLab(release) => release.origin(),
             Reference::Bucket(prefix) => prefix.written_origin(),
+            Reference::List(list) => list.written_origin(),
             _ => None,
         }
     }
@@ -563,6 +578,7 @@ impl Reference {
     pub(crate) fn shown(&self) -> String {
         match self {
             Reference::Url(url) => crate::shown::Shown(url).to_string(),
+            Reference::List(list::List::Link(url)) => format!("list:{}", crate::shown::Shown(url)),
             other => crate::shown::mask_query(&other.to_string()).into_owned(),
         }
     }
@@ -675,6 +691,7 @@ impl Reference {
             Reference::ArxivMonth(month) => month.resolve(api).await,
             Reference::S2Paper(paper) => paper.resolve(api).await,
             Reference::S2Dataset(dataset) => dataset.resolve(api).await,
+            Reference::List(list) => list.resolve(api).await,
             Reference::Local => Err(local::unlisted()),
         }
     }
@@ -708,6 +725,7 @@ impl fmt::Display for Reference {
             Reference::ArxivMonth(month) => write!(f, "{month}"),
             Reference::S2Paper(paper) => write!(f, "{paper}"),
             Reference::S2Dataset(dataset) => write!(f, "{dataset}"),
+            Reference::List(list) => write!(f, "{list}"),
             Reference::Local => f.write_str(local::IMPORTED),
         }
     }
@@ -833,6 +851,7 @@ impl Reference {
             Reference::Bucket(_) => &access::BUCKET,
             Reference::Arxiv(_) | Reference::ArxivMonth(_) => &access::ARXIV,
             Reference::S2Paper(_) | Reference::S2Dataset(_) => &access::S2,
+            Reference::List(_) => &access::LIST,
             Reference::Local => &access::LOCAL,
         }
     }
@@ -863,29 +882,7 @@ impl Remote {
 
 /// a link pasted from a browser, matched to the source that serves it by its host.
 fn link(text: &str) -> Result<Parsed, Error> {
-    let url = Url::parse(text).map_err(|err| {
-        Error::new(
-            Kind::ReferenceInvalid,
-            format!("\"{}\" is not a valid link: {err}", crate::shown::mask_query(text)),
-        )
-        .help("copy the whole link again from the browser's address bar, and keep it in double quotes on the command line")
-    })?;
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(Error::new(
-            Kind::ReferenceInvalid,
-            "this link carries a user name or password, which would end up in files and logs",
-        )
-        .help("remove the user name and password from the link. for a private dataset, sign in with `fetchloom auth login`"));
-    }
-    if url.host_str().is_none_or(str::is_empty) {
-        return Err(Error::new(
-            Kind::ReferenceInvalid,
-            format!("\"{}\" names no host", crate::shown::mask_query(text)),
-        )
-        .help(
-            "copy the complete link from your browser, including https:// and the website name",
-        ));
-    }
+    let url = plain_url(text)?;
     let secret = crate::shown::secret(&url);
     let parsed = |reference, file| Parsed {
         reference,
@@ -958,9 +955,41 @@ fn link(text: &str) -> Result<Parsed, Error> {
             )
             .help(other_page_help(source)));
         }
-        return Ok(parsed(Reference::Url(raw_link(&url).unwrap_or(url)), None));
+        let url = raw_link(&url).unwrap_or(url);
+        // a checksum list's link names the files it lists, beside it
+        let reference = list::List::from_link(&url).map_or(Reference::Url(url), Reference::List);
+        return Ok(parsed(reference, None));
     };
     Ok(routed)
+}
+
+/// `text` read as a plain link: one with a host and no user name or password, which would end up
+/// in data.toml, data.lock and logs.
+fn plain_url(text: &str) -> Result<Url, Error> {
+    let url = Url::parse(text).map_err(|err| {
+        Error::new(
+            Kind::ReferenceInvalid,
+            format!("\"{}\" is not a valid link: {err}", crate::shown::mask_query(text)),
+        )
+        .help("copy the whole link again from the browser's address bar, and keep it in double quotes on the command line")
+    })?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(Error::new(
+            Kind::ReferenceInvalid,
+            "this link carries a user name or password, which would end up in files and logs",
+        )
+        .help("remove the user name and password from the link. for a private dataset, sign in with `fetchloom auth login`"));
+    }
+    if url.host_str().is_none_or(str::is_empty) {
+        return Err(Error::new(
+            Kind::ReferenceInvalid,
+            format!("\"{}\" names no host", crate::shown::mask_query(text)),
+        )
+        .help(
+            "copy the complete link from your browser, including https:// and the website name",
+        ));
+    }
+    Ok(url)
 }
 
 /// a pasted link to a page of a repository whose links name no single file: the dataset the
