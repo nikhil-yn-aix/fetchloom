@@ -745,6 +745,8 @@ async fn add_held(
         dataset: Some(names[0].clone()),
     };
     let kept = kept_files(&new_manifest, &names[0], &addition.listing);
+    let tree = matches!(addition.listing.resolved, Reference::GitFolder(_))
+        .then(|| addition.listing.resolved.shown_short());
     let outcome = sync_add(
         &work,
         adding,
@@ -757,7 +759,10 @@ async fn add_held(
         ),
     )
     .await
-    .map_err(|error| page_by_flag(some_missing(error, &names[0], kept), &names[0]))
+    .map_err(|error| {
+        let error = some_missing(error, &names[0], kept, tree.as_deref());
+        page_by_flag(error, &names[0])
+    })
     .map_err(|error| match &parsed.reference {
         Reference::List(list) => moved_in(error, list),
         _ => on_lines(error, std::slice::from_ref(&typed_line)),
@@ -844,7 +849,9 @@ fn kept_files(manifest: &Manifest, name: &str, listing: &Listing) -> usize {
 
 /// `error` from adding `name`, which keeps `kept` files. when some but not all of them had nothing
 /// at their links, the link did not move: the help leaves those files out, each by its pattern.
-fn some_missing(mut error: Error, name: &str, kept: usize) -> Error {
+/// `tree` is a git folder at its commit, whose tree just listed them: its own commit links cannot
+/// have moved, so the help says its server has no bytes for them, whether or not others are left.
+fn some_missing(mut error: Error, name: &str, kept: usize, tree: Option<&str>) -> Error {
     let prefix = format!("{name}/");
     let missing: Vec<&str> = error
         .failures
@@ -852,27 +859,56 @@ fn some_missing(mut error: Error, name: &str, kept: usize) -> Error {
         .filter(|failure| failure.help.as_deref() == Some(crate::net::MOVED_HELP))
         .filter_map(|failure| failure.file.strip_prefix(&prefix))
         .collect();
-    if missing.is_empty() || missing.len() < error.failures.len() || missing.len() >= kept {
+    let alone = missing.len() == error.failures.len();
+    if missing.is_empty() || (tree.is_none() && (!alone || missing.len() >= kept)) {
         return error;
     }
-    let flags: Vec<String> = missing
-        .iter()
-        .take(MOST_FLAGS)
-        .map(|path| crate::glob::exclusion_flag(path))
-        .collect();
-    let flags = if missing.len() > MOST_FLAGS {
-        format!("an --exclude for each, such as {}", flags[0])
-    } else {
-        flags.join(" ")
-    };
     let them = if missing.len() == 1 { "it" } else { "them" };
-    let help = format!(
-        "the other files are in the cache. to add {name} without {them}, run the add again with {flags}"
-    );
-    for failure in &mut error.failures {
-        failure.help = Some(help.clone());
+    let leave = (alone && missing.len() < kept).then(|| {
+        let flags: Vec<String> = missing
+            .iter()
+            .take(MOST_FLAGS)
+            .map(|path| crate::glob::exclusion_flag(path))
+            .collect();
+        let flags = if missing.len() > MOST_FLAGS {
+            format!("an --exclude for each, such as {}", flags[0])
+        } else {
+            flags.join(" ")
+        };
+        format!(
+            "the other files are in the cache. to add {name} without {them}, run the add again with {flags}"
+        )
+    });
+    let help = match (tree, leave) {
+        (Some(tree), leave) => {
+            let why = format!(
+                "{tree} lists {}, but its server has no bytes for {them}, as for a git-lfs file whose object was never uploaded",
+                units::some_of(&missing, MOST_FLAGS)
+            );
+            match leave {
+                Some(leave) => format!("{why}. {leave}"),
+                None if alone => format!("{why}, and no other file is left to pin"),
+                None => why,
+            }
+        }
+        (None, Some(leave)) => leave,
+        (None, None) => return error,
+    };
+    let moved = format!("help: {}", crate::net::MOVED_HELP);
+    for detail in &mut error.details {
+        if *detail == moved {
+            *detail = format!("help: {help}");
+        }
     }
-    error.help(help)
+    for failure in &mut error.failures {
+        if alone || failure.help.as_deref() == Some(crate::net::MOVED_HELP) {
+            failure.help = Some(help.clone());
+        }
+    }
+    if alone || error.help.as_deref() == Some(crate::net::MOVED_HELP) {
+        error = error.help(help);
+    }
+    error
 }
 
 /// the most `--exclude` flags a help spells out.

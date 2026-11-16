@@ -564,6 +564,69 @@ fn gitlab(host: &str, files: &[(&str, &[u8])]) -> Result<Vec<(String, Vec<Part>)
     Ok(routes)
 }
 
+/// a file a folder's tree lists may have no bytes on its server, as a git-lfs file whose object was
+/// never uploaded: its own commit link cannot have moved, so the help says why and leaves it out
+/// by its pattern to pin the rest, or says no other file is left to pin.
+#[test]
+fn a_listed_file_its_server_has_no_bytes_for_is_left_out_by_name() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(gitlab(
+        "gitlab.com",
+        &[("data/rows.csv", ROWS), ("data/lfs_object.iso", NOTES)],
+    )?)?;
+    let gone = format!("/gitlab.com/lab/group/survey/-/raw/{FIRST}/data/lfs_object.iso");
+    routes.change(vec![(
+        gone.clone(),
+        reply("404 Not Found", &[("Content-Length", "0")], b""),
+    )]);
+    let link = "https://gitlab.com/lab/group/survey/-/tree/main/data";
+    let listed = format!(
+        "https://gitlab.com/lab/group/survey/-/tree/{}/data lists lfs_object.iso, but its server has no bytes for it, as for a git-lfs file whose object was never uploaded",
+        &FIRST[..7]
+    );
+    let output = run(
+        &sandbox,
+        &routes,
+        &["--json", "add", link, "--as", "survey"],
+    )?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        format!(
+            "gitlab.com has nothing at https://gitlab.com/lab/group/survey/-/raw/{FIRST}/data/lfs_object.iso (404)"
+        )
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "{listed}. the other files are in the cache. to add survey without it, run the add again with --exclude \"lfs_object.iso\""
+        )
+    );
+    ok(&run(
+        &sandbox,
+        &routes,
+        &["add", link, "--as", "survey", "--exclude", "lfs_object.iso"],
+    )?)?;
+    assert_eq!(fs::read(sandbox.work().join("data/survey/rows.csv"))?, ROWS);
+
+    let alone = sandbox.folder("alone")?;
+    let output = sandbox
+        .command_in(&alone, &["add", link, "--as", "iso", "--select", "*.iso"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "help: {listed}, and no other file is left to pin\n"
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("if it moved"), "{stderr}");
+    Ok(())
+}
+
 /// a folder on gitlab.com, pasted with the `ref_type` gitlab's own links carry, is pinned at the
 /// commit its branch names from a listing in pages; a teammate's sync asks no api.
 #[test]
