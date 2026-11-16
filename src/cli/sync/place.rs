@@ -1332,8 +1332,8 @@ struct ToLink<'t, 'a> {
 
 /// the files of `targets` that may be copies of their own sync can link to the cache, as
 /// `actions` leave them: kept files the state records as copies or as hardlinks that lost their
-/// other name, and files this run read and took as placed. those of a dataset that asks for copies
-/// stay as they are. `proven` names the files this run took into the cache, which it read too.
+/// other name, and files this run read and took as placed. `proven` names the files this run took
+/// into the cache, which it read too.
 fn copies_to_link<'t, 'a>(
     targets: &'t [Target<'a>],
     actions: &[Action],
@@ -1343,7 +1343,6 @@ fn copies_to_link<'t, 'a>(
     targets
         .iter()
         .zip(actions)
-        .filter(|(target, _)| !target.copy)
         .filter_map(|(target, action)| match action {
             Action::Keep => {
                 let placed = survey.state.files.get(&target.path)?;
@@ -1376,7 +1375,9 @@ fn copies_to_link<'t, 'a>(
 /// whether the file `placed` records is a copy of its own of its cached object that sync may
 /// link: placed read-only as a copy, or as a hardlink that is now `alone`, with no other name,
 /// and never found to hold other bytes or refused a link. a clone shares its blocks with the
-/// cache's copy already, and no look tells it from a copy, so it stays as it is.
+/// cache's copy already, and no look tells it from a copy, so it stays as it is. a dataset that
+/// asks for copies has each of its copies recorded writable, placed so or taken as placed while
+/// writable, so none is ever linked.
 fn is_copy(placed: &Placed, alone: bool) -> bool {
     !placed.writable
         && !placed.unlinkable
@@ -1397,13 +1398,12 @@ fn links_possible(folder: &Path, cache: &Path) -> bool {
 }
 
 /// whether a sync of `scope` with nothing else to do would link a file to the cache: a copy of its
-/// own, as [`is_copy`] tells, of a dataset placed by link, looking as recorded, whose object the
-/// cache holds out of doubt, where [`links_possible`]. the state and the survey tell which files
-/// may be such copies; a project with none pays nothing, and one that cannot link a look at two
-/// folders. a cache found holding none of their objects is noted in the state when `remember`, so
-/// later syncs look at the folders those objects would sit in rather than at every object, until
-/// the cache takes one; a folder changed in the last two seconds may change again within its
-/// clock's tick, so it is not noted.
+/// own, as [`is_copy`] tells, looking as recorded, whose object the cache holds out of doubt, where
+/// [`links_possible`]. the state and the survey tell which files may be such copies; a project
+/// with none pays nothing, and one that cannot link a look at two folders. a cache found holding
+/// none of their objects is noted in the state when `remember`, so later syncs look at the folders
+/// those objects would sit in rather than at every object, until the cache takes one; a folder
+/// changed in the last two seconds may change again within its clock's tick, so it is not noted.
 pub(crate) fn links_copies(
     project: &Project,
     manifest: &Manifest,
@@ -1423,10 +1423,6 @@ pub(crate) fn links_copies(
                     placed,
                     placed.method == Method::Hardlink && found.is_alone(path),
                 )
-                && manifest
-                    .datasets
-                    .get(&placed.dataset)
-                    .is_some_and(|entry| !entry.copy)
                 && found.disk.get(*path) == Some(&placed.look)
         })
         .map(|(_, placed)| placed)
@@ -2017,7 +2013,9 @@ fn adopt(
     // so a CLI test can change the file between the plan that took it and its record
     #[cfg(debug_assertions)]
     crate::stop::hold("FETCHLOOM_TEST_HOLD_ADOPT");
-    let mut found = adoption(target, seen, &destination, cache, survey.started);
+    // the plan takes a file of a dataset that asks for copies only while it is writable; a mode
+    // changed since is the person's, as after the run
+    let mut found = adoption(target, seen, &destination, cache, survey.started, true);
     if found.method != Method::Hardlink && !survey.state.files.contains_key(&target.path) {
         found.adopted = true;
         placement
@@ -2050,7 +2048,8 @@ pub(crate) fn take_in_place(
         };
         let destination = native(&project.root, &target.path);
         if holds_target(target, &seen, &destination) {
-            let mut found = adoption(target, seen, &destination, cache, survey.started);
+            let writable = now_writable(&destination);
+            let mut found = adoption(target, seen, &destination, cache, survey.started, writable);
             found.adopted = found.method != Method::Hardlink;
             survey.state.files.insert(target.path.clone(), found);
         } else {
@@ -2649,15 +2648,21 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: 
 }
 
 /// the record of a file at `path` holding the target's bytes, a hardlink when it is the cached
-/// object, as a cut-off run leaves it, so the audit covers it and its read-only flag stays. a copy
-/// is recorded writable only for `copy = true`, so [`fits`] never replaces a file taken as placed
-/// for being writable.
-fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache, checked: u64) -> Placed {
+/// object, as a cut-off run leaves it, so the audit covers it and its read-only flag stays, else a
+/// copy, found `writable` or not. a copy is recorded writable only for `copy = true`, so [`fits`]
+/// never replaces a file taken as placed for being writable.
+fn adoption(
+    target: &Target,
+    look: Look,
+    path: &Path,
+    cache: &Cache,
+    checked: u64,
+    writable: bool,
+) -> Placed {
     if same_file::is_same_file(path, cache.object_path(&target.sha256)).unwrap_or(false) {
         placed(target, Method::Hardlink, look, false, checked)
     } else {
-        let writable = target.copy && now_writable(path);
-        placed(target, Method::Copy, look, writable, checked)
+        placed(target, Method::Copy, look, target.copy && writable, checked)
     }
 }
 
@@ -3075,7 +3080,7 @@ mod tests {
                 copy,
                 file: &locked,
             };
-            let record = adoption(&target, now(&path).unwrap(), &path, &cache, 0);
+            let record = adoption(&target, now(&path).unwrap(), &path, &cache, 0, true);
             assert_eq!((record.method, record.writable), (Method::Copy, copy));
         }
     }
