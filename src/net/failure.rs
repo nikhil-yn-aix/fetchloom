@@ -489,6 +489,20 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
                 .get(header::PROXY_AUTHENTICATE)
                 .and_then(|value| value.to_str().ok()),
         ),
+        // a redirect with an address fetchloom can go to was followed before this
+        StatusCode::MOVED_PERMANENTLY
+        | StatusCode::FOUND
+        | StatusCode::SEE_OTHER
+        | StatusCode::TEMPORARY_REDIRECT
+        | StatusCode::PERMANENT_REDIRECT => Error::new(
+            Kind::NetworkRefused,
+            format!(
+                "{} answered {code} for {}, a redirect that names no address fetchloom can follow",
+                host(url),
+                Shown(url)
+            ),
+        )
+        .help("ask its owner for a direct download link"),
         _ => Error::new(
             Kind::NetworkStatus,
             format!("{} answered {code} for {}", host(url), Shown(url)),
@@ -1178,6 +1192,42 @@ mod tests {
                 "to reach it too, save it with `fetchloom settings set allowed_origins http://lab.local:9090`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:9090` for one run"
             )
         );
+    }
+
+    /// a redirect that names no address fetchloom can go to, as one with no Location or an
+    /// unreadable one, is a property of the link: no retry follows it, so it is refused as a
+    /// link that leads nowhere fetchloom goes, never told to run again.
+    #[test]
+    fn a_redirect_without_a_usable_address_is_refused_not_retried() {
+        let url = Url::parse("http://127.0.0.1:8731/b8.bin").unwrap();
+        for status in [
+            StatusCode::MOVED_PERMANENTLY,
+            StatusCode::FOUND,
+            StatusCode::SEE_OTHER,
+            StatusCode::TEMPORARY_REDIRECT,
+            StatusCode::PERMANENT_REDIRECT,
+        ] {
+            let Failure::Final(error) = refusal(&url, status, &HeaderMap::new()) else {
+                panic!("a {status} with no address must not be retried");
+            };
+            assert_eq!(error.kind, Kind::NetworkRefused, "{status}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "127.0.0.1 answered {} for http://127.0.0.1:8731/b8.bin, a redirect that names no address fetchloom can follow",
+                    status.as_u16()
+                )
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some("ask its owner for a direct download link")
+            );
+        }
+        let Failure::Final(error) = refusal(&url, StatusCode::NOT_MODIFIED, &HeaderMap::new())
+        else {
+            panic!("a 304 is no redirect");
+        };
+        assert_eq!(error.kind, Kind::NetworkStatus);
     }
 
     /// a 401 or 403 from a known account's host over plain http says keys go only over https and
