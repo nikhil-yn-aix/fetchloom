@@ -49,9 +49,13 @@ pub(crate) struct Survey {
     /// files the disk lets their owner write. a link to the cache's copy among them leaves the
     /// copy every project shares open to an edit.
     pub(crate) writable: HashSet<String>,
-    /// files the state records as hardlinks that now have no other name: copies of their own, as a
-    /// copy of the data folder that kept no links leaves them.
-    pub(crate) alone: HashSet<String>,
+    /// files read-only with no other name, as a copy of the data folder that kept no links leaves
+    /// a hardlink fetchloom placed: the scan's on unix, those of the hardlinks `look_through_links`
+    /// opens on windows.
+    alone: Vec<String>,
+    /// `alone` as a set, gathered the first time a hardlink's record asks, and dropped when a path
+    /// takes another spelling.
+    alone_index: OnceLock<HashSet<String>>,
     /// whether hashing found files as new as the state unchanged, so a state written now settles
     /// them for later runs, or a record moved to another spelling of its path.
     pub(crate) needs_writing: bool,
@@ -269,15 +273,6 @@ impl Survey {
             writable,
             alone,
         } = scanned?;
-        let alone = alone
-            .into_iter()
-            .filter(|path| {
-                state
-                    .files
-                    .get(path)
-                    .is_some_and(|placed| placed.method == Method::Hardlink)
-            })
-            .collect();
         let mut survey = Survey {
             threads,
             started,
@@ -290,6 +285,7 @@ impl Survey {
             damaged: HashSet::new(),
             writable,
             alone,
+            alone_index: OnceLock::new(),
             needs_writing: false,
             temporaries,
             entries,
@@ -509,7 +505,7 @@ impl Survey {
             if winapi_util::file::information(&handle)
                 .is_ok_and(|information| information.number_of_links() == 1)
             {
-                self.alone.insert(path.clone());
+                self.alone.push(path.clone());
             }
         }
     }
@@ -610,9 +606,7 @@ impl Survey {
             if self.writable.remove(&previous) {
                 self.writable.insert(path.clone());
             }
-            if self.alone.remove(&previous) {
-                self.alone.insert(path.clone());
-            }
+            self.moved_alone(&previous, path);
             if let Some(record) = record {
                 self.state.files.remove(&previous);
                 self.state.files.insert(path.clone(), record);
@@ -704,10 +698,24 @@ impl Survey {
         if self.writable.remove(from) {
             self.writable.insert(to.to_owned());
         }
-        if self.alone.remove(from) {
-            self.alone.insert(to.to_owned());
-        }
+        self.moved_alone(from, to);
         self.folded.take();
+    }
+
+    /// whether the file at `path` is read-only with no other name, as a hardlink fetchloom placed
+    /// is not, though a copy of it is.
+    pub(crate) fn is_alone(&self, path: &str) -> bool {
+        self.alone_index
+            .get_or_init(|| self.alone.iter().cloned().collect())
+            .contains(path)
+    }
+
+    /// carries what the scan found of the file at `from` alone to `to`, its other spelling.
+    fn moved_alone(&mut self, from: &str, to: &str) {
+        if let Some(at) = self.alone.iter().position(|path| path == from) {
+            to.clone_into(&mut self.alone[at]);
+            self.alone_index.take();
+        }
     }
 
     /// whether nothing stands at `path` or on its way, so a file can take that name.

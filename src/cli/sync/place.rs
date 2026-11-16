@@ -1100,7 +1100,7 @@ impl<'a> Placing<'a> {
                 cache,
                 work,
                 &found,
-                (state, &survey.alone),
+                state,
                 checked,
                 &mut placement,
             );
@@ -1326,6 +1326,8 @@ struct ToLink<'t, 'a> {
     seen: Look,
     /// whether this run read it and found the pinned bytes, so it is not read again.
     proven: bool,
+    /// whether the scan found it with no other name, which makes a hardlink's record a copy.
+    alone: bool,
 }
 
 /// the files of `targets` that may be copies of their own sync can link to the cache, as
@@ -1342,29 +1344,31 @@ fn copies_to_link<'t, 'a>(
         .iter()
         .zip(actions)
         .filter(|(target, _)| !target.copy)
-        .filter_map(|(target, action)| {
-            let alone = survey.alone.contains(&target.path);
-            match action {
-                Action::Keep => {
-                    let placed = survey.state.files.get(&target.path)?;
-                    is_copy(placed, alone).then(|| ToLink {
-                        target,
-                        seen: placed.look,
-                        proven: placed.racy_intact.get().is_some() || proven.contains(&target.path),
-                    })
-                }
-                Action::Adopt(seen) => Some(ToLink {
+        .filter_map(|(target, action)| match action {
+            Action::Keep => {
+                let placed = survey.state.files.get(&target.path)?;
+                let alone = placed.method == Method::Hardlink && survey.is_alone(&target.path);
+                is_copy(placed, alone).then(|| ToLink {
                     target,
-                    seen: *seen,
-                    proven: true,
-                }),
-                Action::Vouch(seen) if alone => Some(ToLink {
-                    target,
-                    seen: *seen,
-                    proven: true,
-                }),
-                _ => None,
+                    seen: placed.look,
+                    proven: placed.racy_intact.get().is_some() || proven.contains(&target.path),
+                    alone,
+                })
             }
+            // a file taken as placed has a record of its own now, which says how it stands
+            Action::Adopt(seen) => Some(ToLink {
+                target,
+                seen: *seen,
+                proven: true,
+                alone: false,
+            }),
+            Action::Vouch(seen) if survey.is_alone(&target.path) => Some(ToLink {
+                target,
+                seen: *seen,
+                proven: true,
+                alone: true,
+            }),
+            _ => None,
         })
         .collect()
 }
@@ -1404,22 +1408,26 @@ pub(crate) fn links_copies(
     cache: &Cache,
     scope: &Scope,
 ) -> bool {
-    let copies: Vec<&Placed> = survey
+    let mut copies = survey
         .state
         .files
         .iter()
         .filter(|(path, placed)| {
             scope.includes(&placed.dataset)
-                && is_copy(placed, survey.alone.contains(*path))
-                && survey.disk.get(*path) == Some(&placed.look)
+                && is_copy(
+                    placed,
+                    placed.method == Method::Hardlink && survey.is_alone(path),
+                )
                 && manifest
                     .datasets
                     .get(&placed.dataset)
                     .is_some_and(|entry| !entry.copy)
+                && survey.disk.get(*path) == Some(&placed.look)
         })
         .map(|(_, placed)| placed)
-        .collect();
-    if copies.is_empty() {
+        .peekable();
+    // one copy says the two folders are worth a look, which can then spare a look at every copy
+    if copies.peek().is_none() {
         return false;
     }
     let Ok(folder) = project.planned_data_dir(manifest) else {
@@ -1431,9 +1439,7 @@ pub(crate) fn links_copies(
     let Ok(marks) = cache.doubts() else {
         return false;
     };
-    copies
-        .iter()
-        .any(|placed| cache.holds_trusted(&placed.sha256, placed.look.size, &marks))
+    copies.any(|placed| cache.holds_trusted(&placed.sha256, placed.look.size, &marks))
 }
 
 /// links each file of `found` that the state still records as a copy of its own to the cache's
@@ -1453,7 +1459,7 @@ fn link_copies(
     cache: &Cache,
     work: &Work,
     found: &[ToLink],
-    (state, alone): (&mut State, &HashSet<String>),
+    state: &mut State,
     checked: u64,
     placement: &mut Placement,
 ) -> bool {
@@ -1463,7 +1469,7 @@ fn link_copies(
             state
                 .files
                 .get(&item.target.path)
-                .is_some_and(|placed| is_copy(placed, alone.contains(&item.target.path)))
+                .is_some_and(|placed| is_copy(placed, item.alone))
         })
         .collect();
     if found.is_empty() || !links_possible(placer.root(), cache.root()) {
