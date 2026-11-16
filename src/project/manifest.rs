@@ -703,9 +703,12 @@ impl Reader<'_> {
             )
         };
         if let Some(reason) = name::metadata(text) {
-            return Err(
-                refused(reason).help(format!("choose a {key} outside the repository's metadata"))
-            );
+            let outside = if reason == name::OWN_FOLDER {
+                ".fetchloom"
+            } else {
+                "the repository's metadata"
+            };
+            return Err(refused(reason).help(format!("choose a {key} outside {outside}")));
         }
         if shorthand(text) {
             let inside = if key == "data_dir" {

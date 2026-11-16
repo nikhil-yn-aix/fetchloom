@@ -855,7 +855,12 @@ fn metadata_targets_are_refused() {
             let error = result.unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
             assert!(error.message.contains(path), "{}", error.message);
-            assert!(error.message.contains("metadata"), "{}", error.message);
+            let reason = if path.starts_with(".fetchloom") {
+                "fetchloom's own folder"
+            } else {
+                "repository metadata"
+            };
+            assert!(error.message.contains(reason), "{}", error.message);
             assert!(error.help.is_some());
         }
     }

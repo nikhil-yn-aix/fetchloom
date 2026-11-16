@@ -457,8 +457,11 @@ pub(crate) fn escapes(path: &str) -> Option<&'static str> {
     None
 }
 
-/// why a data path names repository metadata, including spellings windows treats as aliases and
-/// spellings hfs+ reads as the same name.
+/// why [`metadata`] refuses a path that names fetchloom's own folder.
+pub(crate) const OWN_FOLDER: &str = "it names .fetchloom, fetchloom's own folder";
+
+/// why a data path names repository metadata or fetchloom's own folder, including spellings
+/// windows treats as aliases and spellings hfs+ reads as the same name.
 pub(crate) fn metadata(path: &str) -> Option<&'static str> {
     for part in path.split('/') {
         let visible = visible_to_hfs(part);
@@ -467,20 +470,12 @@ pub(crate) fn metadata(path: &str) -> Option<&'static str> {
             .next()
             .unwrap_or_default()
             .trim_end_matches(['.', ' ']);
-        if [
-            ".git",
-            ".hg",
-            ".svn",
-            ".fetchloom",
-            "git~1",
-            "hg~1",
-            "svn~1",
-            "fetchl~1",
-        ]
-        .iter()
-        .any(|reserved| part.eq_ignore_ascii_case(reserved))
-        {
+        let named = |reserved: &[&str]| reserved.iter().any(|name| part.eq_ignore_ascii_case(name));
+        if named(&[".git", ".hg", ".svn", "git~1", "hg~1", "svn~1"]) {
             return Some("it names repository metadata");
+        }
+        if named(&[".fetchloom", "fetchl~1"]) {
+            return Some(OWN_FOLDER);
         }
     }
     None

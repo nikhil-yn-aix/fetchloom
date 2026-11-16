@@ -234,6 +234,20 @@ fn refuses_metadata(key: &str, table: &str) {
         );
     }
     for component in METADATA_COMPONENTS {
+        // .fetchloom is fetchloom's own folder, not a version control system's
+        let own = component.to_ascii_lowercase().starts_with(".fetchloom")
+            || component.starts_with("fetchl~1");
+        let (said, outside) = if own {
+            (
+                "because it names .fetchloom, fetchloom's own folder",
+                ".fetchloom",
+            )
+        } else {
+            (
+                "because it names repository metadata",
+                "the repository's metadata",
+            )
+        };
         for path in [(*component).to_owned(), format!("nested/{component}/files")] {
             let text = format!("{table}\n{key} = \"{path}\"\n");
             let result = Manifest::parse(&text);
@@ -241,8 +255,11 @@ fn refuses_metadata(key: &str, table: &str) {
             let error = result.unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
             assert!(error.message.contains(path.trim()), "{}", error.message);
-            assert!(error.message.contains("metadata"), "{}", error.message);
-            assert!(error.help.is_some());
+            assert!(error.message.ends_with(said), "{}", error.message);
+            assert_eq!(
+                error.help.as_deref(),
+                Some(format!("choose a {key} outside {outside}").as_str())
+            );
         }
     }
 }
