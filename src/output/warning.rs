@@ -133,6 +133,8 @@ pub(crate) enum Warning {
     SettingsSwitchUnread,
     /// a variable set is one typo from one fetchloom reads.
     SettingsUnknownVariable,
+    /// a file is gone from its link in data.lock, or changed there, and came from a web archive.
+    SourceArchived,
     /// a file is gone from its link in data.lock and came from where the source lists it now.
     SourceMoved,
     /// what a source lists may not be all of the dataset.
@@ -202,6 +204,7 @@ impl Warning {
             Warning::SettingsOverridden => "settings.overridden",
             Warning::SettingsSwitchUnread => "settings.switch_unread",
             Warning::SettingsUnknownVariable => "settings.unknown_variable",
+            Warning::SourceArchived => "source.archived",
             Warning::SourceMoved => "source.moved",
             Warning::SourcePartial => "source.partial",
             Warning::SpaceShort => "space.short",
@@ -287,6 +290,7 @@ mod tests {
             SettingsOverridden,
             SettingsSwitchUnread,
             SettingsUnknownVariable,
+            SourceArchived,
             SourceMoved,
             SourcePartial,
             SpaceShort,

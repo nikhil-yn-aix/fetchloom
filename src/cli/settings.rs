@@ -521,14 +521,8 @@ fn rows(context: &Context) -> Vec<Shown> {
     shown.push(targets("azure_containers", &settings.azure_containers));
     shown.push(targets("drive_folders", &settings.drive_folders));
     shown.push(mirrors(&context.mirrors.mirrors, settings.mirrors.origin));
-    shown.push(Shown {
-        name: "mirrors_only",
-        value: json!(settings.mirrors_only.value),
-        origin: vec![settings.mirrors_only.origin],
-        variable: crate::settings::variable("mirrors_only"),
-        said: settings.mirrors_only.value.to_string(),
-        only_variable: false,
-    });
+    shown.push(switch("mirrors_only", settings.mirrors_only));
+    shown.push(switch("web_archives", settings.web_archives));
     shown.push(list(
         "reuse",
         settings
@@ -601,6 +595,18 @@ fn variables(context: &Context) -> Vec<Shown> {
         only_variable: true,
     });
     shown
+}
+
+/// a setting that is true or false.
+fn switch(name: &'static str, set: Set<bool>) -> Shown {
+    Shown {
+        name,
+        value: json!(set.value),
+        origin: vec![set.origin],
+        variable: crate::settings::variable(name),
+        said: set.value.to_string(),
+        only_variable: false,
+    }
 }
 
 fn count<N>(name: &'static str, value: N, origin: Origin) -> Shown

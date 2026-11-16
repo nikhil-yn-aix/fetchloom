@@ -36,7 +36,7 @@ const FILE: &str = "settings.toml";
 /// the most a settings file may hold: its few lines need far less, and a run reads it whole.
 const MOST_BYTES: u64 = 1 << 20;
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 23] = [
+const KEYS: [(&str, &str); 24] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("resources", "FETCHLOOM_RESOURCES"),
     ("jobs", "FETCHLOOM_JOBS"),
@@ -57,6 +57,7 @@ const KEYS: [(&str, &str); 23] = [
     ("mirrors", "FETCHLOOM_MIRRORS"),
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
     ("reuse", "FETCHLOOM_REUSE"),
+    ("web_archives", "FETCHLOOM_WEB_ARCHIVES"),
     ("push_to", "FETCHLOOM_PUSH_TO"),
     ("cache_budget", "FETCHLOOM_CACHE_BUDGET"),
     ("rate", "FETCHLOOM_RATE"),
@@ -73,7 +74,7 @@ const LISTS: [&str; 7] = [
     "reuse",
 ];
 /// the keys that hold true or false.
-const BOOLEANS: [&str; 1] = ["mirrors_only"];
+const BOOLEANS: [&str; 2] = ["mirrors_only", "web_archives"];
 /// the keys an empty variable clears rather than leaving to the settings file, so blanking where
 /// requests go, what keys sign, where push writes or which folders are read cannot leave the
 /// file's choice in force.
@@ -492,6 +493,9 @@ pub(crate) struct Settings {
     /// the folders read for a pinned file the cache lacks before any mirror or source is asked,
     /// such as hugging face's cache: only read, never written.
     pub(crate) reuse: Set<Vec<crate::reuse::Folder>>,
+    /// whether a pinned file no source gives any more is asked of software heritage and the
+    /// wayback machine.
+    pub(crate) web_archives: Set<bool>,
     /// the folder or S3 bucket `fetchloom push` writes to when `--to` names none.
     pub(crate) push_to: Set<Option<Location>>,
     /// the most bytes the cache's files may hold before a run that downloads more asks first, or
@@ -526,6 +530,7 @@ impl Settings {
             mirrors: Set::default(Vec::new()),
             mirrors_only: Set::default(false),
             reuse: Set::default(Vec::new()),
+            web_archives: Set::default(true),
             push_to: Set::default(None),
             cache_budget: Set::default(None),
             rate: Set::default(None),
@@ -620,6 +625,7 @@ impl Settings {
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
             reuse: reuse(&given)?,
+            web_archives: boolean(&given, "web_archives", true)?,
             push_to: push_target(&given, "push_to")?,
             cache_budget: optional_size(&given, "cache_budget", "for no budget")?,
             rate: rate(&given)?,

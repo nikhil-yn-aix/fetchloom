@@ -108,6 +108,9 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_REUSE      folders read for a pinned file the cache lacks before
                        any mirror, separated by commas; hugging face's and
                        kagglehub's caches by default, empty for none
+  FETCHLOOM_WEB_ARCHIVES
+                       false asks software heritage and the wayback machine
+                       nothing for a pinned file whose source is gone
   FETCHLOOM_PUSH_TO    the folder or S3 bucket fetchloom push copies files
                        into, unless --to names one
   FETCHLOOM_CACHE_BUDGET
@@ -139,8 +142,8 @@ const ENVIRONMENT: &str = "fetchloom environment
 a settings file keeps cache, resources, jobs, host_jobs, retries, timeout,
 ask_above, memory, most_files, the archive_ settings, allowed_origins,
 s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors,
-mirrors_only, reuse, push_to, cache_budget and rate for every run, one per
-line, as jobs = 16. a variable wins over the file.
+mirrors_only, reuse, web_archives, push_to, cache_budget and rate for every
+run, one per line, as jobs = 16. a variable wins over the file.
 fetchloom settings shows each value and where it came from, and
 fetchloom settings set jobs 16 saves one.
 

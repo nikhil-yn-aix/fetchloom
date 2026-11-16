@@ -143,7 +143,7 @@ struct Asking {
 /// sign-in, and the buckets its settings list for signing. a file from one of them may have needed
 /// the key, so a push asks about it whatever data.lock, which a clone brings, says.
 #[derive(Default)]
-struct Keys {
+pub(in crate::cli) struct Keys {
     hosts: HashSet<String>,
     s3: Vec<crate::net::s3::Bucket>,
     gcs: bool,
@@ -152,7 +152,7 @@ struct Keys {
 }
 
 impl Keys {
-    fn read(context: &Context) -> Keys {
+    pub(in crate::cli) fn read(settings: &crate::settings::Settings) -> Keys {
         let var = &crate::machine::env;
         let host = |named: &str| {
             let named = named.to_ascii_lowercase();
@@ -170,7 +170,6 @@ impl Keys {
                 .iter()
                 .map(|(site, _)| host(site)),
         );
-        let settings = &context.settings;
         Keys {
             hosts,
             s3: settings.s3_buckets.value.clone(),
@@ -182,7 +181,7 @@ impl Keys {
 
     /// whether this machine signs in where the file at `link` comes from, so its download may
     /// have needed a key.
-    fn signs_in(&self, link: &str) -> bool {
+    pub(in crate::cli) fn signs_in(&self, link: &str) -> bool {
         let Ok(url) = url::Url::parse(link) else {
             return false;
         };
@@ -536,7 +535,7 @@ fn plan(
         .map(|(needed, _)| needed.dataset.as_str())
         .chain(unknown.iter().map(|(dataset, _)| dataset.as_str()))
         .collect();
-    let asks = asking(lock, &datasets, &Keys::read(context))
+    let asks = asking(lock, &datasets, &Keys::read(&context.settings))
         .into_iter()
         .filter(|ask| copying.contains(ask.dataset.as_str()))
         .collect();

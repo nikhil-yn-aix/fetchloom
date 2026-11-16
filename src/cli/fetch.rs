@@ -2,6 +2,7 @@
 //! first failure stops them, keeping what already arrived for the next run.
 
 mod again;
+pub(super) mod archived;
 pub(super) mod data_folder;
 pub(super) mod mirrors;
 pub(super) mod reuse;
@@ -1591,6 +1592,7 @@ async fn run_each(
             );
             let yes = context.yes;
             let damaged = context.mirrors.damaged_folder(job.fetch.expect.sha256);
+            let (archived, only) = (context.archived.clone(), context.mirrors.mirrors.only);
             tasks.spawn(async move {
                 let watch = Watch::new(&job, &output, &overall, &approval, yes, &held[index]);
                 // with no bar for them all, a lone download shows its bar while the server
@@ -1599,12 +1601,12 @@ async fn run_each(
                     watch.bar();
                 }
                 let on = |event: Event| watch.on(&event);
-                let fetched = match net.download(&job.fetch, &cache, &on).await {
-                    Err(err) => {
-                        again::recover(&net, &cache, &output, &listings, &job, err, &on).await
-                    }
-                    fetched => fetched,
+                let recovery = Recovery {
+                    listings: &listings,
+                    archived: &archived,
+                    only,
                 };
+                let fetched = recovering(&net, &cache, &output, recovery, &job, &on).await;
                 watch.ended();
                 let fetched = fetched.and_then(|found| watch.checked(&cache, found));
                 if let Ok(found) = &fetched
@@ -1662,6 +1664,39 @@ async fn run_each(
         }
     }
     Ok(results.into_iter().flatten().collect())
+}
+
+/// where a run looks for a pinned file its recorded link no longer gives.
+struct Recovery<'a> {
+    listings: &'a again::Listings,
+    archived: &'a archived::Archived,
+    /// mirror-only mode, which asks no archive.
+    only: bool,
+}
+
+/// `job`'s file: downloaded from its link, else from where its source lists it now, else from a
+/// web archive.
+async fn recovering(
+    net: &Net,
+    cache: &Cache,
+    output: &Output,
+    recovery: Recovery<'_>,
+    job: &Job,
+    on: &(dyn Fn(Event) -> Result<(), Error> + Sync),
+) -> Result<Fetched, Error> {
+    let Recovery {
+        listings,
+        archived,
+        only,
+    } = recovery;
+    let failed = match net.download(&job.fetch, cache, on).await {
+        Err(err) => again::recover(net, cache, output, listings, job, err, on).await,
+        fetched => return fetched,
+    };
+    match failed {
+        Err(err) => archived::recover(net, cache, output, archived, only, job, err, on).await,
+        fetched => fetched,
+    }
 }
 
 /// ends every download still running for `failed`, a job's failure no other job goes on after: a
@@ -3427,6 +3462,7 @@ mod tests {
             resolved: "https://example.org/data.csv".to_owned(),
             path: "data.csv".to_owned(),
             alone: true,
+            changed: String::new(),
         });
         assert_eq!(
             explain(gone(), &job, None).help.as_deref(),
@@ -3439,6 +3475,7 @@ mod tests {
             resolved: "zenodo:3608990".to_owned(),
             path: "data.csv".to_owned(),
             alone: false,
+            changed: String::new(),
         });
         assert_eq!(
             explain(gone(), &job, None).help.as_deref(),

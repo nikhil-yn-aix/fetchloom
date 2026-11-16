@@ -82,6 +82,8 @@ struct Context {
     mirrors: fetch::mirrors::Mirrored,
     /// the folders read for pinned files before any mirror, such as hugging face's cache.
     reuse: fetch::reuse::Reused,
+    /// what the run may ask web archives for a pinned file no source gives any more.
+    archived: Arc<fetch::archived::Archived>,
     /// the parts of file lists this run wrote anew into a project's data.lock.d, with the
     /// project's folder, so the run can end by naming those git does not have.
     lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
@@ -127,6 +129,7 @@ impl Context {
             cautioned: Arc::default(),
             mirrors: fetch::mirrors::Mirrored::default(),
             reuse: fetch::reuse::Reused::default(),
+            archived: Arc::default(),
             lists: std::sync::Mutex::default(),
             speeds: net::speeds::Speeds::default(),
             projectless: false,
@@ -141,6 +144,7 @@ impl Context {
             self.threads = self.threads.at_most(threads.value);
         }
         self.reuse = fetch::reuse::Reused::new(settings.reuse.value.clone());
+        self.archived = Arc::new(fetch::archived::Archived::new(&settings));
         share(&settings);
         self.rate = settings
             .rate

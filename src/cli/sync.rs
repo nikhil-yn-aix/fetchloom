@@ -2250,6 +2250,7 @@ fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url, page: bool
             resolved: locked.resolved.clone(),
             path: file.path.clone(),
             alone: locked.files.len() == 1,
+            changed: locked.timestamp.clone(),
         }),
     }
 }

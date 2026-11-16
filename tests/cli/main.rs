@@ -50,3 +50,4 @@ mod split;
 mod status;
 mod support;
 mod unattended;
+mod web_archives;

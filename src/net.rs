@@ -33,7 +33,7 @@ use reqwest::header::{self, HeaderName, HeaderValue};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use url::Url;
 
-pub(crate) use address::Allowed;
+pub(crate) use address::{Allowed, is_private, looks_internal};
 pub(crate) use api::{Api, Extra, MOST_FILES, Response};
 #[cfg(test)]
 pub(crate) use azure::Given;

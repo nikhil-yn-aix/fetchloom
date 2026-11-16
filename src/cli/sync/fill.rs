@@ -213,6 +213,7 @@ fn jobs(stated: &Stated, listing: &Listing, extract: bool) -> Vec<Job> {
                 resolved: stated.pin.resolved.clone(),
                 path: remote.path.clone(),
                 alone: listing.files.len() == 1,
+                changed: stated.pin.timestamp.clone(),
             }),
         })
         .collect()

@@ -20,6 +20,9 @@ pub(in crate::cli) struct Again {
     pub(in crate::cli) path: String,
     /// the dataset is this one file, so a listing of one file holds it whatever its name.
     pub(in crate::cli) alone: bool,
+    /// when the pinned data last changed, as data.lock writes it, which a web archive's capture
+    /// must be newer than to hold it.
+    pub(in crate::cli) changed: String,
 }
 
 type Asked = Result<Arc<Listing>, Error>;
@@ -170,6 +173,7 @@ mod tests {
                 resolved: "zenodo:3608990?access=s3cr3t".to_owned(),
                 path: "data.csv".to_owned(),
                 alone: true,
+                changed: String::new(),
             }),
         };
         let error = block_on(recover(
@@ -212,6 +216,7 @@ mod tests {
                 resolved: "zenodo:3608990".to_owned(),
                 path: "data.csv".to_owned(),
                 alone: true,
+                changed: String::new(),
             }),
         };
         let moved = std::sync::atomic::AtomicBool::new(false);
@@ -248,6 +253,7 @@ mod tests {
                 resolved: resolved.to_owned(),
                 path: "data.csv".to_owned(),
                 alone: true,
+                changed: String::new(),
             }),
         };
         for kind in [Kind::AuthRequired, Kind::SourceInvalid, Kind::Interrupted] {

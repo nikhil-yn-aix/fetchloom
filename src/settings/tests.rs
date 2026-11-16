@@ -418,7 +418,7 @@ fn a_mistyped_key_is_told_the_setting_it_is_near() {
     assert_eq!(
         unknown.help.as_deref(),
         Some(
-            "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, reuse, push_to, cache_budget, rate, each a number or text"
+            "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors, mirrors_only, reuse, web_archives, push_to, cache_budget, rate, each a number or text"
         )
     );
 }

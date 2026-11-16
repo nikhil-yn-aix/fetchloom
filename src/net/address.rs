@@ -679,7 +679,7 @@ const INTERNAL: [&str; 11] = [
 
 /// whether `name` looks like a host of a private network: one label, as a bare `intranet` is, or
 /// an ending in [`INTERNAL`], as metadata.google.internal has.
-fn looks_internal(name: &str) -> bool {
+pub(crate) fn looks_internal(name: &str) -> bool {
     let name = name.trim_end_matches('.');
     !name.contains('.')
         || INTERNAL.iter().any(|ending| {
