@@ -420,7 +420,8 @@ fn remote(path: String, url: Url) -> Remote {
 }
 
 /// the links of an index of GEO's file server that name its entries: files, and folders ending
-/// in `/`. the link to the folder above, and links to other sites, name none.
+/// in `/`. the link to the folder above, and links to other sites, name none, nor a link with a
+/// raw `?` or `#`, which the server writes `%3F` and `%23` in a name: it would fetch another file.
 fn entries(html: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut rest = html;
@@ -431,7 +432,7 @@ fn entries(html: &str) -> Vec<String> {
         };
         let link = &rest[..end];
         rest = &rest[end..];
-        if !link.is_empty() && !link.starts_with(['/', '?', '#', '.']) && !link.contains(':') {
+        if !link.is_empty() && !link.starts_with(['/', '.']) && !link.contains([':', '?', '#']) {
             found.push(link.to_owned());
         }
     }

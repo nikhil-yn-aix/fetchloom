@@ -394,6 +394,14 @@ fn links_away_from_the_folder_are_not_entries() {
     assert_eq!(entries(html), ["data.txt"]);
 }
 
+/// a link with a raw `?` or `#` asks for another file than its name says, as `a?b.txt` asks for
+/// `a`, so it names no entry; the escaped name is one.
+#[test]
+fn a_link_with_a_query_or_fragment_is_no_entry() {
+    let html = r#"<a href="a?b.txt">a?b.txt</a><a href="c#d.txt">c#d.txt</a><a href="a%3Fb.txt">a?b.txt</a>"#;
+    assert_eq!(entries(html), ["a%3Fb.txt"]);
+}
+
 #[test]
 fn more_folders_than_a_listing_reads_are_refused() {
     let names: Vec<String> = (0..MOST_FOLDERS).map(|n| format!("f{n}/")).collect();
