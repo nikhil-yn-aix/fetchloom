@@ -58,6 +58,8 @@ _MARKS = frozenset("\uf8e0\uf8e1")
 _UNSAFE_ON_WINDOWS = frozenset('&|<>^%!$`"\u201c\u201d\u201e') | _MARKS
 # the line fetchloom adds for each word it withheld, naming it by the placeholder it shows instead
 _WITHHELD = re.compile(r"(<(?:file|folder|name)(?: \d+)?>) is (.*), which no command here can hold safely")
+# control characters and the bidi controls, as src/name.rs lists them
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 def __dir__() -> list[str]:
@@ -139,7 +141,7 @@ def path(
         if meant is None:
             raise
         call = _path_call(meant, project, {"yes": yes, "offline": offline, "locked": locked})
-        help = f"did you mean `{call}`?"
+        help = _escaped(f"did you mean `{call}`?")
         details = _still_named(error.details, error.message, help)
         raise Error(error.kind, error.message, details, help, error.code, error.result) from None
     return Path(answer["path"])
@@ -191,7 +193,7 @@ def sync(
         meant = _meant_names(error.help, project, _placeholders(error.details))
         if meant is None:
             raise
-        help = f"did you mean `{_sync_call(meant, project, switches)}`?"
+        help = _escaped(f"did you mean `{_sync_call(meant, project, switches)}`?")
         details = _still_named(error.details, error.message, help)
         raise Error(error.kind, error.message, details, help, error.code, error.result) from None
     return Path(result["project"])
@@ -248,7 +250,7 @@ def get(
         guessed, after = meant
         given = {"path": path, "folder": folder, "sha256": sha256}
         call = _get_call(guessed, given, {"force": force, "yes": yes, "offline": offline})
-        help = f"did you mean `{call}`?{after}"
+        help = _escaped(f"did you mean `{call}`?{after}")
         details = _still_named(error.details, error.message, help)
         raise Error(error.kind, error.message, details, help, error.code, error.result) from None
     return Path(result["file"] if path is not None else result["folder"])
@@ -257,6 +259,14 @@ def get(
 def _local(path: str | os.PathLike[str]) -> str:
     # pandas expands ~ in the paths it is given, and no shell does it for a python call
     return os.path.expanduser(os.fspath(path))
+
+
+def _escaped(text: str) -> str:
+    """``text`` with each control character, bidi controls among them, written as an escape, as
+    the command line writes it, so a name from a cloned project or a server cannot recolor the
+    terminal, set its title or reorder its words: a tab as ``\\t``, an escape as ``\\u{1b}``."""
+    short = {"\t": "\\t", "\n": "\\n", "\r": "\\r"}
+    return _CONTROL.sub(lambda found: short.get(found[0], f"\\u{{{ord(found[0]):x}}}"), text)
 
 
 def _shell_word(word: str, windows: bool | None = None) -> str:
@@ -350,7 +360,7 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
         help = told(warning["help"], placeholders) if warning["help"] else None
         # as fetchloom prints a warning: what a placeholder in it stands for comes before the help
         said = [message, *_named(warning["details"], message, help), help]
-        warnings.warn("; ".join(filter(None, said)), stacklevel=3)
+        warnings.warn(_escaped("; ".join(filter(None, said))), stacklevel=3)
     if answer["status"] != "ok":
         error = answer["errors"][0]
         placeholders = _placeholders(error["details"])
@@ -362,7 +372,8 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
             help = told(help, placeholders)
         message = told(error["message"], placeholders)
         details = _still_named([told(detail, placeholders) for detail in error["details"]], message, help)
-        raise Error(error["kind"], message, details, help, finished.returncode, answer.get("result"))
+        raise Error(error["kind"], _escaped(message), [_escaped(detail) for detail in details],
+                    None if help is None else _escaped(help), finished.returncode, answer.get("result"))
     return answer["result"]
 
 

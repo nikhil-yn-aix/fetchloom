@@ -727,6 +727,37 @@ class Errors(unittest.TestCase):
             "  help: check the hash first, or pass force=True to replace the file",
         )
 
+    def test_control_and_bidi_characters_are_written_as_escapes_as_the_cli_writes_them(self):
+        # a name in a cloned project's data.toml or a server's error text, which json gives back raw
+        raw = "a\u001b]0;title\u0007b\u202eexe.txt\tc\u0085"
+        escaped = "a\\u{1b}]0;title\\u{7}b\\u{202e}exe.txt\\tc\\u{85}"
+        said = {"kind": "usage", "message": f"no dataset called {raw}", "details": [f"near {raw}"],
+                "help": f"check {raw}"}
+        answer = {"status": "error", "errors": [said], "warnings": [{**said, "kind": "cache.note"}]}
+        response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom, "_call", return_value=response):
+                with self.assertWarns(UserWarning) as warned, self.assertRaises(fetchloom.Error) as raised:
+                    fetchloom.path("iris")
+        error = raised.exception
+        self.assertEqual((error.message, error.details, error.help),
+                         (f"no dataset called {escaped}", [f"near {escaped}"], f"check {escaped}"))
+        self.assertEqual(str(warned.warning), f"no dataset called {escaped}; check {escaped}")
+
+    def test_a_guessed_call_escapes_the_project_it_names(self):
+        project = "p\u202eq"
+        answer = {"status": "error", "warnings": [], "errors": [{
+            "kind": "usage", "message": 'data.toml has no dataset called "irs"', "details": [],
+            "help": f'did you mean `fetchloom --json --progress "-C={project}" path -- iris`?',
+        }]}
+        response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+        with patch.object(fetchloom, "_WINDOWS", False), patch.object(fetchloom, "_program", return_value="fetchloom"), \
+             patch.object(fetchloom, "_call", return_value=response):
+            with self.assertRaises(fetchloom.Error) as raised:
+                fetchloom.path("irs", project)
+        self.assertNotIn("\u202e", raised.exception.help)
+        self.assertIn("\\u{202e}", raised.exception.help)
+
     def test_an_error_without_details_or_help_is_one_line(self):
         self.assertEqual(str(fetchloom.Error("usage", "no data.toml here")), "usage: no data.toml here")
         self.assertEqual(
