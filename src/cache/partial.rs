@@ -326,7 +326,8 @@ impl Partial {
         let mut at = record.received;
         let mut past = Vec::new();
         for range in &record.ranges {
-            let fits = range.start >= at
+            let fits = range.start > record.received
+                && range.start >= at
                 && range.end > range.start
                 && range.end <= held
                 && record.length.is_none_or(|length| range.end <= length);
@@ -794,11 +795,13 @@ impl PartialWriter {
     }
 
     /// takes on the ranges an earlier run recorded past the prefix whose bytes still hash to
-    /// what it recorded. the others are fetched again.
+    /// what it recorded. the others are fetched again, as is one that starts at the prefix, which
+    /// no run records: the answer the writer is for starts there and brings those bytes.
     fn keep(&mut self, ranges: Vec<Range>, length: Option<u64>) -> io::Result<()> {
         let mut at = self.prefix;
         for range in ranges {
-            let fits = range.start >= at
+            let fits = range.start > self.prefix
+                && range.start >= at
                 && range.end > range.start
                 && length.is_none_or(|length| range.end <= length);
             if !fits {

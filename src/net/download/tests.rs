@@ -1107,6 +1107,45 @@ fn a_resume_that_does_not_split_fetches_only_the_gaps() {
     }
 }
 
+/// a record whose first kept range starts where its prefix ends, as no run writes but a damaged
+/// record or one another user of a shared cache wrote can hold, never puts the bytes the answer
+/// brings for that range anywhere else: the answer covers it, so it is not kept.
+#[test]
+fn a_kept_range_at_the_prefix_is_left_to_the_answer() {
+    let total = 3000;
+    let (prefix, kept) = (1000, (1500, 2200));
+    let (url, asked) = ranged(total, true);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    kept_split(&cache, &url, total, prefix, kept);
+    let key = crate::digest::sha256(url.as_str().as_bytes()).hex();
+    let shard = cache.root().join("partial").join(&key[..1]);
+    let mut bytes = fs::read(shard.join(format!("{key}.part"))).unwrap();
+    let at = usize::try_from(prefix).unwrap();
+    bytes[at..at + 200].copy_from_slice(&pattern(prefix, 200));
+    fs::write(shard.join(format!("{key}.part")), bytes).unwrap();
+    let record = shard.join(format!("{key}.json"));
+    let mut json: serde_json::Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+    let ranges = json["ranges"].as_array_mut().unwrap();
+    ranges.insert(
+        0,
+        serde_json::json!({
+            "start": prefix,
+            "end": prefix + 200,
+            "sha256": crate::digest::sha256(&pattern(prefix, 200)).hex(),
+        }),
+    );
+    fs::write(&record, serde_json::to_vec(&json).unwrap()).unwrap();
+    let mut net = net(&url);
+    net.split.when = Splitting::Never;
+    let fetched = block_on(net.download(&Fetch::new(url), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(&pattern(0, total)));
+    assert_eq!(
+        *asked.lock().unwrap(),
+        [(prefix, Some(kept.0 - 1)), (kept.1, Some(total - 1))]
+    );
+}
+
 /// leaves what a split download of the file [`pattern`] makes, `total` bytes long under the
 /// `ETag` "v1", leaves when stopped: its first `prefix` bytes and the range `kept` past them.
 fn kept_split(cache: &Cache, url: &Url, total: u64, prefix: u64, kept: (u64, u64)) {
