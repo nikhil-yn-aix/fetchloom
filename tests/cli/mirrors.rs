@@ -819,6 +819,57 @@ fn a_run_that_may_ask_no_source_names_every_file_it_lacks() -> Result {
     Ok(())
 }
 
+/// a dry run that may ask no source says what the run would: the same refusal, with the same
+/// message, details and exit code, when the mirrors lack files, and none when a folder mirror
+/// holds them, offline or mirror-only alike.
+#[test]
+fn a_dry_run_that_may_ask_no_source_refuses_as_the_run_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = project(&sandbox)?;
+    let lab = sandbox.folder("lab")?;
+    let empty = lab.join("empty");
+    fs::create_dir_all(&empty)?;
+    fs::write(empty.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
+    let full = lab.join("full");
+    mirror_of(&sandbox, &full)?;
+    for (case, mirror, offline, refused) in [
+        ("offline-empty", &empty, true, Some(20)),
+        ("offline-full", &full, true, None),
+        ("only-empty", &empty, false, Some(10)),
+        ("only-full", &full, false, None),
+    ] {
+        let (folder, cache) = cold(&sandbox, case)?;
+        let mirror = mirror.display().to_string();
+        let run = |dry: bool| -> Result<(Option<i32>, serde_json::Value)> {
+            let mut args = vec!["--json"];
+            if offline {
+                args.push("--offline");
+            }
+            args.extend(["sync", "--mirror", &mirror]);
+            if dry {
+                args.push("--dry-run");
+            }
+            let output = sandbox
+                .command_in(&folder, &args)
+                .env("FETCHLOOM_CACHE", &cache)
+                .env("FETCHLOOM_MIRRORS_ONLY", (!offline).to_string())
+                .output()?;
+            Ok((output.status.code(), json(&output)?))
+        };
+        let (dry_code, dry) = run(true)?;
+        let (code, real) = run(false)?;
+        assert_eq!(code, Some(refused.unwrap_or(0)), "{case}: {real}");
+        assert_eq!(dry_code, code, "{case}: the dry run said {dry}");
+        for field in ["kind", "message", "details"] {
+            assert_eq!(
+                dry["errors"][0][field], real["errors"][0][field],
+                "{case}: {field}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// a mirror that asks to wait an hour answered, so it is called busy, not unreachable, and the run
 /// goes to the sources at once.
 #[test]

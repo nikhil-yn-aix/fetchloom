@@ -162,6 +162,66 @@ impl Reused {
             .collect())
     }
 
+    /// the pins of `wanted` the folders hold, found as [`Reused::take`] finds them but taking in
+    /// nothing: each candidate's bytes are hashed and none is copied, as a dry run needs. fails
+    /// at a stop.
+    pub(in crate::cli) fn holding(
+        &self,
+        context: &Context,
+        cache: &Cache,
+        wanted: &[Wanted],
+    ) -> Result<HashSet<Sha256>, Error> {
+        let (threads, stop) = (context.threads.at_most(COPIES), &context.stop);
+        let hashed = |path: &Path, size: u64| crate::cache::sha256_of(path, size, stop);
+        let held = || -> io::Result<HashSet<Sha256>> {
+            if self.folders.is_empty() || wanted.is_empty() {
+                return Ok(HashSet::new());
+            }
+            let shortcut = crate::place::run_all(wanted, threads, |want| {
+                for (_, path) in self.shortcuts(want) {
+                    if hashed(&path, want.size)? == Some(want.digest) {
+                        return Ok(true);
+                    }
+                }
+                Ok::<_, io::Error>(false)
+            });
+            let mut held = HashSet::new();
+            let mut rest = HashSet::new();
+            for (want, found) in wanted.iter().zip(shortcut) {
+                if found? {
+                    held.insert(want.digest);
+                } else {
+                    rest.insert(want.digest);
+                }
+            }
+            if self.listed && !rest.is_empty() {
+                let sizes: HashSet<u64> = wanted
+                    .iter()
+                    .filter(|want| rest.contains(&want.digest))
+                    .map(|want| want.size)
+                    .collect();
+                let found = reuse::scan(&self.folders, &sizes, cache.root(), stop)?;
+                let candidates: Vec<(u64, &Path)> = found
+                    .iter()
+                    .flat_map(|(size, paths)| paths.iter().map(|(_, path)| (*size, path.as_path())))
+                    .collect();
+                let digests =
+                    crate::place::run_all(&candidates, threads, |(size, path)| hashed(path, *size));
+                for digest in digests {
+                    held.extend(digest?.filter(|digest| rest.contains(digest)));
+                }
+            }
+            Ok(held)
+        };
+        held().map_err(|err| {
+            if err.kind() == io::ErrorKind::Interrupted {
+                Stop::stopped()
+            } else {
+                Error::io("could not read a reuse folder", &err)
+            }
+        })
+    }
+
     /// takes in what the shortcuts find of `ask`, then what a scan of listed folders finds of the
     /// rest.
     fn take_all(&self, context: &Context, cache: &Cache, ask: &[&Wanted]) -> io::Result<Vec<Got>> {

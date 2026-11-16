@@ -1084,13 +1084,14 @@ impl<'a> Loop<'a> {
     }
 
     /// what [`Loop::place`] would do, without downloading, unpacking or writing, given the `jobs`
-    /// relocking would download first; it stops where an offline run would. files `guessed` by the
-    /// dry relock that something stands at are told as files to check.
+    /// relocking would download first; it stops where an offline or mirror-only run would, with
+    /// the same refusal. files `guessed` by the dry relock that something stands at are told as
+    /// files to check.
     #[expect(
         clippy::too_many_arguments,
         reason = "each is one finding of the dry run that the preview builds on"
     )]
-    pub(super) fn preview(
+    pub(super) async fn preview(
         &self,
         manifest: &Manifest,
         lock: &Lock,
@@ -1117,7 +1118,8 @@ impl<'a> Loop<'a> {
             .into_iter()
             .chain(placing.missing_as_is(&self.cache, damaged, &held)?)
             .collect();
-        for (dataset, archive) in archives::of(lock, wanted) {
+        let archives = archives::of(lock, wanted);
+        for (dataset, archive) in &archives {
             if archive.file.unpacks_to.is_some() {
                 unpack.push(format!("{dataset}/{}", archive.file.path));
             }
@@ -1127,7 +1129,7 @@ impl<'a> Loop<'a> {
                     && self.cache.find(&file.sha256, Some(file.size)).is_some()
             };
             for file in archive.files().into_iter().filter(|file| !cached(file)) {
-                jobs.push(job(manifest, lock, &dataset, file)?);
+                jobs.push(job(manifest, lock, dataset, file)?);
             }
         }
         let mut seen = BTreeSet::new();
@@ -1137,7 +1139,14 @@ impl<'a> Loop<'a> {
         let available =
             |job: &Job| in_cache_where(&self.cache, &job.fetch, |digest| !damaged.contains(digest));
         jobs.retain(|job| !available(job));
-        self.refuse_offline_with(&jobs, available)?;
+        let elsewhere = if self.net.offline().enabled() || self.context.mirrors.mirrors.only {
+            self.held_elsewhere(&archives).await?
+        } else {
+            HashSet::new()
+        };
+        let gettable = |job: &Job| available(job) || elsewhere.contains(&job.label);
+        self.refuse_offline_with(&jobs, gettable)?;
+        self.refuse_unmirrored(jobs.iter().filter(|job| !gettable(job)))?;
         self.refuse_unasked(jobs.iter().map(|job| &job.fetch.from))?;
         // the run itself would ask before downloads the cache's disk may lack room for
         if !self.net.offline().enabled() {
@@ -1171,6 +1180,76 @@ impl<'a> Loop<'a> {
             .collect();
         preview.changes.unpack = unpack;
         Ok(preview)
+    }
+
+    /// the labels of the files of `archives` a dry run would download that a run asking no source
+    /// still gets without one: from the reuse folders or a mirror, looked at without taking
+    /// anything. a split archive whose list of files a mirror holds has all its parts there.
+    async fn held_elsewhere(
+        &self,
+        archives: &[(String, Archive<'_>)],
+    ) -> Result<HashSet<String>, Error> {
+        let label = |dataset: &str, file: &LockedFile| format!("{dataset}/{}", file.path);
+        let files: Vec<(&str, &LockedFile)> = archives
+            .iter()
+            .flat_map(|(dataset, archive)| {
+                let files = archive.files().into_iter();
+                files.map(move |file| (dataset.as_str(), file))
+            })
+            .filter(|(_, file)| !self.holds(file))
+            .collect();
+        let wanted: Vec<crate::mirror::Wanted> = files
+            .iter()
+            .map(|(dataset, file)| crate::mirror::Wanted {
+                digest: file.sha256,
+                size: file.size,
+                label: label(dataset, file),
+                link: (!file.url.is_empty()).then(|| file.url.clone()),
+            })
+            .collect();
+        let reused = self
+            .context
+            .reuse
+            .holding(self.context, &self.cache, &wanted)?;
+        let asked: Vec<super::probe::Pinned<'_>> = files
+            .iter()
+            .filter(|(_, file)| !reused.contains(&file.sha256))
+            .map(|(dataset, file)| super::probe::Pinned::locked(dataset, file, false))
+            .collect();
+        let found =
+            super::probe::find(self.context, &self.net, &asked, super::probe::Ask::Mirrors).await?;
+        let mirrored: HashSet<String> = asked
+            .iter()
+            .zip(found)
+            .filter(|(_, found)| matches!(found, super::probe::Found::Mirror { .. }))
+            .map(|(pinned, _)| pinned.label())
+            .collect();
+        let mut held = HashSet::new();
+        for (dataset, archive) in archives {
+            let listed = archive.file.unpacks_to.is_some()
+                && mirrored.contains(&label(dataset, archive.file));
+            for file in archive.files() {
+                let label = label(dataset, file);
+                if listed || reused.contains(&file.sha256) || mirrored.contains(&label) {
+                    held.insert(label);
+                }
+            }
+        }
+        Ok(held)
+    }
+
+    /// refuses, in mirror-only mode, `jobs`, files no mirror gave, but those the mirror
+    /// `HF_ENDPOINT` names serves.
+    fn refuse_unmirrored<'j>(&self, jobs: impl IntoIterator<Item = &'j Job>) -> Result<(), Error> {
+        if !self.context.mirrors.mirrors.only {
+            return Ok(());
+        }
+        let lacking: Vec<(String, Option<Sha256>)> = jobs
+            .into_iter()
+            .filter(|job| !fetch::mirrors::at_hf_endpoint(self.context, &job.fetch.from))
+            .map(|job| (job.label.clone(), job.fetch.expect.sha256))
+            .collect();
+        fetch::mirrors::sources_allowed(self.context, &lacking)
     }
 
     /// writes data.lock when it changed from what it was `before`, and says which datasets it
@@ -1330,15 +1409,7 @@ impl<'a> Loop<'a> {
         .map_err(|error| self.as_left(error))?;
         ahead.retain(|job| !in_cache(&self.cache, &job.fetch));
         self.refuse_offline(&jobs)?;
-        if self.context.mirrors.mirrors.only {
-            let lacking: Vec<(String, Option<Sha256>)> = jobs
-                .iter()
-                .filter(|job| !in_cache(&self.cache, &job.fetch))
-                .filter(|job| !fetch::mirrors::at_hf_endpoint(self.context, &job.fetch.from))
-                .map(|job| (job.label.clone(), job.fetch.expect.sha256))
-                .collect();
-            fetch::mirrors::sources_allowed(self.context, &lacking)?;
-        }
+        self.refuse_unmirrored(jobs.iter().filter(|job| !in_cache(&self.cache, &job.fetch)))?;
         let lacking: Vec<&Job> = jobs
             .iter()
             .filter(|job| !in_cache(&self.cache, &job.fetch))

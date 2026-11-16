@@ -237,6 +237,9 @@ pub(in crate::cli) enum Ask {
     /// as `drop` asks: the web and bucket mirrors, then the source of a file none holds. folder
     /// mirrors are the caller's, which hashes their copies.
     Elsewhere,
+    /// as a dry run that may ask no source asks: the mirrors alone, as `Sources` asks them, each
+    /// noting a file it does not hold as a sync's request there would.
+    Mirrors,
 }
 
 /// what `probed`, the answer at `url`, says of a file pinned at `size` bytes: served, or why
@@ -312,6 +315,8 @@ pub(in crate::cli) async fn find(
                 if held {
                     let source = lacks[at].take();
                     found[at] = Some(Found::Mirror { index, source });
+                } else if let (Ask::Mirrors, Some(digest)) = (ask, files[at].sha256) {
+                    context.mirrors.not_there(index, digest);
                 }
             }
         }
@@ -377,7 +382,7 @@ async fn held_on(
     index: usize,
     ask: Ask,
 ) -> Result<Vec<bool>, Error> {
-    let lists = ask == Ask::Sources;
+    let lists = matches!(ask, Ask::Sources | Ask::Mirrors);
     match context.mirrors.look(index) {
         Look::Folder(_) if ask == Ask::Elsewhere => Ok(vec![false; asked.len()]),
         Look::Folder(root) => Ok(tokio::task::block_in_place(|| {

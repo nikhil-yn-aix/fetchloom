@@ -27,6 +27,13 @@ const NAMED: usize = 5;
 /// what a mirror answered for a copy that is not the pinned file.
 const DAMAGED: &str = "a damaged copy";
 
+/// what a mirror said of a file it does not hold.
+const NOT_THERE: &str = "not there";
+
+/// what an S3 mirror said of a file it refused, as S3 refuses a key that is not there to a reader
+/// not allowed to list the bucket.
+const UNLISTED: &str = "not there, or not readable without s3:ListBucket";
+
 /// the mirrors a run asks, and what they answered, so no mirror is asked twice for one file and
 /// one that is not there is asked nothing more.
 #[derive(Default)]
@@ -76,6 +83,16 @@ impl Mirrored {
 
     fn lacked(&self, index: usize, digest: Sha256, said: String) {
         self.answers().lacked.insert((index, digest), said);
+    }
+
+    /// notes that mirror `index`, looked at without taking anything, does not hold the file
+    /// pinned to `digest`, in the words a sync's request there gives.
+    pub(in crate::cli) fn not_there(&self, index: usize, digest: Sha256) {
+        let said = match self.mirrors.list.get(index) {
+            Some(Location::S3(_)) => UNLISTED,
+            _ => NOT_THERE,
+        };
+        self.lacked(index, digest, said.to_owned());
     }
 
     /// notes that folder mirror `index` holds a copy of the file `label` that hashed to `digest`,
@@ -351,10 +368,8 @@ fn skip_warning(
 /// that is not there to a reader not allowed to list the bucket.
 fn lacking(location: &Location, error: &Error) -> Option<String> {
     match (error.kind, location) {
-        (Kind::ReferenceUnresolved, _) => Some("not there".to_owned()),
-        (Kind::AuthRequired, Location::S3(_)) => {
-            Some("not there, or not readable without s3:ListBucket".to_owned())
-        }
+        (Kind::ReferenceUnresolved, _) => Some(NOT_THERE.to_owned()),
+        (Kind::AuthRequired, Location::S3(_)) => Some(UNLISTED.to_owned()),
         _ => None,
     }
 }
@@ -692,7 +707,7 @@ async fn from_folder(
                 copied = (copied.0 + 1, copied.1 + object.size);
                 stored.insert(want.digest);
             }
-            Gave::Absent => mirrored.lacked(index, want.digest, "not there".to_owned()),
+            Gave::Absent => mirrored.lacked(index, want.digest, NOT_THERE.to_owned()),
             Gave::Damaged => {
                 mirrored.lacked(index, want.digest, DAMAGED.to_owned());
                 damaged.push(want.label);
@@ -908,12 +923,11 @@ async fn tree_from_mirrors(
         let bytes = match got {
             Got::Bytes(bytes) => bytes,
             Got::Absent => {
-                mirrored.lacked(index, tree, "not there".to_owned());
+                mirrored.lacked(index, tree, NOT_THERE.to_owned());
                 continue;
             }
             Got::Unlisted => {
-                let said = "not there, or not readable without s3:ListBucket".to_owned();
-                mirrored.lacked(index, tree, said);
+                mirrored.lacked(index, tree, UNLISTED.to_owned());
                 continue;
             }
             Got::Damaged => Vec::new(),

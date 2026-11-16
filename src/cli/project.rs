@@ -1485,7 +1485,9 @@ pub(super) async fn preview_all(
             &engine::sizeless(&jobs),
         );
     }
-    let preview = work.preview(manifest, &lock, force, survey, jobs, &damaged, &guessed)?;
+    let preview = work
+        .preview(manifest, &lock, force, survey, jobs, &damaged, &guessed)
+        .await?;
     if let Some(total) = &preview.changes.to_download {
         super::fetch::tell_would_fetch(output, &preview.changes.download, total);
     }

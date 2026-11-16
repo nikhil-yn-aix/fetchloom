@@ -260,7 +260,8 @@ fn a_copy_of_other_bytes_in_the_hugging_face_cache_is_left_and_downloaded() -> R
     Ok(())
 }
 
-/// offline, hugging face's cache is on this machine, so it still gives what the cache lacks.
+/// offline, hugging face's cache is on this machine, so it still gives what the cache lacks, and
+/// a dry run says so rather than refuse.
 #[cfg(debug_assertions)]
 #[test]
 fn an_offline_sync_takes_pins_from_the_hugging_face_cache() -> Result {
@@ -268,9 +269,15 @@ fn an_offline_sync_takes_pins_from_the_hugging_face_cache() -> Result {
     let (api, files) = hub()?;
     let teammate = pinned(&sandbox, &api, &files, "teammate")?;
     hugging_face_cache(&sandbox, &rows())?;
+    let cache = sandbox.folder("teammate cache")?;
+    let dry = sandbox
+        .command_in(&teammate, &["--offline", "sync", "--dry-run"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr)?);
     let output = sandbox
         .command_in(&teammate, &["--offline", "sync"])
-        .env("FETCHLOOM_CACHE", sandbox.folder("teammate cache")?)
+        .env("FETCHLOOM_CACHE", &cache)
         .output()?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
@@ -334,7 +341,8 @@ fn a_reuse_folder_gives_a_file_under_another_name() -> Result {
 
 /// hugging face's cache is read by default through its own layout alone, so a pinned file it holds
 /// under a name no shortcut finds, as a plain git file's blob is named, is downloaded. listing the
-/// cache in `reuse` has every file of the pinned size there looked at, and gives it with no request.
+/// cache in `reuse` has every file of the pinned size there looked at, and gives it with no request;
+/// an offline dry run looks there as the run would, refusing only without the listing.
 #[test]
 fn only_a_listed_folder_is_searched_for_a_file_no_shortcut_finds() -> Result {
     let sandbox = Sandbox::new()?;
@@ -355,6 +363,17 @@ fn only_a_listed_folder_is_searched_for_a_file_no_shortcut_finds() -> Result {
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
         json(&output)
     };
+    let dry = |reuse: Option<&Path>| -> Result<Option<i32>> {
+        let teammate = clone(&sandbox, "dry")?;
+        let mut command = sandbox.command_in(&teammate, &["--offline", "sync", "--dry-run"]);
+        command.env("FETCHLOOM_CACHE", sandbox.folder("dry cache")?);
+        if let Some(reuse) = reuse {
+            command.env("FETCHLOOM_REUSE", reuse);
+        }
+        Ok(command.output()?.status.code())
+    };
+    assert_eq!(dry(None)?, Some(20));
+    assert_eq!(dry(Some(&hub))?, Some(0));
     let unlisted = sync("unlisted", None)?;
     assert_eq!(unlisted["work"]["reused_objects"], 0, "{unlisted}");
     assert_eq!(unlisted["work"]["requests"], 1, "{unlisted}");
