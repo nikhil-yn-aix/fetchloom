@@ -4867,3 +4867,54 @@ fn a_push_of_every_dataset_leaves_a_waiting_one_out() -> Result {
     );
     Ok(())
 }
+
+/// `add <link> --as iris`, with or without `--no-sync`, while iris waits for its list stops at
+/// that list before asking its source, rather than resolving it and meeting the check every
+/// data.lock write makes.
+#[test]
+fn adding_as_a_waiting_dataset_asks_no_source() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    let link = format!("{}{PATH}", routes.url);
+    for (name, link) in [
+        ("iris", link.clone()),
+        ("b", format!("{}/files/b.csv", routes.url)),
+    ] {
+        let added = listing_in(&sandbox, &sandbox.work(), &["add", &link, "--as", name])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let (clone, part) = clone_without(&sandbox, "iris")?;
+    let asked = routes.requests().len();
+    for args in [
+        &["--json", "add", &*link, "--as", "iris", "--no-sync"][..],
+        &["--json", "add", &*link, "--as", "iris"],
+    ] {
+        let added = listing_in(&sandbox, &clone, args)?;
+        let document = json(&added)?;
+        assert_eq!(added.status.code(), Some(50), "{args:?}: {document}");
+        assert_eq!(
+            document["errors"][0]["message"],
+            format!("data.lock names {part}, the file list of iris, which is not there"),
+            "{args:?}"
+        );
+        assert_eq!(
+            routes.requests().len(),
+            asked,
+            "{args:?}: {:?}",
+            routes.requests()
+        );
+    }
+    // without --as the link is resolved first, to find which dataset it is
+    let added = listing_in(&sandbox, &clone, &["--json", "add", &link, "--no-sync"])?;
+    let document = json(&added)?;
+    assert_eq!(added.status.code(), Some(50), "{document}");
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!("data.lock names {part}, the file list of iris, which is not there")
+    );
+    Ok(())
+}

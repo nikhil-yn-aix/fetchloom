@@ -51,6 +51,10 @@ pub(super) fn again(
     let manifest = &adding.manifest;
     super::same_settings(manifest, present)?;
     let name = present.name;
+    // only its list, once it is back, says what it pins
+    if let Some(old) = &old {
+        old.refuse_waiting([name])?;
+    }
     let entry = &manifest.datasets[name];
     let is_pinned = old.as_ref().is_some_and(|lock| pins(lock, name, entry));
     let renamed = if is_pinned {

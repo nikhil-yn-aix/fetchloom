@@ -658,6 +658,12 @@ async fn add_held(
     } else {
         open_cache()?
     };
+    // a name --as gives that waits for its list is refused before its source is asked
+    if let (Some(asked), Some(old)) = (&args.name, &old)
+        && manifest.datasets.contains_key(asked)
+    {
+        old.refuse_waiting([asked.as_str()])?;
+    }
     let mut addition = resolve_typed(
         context,
         &net,
