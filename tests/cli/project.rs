@@ -4754,3 +4754,34 @@ fn adding_the_link_of_a_waiting_dataset_says_it_waits() -> Result {
     }
     Ok(())
 }
+
+/// `lock --upgrade` while iris waits for its list never says every pin is up to date: iris was
+/// not asked, and its closing line says so.
+#[test]
+fn an_upgrade_names_a_waiting_dataset_it_did_not_ask() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    for (name, path) in [("iris", PATH), ("b", "/files/b.csv")] {
+        let link = format!("{}{path}", routes.url);
+        let added = listing_in(&sandbox, &sandbox.work(), &["add", &link, "--as", name])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let (clone, _) = clone_without(&sandbox, "iris")?;
+    let lock = fs::read(clone.join("data.lock"))?;
+    let upgraded = listing_in(&sandbox, &clone, &["lock", "--upgrade"])?;
+    let stderr = text(&upgraded.stderr)?;
+    assert_eq!(upgraded.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Ok data.lock is already up to date, but iris waits for its file list and was not asked"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("nothing to do"), "{stderr}");
+    assert_eq!(fs::read(clone.join("data.lock"))?, lock);
+    Ok(())
+}

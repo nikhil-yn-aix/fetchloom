@@ -46,6 +46,8 @@ a passing `lock --check` ends with `Ok data.lock matches data.toml` on stderr, a
 
 an [import](add.md#files-on-this-machine) has no source with a newer version: `--upgrade <name>` naming one exits 10 with `reference.unresolved`, and `--upgrade` alone keeps it as data.lock pins it and says so with a `Skipped` line.
 
+a dataset that [waits for its file list](../reference/data-lock.md#big-datasets) is not asked either: `--upgrade <name>` naming one stops with `project.invalid`, exit 50, and `--upgrade` alone keeps it and, when nothing else changed, ends `Ok data.lock is already up to date, but iris waits for its file list and was not asked`.
+
 a change of `select` or `exclude` lists the version data.lock already resolved, not a newer one. an `extract` change alone keeps the pinned files and lists nothing again; it needs the network only for archives the cache lacks. changing `ref`, deleting the lock or an upgrade resolves the reference in data.toml anew. [the spec hash](../reference/data-lock.md#the-spec-hash) defines these rules.
 
 after an upgrade, run `fetchloom sync` to place the new inputs, and commit `data.lock`. a pin that did not change keeps its `locked` time.

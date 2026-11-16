@@ -930,9 +930,23 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
             committed(&project)
         ));
     } else {
-        context
-            .output
-            .done("Ok", "data.lock is already up to date, nothing to do");
+        // an upgrade asks no source of a dataset waiting for its list
+        let unasked: Vec<&str> = lock
+            .still_waiting()
+            .map(|waiting| waiting.name.as_str())
+            .filter(|name| upgrade.includes(name))
+            .collect();
+        let text = match unasked.as_slice() {
+            [] => "data.lock is already up to date, nothing to do".to_owned(),
+            [one] => format!(
+                "data.lock is already up to date, but {one} waits for its file list and was not asked"
+            ),
+            many => format!(
+                "data.lock is already up to date, but {} wait for their file lists and were not asked",
+                units::listed(many, "and")
+            ),
+        };
+        context.output.done("Ok", &text);
     }
     Ok(Report {
         project: project.root,

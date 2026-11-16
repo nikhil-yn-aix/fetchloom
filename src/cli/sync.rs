@@ -52,7 +52,7 @@ pub(super) enum Upgrade {
 }
 
 impl Upgrade {
-    fn includes(&self, name: &str) -> bool {
+    pub(super) fn includes(&self, name: &str) -> bool {
         match self {
             Upgrade::Nothing => false,
             Upgrade::All => true,
