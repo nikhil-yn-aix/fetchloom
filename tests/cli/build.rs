@@ -2136,6 +2136,43 @@ fn a_build_short_of_room_asks_first() -> Result {
     Ok(())
 }
 
+/// a step that removes the folder `{out}` stands for and puts a link to another folder in its
+/// place made no result: the build fails as for a link in the result, exit 60, and nothing of the
+/// other folder is taken in. on windows the folder is held while the step runs, so the step
+/// cannot remove it and fails itself.
+#[test]
+fn a_step_that_replaces_its_result_folder_fails_the_build() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    fs::write(elsewhere.join("theirs.csv"), "someone's own bytes")?;
+    with(
+        &sandbox,
+        &server,
+        &recipe(&["replace-out", &word(&elsewhere)]),
+    )?;
+    let pinned = pins(&sandbox.work())?;
+
+    let output = build(&sandbox, &["--json", "build"])?;
+
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, _, _) = error(&document);
+    assert_eq!(kind, "build.failed");
+    if cfg!(unix) {
+        assert_eq!(
+            message,
+            "clean put a link in place of the folder {out} stands for, so it made no result"
+        );
+    }
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    assert_eq!(
+        fs::read(elsewhere.join("theirs.csv"))?,
+        b"someone's own bytes"
+    );
+    Ok(())
+}
+
 /// a step would stop at its first look at a disk below the floor, so the build refuses with
 /// `--yes` too, and its help never offers it.
 #[test]

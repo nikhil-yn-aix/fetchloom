@@ -841,9 +841,7 @@ impl<'a> Building<'a> {
         let ran = self.run(step, &staging)?;
         self.same_code(step)?;
         let most = self.context.settings.most_files.value;
-        let out = staging
-            .out_folder()
-            .map_err(|err| taken(name, err.into()))?;
+        let out = staging.out_folder().map_err(|fault| taken(name, fault))?;
         let found = capture::read(&out, most, threads, &self.context.stop)
             .map_err(|fault| taken(name, fault))?;
         self.room_for(name, found.copies(cache))?;
@@ -1473,6 +1471,10 @@ fn taken(name: &str, fault: Fault) -> Error {
         Refused::Changed(path) => (
             format!("{name} wrote {path}, which changed while fetchloom read it"),
             "make sure nothing the step started still writes into {out} once it ends",
+        ),
+        Refused::Replaced(did) => (
+            format!("{name} {did} the folder {{out}} stands for, so it made no result"),
+            "write the result into the folder {out} stands for, and leave the folder itself in place",
         ),
     };
     Error::new(Kind::BuildFailed, message).help(help)

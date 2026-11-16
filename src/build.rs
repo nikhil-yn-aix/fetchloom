@@ -114,22 +114,44 @@ impl Staging {
 
     /// the step's `out` folder to take its result from: on unix opened through the folder held
     /// since the step began. a file in a folder of the step's own in TMPDIR is copied into the
-    /// cache, never moved, since the cache may be on another disk.
-    #[cfg_attr(
-        not(unix),
-        expect(
-            clippy::unnecessary_wraps,
-            reason = "unix opens the folder, which windows only names"
-        )
-    )]
-    pub(crate) fn out_folder(&self) -> io::Result<capture::Out> {
+    /// cache, never moved, since the cache may be on another disk. a step that removed `out`, or
+    /// put a link or a file in its place, made no result.
+    pub(crate) fn out_folder(&self) -> Result<capture::Out, capture::Fault> {
         #[cfg(unix)]
         {
-            let out = crate::cache::enter_at(&self.held.folder, "out")?;
+            use rustix::fs::{AtFlags, FileType};
+            let out = crate::cache::enter_at(&self.held.folder, "out").map_err(|err| {
+                let found =
+                    rustix::fs::statat(&*self.held.folder, "out", AtFlags::SYMLINK_NOFOLLOW);
+                let found = found.map(|found| FileType::from_raw_mode(found.st_mode));
+                match found {
+                    Err(rustix::io::Errno::NOENT) => capture::Refused::Replaced("removed").into(),
+                    Ok(FileType::Symlink) => {
+                        capture::Refused::Replaced("put a link in place of").into()
+                    }
+                    Ok(FileType::Directory) | Err(_) => capture::Fault::Io(err),
+                    Ok(_) => capture::Refused::Replaced("put a file in place of").into(),
+                }
+            })?;
             Ok(capture::Out::held(self.out(), out, self.scratch.is_none()))
         }
         #[cfg(not(unix))]
-        Ok(capture::Out::below(self.root.clone(), self.out()))
+        {
+            match std::fs::symlink_metadata(self.out()) {
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    return Err(capture::Refused::Replaced("removed").into());
+                }
+                Err(err) => return Err(err.into()),
+                Ok(found) if found.file_type().is_symlink() => {
+                    return Err(capture::Refused::Replaced("put a link in place of").into());
+                }
+                Ok(found) if !found.is_dir() => {
+                    return Err(capture::Refused::Replaced("put a file in place of").into());
+                }
+                Ok(_) => {}
+            }
+            Ok(capture::Out::below(self.root.clone(), self.out()))
+        }
     }
 
     /// holds every folder of what the step reads, once [`inputs::make`] made them, until the

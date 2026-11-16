@@ -14,6 +14,7 @@
 //! | `nothing` | writes nothing |
 //! | `hold <marker> <release>` | makes the file `marker`, waits for `release`, then copies |
 //! | `link` | writes a file and a link to it |
+//! | `replace-out <target>` | removes the result folder and puts a link to the folder `target` in its place, a junction on windows |
 //! | `case` | writes `Data.csv` and `data.csv` |
 //! | `say <bytes>` | prints `bytes` bytes of lines, then copies |
 //! | `call <program>` | runs `program sync` and exits with its exit code |
@@ -96,6 +97,7 @@ fn run(args: &[String]) -> io::Result<ExitCode> {
             copy(folders)?;
         }
         ("link", folders) => link(out(folders)?)?,
+        ("replace-out", [target, folders @ ..]) => replace_out(out(folders)?, Path::new(target))?,
         ("case", folders) => {
             let out = out(folders)?;
             fs::write(out.join("Data.csv"), "upper")?;
@@ -223,6 +225,28 @@ fn link(out: &Path) -> io::Result<()> {
 fn link(out: &Path) -> io::Result<()> {
     fs::write(out.join("real.csv"), "a,b\n")?;
     std::os::windows::fs::symlink_file("real.csv", out.join("latest"))
+}
+
+/// removes the folder `out` and puts a link to `target` in its place.
+fn replace_out(out: &Path, target: &Path) -> io::Result<()> {
+    fs::remove_dir(out)?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, out)
+    }
+    #[cfg(windows)]
+    {
+        let made = Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(out)
+            .arg(target)
+            .status()?;
+        if made.success() {
+            Ok(())
+        } else {
+            Err(invalid("mklink made no junction"))
+        }
+    }
 }
 
 /// runs `program sync` where the step runs, and passes on how it ended.

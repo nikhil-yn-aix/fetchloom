@@ -36,6 +36,8 @@ pub(crate) enum Refused {
     TooMany(usize),
     /// a file that changed while it was taken in.
     Changed(String),
+    /// the folder `{out}` stands for is gone: the step did this to it, as `removed` says.
+    Replaced(&'static str),
 }
 
 /// why taking in a result failed.

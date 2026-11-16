@@ -99,7 +99,7 @@ the step's output goes to `.fetchloom/builds/<name>.log`, made anew for each run
 
 once the step exits with 0, fetchloom takes in what it wrote into `<build>/out`, without following links, and refuses the result with `build.failed` when it holds:
 
-- nothing at all;
+- nothing at all, or no folder: the step removed `<build>/out` or put a link or a file in its place, which windows, holding the folder while the step runs, refuses the step itself;
 - a link, a device, a fifo or a socket, since a result holds plain files only;
 - a name some disk fetchloom supports cannot store, such as `a:b.csv` on windows or a name longer than 255 bytes, or one that names repository metadata, such as `.git`;
 - two names a disk takes for one, as `Data.csv` and `data.csv` on a disk that ignores case, or the same name with an accent written two ways;
