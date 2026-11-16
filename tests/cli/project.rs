@@ -4393,7 +4393,7 @@ fn a_clone_missing_a_fetched_list_never_asks_its_source() -> Result {
     let audited = listing_in(&sandbox, &clone, &["audit"])?;
     let stderr = text(&audited.stderr)?;
     assert!(
-        stderr.contains("Ok the file in data.lock is still served, and its source changed nothing, but iris waits for its file list and was not asked"),
+        stderr.contains("Ok the file in data.lock is still served at its pinned size, and its source lists it as data.lock pins it, but iris waits for its file list and was not asked"),
         "{stderr}"
     );
     let audited = listing_in(&sandbox, &clone, &["--json", "audit", "iris"])?;

@@ -16,7 +16,7 @@ use super::probe::{self, Ask, Found, Lack, Pinned};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::net::Net;
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::project::lock::{Lock, Waiting, Words};
 use crate::project::manifest::Manifest;
 use crate::source::{Access, Listing, Reference};
@@ -83,6 +83,13 @@ struct Dataset {
     /// the mirrors that hold any, as the run names them.
     #[serde(skip)]
     mirrors: BTreeSet<String>,
+    /// when data.lock pinned it, as its `locked` time writes it.
+    #[serde(skip)]
+    locked: String,
+    /// its files whose source says they changed after `locked`, each as `iris/iris.csv`: the
+    /// same size tells nothing of their bytes.
+    #[serde(skip)]
+    modified: Vec<String>,
 }
 
 impl Dataset {
@@ -101,6 +108,8 @@ impl Dataset {
             unlisted: None,
             pinned: pinned.to_owned(),
             mirrors: BTreeSet::new(),
+            locked: String::new(),
+            modified: Vec::new(),
         }
     }
 
@@ -314,6 +323,7 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
             listings(&net, &asks),
         );
         gathered(context, &mut report, &pinned, found?);
+        tell_modified(output, &report);
         for ((index, asked), (now, newest)) in asks.iter().zip(listed?) {
             judge(&mut report.datasets[*index], asked, now, newest);
         }
@@ -351,7 +361,10 @@ fn pinned<'l>(
         } else {
             continue;
         };
-        report.datasets.push(Dataset::new(name, &pin.resolved));
+        report.datasets.push(Dataset {
+            locked: pin.timestamp.clone(),
+            ..Dataset::new(name, &pin.resolved)
+        });
         if entry.is_import() {
             continue;
         }
@@ -508,9 +521,13 @@ fn gathered(context: &Context, report: &mut Report, pinned: &[Pinned<'_>], found
                     dataset.lost_at_source.push(unserved(pinned, lack));
                 }
             }
-            Found::Source => {
+            Found::Source { modified } => {
                 dataset.served += 1;
                 report.served += 1;
+                // both read as data.lock writes a time, which sorts as the times do
+                if modified.is_some_and(|modified| units::timestamp(modified) > dataset.locked) {
+                    dataset.modified.push(pinned.label());
+                }
             }
             // the source gave the file, as it did to the download, only not its size
             Found::Nowhere(Lack::Unsized(_)) => {
@@ -524,6 +541,39 @@ fn gathered(context: &Context, report: &mut Report, pinned: &[Pinned<'_>], found
                 dataset.unchecked.push(unserved(pinned, lack));
             }
         }
+    }
+}
+
+/// warns of each file whose source says it changed after data.lock pinned it, though served at
+/// its pinned size, which tells nothing of its bytes; `--check` stays as it was.
+fn tell_modified(output: &Output, report: &Report) {
+    for dataset in report
+        .datasets
+        .iter()
+        .filter(|dataset| !dataset.modified.is_empty())
+    {
+        let (files, they) = match dataset.modified.as_slice() {
+            [one] => (
+                one.clone(),
+                "its server says it was modified later, and only its size was",
+            ),
+            many => (
+                format!("{} files of {}", many.len(), dataset.name),
+                "their server says they were modified later, and only their sizes were",
+            ),
+        };
+        output.warn_detailed(
+            Warning::SourceModified,
+            &format!(
+                "{files} may have changed at its source since data.lock pinned it on {}: {they} compared",
+                dataset.locked
+            ),
+            Some(&format!(
+                "`{}` pins the bytes its source serves now; check the change before you commit data.lock",
+                super::project::command(&format!("lock --upgrade {}", dataset.name))
+            )),
+            &dataset.modified,
+        );
     }
 }
 
@@ -566,11 +616,12 @@ fn tell(output: &Output, report: &Report) {
     let unasked = report.unasked().count();
     let moved = report.moved();
     if unserved == 0 && report.unchecked == 0 && gone + unasked + moved.len() == 0 {
+        // a size is all a first byte's answer can vouch for
         let all = match report.files {
             0 => "data.lock pins no file to ask about".to_owned(),
-            1 => "the file in data.lock is still served, and its source changed nothing".to_owned(),
+            1 => "the file in data.lock is still served at its pinned size, and its source lists it as data.lock pins it".to_owned(),
             files => format!(
-                "all {} files in data.lock are still served, and their sources changed nothing",
+                "all {} files in data.lock are still served at their pinned sizes, and their sources list each dataset as data.lock pins it",
                 units::grouped(files)
             ),
         };

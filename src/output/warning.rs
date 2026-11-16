@@ -139,6 +139,8 @@ pub(crate) enum Warning {
     SourceMoved,
     /// what a source lists may not be all of the dataset.
     SourcePartial,
+    /// a pinned file's server says it changed after data.lock pinned it, at the same size.
+    SourceModified,
     /// a run told `--yes` goes on though a disk may lack the room it needs.
     SpaceShort,
     /// `FETCHLOOM_TRACE` names a file fetchloom cannot write.
@@ -205,6 +207,7 @@ impl Warning {
             Warning::SettingsSwitchUnread => "settings.switch_unread",
             Warning::SettingsUnknownVariable => "settings.unknown_variable",
             Warning::SourceArchived => "source.archived",
+            Warning::SourceModified => "source.modified",
             Warning::SourceMoved => "source.moved",
             Warning::SourcePartial => "source.partial",
             Warning::SpaceShort => "space.short",
@@ -291,6 +294,7 @@ mod tests {
             SettingsSwitchUnread,
             SettingsUnknownVariable,
             SourceArchived,
+            SourceModified,
             SourceMoved,
             SourcePartial,
             SpaceShort,

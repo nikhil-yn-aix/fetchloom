@@ -444,7 +444,7 @@ fn a_newer_zenodo_version_is_reported_with_the_upgrade_that_takes_it() -> Result
     assert_eq!(text(&output.stdout)?, "");
     assert!(
         text(&output.stderr)?
-            .contains("Ok the file in data.lock is still served, and its source changed nothing"),
+            .contains("Ok the file in data.lock is still served at its pinned size, and its source lists it as data.lock pins it"),
         "{}",
         text(&output.stderr)?
     );
@@ -613,5 +613,74 @@ fn an_import_a_mirror_holds_is_served_by_it() -> Result {
         stderr.contains(&format!("     Served flowers · 1 file · 1 on {mirror}\n")),
         "{stderr}"
     );
+    Ok(())
+}
+
+/// a link's file is checked by its size alone, so the run says so and never that nothing
+/// changed: one digit changed in place keeps the size. its server's `Last-Modified` after
+/// data.lock's `locked` names the file as possibly changed since the pin, a warning that leaves
+/// `--check` passing; one from before the pin raises nothing.
+#[test]
+fn a_file_checked_by_size_alone_says_so_and_a_later_change_warns() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = Routes::start(vec![(
+        "/files/iris.csv".to_owned(),
+        file(b"a,b\n1,2\n", "\"v1\""),
+    )])?;
+    pinned(&sandbox, &source, &["/files/iris.csv"])?;
+    let path = sandbox.work().join("data.lock");
+    let lock = std::fs::read_to_string(&path)?;
+    let at = lock.find("locked = \"").ok_or("no locked time")? + "locked = \"".len();
+    let pinned_at = "2026-06-01T00:00:00Z";
+    std::fs::write(
+        &path,
+        format!(
+            "{}{pinned_at}{}",
+            &lock[..at],
+            &lock[at + pinned_at.len()..]
+        ),
+    )?;
+    for (modified, warned) in [
+        ("Sun, 31 May 2026 23:00:00 GMT", false),
+        ("Mon, 01 Jun 2026 01:00:00 GMT", true),
+    ] {
+        source.change(vec![(
+            "/files/iris.csv".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Length", "8"), ("Last-Modified", modified)],
+                b"a,b\n1,3\n",
+            ),
+        )]);
+        let output = sandbox.run(&["audit"])?;
+        ok(&output)?;
+        let stderr = text(&output.stderr)?;
+        assert!(
+            stderr.contains("Ok the file in data.lock is still served at its pinned size"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("changed nothing"), "{stderr}");
+        let output = sandbox.run(&["--json", "audit", "--check"])?;
+        ok(&output)?;
+        let document = json(&output)?;
+        let changed: Vec<&serde_json::Value> = document["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|warning| warning["kind"] == "source.modified")
+            .collect();
+        if !warned {
+            assert!(changed.is_empty(), "{modified}: {document}");
+            continue;
+        }
+        assert_eq!(changed.len(), 1, "{document}");
+        assert_eq!(
+            changed[0]["message"],
+            format!(
+                "iris/iris.csv may have changed at its source since data.lock pinned it on {pinned_at}: its server says it was modified later, and only its size was compared"
+            ),
+            "{document}"
+        );
+    }
     Ok(())
 }

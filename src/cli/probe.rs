@@ -145,8 +145,10 @@ pub(in crate::cli) enum Found {
         index: usize,
         source: Option<Lack>,
     },
-    /// its source serves it at its size.
-    Source,
+    /// its source serves it at its size, and says it last changed at `modified`, when it does.
+    Source {
+        modified: Option<std::time::SystemTime>,
+    },
     Nowhere(Lack),
 }
 
@@ -355,6 +357,10 @@ async fn at_sources(
     let probed = each(context, net, &asked, |at| files[at].request().ok()).await?;
     for (at, probed) in asked.into_iter().zip(probed) {
         let pinned = &files[at];
+        let modified = match &probed {
+            Some(Probed::File { modified, .. }) => *modified,
+            _ => None,
+        };
         let judgement = pinned
             .request()
             .and_then(|_| match (probed, Url::parse(pinned.url)) {
@@ -365,7 +371,7 @@ async fn at_sources(
                 ))),
             });
         match judgement {
-            Ok(()) => found[at] = Some(Found::Source),
+            Ok(()) => found[at] = Some(Found::Source { modified }),
             Err(lack) => lacks[at] = Some(lack),
         }
     }

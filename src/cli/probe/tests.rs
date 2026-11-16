@@ -36,6 +36,7 @@ fn an_answer_is_served_only_at_the_pinned_size() {
         page,
         name: None,
         head: Vec::new(),
+        modified: None,
     };
     let cases = [
         (file(Some(10), false), false, ("served", None)),

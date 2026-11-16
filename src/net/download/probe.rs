@@ -18,12 +18,14 @@ use crate::work::Work;
 pub(crate) enum Probed {
     /// the file or its first byte: the whole file's size when the answer states it, whether the
     /// answer is a web page that names no file, the name the server gives the file, which a
-    /// download of the link takes, and for such a page, the first bytes a [`Net::peek`] read.
+    /// download of the link takes, for such a page, the first bytes a [`Net::peek`] read, and
+    /// when the server says the file last changed.
     File {
         total: Option<u64>,
         page: bool,
         name: Option<String>,
         head: Vec<u8>,
+        modified: Option<std::time::SystemTime>,
     },
     /// an answer that is no file, with the error a download would end with: a refusal with its
     /// sign-in hint, nothing at the link, or another status.
@@ -183,6 +185,10 @@ impl Net {
             .then(|| headers::total_length(&head, StatusCode::PARTIAL_CONTENT))
             .flatten();
         let served = |response: &reqwest::Response| super::served_name(response, &fetch.url);
+        let modified = head
+            .get(header::LAST_MODIFIED)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| httpdate::parse_http_date(value).ok());
         match status {
             StatusCode::OK | StatusCode::PARTIAL_CONTENT => {
                 let total = headers::total_length(&head, status);
@@ -209,6 +215,7 @@ impl Net {
                     page,
                     name,
                     head,
+                    modified,
                 }))
             }
             _ if empty.is_some() => Ok(Step::Probed(Probed::File {
@@ -216,6 +223,7 @@ impl Net {
                 page: false,
                 name: served(&response).ok().flatten(),
                 head: Vec::new(),
+                modified,
             })),
             status => match self.status_refusal(from, status, &head) {
                 Failure::Final(error) => Ok(Step::Probed(Probed::Answered {

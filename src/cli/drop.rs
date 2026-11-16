@@ -401,7 +401,7 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
     for ((pinned, answer), &at) in rest.iter().zip(answers).zip(&rest_at) {
         let lacks = checked.lacks(pinned.dataset);
         let why = match answer {
-            Found::Mirror { .. } | Found::Source => {
+            Found::Mirror { .. } | Found::Source { .. } => {
                 lacks.sized += 1;
                 by_size.push((at, false));
                 continue;
