@@ -202,6 +202,7 @@ impl State {
 
     /// [`State::parse`] keeping only the records of the paths `keep` accepts. the others are
     /// passed over without being built, so a few files of a large state cost little to read.
+    #[cfg(test)]
     pub(crate) fn parse_only(bytes: &[u8], keep: &dyn Fn(&str) -> bool) -> State {
         let mut deserializer = serde_json::Deserializer::from_slice(bytes);
         let state = serde::de::DeserializeSeed::deserialize(Only(keep), &mut deserializer)
@@ -212,21 +213,24 @@ impl State {
         }
     }
 
-    /// [`State::parse_only`] of `file`, reading only the parts that can hold a record at or below
-    /// `folders`, with how many bytes it read; a state whose index does not fit is read whole, so
-    /// the records are always a whole read's. fails when `file` cannot be read.
+    /// the state in `file` with only the records `keep` accepts, passing the others over without
+    /// building them, reading only the parts that can hold a record at or below `folders`, with
+    /// how many bytes it read; a state whose index does not fit is read whole, so
+    /// the records are always a whole read's. one `ours` refuses by the folder it was written
+    /// for, as a clone or a copy brings it, gives none of its records. fails when `file` cannot
+    /// be read.
     pub(crate) fn read_within(
         file: &mut (impl Read + Seek),
         folders: &[String],
         keep: &dyn Fn(&str) -> bool,
+        ours: &dyn Fn(Option<&Folder>) -> bool,
     ) -> io::Result<(State, u64)> {
         let mut reading = Reading { file, bytes: 0 };
-        match indexed(&mut reading, folders, keep) {
+        match indexed(&mut reading, folders, keep, ours) {
             Ok(state) => return Ok((state, reading.bytes)),
             Err(reason) => tracing::debug!(reason, "the state is read whole"),
         }
-        let bytes = reading.rest(0)?;
-        Ok((State::parse_only(&bytes, keep), reading.bytes))
+        reading.streamed(keep, ours)
     }
 
     /// [`State::parse`] of `file`, `length` bytes from its start, with how many bytes it read. a
@@ -234,10 +238,11 @@ impl State {
     pub(crate) fn read_whole(
         file: &mut (impl Read + Seek),
         length: u64,
+        ours: &dyn Fn(Option<&Folder>) -> bool,
     ) -> io::Result<(State, u64)> {
         // through the index, its header, tail and block would take three reads and three seeks
         if length > BLOCK as u64 {
-            return State::read_blocks(file);
+            return State::read_blocks(file, ours);
         }
         let mut bytes = vec![0; usize::try_from(length).unwrap_or_default()];
         let mut filled = 0;
@@ -255,15 +260,17 @@ impl State {
 
     /// [`State::parse`] of `file`, read a block at a time through its index, so the document is
     /// never held whole, with how many bytes it read; a state whose index does not fit is read
-    /// whole.
-    fn read_blocks(file: &mut (impl Read + Seek)) -> io::Result<(State, u64)> {
+    /// whole, and one `ours` refuses gives none of its records.
+    fn read_blocks(
+        file: &mut (impl Read + Seek),
+        ours: &dyn Fn(Option<&Folder>) -> bool,
+    ) -> io::Result<(State, u64)> {
         let mut reading = Reading { file, bytes: 0 };
-        match by_blocks(&mut reading) {
+        match by_blocks(&mut reading, ours) {
             Ok(state) => return Ok((state, reading.bytes)),
             Err(reason) => tracing::debug!(reason, "the state is read whole"),
         }
-        let bytes = reading.rest(0)?;
-        Ok((State::parse(&bytes), reading.bytes))
+        reading.streamed(&|_| true, ours)
     }
 
     /// moves the kept rebuild of each recipe `manifest` no longer has to the one recipe it has
@@ -605,12 +612,74 @@ impl<R: Read + Seek> Reading<'_, R> {
         Ok(())
     }
 
-    /// everything from `start` on.
-    fn rest(&mut self, start: u64) -> io::Result<Vec<u8>> {
-        self.file.seek(SeekFrom::Start(start))?;
-        let mut bytes = Vec::new();
-        self.bytes += self.file.read_to_end(&mut bytes)? as u64;
-        Ok(bytes)
+    /// what follows the records that end at `at`, parsed as it is read: the comma that ends the
+    /// records opens it as an object of its own.
+    fn tail<T: serde::de::DeserializeOwned>(&mut self, at: u64) -> Result<T, &'static str> {
+        let unread = |_| "what follows its records cannot be read";
+        self.file.seek(SeekFrom::Start(at)).map_err(unread)?;
+        let mut comma = [0];
+        self.file
+            .read_exact(&mut comma)
+            .map_err(|_| "its records do not end where its header says")?;
+        self.bytes += 1;
+        if comma != *b"," {
+            return Err("its records do not end where its header says");
+        }
+        let mut counted = Counted {
+            inner: &mut *self.file,
+            bytes: 0,
+        };
+        let parsed =
+            serde_json::from_reader(io::Cursor::new(b"{").chain(io::BufReader::new(&mut counted)));
+        self.bytes += counted.bytes;
+        parsed.map_err(|_| "what follows its records is not its index")
+    }
+
+    /// the state read whole from its start as it is parsed, of the records `keep` accepts, for
+    /// one whose index does not fit: a file that is no state, as one of zeros a clone can hold,
+    /// stops at its first byte rather than being held whole, and one `ours` refuses by the
+    /// folder it names gives none of its records.
+    fn streamed(
+        &mut self,
+        keep: &dyn Fn(&str) -> bool,
+        ours: &dyn Fn(Option<&Folder>) -> bool,
+    ) -> io::Result<(State, u64)> {
+        let owner: Option<Owner> =
+            self.parsed(|deserializer| serde::Deserialize::deserialize(deserializer))?;
+        let state = match owner {
+            Some(owner) if owner.version != Some(VERSION) => State::default(),
+            Some(owner) if !ours(owner.folder.as_ref()) => foreign(owner.folder),
+            Some(_) => self
+                .parsed(|deserializer| {
+                    serde::de::DeserializeSeed::deserialize(Only(keep), deserializer)
+                })?
+                .filter(|state| state.version == VERSION)
+                .unwrap_or_default(),
+            None => State::default(),
+        };
+        Ok((state, self.bytes))
+    }
+
+    /// what `parse` makes of the whole file read from its start, none when it is no such json.
+    fn parsed<T>(
+        &mut self,
+        parse: impl FnOnce(
+            &mut serde_json::Deserializer<
+                serde_json::de::IoRead<io::BufReader<&mut Counted<&mut R>>>,
+            >,
+        ) -> serde_json::Result<T>,
+    ) -> io::Result<Option<T>> {
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut counted = Counted {
+            inner: &mut *self.file,
+            bytes: 0,
+        };
+        let mut deserializer =
+            serde_json::Deserializer::from_reader(io::BufReader::new(&mut counted));
+        let parsed = parse(&mut deserializer).and_then(|value| deserializer.end().map(|()| value));
+        drop(deserializer);
+        self.bytes += counted.bytes;
+        Ok(parsed.ok())
     }
 }
 
@@ -620,6 +689,7 @@ fn indexed(
     reading: &mut Reading<'_, impl Read + Seek>,
     folders: &[String],
     keep: &dyn Fn(&str) -> bool,
+    ours: &dyn Fn(Option<&Folder>) -> bool,
 ) -> Result<State, &'static str> {
     let Tail {
         synced,
@@ -630,7 +700,10 @@ fn indexed(
         aside,
         replacing,
         blocks,
-    } = index(reading)?;
+    } = match index(reading, ours)? {
+        Indexed::Tail(tail) => *tail,
+        Indexed::Foreign(folder) => return Ok(foreign(folder)),
+    };
     let mut files = BTreeMap::new();
     let mut bytes = Vec::new();
     for run in runs(&blocks, folders) {
@@ -657,7 +730,10 @@ fn indexed(
 
 /// every record, read a block at a time through the state's index into one list in path order,
 /// which builds the map at once, or why it declines as [`indexed`] does.
-fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'static str> {
+fn by_blocks(
+    reading: &mut Reading<'_, impl Read + Seek>,
+    ours: &dyn Fn(Option<&Folder>) -> bool,
+) -> Result<State, &'static str> {
     let Tail {
         synced,
         candidates,
@@ -667,7 +743,10 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         aside,
         replacing,
         blocks,
-    } = index(reading)?;
+    } = match index(reading, ours)? {
+        Indexed::Tail(tail) => *tail,
+        Indexed::Foreign(folder) => return Ok(foreign(folder)),
+    };
     let mut records = Vec::new();
     let mut bytes = Vec::new();
     for at in 0..blocks.len() {
@@ -696,26 +775,65 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
 }
 
 /// what follows a state's records, once its blocks are found to cover them.
-fn index(reading: &mut Reading<'_, impl Read + Seek>) -> Result<Tail, &'static str> {
+fn index(
+    reading: &mut Reading<'_, impl Read + Seek>,
+    ours: &dyn Fn(Option<&Folder>) -> bool,
+) -> Result<Indexed, &'static str> {
     let mut head = Vec::new();
     reading
         .append(0, START as u64, &mut head)
         .map_err(|_| "it is shorter than its header")?;
     let at = records_end(&head).ok_or("its header is not this version's")?;
-    let mut tail = reading
-        .rest(at)
-        .map_err(|_| "what follows its records cannot be read")?;
-    // the comma that ends the records opens what follows them as an object of its own
-    match tail.first_mut() {
-        Some(comma @ b',') => *comma = b'{',
-        _ => return Err("its records do not end where its header says"),
+    // the folder first, so nothing more of another folder's state, as a clone brings it, is read
+    let owner: Owner = reading.tail(at)?;
+    if !ours(owner.folder.as_ref()) {
+        return Ok(Indexed::Foreign(owner.folder));
     }
-    let found: Tail =
-        serde_json::from_slice(&tail).map_err(|_| "what follows its records is not its index")?;
+    let found: Tail = reading.tail(at)?;
     if !chained(&found.blocks, at) {
         return Err("its blocks do not cover its records");
     }
-    Ok(found)
+    Ok(Indexed::Tail(Box::new(found)))
+}
+
+/// what [`index`] found after a state's records: the index of one written for this folder, or
+/// the folder another one names.
+enum Indexed {
+    Tail(Box<Tail>),
+    Foreign(Option<Folder>),
+}
+
+/// the version and the folder a state records, read before anything else of it, every other
+/// field passed over unheld.
+#[derive(Deserialize)]
+struct Owner {
+    #[serde(default)]
+    version: Option<u32>,
+    #[serde(default)]
+    folder: Option<Folder>,
+}
+
+/// a state written for another folder, `folder`, with none of its records: the reader drops it.
+fn foreign(folder: Option<Folder>) -> State {
+    State {
+        version: VERSION,
+        folder,
+        ..State::default()
+    }
+}
+
+/// a reader that counts the bytes read through it.
+struct Counted<R> {
+    inner: R,
+    bytes: u64,
+}
+
+impl<R: Read> Read for Counted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.bytes += read as u64;
+        Ok(read)
+    }
 }
 
 /// the records of the blocks `run` read into `bytes` as one json object, with the first path of
@@ -1145,9 +1263,13 @@ mod tests {
             bytes: 0,
         };
         let folders = ["data/tiny".to_owned()];
-        let (read, _) =
-            State::read_within(&mut file, &folders, &|path| path.starts_with("data/tiny/"))
-                .unwrap();
+        let (read, _) = State::read_within(
+            &mut file,
+            &folders,
+            &|path| path.starts_with("data/tiny/"),
+            &|_| true,
+        )
+        .unwrap();
         assert_eq!(
             read.files.keys().collect::<Vec<_>>(),
             ["data/tiny/payload.bin"]
@@ -1324,9 +1446,72 @@ mod tests {
             );
             let folders = ["data".to_owned()];
             let (within, _) =
-                State::read_within(&mut io::Cursor::new(&bytes), &folders, &|_| true).unwrap();
+                State::read_within(&mut io::Cursor::new(&bytes), &folders, &|_| true, &|_| true)
+                    .unwrap();
             assert!(within.files.is_empty() && within.synced.is_none());
         }
+    }
+
+    /// a state another folder wrote, as a clone or a copy brings it, is dropped from its index
+    /// alone: none of its records is read, however many it holds. its own folder reads them all.
+    #[test]
+    fn a_state_written_for_another_folder_has_no_record_read() {
+        let mut state = crowded();
+        for number in 0..2_000 {
+            let path = format!("data/big/{number:05}");
+            state.files.insert(path, placed("big", number));
+        }
+        let there = Folder {
+            inode: Some(7),
+            created: None,
+        };
+        let bytes = state.render_for(Some(&there));
+        assert!(bytes.len() > 4 * BLOCK, "{} bytes", bytes.len());
+        let here = Folder {
+            inode: Some(8),
+            created: None,
+        };
+        for (folder, all) in [(&here, false), (&there, true)] {
+            let ours = |recorded: Option<&Folder>| {
+                recorded.is_some_and(|recorded| recorded.matches(folder))
+            };
+            let mut file = Counted {
+                inner: io::Cursor::new(&bytes),
+                bytes: 0,
+            };
+            let (read, _) = State::read_whole(&mut file, bytes.len() as u64, &ours).unwrap();
+            assert_eq!(read.folder.as_ref(), Some(&there));
+            if all {
+                assert_eq!(read.files.len(), state.files.len());
+            } else {
+                assert!(read.files.is_empty());
+                assert!(
+                    file.bytes < BLOCK,
+                    "{} of {} bytes",
+                    file.bytes,
+                    bytes.len()
+                );
+            }
+        }
+    }
+
+    /// a state that is no state at all, as a file of zeros a clone can hold, is found so at its
+    /// first bytes rather than read whole.
+    #[test]
+    fn a_state_of_zeros_is_never_read_whole() {
+        let zeros = vec![0_u8; 8 * BLOCK];
+        let mut file = Counted {
+            inner: io::Cursor::new(&zeros),
+            bytes: 0,
+        };
+        let (read, _) = State::read_whole(&mut file, zeros.len() as u64, &|_| true).unwrap();
+        assert!(!read.was_read());
+        assert!(
+            file.bytes < BLOCK,
+            "{} of {} bytes",
+            file.bytes,
+            zeros.len()
+        );
     }
 
     /// paths in a folder, beside it and in folders whose names start alike, around block edges.
@@ -1454,7 +1639,7 @@ mod tests {
                 file: &mut file,
                 bytes: 0,
             };
-            let read = by_blocks(&mut reading).expect("its index fits");
+            let read = by_blocks(&mut reading, &|_| true).expect("its index fits");
             assert_same(&read, &State::parse(&bytes), &format!("blocks of {block}"));
             assert_eq!(read.aside, state.aside, "blocks of {block}");
             assert_eq!(read.replacing, state.replacing, "blocks of {block}");
@@ -1467,7 +1652,7 @@ mod tests {
                     file: &mut file,
                     bytes: 0,
                 };
-                let read = indexed(&mut reading, &folders, &keep).expect(&case);
+                let read = indexed(&mut reading, &folders, &keep, &|_| true).expect(&case);
                 assert_same(&read, &whole_within(&bytes, &folders), &case);
             }
         }
@@ -1506,7 +1691,7 @@ mod tests {
                 reads: 0,
                 seeks: 0,
             };
-            let (read, counted) = State::read_whole(&mut file, length as u64).unwrap();
+            let (read, counted) = State::read_whole(&mut file, length as u64, &|_| true).unwrap();
             assert_same(
                 &read,
                 &State::parse(&bytes[..length]),
@@ -1601,7 +1786,7 @@ mod tests {
             .collect();
         sets.push(vec![first]);
         for (number, state) in states.iter().enumerate() {
-            let (read, _) = State::read_blocks(&mut io::Cursor::new(state)).unwrap();
+            let (read, _) = State::read_blocks(&mut io::Cursor::new(state), &|_| true).unwrap();
             assert_same(
                 &read,
                 &State::parse(state),
@@ -1610,7 +1795,8 @@ mod tests {
             for folders in &sets {
                 let keep = |path: &str| inside(path, folders);
                 let (read, _) =
-                    State::read_within(&mut io::Cursor::new(state), folders, &keep).unwrap();
+                    State::read_within(&mut io::Cursor::new(state), folders, &keep, &|_| true)
+                        .unwrap();
                 let case = format!("change {number}, {folders:?}");
                 assert_same(&read, &whole_within(state, folders), &case);
             }

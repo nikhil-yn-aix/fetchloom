@@ -57,6 +57,6 @@ the record lets windows and WSL, which cannot see each other's locks, keep out o
 | `freeing` | those of `dropped` whose drop was cut short before it freed what the cache holds of them, which the same drop finishes |
 | `blocks` | `files` cut into blocks of about 64 KiB, each as its first path and its byte range, start and end, in the file. a `path` or `sync` that names datasets reads only the blocks their folders need |
 
-missing, unreadable or malformed state counts as empty, and files already holding the pinned bytes are then adopted again. a state whose `at` or `blocks` do not match its records is read whole. a file changed too soon after the state was written to tell by its time is hashed before its look is trusted.
+missing, unreadable or malformed state counts as empty, and files already holding the pinned bytes are then adopted again. a state whose `at` or `blocks` do not match its records is read whole. one written for another folder, as a clone or a copy of the project brings it, counts as empty too, and none of its records is read. a file changed too soon after the state was written to tell by its time is hashed before its look is trusted.
 
 recovery files hold `data.toml` and `data.lock` as they were before an add changed them, readable by you only on unix, and go once the add succeeds or is undone. errors name them without printing them. a killed add can leave one; compare it with the current files before using it.

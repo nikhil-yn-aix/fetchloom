@@ -408,8 +408,8 @@ impl Project {
         folders: &[String],
         keep: &dyn Fn(&str) -> bool,
     ) -> (State, u64) {
-        self.read_opened(self.open_state(), |file, _| {
-            State::read_within(file, folders, keep)
+        self.read_opened(self.open_state(), |file, _, ours| {
+            State::read_within(file, folders, keep, ours)
         })
     }
 
@@ -433,24 +433,33 @@ impl Project {
 
     /// the state as `read` makes it from the opened file and its length, and when it was written.
     /// a missing or unreadable state is empty, and so is one written for another folder, as a
-    /// clone or a copy of the project brings it: every file is then checked by its hash.
+    /// clone or a copy of the project brings it: every file is then checked by its hash. `read`
+    /// gets whether a folder a state names is this one, so it reads no record of another's.
     pub(crate) fn read_opened(
         &self,
         opened: io::Result<(fs::File, Look)>,
-        read: impl FnOnce(&mut fs::File, u64) -> io::Result<(State, u64)>,
+        read: impl FnOnce(
+            &mut fs::File,
+            u64,
+            &dyn Fn(Option<&Folder>) -> bool,
+        ) -> io::Result<(State, u64)>,
     ) -> (State, u64) {
         static TOLD: std::sync::Once = std::sync::Once::new();
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
+        let here = Folder::of(&self.root);
+        let is_ours = |recorded: Option<&Folder>| {
+            recorded
+                .zip(here.as_ref())
+                .is_some_and(|(recorded, here)| recorded.matches(here))
+        };
         let (state, written) = opened
             .and_then(|(mut file, found)| {
-                let (state, bytes) = read(&mut file, found.size)?;
+                let (state, bytes) = read(&mut file, found.size, &is_ours)?;
                 span.record("bytes", bytes);
                 Ok((state, found.modified))
             })
             .unwrap_or_default();
-        let here = Folder::of(&self.root);
-        let ours = (state.folder.as_ref().zip(here.as_ref()))
-            .is_some_and(|(recorded, here)| recorded.matches(here));
+        let ours = is_ours(state.folder.as_ref());
         if !state.was_read() || ours {
             return (state, written);
         }
