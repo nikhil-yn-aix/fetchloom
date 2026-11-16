@@ -272,6 +272,21 @@ fn diff_says_what_a_commit_lacks_and_goes_on() -> Result {
         stderr.contains("data.toml names 2 datasets that data.lock does not pin yet, so diff cannot show them: `fetchloom lock` pins them"),
         "{stderr}"
     );
+    // run from the folder above, the command pins in this project
+    let output = run(&sandbox, &sandbox.work(), &["-C", "study", "diff"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let hint = stderr
+        .lines()
+        .find(|line| line.contains("does not pin yet"))
+        .unwrap_or_default();
+    // windows quotes the folder, as in `fetchloom -C "C:\...\study" lock`
+    assert!(
+        hint.contains("`fetchloom -C ")
+            && hint.contains("study")
+            && hint.ends_with(" lock` pins them"),
+        "{stderr}"
+    );
     Ok(())
 }
 

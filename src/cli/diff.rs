@@ -248,7 +248,7 @@ fn tell_unpinned(context: &Context, project: &crate::project::Project, now: &Loc
             "them",
         )
     };
-    let command = "fetchloom lock";
+    let command = super::project::command("lock");
     context.output.hint(&format!(
         "data.toml names {named} that data.lock does not pin yet, so diff cannot show {them}: `{command}` pins {them}"
     ));
