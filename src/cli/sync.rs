@@ -737,6 +737,13 @@ impl<'a> Loop<'a> {
                     .collect();
             }
         }
+        // the drafts whose split archives' parts were asked whether they changed
+        let asked: HashSet<usize> = slots
+            .iter()
+            .zip(&jobs)
+            .filter(|(_, job)| job.fetch.held.is_some())
+            .map(|((draft, _), _)| *draft)
+            .collect();
         let batch = self.download_with(jobs, ahead).await?;
         for ((draft, file), fetched) in slots.into_iter().zip(&batch.fetched) {
             if let Some(file) = file {
@@ -750,6 +757,14 @@ impl<'a> Loop<'a> {
                 started,
             });
         }
+        // a part a server said is unchanged keeps its bytes out of the cache, which an archive
+        // needs after all when another of its parts changed and it unpacks again
+        let again: Vec<Job> = asked
+            .into_iter()
+            .flat_map(|draft| drafts[draft].jobs(&self.cache))
+            .map(|(_, job)| job)
+            .collect();
+        self.download_with(again, Vec::new()).await?;
         self.unpack_drafts(manifest, &mut drafts).await?;
         self.unpack_pinned(manifest, &mut pinned).await?;
         let now = crate::units::timestamp(SystemTime::now());

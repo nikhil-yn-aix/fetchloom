@@ -65,6 +65,9 @@ pub(crate) struct Needed {
     pub(crate) objects: HashSet<Sha256>,
     /// archives whose record tells what a project places from them.
     pub(crate) unpacked: HashSet<Sha256>,
+    /// the bytes of those archives, each part of a split one, whose own objects may be gone: the
+    /// records of what their links served stay, so an upgrade can ask whether they changed.
+    pub(crate) archives: HashSet<Sha256>,
     /// the results projects pin, by key and tree, whose records under `builds/` gc keeps.
     pub(crate) results: HashSet<(Sha256, Sha256)>,
     /// whether `uses` tells how the projects use each of `objects`.
@@ -563,7 +566,7 @@ impl Cache {
         freed.removed_leftovers += self.sweep_staging(now, stop, &mut freed.not_removed);
         stop.check()?;
         self.forget_changed_reporting(&needed.objects, stop, &mut freed.not_removed)?;
-        self.forget_url_records(stop, &mut freed.not_removed)?;
+        self.forget_url_records(needed, stop, &mut freed.not_removed)?;
         for entry in scan_entries(&self.root.join("tmp"), &mut freed.not_removed, stop)? {
             stop.check()?;
             let stale = entry
@@ -634,15 +637,23 @@ impl Cache {
     }
 
     /// drops the record of each link whose object and unpack record are both gone, which would
-    /// otherwise only grow, and the older records of each link; the next download of a link
-    /// writes a new one. a pretend sweep lists the shards it would remove, left with no record.
-    fn forget_url_records(&self, stop: &Stop, not_removed: &mut Vec<Failure>) -> Result<(), Error> {
+    /// otherwise only grow, unless it served an archive or a part of one that `needed` keeps, and
+    /// the older records of each link; the next download of a link writes a new one. a pretend
+    /// sweep lists the shards it would remove, left with no record.
+    fn forget_url_records(
+        &self,
+        needed: &Needed,
+        stop: &Stop,
+        not_removed: &mut Vec<Failure>,
+    ) -> Result<(), Error> {
         // a pretend sweep keeps what it would remove, so their records go as well
         let held = |record: &super::UrlRecord| {
             let kept = |path: &Path| {
                 !self.volume.pretends_removed(path) && path.try_exists().is_ok_and(|exists| exists)
             };
-            kept(&self.object_path(&record.sha256)) || kept(&self.unpacked_path(&record.sha256))
+            needed.archives.contains(&record.sha256)
+                || kept(&self.object_path(&record.sha256))
+                || kept(&self.unpacked_path(&record.sha256))
         };
         let scratch = self.root.join("tmp");
         for shard in 0..super::urls::SHARDS {

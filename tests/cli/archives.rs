@@ -1636,7 +1636,7 @@ mod split {
     mod bucket {
         use super::super::{ok, run, text};
         use super::{SCANS, Sandbox, cut, files_in, fs, scans_zip};
-        use crate::buckets::{s3_listing, s3_page};
+        use crate::buckets::{s3_listing, s3_page, s3_stated};
         use crate::support::md5_hex;
         use crate::support::{Result, Routes, file};
 
@@ -1761,6 +1761,113 @@ mod split {
             assert_eq!(files_in(&data)?.len(), 5, "{}", text(&switched.stderr)?);
             let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
             assert_eq!(lock.matches("unpacks_to").count(), 1, "{lock}");
+            Ok(())
+        }
+
+        /// parts no checksum pins, as an upload in parts leaves S3 an `ETag` that is no MD5, are
+        /// known again by what their links served while the files they unpacked to are cached,
+        /// though the parts' own bytes left, before gc and after it: an upgrade asks for none.
+        #[test]
+        fn an_upgrade_downloads_no_unchanged_part_again() -> Result {
+            let sandbox = Sandbox::new()?;
+            let base = "/split-bucket.s3.amazonaws.com/";
+            let folder = tempfile::tempdir()?;
+            let halves = cut(folder.path(), &scans_zip()?, &["001", "002"])?;
+            let keys = ["scans/scans.zip.001", "scans/scans.zip.002"];
+            let tagged = |half: &[u8]| format!("{}-2", md5_hex(half));
+            let listed: Vec<(&str, String, u64)> = keys
+                .iter()
+                .zip(&halves)
+                .map(|(key, half)| (*key, tagged(half), half.len() as u64))
+                .collect();
+            let mut routes = vec![(s3_listing(base, "scans/", None), s3_stated(&listed, None))];
+            for (key, half) in keys.iter().zip(&halves) {
+                let etag = format!("\"{}\"", tagged(half));
+                routes.push((format!("{base}{key}"), file(half, &etag)));
+            }
+            let routes = Routes::start(routes)?;
+            ok(&run(&sandbox, &routes, &["add", LINK, "--as", "scans"])?)?;
+            let pins = |lock: &str| -> Vec<String> {
+                let pinned = lock.lines().filter(|line| line.contains("sha256:"));
+                pinned.map(str::to_owned).collect()
+            };
+            let pinned = pins(&fs::read_to_string(sandbox.work().join("data.lock"))?);
+            for gc in [false, true] {
+                if gc {
+                    ok(&sandbox.run(&["cache", "gc", "--now"])?)?;
+                }
+                let before = routes.requests().len();
+                ok(&run(&sandbox, &routes, &["lock", "--upgrade"])?)?;
+                let asked = routes.requests()[before..]
+                    .iter()
+                    .filter(|head| head.contains("scans.zip.00"))
+                    .count();
+                assert_eq!(asked, 0, "after gc: {gc}");
+                let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+                assert_eq!(pins(&lock), pinned, "after gc: {gc}");
+            }
+            Ok(())
+        }
+
+        /// a part the server says is unchanged is downloaded after all when another part of its
+        /// archive changed, since the archive unpacks again from every part.
+        #[test]
+        fn a_changed_part_brings_back_the_unchanged_ones() -> Result {
+            let sandbox = Sandbox::new()?;
+            let base = "/split-bucket.s3.amazonaws.com/";
+            let before = scans_zip()?;
+            let mut changed = SCANS;
+            changed[4].1 = b"changed\n";
+            let after = crate::support::zip_of(&changed)?;
+            // both zips start alike, so one first part serves either
+            let alike = before
+                .iter()
+                .zip(&after)
+                .take_while(|(a, b)| a == b)
+                .count();
+            let (first, tail) = before.split_at(alike / 2);
+            let tails = [tail.to_vec(), after[alike / 2..].to_vec()];
+            let keys = ["scans/scans.zip.001", "scans/scans.zip.002"];
+            let tagged = |part: &[u8]| format!("{}-2", md5_hex(part));
+            let serve = |second: &[u8]| -> Vec<(String, Vec<crate::support::Part>)> {
+                let listed: Vec<(&str, String, u64)> = keys
+                    .iter()
+                    .zip([first, second])
+                    .map(|(key, part)| (*key, tagged(part), part.len() as u64))
+                    .collect();
+                let mut routes = vec![(s3_listing(base, "scans/", None), s3_stated(&listed, None))];
+                for (key, part) in keys.iter().zip([first, second]) {
+                    let etag = format!("\"{}\"", tagged(part));
+                    routes.push((format!("{base}{key}"), file(part, &etag)));
+                }
+                routes
+            };
+            let routes = Routes::start(serve(&tails[0]))?;
+            ok(&run(&sandbox, &routes, &["add", LINK, "--as", "scans"])?)?;
+            routes.change(serve(&tails[1]));
+            let unchanged = format!("\"{}\"", tagged(first));
+            let target = format!("{base}{}", keys[0]);
+            routes.turns(
+                &target,
+                vec![crate::support::reply(
+                    "304 Not Modified",
+                    &[("ETag", &unchanged)],
+                    b"",
+                )],
+            );
+            let start = routes.requests().len();
+            ok(&run(&sandbox, &routes, &["lock", "--upgrade"])?)?;
+            let requests = routes.requests();
+            let asked: Vec<&String> = requests[start..]
+                .iter()
+                .filter(|head| head.contains(&target))
+                .collect();
+            assert_eq!(asked.len(), 2, "{asked:?}");
+            assert!(asked[0].contains("if-none-match"), "{}", asked[0]);
+            assert!(!asked[1].contains("if-none-match"), "{}", asked[1]);
+            ok(&sandbox.run(&["sync"])?)?;
+            let placed = sandbox.work().join("data/scans/f.txt");
+            assert_eq!(fs::read(placed)?, b"changed\n");
             Ok(())
         }
     }

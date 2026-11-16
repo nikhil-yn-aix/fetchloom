@@ -1386,6 +1386,9 @@ fn add_with_stop(
                 continue;
             };
             needed.unpacked.insert(archive.key());
+            needed
+                .archives
+                .extend(archive.files().into_iter().map(|file| file.sha256));
             let filter = filters.and_then(|filters| filters.get(&archive.file.path));
             let kept: Vec<&Member> = members
                 .iter()

@@ -165,8 +165,58 @@ impl Draft {
             versions,
             files,
         };
+        draft.recall_split(cache);
         draft.carry_split(previous, upgrading, cache);
         Ok(draft)
+    }
+
+    /// knows the parts of each split archive no checksum pins by the records of what their links
+    /// served, while the listing's strong `ETag`s and sizes match them all and the files those
+    /// parts unpacked to are in the cache, as a lone archive is known once its own bytes are gone.
+    fn recall_split(&mut self, cache: &Cache) {
+        // a source stating a checksum for every file, as most do, leaves nothing to recall
+        let unpinned = |file: &DraftFile| {
+            file.known.is_none() && file.remote.sha256.is_none() && file.remote.md5.is_none()
+        };
+        if !self.files.iter().any(unpinned) {
+            return;
+        }
+        for unit in self.archives().unpack {
+            let Unit::Split(set) = unit else {
+                continue;
+            };
+            let Some(records) = self.recalled(&set, cache, |remote| listed_record(cache, remote))
+            else {
+                continue;
+            };
+            for (index, record) in set.into_iter().zip(records) {
+                let file = &mut self.files[index];
+                file.known = Some((record.sha256, record.size));
+                file.version = record.validators.version;
+            }
+        }
+    }
+
+    /// the records `record` finds for the parts `set`, which no checksum pins and no other way
+    /// knows, when the parts they name unpacked here and the cache holds every file they made.
+    fn recalled(
+        &self,
+        set: &[usize],
+        cache: &Cache,
+        record: impl Fn(&Remote) -> Option<UrlRecord>,
+    ) -> Option<Vec<UrlRecord>> {
+        let records = set
+            .iter()
+            .map(|index| {
+                let file = &self.files[*index];
+                let remote = &file.remote;
+                let unknown =
+                    file.known.is_none() && remote.sha256.is_none() && remote.md5.is_none();
+                unknown.then(|| record(remote)).flatten()
+            })
+            .collect::<Option<Vec<UrlRecord>>>()?;
+        let key = parts_key(records.iter().map(|record| (record.sha256, record.size)));
+        cache.holds_unpacked(&key, None).then_some(records)
     }
 
     /// gives each split archive's first part its pinned tree while every part is the one pinned, or
@@ -278,9 +328,23 @@ impl Draft {
     pub(super) fn jobs(&self, cache: &Cache) -> Vec<(Option<usize>, Job)> {
         let mut unpacking = vec![false; self.files.len()];
         let mut whole = vec![false; self.files.len()];
+        let mut held = vec![None; self.files.len()];
         for unit in self.archives().unpack {
             if let Unit::Whole(index) = unit {
                 whole[index] = true;
+            }
+            // a part of an archive this cache unpacked is asked whether it changed, as a lone
+            // archive is, rather than downloaded again
+            if let Unit::Split(set) = &unit
+                && let Some(records) = self.recalled(set, cache, |remote| {
+                    cache
+                        .url_record(remote.url.as_str())
+                        .filter(|record| !record.page)
+                })
+            {
+                for (index, record) in set.iter().zip(records) {
+                    held[*index] = Some(record.sha256);
+                }
             }
             if self.files[unit.first()].unpacks_to.is_none()
                 && self.recorded(&unit, cache).is_none()
@@ -318,6 +382,7 @@ impl Draft {
             let fetch = Fetch {
                 expect,
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
+                held: held[index],
                 unpack: whole[index],
                 page: self.web_page,
                 named: learn && remote.named_by_server,
@@ -789,19 +854,24 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<crate::cache::Stated> {
 /// what the cache recorded the link served, while the listing's strong `ETag` and size match it and
 /// the cache holds its bytes or files, trusting `ETag`s to change; a web page is asked for again.
 fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord> {
+    let record = listed_record(cache, remote)?;
+    let unpacks = extract && archive::by_name(&remote.path) == Some(Packed::Archive);
+    (cache.find(&record.sha256, Some(record.size)).is_some()
+        || unpacks && cache.holds_unpacked(&record.sha256, None))
+    .then_some(record)
+}
+
+/// what the cache recorded the link served, while the listing's strong `ETag` and size match it,
+/// whether or not the cache still holds those bytes; never a web page.
+fn listed_record(cache: &Cache, remote: &Remote) -> Option<UrlRecord> {
     let etag = remote
         .etag
         .as_deref()
         .filter(|etag| etag.starts_with('"'))?;
     let size = remote.size?;
     let record = cache.url_record(remote.url.as_str())?;
-    if record.page || record.size != size || record.validators.etag.as_deref() != Some(etag) {
-        return None;
-    }
-    let unpacks = extract && archive::by_name(&remote.path) == Some(Packed::Archive);
-    (cache.find(&record.sha256, Some(size)).is_some()
-        || unpacks && cache.holds_unpacked(&record.sha256, None))
-    .then_some(record)
+    (!record.page && record.size == size && record.validators.etag.as_deref() == Some(etag))
+        .then_some(record)
 }
 
 /// the file data.lock pins for this remote file when it is the same file: the same link, and path
@@ -1414,6 +1484,86 @@ mod tests {
         for other in [changed, more] {
             assert_eq!(other.files[0].unpacks_to, None);
         }
+    }
+
+    /// the parts of a split archive no checksum pins are known again by the records of what their
+    /// links served while the files the parts unpacked to are in the cache, though the parts' own
+    /// bytes are gone: by a listing's strong `ETag` and size with no request, else asked about.
+    #[test]
+    fn a_split_archives_parts_are_known_by_their_links_records() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let manifest = Manifest::parse("[datasets.scans]\nref = \"zenodo:1\"\n").unwrap();
+        let entry = &manifest.datasets["scans"];
+        let parts: [(&str, &[u8]); 2] = [("scans.zip.001", b"first"), ("scans.zip.002", b"second")];
+        let url = |path: &str| format!("https://bucket.example.org/{path}");
+        let etag = |bytes: &[u8]| format!("\"{}-2\"", &digest::sha256(bytes).hex()[..32]);
+        let inside = store(&cache, b"a,b\n");
+        let member = Member {
+            path: "a.csv".to_owned(),
+            size: inside.size,
+            sha256: inside.digest,
+        };
+        let key = parts_key(parts.map(|(_, bytes)| (digest::sha256(bytes), bytes.len() as u64)));
+        cache.record_unpacked(&key, &[member]).unwrap();
+        for (path, bytes) in parts {
+            cache
+                .save_url_record(&UrlRecord {
+                    url: url(path),
+                    sha256: digest::sha256(bytes),
+                    size: bytes.len() as u64,
+                    name: None,
+                    validators: crate::cache::Validators {
+                        etag: Some(etag(bytes)),
+                        ..crate::cache::Validators::default()
+                    },
+                    page: false,
+                })
+                .unwrap();
+        }
+        let drafted = |listed: bool| {
+            let files = parts
+                .iter()
+                .map(|(path, bytes)| Remote {
+                    path: (*path).to_owned(),
+                    size: Some(bytes.len() as u64),
+                    sha256: None,
+                    md5: None,
+                    url: Url::parse(&url(path)).unwrap(),
+                    named_by_server: false,
+                    etag: listed.then(|| etag(bytes)),
+                })
+                .collect();
+            let listing = Listing {
+                within: Vec::new(),
+                access: Access::Public,
+                unavailable: Vec::new(),
+                warnings: Vec::new(),
+                resolved: Reference::parse("zenodo:1").unwrap().reference,
+                title: None,
+                license: None,
+                doi: None,
+                files,
+            };
+            Draft::new(
+                "scans",
+                entry,
+                entry.source().unwrap(),
+                listing,
+                None,
+                false,
+                &cache,
+            )
+            .unwrap()
+        };
+        assert!(drafted(true).jobs(&cache).is_empty(), "the listing vouches");
+        let held: Vec<Option<Sha256>> = drafted(false)
+            .jobs(&cache)
+            .into_iter()
+            .map(|(_, job)| job.fetch.held)
+            .collect();
+        let digests = parts.map(|(_, bytes)| Some(digest::sha256(bytes)));
+        assert_eq!(held, digests, "each part is asked about");
     }
 
     /// exclude rewrites a dataset's pin offline when it leaves out a file its source lists: the

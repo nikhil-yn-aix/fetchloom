@@ -41,7 +41,7 @@ pub(crate) fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part
 }
 
 /// an S3 listing page of `(key, md5, size)` objects, stating whatever the test asks.
-fn s3_stated(objects: &[(&str, String, u64)], next: Option<&str>) -> Vec<Part> {
+pub(crate) fn s3_stated(objects: &[(&str, String, u64)], next: Option<&str>) -> Vec<Part> {
     let mut xml = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>b</Name><EncodingType>url</EncodingType>",
     );
