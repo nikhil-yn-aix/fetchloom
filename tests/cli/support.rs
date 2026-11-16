@@ -518,6 +518,26 @@ pub(crate) fn json(output: &Output) -> Result<serde_json::Value> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+/// the help's way to let one run reach `value`, the whole list of allowed origins, as the shell
+/// fetchloom writes for sets a variable: before the command in bash, zsh and fish, with `$env:` in
+/// powershell.
+pub(crate) fn allowed_for_one_run(value: &str) -> String {
+    if cfg!(windows) {
+        format!("run `$env:FETCHLOOM_ALLOWED_ORIGINS = '{value}'` first for this terminal alone")
+    } else {
+        format!("put `FETCHLOOM_ALLOWED_ORIGINS={value}` before the command for that run alone")
+    }
+}
+
+/// [`allowed_for_one_run`] while the variable sets the list, the one way the help gives then.
+pub(crate) fn allowed_by_variable(value: &str) -> String {
+    if cfg!(windows) {
+        format!("run `$env:FETCHLOOM_ALLOWED_ORIGINS = '{value}'` first")
+    } else {
+        format!("put `FETCHLOOM_ALLOWED_ORIGINS={value}` before the command")
+    }
+}
+
 /// each warning of a `--json` document as one sentence, its help after a semicolon. the copy note
 /// a drive that cannot link adds, as ci's fat32 and exfat passes have, is left out.
 pub(crate) fn warned(document: &serde_json::Value) -> Vec<String> {

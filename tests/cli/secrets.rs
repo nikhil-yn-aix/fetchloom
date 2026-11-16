@@ -313,7 +313,8 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         Ok(document["errors"][0].clone())
     };
     let untrusted = format!(
-        "if you trust that server, save it with `fetchloom settings set allowed_origins {origin}`, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run"
+        "if you trust that server, save it with `fetchloom settings set allowed_origins {origin}`, or {}",
+        crate::support::allowed_for_one_run(&origin)
     );
     assert_eq!(refused("sync", None, &sandbox.cache())?["help"], untrusted);
     // a run that reads no settings file cannot use what `settings set` saves, so the variable
@@ -331,14 +332,20 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         assert_eq!(output.status.code(), Some(10), "{document}");
         assert_eq!(
             document["errors"][0]["help"],
-            format!("if you trust that server, set `FETCHLOOM_ALLOWED_ORIGINS={origin}`"),
+            format!(
+                "if you trust that server, {}",
+                crate::support::allowed_by_variable(&origin)
+            ),
             "{arguments:?}"
         );
     }
     // an empty variable clears what the file allows, so the file is no remedy while it is set
     assert_eq!(
         refused("sync", Some(""), &sandbox.cache())?["help"],
-        format!("if you trust that server, set `FETCHLOOM_ALLOWED_ORIGINS={origin}`")
+        format!(
+            "if you trust that server, {}",
+            crate::support::allowed_by_variable(&origin)
+        )
     );
     // another port of the host is another origin, which the refusal tells apart
     let error = refused("sync", Some("http://127.0.0.1:9"), &sandbox.cache())?;
@@ -348,7 +355,10 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     );
     assert_eq!(
         error["help"],
-        format!("to reach it too, set `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:9,{origin}`")
+        format!(
+            "to reach it too, {}",
+            crate::support::allowed_by_variable(&format!("http://127.0.0.1:9,{origin}"))
+        )
     );
     assert_eq!(server.requests(), Vec::<String>::new());
     let output = sandbox
@@ -402,8 +412,11 @@ fn another_port_of_an_allowed_host_reaches_no_private_address() -> Result {
     assert_eq!(
         error["help"],
         format!(
-            "to reach it too, set `FETCHLOOM_ALLOWED_ORIGINS=http://localhost:9,{}`",
-            link.trim_end_matches(PATH)
+            "to reach it too, {}",
+            crate::support::allowed_by_variable(&format!(
+                "http://localhost:9,{}",
+                link.trim_end_matches(PATH)
+            ))
         )
     );
     Ok(())
@@ -450,8 +463,9 @@ fn a_mirror_on_this_machine_trusts_its_own_origin_alone() -> Result {
     assert_eq!(
         error["help"],
         format!(
-            "to reach it too, save it with `fetchloom settings set allowed_origins {}`, or set `FETCHLOOM_ALLOWED_ORIGINS={}` for one run",
-            source.url, source.url
+            "to reach it too, save it with `fetchloom settings set allowed_origins {}`, or {}",
+            source.url,
+            crate::support::allowed_for_one_run(&source.url)
         )
     );
     Ok(())

@@ -1194,10 +1194,18 @@ mod tests {
                 "only http://lab.local, http://lab.local:8080 and https://lab.local are trusted on lab.local, and trust covers those origins alone"
             ]
         );
+        let one_run = if cfg!(windows) {
+            "run `$env:FETCHLOOM_ALLOWED_ORIGINS = 'http://lab.local:9090'` first for this terminal alone"
+        } else {
+            "put `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:9090` before the command for that run alone"
+        };
         assert_eq!(
             error.help.as_deref(),
             Some(
-                "to reach it too, save it with `fetchloom settings set allowed_origins http://lab.local:9090`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:9090` for one run"
+                format!(
+                    "to reach it too, save it with `fetchloom settings set allowed_origins http://lab.local:9090`, or {one_run}"
+                )
+                .as_str()
             )
         );
     }

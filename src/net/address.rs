@@ -51,6 +51,13 @@ impl Allowed {
     /// saved with `settings set` or as one run's variable, or the variable alone when only it
     /// changes the setting.
     pub(crate) fn remedy(&self, origin: &url::Origin) -> String {
+        self.remedy_for(origin, cfg!(windows))
+    }
+
+    /// [`Allowed::remedy`] for powershell on `windows`, where `$env:` sets the variable for the
+    /// terminal, or for bash, zsh and fish, which read it written before the command for that
+    /// run alone, and pasted on a line of its own would keep it from every command.
+    pub(crate) fn remedy_for(&self, origin: &url::Origin, windows: bool) -> String {
         let mut listed: Vec<String> = self
             .origins
             .iter()
@@ -60,15 +67,36 @@ impl Allowed {
         if !listed.contains(&origin) {
             listed.push(origin);
         }
-        let quoted = |word: &str| crate::suggested::shell_word(word).into_owned();
-        let variable = format!("`FETCHLOOM_ALLOWED_ORIGINS={}`", quoted(&listed.join(",")));
+        let value = listed.join(",");
+        let variable = if windows {
+            format!(
+                "run `$env:FETCHLOOM_ALLOWED_ORIGINS = '{}'` first",
+                value.replace('\'', "''")
+            )
+        } else {
+            format!(
+                "put `FETCHLOOM_ALLOWED_ORIGINS={}` before the command",
+                crate::suggested::shell_word_for(&value, false)
+            )
+        };
         if self.by_variable {
-            return format!("set {variable}");
+            return variable;
         }
-        let words: Vec<String> = listed.iter().map(|origin| quoted(origin)).collect();
+        let words: Vec<String> = listed
+            .iter()
+            .map(|origin| crate::suggested::shell_word_for(origin, windows).into_owned())
+            .collect();
+        let alone = if windows {
+            "for this terminal alone"
+        } else {
+            "for that run alone"
+        };
         format!(
-            "save it with `fetchloom settings set allowed_origins {}`, or set {variable} for one run",
-            words.join(" ")
+            "save it with `{}`, or {variable} {alone}",
+            crate::suggested::anywhere(&format!(
+                "settings set allowed_origins {}",
+                words.join(" ")
+            ))
         )
     }
 }
@@ -946,37 +974,84 @@ mod tests {
         assert_eq!(on("other.local"), Vec::<String>::new());
     }
 
-    /// the refusal gives the `settings set` command with what the setting lists already and one
-    /// run's variable, or the variable alone while it sets the list, since it then wins.
+    /// the refusal gives the `settings set` command with what the setting lists already and the
+    /// variable for one run, or the variable alone while it sets the list, since it then wins. the
+    /// variable is written as the shell there sets it: before the command in bash, zsh and fish,
+    /// where a line of its own would set it for no command, and with `$env:` in powershell.
     #[test]
     fn a_refusal_quotes_the_whole_setting_that_lifts_it() {
         let origin = Url::parse("http://10.0.0.5:9001/a.zip").unwrap().origin();
         let lab = Url::parse("http://lab.local:8080").unwrap().origin();
-        let remedy = |origins: Vec<url::Origin>, by_variable| {
+        let remedy = |origins: Vec<url::Origin>, by_variable, windows| {
             Allowed {
                 origins,
                 by_variable,
             }
-            .remedy(&origin)
+            .remedy_for(&origin, windows)
         };
         assert_eq!(
-            remedy(Vec::new(), false),
-            "save it with `fetchloom settings set allowed_origins http://10.0.0.5:9001`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://10.0.0.5:9001` for one run"
+            remedy(Vec::new(), false, false),
+            "save it with `fetchloom settings set allowed_origins http://10.0.0.5:9001`, or put `FETCHLOOM_ALLOWED_ORIGINS=http://10.0.0.5:9001` before the command for that run alone"
         );
         assert_eq!(
-            remedy(vec![lab.clone()], false),
-            "save it with `fetchloom settings set allowed_origins http://lab.local:8080 http://10.0.0.5:9001`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001` for one run"
+            remedy(vec![lab.clone()], false, false),
+            "save it with `fetchloom settings set allowed_origins http://lab.local:8080 http://10.0.0.5:9001`, or put `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001` before the command for that run alone"
         );
         assert_eq!(
-            remedy(vec![lab], true),
-            "set `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001`"
+            remedy(vec![lab.clone()], true, false),
+            "put `FETCHLOOM_ALLOWED_ORIGINS=http://lab.local:8080,http://10.0.0.5:9001` before the command"
+        );
+        assert_eq!(
+            remedy(vec![lab.clone()], false, true),
+            "save it with `fetchloom settings set allowed_origins http://lab.local:8080 http://10.0.0.5:9001`, or run `$env:FETCHLOOM_ALLOWED_ORIGINS = 'http://lab.local:8080,http://10.0.0.5:9001'` first for this terminal alone"
+        );
+        assert_eq!(
+            remedy(vec![lab], true, true),
+            "run `$env:FETCHLOOM_ALLOWED_ORIGINS = 'http://lab.local:8080,http://10.0.0.5:9001'` first"
         );
         // a word a shell would read as more than a word is quoted, wherever it came from
         let odd = Url::parse("http://lab;sh.example/").unwrap().origin();
         assert_eq!(
-            Allowed::default().remedy(&odd),
-            "save it with `fetchloom settings set allowed_origins \"http://lab;sh.example\"`, or set `FETCHLOOM_ALLOWED_ORIGINS=\"http://lab;sh.example\"` for one run"
+            Allowed::default().remedy_for(&odd, false),
+            "save it with `fetchloom settings set allowed_origins \"http://lab;sh.example\"`, or put `FETCHLOOM_ALLOWED_ORIGINS=\"http://lab;sh.example\"` before the command for that run alone"
         );
+    }
+
+    /// what a person pastes reads back as the variable and its value: bash, zsh and fish run the
+    /// command with it set, as the help says, and set nothing for later commands.
+    #[cfg(unix)]
+    #[test]
+    fn the_variable_the_help_writes_sets_it_for_that_command() {
+        let origin = Url::parse("http://lab;sh.example/").unwrap().origin();
+        let help = Allowed::default().remedy_for(&origin, false);
+        let prefix = help
+            .split_once("put `")
+            .and_then(|(_, rest)| rest.split_once('`'))
+            .map(|(prefix, _)| prefix)
+            .unwrap_or_default();
+        let line = format!("{prefix} printenv FETCHLOOM_ALLOWED_ORIGINS");
+        for shell in [
+            &["bash", "--norc", "--noprofile", "-c"][..],
+            &["sh", "-c"],
+            &["zsh", "-f", "-c"],
+            &["fish", "--no-config", "-c"],
+        ] {
+            let Ok(ran) = std::process::Command::new(shell[0])
+                .args(&shell[1..])
+                .arg(&line)
+                .env_remove("FETCHLOOM_ALLOWED_ORIGINS")
+                .output()
+            else {
+                crate::test_skips::skip(shell[0], &format!("{} cannot start", shell[0]));
+                continue;
+            };
+            assert_eq!(
+                String::from_utf8_lossy(&ran.stdout),
+                "http://lab;sh.example\n",
+                "{}: {line}",
+                shell[0]
+            );
+        }
     }
 
     /// a host whose name holds what a shell would run, which the url crate lets through, is

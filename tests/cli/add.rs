@@ -1576,7 +1576,8 @@ fn a_private_link_typed_for_add_says_how_a_later_run_reaches_it() -> Result {
     let settings = sandbox.folder("config")?.join("settings.toml");
     fs::write(&settings, "")?;
     let line = format!(
-        "save it with `fetchloom settings set allowed_origins {origin}`, or set `FETCHLOOM_ALLOWED_ORIGINS={origin}` for one run"
+        "save it with `fetchloom settings set allowed_origins {origin}`, or {}",
+        crate::support::allowed_for_one_run(&origin)
     );
     let added = sandbox
         .command(&["-q", "add", &server.url])
