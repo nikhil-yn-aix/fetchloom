@@ -31,19 +31,19 @@ each file downloads from `/api/access/datafile/<number>?format=original`. the MD
 
 ## credentials and limits
 
-public files need no account. for restricted files you have access to, sign in for that installation:
+public files need no account. for restricted files you have access to, save your api token as that installation's key, in the `x-dataverse-key` header dataverse reads:
 
 ```sh
-fetchloom auth login dataverse
-fetchloom auth login dataverse --host demo.dataverse.org
+fetchloom auth login dataverse.harvard.edu --header x-dataverse-key
+fetchloom auth login demo.dataverse.org --header x-dataverse-key
 ```
 
-the first line is for harvard's installation. `DATAVERSE_API_TOKEN` also works when `DATAVERSE_URL` names the same installation, as pyDataverse reads them. `DATAVERSE_TOKEN` is not read.
+the key works on the installation that made it alone, so each is saved for its own host, and fetchloom checks it with that installation before saving it. `DATAVERSE_API_TOKEN` also works when `DATAVERSE_URL` names the same installation, as pyDataverse reads them, and wins over a key saved for that host. `DATAVERSE_TOKEN` is not read.
 
 a link to the api that carries the key in its query, as `https://dataverse.harvard.edu/api/access/datafile/6867336?key=<key>`, is refused by `add` and the other project commands, since data.toml and data.lock are shared: sign in instead, and the key goes in a header to that installation alone.
 
-an installation on another port than 443 is signed in to with its port, as references name it: `fetchloom auth login dataverse --host dv.example.edu:8443`, or `DATAVERSE_URL=https://dv.example.edu:8443`. that key goes to that port only, and a key for port 443 never goes to another port.
+an installation on another port than 443 is signed in to with its port, as references name it: `fetchloom auth login dv.example.edu:8443 --header x-dataverse-key`, or `DATAVERSE_URL=https://dv.example.edu:8443`. that key goes to that port only, and a key for port 443 never goes to another port.
 
-signing in and `fetchloom auth` check the key with the installation, even one on a private network, such as a university intranet, since you named that installation yourself. `add` reaches an installation you type on the command line for that run, at its https origin alone; a later sync, or a clone of the project, reaches one on a private network only when the [`allowed_origins`](../reference/environment.md) setting lists it, as `https://dv.example.edu:8443`. a sign-in offer after a dataset or file metadata refusal uses that same installation and port.
+signing in and `fetchloom auth` check the key with the installation, even one on a private network, such as a university intranet, since you named that installation yourself. `add` reaches an installation you type on the command line for that run, at its https origin alone; a later sync, or a clone of the project, reaches one on a private network only when the [`allowed_origins`](../reference/environment.md) setting lists it, as `https://dv.example.edu:8443`. a sign-in offer after a dataset or file metadata refusal uses that same installation and port, and never checks the key on a private network, since a file may have named that host.
 
 without a key for its host, a dataset with any restricted file is refused before selection, naming those files, so `--exclude` cannot leave them out. sign in with an account that has access, or request access on the dataset's page. a key the installation does not allow for a file fails at that file's download. selection cannot bypass the listing-size limit.

@@ -452,8 +452,14 @@ pub(crate) fn of_account(account: &Account) -> Option<&'static Access> {
         Account::GitHub => &GITHUB,
         Account::GitLab => &GITLAB,
         Account::S2 => &S2,
-        Account::Dataverse(_) | Account::Login(_) => return None,
+        Account::Login(_) => return None,
     })
+}
+
+/// the descriptor of the source whose key `key` is.
+pub(crate) fn of_key(key: &KeyShape) -> Option<&'static Access> {
+    ALL.into_iter()
+        .find(|access| access.key.is_some_and(|own| std::ptr::eq(own, key)))
 }
 
 /// the account whose source answered from `host`, for a refusal that names no account.

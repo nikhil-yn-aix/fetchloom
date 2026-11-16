@@ -97,7 +97,6 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
         ("api.osf.io", "authorization", "Bearer o", false),
         ("api.semanticscholar.org", "x-api-key", "s2", false),
         ("datadryad.org", "authorization", "Bearer d", false),
-        ("demo.dataverse.org", "x-dataverse-key", "dv", false),
         ("files.osf.io", "authorization", "Bearer o", true),
         ("gitlab.com", "authorization", "Bearer gl", false),
         ("huggingface.co", "authorization", "Bearer hf_abc", false),
@@ -112,6 +111,17 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
     ]
     .map(|(host, header, value, every)| (host.to_owned(), header, value.to_owned(), every));
     assert_eq!(sent, expected);
+    // a dataverse key is the installation's own, which goes as its host's key
+    assert_eq!(
+        site::sites(&var),
+        [(
+            "demo.dataverse.org".to_owned(),
+            site::Saved::Header {
+                name: "x-dataverse-key".to_owned(),
+                value: "dv".to_owned(),
+            }
+        )]
+    );
 }
 
 /// the order is `GH_TOKEN`, then `GITHUB_TOKEN`, as the gh command reads them, then a saved key.
@@ -139,34 +149,52 @@ fn a_github_key_is_found_where_the_gh_command_looks_first() {
     );
 }
 
+/// `DATAVERSE_API_TOKEN` is the key of the installation `DATAVERSE_URL` names, with its port
+/// when that is not 443, and of no other.
 #[test]
 fn a_dataverse_token_goes_only_to_the_installation_it_names() {
     let home = tempfile::tempdir().unwrap();
     let var = machine(home.path(), &[("DATAVERSE_API_TOKEN", "dv")]);
+    assert_eq!(site::from_variables(&var), []);
     assert!(
         credentials(&var)
             .iter()
             .all(|c| c.header != "x-dataverse-key")
     );
-    let var = machine(
-        home.path(),
-        &[
-            ("DATAVERSE_URL", "https://other.edu"),
-            ("DATAVERSE_API_TOKEN", "dv"),
-        ],
-    );
-    assert_eq!(
-        Account::Dataverse("dataverse.harvard.edu".into())
-            .find(&var)
-            .map(|f| f.secret),
-        None
-    );
+    for (url, host) in [
+        ("https://other.edu", "other.edu"),
+        ("https://dv.lab:8443/", "dv.lab:8443"),
+        ("https://DV.lab:443", "dv.lab"),
+    ] {
+        let pairs = [("DATAVERSE_URL", url), ("DATAVERSE_API_TOKEN", " dv ")];
+        let var = machine(home.path(), &pairs);
+        let given = site::from_variables(&var);
+        assert_eq!(given.len(), 1, "{url}");
+        assert_eq!(given[0].0, host, "{url}");
+        assert_eq!(given[0].2, "DATAVERSE_API_TOKEN");
+        assert_eq!(
+            given[0].1,
+            site::Saved::Header {
+                name: "x-dataverse-key".to_owned(),
+                value: "dv".to_owned(),
+            }
+        );
+        assert!(site::keyed(&var, host), "{url}");
+        assert!(!site::keyed(&var, "dataverse.harvard.edu"), "{url}");
+        assert!(
+            credentials(&var)
+                .iter()
+                .all(|c| c.header != "x-dataverse-key")
+        );
+    }
 }
 
+/// a host typed for a key keeps its port when that is not 443, and anything else, a login, a
+/// path or a character a shell reads, is refused; the command that saves a dataverse key
+/// names that host and the header dataverse reads.
 #[test]
-fn a_dataverse_host_keeps_its_port_and_nothing_else() {
-    let parse = |host: &str| Account::parse("dataverse", Some(host));
-    for (typed, account) in [
+fn a_typed_host_keeps_its_port_and_nothing_else() {
+    for (typed, host) in [
         ("dv.lab:8443", "dv.lab:8443"),
         ("https://DV.lab:8443/", "dv.lab:8443"),
         ("dv.lab:443", "dv.lab"),
@@ -174,11 +202,7 @@ fn a_dataverse_host_keeps_its_port_and_nothing_else() {
         ("[::1]:8443", "[::1]:8443"),
         ("dv_lab.example", "dv_lab.example"),
     ] {
-        assert_eq!(
-            parse(typed).unwrap(),
-            Account::Dataverse(account.to_owned()),
-            "{typed}"
-        );
+        assert_eq!(typed_host(typed).as_deref(), Some(host), "{typed}");
     }
     for typed in [
         "user:pw@dv.lab",
@@ -195,51 +219,13 @@ fn a_dataverse_host_keeps_its_port_and_nothing_else() {
         "dv'lab'.org",
         "dv!lab.org",
         "{dv,lab}.org",
+        "demo.example\nmachine other.example",
     ] {
-        let error = parse(typed).unwrap_err();
-        assert_eq!(error.kind, Kind::Usage, "{typed}");
-        assert!(!error.message.contains("pw"), "{}", error.message);
+        assert_eq!(typed_host(typed), None, "{typed}");
     }
-    let account = parse("dv.lab:8443").unwrap();
-    let found = Found {
-        origin: Origin::Keyring,
-        secret: "k".to_owned(),
-        login: None,
-    };
-    assert_eq!(account.credential(&found).unwrap().host, "dv.lab:8443");
     assert_eq!(
-        account.check().unwrap().url.as_str(),
-        "https://dv.lab:8443/api/users/:me"
-    );
-    assert_eq!(
-        account.command(),
-        "fetchloom auth login dataverse --host dv.lab:8443"
-    );
-}
-
-#[test]
-fn a_dataverse_url_with_a_port_names_that_installation() {
-    let home = tempfile::tempdir().unwrap();
-    let var = machine(
-        home.path(),
-        &[
-            ("DATAVERSE_URL", "https://dv.lab:8443/"),
-            ("DATAVERSE_API_TOKEN", "dv"),
-        ],
-    );
-    assert_eq!(dataverses(&var), ["dv.lab:8443"]);
-    let account = Account::Dataverse("dv.lab:8443".into());
-    assert_eq!(account.find(&var).map(|f| f.secret).as_deref(), Some("dv"));
-    assert_eq!(
-        Account::Dataverse("dv.lab".into())
-            .find(&var)
-            .map(|f| f.secret),
-        None
-    );
-    assert!(
-        credentials(&var)
-            .iter()
-            .any(|c| c.host == "dv.lab:8443" && c.header == "x-dataverse-key")
+        site::key_command("dv.lab:8443", &crate::account::DATAVERSE_KEY),
+        "fetchloom auth login dv.lab:8443 --header x-dataverse-key"
     );
 }
 
@@ -400,7 +386,7 @@ fn auth_finds_kaggle_json_in_xdg_config_as_downloads_do() {
 
 #[test]
 fn names_people_type_find_their_account() {
-    let parse = |name: &str| Account::parse(name, None).unwrap();
+    let parse = |name: &str| Account::parse(name).unwrap();
     assert_eq!(parse("HF"), Account::HuggingFace);
     assert_eq!(parse("hugging-face"), Account::HuggingFace);
     assert_eq!(
@@ -424,44 +410,29 @@ fn names_people_type_find_their_account() {
         parse("localhost:8080"),
         Account::Login("localhost:8080".into())
     );
+    // a dataverse key is one installation's, which a person signs in to by its host
+    let dataverse = Account::parse("dataverse").unwrap_err();
+    assert_eq!(dataverse.kind, Kind::Usage);
     assert_eq!(
-        parse("dataverse"),
-        Account::Dataverse("dataverse.harvard.edu".into())
+        dataverse.message,
+        "a dataverse key belongs to one installation, so you sign in to its host"
     );
-    assert_eq!(
-        Account::parse("dataverse", Some("https://demo.dataverse.org/")).unwrap(),
-        Account::Dataverse("demo.dataverse.org".into())
-    );
+    assert!(dataverse.help.is_some_and(|help| {
+        help.contains("fetchloom auth login demo.dataverse.org --header x-dataverse-key")
+    }),);
     assert_eq!(parse("github"), Account::GitHub);
     assert_eq!(parse("GitLab"), Account::GitLab);
     for name in ["s2", "SemanticScholar", "api.semanticscholar.org"] {
         assert_eq!(parse(name), Account::S2, "{name}");
     }
-    assert_eq!(
-        Account::parse("bitbucket", None).unwrap_err().kind,
-        Kind::Usage
-    );
-    assert_eq!(
-        Account::parse("hf", Some("x.org")).unwrap_err().kind,
-        Kind::Usage
-    );
+    assert_eq!(Account::parse("bitbucket").unwrap_err().kind, Kind::Usage);
     for name in [
         "intended.example\nmachine\tother.example",
         "a.example\tb",
         "x.$(id).example",
     ] {
-        assert_eq!(Account::parse(name, None).unwrap_err().kind, Kind::Usage);
+        assert_eq!(Account::parse(name).unwrap_err().kind, Kind::Usage);
     }
-    assert_eq!(
-        Account::parse("dataverse", Some("demo.example\nmachine other.example"))
-            .unwrap_err()
-            .kind,
-        Kind::Usage
-    );
-    assert_eq!(
-        Account::Dataverse("demo.dataverse.org".into()).command(),
-        "fetchloom auth login dataverse --host demo.dataverse.org"
-    );
     assert_eq!(
         Account::Login("urs.earthdata.nasa.gov".into()).command(),
         "fetchloom auth login earthdata"
@@ -482,15 +453,6 @@ fn a_sign_in_command_keeps_each_host_one_literal_word() {
         (Account::GitHub, &["github"]),
         (Account::GitLab, &["gitlab"]),
         (Account::S2, &["s2"]),
-        (Account::Dataverse(HARVARD.into()), &["dataverse"]),
-        (
-            Account::Dataverse("a;b$(c)".into()),
-            &["dataverse", "--host", "a;b$(c)"],
-        ),
-        (
-            Account::Dataverse("[::1]:8443".into()),
-            &["dataverse", "--host", "[::1]:8443"],
-        ),
         (Account::Login(EARTHDATA.into()), &["earthdata"]),
         (Account::Login(PHYSIONET.into()), &["physionet"]),
         (
@@ -570,12 +532,12 @@ fn account_hosts_cannot_carry_url_components() {
         "https%3A%2F%2Freader%3Amask_canary%40example.org",
         "reader:mask_canary@example.org",
     ] {
-        let error = Account::parse(name, None).unwrap_err();
+        let error = Account::parse(name).unwrap_err();
         assert_eq!(error.kind, Kind::Usage);
         assert!(!error.message.contains("mask_canary"));
     }
     assert_eq!(
-        Account::parse("DATA.example.org", None).unwrap(),
+        Account::parse("DATA.example.org").unwrap(),
         Account::Login("data.example.org".to_owned())
     );
 }
@@ -591,23 +553,20 @@ fn a_typo_of_an_account_name_suggests_the_account() {
         ("kagle", "kaggle"),
         ("zenodoo", "zenodo"),
     ] {
-        let error = Account::parse(typed, None).unwrap_err();
+        let error = Account::parse(typed).unwrap_err();
         assert_eq!(error.kind, Kind::Usage);
         assert_eq!(
             error.help.as_deref(),
             Some(format!("did you mean `fetchloom auth login {meant}`?").as_str()),
             "{typed}"
         );
-        assert_eq!(
-            meant_account(typed),
-            Some(Account::parse(meant, None).unwrap())
-        );
+        assert_eq!(meant_account(typed), Some(Account::parse(meant).unwrap()));
     }
     for typed in ["bitbucket", "s3", "nas", "data.example.org", "hf"] {
         assert_eq!(meant_account(typed), None, "{typed}");
     }
     assert!(
-        Account::parse("bitbucket", None)
+        Account::parse("bitbucket")
             .unwrap_err()
             .help
             .is_some_and(|help| help.starts_with("use one of hf, kaggle")),

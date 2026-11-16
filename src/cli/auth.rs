@@ -76,10 +76,12 @@ pub(super) async fn run(context: &Arc<Context>, args: Auth) -> Result<Report, Er
     match args.action {
         None => status(context).await,
         Some(AuthAction::Login(login)) if site::wanted(&login) => {
-            site::sign_in(context, &login).map(Report::Login)
+            site::sign_in(context, &login, true)
+                .await
+                .map(Report::Login)
         }
         Some(AuthAction::Login(login)) => {
-            let account = Account::parse(&login.account, login.host.as_deref())?;
+            let account = Account::parse(&login.account)?;
             sign_in(context, &account, &login, false)
                 .await
                 .map(Report::Login)
@@ -134,7 +136,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                 warn_unsendable(output, &account, found);
                 (None, None, None)
             }
-            Some(found) => asked_about(context, &account, found, true).await,
+            Some(found) => asked_about(context, &account, found).await,
             None => (None, None, None),
         };
         let name = login_name(&account);
@@ -425,8 +427,7 @@ async fn sign_in(
         secret: secret.clone(),
         login: user_name.clone(),
     };
-    // a host only a refusal named, as a project's data.toml can, is not trusted as one typed
-    let (user, valid, unanswered) = asked_about(context, account, &found, !rerun).await;
+    let (user, valid, unanswered) = asked_about(context, account, &found).await;
     if valid == Some(false) {
         return Err(refused(account));
     }
@@ -693,12 +694,11 @@ async fn asked_about(
     context: &Arc<Context>,
     account: &Account,
     found: &Found,
-    chosen: bool,
 ) -> (Option<String>, Option<bool>, Option<String>) {
     if context.offline.enabled() || context.mirrors.mirrors.only {
         return (None, None, None);
     }
-    let (user, valid) = check(context, account, found, chosen).await;
+    let (user, valid) = check(context, account, found).await;
     let unanswered = valid
         .is_none()
         .then(|| {
@@ -712,13 +712,11 @@ async fn asked_about(
 }
 
 /// asks the source who the key belongs to: the name and whether it was accepted, or nothing
-/// when the source has no such check or could not be reached. `chosen` says the person named the
-/// account's host, as `--host` does, rather than a refusal.
+/// when the source has no such check or could not be reached.
 async fn check(
     context: &Arc<Context>,
     account: &Account,
     found: &Found,
-    chosen: bool,
 ) -> (Option<String>, Option<bool>) {
     let Some(check) = account.check() else {
         return (None, None);
@@ -726,16 +724,30 @@ async fn check(
     let Some(credential) = account.credential(found) else {
         return (None, None);
     };
+    let access = crate::source::access::of_account(account);
+    asked_check(context, &check, credential, access, None).await
+}
+
+/// asks `check` with `credential`: whose key it is and whether it was accepted, or nothing when
+/// the host could not be reached. the answer is read as the source's own, so it goes only where
+/// `access` lets its source ask; `chosen`, an installation's origin the person typed, may be on a
+/// private network, as `add` allows, and no other origin is trusted.
+pub(super) async fn asked_check(
+    context: &Arc<Context>,
+    check: &auth::Check,
+    credential: auth::Credential,
+    access: Option<&'static crate::source::access::Access>,
+    chosen: Option<url::Origin>,
+) -> (Option<String>, Option<bool>) {
     let net = context.net_with(vec![credential]);
-    // a dataverse host the person named, through --host or their own earlier sign-in, may be on
-    // a private network, as `add` allows. the origin asked is trusted, and no other
-    if chosen && let Account::Dataverse(_) = account {
-        net.trust([check.url.origin()]);
+    let written = chosen.clone();
+    if let Some(origin) = chosen {
+        net.trust([origin]);
     }
-    // the check's answer is read as the source's own, so it goes only where its source asks
-    let asked = match crate::source::access::of_account(account) {
+    let asked = match access {
         Some(access) => {
-            let scoped = crate::source::access::Scoped::new(&net, access, None, title(account));
+            let subject = check.url.origin().ascii_serialization();
+            let scoped = crate::source::access::Scoped::new(&net, access, written, subject);
             scoped.get(&check.url).await
         }
         None => net.get(&check.url).await,
@@ -1017,12 +1029,7 @@ pub(super) fn no_store(var: crate::machine::Var<'_>) -> &'static str {
 pub(super) fn tell_kept_out(output: &crate::output::Output, var: crate::machine::Var<'_>) {
     let names: Vec<String> = store::kept_out(var)
         .iter()
-        .map(|id| {
-            id.strip_prefix("site:")
-                .or_else(|| id.strip_prefix("dataverse:"))
-                .unwrap_or(id)
-                .to_owned()
-        })
+        .map(|id| id.strip_prefix("site:").unwrap_or(id).to_owned())
         .collect();
     let (keys, them) = match names.len() {
         0 => return,
@@ -1109,7 +1116,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
         return Ok(report);
     }
     let output = &context.output;
-    let account = Account::parse(&logout.account, logout.host.as_deref())?;
+    let account = Account::parse(&logout.account)?;
     let var = &crate::machine::env;
     let failed = |err: std::io::Error| {
         let doing = format!("could not remove the {} key", title(&account));
@@ -1296,10 +1303,23 @@ pub(super) async fn offer(
             output.link(terms)
         ));
     }
-    if let Account::Dataverse(host) = account
-        && let Some(named) = named_here(context, account).await
+    if let (Some(header), Account::Login(host)) = (need.header, account)
+        && let Some(key) = crate::account::per_host_key(header)
     {
-        output.say(&format!("{:>11} that you trust {host}: {named}", "Check"));
+        if let Some(named) = named_here(host, need.via.as_deref()) {
+            output.say(&format!("{:>11} that you trust {host}: {named}", "Check"));
+        }
+        let question = format!("sign in to {} at {host} now?", key.name);
+        if !agree(context, &question, false)
+            .map_err(|error| error.cancelling(&signing))?
+            .unwrap_or(false)
+        {
+            return declined(&signing);
+        }
+        site::sign_in_key(context, host, key)
+            .await
+            .map_err(|error| error.cancelling(&signing))?;
+        return Ok(true);
     }
     if need.site {
         let signed = site::offered(context, account)
@@ -1327,52 +1347,33 @@ pub(super) async fn offer(
     Ok(true)
 }
 
-/// how the data.toml of the project here led to the dataverse `account` signs in to, so the host
-/// a refusal offers a sign-in for came from a file, not from the person: it names a dataset
-/// there, or a DOI that doi.org says leads there. none when it names neither.
-async fn named_here(context: &Context, account: &Account) -> Option<String> {
+/// how the data.toml of the project here led to `host`, whose key a refusal offers to save, so
+/// a host a file chose is told apart from one the person typed: it names a dataset there, or the
+/// DOI `via`, which led there. none when it names neither. it asks nothing of the network.
+fn named_here(host: &str, via: Option<&str>) -> Option<String> {
     use crate::source::Reference;
     let (_, manifest) = std::env::current_dir()
         .ok()
         .and_then(|here| crate::project::Project::find(&here))?
         .manifest()
         .ok()?;
-    if names(&manifest, account) {
+    let named: Vec<Reference> = manifest
+        .datasets
+        .values()
+        .filter_map(|entry| Reference::parse(&entry.source.reference).ok())
+        .map(|parsed| parsed.reference)
+        .collect();
+    if named
+        .iter()
+        .any(|reference| matches!(reference, Reference::Dataverse(dataset) if dataset.key_host() == host))
+    {
         return Some("this project's data.toml named it".to_owned());
     }
-    let net = context.net();
-    for entry in manifest.datasets.values() {
-        let Ok(parsed) = Reference::parse(&entry.source.reference) else {
-            continue;
-        };
-        let Reference::Doi(doi) = &parsed.reference else {
-            continue;
-        };
-        let scoped = crate::source::access::Scoped::new(
-            &net,
-            &crate::source::access::DOI,
-            None,
-            doi.to_string(),
-        );
-        if let Ok(Reference::Dataverse(dataset)) = doi.locate(&scoped).await
-            && dataset.account() == *account
-        {
-            return Some(format!(
-                "this project's data.toml named {doi}, which leads there"
-            ));
-        }
-    }
-    None
-}
-
-/// whether `manifest` names a dataset on the dataverse `account` signs in to.
-fn names(manifest: &crate::project::manifest::Manifest, account: &Account) -> bool {
-    use crate::source::Reference;
-    manifest.datasets.values().any(|entry| {
-        Reference::parse(&entry.source.reference).is_ok_and(|parsed| {
-            matches!(&parsed.reference, Reference::Dataverse(dataset) if dataset.account() == *account)
-        })
-    })
+    let via = via?;
+    named
+        .iter()
+        .any(|reference| reference.to_string() == via)
+        .then(|| format!("this project's data.toml named {via}, which leads there"))
 }
 
 /// how to replace a key the source refused: a variable wins over the key a sign-in saves, so a
@@ -1407,12 +1408,9 @@ fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Fo
 /// the account as `fetchloom auth login` takes it, such as hf, so the listing names what to type.
 /// a name no command on windows holds safely shows as it is: a listing runs nothing.
 fn login_name(account: &Account) -> String {
-    match account {
-        Account::Dataverse(_) => title(account),
-        _ => crate::suggested::unmarked(&account.command())
-            .trim_start_matches("fetchloom auth login ")
-            .to_owned(),
-    }
+    crate::suggested::unmarked(&account.command())
+        .trim_start_matches("fetchloom auth login ")
+        .to_owned()
 }
 
 fn title(account: &Account) -> String {
@@ -1426,7 +1424,6 @@ fn title(account: &Account) -> String {
         Account::GitHub => "github".to_owned(),
         Account::GitLab => "gitlab".to_owned(),
         Account::S2 => "semantic scholar".to_owned(),
-        Account::Dataverse(host) => format!("dataverse at {host}"),
         Account::Login(host) if host == "urs.earthdata.nasa.gov" => "nasa earthdata".to_owned(),
         Account::Login(host) if host == "physionet.org" => "physionet".to_owned(),
         Account::Login(host) => host.clone(),
@@ -1442,7 +1439,6 @@ fn variable(account: &Account) -> &'static str {
         Account::GitHub => "GH_TOKEN or GITHUB_TOKEN",
         Account::GitLab => "GITLAB_TOKEN",
         Account::S2 => "S2_API_KEY",
-        Account::Dataverse(_) => "DATAVERSE_URL and DATAVERSE_API_TOKEN",
         Account::HuggingFace => "HF_TOKEN",
         Account::Kaggle => "KAGGLE_API_TOKEN",
         Account::Login(_) => "NETRC",
@@ -1535,6 +1531,23 @@ mod tests {
         });
     }
 
+    /// the check of a dataverse key for the installation at `host`, as a sign-in asks it.
+    fn dataverse_check(host: &str) -> (auth::Check, auth::Credential) {
+        let key = &crate::account::DATAVERSE_KEY;
+        let check = auth::Check {
+            url: url::Url::parse(&format!("https://{host}{}", key.check.unwrap())).unwrap(),
+            who: key.who,
+        };
+        let credential = auth::Credential {
+            host: host.to_owned(),
+            header: key.header,
+            value: "key".to_owned(),
+            every_hop: false,
+            every_port: false,
+        };
+        (check, credential)
+    }
+
     /// a dataverse host a person typed may be on a private network, as `add` allows, so its key
     /// is checked there instead of the check being skipped.
     #[test]
@@ -1551,14 +1564,11 @@ mod tests {
                 let _ = reached.send(());
             }
         });
-        let account = Account::parse("dataverse", Some(&format!("127.0.0.1:{port}"))).unwrap();
-        let found = Found {
-            origin: Origin::Keyring,
-            secret: "key".to_owned(),
-            login: None,
-        };
+        let (check, credential) = dataverse_check(&format!("127.0.0.1:{port}"));
+        let chosen = Some(check.url.origin());
+        let access = Some(&crate::source::access::DATAVERSE);
         assert_eq!(
-            block_on(check(&context, &account, &found, true)),
+            block_on(asked_check(&context, &check, credential, access, chosen)),
             (None, None)
         );
         assert!(
@@ -1583,14 +1593,10 @@ mod tests {
                 stop.ask();
             }
         });
-        let account = Account::parse("dataverse", Some(&format!("127.0.0.1:{port}"))).unwrap();
-        let found = Found {
-            origin: Origin::Keyring,
-            secret: "key".to_owned(),
-            login: None,
-        };
+        let (check, credential) = dataverse_check(&format!("127.0.0.1:{port}"));
+        let access = Some(&crate::source::access::DATAVERSE);
         assert_eq!(
-            block_on(check(&context, &account, &found, false)),
+            block_on(asked_check(&context, &check, credential, access, None)),
             (None, None)
         );
         assert!(
@@ -1603,7 +1609,7 @@ mod tests {
     /// than a key copied from a page.
     #[test]
     fn a_refused_login_names_the_username_and_password_not_a_key() {
-        let login = refused(&Account::parse("earthdata", None).unwrap());
+        let login = refused(&Account::parse("earthdata").unwrap());
         assert_eq!(
             login.message,
             "nasa earthdata did not accept this username and password"
@@ -1638,7 +1644,7 @@ mod tests {
     /// paths a home folder usually gives, so its `[y/N]` never splits.
     #[test]
     fn the_questions_about_a_saved_key_fit_an_80_column_terminal() {
-        let earthdata = Account::parse("earthdata", None).unwrap();
+        let earthdata = Account::parse("earthdata").unwrap();
         let mut questions = Vec::new();
         for (account, path) in [
             (&Account::HuggingFace, "/home/ada/.cache/huggingface/token"),

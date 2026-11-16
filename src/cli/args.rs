@@ -170,7 +170,7 @@ on disk: a key is saved where the source's own tools read it, so one key works i
 
     pub(super) const LOGIN: &str = "examples:
   fetchloom auth login hf
-  fetchloom auth login dataverse --host demo.dataverse.org
+  fetchloom auth login demo.dataverse.org --header x-dataverse-key
   fetchloom auth login data.example.org --browser firefox
   fetchloom auth login hf --with-token
 
@@ -780,14 +780,10 @@ pub(crate) enum AuthAction {
 /// options of `auth login`.
 #[derive(Clone, Debug, Default, clap::Args)]
 pub(crate) struct Login {
-    /// hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse, earthdata,
-    /// physionet or a host name
+    /// hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet or a
+    /// host name
     #[arg(value_name = "account", help_heading = "arguments")]
     pub(crate) account: String,
-
-    /// the dataverse site, such as demo.dataverse.org. harvard's is the default
-    #[arg(long, value_name = "host", help_heading = "options")]
-    pub(crate) host: Option<String>,
 
     /// read the key from stdin instead of asking, for scripts and CI. a login reads
     /// `username:password`
@@ -798,7 +794,8 @@ pub(crate) struct Login {
     #[arg(long, help_heading = "options")]
     pub(crate) token: bool,
 
-    /// for any website: save a key it reads from this header, such as x-api-key
+    /// for any website: save a key it reads from this header, such as x-api-key, or
+    /// x-dataverse-key for a dataverse installation
     #[arg(
         long,
         value_name = "name",
@@ -835,10 +832,6 @@ pub(crate) struct Logout {
     /// the account, as `auth login` takes it
     #[arg(value_name = "account", help_heading = "arguments")]
     pub(crate) account: String,
-
-    /// the dataverse site
-    #[arg(long, value_name = "host", help_heading = "options")]
-    pub(crate) host: Option<String>,
 }
 
 /// words to look up in public dataset catalogs.

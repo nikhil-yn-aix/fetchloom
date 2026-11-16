@@ -426,9 +426,10 @@ fn configured_dataverse_keys_do_not_return_after_an_origin_change() {
             format!("https://{other_port}/away"),
             format!("http://{owner}/away"),
         ] {
-            let credentials = crate::auth::credentials(&var);
-            assert_eq!(credentials.len(), 1);
-            let net = carrying(credentials);
+            assert!(crate::auth::credentials(&var).is_empty());
+            let sites = crate::auth::site::sites(&var);
+            assert_eq!(sites.len(), 1);
+            let net = carrying(Vec::new()).finding_sites(move || sites);
             let start = format!("https://{owner}/start");
             let hops = [
                 format!("https://{owner}/same"),

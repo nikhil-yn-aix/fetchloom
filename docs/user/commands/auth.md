@@ -18,7 +18,7 @@ fetchloom auth login [options] <account>
 fetchloom auth logout [options] <account>
 ```
 
-`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. a host on another port than 443 carries it, as `data.example.edu:8443` or `localhost:8080`, and what is saved for it goes to that port alone. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. a host name, there and as `<account>`, holds only letters, digits, dots, hyphens and underscores; `--host` also takes an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
+`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dryad`, `github`, `gitlab`, `s2`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. a host on another port than 443 carries it, as `data.example.edu:8443` or `localhost:8080`, and what is saved for it goes to that port alone. a dataverse installation is signed in to by its host, with `--header x-dataverse-key`, the header dataverse reads its key from: fetchloom then checks the key with the installation before saving it. a host name holds only letters, digits, dots, hyphens and underscores, or is an IPv6 address in brackets. an argument that is refused is shown with any secret in it masked.
 
 ## signing in
 

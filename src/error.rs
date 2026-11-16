@@ -116,6 +116,11 @@ pub(crate) struct Need {
     /// a website whose refusal named no way in, so the person picks one: a browser's cookies,
     /// a cookies.txt file, a token, a header or a username and password.
     pub(crate) site: bool,
+    /// the header of the key of one installation that would let the request through, as its
+    /// source names it: `x-dataverse-key` for a dataverse installation at the account's host.
+    pub(crate) header: Option<&'static str>,
+    /// the DOI that led to that host, when the reference was one.
+    pub(crate) via: Option<String>,
 }
 
 /// a failure: what happened in one sentence, supporting lines, and what to do next.
@@ -208,6 +213,8 @@ impl Error {
             terms,
             maybe_missing: None,
             site: false,
+            header: None,
+            via: None,
         }));
         self
     }
@@ -220,7 +227,31 @@ impl Error {
             terms: None,
             maybe_missing: None,
             site: true,
+            header: None,
+            via: None,
         }));
+        self
+    }
+
+    /// marks the error as a refusal the key of the installation at `host` could lift, sent in the
+    /// `header` its source names, as a dataverse key goes in `x-dataverse-key`.
+    pub(crate) fn needs_key(mut self, host: String, header: &'static str) -> Error {
+        self.need = Some(Box::new(Need {
+            account: Account::Login(host),
+            terms: None,
+            maybe_missing: None,
+            site: true,
+            header: Some(header),
+            via: None,
+        }));
+        self
+    }
+
+    /// says the DOI `via` led to the host whose key this refusal needs.
+    pub(crate) fn via(mut self, via: String) -> Error {
+        if let Some(need) = self.need.as_mut().filter(|need| need.header.is_some()) {
+            need.via = Some(via);
+        }
         self
     }
 
@@ -232,6 +263,8 @@ impl Error {
             terms: None,
             maybe_missing: Some(page),
             site: false,
+            header: None,
+            via: None,
         }));
         self.unseen()
     }

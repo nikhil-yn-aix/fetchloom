@@ -59,7 +59,7 @@ impl Asked {
 /// not 443, or what a login's name stands for, as earthdata does. an account that takes a key of
 /// its own, such as hf, has none, and neither has a typo of one's name, as `hff`.
 fn site_host(typed: &str) -> Result<String, Error> {
-    match Account::parse(typed, None) {
+    match Account::parse(typed) {
         Ok(Account::Login(host)) => Ok(host),
         Ok(account) => Err(Error::new(
             Kind::Usage,
@@ -74,15 +74,15 @@ fn site_host(typed: &str) -> Result<String, Error> {
     }
 }
 
-/// signs in to the website `login` names with its own credential, saved for its host alone.
-pub(super) fn sign_in(context: &Arc<Context>, login: &Login) -> Result<Outcome, Error> {
-    if login.host.is_some() {
-        return Err(
-            Error::new(Kind::Usage, "--host names a dataverse installation").help(
-                "name the website as the account, as in `fetchloom auth login data.example.org --token`",
-            ),
-        );
-    }
+/// signs in to the website `login` names with its own credential, saved for its host alone. a
+/// key in the header a source names for its installations, as dataverse's `x-dataverse-key`, is
+/// checked as that source checks one first; `chosen` says the person typed the host, rather than
+/// a refusal naming it, so the check may reach it on a private network.
+pub(super) async fn sign_in(
+    context: &Arc<Context>,
+    login: &Login,
+    chosen: bool,
+) -> Result<Outcome, Error> {
     let host = site_host(&login.account)?;
     let asked = match &login.header {
         Some(typed) => {
@@ -91,9 +91,13 @@ pub(super) fn sign_in(context: &Arc<Context>, login: &Login) -> Result<Outcome, 
         }
         None => Asked::Token,
     };
+    let key = match &asked {
+        Asked::Header(name) => crate::account::per_host_key(name),
+        Asked::Token => None,
+    };
     let cancelled = format!("signing in to {host}, so nothing changed");
     let told = login.with_token;
-    let run = || -> Result<Origin, Error> {
+    let run = async {
         let saved = if let Some(path) = &login.cookies {
             let saved = from_file(context, &host, path)?;
             replacing(context, &host)?;
@@ -106,8 +110,11 @@ pub(super) fn sign_in(context: &Arc<Context>, login: &Login) -> Result<Outcome, 
             if !told {
                 replacing(context, &host)?;
             }
-            let key = secret(context, login, &host, &asked)?;
-            asked.saved(key)
+            let secret = secret(context, login, &host, &asked, key)?;
+            if let Some(key) = key {
+                checked(context, &host, key, &secret, chosen).await?;
+            }
+            asked.saved(secret)
         };
         // the key is in hand, so a ctrl-c at the question below cancels it and any other stop
         // lets it finish
@@ -122,14 +129,79 @@ pub(super) fn sign_in(context: &Arc<Context>, login: &Login) -> Result<Outcome, 
                 origin.shown()
             ),
         );
-        Ok(origin)
+        Ok::<Origin, Error>(origin)
     };
-    let origin = run().map_err(|error| error.cancelling(&cancelled))?;
+    let origin = run.await.map_err(|error| error.cancelling(&cancelled))?;
     Ok(Outcome {
         account: format!("site:{host}"),
         user: None,
         saved_to: Some(origin.to_string()),
     })
+}
+
+/// signs in to `host` with the key of one installation that `key` shapes, as a refusal from that
+/// host offered, which a file may have named, so its check never reaches a private network.
+pub(super) async fn sign_in_key(
+    context: &Arc<Context>,
+    host: &str,
+    key: &'static crate::account::KeyShape,
+) -> Result<(), Error> {
+    let login = Login {
+        account: host.to_owned(),
+        header: Some(key.header.to_owned()),
+        ..Login::default()
+    };
+    sign_in(context, &login, false).await.map(drop)
+}
+
+/// asks `host` whether `secret` works as the key of one installation that `key` shapes, as its
+/// source checks one: a refused key is an error, and an accepted one says whose it is. offline,
+/// with mirrors alone, or with no answer, the key is kept unchecked.
+async fn checked(
+    context: &Arc<Context>,
+    host: &str,
+    key: &'static crate::account::KeyShape,
+    secret: &str,
+    chosen: bool,
+) -> Result<(), Error> {
+    if context.offline.enabled() || context.mirrors.mirrors.only {
+        return Ok(());
+    }
+    let Some(url) = key
+        .check
+        .and_then(|path| url::Url::parse(&format!("https://{host}{path}")).ok())
+    else {
+        return Ok(());
+    };
+    let check = auth::Check { url, who: key.who };
+    let credential = auth::Credential {
+        host: host.to_owned(),
+        header: key.header,
+        value: (key.value)(secret),
+        every_hop: false,
+        every_port: false,
+    };
+    let access = crate::source::access::of_key(key);
+    let origin = chosen.then(|| check.url.origin());
+    let output = &context.output;
+    match super::asked_check(context, &check, credential, access, origin).await {
+        (_, Some(false)) => Err(Error::new(
+            Kind::AuthRequired,
+            format!("{} at {host} did not accept this key", key.name),
+        )
+        .help("check that you copied all of it and that it has not expired, then sign in again")),
+        (user, Some(true)) => {
+            let who = user.map_or_else(String::new, |user| format!(" for {user}"));
+            output.step("Checked", &format!("the key works{who}"));
+            Ok(())
+        }
+        (_, None) => {
+            output.hint(&format!(
+                "{host} gave no answer, so the key was not checked"
+            ));
+            Ok(())
+        }
+    }
 }
 
 /// the ways a website may let a person in, as a refusal's sign-in offers them: the word a
@@ -196,7 +268,7 @@ pub(super) async fn offered(context: &Arc<Context>, account: &Account) -> Result
     if !wanted(&login) {
         return Ok(false);
     }
-    sign_in(context, &login)?;
+    sign_in(context, &login, false).await?;
     Ok(true)
 }
 
@@ -519,7 +591,13 @@ fn tell(output: &Output, host: &str, picked: &Picked, from: &str) {
 }
 
 /// the key `asked` for `host`: read from stdin with `--with-token`, else typed at the terminal.
-fn secret(context: &Context, login: &Login, host: &str, asked: &Asked) -> Result<String, Error> {
+fn secret(
+    context: &Context,
+    login: &Login,
+    host: &str,
+    asked: &Asked,
+    key: Option<&crate::account::KeyShape>,
+) -> Result<String, Error> {
     let output = &context.output;
     let (prompt, option) = asked.named();
     let command = format!(
@@ -529,7 +607,7 @@ fn secret(context: &Context, login: &Login, host: &str, asked: &Asked) -> Result
     let text = if login.with_token {
         read_stdin(output, prompt)?
     } else if output.can_ask() {
-        guide(context, host, asked);
+        guide(context, host, asked, key);
         output
             .ask_text(prompt, true)?
             .filter(|text| !text.trim().is_empty())
@@ -574,19 +652,29 @@ fn read_stdin(output: &Output, prompt: &str) -> Result<String, Error> {
     Ok(text)
 }
 
-/// the steps to a website's key, which each site words its own way.
-fn guide(context: &Context, host: &str, asked: &Asked) {
+/// the steps to a website's key, which each site words its own way, or for the key of one
+/// installation that `key` shapes, its source's page for it.
+fn guide(context: &Context, host: &str, asked: &Asked, key: Option<&crate::account::KeyShape>) {
     let output = &context.output;
     output.say(&format!("{:>11} {host}", "Sign in"));
     let sent = match asked {
         Asked::Token => "Authorization: Bearer".to_owned(),
         Asked::Header(name) => format!("the {name} header"),
     };
-    let steps = [
-        format!("sign in at {host} in your browser"),
-        "make a token or an api key where its settings or profile offer one".to_owned(),
-        format!("paste it below; it is sent in {sent}"),
-    ];
+    let steps = match key.and_then(|key| Some((key.name, key.page?))) {
+        Some((name, page)) => [
+            format!("open {}", output.link(&format!("https://{host}{page}"))),
+            format!(
+                "sign in to {host}, then create or copy the {name} api token there; it works on that server only"
+            ),
+            format!("paste it below; it is sent in {sent}"),
+        ],
+        None => [
+            format!("sign in at {host} in your browser"),
+            "make a token or an api key where its settings or profile offer one".to_owned(),
+            format!("paste it below; it is sent in {sent}"),
+        ],
+    };
     for (number, step) in steps.iter().enumerate() {
         output.say(&format!("{:>11} {step}", format!("{}.", number + 1)));
     }
@@ -738,6 +826,21 @@ pub(super) fn listed(output: &Output) -> Vec<State> {
     let var = &crate::machine::env;
     let now = SystemTime::now();
     let mut rows = Vec::new();
+    for (host, saved, name) in site::from_variables(var) {
+        output.step(
+            "Signed in",
+            &format!("to {host} with {} \u{b7} {name}", described(&saved)),
+        );
+        rows.push(State {
+            account: format!("site:{host}"),
+            signed_in: true,
+            from: Some(name.to_owned()),
+            user: None,
+            valid: None,
+            kind: Some(saved.kind()),
+            expires: None,
+        });
+    }
     for host in site::hosts(var) {
         let Some((saved, origin)) = site::find(var, &host) else {
             continue;
@@ -781,10 +884,7 @@ pub(super) fn listed(output: &Output) -> Vec<State> {
 /// removes a website's saved credential for the host `logout` names. none when it names an
 /// account, or a login's host with nothing saved for it here, which `auth logout` goes on to.
 pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Report>, Error> {
-    if logout.host.is_some() {
-        return Ok(None);
-    }
-    let (host, named) = match Account::parse(&logout.account, None) {
+    let (host, named) = match Account::parse(&logout.account) {
         Ok(Account::Login(host)) => (host, true),
         Ok(_) => return Ok(None),
         Err(error) => (site::host(&logout.account).ok_or(error)?, false),

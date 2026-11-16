@@ -49,14 +49,13 @@ pub(crate) enum Step {
 
 const EARTHDATA: &str = "urs.earthdata.nasa.gov";
 const PHYSIONET: &str = "physionet.org";
-const HARVARD: &str = "dataverse.harvard.edu";
 /// semantic scholar's API, the only host its key goes to.
 pub(crate) const S2_HOST: &str = "api.semanticscholar.org";
 /// where semantic scholar gives a person a key.
 pub(crate) const S2_KEYS: &str = "https://www.semanticscholar.org/product/api#api-key-form";
 
 /// what a person types after `fetchloom auth login`.
-pub(crate) const NAMES: &str = "hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse, earthdata, physionet or a host name";
+pub(crate) const NAMES: &str = "hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet or a host name";
 
 /// the kind of secret an account takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,6 +158,24 @@ fn cloud_sign_in(name: &str) -> Option<Error> {
     )
 }
 
+/// the refusal to sign in to `name` when it is a source whose keys each belong to one
+/// installation, as dataverse's do, which a person signs in to by its host.
+fn per_host_sign_in(name: &str) -> Option<Error> {
+    let key = crate::account::PER_HOST_KEYS
+        .into_iter()
+        .find(|key| key.name == name)?;
+    Some(
+        Error::new(
+            Kind::Usage,
+            format!("a {name} key belongs to one installation, so you sign in to its host"),
+        )
+        .help(format!(
+            "run `fetchloom auth login <host> --header {}` with your installation's host, as in `fetchloom auth login demo.dataverse.org --header {}`",
+            key.header, key.header
+        )),
+    )
+}
+
 /// the name of the system's credential store, as a person knows it.
 pub(crate) fn keyring_name() -> &'static str {
     if cfg!(windows) {
@@ -171,8 +188,8 @@ pub(crate) fn keyring_name() -> &'static str {
 }
 
 impl Account {
-    /// the account `name` means, with `host` naming a dataverse installation.
-    pub(crate) fn parse(name: &str, host: Option<&str>) -> Result<Account, Error> {
+    /// the account `name` means.
+    pub(crate) fn parse(name: &str) -> Result<Account, Error> {
         let lowered = name.trim().to_ascii_lowercase();
         let account = match lowered.as_str() {
             "hf" | "huggingface" | "hugging-face" | "huggingface.co" | "hf.co" => {
@@ -186,28 +203,22 @@ impl Account {
             "github" | "github.com" => Account::GitHub,
             "gitlab" | "gitlab.com" => Account::GitLab,
             "s2" | "semanticscholar" | "semantic-scholar" | S2_HOST => Account::S2,
-            "dataverse" => match host {
-                None => Account::Dataverse(HARVARD.to_owned()),
-                Some(host) => Account::Dataverse(dataverse_host(host).ok_or_else(|| {
-                    // what was typed is not repeated, since it may hold a password
-                    Error::new(
-                        Kind::Usage,
-                        "--host takes a dataverse installation's host name, with its port when that is not 443",
-                    )
-                    .help("use it as `fetchloom auth login dataverse --host dataverse.example.edu`, or with a port as `--host dataverse.example.edu:8443`")
-                })?),
-            },
             "earthdata" | "nasa" | EARTHDATA => Account::Login(EARTHDATA.to_owned()),
             "physionet" | PHYSIONET => Account::Login(PHYSIONET.to_owned()),
             // a login for another port than 443 names it, as a website's own key does
-            other if (other.contains('.') || other.split(':').next() == Some("localhost"))
-                && one_word(other) && !other.contains(['/', '\\', '@', '?', '#', '%'])
-                && dataverse_host(other).is_some() => {
-                Account::Login(dataverse_host(other).unwrap_or_else(|| other.to_owned()))
+            other
+                if (other.contains('.') || other.split(':').next() == Some("localhost"))
+                    && one_word(other)
+                    && !other.contains(['/', '\\', '@', '?', '#', '%'])
+                    && typed_host(other).is_some() =>
+            {
+                Account::Login(typed_host(other).unwrap_or_else(|| other.to_owned()))
             }
             _ => {
-                if let Some(cloud) = cloud_sign_in(&lowered) {
-                    return Err(cloud);
+                if let Some(refused) =
+                    cloud_sign_in(&lowered).or_else(|| per_host_sign_in(&lowered))
+                {
+                    return Err(refused);
                 }
                 let error = Error::new(
                     Kind::Usage,
@@ -224,13 +235,6 @@ impl Account {
                 });
             }
         };
-        if host.is_some() && !matches!(account, Account::Dataverse(_)) {
-            return Err(
-                Error::new(Kind::Usage, "--host names a dataverse installation").help(
-                    "use it as `fetchloom auth login dataverse --host dataverse.example.edu`",
-                ),
-            );
-        }
         Ok(account)
     }
 
@@ -246,7 +250,6 @@ impl Account {
             Account::GitHub => "github".to_owned(),
             Account::GitLab => "gitlab".to_owned(),
             Account::S2 => "s2".to_owned(),
-            Account::Dataverse(host) => format!("dataverse:{host}"),
             Account::Login(host) => format!("login:{host}"),
         }
     }
@@ -256,8 +259,6 @@ impl Account {
     pub(crate) fn command(&self) -> String {
         let quoted = |word: &str| crate::suggested::shell_word(word).into_owned();
         let named = match self {
-            Account::Dataverse(host) if host == HARVARD => "dataverse".to_owned(),
-            Account::Dataverse(host) => format!("dataverse --host {}", quoted(host)),
             Account::Login(host) if host == EARTHDATA => "earthdata".to_owned(),
             Account::Login(host) if host == PHYSIONET => "physionet".to_owned(),
             Account::Login(host) => quoted(host),
@@ -329,10 +330,6 @@ impl Account {
                 Step::Do("ask for a key with the form there; semantic scholar sends it by email".into()),
                 Step::Do("papers and search work without one, at a rate everyone shares; the files of its datasets need it".into()),
             ],
-            Account::Dataverse(host) => vec![
-                Step::Open(format!("https://{host}/dataverseuser.xhtml?selectTab=apiTokenTab")),
-                Step::Do(format!("sign in to {host}, then create or copy the api token there; it works on that server only")),
-            ],
             Account::Login(host) if host == EARTHDATA => vec![
                 Step::Open("https://urs.earthdata.nasa.gov/users/new".into()),
                 Step::Do("use your earthdata login username and password; create an account there if you have none".into()),
@@ -385,10 +382,6 @@ impl Account {
                     .as_deref()
                     .map_or(value, |login| basic(login, token));
                 (host.to_owned(), "authorization", value, false)
-            }
-            Account::Dataverse(host) => {
-                let key = self.key()?;
-                (host.clone(), key.header, (key.value)(token), false)
             }
             // a login answers its host on every hop, and every port of it from a line without
             // one, as curl reads netrc: earthdata sends a person through urs.earthdata.nasa.gov
@@ -443,26 +436,11 @@ impl Account {
     /// a request that proves a key works, where the source has one, at the path its key's shape
     /// names, and how to read who the key belongs to.
     pub(crate) fn check(&self) -> Option<Check> {
-        let who: fn(&serde_json::Value) -> Option<String> = match self {
-            Account::HuggingFace => |v| text(&v["name"]),
-            Account::Figshare => |v| text(&v["email"]).or_else(|| text(&v["first_name"])),
-            Account::Osf => |v| text(&v["data"]["attributes"]["full_name"]),
-            Account::GitLab => |v| text(&v["username"]),
-            Account::Dryad => |v| {
-                text(&v["message"]).map(|said| {
-                    said.trim_start_matches("Welcome application owner ")
-                        .to_owned()
-                })
-            },
-            Account::Dataverse(_) => {
-                |v| text(&v["data"]["displayName"]).or_else(|| text(&v["data"]["identifier"]))
-            }
-            Account::Kaggle => |v| text(&v["userName"]),
-            // zenodo's, github's and semantic scholar's answers name nobody
-            Account::Zenodo | Account::GitHub | Account::S2 | Account::Login(_) => |_| None,
-        };
+        let who = self.key().map_or(
+            (|_| None) as fn(&serde_json::Value) -> Option<String>,
+            |key| key.who,
+        );
         let url = match self {
-            Account::Dataverse(host) => format!("https://{host}{}", self.key()?.check?),
             Account::Login(host) if host == EARTHDATA => {
                 "https://urs.earthdata.nasa.gov/api/users/tokens".to_owned()
             }
@@ -515,16 +493,6 @@ impl Account {
         match self {
             Account::HuggingFace => named().or_else(|| hf_file(var).and_then(file)),
             Account::Kaggle => kaggle::locate(var),
-            Account::Dataverse(host) => {
-                let named = var("DATAVERSE_URL")
-                    .and_then(|value| value.into_string().ok())
-                    .and_then(|value| Url::parse(&value).ok())
-                    .and_then(|url| installation(&url));
-                (named.as_deref() == Some(host.as_str()))
-                    .then(|| set("DATAVERSE_API_TOKEN"))
-                    .flatten()
-                    .or_else(|| stored(&self.id()))
-            }
             Account::Login(host) => {
                 let path = netrc::path(var)?;
                 let entry = netrc::read(var)
@@ -572,17 +540,12 @@ pub(crate) enum Home {
 /// every key fetchloom found, as the network sends them: each to its own host only.
 pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
     // kaggle's keys are read below, a legacy key with its username
-    let mut accounts: Vec<Account> = Account::SOURCES
+    let accounts: Vec<Account> = Account::SOURCES
         .into_iter()
         .filter(|account| *account != Account::Kaggle)
         .collect();
     // the index of saved keys is read once here, rather than again for each account
     let saved = store::saved(var);
-    accounts.extend(
-        saved_dataverses(var, &saved)
-            .into_iter()
-            .map(Account::Dataverse),
-    );
     let mut found: Vec<Credential> = accounts
         .iter()
         .filter_map(|account| Some(account.credentials(&account.find_in(var, &saved)?)))
@@ -602,33 +565,9 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
     found
 }
 
-/// every dataverse installation a key is known for.
-fn dataverses(var: Var<'_>) -> Vec<String> {
-    saved_dataverses(var, &store::saved(var))
-}
-
-/// [`dataverses`], with `saved` the index of keys saved through fetchloom, read already.
-fn saved_dataverses(var: Var<'_>, saved: &BTreeMap<String, store::Place>) -> Vec<String> {
-    let mut hosts: Vec<String> = saved
-        .keys()
-        .filter_map(|id| id.strip_prefix("dataverse:").and_then(dataverse_host))
-        .collect();
-    if let Some(host) = var("DATAVERSE_URL")
-        .and_then(|value| value.into_string().ok())
-        .and_then(|value| Url::parse(&value).ok())
-        .and_then(|url| installation(&url))
-        && !hosts.contains(&host)
-    {
-        hosts.push(host);
-    }
-    hosts
-}
-
-/// every account worth listing in `auth`: the sources, and each dataverse and login host
-/// a key is known for.
+/// every account worth listing in `auth`/// every account worth listing in `auth`: the sources, and each login host a key is known for.
 pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
     let mut accounts = Account::SOURCES.to_vec();
-    accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
     let mut logins: Vec<String> = netrc::read(var)
         .into_iter()
         .map(|entry| entry.host)
@@ -670,7 +609,7 @@ fn one_word(host: &str) -> bool {
 
 /// the names a person types for each account, which [`meant_account`] holds a typo up to. hosts
 /// are left out, since a typo of one may be another host, and so is nasa, a typo away from `nas`.
-const TYPED_NAMES: [&str; 14] = [
+const TYPED_NAMES: [&str; 13] = [
     "hf",
     "huggingface",
     "kaggle",
@@ -682,7 +621,6 @@ const TYPED_NAMES: [&str; 14] = [
     "gitlab",
     "s2",
     "semanticscholar",
-    "dataverse",
     "earthdata",
     "physionet",
 ];
@@ -695,12 +633,12 @@ pub(crate) fn meant_account(typed: &str) -> Option<Account> {
         return None;
     }
     let name = crate::name::sole_closest(&lowered, TYPED_NAMES)?;
-    Account::parse(name, None).ok()
+    Account::parse(name).ok()
 }
 
-/// a dataverse installation as its account names it, from what a person typed: the host, with
-/// its port when that is not 443. none for anything else, such as a login, a path or a query.
-pub(crate) fn dataverse_host(typed: &str) -> Option<String> {
+/// a host as a key saved for it names it, from what a person typed: the host, with its port when
+/// that is not 443. none for anything else, such as a login, a path or a query.
+pub(crate) fn typed_host(typed: &str) -> Option<String> {
     let typed = typed.trim();
     // the URL parser drops tabs and line breaks, which would join two words into one host
     if !one_word(typed) {
@@ -725,10 +663,10 @@ pub(crate) fn plain_host(url: &str) -> Option<Url> {
     plain.then_some(url)
 }
 
-/// the installation a dataverse URL is on: its host, with its port when that is not 443. none
-/// for a host with other characters than letters, digits, dots, hyphens and underscores, such as
-/// the `$(` a shell reads.
-fn installation(url: &Url) -> Option<String> {
+/// the host a URL is at, with its port when that is not 443, as an installation's key names it.
+/// none for a host with other characters than letters, digits, dots, hyphens and underscores,
+/// such as the `$(` a shell reads.
+pub(crate) fn installation(url: &Url) -> Option<String> {
     let host = url.host_str()?.to_ascii_lowercase();
     let named = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_');
     if matches!(url.host(), Some(url::Host::Domain(_))) && !host.chars().all(named) {
@@ -742,14 +680,6 @@ fn installation(url: &Url) -> Option<String> {
 
 pub(crate) fn basic(login: &str, password: &str) -> String {
     format!("Basic {}", base64(format!("{login}:{password}").as_bytes()))
-}
-
-fn text(value: &serde_json::Value) -> Option<String> {
-    value
-        .as_str()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(str::to_owned)
 }
 
 /// standard base64 with padding, which basic authentication sends.

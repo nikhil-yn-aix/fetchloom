@@ -189,7 +189,17 @@ pub(crate) fn host(typed: &str) -> Option<String> {
     if typed.contains(['/', '\\', '@', '?', '#', '%']) {
         return None;
     }
-    super::dataverse_host(typed)
+    super::typed_host(typed)
+}
+
+/// the command that saves the key of one installation at `host`, in the header its source names,
+/// quoted for a shell.
+pub(crate) fn key_command(host: &str, key: &crate::account::KeyShape) -> String {
+    Saved::Header {
+        name: key.header.to_owned(),
+        value: String::new(),
+    }
+    .command(host)
 }
 
 /// the header a saved key goes in, from the name a person typed, or why no key may go in it.
@@ -284,15 +294,52 @@ pub(crate) fn forget(var: Var<'_>, host: &str) -> std::io::Result<Option<Origin>
     Ok(store::forget(var, &id(host))?.map(|place| Origin::saved(var, place)))
 }
 
-/// every website's saved credential, each with the host it goes to alone.
-pub(crate) fn sites(var: Var<'_>) -> Vec<(String, Saved)> {
-    hosts(var)
+/// the keys of one installation a variable gives, as `DATAVERSE_API_TOKEN` gives one for the
+/// installation `DATAVERSE_URL` names: each installation's host, the key in the header its source
+/// names, and the variable it came from.
+pub(crate) fn from_variables(var: Var<'_>) -> Vec<(String, Saved, &'static str)> {
+    crate::account::PER_HOST_KEYS
         .into_iter()
-        .filter_map(|host| {
-            let (saved, _) = find(var, &host)?;
-            Some((host, saved))
+        .filter_map(|key| {
+            let host = var(key.env_host?)
+                .and_then(|value| value.into_string().ok())
+                .and_then(|value| url::Url::parse(&value).ok())
+                .and_then(|url| super::installation(&url))?;
+            let (name, token) = key
+                .env
+                .iter()
+                .find_map(|name| crate::machine::set(var, name).map(|token| (*name, token)))?;
+            let saved = Saved::Header {
+                name: key.header.to_owned(),
+                value: token.trim().to_owned(),
+            };
+            Some((host, saved, name))
         })
         .collect()
+}
+
+/// every website's saved credential, each with the host it goes to alone; a key a variable
+/// gives for a host comes in place of what is saved for it, as variables win over saved keys.
+pub(crate) fn sites(var: Var<'_>) -> Vec<(String, Saved)> {
+    let given: Vec<(String, Saved)> = from_variables(var)
+        .into_iter()
+        .map(|(host, saved, _)| (host, saved))
+        .collect();
+    let saved = hosts(var).into_iter().filter_map(|host| {
+        if given.iter().any(|(given, _)| *given == host) {
+            return None;
+        }
+        let (saved, _) = find(var, &host)?;
+        Some((host, saved))
+    });
+    let mut all = given.clone();
+    all.extend(saved);
+    all
+}
+
+/// whether a key goes to `host`: one a variable gives for it or one saved for it.
+pub(crate) fn keyed(var: Var<'_>, host: &str) -> bool {
+    from_variables(var).iter().any(|(given, ..)| given == host) || find(var, host).is_some()
 }
 
 #[cfg(test)]

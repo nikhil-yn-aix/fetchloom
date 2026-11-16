@@ -232,12 +232,8 @@ impl Parsed {
 /// how to read a link to a dataverse installation's api without the key it carries: a key saved
 /// for the installation goes with each request to it.
 fn signing_in(url: &Url) -> Option<String> {
-    let host = match url.port() {
-        Some(port) => format!("{}:{port}", url.host_str()?),
-        None => url.host_str()?.to_owned(),
-    };
-    let host = crate::auth::dataverse_host(&host)?;
-    let command = crate::account::Account::Dataverse(host.clone()).command();
+    let host = crate::auth::installation(url)?;
+    let command = crate::auth::site::key_command(&host, &crate::account::DATAVERSE_KEY);
     Some(format!(
         "leave key out of the link: sign in once with `{command}`, and fetchloom sends your key to {host} itself"
     ))
@@ -567,7 +563,10 @@ impl Reference {
                 Reference::Doi(doi) => {
                     let scoped = access::Scoped::new(api, &access::DOI, None, self.shown());
                     let target = doi.locate(&scoped).await?;
-                    let mut listing = target.resolve_direct(api, select).await?;
+                    let mut listing = target
+                        .resolve_direct(api, select)
+                        .await
+                        .map_err(|error| error.via(doi.to_string()))?;
                     listing.doi.get_or_insert_with(|| doi.name().to_owned());
                     Ok(listing)
                 }
@@ -1384,7 +1383,7 @@ mod tests {
         assert_eq!(
             error.help.as_deref(),
             Some(
-                "leave key out of the link: sign in once with `fetchloom auth login dataverse --host demo.dataverse.org`, and fetchloom sends your key to demo.dataverse.org itself"
+                "leave key out of the link: sign in once with `fetchloom auth login demo.dataverse.org --header x-dataverse-key`, and fetchloom sends your key to demo.dataverse.org itself"
             )
         );
         // a host no real installation has, as one holding `$(`, gets no command to paste

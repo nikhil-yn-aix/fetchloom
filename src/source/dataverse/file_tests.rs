@@ -237,12 +237,13 @@ fn a_restricted_file_answered_with_success_is_still_refused() {
         error
             .help
             .unwrap()
-            .contains("fetchloom auth login dataverse")
+            .contains("fetchloom auth login dataverse.harvard.edu --header x-dataverse-key")
     );
     assert_eq!(
-        error.need.map(|need| need.account),
-        Some(crate::account::Account::Dataverse(
-            "dataverse.harvard.edu".into()
+        error.need.map(|need| (need.account, need.header)),
+        Some((
+            crate::account::Account::Login("dataverse.harvard.edu".into()),
+            Some("x-dataverse-key")
         ))
     );
 }
@@ -259,7 +260,7 @@ fn file_access_errors_do_not_suggest_unscoped_credentials() {
             error
                 .help
                 .unwrap()
-                .contains("`fetchloom auth login dataverse`")
+                .contains("`fetchloom auth login dataverse.harvard.edu --header x-dataverse-key`")
         );
     }
 }

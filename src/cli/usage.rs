@@ -644,7 +644,7 @@ mod tests {
     /// fix needs no second run for the list.
     #[test]
     fn a_missing_choice_lists_what_it_may_be() -> Result<(), Box<dyn std::error::Error>> {
-        let accounts = "use one of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, dataverse, earthdata, physionet or a host name";
+        let accounts = "use one of hf, kaggle, zenodo, figshare, osf, dryad, github, gitlab, s2, earthdata, physionet or a host name";
         for (arguments, shell, help) in [
             (
                 &["fetchloom", "completions"][..],

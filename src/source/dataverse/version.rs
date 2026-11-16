@@ -182,17 +182,12 @@ impl Version {
             .collect();
         // a key for this installation may be allowed the files; if not, their downloads are
         // refused and say so
-        let account = dataset.account();
-        if !restricted.is_empty() && account.find(var).is_none() {
-            let command = account.command();
-            return Err(Error::new(
+        if !restricted.is_empty() && !crate::auth::site::keyed(var, &dataset.key_host()) {
+            let error = Error::new(
                 Kind::AuthRequired,
                 format!("{dataset} restricts access to {}", restricted.join(", ")),
-            )
-            .help(format!(
-                "if you have access, sign in with `{command}` and run the same command again; otherwise request access on the dataset's page"
-            ))
-            .needs(account, None));
+            );
+            return Err(dataset.needs_key(error, false));
         }
         Ok(())
     }

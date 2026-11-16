@@ -295,7 +295,7 @@ fn access_errors_do_not_suggest_unscoped_credentials() {
             error
                 .help
                 .unwrap()
-                .contains("`fetchloom auth login dataverse`")
+                .contains("`fetchloom auth login dataverse.harvard.edu --header x-dataverse-key`")
         );
     }
 }
@@ -304,18 +304,14 @@ fn access_errors_do_not_suggest_unscoped_credentials() {
 /// finds it.
 #[test]
 fn an_install_on_another_port_keeps_its_port_in_the_account() {
-    let account = |text: &str| Dataset::parse(text).unwrap().account();
+    let key_host = |text: &str| Dataset::parse(text).unwrap().key_host();
     for (text, host) in [
         ("dv.lab:8443/doi:10.1/X", "dv.lab:8443"),
         ("dv.lab:443/doi:10.1/X", "dv.lab"),
         ("DV.lab/file:1", "dv.lab"),
         ("[::1]:8443/doi:10.1/X", "[::1]:8443"),
     ] {
-        assert_eq!(
-            account(text),
-            crate::account::Account::Dataverse(host.to_owned()),
-            "{text}"
-        );
+        assert_eq!(key_host(text), host, "{text}");
     }
 }
 
@@ -324,10 +320,7 @@ fn an_install_on_another_port_keeps_its_port_in_the_account() {
 #[test]
 fn an_install_no_key_is_saved_for_is_named_by_its_host() {
     let dataset = Dataset::parse("DV!lab:8443/doi:10.1/X").unwrap();
-    assert_eq!(
-        dataset.account(),
-        crate::account::Account::Dataverse("dv!lab".to_owned())
-    );
+    assert_eq!(dataset.key_host(), "dv!lab");
 }
 
 #[test]
@@ -396,7 +389,8 @@ fn http_refusals_name_the_install_account() {
         ("DV.example.edu:8443", "dv.example.edu:8443"),
         ("[::1]:8443", "[::1]:8443"),
     ] {
-        let account = crate::account::Account::Dataverse(account_host.to_owned());
+        let account = crate::account::Account::Login(account_host.to_owned());
+        let command = crate::auth::site::key_command(account_host, &crate::account::DATAVERSE_KEY);
         for (item, path) in [
             (
                 "doi:10.7910/DVN/TJCLKP",
@@ -418,11 +412,12 @@ fn http_refusals_name_the_install_account() {
                 let error = block_on(dataset.resolve(&recorded)).unwrap_err();
                 assert_eq!(error.kind, Kind::AuthRequired);
                 assert_eq!(
-                    error.need.as_ref().map(|need| &need.account),
-                    Some(&account),
+                    error.need.as_ref().map(|need| (&need.account, need.header)),
+                    Some((&account, Some("x-dataverse-key"))),
                     "{host}, {item}, {status}"
                 );
-                assert!(error.help.unwrap().contains(&account.command()));
+                let help = error.help.unwrap();
+                assert!(help.contains(&command), "{help}");
                 assert_eq!(recorded.asked(), [url.as_str()]);
             }
         }

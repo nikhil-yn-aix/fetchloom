@@ -1039,6 +1039,128 @@ fn a_dataverse_sign_in_for_a_host_a_data_toml_doi_leads_to_says_so() -> Result {
     Ok(())
 }
 
+/// a dataverse key is saved as its installation's key, in the header dataverse names, once the
+/// installation accepts it; a key it refuses is not saved, and `dataverse` alone names no
+/// installation to sign in to.
+#[test]
+fn a_dataverse_key_is_checked_and_saved_as_its_installations_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let check = "/dv.example.org/api/users/:me".to_owned();
+    let routes = Routes::start(vec![(
+        check.clone(),
+        reply("401 Unauthorized", &[("Content-Length", "0")], b""),
+    )])?;
+    let login = |key: &str| {
+        let mut command = sandbox.command(&[
+            "auth",
+            "login",
+            "dv.example.org",
+            "--header",
+            "x-dataverse-key",
+            "--with-token",
+        ]);
+        command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+        with_stdin(command, &format!("{key}\n"))
+    };
+    let refused = login("dv-refused")?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(40), "{stderr}");
+    assert!(
+        stderr.contains("dataverse at dv.example.org did not accept this key"),
+        "{stderr}"
+    );
+    let listed = sandbox.command(&["--json", "auth", "--offline"]).output()?;
+    assert!(!text(&listed.stdout)?.contains("site:dv.example.org"));
+    routes.change(vec![(
+        check,
+        reply(
+            "200 OK",
+            &[("Content-Type", "application/json")],
+            br#"{"status":"OK","data":{"displayName":"Ada Lovelace"}}"#,
+        ),
+    )]);
+    let accepted = login("dv-accepted")?;
+    let stderr = text(&accepted.stderr)?;
+    assert_eq!(accepted.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Checked the key works for Ada Lovelace"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Signed in to dv.example.org with the x-dataverse-key header"),
+        "{stderr}"
+    );
+    let listed = json(&sandbox.command(&["--json", "auth", "--offline"]).output()?)?;
+    let row = listed["result"]["accounts"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["account"] == "site:dv.example.org")
+        })
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(row["kind"], "header", "{listed}");
+    let mut given = sandbox.command(&["--json", "auth", "--offline"]);
+    given.env("DATAVERSE_URL", "https://dv.lab:8443/");
+    given.env("DATAVERSE_API_TOKEN", "dv-given");
+    let listed = json(&given.output()?)?;
+    let row = listed["result"]["accounts"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["account"] == "site:dv.lab:8443"))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        (&row["from"], &row["kind"]),
+        (&"DATAVERSE_API_TOKEN".into(), &"header".into()),
+        "{listed}"
+    );
+    let alone = sandbox.command(&["auth", "login", "dataverse"]).output()?;
+    let stderr = text(&alone.stderr)?;
+    assert_eq!(alone.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("fetchloom auth login demo.dataverse.org --header x-dataverse-key"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a sign-in offered for a dataverse host the person typed asks doi.org nothing before the
+/// question, whatever DOIs data.toml names: the run that was refused already knows how it got
+/// there, and a project of many DOIs would otherwise wait on doi.org once for each.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_dataverse_sign_in_offer_asks_doi_org_nothing_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let target = "/dv.example.org/api/datasets/:persistentId/versions/:latest-published?persistentId=doi%3A10.1%2FY";
+    let routes = Routes::start(vec![(
+        target.to_owned(),
+        reply("401 Unauthorized", &[("Content-Length", "0")], b""),
+    )])?;
+    let named = (1..=5)
+        .map(|n| format!("[datasets.d{n}]\nref = \"doi:10.1/D{n}\"\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    std::fs::write(sandbox.work().join("data.toml"), named)?;
+    let mut command = sandbox.command(&["add", "dataverse:dv.example.org/doi:10.1/Y"]);
+    command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+    let Some((_, screen)) = crate::support::typed(&sandbox.work(), &command, "", "now?", "\r")?
+    else {
+        return Ok(());
+    };
+    let screen = screen.replace('\r', "");
+    assert!(
+        screen.contains("sign in to dataverse at dv.example.org now? [y/N]"),
+        "{screen}"
+    );
+    assert!(!screen.contains("Check that you trust"), "{screen}");
+    let asked = routes.requests();
+    assert!(
+        asked.iter().all(|head| !head.contains("/doi.org/")),
+        "{asked:?}"
+    );
+    Ok(())
+}
+
 /// the command runs again after signing in, and its refusal never offers another sign-in; a key
 /// kept for the command alone is named so, and a saved key's help says how to check it.
 #[cfg(target_os = "linux")]

@@ -133,12 +133,28 @@ impl Dataset {
             .map(|url| url.origin())
     }
 
-    /// the account a key for this install is saved under: its host, with its port when that is
-    /// not 443, as the key only goes there.
-    pub(crate) fn account(&self) -> crate::account::Account {
-        let host = crate::auth::dataverse_host(&self.host)
-            .unwrap_or_else(|| self.host_name().to_ascii_lowercase());
-        crate::account::Account::Dataverse(host)
+    /// the host a key for this install is saved for: its host, with its port when that is not
+    /// 443, as the key only goes there.
+    pub(crate) fn key_host(&self) -> String {
+        crate::auth::typed_host(&self.host).unwrap_or_else(|| self.host_name().to_ascii_lowercase())
+    }
+
+    /// the error for a refusal that a key for this install could lift, saying how to save one;
+    /// one refused with a key already says that key was refused.
+    pub(super) fn needs_key(&self, error: Error, keyed: bool) -> Error {
+        let host = self.key_host();
+        let key = &crate::account::DATAVERSE_KEY;
+        let command = crate::auth::site::key_command(&host, key);
+        if keyed {
+            return error.help(format!(
+                "the key for {host} was refused or has no access to it: save a current one with `{command}`, or request access on the dataset's page"
+            ));
+        }
+        error
+            .help(format!(
+                "if you have access, sign in with `{command}` and run the same command again; otherwise ask the dataset's owner for access"
+            ))
+            .needs_key(host, key.header)
     }
 
     /// asks the install's native API for the dataset's files.
@@ -154,11 +170,7 @@ impl Dataset {
     fn answer<T: serde::de::DeserializeOwned>(&self, response: &Response) -> Result<T, Error> {
         super::json(self, response).map_err(|error| {
             if error.kind == Kind::AuthRequired {
-                let account = self.account();
-                let command = account.command();
-                error.help(format!(
-                    "if you have access, sign in with `{command}` and run the same command again; otherwise ask the dataset's owner for access"
-                )).needs(account, None)
+                self.needs_key(error, response.signed.is_some())
             } else {
                 error
             }
