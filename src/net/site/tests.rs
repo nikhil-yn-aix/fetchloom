@@ -36,7 +36,7 @@ fn net(sites: Vec<Site>) -> Net {
 fn sent(net: &Net, url: &str, name: &HeaderName) -> Option<String> {
     let url = Url::parse(url).unwrap();
     let client = net.wire().unwrap().lane(Lane::Shared, &url).unwrap();
-    let request = net.request(client, &url, true).build().unwrap();
+    let request = net.request(client, &url, &url, true).0.build().unwrap();
     let values: Vec<_> = request.headers().get_all(name).iter().collect();
     assert!(values.len() <= 1, "{url}: {values:?}");
     values.first().map(|value| {

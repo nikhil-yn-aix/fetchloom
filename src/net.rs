@@ -884,12 +884,16 @@ impl Net {
         let container = self.azure.locate(url);
         // judged on the link as written too, before a test server stands in for it
         let in_the_clear = (!self.carries(url)).then(|| s3::in_the_clear(url));
+        // stored keys and the origin they stay on are judged on each hop as written, before a
+        // test server stands in for it, as on the host itself
+        let written = url;
         #[cfg(debug_assertions)]
         let local = api::stand_in(url).inspect(|local| self.typed(local));
         #[cfg(debug_assertions)]
         let url = local.as_ref().unwrap_or(url);
         let wire = self.wire().map_err(Failure::Final)?;
         let mut hop = url.clone();
+        let mut written_hop = written.clone();
         let mut sent_by: Option<Url> = None;
         let mut redirects = 0;
         let mut name = None;
@@ -900,7 +904,7 @@ impl Net {
         loop {
             self.may_ask(&hop, mirror, sent_by.as_ref())?;
             let (client, carrier) = self.checked_client(wire, lane, &hop).await?;
-            first_origin &= hop.origin() == url.origin();
+            first_origin &= written_hop.origin() == written.origin();
             // a signature goes with the first request alone, never after a redirect
             let located = bucket.as_ref().filter(|_| redirects == 0);
             let signer = self.signer_for(located, in_the_clear.as_ref()).await?;
@@ -911,8 +915,13 @@ impl Net {
                 .await
                 .map_err(Failure::Final)?;
             let credentials = (signer.as_ref(), &tokened, &blobbed);
-            let (request, sends_key) =
-                self.hop_request(client, &hop, &shape, first_origin, credentials)?;
+            let (request, sends_key) = self.hop_request(
+                client,
+                (&hop, &written_hop),
+                &shape,
+                first_origin,
+                credentials,
+            )?;
             keyed |= sends_key;
             // counted as it goes: one refused before is no request, and a redirect's hop is part
             // of the request it follows
@@ -970,7 +979,9 @@ impl Net {
             {
                 continue;
             }
-            let Some(next) = self.next_hop(url, &hop, &response, &mut redirects, &mut name)? else {
+            let Some((next, written_next)) =
+                self.next_hop(url, &hop, &response, &mut redirects, &mut name)?
+            else {
                 if let Some(name) = name {
                     response.extensions_mut().insert(RedirectName(name));
                 }
@@ -980,6 +991,7 @@ impl Net {
                 response.extensions_mut().insert(Answering(answering));
                 return Ok(response);
             };
+            written_hop = written_next;
             sent_by = Some(std::mem::replace(&mut hop, next));
         }
     }
@@ -1017,6 +1029,8 @@ impl Net {
         Ok((client, carrier))
     }
 
+    /// where `response`, the answer to `hop`, sends the request next, once checked: the link to
+    /// ask, and the link as written, which a test server's stand-in replaces in debug builds.
     fn next_hop(
         &self,
         from: &Url,
@@ -1024,7 +1038,7 @@ impl Net {
         response: &reqwest::Response,
         redirects: &mut usize,
         name: &mut Option<String>,
-    ) -> Result<Option<Url>, Failure> {
+    ) -> Result<Option<(Url, Url)>, Failure> {
         let Some(next) = redirect_target(hop, response) else {
             return Ok(None);
         };
@@ -1042,10 +1056,10 @@ impl Net {
             .map_err(|reason| Failure::Final(failure::refused(&next, &reason)))?;
         tracing::debug!(from = host(hop), to = host(&next), "redirect");
         #[cfg(debug_assertions)]
-        let next = api::stand_in(&next)
-            .inspect(|local| self.typed(local))
-            .unwrap_or(next);
-        Ok(Some(next))
+        if let Some(local) = api::stand_in(&next).inspect(|local| self.typed(local)) {
+            return Ok(Some((local, next)));
+        }
+        Ok(Some((next.clone(), next)))
     }
 
     /// sends `request` for `hop`, which `carrier` carries when a proxy does: the answer, or why
@@ -1086,13 +1100,13 @@ impl Net {
         Ok(response)
     }
 
-    /// the request for `hop`, as `shape` makes it: signed by `signer`, or else with its host's
-    /// stored credential while on the `first_origin`, a google token and an azure credential, and
-    /// whether any credential of this machine goes with it.
+    /// the request for `hop`, as `shape` makes it: signed by `signer`, or else with the stored
+    /// credential of its host as `written` names it while on the `first_origin`, a google token
+    /// and an azure credential, and whether any credential of this machine goes with it.
     fn hop_request(
         &self,
         client: &reqwest::Client,
-        hop: &Url,
+        (hop, written): (&Url, &Url),
         shape: &impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
         first_origin: bool,
         (signer, tokened, blobbed): (
@@ -1110,7 +1124,7 @@ impl Net {
             .map_err(Failure::Final)?;
             return Ok((request, true));
         }
-        let (request, stored) = self.carrying(client, &blobbed.url(hop), first_origin);
+        let (request, stored) = self.request(client, &blobbed.url(hop), written, first_origin);
         let request = shape(request)
             .headers(tokened.headers())
             .headers(blobbed.headers());
@@ -1197,31 +1211,24 @@ impl Net {
         Ok((reqwest::Response::from(again), body))
     }
 
-    /// a GET with, when `credentials` allows, the credential for this exact host and port, over
-    /// https, or plain http where [`Net::carries`] allows, so a key for port 443 never reaches
-    /// another port (curl's CVE-2022-27776); only a `.netrc` line without a port answers every
-    /// port, as curl reads one. a website's own saved credential wins over a stored one for the
-    /// same header.
+    /// a GET for `url` with, when `credentials` allows, the credential for this exact host and
+    /// port, over https, or plain http where [`Net::carries`] allows, so a key for port 443 never
+    /// reaches another port (curl's CVE-2022-27776); only a `.netrc` line without a port answers
+    /// every port, as curl reads one. a website's own saved credential wins over a stored one for
+    /// the same header. a stored key is judged on `written`, the link as written, which a test
+    /// server's stand-in replaces in debug builds. it says whether a stored credential or a
+    /// website's went with the request.
     fn request(
         &self,
         client: &reqwest::Client,
         url: &Url,
-        credentials: bool,
-    ) -> reqwest::RequestBuilder {
-        self.carrying(client, url, credentials).0
-    }
-
-    /// [`Net::request`], and whether a stored credential or a website's went with it.
-    fn carrying(
-        &self,
-        client: &reqwest::Client,
-        url: &Url,
+        written: &Url,
         credentials: bool,
     ) -> (reqwest::RequestBuilder, bool) {
         let mut request = client.get(url.clone());
         let site = self.site_headers(url, credentials);
         let mut carried = !site.is_empty();
-        for key in self.stored_keys(url, credentials, &site) {
+        for key in self.stored_keys(written, credentials, &site) {
             // the header name only; the value is the secret
             tracing::debug!(host = key.host, header = %key.name, "sending a stored credential");
             request = request.header(key.name.clone(), key.value.clone());
@@ -1266,8 +1273,8 @@ impl Net {
         keys
     }
 
-    /// whether a request that starts at `url` carries a key: a stored one, or a website's saved
-    /// credential.
+    /// whether a request that starts at `url` carries a key, as [`Net::request`] sends one: a
+    /// stored one, or a website's saved credential.
     pub(crate) fn sends_key(&self, url: &Url) -> bool {
         self.site_of(url).is_some() || !self.stored_keys(url, true, &[]).is_empty()
     }
@@ -1578,8 +1585,10 @@ mod tests {
             .request(
                 net.wire().unwrap().lane(Lane::Shared, &url).unwrap(),
                 &url,
+                &url,
                 true,
             )
+            .0
             .build()
             .unwrap();
         let sent: Vec<_> = request

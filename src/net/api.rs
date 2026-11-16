@@ -311,6 +311,7 @@ impl Net {
         let bucket = self.signing.locate(url);
         let stored = self.google.locate(url);
         let container = self.azure.locate(url);
+        let written = url;
         #[cfg(debug_assertions)]
         let local = stand_in(url).inspect(|local| self.typed(local));
         #[cfg(debug_assertions)]
@@ -335,7 +336,8 @@ impl Net {
                 signer.headers(url, std::time::SystemTime::now()),
             )?,
             None => self
-                .request(client, &blobbed.url(url), true)
+                .request(client, &blobbed.url(url), written, true)
+                .0
                 .headers(tokened.headers())
                 .headers(blobbed.headers()),
         }

@@ -74,7 +74,7 @@ fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
             format!("https://{}/file", host.to_ascii_uppercase()),
         ] {
             let url = Url::parse(&url).unwrap();
-            let request = net.request(client, &url, true).build().unwrap();
+            let request = net.request(client, &url, &url, true).0.build().unwrap();
             assert_eq!(request.headers()[header::AUTHORIZATION], value, "{url}");
             assert!(request.headers()[header::AUTHORIZATION].is_sensitive());
         }
@@ -86,7 +86,7 @@ fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
             format!("https://{host}.example.org/file"),
         ] {
             let url = Url::parse(&url).unwrap();
-            let request = net.request(client, &url, true).build().unwrap();
+            let request = net.request(client, &url, &url, true).0.build().unwrap();
             assert!(
                 !request.headers().contains_key(header::AUTHORIZATION),
                 "{url}"
@@ -109,7 +109,8 @@ fn no_key_goes_to_a_plain_http_hugging_face_mirror() {
     let mirrored = Url::parse("http://127.0.0.1:8080/api/datasets/x/y").unwrap();
     let plain = carrying(vec![saved("127.0.0.1:8080")]);
     let request = plain
-        .request(any_client(&plain), &mirrored, true)
+        .request(any_client(&plain), &mirrored, &mirrored, true)
+        .0
         .build()
         .unwrap();
     assert_eq!(
@@ -119,7 +120,8 @@ fn no_key_goes_to_a_plain_http_hugging_face_mirror() {
     let net = carrying(vec![saved("127.0.0.1:8080")])
         .with_hf_endpoint(Some(crate::net::Endpoint::at("http://127.0.0.1:8080")));
     let request = net
-        .request(any_client(&net), &mirrored, true)
+        .request(any_client(&net), &mirrored, &mirrored, true)
+        .0
         .build()
         .unwrap();
     assert!(!request.headers().contains_key(header::AUTHORIZATION));
@@ -127,7 +129,11 @@ fn no_key_goes_to_a_plain_http_hugging_face_mirror() {
         .with_hf_endpoint(Some(crate::net::Endpoint::at("https://hf-mirror.example")));
     let client = any_client(&net);
     let mirrored = Url::parse("https://hf-mirror.example/api/datasets/x/y").unwrap();
-    let request = net.request(client, &mirrored, true).build().unwrap();
+    let request = net
+        .request(client, &mirrored, &mirrored, true)
+        .0
+        .build()
+        .unwrap();
     assert_eq!(
         request.headers()[header::AUTHORIZATION],
         "Bearer mirror-test"
@@ -142,7 +148,7 @@ fn a_semantic_scholar_key_goes_to_its_api_alone() {
     let net = carrying(crate::auth::credentials(&var));
     let client = any_client(&net);
     let api = Url::parse("https://api.semanticscholar.org/datasets/v1/release/latest").unwrap();
-    let request = net.request(client, &api, true).build().unwrap();
+    let request = net.request(client, &api, &api, true).0.build().unwrap();
     assert_eq!(request.headers()["x-api-key"], "s2-test");
     assert!(request.headers()["x-api-key"].is_sensitive());
     for url in [
@@ -151,7 +157,7 @@ fn a_semantic_scholar_key_goes_to_its_api_alone() {
         "http://api.semanticscholar.org/datasets/v1/release/latest",
     ] {
         let url = Url::parse(url).unwrap();
-        let request = net.request(client, &url, true).build().unwrap();
+        let request = net.request(client, &url, &url, true).0.build().unwrap();
         assert!(!request.headers().contains_key("x-api-key"), "{url}");
     }
 }
@@ -296,7 +302,7 @@ fn a_key_for_another_port_reaches_that_port_only() {
     let client = any_client(&net);
     let sent = |url: &str| {
         let url = Url::parse(url).unwrap();
-        let request = net.request(client, &url, true).build().unwrap();
+        let request = net.request(client, &url, &url, true).0.build().unwrap();
         request
             .headers()
             .get(header::AUTHORIZATION)
@@ -335,7 +341,7 @@ fn a_netrc_line_for_the_port_asked_wins_over_one_without_a_port() {
     let client = any_client(&net);
     let sent = |url: &str| {
         let url = Url::parse(url).unwrap();
-        let request = net.request(client, &url, true).build().unwrap();
+        let request = net.request(client, &url, &url, true).0.build().unwrap();
         request
             .headers()
             .get_all(header::AUTHORIZATION)
@@ -410,7 +416,7 @@ fn a_github_key_never_reaches_github_com_or_its_storage() {
         "https://media.githubusercontent.com/media/lab/survey/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/data/model.bin",
     ] {
         let url = Url::parse(url).unwrap();
-        let request = net.request(client, &url, true).build().unwrap();
+        let request = net.request(client, &url, &url, true).0.build().unwrap();
         assert!(
             !request.headers().contains_key(header::AUTHORIZATION),
             "{url}"
