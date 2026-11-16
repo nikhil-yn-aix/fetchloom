@@ -10,7 +10,7 @@ use super::super::fetch::{self, Job};
 use super::unpack::Unpack;
 use crate::archive::{self, Packed, parts};
 use crate::cache::{Cache, UrlRecord, parts_key};
-use crate::digest::{BlobId, Sha256};
+use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
@@ -174,33 +174,63 @@ impl Draft {
     }
 
     /// knows each file of a git repository whose blob a download here brought before, without a
-    /// download: the cache's record of the blob names the object, whose bytes must still be that
-    /// blob. the records are looked up first, then the bytes they name checked at once.
+    /// download: the cache's record of the blob names the object, else `previous`, data.lock's pin
+    /// of the same file at its commit then, does, as a sync of data.lock brought its bytes, and the
+    /// object's bytes must still be that blob. the records are looked up first, then the bytes
+    /// they name checked at once; a pin's bytes found to be the blob are recorded when `recording`,
+    /// as a download's are, so a later commit that moves the file finds them.
     pub(super) fn recall_blobs(
         &mut self,
         cache: &Cache,
+        (previous, recording): (Option<&Locked>, bool),
         threads: Threads,
         stop: &Stop,
     ) -> Result<(), Error> {
-        let recorded: Vec<(usize, BlobId, Sha256, u64)> = self
+        let mut pins: Option<HashMap<String, &LockedFile>> = None;
+        let recorded: Vec<(usize, &Blob, Sha256, u64, bool)> = self
             .files
             .iter()
             .enumerate()
             .filter_map(|(index, file)| {
                 let blob = file.remote.blob.as_ref().filter(|_| file.known.is_none())?;
-                let (sha256, size) = cache.blob_record(&blob.repository, &blob.id)?;
+                let (sha256, size, pinned) =
+                    if let Some((sha256, size)) = cache.blob_record(&blob.repository, &blob.id) {
+                        (sha256, size, false)
+                    } else {
+                        let pins = pins.get_or_insert_with(|| {
+                            let files = previous.iter().flat_map(|locked| &locked.files);
+                            files
+                                .map(|file| (without_commit(&file.url), file))
+                                .collect()
+                        });
+                        let pin = pins.get(&without_commit(file.remote.url.as_str()))?;
+                        (pin.sha256, pin.size, true)
+                    };
                 let sized = file.remote.size.is_none_or(|listed| listed == size);
-                sized.then_some((index, blob.id, sha256, size))
+                sized.then_some((index, blob, sha256, size, pinned))
             })
             .collect();
         let bytes = recorded
             .iter()
-            .fold(0_u64, |sum, (.., size)| sum.saturating_add(*size));
-        let held =
-            crate::place::run_hashes(&recorded, bytes, threads, None, |(_, id, sha256, size)| {
-                cache.holds_blob(id, sha256, *size, stop)
-            });
-        for ((index, _, sha256, size), held) in recorded.into_iter().zip(held) {
+            .fold(0_u64, |sum, (.., size, _)| sum.saturating_add(*size));
+        let held = crate::place::run_hashes(
+            &recorded,
+            bytes,
+            threads,
+            None,
+            |(_, blob, sha256, size, pinned)| {
+                if *pinned && recording {
+                    cache.remember_blob(&blob.repository, &blob.id, *sha256, *size, stop)
+                } else {
+                    cache.holds_blob(&blob.id, sha256, *size, stop)
+                }
+            },
+        );
+        let recorded: Vec<(usize, Sha256, u64)> = recorded
+            .into_iter()
+            .map(|(index, _, sha256, size, _)| (index, sha256, size))
+            .collect();
+        for ((index, sha256, size), held) in recorded.into_iter().zip(held) {
             match held {
                 Ok(true) => self.files[index].known = Some((sha256, size)),
                 Ok(false) => {
@@ -874,6 +904,18 @@ pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
             crate::cli::project::command(&format!("lock --upgrade {dataset}"))
         ))
     })
+}
+
+/// a git file's link with its commit left out, as `…/lab/survey/*/data/rows.csv`, so the links of
+/// one file of one repository at two commits read alike, and those of a fork's file do not.
+fn without_commit(url: &str) -> String {
+    let commit = |segment: &str| {
+        matches!(segment.len(), 40 | 64) && segment.bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    url.split('/')
+        .map(|segment| if commit(segment) { "*" } else { segment })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// whether the file at `url` of the dataset resolved as `resolved` is one only its server vouches

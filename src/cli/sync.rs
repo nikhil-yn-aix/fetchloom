@@ -755,7 +755,7 @@ impl<'a> Loop<'a> {
             others,
             renamed,
         } = self
-            .draft(manifest, old.unwrap_or_default(), upgrade, given)
+            .draft(manifest, old.unwrap_or_default(), upgrade, given, true)
             .await?;
         let mut jobs = Vec::new();
         let mut slots = Vec::new();
@@ -885,7 +885,7 @@ impl<'a> Loop<'a> {
             others,
             renamed,
         } = self
-            .draft(manifest, old.unwrap_or_default(), upgrade, given)
+            .draft(manifest, old.unwrap_or_default(), upgrade, given, false)
             .await?;
         let mut jobs = Vec::new();
         let mut unpack = Vec::new();
@@ -932,6 +932,7 @@ impl<'a> Loop<'a> {
         old: Lock,
         upgrade: &Upgrade,
         given: Vec<Given>,
+        download: bool,
     ) -> Result<Drafted, Error> {
         let (mut listed, mut whole) = (Vec::new(), Vec::new());
         for given in given {
@@ -1006,7 +1007,12 @@ impl<'a> Loop<'a> {
                 upgrade.includes(&name),
                 &self.cache,
             )?;
-            draft.recall_blobs(&self.cache, self.context.threads, &self.context.stop)?;
+            draft.recall_blobs(
+                &self.cache,
+                (others.get(&name), download),
+                self.context.threads,
+                &self.context.stop,
+            )?;
             // an upgrade of an unchanged entry told its hint when it was new
             if others
                 .get(&name)

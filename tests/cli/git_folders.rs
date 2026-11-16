@@ -2081,6 +2081,129 @@ fn a_cache_that_never_held_the_old_commit_downloads_each_file_once() -> Result {
     Ok(())
 }
 
+/// a teammate's cache that synced data.lock holds the commit it pins, so their first upgrade to a
+/// commit that changed one file downloads that file alone: the others are proven by their blob
+/// ids, computed from the bytes the sync brought, and recorded, so a later commit that moves one
+/// finds it by its blob alone.
+#[test]
+fn a_teammate_who_synced_downloads_only_what_the_new_commit_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let routes = Routes::start(github(
+        "main",
+        FIRST,
+        &[
+            ("data/rows.csv", Held::File(ROWS)),
+            ("data/big.bin", Held::File(&big)),
+        ],
+    )?)?;
+    ok(&run(
+        &sandbox,
+        &routes,
+        &[
+            "add",
+            "https://github.com/lab/survey/tree/main/data",
+            "--as",
+            "survey",
+        ],
+    )?)?;
+    let (teammate, synced) = teammate_sync(&sandbox, &routes)?;
+    ok(&synced)?;
+    let cache = sandbox.folder("teammate-cache")?;
+    let upgrade = || -> Result<()> {
+        ok(&sandbox
+            .command_in(&teammate, &["lock", "--upgrade"])
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?)
+    };
+    let api = |commit: &str| {
+        vec![
+            format!("{GITHUB_API}/commits/main"),
+            format!("{GITHUB_API}/git/trees/{commit}?recursive=1"),
+        ]
+    };
+
+    routes.change(github(
+        "main",
+        SECOND,
+        &[
+            ("data/rows.csv", Held::File(NOTES)),
+            ("data/big.bin", Held::File(&big)),
+        ],
+    )?);
+    let before = routes.targets().len();
+    upgrade()?;
+    let mut expected = api(SECOND);
+    expected.extend(served_from(SECOND, "rows.csv", true));
+    expected.sort();
+    assert_eq!(asked_since(&routes, before), expected);
+    assert_eq!(
+        pins(&teammate, "survey")?,
+        pinned_as(&[("rows.csv", NOTES), ("big.bin", &big)])
+    );
+
+    routes.change(github(
+        "main",
+        THIRD,
+        &[
+            ("data/rows.csv", Held::File(NOTES)),
+            ("data/moved.bin", Held::File(&big)),
+        ],
+    )?);
+    let before = routes.targets().len();
+    upgrade()?;
+    let mut expected = api(THIRD);
+    expected.sort();
+    assert_eq!(asked_since(&routes, before), expected);
+    assert_eq!(
+        pins(&teammate, "survey")?,
+        pinned_as(&[("rows.csv", NOTES), ("moved.bin", &big)])
+    );
+    Ok(())
+}
+
+/// data.lock's pins stand only for files of their own repository: a dataset whose link moves from
+/// a fork to the repository downloads each file again, though the fork holds the very same blobs,
+/// since one repository's ids never vouch for another's bytes.
+#[test]
+fn a_pin_of_a_fork_never_stands_for_a_file_of_the_repository() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let held = [
+        ("data/rows.csv", Held::File(ROWS)),
+        ("data/big.bin", Held::File(&big)),
+    ];
+    let mut served = on_github("lab/fork", "main", FIRST, &held)?;
+    served.extend(github("main", FIRST, &held)?);
+    let routes = Routes::start(served)?;
+    ok(&run(
+        &sandbox,
+        &routes,
+        &[
+            "add",
+            "https://github.com/lab/fork/tree/main/data",
+            "--as",
+            "survey",
+        ],
+    )?)?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.survey]\nref = \"https://github.com/lab/survey/tree/main/data\"\n",
+    )?;
+    let before = routes.targets().len();
+    ok(&run(&sandbox, &routes, &["lock"])?)?;
+    let mut expected = vec![
+        format!("{GITHUB_API}/commits/main"),
+        format!("{GITHUB_API}/git/trees/{FIRST}?recursive=1"),
+    ];
+    expected.extend(served_from(FIRST, "rows.csv", true));
+    expected.extend(served_from(FIRST, "big.bin", false));
+    expected.sort();
+    assert_eq!(asked_since(&routes, before), expected);
+    Ok(())
+}
+
 /// rewrites each record in the cache at `cache` that names the bytes `bytes` as `rewrite` makes
 /// its json, keeping its check, so the record is damaged, or making it again when `checked`, as
 /// someone else sharing the cache could write a record of their own.
@@ -2123,9 +2246,9 @@ fn rewrite_records(
 }
 
 /// a record that names other bytes than its blob's never places them: a damaged one is no
-/// record, and the bytes a foreign one names, which the cache holds, do not have the blob's id,
-/// so each of their files downloads and is pinned by its own bytes, while the rest come from
-/// the cache.
+/// record, and the bytes a foreign one names, which the cache holds, do not have the blob's id.
+/// so the notes, moved where data.lock pins nothing, and the file of the foreign record download
+/// and are pinned by their own bytes, while the rest come from the cache.
 #[test]
 fn a_damaged_or_foreign_record_never_places_other_bytes() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2169,14 +2292,21 @@ fn a_damaged_or_foreign_record_never_places_other_bytes() -> Result {
         false,
     )?;
 
-    routes.change(github("main", SECOND, &held)?);
+    // the notes move, so no pin of data.lock stands for them at the new commit
+    let moved = [
+        ("data/rows.csv", Held::File(ROWS)),
+        ("data/moved.txt", Held::File(NOTES)),
+        ("data/big.bin", Held::File(&big)),
+        ("data/other.bin", Held::File(&other)),
+    ];
+    routes.change(github("main", SECOND, &moved)?);
     let before = routes.targets().len();
     ok(&run(&sandbox, &routes, &["lock", "--upgrade"])?)?;
     let mut expected = vec![
         format!("{GITHUB_API}/commits/main"),
         format!("{GITHUB_API}/git/trees/{SECOND}?recursive=1"),
     ];
-    expected.extend(served_from(SECOND, "notes.txt", true));
+    expected.extend(served_from(SECOND, "moved.txt", true));
     expected.extend(served_from(SECOND, "big.bin", false));
     expected.sort();
     assert_eq!(asked_since(&routes, before), expected);
@@ -2185,7 +2315,7 @@ fn a_damaged_or_foreign_record_never_places_other_bytes() -> Result {
         pins(&work, "survey")?,
         pinned_as(&[
             ("rows.csv", ROWS),
-            ("notes.txt", NOTES),
+            ("moved.txt", NOTES),
             ("big.bin", &big),
             ("other.bin", &other),
         ])
