@@ -23,6 +23,9 @@ pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
 const PROJECT_FILES: [&str; 3] = [FILE, "data.lock", "data.lock.d"];
 /// the files git reads its rules from in a repository's folders, besides its `.git` folder.
 const GIT_FILES: [&str; 3] = [".gitignore", ".gitattributes", ".gitmodules"];
+/// folders whose files tools run with no one asking: git hooks, as husky or a hooks folder by its
+/// usual name holds them, editor tasks, dev container commands and ci workflows.
+const TOOL_FOLDERS: [&str; 5] = [".devcontainer", ".github", ".githooks", ".husky", ".vscode"];
 const TOP_KEYS: [&str; 3] = [required::KEY, "project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
 const DATASET_KEYS: [&str; 8] = [
@@ -747,6 +750,19 @@ impl Reader<'_> {
         {
             return Err(refused(&format!("{file} is the name of a file git reads"))
                 .help("use a folder of its own inside the project, such as data"));
+        }
+        // data placed there would run as code, as a hook husky points git at runs on commit
+        if key == "data_dir"
+            && let Some(folder) = text.split('/').find(|part| {
+                TOOL_FOLDERS
+                    .iter()
+                    .any(|tool| name::fold(tool) == name::fold(part))
+            })
+        {
+            return Err(
+                refused(&format!("{folder} is a folder other tools run files from"))
+                    .help("use a folder of its own inside the project, such as data"),
+            );
         }
         match name::escapes(text) {
             // a data.toml is shared with windows clones, where every file would hit the same name

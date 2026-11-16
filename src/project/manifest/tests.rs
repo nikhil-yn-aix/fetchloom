@@ -221,10 +221,11 @@ const METADATA_COMPONENTS: &[&str] = &[
 ];
 
 fn refuses_metadata(key: &str, table: &str) {
-    let mut taken = vec![".github", "data/git", "data/.hgdata"];
-    // a data_dir named as one of git's own files is refused on its own
+    let mut taken = vec![".gitlab", "data/git", "data/.hgdata"];
+    // a data_dir named as one of git's own files, or a folder other tools run files from, is
+    // refused on its own
     if key != "data_dir" {
-        taken.push(".gitignore");
+        taken.extend([".gitignore", ".github"]);
     }
     for path in taken {
         let text = format!("{table}\n{key} = \"{path}\"\n");
@@ -367,6 +368,37 @@ fn a_data_dir_is_no_file_git_reads_and_may_start_at_dot() {
         let manifest = Manifest::parse(&format!("[project]\ndata_dir = '{written}'\n")).unwrap();
         assert_eq!(manifest.data_dir, read, "{written}");
     }
+}
+
+/// a `data_dir` in a folder other tools run files from is refused, in any case and at any depth:
+/// with git's hooks in .husky, a data.toml could place a `pre-commit` the next commit runs.
+#[test]
+fn a_data_dir_is_no_folder_other_tools_run_files_from() {
+    for (written, folder) in [
+        (".husky", ".husky"),
+        (".VSCode", ".VSCode"),
+        (".github/data", ".github"),
+        ("apps/web/.husky", ".husky"),
+        (".githooks", ".githooks"),
+        (".devcontainer", ".devcontainer"),
+    ] {
+        let error = fails(&format!("[project]\ndata_dir = '{written}'\n"));
+        assert_eq!(
+            error.message,
+            format!(
+                "data_dir = \"{written}\" in data.toml is refused because {folder} is a folder other tools run files from"
+            )
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("use a folder of its own inside the project, such as data")
+        );
+    }
+    let manifest = Manifest::parse(
+        "[project]\ndata_dir = 'data'\n[datasets.a]\nref = 'https://example.org/a'\npath = '.husky'\n",
+    )
+    .unwrap();
+    assert_eq!(manifest.datasets["a"].path.as_deref(), Some(".husky"));
 }
 
 #[test]
