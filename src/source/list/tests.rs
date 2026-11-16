@@ -279,6 +279,32 @@ fn a_repeated_line_counts_once_and_a_path_with_two_hashes_is_refused() {
     );
 }
 
+/// what unix `sum` and `cksum` write, a short sum and a size, shows nothing of a file's bytes:
+/// such a line is refused by what it is. a pooch line whose path is digits stays a pooch line.
+#[test]
+fn a_unix_sum_line_is_refused_as_a_sum_fetchloom_cannot_check() {
+    for line in [
+        "08820   582 Saccharomyces_cerevisiae.R64-1-1.113.gtf.gz",
+        "35632 3 README",
+        "4294967295 1024 two words.txt",
+    ] {
+        let error = refused(&format!("# sums\n{line}\n"));
+        assert_eq!(
+            error.message,
+            "line 2 of SUMS gives a unix `sum` checksum, a kind fetchloom cannot check: it checks MD5 and SHA-256 alone",
+            "{line}"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("list each file's link instead, with its MD5 or SHA-256 if you know it")
+        );
+    }
+    assert_eq!(
+        entries(&format!("2024 {SHA}\n")),
+        [(path("2024"), sha(SHA))]
+    );
+}
+
 /// a list gives no path or link longer than data.lock keeps.
 #[test]
 fn a_list_bounds_its_paths_and_links_as_data_lock_does() {
@@ -357,7 +383,7 @@ fn a_list_is_named_by_its_link_or_its_path_in_the_project() {
         ),
         (
             "https://example.org/data/checksums.txt",
-            "https://example.org/data/checksums.txt",
+            "list:https://example.org/data/checksums.txt",
         ),
         (
             "https://github.com/o/r/blob/main/SHA1SUMS",
@@ -401,6 +427,7 @@ fn a_dataset_of_a_list_is_named_after_the_list_or_its_folder() {
             "mitdb-1-0-0",
         ),
         ("https://example.org/data/MD5SUMS", "data"),
+        ("https://ftp.example.org/pub/yeast/CHECKSUMS", "yeast"),
         ("list:https://example.org/data/registry.txt", "registry"),
         ("list:lists/era5-urls.txt", "era5-urls"),
         ("list:SHA256SUMS", "sha256sums"),

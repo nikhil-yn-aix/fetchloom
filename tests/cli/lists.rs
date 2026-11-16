@@ -172,6 +172,41 @@ fn a_list_line_that_leaves_its_folder_is_refused_before_any_download() -> Result
     Ok(())
 }
 
+/// ensembl's `CHECKSUMS` holds what unix `sum` writes, a 16-bit sum and a size for each file,
+/// which shows nothing of the bytes. by its name or with `list:`, it is refused as a list of a
+/// kind of sum fetchloom cannot check, never pinned as one small file, and the help names the
+/// folder's own link.
+#[test]
+fn a_list_of_unix_sums_is_refused_and_names_its_folder() -> Result {
+    let sums = "08820   582 Saccharomyces_cerevisiae.R64-1-1.113.gtf.gz\n35632     3 README\n";
+    let server = served(&[("CHECKSUMS", sums.to_owned())])?;
+    let link = format!("{}/data/CHECKSUMS", server.url);
+    for typed in [link.clone(), format!("list:{link}")] {
+        let sandbox = Sandbox::new()?;
+        let output = sandbox.run(&["--json", "add", &typed])?;
+        assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        let error = &document["errors"][0];
+        assert_eq!(
+            error["message"],
+            format!(
+                "line 1 of {link} gives a unix `sum` checksum, a kind fetchloom cannot check: it checks MD5 and SHA-256 alone"
+            ),
+            "{typed}"
+        );
+        assert_eq!(
+            error["help"],
+            format!(
+                "add the folder's link instead, as in `fetchloom add {}/data/`, or each file's link",
+                server.url
+            ),
+            "{typed}"
+        );
+        assert!(!sandbox.work().join("data.toml").exists(), "{typed}");
+    }
+    Ok(())
+}
+
 /// a pooch registry, a BSD list and the GNU form of the same files pin the same files.
 #[test]
 fn every_list_form_pins_the_same_files() -> Result {

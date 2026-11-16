@@ -208,8 +208,15 @@ impl List {
             )
             .help("open the link in a browser: a site that asks you to sign in shows a page instead. use the link that downloads the list itself"));
         }
-        let read = read(&shown, &text, api.most_files())
-            .and_then(|entries| listing(self, entries, Some(url)));
+        let summed_at = text
+            .lines()
+            .position(|line| is_summed(line.trim()))
+            .map(|index| format!("line {} of {shown}", index + 1));
+        let read = match summed_at {
+            Some(at) => Err(summed(&at, Some(&below(url, "")))),
+            None => read(&shown, &text, api.most_files()),
+        }
+        .and_then(|entries| listing(self, entries, Some(url)));
         read.map_err(|mut error| {
             // the list is the server's, so nothing on this machine is to blame
             if error.kind == Kind::Usage {
@@ -244,16 +251,51 @@ impl fmt::Display for List {
 }
 
 /// whether a list's file `name` says it holds checksums, as `SHA256SUMS`, `MD5SUMS`,
-/// `sha1sum.txt` and NCBI's `md5checksums.txt` do, in any case.
+/// `sha1sum.txt`, NCBI's `md5checksums.txt` and ensembl's `CHECKSUMS` do, in any case.
 fn is_named_for_sums(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     let stem = name.strip_suffix(".txt").unwrap_or(&name);
     ["checksums", "checksum", "sums", "sum"]
         .iter()
-        .find_map(|kind| stem.strip_suffix(kind))
-        .is_some_and(|function| {
-            ["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "b2"].contains(&function)
+        .find_map(|kind| stem.strip_suffix(kind).map(|function| (*kind, function)))
+        .is_some_and(|(kind, function)| {
+            (function.is_empty() && kind.starts_with("checksum"))
+                || ["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "b2"].contains(&function)
         })
+}
+
+/// whether `line` is what unix `sum` or `cksum` writes: a checksum of at most 10 digits, a size,
+/// then the file's name.
+fn is_summed(line: &str) -> bool {
+    let digits = |word: &str, most: usize| {
+        (1..=most).contains(&word.len()) && word.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    let mut words = line.split_whitespace();
+    let (Some(sum), Some(size), Some(_)) = (words.next(), words.next(), words.next()) else {
+        return false;
+    };
+    digits(sum, 10) && digits(size, 20)
+}
+
+/// the error for `at`, a line unix `sum` or `cksum` wrote, whose sum shows nothing of a file's
+/// bytes. `folder`, the link of a list's own folder, is the link that pins its files.
+fn summed(at: &str, folder: Option<&Url>) -> Error {
+    let error = Error::new(
+        Kind::Usage,
+        format!(
+            "{at} gives a unix `sum` checksum, a kind fetchloom cannot check: it checks MD5 and SHA-256 alone"
+        ),
+    );
+    match folder {
+        Some(folder) => error.help(format!(
+            "add the folder's link instead, as in `{}`, or each file's link",
+            crate::suggested::command(&format!(
+                "add {}",
+                crate::suggested::shell_word(folder.as_str())
+            ))
+        )),
+        None => error.help("list each file's link instead, with its MD5 or SHA-256 if you know it"),
+    }
 }
 
 /// the text of the list at `path` in the project at `root`, at most `most` bytes, refused when a
@@ -359,6 +401,9 @@ fn read_line(
         return Ok(None);
     }
     let at = format!("line {number} of {name}");
+    if is_summed(line) {
+        return Err(summed(&at, None));
+    }
     if line.starts_with('\\') {
         return Err(Error::new(
             Kind::Usage,
