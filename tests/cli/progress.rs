@@ -151,6 +151,33 @@ fn progress_tells_its_lines_beside_json() -> Result {
     Ok(())
 }
 
+/// a locked sync knows each file's size from data.lock before it downloads, which its plan line
+/// says; `--json` hides that line, so with `--progress` the downloads say they began themselves.
+#[test]
+fn a_locked_sync_tells_its_downloads_beside_json() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![crate::support::file(IRIS, "\"v1\""), slow_iris()],
+    )?;
+    crate::project::added(&sandbox, &server)?;
+    let clone = crate::project::clone(&sandbox, "clone")?;
+    let cold = sandbox.folder("cold-cache")?;
+    let output = sandbox
+        .command_in(&clone, &["--json", "--progress", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", &cold)
+        .env("FETCHLOOM_TEST_TICKER", "on")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr.lines().next(),
+        Some("Downloading iris/iris.csv · 32 B"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// the lines a terminal `columns` wide shows once it has drawn `text`, as from `script`: each
 /// `\n` starts a line, and a character past the last column moves to the next line first.
 #[cfg(target_os = "linux")]

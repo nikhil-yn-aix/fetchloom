@@ -850,15 +850,16 @@ impl Ticker {
     }
 
     /// tells `verb` and `what` through `say` once the batch lasts `moment`, its known sizes adding
-    /// up to `total`, with `unknown` more files whose downloads have yet to tell theirs.
+    /// up to `total`, with `unknown` more files whose downloads have yet to tell theirs. `planned`
+    /// says the run told a download batch's plan, which then said it began.
     pub(super) fn start(
         verb: &'static str,
         what: String,
         (total, unknown): (u64, usize),
-        moment: Duration,
+        (moment, planned): (Duration, bool),
         say: impl Fn(&str, &str) + Send + Sync + 'static,
     ) -> Ticker {
-        Ticker::paced(verb, what, (total, unknown), (moment, EVERY), say)
+        Ticker::paced(verb, what, (total, unknown), (moment, EVERY), planned, say)
     }
 
     fn paced(
@@ -866,6 +867,7 @@ impl Ticker {
         what: String,
         (total, unknown): (u64, usize),
         pace: (Duration, Duration),
+        planned: bool,
         say: impl Fn(&str, &str) + Send + Sync + 'static,
     ) -> Ticker {
         let shared = Arc::new(Shared {
@@ -881,10 +883,12 @@ impl Ticker {
             say: Box::new(say),
         });
         // said before the work starts, so even a batch that ends at once has said it began. a
-        // download batch whose sizes are all known said so in its plan before it started
-        if shared.first == First::Now {
+        // download batch whose sizes are all known said so in its plan before it started, where
+        // the run told its plan, which --json hides
+        let sized = shared.first == First::Sized && unknown == 0;
+        if shared.first == First::Now || (sized && !planned) {
             shared.begin(None);
-        } else if shared.first == First::Sized && unknown == 0 {
+        } else if sized {
             shared.begun.store(true, Ordering::Relaxed);
         }
         let watched = shared.clone();
@@ -1392,24 +1396,57 @@ mod tests {
             "3 files".to_owned(),
             (300, 0),
             pace,
+            true,
             say,
         ));
         assert!(heard.lock().unwrap().is_empty());
+        // where no plan was told, as under --json, the batch says it began itself
         let (heard, _reported, say) = ear();
-        let ticker = Ticker::paced("Downloading", "iris.csv".to_owned(), (0, 1), pace, say);
+        drop(Ticker::paced(
+            "Downloading",
+            "3 files".to_owned(),
+            (300, 0),
+            pace,
+            false,
+            say,
+        ));
+        assert_eq!(*heard.lock().unwrap(), ["Downloading 3 files · 300 B"]);
+        let (heard, _reported, say) = ear();
+        let ticker = Ticker::paced(
+            "Downloading",
+            "iris.csv".to_owned(),
+            (0, 1),
+            pace,
+            true,
+            say,
+        );
         assert!(heard.lock().unwrap().is_empty());
         ticker.sized(32, None);
         assert_eq!(*heard.lock().unwrap(), ["Downloading iris.csv · 32 B"]);
         drop(ticker);
         // a download refused before its body tells no size, and never began
         let (heard, _reported, say) = ear();
-        let ticker = Ticker::paced("Downloading", "iris.csv".to_owned(), (0, 1), pace, say);
+        let ticker = Ticker::paced(
+            "Downloading",
+            "iris.csv".to_owned(),
+            (0, 1),
+            pace,
+            true,
+            say,
+        );
         ticker.sized(0, None);
         drop(ticker);
         assert!(heard.lock().unwrap().is_empty());
         for verb in ["Resolving", "Searching"] {
             let (heard, _reported, say) = ear();
-            drop(Ticker::paced(verb, "iris".to_owned(), (0, 1), pace, say));
+            drop(Ticker::paced(
+                verb,
+                "iris".to_owned(),
+                (0, 1),
+                pace,
+                true,
+                say,
+            ));
             assert_eq!(*heard.lock().unwrap(), [format!("{verb} iris")]);
         }
     }
@@ -1419,7 +1456,7 @@ mod tests {
     fn a_download_batch_says_its_time_once_its_sizes_are_known() {
         let pace = (Duration::from_mins(1), Duration::from_mins(2));
         let (heard, _reported, say) = ear();
-        let ticker = Ticker::paced("Downloading", "2 files".to_owned(), (0, 2), pace, say);
+        let ticker = Ticker::paced("Downloading", "2 files".to_owned(), (0, 2), pace, true, say);
         ticker.sized(32, None);
         assert!(heard.lock().unwrap().is_empty());
         ticker.sized(64, Some("under 10 s"));
@@ -1440,6 +1477,7 @@ mod tests {
             "3 files".to_owned(),
             (300, 0),
             pace,
+            true,
             say,
         ));
         assert!(heard.lock().unwrap().is_empty());
@@ -1449,7 +1487,14 @@ mod tests {
     fn a_long_batch_says_what_it_does_then_how_far_it_got() {
         let (heard, reported, say) = ear();
         let pace = (Duration::from_millis(30), Duration::from_millis(90));
-        let ticker = Ticker::paced("Downloading", "3 files".to_owned(), (200, 1), pace, say);
+        let ticker = Ticker::paced(
+            "Downloading",
+            "3 files".to_owned(),
+            (200, 1),
+            pace,
+            true,
+            say,
+        );
         ticker.sized(100, None);
         ticker.sized(7, None);
         ticker.advance(150);
@@ -1851,7 +1896,7 @@ mod tests {
     fn a_wait_without_bytes_says_what_it_waits_for() {
         let (heard, reported, say) = ear();
         let pace = (Duration::from_millis(30), Duration::from_millis(90));
-        let ticker = Ticker::paced("Resolving", "zenodo:1".to_owned(), (0, 1), pace, say);
+        let ticker = Ticker::paced("Resolving", "zenodo:1".to_owned(), (0, 1), pace, true, say);
         for _ in 0..2 {
             reported.recv_timeout(Duration::from_mins(1)).unwrap();
         }

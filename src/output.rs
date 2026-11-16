@@ -927,7 +927,9 @@ impl Output {
         let unicode = self.style.unicode;
         let columns = self.columns;
         let held = Arc::clone(&self.held);
-        Ticker::start(verb, what, known, moment, move |verb, text| {
+        // a download batch's plan is a step, which --json hides
+        let planned = self.tells(Level::Normal);
+        Ticker::start(verb, what, known, (moment, planned), move |verb, text| {
             let line = verb_line(verb, text, Tone::Work, color);
             let line = shown(&line, unicode);
             let line = match columns {
