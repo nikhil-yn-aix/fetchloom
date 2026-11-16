@@ -1,9 +1,10 @@
 //! a folder of a github or gitlab repository at one commit, from the link a browser shows for it:
 //! `https://github.com/<owner>/<repo>/tree/<ref>/<path>`, or `.../<project>/-/tree/<ref>/<path>`
-//! on gitlab.com or another gitlab server. its ref, a branch, a tag or a commit, is read as the
-//! commit it names when the folder is listed, and that commit is the version data.lock pins, each
-//! file by the SHA-256 of its bytes. git's links, symbolic links and submodules, are left out by
-//! name.
+//! on gitlab.com or another gitlab server, and a repository's own link on github.com or
+//! gitlab.com, which is its top folder at the default branch. its ref, a branch, a tag or a
+//! commit, is read as the commit it names when the folder is listed, and that commit is the
+//! version data.lock pins, each file by the SHA-256 of its bytes. git's links, symbolic links and
+//! submodules, are left out by name.
 
 use std::fmt;
 
@@ -19,12 +20,102 @@ use crate::net::Api;
 /// each part tried costs a request, and git's names rarely take more.
 const MOST_REF_PARTS: usize = 5;
 
+/// the ref both hosts' apis read as the default branch, whatever it is called.
+const DEFAULT_BRANCH: &str = "HEAD";
+
+/// github.com's own pages whose link starts as a repository's would, as `/topics/<topic>`: no
+/// account holds these names, so none owns a repository.
+const GITHUB_PAGES: [&str; 31] = [
+    "about",
+    "account",
+    "apps",
+    "codespaces",
+    "collections",
+    "dashboard",
+    "enterprise",
+    "events",
+    "explore",
+    "features",
+    "issues",
+    "login",
+    "marketplace",
+    "new",
+    "notifications",
+    "organizations",
+    "orgs",
+    "pricing",
+    "pulls",
+    "readme",
+    "resources",
+    "search",
+    "security",
+    "settings",
+    "site",
+    "solutions",
+    "sponsors",
+    "stars",
+    "topics",
+    "trending",
+    "users",
+];
+
+/// the first parts of gitlab's own pages, which no group's path takes, from gitlab's
+/// `TOP_LEVEL_ROUTES`.
+const GITLAB_PAGES: [&str; 22] = [
+    "admin",
+    "api",
+    "assets",
+    "dashboard",
+    "explore",
+    "groups",
+    "help",
+    "import",
+    "jwt",
+    "login",
+    "o",
+    "oauth",
+    "profile",
+    "projects",
+    "public",
+    "s",
+    "search",
+    "sitemap",
+    "snippets",
+    "unsubscribes",
+    "uploads",
+    "users",
+];
+
+/// the words of a gitlab project's pages, which no group's or project's path holds, from
+/// gitlab's `PROJECT_WILDCARD_ROUTES`: a link holding one is a page of a project, never one.
+const GITLAB_PAGE_WORDS: [&str; 18] = [
+    "-",
+    "badges",
+    "blame",
+    "blob",
+    "builds",
+    "commits",
+    "create",
+    "create_dir",
+    "edit",
+    "files",
+    "find_file",
+    "new",
+    "preview",
+    "raw",
+    "refs",
+    "tree",
+    "update",
+    "wikis",
+];
+
 /// a folder of a repository, at the branch, tag or commit its link names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Folder {
     host: Host,
     /// the link's parts after `tree`, decoded: a branch, tag or commit, which may take several
-    /// parts as `release/v1` does, then the folder's path in the repository.
+    /// parts as `release/v1` does, then the folder's path in the repository. none for the
+    /// repository's own link, which names its top folder at the default branch.
     rest: Vec<String>,
 }
 
@@ -66,7 +157,9 @@ pub(super) enum Listed {
 }
 
 impl Folder {
-    /// a pasted link to a folder of a repository on github.com or gitlab.com.
+    /// a pasted link to a folder of a repository on github.com or gitlab.com, or to the
+    /// repository itself, which is its top folder at the default branch. a repository's own link
+    /// may end in `.git`, as the one git clones does.
     pub(super) fn from_link(url: &Url) -> Option<Folder> {
         let parts = parts(url)?;
         match url.host_str()? {
@@ -74,9 +167,15 @@ impl Folder {
                 [owner, name, "tree", rest @ ..] => {
                     Folder::new(Host::GitHub(github::Repo::named(owner, name)?), rest)
                 }
+                [owner, name] if !GITHUB_PAGES.contains(owner) => {
+                    let repo = github::Repo::named(owner, cloned(name))?;
+                    Some(Folder::top(Host::GitHub(repo)))
+                }
                 _ => None,
             },
-            "gitlab.com" => Folder::on_gitlab(url, &parts),
+            "gitlab.com" => {
+                Folder::on_gitlab(url, &parts).or_else(|| Folder::gitlab_project(url, &parts))
+            }
             _ => None,
         }
     }
@@ -103,11 +202,36 @@ impl Folder {
         Folder::new(Host::GitLab(project), rest)
     }
 
+    /// a gitlab.com project's own link, `<group>/<project>` with any subgroups between: one that
+    /// holds no word of gitlab's own pages. another server's project link is a link like any
+    /// other, since nothing in it says the server runs gitlab.
+    fn gitlab_project(url: &Url, parts: &[&str]) -> Option<Folder> {
+        let (first, _) = parts.split_first()?;
+        if GITLAB_PAGES.contains(first) || parts.iter().any(|part| GITLAB_PAGE_WORDS.contains(part))
+        {
+            return None;
+        }
+        let mut parts = parts.to_vec();
+        if let Some(last) = parts.last_mut() {
+            *last = cloned(last);
+        }
+        let project = gitlab::Project::of_page(url, &parts)?;
+        Some(Folder::top(Host::GitLab(project)))
+    }
+
     fn new(host: Host, rest: &[&str]) -> Option<Folder> {
         Some(Folder {
             host,
             rest: decoded(rest)?,
         })
+    }
+
+    /// the repository's top folder at its default branch.
+    fn top(host: Host) -> Folder {
+        Folder {
+            host,
+            rest: Vec::new(),
+        }
     }
 
     /// what the folder's source may ask and link to, and the key it takes.
@@ -225,6 +349,16 @@ impl Folder {
         api: &impl Api,
         signed_in: bool,
     ) -> Result<(String, String, String), Error> {
+        if self.rest.is_empty() {
+            return match self.named(api, DEFAULT_BRANCH, signed_in).await? {
+                Some(commit) => Ok((DEFAULT_BRANCH.to_owned(), commit, String::new())),
+                None => Err(Error::new(
+                    Kind::ReferenceUnresolved,
+                    format!("{self} is empty: its default branch holds no commit"),
+                )
+                .help("check the link in a browser; an empty repository has no file to pin")),
+            };
+        }
         let most = if self.is_at_commit() {
             1
         } else {
@@ -233,11 +367,7 @@ impl Folder {
         let mut tried = Vec::new();
         for at in 1..=most {
             let reference = self.rest[..at].join("/");
-            let commit = match &self.host {
-                Host::GitHub(repo) => repo.commit(api, &reference, signed_in).await?,
-                Host::GitLab(project) => project.commit(api, &reference).await?,
-            };
-            if let Some(commit) = commit {
+            if let Some(commit) = self.named(api, &reference, signed_in).await? {
                 return Ok((reference, commit, self.rest[at..].join("/")));
             }
             tried.push(reference);
@@ -254,6 +384,19 @@ impl Folder {
             "check the name in the link against the branches and tags at {}",
             self.page()
         )))
+    }
+
+    /// the commit `reference` names in the repository, none when it names none there.
+    async fn named(
+        &self,
+        api: &impl Api,
+        reference: &str,
+        signed_in: bool,
+    ) -> Result<Option<String>, Error> {
+        match &self.host {
+            Host::GitHub(repo) => repo.commit(api, reference, signed_in).await,
+            Host::GitLab(project) => project.commit(api, reference).await,
+        }
     }
 
     /// a file of the folder at `path` inside it, of `size` when the host states one.
@@ -365,7 +508,8 @@ impl Folder {
         link
     }
 
-    /// the folder's link, as data.toml and data.lock keep it.
+    /// the folder's link, as data.toml and data.lock keep it: the repository's own link for its
+    /// top folder at the default branch.
     fn link(&self) -> Url {
         let marker: &[&str] = match self.host {
             Host::GitHub(_) => &["tree"],
@@ -373,7 +517,9 @@ impl Folder {
         };
         let mut url = Url::parse(&self.page())
             .unwrap_or_else(|_| unreachable!("a repository's page is a link"));
-        if let Ok(mut segments) = url.path_segments_mut() {
+        if !self.rest.is_empty()
+            && let Ok(mut segments) = url.path_segments_mut()
+        {
             segments.extend(marker).extend(&self.rest);
         }
         url
@@ -466,6 +612,11 @@ pub(super) fn relative(entries: Vec<Entry>, folder: &str) -> Vec<Entry> {
             })
         })
         .collect()
+}
+
+/// a repository's name in its link, without the `.git` the link git clones ends in.
+fn cloned(name: &str) -> &str {
+    name.strip_suffix(".git").unwrap_or(name)
 }
 
 /// the parts of `url`'s path, without the empty one a closing `/` leaves.

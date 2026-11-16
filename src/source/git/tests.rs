@@ -94,6 +94,163 @@ fn folder_links_read_back_in_one_form() {
     }
 }
 
+/// a repository's own link, as people share one, is its root at the default branch, written
+/// without a closing `/`, `.git`, a query or a fragment, and named after the repository.
+#[test]
+fn a_repository_link_is_its_top_folder_at_the_default_branch() {
+    for (typed, written) in [
+        (
+            "https://github.com/lab/survey",
+            "https://github.com/lab/survey",
+        ),
+        (
+            "https://github.com/lab/survey/",
+            "https://github.com/lab/survey",
+        ),
+        (
+            "http://www.github.com/lab/survey.git?tab=readme-ov-file#data",
+            "https://github.com/lab/survey",
+        ),
+        (
+            "https://gitlab.com/lab/group/survey",
+            "https://gitlab.com/lab/group/survey",
+        ),
+        (
+            "https://gitlab.com/lab/group/survey.git/",
+            "https://gitlab.com/lab/group/survey",
+        ),
+    ] {
+        let parsed = folder(typed);
+        assert_eq!(parsed.to_string(), written, "{typed}");
+        assert_eq!(folder(written), parsed, "{typed}");
+        let reference = Reference::GitFolder(parsed);
+        assert_eq!(reference.naming(), "survey", "{typed}");
+        assert!(!reference.fixes_bytes(), "{typed}");
+    }
+}
+
+/// a page of a repository that is not its code reads as it did: its issues, pulls, wiki,
+/// actions and list of releases stay links, a release's page is the release and a file's page its
+/// raw file. github's and gitlab's own pages, a user's or a group's, and another host's link of
+/// two parts stay links too, since nothing in them names a repository's code.
+#[test]
+fn pages_that_are_not_the_code_read_as_they_did() {
+    for link in [
+        "https://github.com/lab/survey/issues",
+        "https://github.com/lab/survey/pulls",
+        "https://github.com/lab/survey/wiki",
+        "https://github.com/lab/survey/actions",
+        "https://github.com/lab/survey/releases",
+        "https://github.com/lab",
+        "https://github.com/topics/survey",
+        "https://github.com/orgs/lab",
+        "https://gitlab.com/lab",
+        "https://gitlab.com/lab/survey/-/issues",
+        "https://gitlab.com/explore/projects",
+        "https://gitlab.com/lab/survey/blob/main/rows.csv",
+        "https://code.example.org/lab/survey",
+        "https://example.org/data/rows.csv",
+    ] {
+        let parsed = Reference::parse(link).unwrap().reference;
+        assert_eq!(parsed, Reference::Url(Url::parse(link).unwrap()), "{link}");
+    }
+    for (link, read) in [
+        (
+            "https://github.com/lab/survey/releases/tag/v1",
+            "github:lab/survey@v1",
+        ),
+        (
+            "https://github.com/lab/survey/blob/main/rows.csv",
+            "https://raw.githubusercontent.com/lab/survey/main/rows.csv",
+        ),
+    ] {
+        assert_eq!(
+            Reference::parse(link).unwrap().reference.to_string(),
+            read,
+            "{link}"
+        );
+    }
+}
+
+/// a repository's own link lists what its default branch's link lists: the commit `HEAD` names,
+/// in one request as for a branch, then the whole tree.
+#[test]
+fn a_repository_link_lists_its_default_branch() {
+    let trees = format!("{API}/git/trees/{COMMIT}?recursive=1");
+    let recorded = Recorded::default()
+        .on(&format!("{API}/commits/HEAD"), 200, COMMIT)
+        .on(&format!("{API}/commits/main"), 200, COMMIT)
+        .on(
+            &trees,
+            200,
+            tree(
+                &serde_json::json!([
+                    blob("README.md", 9),
+                    subtree("data", "d"),
+                    blob("data/rows.csv", 2048)
+                ]),
+                false,
+            ),
+        );
+    let bare = block_on(folder("https://github.com/lab/survey").listing(&recorded, false)).unwrap();
+    assert_eq!(
+        bare.resolved.to_string(),
+        format!("https://github.com/lab/survey/tree/{COMMIT}")
+    );
+    assert_eq!(paths(&bare), ["README.md", "data/rows.csv"]);
+    let main =
+        block_on(folder("https://github.com/lab/survey/tree/main").listing(&recorded, false))
+            .unwrap();
+    assert_eq!(bare.resolved, main.resolved);
+    assert_eq!(bare.files, main.files);
+    let asked: Vec<String> = recorded
+        .asked()
+        .iter()
+        .map(|asked| asked.split(' ').next().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            format!("{API}/commits/HEAD"),
+            trees.clone(),
+            format!("{API}/commits/main"),
+            trees
+        ]
+    );
+}
+
+/// an empty repository's default branch holds no commit, which github answers with 409 and
+/// gitlab with 404, and its own link says it is empty.
+#[test]
+fn an_empty_repository_says_so() {
+    for (link, asked, status, body) in [
+        (
+            "https://github.com/lab/survey",
+            format!("{API}/commits/HEAD"),
+            409,
+            r#"{"message":"Git Repository is empty.","status":"409"}"#,
+        ),
+        (
+            "https://gitlab.com/lab/group/survey",
+            format!("{PROJECT}/repository/commits/HEAD"),
+            404,
+            r#"{"message":"404 Commit Not Found"}"#,
+        ),
+    ] {
+        let recorded = Recorded::default().on(&asked, status, body);
+        let error = block_on(folder(link).listing(&recorded, false)).unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceUnresolved, "{link}");
+        assert_eq!(
+            error.message,
+            format!("{link} is empty: its default branch holds no commit")
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("check the link in a browser; an empty repository has no file to pin")
+        );
+    }
+}
+
 /// a dataset is named after its folder, or its repository for the whole of it; a commit fixes
 /// its bytes, a branch does not.
 #[test]

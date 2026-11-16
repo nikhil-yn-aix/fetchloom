@@ -642,3 +642,155 @@ fn a_folder_on_another_gitlab_server_asks_that_server_alone() -> Result {
     assert!(!said.contains("never-printed"), "{said}");
     Ok(())
 }
+
+/// the `resolved` and `files` data.lock pins for the dataset `name`.
+fn pinned(lock: &toml::Value, name: &str) -> Result<(toml::Value, toml::Value)> {
+    let dataset = lock["dataset"]
+        .as_array()
+        .and_then(|datasets| {
+            datasets
+                .iter()
+                .find(|dataset| dataset["name"].as_str() == Some(name))
+        })
+        .ok_or("no such dataset in data.lock")?;
+    Ok((dataset["resolved"].clone(), dataset["files"].clone()))
+}
+
+/// a link to a repository, as people share one, is its root at the default branch: pinned at
+/// that branch's commit as its `tree/<branch>` link would be and named after the repository,
+/// it moves on with the default branch at `lock --upgrade`; a teammate's sync asks no api.
+#[test]
+fn a_bare_github_link_pins_its_default_branch_and_follows_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let held = [
+        ("README.md", Held::File(b"# survey\n")),
+        ("data/rows.csv", Held::File(ROWS)),
+    ];
+    let mut served = github("HEAD", FIRST, &held)?;
+    served.push((
+        format!("{GITHUB_API}/commits/main"),
+        reply("200 OK", &[], FIRST.as_bytes()),
+    ));
+    let routes = Routes::start(served)?;
+    ok(&run(
+        &sandbox,
+        &routes,
+        &["add", "https://github.com/lab/survey.git"],
+    )?)?;
+    let asked: Vec<String> = routes
+        .targets()
+        .into_iter()
+        .filter(|target| target.starts_with("/api.github.com"))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            format!("{GITHUB_API}/commits/HEAD"),
+            format!("{GITHUB_API}/git/trees/{FIRST}?recursive=1"),
+        ]
+    );
+    ok(&run(
+        &sandbox,
+        &routes,
+        &[
+            "add",
+            "https://github.com/lab/survey/tree/main",
+            "--as",
+            "main",
+        ],
+    )?)?;
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.survey]\nref = \"https://github.com/lab/survey\"\n"),
+        "{manifest}"
+    );
+    assert_eq!(fs::read(work.join("data/survey/data/rows.csv"))?, ROWS);
+    let lock: toml::Value = toml::from_str(&fs::read_to_string(work.join("data.lock"))?)?;
+    let (resolved, files) = pinned(&lock, "survey")?;
+    assert_eq!(
+        resolved.as_str(),
+        Some(format!("https://github.com/lab/survey/tree/{FIRST}").as_str())
+    );
+    assert_eq!(
+        (resolved, files),
+        pinned(&lock, "main")?,
+        "a bare link pins as its default branch's tree link does"
+    );
+
+    let asked = routes.targets().len();
+    let (teammate, synced) = teammate_sync(&sandbox, &routes)?;
+    ok(&synced)?;
+    assert_eq!(fs::read(teammate.join("data/survey/data/rows.csv"))?, ROWS);
+    assert!(
+        routes.targets()[asked..]
+            .iter()
+            .all(|target| !target.starts_with("/api.github.com")),
+        "the lock alone says what to download: {:?}",
+        &routes.targets()[asked..]
+    );
+
+    routes.change(github(
+        "HEAD",
+        SECOND,
+        &[
+            ("README.md", Held::File(b"# survey\n")),
+            ("data/rows.csv", Held::File(NOTES)),
+        ],
+    )?);
+    let upgraded = run(&sandbox, &routes, &["lock", "--upgrade", "survey"])?;
+    ok(&upgraded)?;
+    let said = text(&upgraded.stderr)?;
+    assert!(
+        said.contains(&format!(
+            "Upgraded survey · https://github.com/lab/survey/tree/{FIRST} → https://github.com/lab/survey/tree/{SECOND} · 1 file changed"
+        )),
+        "{said}"
+    );
+    Ok(())
+}
+
+/// a gitlab.com project's own link is its root at the default branch too, named after the
+/// project.
+#[test]
+fn a_bare_gitlab_link_pins_its_default_branch() -> Result {
+    let sandbox = Sandbox::new()?;
+    let api = "/gitlab.com/api/v4/projects/lab%2Fgroup%2Fsurvey";
+    let entry = |path: &str| serde_json::json!({"id": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", "name": path, "type": "blob", "path": path, "mode": "100644"});
+    let routes = Routes::start(vec![
+        (
+            format!("{api}/repository/commits/HEAD"),
+            answer(&serde_json::json!({"id": FIRST, "short_id": &FIRST[..8]}))?,
+        ),
+        (
+            format!(
+                "{api}/repository/tree?ref={FIRST}&recursive=true&per_page=100&pagination=keyset"
+            ),
+            answer(&serde_json::json!([entry("rows.csv")]))?,
+        ),
+        (
+            format!("/gitlab.com/lab/group/survey/-/raw/{FIRST}/rows.csv"),
+            file(ROWS, "\"git\""),
+        ),
+    ])?;
+    ok(&run(
+        &sandbox,
+        &routes,
+        &["add", "https://gitlab.com/lab/group/survey.git/"],
+    )?)?;
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.survey]\nref = \"https://gitlab.com/lab/group/survey\"\n"),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains(&format!(
+            "resolved = \"https://gitlab.com/lab/group/survey/-/tree/{FIRST}\""
+        )),
+        "{lock}"
+    );
+    assert_eq!(fs::read(work.join("data/survey/rows.csv"))?, ROWS);
+    Ok(())
+}

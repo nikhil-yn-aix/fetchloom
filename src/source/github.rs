@@ -285,8 +285,9 @@ impl Repo {
             .map_err(|reason| invalid(self, reason))?;
         let response = get(api, &url, SHA, signed_in).await?;
         match response.status {
-            // github's word for a branch, tag or commit it does not know
-            422 => Ok(None),
+            // github's words for a branch, tag or commit it does not know, and for a repository
+            // with no commit at all
+            409 | 422 => Ok(None),
             404 => Err(self.hidden(signed_in)),
             200..=299 => super::git::commit_id(response.text().trim())
                 .map(Some)
