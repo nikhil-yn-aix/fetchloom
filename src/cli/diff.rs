@@ -106,14 +106,21 @@ struct Pinned {
 
 impl Pinned {
     /// whether `other` pins the same bytes: the same size, and the same SHA-256 where both have
-    /// one, else the same MD5 where both have one, as a sync checks a stated pin.
+    /// one, else the same MD5 where both have one, as a sync checks a stated pin. pins that share
+    /// no checksum never show the same bytes.
     fn same(self, other: Pinned) -> bool {
         self.size == other.size
             && match (self.sha256, other.sha256, self.md5, other.md5) {
                 (Some(this), Some(that), _, _) => this == that,
                 (_, _, Some(this), Some(that)) => this == that,
-                _ => true,
+                _ => false,
             }
+    }
+
+    /// whether `other` has a checksum of the kind this one has, so the two can be compared.
+    fn comparable(self, other: Pinned) -> bool {
+        (self.sha256.is_some() && other.sha256.is_some())
+            || (self.md5.is_some() && other.md5.is_some())
     }
 }
 
@@ -803,8 +810,13 @@ fn line(dataset: &str, file: &File) -> String {
     let dataset = plain(dataset);
     match (file.change, file.before, file.after) {
         (Change::Changed, Some(before), Some(after)) if before.size == after.size => format!(
-            "M  {dataset}/{path}  {}, other bytes",
-            units::size(after.size)
+            "M  {dataset}/{path}  {}, {}",
+            units::size(after.size),
+            if before.comparable(after) {
+                "other bytes"
+            } else {
+                "pinned by another checksum"
+            }
         ),
         (Change::Changed, Some(before), Some(after)) => format!(
             "M  {dataset}/{path}  {} \u{2192} {}",

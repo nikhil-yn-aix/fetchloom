@@ -270,6 +270,23 @@ fn a_dataset_not_downloaded_yet_is_said_and_compared_by_its_stated_digests() {
             "M  zen/b.csv  3 B, other bytes",
         ]
     );
+    // pins that share no checksum, an MD5 alone and a SHA-256 alone, never show the same bytes
+    let sha256_alone = Lock {
+        datasets: vec![fetched(
+            "zen",
+            1,
+            vec![file("a.csv", b"aa"), file("b.csv", b"BBB")],
+        )],
+        ..Lock::default()
+    };
+    assert_eq!(
+        told(&diffed(&not_yet, &sha256_alone)),
+        [
+            "zen changed: now downloaded; 2 files changed",
+            "M  zen/a.csv  2 B, pinned by another checksum",
+            "M  zen/b.csv  3 B, pinned by another checksum",
+        ]
+    );
 }
 
 /// a dataset whose file list a side's commit lacks is told with what else changed, its files
