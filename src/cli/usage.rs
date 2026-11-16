@@ -241,6 +241,44 @@ fn key_and_value(parent: Option<&str>, line: &[String]) -> Option<String> {
     ))
 }
 
+/// `err` where a sentence of fetchloom's own says it better than clap's words: a conflict
+/// [`explained`] knows, several keys for `settings unset`, or a revision typed with a `-`.
+fn special(err: &clap::Error, parent: Option<&str>, line: &[String]) -> Option<Error> {
+    explained(err)
+        .or_else(|| several_keys(err, parent, line))
+        .or_else(|| dashed_revision(err, parent, line))
+}
+
+/// `settings unset` given several keys, which takes out one at a time, as `settings set` saves one.
+fn several_keys(err: &clap::Error, parent: Option<&str>, line: &[String]) -> Option<Error> {
+    if parent != Some("settings unset") || err.kind() != ErrorKind::UnknownArgument {
+        return None;
+    }
+    let keys: Vec<&str> = line
+        .iter()
+        .skip_while(|word| *word != "unset")
+        .skip(1)
+        .filter(|word| !word.starts_with('-'))
+        .map(String::as_str)
+        .collect();
+    let [first, _, ..] = keys.as_slice() else {
+        return None;
+    };
+    Some(
+        Error::new(
+            Kind::Usage,
+            format!(
+                "settings unset takes out one key at a time, and was given {}",
+                crate::units::listed(&keys, "and")
+            ),
+        )
+        .help(format!(
+            "run `{}`, then unset the next",
+            crate::suggested::anywhere(&format!("settings unset {}", super::shell_word(first)))
+        )),
+    )
+}
+
 /// `diff -HEAD`: a revision typed with a `-` before it, which clap reads as options. one whose
 /// first letter is no option of fetchloom's is taken as the revision meant.
 fn dashed_revision(err: &clap::Error, parent: Option<&str>, line: &[String]) -> Option<Error> {
@@ -308,7 +346,7 @@ fn describe(
     (parent, line): (Option<&str>, &[String]),
     shell: Option<&std::ffi::OsStr>,
 ) -> Error {
-    if let Some(error) = explained(err).or_else(|| dashed_revision(err, parent, line)) {
+    if let Some(error) = special(err, parent, line) {
         return error;
     }
     let named = |kind| context_value(err, kind);
@@ -1087,6 +1125,23 @@ mod tests {
         assert_eq!(
             error.help.as_deref(),
             Some("give --to once, with the value you mean")
+        );
+        Ok(())
+    }
+
+    /// `settings unset` takes out one key at a time, as `settings set` saves one, so a second key
+    /// is told as that, with the first unset to run.
+    #[test]
+    fn settings_unset_of_two_keys_takes_one_at_a_time() -> Result<(), Box<dyn std::error::Error>> {
+        let error = problem(&["fetchloom", "settings", "unset", "cache_budget", "cache"])?;
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(
+            error.message,
+            "settings unset takes out one key at a time, and was given cache_budget and cache"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("run `fetchloom settings unset cache_budget`, then unset the next")
         );
         Ok(())
     }

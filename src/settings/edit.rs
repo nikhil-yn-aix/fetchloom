@@ -63,7 +63,7 @@ pub(crate) fn set(
     here: Option<&Path>,
     usable: Usable<'_>,
 ) -> Result<Changed, Error> {
-    let key = known(name, "set")?;
+    let key = known(name, "set", values.first().map(String::as_str))?;
     let home = crate::machine::home(var);
     let places = Places {
         here,
@@ -126,7 +126,7 @@ pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Chan
     } = open(var, false)?;
     let mut document = document(&path, &text)?;
     if !document.contains_key(name) {
-        known(name, "unset")?;
+        known(name, "unset", None)?;
     }
     // a table, as a `[mystuff]` the file holds, shows as the inline table it would be
     let before = document
@@ -227,9 +227,27 @@ pub(crate) fn overridden(var: Var<'_>, key: &str) -> Option<&'static str> {
 
 /// `name` as a key the settings file takes, or a usage error naming the nearest one, or the
 /// variable that sets it when only a variable does, which `doing`, `set` or `unset`, then names.
-fn known(name: &str, doing: &str) -> Result<&'static str, Error> {
+/// `data_dir`, the project's own, is told where data.toml takes it, with the `value` given.
+fn known(name: &str, doing: &str, value: Option<&str>) -> Result<&'static str, Error> {
     if let Some((key, _)) = KEYS.iter().find(|(key, _)| *key == name) {
         return Ok(key);
+    }
+    if name == "data_dir" {
+        let help = match value {
+            Some(value) => format!(
+                "put data_dir = {} under [project] in data.toml",
+                toml_edit::Value::from(value)
+            ),
+            None => {
+                "take data_dir out of [project] in data.toml, and the data folder is data again"
+                    .to_owned()
+            }
+        };
+        return Err(Error::new(
+            Kind::Usage,
+            "data_dir belongs to the project, so data.toml holds it, not the settings file",
+        )
+        .help(help));
     }
     let variable = format!("FETCHLOOM_{}", name.to_ascii_uppercase());
     if OTHERS.contains(&variable.as_str()) {

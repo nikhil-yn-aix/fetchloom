@@ -335,6 +335,22 @@ fn an_unknown_key_names_the_nearest_setting() {
         assert_eq!(error.message, message);
         assert_eq!(error.help.as_deref(), Some(help));
     }
+    // data_dir is the project's, so data.toml holds it, with the value given when there is one
+    let message = "data_dir belongs to the project, so data.toml holds it, not the settings file";
+    for (error, help) in [
+        (
+            set(&var, "data_dir", &values(&["inputs"]), None, FINE).unwrap_err(),
+            "put data_dir = \"inputs\" under [project] in data.toml",
+        ),
+        (
+            unset(&var, "data_dir", FINE).unwrap_err(),
+            "take data_dir out of [project] in data.toml, and the data folder is data again",
+        ),
+    ] {
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(error.message, message);
+        assert_eq!(error.help.as_deref(), Some(help));
+    }
     assert!(!path.exists());
 }
 
