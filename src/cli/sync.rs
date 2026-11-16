@@ -2465,20 +2465,22 @@ fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> St
             .map(|title| output.clip(title, TITLE)),
     );
     facts.push(units::count(locked.files.len() as u64, "file", "files"));
-    let known = !locked
-        .files
-        .iter()
-        .any(|file| sizeless.contains(&format!("{}/{}", locked.name, file.path)));
-    facts.push(if known {
-        units::size(
-            locked
-                .files
-                .iter()
-                .map(|file| file.size)
-                .fold(0, u64::saturating_add),
-        )
-    } else {
-        "size unknown".to_owned()
+    let (mut unknown, mut size) = (0, 0_u64);
+    for file in &locked.files {
+        if sizeless.contains(&format!("{}/{}", locked.name, file.path)) {
+            unknown += 1;
+        } else {
+            size = size.saturating_add(file.size);
+        }
+    }
+    facts.push(match unknown {
+        0 => units::size(size),
+        _ if unknown == locked.files.len() => "size unknown".to_owned(),
+        count => format!(
+            "{} and {} of unknown size",
+            units::size(size),
+            units::grouped(count as u64)
+        ),
     });
     format!(
         "{}, new in {}: {}",

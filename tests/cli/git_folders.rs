@@ -232,6 +232,39 @@ fn large() -> Vec<u8> {
     (0..2048u32).map(|n| (n % 251) as u8).collect()
 }
 
+/// a dry run states the size of the files the tree states one for, beside the count of those it
+/// states none for, whose size a git-lfs pointer's would misstate.
+#[test]
+fn a_dry_run_states_the_sizes_the_tree_states() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = large();
+    let routes = Routes::start(github(
+        "main",
+        FIRST,
+        &[
+            ("data/rows.csv", Held::File(ROWS)),
+            ("data/notes.txt", Held::File(NOTES)),
+            ("data/big.bin", Held::File(&big)),
+        ],
+    )?)?;
+    let link = "https://github.com/lab/survey/tree/main/data";
+    let output = run(
+        &sandbox,
+        &routes,
+        &["add", link, "--as", "survey", "--dry-run"],
+    )?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "Would pin survey, new in data.lock: https://github.com/lab/survey/tree/{}/data · 3 files · 2.0 KiB and 2 of unknown size\n",
+            &FIRST[..7]
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a pasted folder link at a branch pins the folder's every file, subfolders included, at the
 /// commit the branch names, with two requests to github's api; a teammate's sync asks no api.
 #[test]
