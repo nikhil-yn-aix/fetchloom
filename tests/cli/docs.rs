@@ -558,15 +558,20 @@ fn the_home_page_shows_what_fetchloom_prints() -> Result {
 }
 
 /// the lines of `text` a terminal keeps once its bars clear, those of work under way left out, with
-/// the time a line says its work took, as `in 214 ms`, as `in [time]`.
+/// the time a line says its work took, as `in 214 ms`, as `in [time]`, and no rate after it, which a
+/// transfer of a second or more adds.
 #[cfg(all(debug_assertions, target_os = "linux"))]
 fn kept(text: &str) -> String {
+    let number =
+        |text: &str| !text.is_empty() && text.chars().all(|c| c.is_ascii_digit() || c == '.');
     let took = |rest: &str| {
-        rest.split_once(' ').is_some_and(|(number, unit)| {
-            matches!(unit, "ms" | "s")
-                && !number.is_empty()
-                && number.chars().all(|c| c.is_ascii_digit() || c == '.')
-        })
+        rest.split_once(' ')
+            .is_some_and(|(amount, unit)| matches!(unit, "ms" | "s") && number(amount))
+    };
+    let rate = |part: &str| {
+        part.strip_suffix("/s")
+            .and_then(|size| size.split_once(' '))
+            .is_some_and(|(amount, _)| number(amount))
     };
     let under_way = |line: &str| {
         line.get(..11)
@@ -575,6 +580,10 @@ fn kept(text: &str) -> String {
     };
     text.lines()
         .filter(|line| !under_way(line))
+        .map(|line| match line.rsplit_once(" · ") {
+            Some((before, after)) if rate(after) => before,
+            _ => line,
+        })
         .map(|line| match line.rsplit_once(" in ") {
             Some((before, rest)) if took(rest) => format!("{before} in [time]"),
             _ => line.to_owned(),
