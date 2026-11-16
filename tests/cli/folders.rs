@@ -518,3 +518,38 @@ fn a_listing_that_states_sizes_sizes_the_folder_before_it_downloads() -> Result 
     );
     Ok(())
 }
+
+/// files whose sizes only their server states, as a listing that gives none leaves them, count
+/// together against `ask_above` and `cache_budget`, as a sync from data.lock counts the sizes it
+/// knows: three files of 1 MiB at 2 MiB stop an add no one can answer, naming them all.
+#[test]
+fn sizes_only_a_server_states_count_together() -> Result {
+    let big = vec![b'x'; 1 << 20];
+    let names = ["a.bin", "b.bin", "c.bin"];
+    let mut routes = vec![("/big/".to_owned(), python("/big/", &names))];
+    for (index, name) in names.iter().enumerate() {
+        routes.push((format!("/big/{name}"), file(&big, &format!("\"{index}\""))));
+    }
+    let server = Routes::start(routes)?;
+    let folder = format!("{}/big/", server.url);
+    for (setting, message) in [
+        (
+            "FETCHLOOM_ASK_ABOVE",
+            "downloading 3 files needs more than 2.0 MiB, and fetchloom cannot ask you here",
+        ),
+        (
+            "FETCHLOOM_CACHE_BUDGET",
+            "downloading 3 files would bring the cache to 3.0 MiB, past the 2.0 MiB cache_budget",
+        ),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let added = sandbox
+            .command(&["--json", "add", &folder])
+            .env(setting, "2M")
+            .output()?;
+        assert_eq!(added.status.code(), Some(1), "{}", text(&added.stdout)?);
+        assert_eq!(json(&added)?["errors"][0]["message"], message, "{setting}");
+        assert!(!sandbox.work().join("data.lock").exists(), "{setting}");
+    }
+    Ok(())
+}

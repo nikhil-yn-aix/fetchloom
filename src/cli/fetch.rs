@@ -496,6 +496,10 @@ struct Approval {
     asking: Mutex<()>,
     /// what the downloads of no stated size received so far, which shares the room among them.
     taken: AtomicU64,
+    /// what the servers of the downloads of no stated size said they bring, and the room that
+    /// takes in the cache, added up, which `above` and the budget judge together.
+    stated: AtomicU64,
+    stated_room: AtomicU64,
     above: u64,
     cache: Option<std::path::PathBuf>,
     /// what the disk holding a folder has free, which tests give.
@@ -514,6 +518,8 @@ impl Approval {
             answers: std::array::from_fn(|_| OnceLock::new()),
             asking: Mutex::new(()),
             taken: AtomicU64::new(0),
+            stated: AtomicU64::new(0),
+            stated_room: AtomicU64::new(0),
             above,
             cache: None,
             free: crate::space::free,
@@ -635,6 +641,10 @@ struct Watch<'a> {
     taken_from: AtomicU64,
     /// what this download added to what the downloads of no stated size took, this try.
     reported: AtomicU64,
+    /// what this download's server said it brings, and the room that takes, as this try added
+    /// them to the run's sums.
+    stated: AtomicU64,
+    stated_room: AtomicU64,
     /// what this download holds for the next run. the batch owns it, to say what a stop kept.
     held: &'a Held,
     /// the bytes an earlier run kept, so a start from the first byte can say they were lost.
@@ -692,6 +702,8 @@ impl<'a> Watch<'a> {
             free_from: AtomicU64::new(0),
             taken_from: AtomicU64::new(0),
             reported: AtomicU64::new(0),
+            stated: AtomicU64::new(0),
+            stated_room: AtomicU64::new(0),
             held,
             earlier: AtomicU64::new(0),
             restarted: AtomicBool::new(false),
@@ -1011,6 +1023,11 @@ impl<'a> Watch<'a> {
         let left = total.map_or(0, |total| total.saturating_sub(resumed));
         let unknown = self.job.fetch.expect.size.is_none();
         let free = self.approval.cache.as_deref().map(self.approval.free);
+        // the sizes only servers state count together, as the sizes a run knows do
+        let together = match total.filter(|_| unknown) {
+            Some(total) => self.together(left, room_needed(Some(total), 0, self.job.fetch.unpack)),
+            None => (left, 0),
+        };
         // a download that may have found its bytes unchanged was not asked about before
         if unknown || self.job.fetch.held.is_some() {
             let needed = room_needed(total, resumed, unknown && self.job.fetch.unpack);
@@ -1028,8 +1045,8 @@ impl<'a> Watch<'a> {
                 self.approve(Question::Room, || {
                     super::ask_room(self.output, &doing, needed, free, cache)
                 })?;
-            } else if unknown && let Some(past) = self.past_budget(total) {
-                self.approve(Question::Budget, || self.ask_budget(past))?;
+            } else if unknown && let Some((past, doing)) = self.past_budget(total, together.1) {
+                self.approve(Question::Budget, || self.ask_budget(past, &doing))?;
             } else if left > self.approval.above {
                 let size = units::size(left);
                 self.approve(Question::Size, || {
@@ -1040,6 +1057,12 @@ impl<'a> Watch<'a> {
                         &size,
                         self.approval.above,
                     )
+                })?;
+            } else if together.0 > self.approval.above {
+                let what = self.overall.told_as(&self.label());
+                let size = format!("more than {}", units::size(self.approval.above));
+                self.approve(Question::Size, || {
+                    super::ask(self.output, self.yes, &what, &size, self.approval.above)
                 })?;
             }
         }
@@ -1086,17 +1109,41 @@ impl<'a> Watch<'a> {
 
     /// how a download whose size only its server states, as `total`, would take the cache past
     /// the `cache_budget` setting, the whole file and an archive's files beside it counting, since
-    /// a partial download is no cached file. none within it, or when the server states no size.
-    fn past_budget(&self, total: Option<u64>) -> Option<cache_budget::Past> {
+    /// a partial download is no cached file, and what does: the download alone, or the run's
+    /// downloads of no stated size together, which need `together`. none within it, or when the
+    /// server states no size.
+    fn past_budget(
+        &self,
+        total: Option<u64>,
+        together: u64,
+    ) -> Option<(cache_budget::Past, String)> {
         let (held, budget) = self.approval.budget?;
         let adding = room_needed(Some(total?), 0, self.job.fetch.unpack);
-        cache_budget::weigh(Some(budget), adding, || Some(held))
+        if let Some(past) = cache_budget::weigh(Some(budget), adding, || Some(held)) {
+            return Some((past, self.label()));
+        }
+        cache_budget::weigh(Some(budget), together, || Some(held))
+            .map(|past| (past, self.overall.told_as(&self.label())))
+    }
+
+    /// counts `bytes` and `room`, what this download's server said it brings and the room that
+    /// takes, in the run's sums for downloads of no stated size, in place of what its last try
+    /// counted, and says the sums.
+    fn together(&self, bytes: u64, room: u64) -> (u64, u64) {
+        let count = |mine: &AtomicU64, sum: &AtomicU64, now: u64| {
+            sum.fetch_sub(mine.swap(now, Ordering::Relaxed), Ordering::Relaxed);
+            sum.fetch_add(now, Ordering::Relaxed).saturating_add(now)
+        };
+        (
+            count(&self.stated, &self.approval.stated, bytes),
+            count(&self.stated_room, &self.approval.stated_room, room),
+        )
     }
 
     /// the question sync and get ask before downloads they know the size of would take the cache
-    /// `past` its budget, here once the server states the size.
-    fn ask_budget(&self, past: cache_budget::Past) -> Result<(), Error> {
-        let doing = format!("downloading {}", self.label());
+    /// `past` its budget, here once the server states the size of what `what` names.
+    fn ask_budget(&self, past: cache_budget::Past, what: &str) -> Result<(), Error> {
+        let doing = format!("downloading {what}");
         let over = cache_budget::Over {
             doing: &doing,
             past,
@@ -2887,6 +2934,65 @@ mod tests {
         assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);
         let second = Watch::new(&second, &output, &overall, &approval, false, &held);
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
+    }
+
+    /// the sizes servers state for a run's downloads of no stated size count together against
+    /// `ask_above` and `cache_budget`, as the sizes a sync knows do: three files of 1 MiB at
+    /// 2 MiB pass one at a time, and the one that brings them past it asks for them all. a try
+    /// that starts over counts its file once.
+    #[test]
+    fn sizes_only_servers_state_count_together() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let jobs: Vec<Job> = ["a.bin", "b.bin", "c.bin"]
+            .into_iter()
+            .map(|name| Job {
+                fetch: Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap()),
+                label: name.to_owned(),
+                dataset: None,
+                again: None,
+            })
+            .collect();
+        let mut overall = overall();
+        overall.what = "3 files".to_owned();
+        let held = Held::default();
+        let mib = Event::Started {
+            total: Some(1 << 20),
+            resumed: 0,
+            resumable: Resumable::Maybe,
+        };
+        for (approval, message) in [
+            (
+                Approval::new(2 << 20),
+                "downloading 3 files needs more than 2.0 MiB, and fetchloom cannot ask you here",
+            ),
+            (
+                Approval::new(crate::settings::ASK_ABOVE).with_budget(2 << 20, 0),
+                "downloading 3 files would bring the cache to 3.0 MiB, past the 2.0 MiB cache_budget",
+            ),
+        ] {
+            let watches: Vec<Watch> = jobs
+                .iter()
+                .map(|job| Watch::new(job, &output, &overall, &approval, false, &held))
+                .collect();
+            watches[0].on(&mib).unwrap();
+            watches[0].on(&mib).unwrap();
+            watches[1].on(&mib).unwrap();
+            let stopped = watches[2].on(&mib).unwrap_err();
+            assert_eq!(stopped.kind, Kind::Unconfirmed);
+            assert_eq!(stopped.message, message);
+        }
     }
 
     /// a download that may be unchanged is never asked about up front, even with its size known.
