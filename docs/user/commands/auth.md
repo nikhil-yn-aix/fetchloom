@@ -110,7 +110,7 @@ it lists each account with a key, where the key came from and, online, who the s
 
 | row | what it names |
 |---|---|
-| `aws` | the keys in `AWS_ACCESS_KEY_ID`, or a profile's keys in `~/.aws/credentials` or `~/.aws/config`, each by the last four characters of its id; else the program that would give them, which runs only once a bucket needs keys: the profile's `credential_process`, or the AWS CLI for a profile that signs in to IAM identity center or takes on a role |
+| `aws` | the keys in `AWS_ACCESS_KEY_ID`, or a profile's keys in `~/.aws/credentials` or `~/.aws/config`, each by the last four characters of its id; else the program that would give them, which runs only once a bucket needs keys: the profile's `credential_process`, or the AWS CLI for a profile that signs in to IAM identity center or takes on a role. keys only the AWS CLI's default chain would find, such as this machine's role, are not listed, since only running it would tell |
 | `google` | the application default credentials file, as a service account with its email or a person's login |
 | `azure` | the SAS in `AZURE_STORAGE_SAS_TOKEN` or the key in `AZURE_STORAGE_KEY`, by its variable; else the az cli, by its path and the user its saved login names, once `az login` signed it in; or this machine's managed identity, when `AZURE_TOKEN_CREDENTIALS` asks for it |
 

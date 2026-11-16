@@ -145,8 +145,9 @@ pub(crate) fn s3_endpoint(var: Var<'_>) -> Result<Option<url::Origin>, Error> {
 }
 
 /// the keys that sign for `endpoint`, AWS when none: the environment's or the chosen profile's
-/// where the settings send S3 requests, else the one profile's whose `endpoint_url` names it. a
-/// program that gives keys runs only once they are needed.
+/// where the settings send S3 requests, else the one profile's whose `endpoint_url` names it.
+/// for AWS with no keys there and no profile a variable chose, the AWS CLI's default chain gives
+/// them. a program that gives keys runs only once they are needed.
 ///
 /// # Errors
 ///
@@ -180,11 +181,22 @@ pub(crate) fn find(
     };
     if sent.as_ref().map(|(origin, _)| origin) == endpoint {
         let region = region(var).or_else(|| files.value(profile, "region"));
-        return Ok(own(var, &files, profile)?.map(|(source, origin)| Identity {
-            source,
-            origin,
-            region,
-        }));
+        // a profile a variable chose is never passed over for the chain's identity
+        let chain = || {
+            Program::chain(var)
+                .filter(|_| endpoint.is_none() && chosen.is_none())
+                .map(|program| {
+                    let origin = "the AWS CLI's default chain".to_owned();
+                    (Source::program(program), origin)
+                })
+        };
+        return Ok(own(var, &files, profile)?
+            .or_else(chain)
+            .map(|(source, origin)| Identity {
+                source,
+                origin,
+                region,
+            }));
     }
     if let (None, Some((origin, named))) = (endpoint, &sent) {
         return Err(Error::new(
@@ -268,7 +280,8 @@ impl How {
 }
 
 /// the keys for the endpoint the settings send S3 requests to, described for `auth`, none when
-/// no keys are there.
+/// no keys are there or only the AWS CLI's default chain could find some: `auth` runs nothing,
+/// and an AWS CLI on PATH would otherwise count as keys on every machine that has one.
 ///
 /// # Errors
 ///
@@ -290,6 +303,7 @@ pub(crate) fn describe(var: Var<'_>) -> Result<Option<Described>, Error> {
         Source::Program { program, .. } => match program.by {
             program::By::Process => How::Process,
             program::By::Cli { signs_in } => How::Cli { signs_in },
+            program::By::Chain => return Ok(None),
         },
     };
     // the file a profile's origin names whole reads below the home folder as `~/…`
@@ -1059,5 +1073,64 @@ mod tests {
             find(&machine(home.path(), &bad), None).unwrap_err().kind,
             Kind::Usage
         );
+    }
+
+    /// with no keys in the environment or the default profile, the AWS CLI's default chain gives
+    /// them, as an instance's or a container's role does, for AWS alone; `auth` names none.
+    #[test]
+    fn without_keys_or_a_chosen_profile_the_aws_clis_default_chain_gives_them() {
+        let home = tempfile::tempdir().unwrap();
+        files(home.path(), "", "[default]\nregion = eu-west-1\n");
+        let tools = home.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        let aws = runnable_file(&tools, "aws");
+        let pairs = [("PATH", tools.to_str().unwrap())];
+        let identity = find(&machine(home.path(), &pairs), None).unwrap().unwrap();
+        assert_eq!(identity.origin, "the AWS CLI's default chain");
+        assert_eq!(identity.region.as_deref(), Some("eu-west-1"));
+        let program = program(&identity);
+        assert_eq!((&program.path, program.by), (&aws, By::Chain));
+        assert_eq!(
+            program.args,
+            ["configure", "export-credentials", "--format", "process"]
+        );
+        assert!(describe(&machine(home.path(), &pairs)).unwrap().is_none());
+        let endpoint = origin("https://minio.lab.example");
+        assert!(
+            find(&machine(home.path(), &pairs), Some(&endpoint))
+                .unwrap()
+                .is_none()
+        );
+        let nowhere = [("PATH", "relative")];
+        assert!(
+            find(&machine(home.path(), &nowhere), None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// a profile a variable chose is never passed over for the default chain's identity, even
+    /// when it gives no keys.
+    #[test]
+    fn a_chosen_profile_is_never_passed_over_for_the_default_chain() {
+        let home = tempfile::tempdir().unwrap();
+        files(
+            home.path(),
+            "",
+            "[default]\nregion = eu-west-1\n[profile lab]\nregion = eu-west-1\n",
+        );
+        let tools = home.path().join("tools");
+        std::fs::create_dir(&tools).unwrap();
+        runnable_file(&tools, "aws");
+        let path = tools.to_str().unwrap();
+        for variable in ["AWS_PROFILE", "AWS_DEFAULT_PROFILE"] {
+            for profile in ["lab", "default"] {
+                let pairs = [(variable, profile), ("PATH", path)];
+                assert!(
+                    find(&machine(home.path(), &pairs), None).unwrap().is_none(),
+                    "{variable}={profile}"
+                );
+            }
+        }
     }
 }

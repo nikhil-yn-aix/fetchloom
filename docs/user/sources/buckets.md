@@ -71,7 +71,7 @@ a listed bucket with no keys on this machine:
 
 ```text
 error: s3://lab-raw/2026/ is private: S3 refused to list it without a key, and no AWS keys were found
-  help: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-s3-buckets
+  help: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI; for this machine's own role, install the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-s3-buckets
 ```
 
 cloud storage says the same of a bucket `gcs_buckets` does not list, `gs://lab-private/raw/ is private: google cloud storage refused to list it without credentials`, with help to add it to `gcs_buckets` or `FETCHLOOM_GCS_BUCKETS`, and of a listed one with none on this machine, `... and no google application default credentials were found`, with help to run `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account's key file.
@@ -88,4 +88,4 @@ a request with a token cloud storage still refuses says `google cloud storage re
 
 requester-pays buckets bill the reader for each request, and fetchloom never agrees to pay: they fail with `auth.required`, with or without a key or a token, since fetchloom never names a project to bill. use the AWS CLI with `--request-payer requester`, or `gcloud storage cp` with `--billing-project`, for them. a bucket that allows reading objects but not listing them still works one object at a time through plain object links, `https://storage.googleapis.com/<bucket>/<key>` for cloud storage.
 
-AWS keys that an instance's or a container's role gives, or that `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` lead to outside a profile, are not read; an object link that needs no key still works as a plain URL.
+AWS keys that an instance's or a container's role gives, or that `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` lead to, come from the AWS CLI's default chain when no variable or profile gives keys, as [private S3 buckets](../guides/private-cloud-storage.md#private-s3-buckets) says; an object link that needs no key still works as a plain URL.

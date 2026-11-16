@@ -745,6 +745,7 @@ fn a_listed_bucket_without_keys_says_which_keys_to_set() -> Result {
         .command(&["--json", "add", "s3://private-lab/"])
         .env("FETCHLOOM_TEST_HOSTS", &routes.url)
         .env("FETCHLOOM_S3_BUCKETS", "private-lab")
+        .env("PATH", sandbox.folder("empty")?)
         .output()?;
     assert_eq!(output.status.code(), Some(40));
     let document = json(&output)?;
@@ -756,7 +757,7 @@ fn a_listed_bucket_without_keys_says_which_keys_to_set() -> Result {
     );
     assert_eq!(
         error["help"],
-        "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-s3-buckets"
+        "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys in ~/.aws/credentials, a credential_process, or sso or a role through the AWS CLI; for this machine's own role, install the AWS CLI. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/private-cloud-storage/#private-s3-buckets"
     );
     assert_eq!(routes.targets().len(), 1);
     assert_anonymous(&routes);
@@ -1107,6 +1108,72 @@ fn a_profile_that_signs_in_without_the_aws_cli_says_to_install_it() -> Result {
     );
     assert!(!ran.exists());
     assert_eq!(routes.targets().len(), 1);
+    Ok(())
+}
+
+/// on a machine whose only keys are its role's, the AWS CLI's default chain, asked with no
+/// profile, signs a listed bucket's requests once it refused; a profile `AWS_PROFILE` chose is
+/// never passed over for it, even one without keys.
+#[cfg(unix)]
+#[test]
+fn a_listed_bucket_reads_with_the_aws_clis_default_chain() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/",
+        vec![
+            refusal(),
+            refusal(),
+            s3_page(&[("raw/a.csv", PARTICIPANTS)], None),
+            versioned(),
+        ],
+    )?;
+    let folder = sandbox.folder("aws")?;
+    let asked = folder.join("asked");
+    let bin = sandbox.folder("bin")?;
+    program(
+        &bin.join("aws"),
+        &format!(
+            "printf '%s\\n' \"$@\" >> '{}'\nprintf '%s' '{PRINTED}'",
+            asked.display()
+        ),
+    )?;
+    let config = folder.join("config");
+    fs::write(&config, "[profile lab]\nregion = eu-west-1\n")?;
+    let args = ["--json", "add", "s3://private-lab/raw/", "--as", "raw"];
+    let chosen = profile_command(&sandbox, &server.url, &config, &args)
+        .env("PATH", &bin)
+        .output()?;
+    assert_eq!(chosen.status.code(), Some(40), "{}", text(&chosen.stderr)?);
+    let error = &json(&chosen)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "s3://private-lab/raw/ is private: S3 refused to list it without a key, and no AWS keys were found"
+    );
+    assert!(!asked.exists());
+    let output = sandbox
+        .command(&args[1..])
+        .env("FETCHLOOM_TEST_HOSTS", &server.url)
+        .env("FETCHLOOM_S3_BUCKETS", "private-lab")
+        .env("PATH", &bin)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read_to_string(&asked)?,
+        "configure\nexport-credentials\n--format\nprocess\n"
+    );
+    let heads = server.requests();
+    assert_eq!(heads.len(), 4, "{heads:?}");
+    assert!(!heads[1].contains("authorization"), "{}", heads[1]);
+    for head in &heads[2..] {
+        assert_eq!(
+            signed_with(head, PRINTED_SECRET)?,
+            ("akiaprintedkey".to_owned(), "us-east-1".to_owned())
+        );
+    }
+    assert_eq!(
+        fs::read(sandbox.work().join("data/raw/a.csv"))?,
+        PARTICIPANTS
+    );
     Ok(())
 }
 

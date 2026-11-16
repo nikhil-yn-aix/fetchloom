@@ -1,5 +1,6 @@
-//! a program that prints AWS keys: a profile's `credential_process`, or the AWS CLI for a role or
-//! IAM identity center. it runs without a shell, by a full path, never from a relative PATH folder.
+//! a program that prints AWS keys: a profile's `credential_process`, or the AWS CLI for a role, IAM
+//! identity center or its default chain. it runs without a shell, by a full path, never from a
+//! relative PATH folder.
 
 use std::iter::repeat_n;
 use std::path::{Path, PathBuf};
@@ -42,6 +43,9 @@ pub(super) enum By {
     /// the AWS CLI, for a profile that signs in to IAM identity center when `signs_in`, else takes
     /// on a role.
     Cli { signs_in: bool },
+    /// the AWS CLI with no profile, whose default chain finds keys past the profiles, such as an
+    /// instance's or a container's role.
+    Chain,
 }
 
 impl Program {
@@ -144,6 +148,21 @@ impl Program {
         })
     }
 
+    /// `aws configure export-credentials` with no profile, which gives the keys the AWS CLI's
+    /// default chain finds: a web identity, a container's role or an instance's role. none when no
+    /// folder on PATH holds the AWS CLI.
+    pub(super) fn chain(var: Var<'_>) -> Option<Program> {
+        let path = installed("aws", var)?;
+        let args = ["configure", "export-credentials", "--format", "process"];
+        Some(Program {
+            path,
+            args: args.map(str::to_owned).to_vec(),
+            profile: String::new(),
+            by: By::Chain,
+            patience: PATIENCE,
+        })
+    }
+
     /// runs the program and reads the keys it printed, which must still hold at `now`.
     ///
     /// # Errors
@@ -166,7 +185,7 @@ impl Program {
             )
             .help(match self.by {
                 By::Process => "a credential_process prints JSON with Version 1, AccessKeyId and SecretAccessKey, and SessionToken and Expiration for keys that expire",
-                By::Cli { .. } => "update the AWS CLI to version 2.9 or later",
+                By::Cli { .. } | By::Chain => "update the AWS CLI to version 2.9 or later",
             })
         })?;
         if let Some(expires) = issued.expires.filter(|expires| *expires <= now) {
@@ -200,6 +219,7 @@ impl Program {
                 "`aws configure export-credentials --profile {}`",
                 crate::suggested::shell_word(&self.profile)
             ),
+            By::Chain => "`aws configure export-credentials`".to_owned(),
         }
     }
 
@@ -219,6 +239,7 @@ impl Program {
                 "run `aws configure export-credentials --profile {}` yourself to see what went wrong",
                 crate::suggested::shell_word(&self.profile)
             ),
+            By::Chain => "run `aws configure export-credentials` yourself to see what went wrong; on a machine without a role, set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile with keys".to_owned(),
         };
         Error::new(Kind::AuthRequired, message).help(help)
     }

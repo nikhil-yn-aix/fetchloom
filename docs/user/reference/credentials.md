@@ -34,7 +34,7 @@ AWS keys sign requests only for the buckets `s3_buckets` lists, in the order [pr
 | `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS` | `true` ignores the endpoint settings |
 | `PATH` | the folders that hold the AWS CLI and a `credential_process` named without its folder; only folders named by their full path are searched |
 
-a profile with `credential_process` gets its keys from that program, and one that signs in to IAM identity center or takes on a role from the AWS CLI, version 2.9 or later, as [keys from a program](../guides/private-cloud-storage.md#keys-from-a-program) describes.
+a profile with `credential_process` gets its keys from that program, and one that signs in to IAM identity center or takes on a role from the AWS CLI, version 2.9 or later, as [keys from a program](../guides/private-cloud-storage.md#keys-from-a-program) describes. with no keys in the variables or the default profile, and neither `AWS_PROFILE` nor `AWS_DEFAULT_PROFILE` set, the AWS CLI's default chain gives them, such as this machine's or a container's role, as [private S3 buckets](../guides/private-cloud-storage.md#private-s3-buckets) says.
 
 ## google application default credentials
 

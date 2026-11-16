@@ -13,12 +13,12 @@ azure_containers = ["azure:lab/raw"]
 
 | store | list it in | sign in with |
 |---|---|---|
-| S3 and services that speak its API | `s3_buckets` | AWS keys: `aws configure`, `aws sso login`, a profile's `credential_process`, or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` |
+| S3 and services that speak its API | `s3_buckets` | AWS keys: `aws configure`, `aws sso login`, a profile's `credential_process`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, or this machine's role through the AWS CLI |
 | google cloud storage | `gcs_buckets` | `gcloud auth application-default login`, or a service account's key in `GOOGLE_APPLICATION_CREDENTIALS` |
 | google drive, shared with some people | `drive_folders` | the same google credentials, with drive's scope: a service account the folder is shared with, or your own login through an oauth client you make |
 | azure blob storage | `azure_containers` | `az login`, a SAS in `AZURE_STORAGE_SAS_TOKEN` or in the container's entry, an account key in `AZURE_STORAGE_KEY` with `AZURE_STORAGE_ACCOUNT`, or a virtual machine's managed identity with `AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential` |
 
-each request goes without a key first, so a public bucket never sees one, and the key follows only once the store refused. `fetchloom auth` shows the AWS keys, google credentials and azure credentials it would use, without running a program or asking a server. each store's page has the rest: [private S3 buckets](#private-s3-buckets), [private cloud storage buckets](#private-cloud-storage-buckets), [private drive files and folders](#private-google-drive-files) and [private azure containers](#private-containers).
+each request goes without a key first, so a public bucket never sees one, and the key follows only once the store refused. `fetchloom auth` shows the AWS keys, google credentials and azure credentials it would use, without running a program or asking a server, so keys only the AWS CLI's default chain would find are not shown. each store's page has the rest: [private S3 buckets](#private-s3-buckets), [private cloud storage buckets](#private-cloud-storage-buckets), [private drive files and folders](#private-google-drive-files) and [private azure containers](#private-containers).
 
 ## private S3 buckets
 
@@ -38,8 +38,9 @@ keys come from where the AWS tools keep them, in this order:
     2. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/credentials`.
     3. `credential_process`, a program that prints the keys.
     4. `aws_access_key_id` and `aws_secret_access_key` in `~/.aws/config`.
+3. with neither, and no `AWS_PROFILE` or `AWS_DEFAULT_PROFILE` set, the AWS CLI's default chain, which `aws configure export-credentials --format process` gives with no profile: the role of a web identity `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` name, of a container, as on ECS or EKS, or of this machine, as on EC2, the keys `aws s3 cp` signs with there. this needs the AWS CLI, version 2.9 or later, and signs for AWS alone, never for a bucket at another service.
 
-a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
+a profile is never passed over for another identity: one that signs in or takes on a role on a machine without the AWS CLI fails with `auth.required`, exit 40, and says to install it, and a profile `AWS_PROFILE` or `AWS_DEFAULT_PROFILE` chose never gives way to the default chain, even one with no keys. an `AWS_PROFILE` neither file has fails with `usage`, exit 2.
 
 the region a request is signed for is the one its host names, as `s3.eu-west-1.amazonaws.com` does, else the one S3 named for the bucket, else `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region`, else `us-east-1`.
 
@@ -49,7 +50,7 @@ the secret never leaves the machine: a request carries the key id and a signatur
 
 ### keys from a program
 
-a `credential_process`, or the AWS CLI for a sign-in or a role, runs only once a bucket `s3_buckets` lists has refused a request without a key, when its requests first need keys. nothing in data.toml or data.lock chooses a profile, a program or a command.
+a `credential_process`, or the AWS CLI for a sign-in, a role or its default chain, runs only once a bucket `s3_buckets` lists has refused a request without a key, when its requests first need keys. nothing in data.toml or data.lock chooses a profile, a program or a command.
 
 - the setting is split into words as the AWS CLI splits it, by shell quoting on linux and macos and by the windows rules on windows. no shell runs it, so `$HOME`, `~`, pipes and `;` reach the program as written. the program is a full path, or a name found in a folder on PATH. a folder PATH names relatively, such as `.`, is never searched, since it would be whatever folder fetchloom runs in, and a program named by a relative path fails with `usage`, exit 2. the AWS CLI is found the same way.
 - the program prints the JSON AWS defines for `credential_process`: `Version` 1, `AccessKeyId`, `SecretAccessKey`, and `SessionToken` and `Expiration` for keys that expire. nothing it prints reaches a message, a log, `--json` output or a file, and the keys stay in memory for the run.
@@ -63,7 +64,7 @@ error: `aws configure export-credentials --profile lab` exited with code 255
   help: sign in again with `aws sso login --profile lab`, or run `aws configure export-credentials --profile lab` yourself to see what went wrong
 ```
 
-fetchloom itself asks no instance or container metadata service for keys. a profile whose role names `credential_source = Ec2InstanceMetadata` gets its keys from the AWS CLI, which asks that service.
+fetchloom itself asks no instance or container metadata service for keys: the AWS CLI does, for its default chain and for a profile whose role names `credential_source = Ec2InstanceMetadata`. on a machine with the AWS CLI but no keys and no role, a listed bucket fails with `auth.required`, exit 40, as `` `aws configure export-credentials` exited with code 255 ``, and the help says to run that command yourself to see what went wrong.
 
 ## private cloud storage buckets
 
