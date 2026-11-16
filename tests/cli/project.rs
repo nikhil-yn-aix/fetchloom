@@ -4829,3 +4829,41 @@ fn a_waiting_dataset_taken_out_of_data_toml_goes_at_the_next_sync() -> Result {
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stdout)?);
     Ok(())
 }
+
+/// `push` of every dataset while big waits for its list pushes the rest and warns that big waits,
+/// as sync places the rest; `push big` stops at its missing list.
+#[test]
+fn a_push_of_every_dataset_leaves_a_waiting_one_out() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (clone, part) = clone_without_big(&sandbox)?;
+    let folder = sandbox.folder("mirror")?;
+    let mirror = folder.to_string_lossy();
+    for args in [
+        &["--json", "push", "--to", &*mirror, "--dry-run"][..],
+        &["--json", "push", "--to", &*mirror, "--yes"],
+    ] {
+        let pushed = listing_in(&sandbox, &clone, args)?;
+        let document = json(&pushed)?;
+        assert_eq!(pushed.status.code(), Some(0), "{args:?}: {document}");
+        assert!(
+            crate::support::warned(&document)
+                .iter()
+                .any(|warning| warning.contains("so big waits for it;")),
+            "{args:?}: {document}"
+        );
+    }
+    let object = crate::support::object(&folder, b"c.csv");
+    assert!(object.is_file(), "small's file is on the mirror");
+    let named = listing_in(
+        &sandbox,
+        &clone,
+        &["--json", "push", "big", "--to", &*mirror],
+    )?;
+    let document = json(&named)?;
+    assert_eq!(named.status.code(), Some(50), "{document}");
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!("data.lock names {part}, the file list of big, which is not there")
+    );
+    Ok(())
+}

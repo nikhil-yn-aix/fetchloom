@@ -272,7 +272,8 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     for name in &args.names {
         known(&manifest, name, "push")?;
     }
-    let datasets = selected(&manifest, &args.names);
+    let lock = project.lock()?;
+    let datasets = pushed(context, &manifest, &args.names, lock.as_ref())?;
     if datasets.is_empty() {
         context.output.done("Ok", &everything(&datasets));
         let target = match target {
@@ -282,11 +283,6 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
         return Ok(Report::empty(target, dry_run));
     }
     let target = opened(context, target, args.verify)?;
-    let lock = project.lock()?;
-    if let Some(lock) = &lock {
-        lock.refuse_waiting(datasets.iter().map(String::as_str))?;
-        lock.refuse_stated(datasets.iter().map(String::as_str))?;
-    }
     let scope = Scope::Only(datasets.iter().cloned().collect());
     locked(
         &project,
@@ -486,6 +482,28 @@ fn reached(target: PathBuf) -> PathBuf {
 }
 
 /// the datasets a push sends: `names`, else every dataset in data.toml.
+/// the datasets a push of `names` pushes, every one when it names none: of every one, those
+/// waiting for their lists in `lock` are left out with a warning, as a sync places the rest, while
+/// one named waits, as for every command that needs its files; one not downloaded yet waits too.
+fn pushed(
+    context: &Context,
+    manifest: &Manifest,
+    names: &[String],
+    lock: Option<&Lock>,
+) -> Result<Vec<String>, Error> {
+    let mut datasets = selected(manifest, names);
+    if let Some(lock) = lock {
+        if names.is_empty() {
+            let waiting: Vec<_> = lock.still_waiting().cloned().collect();
+            super::project::tell_waiting(&context.output, &waiting, &Scope::All);
+            datasets.retain(|name| lock.waits(name).is_none());
+        }
+        lock.refuse_waiting(datasets.iter().map(String::as_str))?;
+        lock.refuse_stated(datasets.iter().map(String::as_str))?;
+    }
+    Ok(datasets)
+}
+
 fn selected(manifest: &Manifest, names: &[String]) -> Vec<String> {
     let chosen: BTreeSet<&str> = if names.is_empty() {
         manifest.datasets.keys().map(String::as_str).collect()
