@@ -697,6 +697,19 @@ fn listing(list: &List, entries: Vec<Entry>, folder: Option<&Url>) -> Result<Lis
                 None => return Err(no_folder(&shown, &entry, path)),
             },
         };
+        let longest = crate::project::lock::lists::LONGEST_PATH;
+        if path.len() > longest || url.as_str().len() > crate::project::lock::lists::LONGEST_URL {
+            let what = if path.len() > longest {
+                "a path"
+            } else {
+                "a link"
+            };
+            return Err(Error::new(
+                Kind::Usage,
+                format!("{at} gives {what} longer than data.lock keeps"),
+            )
+            .help("data.lock keeps a path of up to 4,096 bytes and a link of up to 64 KiB"));
+        }
         let (sha256, md5) = match entry.checksum {
             Some(Checksum::Sha256(sha256)) => (Some(sha256), None),
             Some(Checksum::Md5(md5)) => (None, Some(md5)),

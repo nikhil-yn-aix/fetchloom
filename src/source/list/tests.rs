@@ -277,6 +277,14 @@ fn a_list_on_this_machine_gives_each_files_link() {
             "the link on line 1 of links.txt names no file",
         ),
         ("# nothing yet\n".to_owned(), "links.txt lists no files"),
+        (
+            format!("https://example.org/{}.csv", "x".repeat(64 << 10)),
+            "line 1 of links.txt gives a link longer than data.lock keeps",
+        ),
+        (
+            format!("{}/x.csv {SHA} https://example.org/x.csv", "p".repeat(4096)),
+            "line 1 of links.txt gives a path longer than data.lock keeps",
+        ),
     ] {
         let error = listing(&list, read("links.txt", &text, 10).unwrap(), None).unwrap_err();
         assert_eq!(error.message, message, "{text}");
