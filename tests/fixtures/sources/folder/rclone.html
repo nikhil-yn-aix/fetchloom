@@ -1,0 +1,73 @@
+
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>/sub</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<meta name="google" content="notranslate">
+</head>
+	<body>
+		<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+			<defs>
+				<symbol id="folder" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></symbol>
+				<symbol id="file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z"/></symbol>
+				<symbol id="search" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zm5 11.5L20 20"/></symbol>
+				<symbol id="zip-folder" viewBox="0 -960 960 960"><path d="M640-480v-80h80v80h-80Zm0 80h-80v-80h80v80Zm0 80v-80h80v80h-80ZM447-640l-80-80H160v480h400v-80h80v80h160v-400H640v80h-80v-80H447ZM160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h240l80 80h320q33 0 56.5 23.5T880-640v400q0 33-23.5 56.5T800-160H160Zm0-80v-480 480Z"/></symbol>
+			</defs>
+		</svg>
+		<header>
+			<div class="eyebrow">Folder path</div>
+			<h1><a href="../">/</a><a href="">sub</a>/
+				<a class="zip-root" href="?download=zip" title="Download root as .zip"><svg><use href="#zip-folder"></use></svg></a>
+			</h1>
+		</header>
+		<main>
+			<div class="card">
+				<div id="summary">
+					<button class="toggle" id="toggle-dirs" aria-pressed="true" title="Show or hide directories"><svg><use href="#folder"></use></svg><b id="ndirs">1</b> directories</button>
+					<button class="toggle" id="toggle-files" aria-pressed="true" title="Show or hide files"><svg><use href="#file"></use></svg><b id="nfiles">2</b> files</button>
+					<span class="total"><b><size>26</size></b> total</span>
+				</div>
+				<div class="listing">
+					<table aria-describedby="summary">
+						<thead>
+							<tr>
+								<th class="name" data-key="name">
+									<a href="#" onclick="return sortBy(this.parentNode)">Name</a>
+									<span class="search"><svg><use href="#search"></use></svg><input type="search" id="filter" placeholder="Search" aria-label="Search this directory" autocomplete="off" oninput="filter()"></span>
+								</th>
+								<th class="size" data-key="size"><a href="#" onclick="return sortBy(this.parentNode)">Size</a></th>
+								<th class="time" data-key="time"><a href="#" onclick="return sortBy(this.parentNode)">Modified</a></th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr class="goup"><td class="name"><a href="..">Go up</a></td><td class="size">&mdash;</td><td class="time">&mdash;</td></tr>
+							<tr class="file dir" data-size="0" data-time="2026-11-16 18:07:28.399243907 &#43;0000 UTC">
+								<td class="name"><svg><use href="#folder"></use></svg><a href="./deeper/">deeper/</a>
+									<a class="zip" href="./deeper/?download=zip" title="Download folder as .zip"><svg><use href="#zip-folder"></use></svg></a>
+								</td>
+								<td class="size">&mdash;</td>
+								<td class="time"><time datetime="2026-11-16 18:07:28.399243907 &#43;0000 UTC">2026-11-16 18:07:28.399243907 &#43;0000 UTC</time></td>
+							</tr>
+							<tr class="file" data-size="20" data-time="2026-11-16 18:07:28.399243907 &#43;0000 UTC">
+								<td class="name"><svg><use href="#file"></use></svg><a href="./iris.csv">iris.csv</a>
+								</td>
+								<td class="size"><size>20</size></td>
+								<td class="time"><time datetime="2026-11-16 18:07:28.399243907 &#43;0000 UTC">2026-11-16 18:07:28.399243907 &#43;0000 UTC</time></td>
+							</tr>
+							<tr class="file" data-size="6" data-time="2026-11-16 18:07:28.399243907 &#43;0000 UTC">
+								<td class="name"><svg><use href="#file"></use></svg><a href="./read%20me.txt">read me.txt</a>
+								</td>
+								<td class="size"><size>6</size></td>
+								<td class="time"><time datetime="2026-11-16 18:07:28.399243907 &#43;0000 UTC">2026-11-16 18:07:28.399243907 &#43;0000 UTC</time></td>
+							</tr>
+							<tr class="empty" hidden><td colspan="3"></td></tr>
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</main>
+		</body>
+</html>

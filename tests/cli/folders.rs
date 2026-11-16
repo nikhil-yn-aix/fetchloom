@@ -1,6 +1,6 @@
-//! a folder a web server lists, as apache, nginx, lighttpd and python's http.server do, as one
-//! dataset: every file below it, each pinned by its SHA-256, its listing read again only by
-//! `lock --upgrade`.
+//! a folder a web server lists, as apache, nginx, lighttpd, rclone and python's http.server do,
+//! as one dataset: every file below it, each pinned by its SHA-256, its listing read again only
+//! by `lock --upgrade`.
 
 use std::fs;
 
@@ -62,6 +62,36 @@ fn ncei(folder: &str, entries: &[&str]) -> Vec<Part> {
     ))
 }
 
+/// a listing as apache writes it inside a page psl's site titles with nothing, as noaa's psl,
+/// gml and star do: known by its link to the folder above, which reads "Parent Directory".
+fn psl(folder: &str, entries: &[&str]) -> Vec<Part> {
+    let parent = folder
+        .trim_end_matches('/')
+        .rsplit_once('/')
+        .map_or("/", |(above, _)| above);
+    let rows = entries
+        .iter()
+        .map(|entry| format!("<tr><td class=\"indexcolname\"><a href=\"{entry}\">{entry}</a></td><td class=\"indexcolsize\"> 1K</td></tr>\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    page(&format!(
+        "<!DOCTYPE html>\n<html>\n<head>\n<title></title>\n</head>\n<body>\n<ul class=\"nav\"><li><a href=\"/about/\">About Us</a></li></ul>\n<table id=\"indexlist\">\n<tr class=\"indexhead\"><th class=\"indexcolname\"><a href=\"?C=N;O=D\">Name</a></th><th class=\"indexcolsize\"><a href=\"?C=S;O=A\">Size</a></th></tr>\n<tr><td class=\"indexcolname\"><a href=\"{parent}/\">Parent Directory</a></td><td class=\"indexcolsize\">  - </td></tr>\n{rows}</table>\n</body>\n</html>\n"
+    ))
+}
+
+/// a listing as `rclone serve http` writes it, titled with the folder's path.
+fn rclone(folder: &str, entries: &[&str]) -> Vec<Part> {
+    let rows = entries
+        .iter()
+        .map(|entry| format!("<tr class=\"file\"><td class=\"name\"><a href=\"./{entry}\">{entry}</a></td><td class=\"size\">&mdash;</td></tr>\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    page(&format!(
+        "<!DOCTYPE html>\n<html>\n<head>\n<title>{}</title>\n</head>\n<body>\n<h1><a href=\"../\">/</a></h1>\n<table>\n<tr><td class=\"name\"><a href=\"..\">Go up</a></td></tr>\n{rows}</table>\n</body>\n</html>\n",
+        folder.trim_end_matches('/')
+    ))
+}
+
 /// a web page answered with 200.
 fn page(html: &str) -> Vec<Part> {
     reply(
@@ -99,7 +129,7 @@ fn pin(path: &str, bytes: &[u8], url: &str) -> String {
 /// alone and never asks for a listing.
 #[test]
 fn a_listed_folder_is_one_dataset_of_every_file_below_it() -> Result {
-    for lister in [python as Lister, nginx, ncei] {
+    for lister in [python as Lister, nginx, ncei, psl, rclone] {
         let sandbox = Sandbox::new()?;
         let server = served(lister)?;
         let folder = format!("{}/data/", server.url);
@@ -255,7 +285,7 @@ fn a_page_that_is_no_listing_is_refused() -> Result {
     );
     assert_eq!(
         error["help"],
-        "fetchloom reads the folder listings apache, nginx, lighttpd and python's http.server make, and this page is none of them. open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add --web-page"
+        "fetchloom reads the folder listings apache, nginx, lighttpd, caddy, rclone and python's http.server make, and this page is none of them. open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, add --web-page"
     );
     assert_eq!(server.targets(), ["/lab/"]);
     assert!(!sandbox.work().join("data.toml").exists());

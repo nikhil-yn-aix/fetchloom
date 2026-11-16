@@ -1,9 +1,9 @@
 //! folders a web server lists, each one dataset by its link ending in `/`: every file in it and
 //! in the folders inside it, at its path there, pinned by the SHA-256 its download gives. one
-//! reader takes the listings apache, nginx, lighttpd and python's http.server write, NCBI's that
-//! GEO's folders have among them. a listing is a page anyone could have written, so only links on
-//! the folder's own origin and below it are followed, each once, and a name no file may have
-//! stops it.
+//! reader takes the listings apache, nginx, lighttpd, caddy, rclone and python's http.server
+//! write, under any title a site gives apache's, NCBI's that GEO's folders have among them. a
+//! listing is a page anyone could have written, so only links on the folder's own origin and
+//! below it are followed, each once, and a name no file may have stops it.
 
 use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
@@ -58,20 +58,21 @@ pub(super) struct Index {
 }
 
 /// a link of a list on a listing's page: its `href`, its character references undone, the link
-/// it makes against the page, none for one that makes none, and the size its row states. a link
-/// whose text names a folder, ending in `/`, while its `href` does not, as ncei's do, makes the
-/// folder's link, with the `/`.
+/// it makes against the page, none for one that makes none, whether its text reads "Parent
+/// Directory", and the size its row states. a link whose text names a folder, ending in `/`,
+/// while its `href` does not, as ncei's do, makes the folder's link, with the `/`.
 struct Link {
     href: String,
     url: Option<Url>,
+    names_parent: bool,
     size: Option<u64>,
 }
 
 /// why a page is no listing to read.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Unread {
-    /// no server made it as a listing: its title names no folder, or it has no list of links,
-    /// or one that does not end, as a page cut short.
+    /// no server made it as a listing: nothing on it says it lists the folder, or it has no list
+    /// of links, or one that does not end, as a page cut short.
     NoListing,
     /// an entry has a name no file may have, decoded.
     Name(String),
@@ -81,9 +82,6 @@ pub(super) enum Unread {
 /// its list of entries, their character references undone, each read against `page`.
 pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread> {
     let lower = html.to_ascii_lowercase();
-    if !titled(html, &lower) {
-        return Err(Unread::NoListing);
-    }
     let parent = folder.join("..").ok();
     // each link of each list, read against the page, but those a query or a fragment marks
     let lists: Vec<Vec<Link>> = lists(&lower)
@@ -104,6 +102,7 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
                     Link {
                         url: url.ok(),
                         href: anchor.href,
+                        names_parent: anchor.names_parent,
                         size: anchor.size,
                     }
                 })
@@ -133,9 +132,14 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
         .max_by_key(|(at, links)| (entries(links), links.iter().any(above), Reverse(*at)))
         .map(|(at, _)| at)
         .ok_or(Unread::NoListing)?;
+    let listing = &lists[chosen];
+    let parent_row = listing.iter().any(|link| link.names_parent && above(link));
+    if !parent_row && !titled(html, &lower, folder, listing.iter().any(above)) {
+        return Err(Unread::NoListing);
+    }
     let mut index = Index::default();
     let mut seen = HashSet::new();
-    for each in &lists[chosen] {
+    for each in listing {
         if above(each) {
             continue;
         }
@@ -143,6 +147,7 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
             href,
             url: Some(link),
             size,
+            ..
         } = each
         else {
             index
@@ -190,24 +195,55 @@ fn below<'a>(link: &'a Url, folder: &Url) -> Option<(&'a str, bool)> {
     (!name.contains('/')).then_some((name, is_folder))
 }
 
-/// whether the page's title says a server listed a folder there, as `Index of /data/` does.
-fn titled(html: &str, lower: &str) -> bool {
-    let Some(open) = opening(lower, 0, "title") else {
+/// whether the page says it lists `folder` in words: its title or first heading begins as a
+/// server's listing does, as `Index of /data/`, or its title is the folder's path, decoded, as
+/// rclone's `/data` is, or, where its list `links_above` the folder, the folder's name, as
+/// caddy's `data` is.
+fn titled(html: &str, lower: &str, folder: &Url, links_above: bool) -> bool {
+    let begins = |text: &String| {
+        let text = text.to_lowercase();
+        TITLES.iter().any(|words| text.starts_with(words))
+    };
+    let title = inner(html, lower, "title");
+    if title.as_ref().is_some_and(begins) || inner(html, lower, "h1").as_ref().is_some_and(begins) {
+        return true;
+    }
+    let Some(title) = title else {
         return false;
     };
-    let Some(start) = lower[open..].find('>').map(|end| open + end + 1) else {
-        return false;
-    };
-    let Some(end) = lower[start..].find("</title").map(|end| start + end) else {
-        return false;
-    };
-    let title = unescape(&html[start..end]);
-    let title = title
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase();
-    TITLES.iter().any(|words| title.starts_with(words))
+    let path = words(&percent_decode_str(folder.path()).decode_utf8_lossy());
+    let name = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    (title.starts_with('/') && title.trim_end_matches('/') == path.trim_end_matches('/'))
+        || (links_above && !name.is_empty() && title == name)
+}
+
+/// the text of the first element `tag` of the page, without the tags inside it, its character
+/// references undone and its spaces as one; `lower` is the page in lowercase.
+fn inner(html: &str, lower: &str, tag: &str) -> Option<String> {
+    let open = opening(lower, 0, tag)?;
+    let start = lower[open..].find('>').map(|end| open + end + 1)?;
+    let end = lower[start..]
+        .find(&format!("</{tag}"))
+        .map(|end| start + end)?;
+    let mut text = String::new();
+    let mut from = start;
+    while let Some(offset) = lower[from..end].find('<') {
+        text.push_str(&html[from..from + offset]);
+        from = lower[from + offset..end]
+            .find('>')
+            .map_or(end, |close| from + offset + close + 1);
+    }
+    text.push_str(&html[from..end]);
+    Some(words(&unescape(&text)))
+}
+
+/// `text` with its spaces as one, none at its ends.
+fn words(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// where each list of the lowercase page `lower` holds its entries, between its tags, in order,
@@ -262,10 +298,12 @@ fn starts_tag(lower: &str, open: usize, tag: &str) -> bool {
 }
 
 /// a link as a list writes it: its `href`, its character references undone, whether its text
-/// ends in `/`, as a folder's name does, and the size its row states.
+/// ends in `/`, as a folder's name does, whether it reads "Parent Directory", as apache's link to
+/// the folder above does, and the size its row states.
 struct Anchor {
     href: String,
     names_folder: bool,
+    names_parent: bool,
     size: Option<u64>,
 }
 
@@ -276,9 +314,11 @@ fn links(list: &str, lower: &str) -> Vec<Anchor> {
     while let Some(open) = opening(lower, at, "a") {
         let (href, end) = href(list, lower, open + 2);
         if let Some(href) = href {
+            let text = words(&unescape(&text(list, lower, end)));
             found.push(Anchor {
                 href: unescape(href),
-                names_folder: unescape(&text(list, lower, end)).trim_end().ends_with('/'),
+                names_folder: text.ends_with('/'),
+                names_parent: text.eq_ignore_ascii_case("parent directory"),
                 size: size(&lower[end..]),
             });
         }
@@ -583,7 +623,7 @@ pub(crate) fn no_listing(link: &Url, asked: &str) -> Error {
         ),
     )
     .help(format!(
-        "fetchloom reads the folder listings apache, nginx, lighttpd and python's http.server make, and this page is none of them. open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}"
+        "fetchloom reads the folder listings apache, nginx, lighttpd, caddy, rclone and python's http.server make, and this page is none of them. open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}"
     ))
 }
 

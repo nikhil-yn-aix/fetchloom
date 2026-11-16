@@ -52,87 +52,87 @@ fn nested() -> Recorded {
         .fixture(&format!("{DATA}sub/"), "folder/data-sub.html")
 }
 
+/// reads the recorded listing `fixture` of `folder`, which must show `entries`, each a name and
+/// whether it is a folder, and no link elsewhere.
+fn reads_as(fixture: &str, folder: &str, entries: &[(&str, bool)]) -> Index {
+    let html = String::from_utf8(fixture_bytes(fixture)).unwrap();
+    let index = read_at(&html, folder).unwrap();
+    assert_eq!(names(&index), entries, "{fixture}");
+    assert_eq!(index.elsewhere, Vec::<String>::new(), "{fixture}");
+    index
+}
+
 /// the listings apache, nginx, lighttpd, python's http.server and NCBI's file server sent, as
 /// recorded, read as the files and folders they show, past the links to the folder above, the
-/// sort links and a readme's links lighttpd shows below its listing.
+/// sort links and a readme's links lighttpd shows below its listing; ncei's links a folder
+/// without its `/` and the folder above as `..`, and lp daac's shows a notice above it.
 #[test]
 fn every_servers_listing_reads_as_the_entries_it_shows() {
     let gtf = "Saccharomyces_cerevisiae.R64-1-1.113";
+    let (abinitio, annotation) = (format!("{gtf}.abinitio.gtf.gz"), format!("{gtf}.gtf.gz"));
     for (fixture, folder, entries) in [
         (
             "folder/apache.html",
             "https://ftp.ensembl.org/pub/release-113/gtf/saccharomyces_cerevisiae/",
-            vec![
-                ("CHECKSUMS".to_owned(), false),
-                ("README".to_owned(), false),
-                (format!("{gtf}.abinitio.gtf.gz"), false),
-                (format!("{gtf}.gtf.gz"), false),
-            ],
+            &[
+                ("CHECKSUMS", false),
+                ("README", false),
+                (abinitio.as_str(), false),
+                (annotation.as_str(), false),
+            ][..],
         ),
         (
             "folder/nginx.html",
             "https://opendata.dwd.de/climate_environment/CDC/observations_germany/climate/annual/kl/",
-            vec![
-                ("historical".to_owned(), true),
-                ("recent".to_owned(), true),
-                ("timeseries_overview".to_owned(), true),
+            &[
+                ("historical", true),
+                ("recent", true),
+                ("timeseries_overview", true),
             ],
         ),
         (
             "folder/lighttpd.html",
             "https://download.lighttpd.net/lighttpd/",
-            vec![
-                ("security".to_owned(), true),
-                ("snapshots-2.0.x".to_owned(), true),
-                ("snapshots-1.4.x".to_owned(), true),
-                ("releases-1.4.x".to_owned(), true),
-                ("README.txt".to_owned(), false),
+            &[
+                ("security", true),
+                ("snapshots-2.0.x", true),
+                ("snapshots-1.4.x", true),
+                ("releases-1.4.x", true),
+                ("README.txt", false),
             ],
         ),
         (
             "folder/python.html",
             "http://127.0.0.1:19340/data/",
-            vec![
-                ("a&b c.csv".to_owned(), false),
-                ("iris.csv".to_owned(), false),
-                ("sub".to_owned(), true),
-            ],
+            &[("a&b c.csv", false), ("iris.csv", false), ("sub", true)],
         ),
         (
             "geo/series.html",
             "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/",
-            vec![
-                ("matrix".to_owned(), true),
-                ("miniml".to_owned(), true),
-                ("soft".to_owned(), true),
-                ("suppl".to_owned(), true),
+            &[
+                ("matrix", true),
+                ("miniml", true),
+                ("soft", true),
+                ("suppl", true),
             ],
         ),
         (
             "folder/ncei.html",
             NCEI,
-            vec![
-                ("all".to_owned(), true),
-                ("papers".to_owned(), true),
-                ("ghcnd-countries.txt".to_owned(), false),
-                ("ghcnd_all.tar.gz".to_owned(), false),
+            &[
+                ("all", true),
+                ("papers", true),
+                ("ghcnd-countries.txt", false),
+                ("ghcnd_all.tar.gz", false),
             ],
         ),
         (
             "folder/lpdaac.html",
             "https://e4ftl01.cr.usgs.gov/",
-            vec![("ASTT".to_owned(), true)],
+            &[("ASTT", true)],
         ),
     ] {
-        let html = String::from_utf8(fixture_bytes(fixture)).unwrap();
-        let index = read_at(&html, folder).unwrap();
-        let read: Vec<(String, bool)> = index
-            .entries
-            .iter()
-            .map(|entry| (entry.name.clone(), entry.folder))
-            .collect();
-        assert_eq!(read, entries, "{fixture}");
-        assert_eq!(index.elsewhere, Vec::<String>::new(), "{fixture}");
+        reads_as(fixture, folder, entries);
     }
     let python = String::from_utf8(fixture_bytes("folder/python.html")).unwrap();
     let index = read_at(&python, "http://127.0.0.1:19340/data/").unwrap();
@@ -147,6 +147,41 @@ fn every_servers_listing_reads_as_the_entries_it_shows() {
     let ncei = String::from_utf8(fixture_bytes("folder/ncei.html")).unwrap();
     let index = read_at(&ncei, NCEI).unwrap();
     assert_eq!(index.entries[0].link.as_str(), format!("{NCEI}all/"));
+}
+
+/// apache's listings a site titled as it likes, psl's with no title and ndbc's with its own, and
+/// those rclone and caddy title with the folder's path or its name, read as the entries they show.
+#[test]
+fn listings_titled_otherwise_read_as_the_entries_they_show() {
+    let sub = [
+        ("deeper", true),
+        ("iris.csv", false),
+        ("read me.txt", false),
+    ];
+    for (fixture, folder, entries) in [
+        (
+            "folder/psl.html",
+            "https://downloads.psl.noaa.gov/Datasets/ncep.reanalysis/surface/",
+            &[
+                ("air.sig995.1948.nc", false),
+                ("air.sig995.1949.nc", false),
+                ("air.sig995.1950.nc", false),
+            ][..],
+        ),
+        (
+            "folder/ndbc.html",
+            "https://www.ndbc.noaa.gov/data/realtime2/",
+            &[
+                ("32ST0.ocean", false),
+                ("32ST0.srad", false),
+                ("32ST0.txt", false),
+            ],
+        ),
+        ("folder/rclone.html", "http://127.0.0.1:19340/sub/", &sub),
+        ("folder/caddy.html", "http://127.0.0.1:19340/sub/", &sub),
+    ] {
+        reads_as(fixture, folder, entries);
+    }
 }
 
 /// a folder whose listing links a folder inside it without its `/`, under a name ending in `/`,
@@ -182,6 +217,80 @@ fn the_listing_is_the_list_that_holds_the_entries() {
     let index = read_at(page, sub).unwrap();
     assert_eq!(names(&index), [("a.csv", false), ("b.csv", false)]);
     assert_eq!(index.elsewhere, Vec::<String>::new());
+}
+
+/// a listing a site titled as it likes reads only by its own folder: its list's link to the
+/// folder above, on the folder's origin, reads "Parent Directory", as apache writes it. that
+/// link on another host, scheme or port makes the page none, and an entry on another origin is
+/// none, as in any listing.
+#[test]
+fn a_listing_titled_otherwise_reads_only_by_its_own_folder() {
+    let page = |parent: &str, entry: &str| {
+        format!(
+            "<html><head><title>Our files</title></head><body><table>\
+<tr><td><a href=\"{parent}\">Parent Directory</a></td></tr>\
+<tr><td><a href=\"{entry}\">x.csv</a></td></tr></table></body></html>"
+        )
+    };
+    let index = read_at(&page("/", "x.csv"), DATA).unwrap();
+    assert_eq!(names(&index), [("x.csv", false)]);
+    for parent in [
+        "https://other.example/",
+        "//other.example/",
+        "http://example.org/",
+        "https://example.org:8443/",
+        "/data/",
+    ] {
+        assert_eq!(
+            read_at(&page(parent, "x.csv"), DATA),
+            Err(Unread::NoListing),
+            "{parent}"
+        );
+    }
+    let index = read_at(&page("/", "https://other.example/data/x.csv"), DATA).unwrap();
+    assert_eq!(names(&index), Vec::<(&str, bool)>::new());
+    assert_eq!(index.elsewhere, ["https://other.example/data/x.csv"]);
+    // the same page sent from another host after a redirect lists nothing
+    for parent in ["/", "https://example.org/"] {
+        let recorded = Recorded::default()
+            .on(DATA, 200, page(parent, "x.csv"))
+            .redirected(DATA, "https://other.example/data/");
+        let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid, "{parent}");
+    }
+}
+
+/// a page is a listing by its words for the folder: a first heading that begins as a listing's
+/// title does, a title that is the folder's path, decoded, with or without its last `/`, or its
+/// name beside a link to the folder above. a title naming another folder, or the name with no
+/// link above, is none.
+#[test]
+fn a_listing_is_known_by_its_heading_or_the_folders_path_or_name() {
+    let page = |title: &str, heading: &str, above: &str| {
+        format!(
+            "<html><head><title>{title}</title></head><body>{heading}<ul>{above}<li><a href=\"x.csv\">x.csv</a></li></ul></body></html>"
+        )
+    };
+    let folder = "https://example.org/my%20data/";
+    let up = "<li><a href=\"..\">Up</a></li>";
+    for (title, heading, above, listing) in [
+        ("Lab - files", "<h1>Index of /my data/</h1>", "", true),
+        ("Lab - files", "<h1>Our files</h1>", "", false),
+        ("/my data", "", "", true),
+        ("/my data/", "", "", true),
+        ("/other", "", "", false),
+        ("my data", "", up, true),
+        ("my data", "", "", false),
+        ("other", "", up, false),
+    ] {
+        let read = read_at(&page(title, heading, above), folder);
+        assert_eq!(read.is_ok(), listing, "{title} {heading} {above}");
+    }
+    let root = page("/", "", "");
+    assert_eq!(
+        names(&read_at(&root, "https://example.org/").unwrap()),
+        [("x.csv", false)]
+    );
 }
 
 /// a page no server made as a listing is none, though it links files below its folder: a site's
