@@ -168,6 +168,9 @@ impl Fetch {
 pub(crate) enum Event {
     /// another fetchloom on this machine is downloading the same URL, and this one waits for it.
     Waiting,
+    /// the cache's disk cannot lock files, so the download keeps its bytes in a file of its own
+    /// that no later run can find, and a stop deletes them.
+    Lockless,
     /// an earlier run kept `bytes` of the file, which the download goes on from when the server
     /// allows it, and what its record says a later run can do with them.
     Kept {
@@ -442,7 +445,8 @@ impl Drop for Unfinished<'_> {
         if self.done {
             return;
         }
-        if *self.continuable.get_mut() {
+        // no later run can find a part kept without a lock, and gc never sweeps one
+        if *self.continuable.get_mut() && !self.partial.lockless() {
             self.partial.discard_unstarted();
         } else {
             self.partial.discard();
@@ -570,6 +574,7 @@ impl Reach {
                 self.moved.fetch_add(*bytes, Ordering::Relaxed);
             }
             Event::Waiting
+            | Event::Lockless
             | Event::Kept { .. }
             | Event::WebPage { .. }
             | Event::Named(_)
@@ -732,6 +737,9 @@ impl Net {
         if waited && let Some(record) = fetch.revalidate.then(|| fetch.remembered(cache)).flatten()
         {
             return recalled(record, Origin::Cache, on);
+        }
+        if partial.lockless() {
+            on(Event::Lockless)?;
         }
         let mut unfinished = Unfinished {
             partial: &partial,

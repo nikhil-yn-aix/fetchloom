@@ -908,6 +908,7 @@ impl<'a> Watch<'a> {
                 self.bar().message("Waiting", what.clone());
                 *self.waited() = Some(self.output.ticker("Waiting", what, [None]));
             }
+            Event::Lockless => self.held.lockless.store(true, Ordering::Relaxed),
             // no new bar: the download may still wait for a free slot. a lone download's bar,
             // already showing, says what it goes on from
             Event::Kept { bytes, resumable } => {
@@ -1610,6 +1611,9 @@ async fn wind_down(tasks: &mut JoinSet<(usize, Result<Fetched, Error>)>, held: &
 struct Held {
     bytes: AtomicU64,
     resumable: Mutex<Resumable>,
+    /// whether the cache's disk cannot lock files, so a stop deletes the bytes whatever the
+    /// server allows: no later run could find them.
+    lockless: AtomicBool,
 }
 
 impl Held {
@@ -1636,9 +1640,14 @@ fn kept(error: Error, held: &[Held]) -> Error {
         return error;
     }
     let (mut sure, mut maybe, mut lost, mut unproven) = (0_u64, 0_u64, 0_u64, 0_u64);
+    let mut lockless = 0_u64;
     let mut reasons = Vec::new();
     for held in held {
         let bytes = held.bytes.load(Ordering::Relaxed);
+        if held.lockless.load(Ordering::Relaxed) {
+            lockless = lockless.saturating_add(bytes);
+            continue;
+        }
         let sum = match held.resumable() {
             Resumable::Yes => &mut sure,
             Resumable::Maybe => &mut maybe,
@@ -1682,6 +1691,7 @@ fn kept(error: Error, held: &[Held]) -> Error {
             unproven_why("the server"),
             unproven_why("its server"),
         ),
+        (lockless, LOCKLESS.to_owned(), LOCKLESS.to_owned()),
     ];
     let mut told = going_on > 0;
     let mut error = error;
@@ -1698,6 +1708,9 @@ fn kept(error: Error, held: &[Held]) -> Error {
     }
     error
 }
+
+/// why a stop deletes the bytes downloads kept in a cache on a disk that cannot lock files.
+const LOCKLESS: &str = "the cache's disk cannot lock files, so no later run could find it";
 
 /// what `server` sent that names no version a request for the rest of a file may name.
 fn unnamed(why: NoVersion, server: &str) -> String {
@@ -3143,6 +3156,18 @@ mod tests {
                 .collect();
             kept(Error::new(Kind::Interrupted, "stopped"), &held).details
         };
+        let lockless = Held::default();
+        lockless.keep(2 * mib, Resumable::Yes);
+        lockless.lockless.store(true, Ordering::Relaxed);
+        let other = Held::default();
+        other.keep(mib, Resumable::Yes);
+        assert_eq!(
+            kept(Error::new(Kind::Interrupted, "stopped"), &[lockless, other]).details,
+            [
+                "the 1.0 MiB downloaded so far is kept, and the next run continues from there",
+                "the other 2.0 MiB is deleted, since the cache's disk cannot lock files, so no later run could find it"
+            ]
+        );
         assert_eq!(
             said(&[(3 * mib, Resumable::Yes), (0, Resumable::No)]),
             ["the 3.0 MiB downloaded so far is kept, and the next run continues from there"]

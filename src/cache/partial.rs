@@ -132,17 +132,30 @@ impl Cache {
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
         let lock_name = format!("{key}.lock");
+        let made = shard.lacks(&lock_name);
         let opened = open_claim(&shard, &lock_name).map_err(|err| self.explained(&partial, err))?;
         let taken = lock_named(
             opened,
             |file| shard.names(&lock_name, file),
             || open_claim(&shard, &lock_name),
         );
+        #[cfg(test)]
+        let taken = taken.and_then(|lock| {
+            if self.locks {
+                Ok(lock)
+            } else {
+                Err(TryLockError::Error(io::ErrorKind::Unsupported.into()))
+            }
+        });
         let (folder, stem, lock) = match taken {
             Ok(lock) => (shard, key, Some(lock)),
             Err(TryLockError::WouldBlock) => return Ok(Claim::Busy),
             // without locks, a private file keeps processes apart, at the cost of resuming
             Err(TryLockError::Error(_)) => {
+                // a lock file this claim made locks nothing on this disk, and nothing removes it
+                if made {
+                    let _ = shard.remove(&lock_name);
+                }
                 let tmp = Folder::open(&self.root, Path::new("tmp"))
                     .map_err(|err| self.explained(&self.root, err))?;
                 let stem = format!("{key}.{:016x}", fastrand::u64(..));
@@ -265,6 +278,12 @@ pub(crate) fn names(path: &Path, file: &File) -> io::Result<bool> {
 }
 
 impl Partial {
+    /// whether the download is claimed without a lock, on a disk that cannot lock files: its bytes
+    /// are then in a file of its own in `tmp/`, which no later run can find.
+    pub(crate) fn lockless(&self) -> bool {
+        self.lock.is_none()
+    }
+
     /// how many bytes an earlier run kept from the first on, and how the server identified them
     /// then. a split download may have kept ranges past them with none at the start.
     pub(crate) fn resumable(&self) -> Option<(u64, Validators)> {

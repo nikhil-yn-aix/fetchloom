@@ -1633,6 +1633,49 @@ fn a_start_over_refused_at_its_question_keeps_the_bytes_kept() {
     );
 }
 
+/// on a disk that cannot lock files, a download keeps its bytes in a file of its own that no later
+/// run can find: a stop deletes it rather than leave it in the cache for good, and the download
+/// says so before any byte comes, so the stop's line can say they are not kept.
+#[test]
+fn a_stop_deletes_what_no_later_run_can_find() {
+    let body = pattern(0, 4 << 20);
+    let (url, _) = serve(vec![reply("200 OK", &[("ETag", "\"v1\"")], &body)]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache"))
+        .unwrap()
+        .without_locks();
+    let told = Mutex::new(Vec::new());
+    let chunks = std::sync::atomic::AtomicU32::new(0);
+    let stop = |event: Event| {
+        let what = match event {
+            Event::Lockless => "lockless",
+            Event::Started { .. } => "started",
+            // the bytes of the first chunk are written once the stream stops
+            Event::Bytes(_) if chunks.fetch_add(1, Ordering::Relaxed) > 0 => {
+                return Err(Error::new(Kind::Interrupted, "stopped"));
+            }
+            _ => return Ok(()),
+        };
+        told.lock().unwrap().push(what);
+        Ok(())
+    };
+    let stopped = block_on(net(&url).download(&Fetch::new(url.clone()), &cache, &stop));
+    assert_eq!(stopped.unwrap_err().kind, Kind::Interrupted);
+    assert_eq!(*told.lock().unwrap(), ["lockless", "started"]);
+    let left: Vec<_> = fs::read_dir(cache.root().join("tmp"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+    let key = crate::digest::sha256(url.as_str().as_bytes()).hex();
+    let lock = cache
+        .root()
+        .join("partial")
+        .join(&key[..1])
+        .join(format!("{key}.lock"));
+    assert!(!lock.exists(), "a lock file that locks nothing stays");
+}
+
 /// a stop while the download waits for a slot or an answer still counts the kept bytes. their
 /// `ETag` proves they may be continued, and once the server sends the rest, they can.
 #[test]

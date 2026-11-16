@@ -292,6 +292,10 @@ pub(crate) struct Cache {
     /// on windows, what removes the cache's files, shared by every clone.
     #[cfg(not(unix))]
     remover: Arc<Remover>,
+    /// whether downloads may lock their claims, which a test turns off to stand for a disk that
+    /// cannot lock files.
+    #[cfg(test)]
+    locks: bool,
 }
 
 /// the placer windows removes the cache's files through, made at the first removal and kept, so
@@ -449,6 +453,8 @@ impl Cache {
             urls: Arc::default(),
             #[cfg(not(unix))]
             remover: Arc::default(),
+            #[cfg(test)]
+            locks: true,
         })
     }
 
@@ -483,6 +489,8 @@ impl Cache {
             urls: Arc::default(),
             #[cfg(not(unix))]
             remover: Arc::default(),
+            #[cfg(test)]
+            locks: true,
         })
     }
 
@@ -522,6 +530,15 @@ impl Cache {
         Cache {
             volume: Arc::new(Volume::pretend(self.root.join("tmp"))),
             ..self.clone()
+        }
+    }
+
+    /// this cache, as on a disk that cannot lock files, for tests.
+    #[cfg(test)]
+    pub(crate) fn without_locks(self) -> Cache {
+        Cache {
+            locks: false,
+            ..self
         }
     }
 
