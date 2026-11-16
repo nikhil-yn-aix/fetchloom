@@ -254,6 +254,13 @@ fn a_list_at_a_link_places_each_path_below_its_folder() {
     assert_eq!(listed.resolved, Reference::List(list));
 }
 
+/// a list gives no path or link longer than data.lock keeps.
+#[test]
+fn a_list_bounds_its_paths_and_links_as_data_lock_does() {
+    assert_eq!(LONGEST_PATH, crate::project::lock::lists::LONGEST_PATH);
+    assert_eq!(LONGEST_LINK, crate::project::lock::lists::LONGEST_URL);
+}
+
 /// a list on this machine has no folder, so each line gives its file's link; a link that would
 /// leave a secret in data.lock is refused.
 #[test]

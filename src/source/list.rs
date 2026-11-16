@@ -24,6 +24,10 @@ pub(crate) const FORM: &str = "a line is a file's link, then its MD5 or SHA-256 
 /// how data.toml marks a list: this, then its link or its path in the project.
 const MARK: &str = "list:";
 
+/// the longest path and link, in bytes, a list may give a file: the most data.lock keeps.
+const LONGEST_PATH: usize = 4096;
+const LONGEST_LINK: usize = 64 << 10;
+
 /// a list as data.toml names it after `list:`: at a link, or a file in the project folder by its
 /// path there, with `/` between folders.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -708,9 +712,8 @@ fn listing(list: &List, entries: Vec<Entry>, folder: Option<&Url>) -> Result<Lis
                 None => return Err(no_folder(&shown, &entry, path)),
             },
         };
-        let longest = crate::project::lock::lists::LONGEST_PATH;
-        if path.len() > longest || url.as_str().len() > crate::project::lock::lists::LONGEST_URL {
-            let what = if path.len() > longest {
+        if path.len() > LONGEST_PATH || url.as_str().len() > LONGEST_LINK {
+            let what = if path.len() > LONGEST_PATH {
                 "a path"
             } else {
                 "a link"
