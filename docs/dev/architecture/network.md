@@ -11,7 +11,7 @@
 - range support without version proof is insufficient for joining bytes.
 - a cookie a host with a saved credential sets stays in that site's own jar, never the run's shared one, so it goes only where the credential may.
 - no credential goes over plain http through a proxy, loopback included: the proxy reads the request whole, and only `NO_PROXY` keeps a loopback link off `HTTP_PROXY`.
-- a change to the saved keys, `accounts.json` and `credentials.json`, or to the `.netrc`, holds `store::hold`, a lock in the settings folder, from its read to its last write, credential store calls included: two sign-ins at once would otherwise each write back the file they read and lose the other's key.
+- a change to the saved keys, `accounts.json` and `credentials.json`, or to the `.netrc`, holds `store::hold`, a lock in the settings folder, from its read to its last write, credential store calls included: two sign-ins at once would otherwise each write back the file they read and lose the other's key. where file locks fail, as on an nfs home without its lock manager, the change makes `accounts.lock.made` instead, which only one run can make, and removes it when done; one older than two minutes was left by a stopped run and is taken over.
 - masking is explicit. URL and partial records store only URL fingerprints. cache bodies and other metadata are not sanitized output.
 - a shared writable cache trusts its writers; address checks do not isolate cache users. address tests cover radix, percent-encoded and Unicode-dot IPv4 hosts, compressed and embedded IPv6 hosts, scoped-literal refusal, and DNS failure categories.
 

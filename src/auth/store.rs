@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use crate::machine::Var;
 
@@ -154,23 +155,65 @@ fn kept_out_of_store() -> io::Error {
 /// the file every change to the saved keys locks, in fetchloom's settings folder.
 const LOCK: &str = "accounts.lock";
 
+/// the file a change makes to hold the keys where file locks fail, as on an nfs home without its
+/// lock manager: only one run can make it at once.
+const MADE: &str = "accounts.lock.made";
+
+/// how old a made lock file is when the run that made it counts as stopped, so a crash never
+/// keeps every later change waiting. a change holds the keys for a moment, a credential store's
+/// password prompt aside.
+const STALE: Duration = Duration::from_secs(120);
+
 /// the saved keys, and the `.netrc` fetchloom writes, held for one change until this is dropped.
 pub(crate) struct Held {
     _lock: Option<File>,
+    /// the lock file this change made, removed once it is done.
+    made: Option<PathBuf>,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if let Some(path) = self.made.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 /// holds the saved keys and the `.netrc` for one change, waiting while another run changes them:
 /// a change reads a whole file and writes it back, so two at once would lose one of the keys.
-/// with no settings folder, or on a filesystem without locks, the change goes on unheld.
+/// where file locks fail, a lock file only one run can make holds them instead. with no settings
+/// folder, the change goes on unheld.
 pub(crate) fn hold(var: Var<'_>) -> io::Result<Held> {
     match crate::machine::settings_folder(var) {
         Some(folder) => hold_in(&folder),
-        None => Ok(Held { _lock: None }),
+        None => Ok(Held {
+            _lock: None,
+            made: None,
+        }),
     }
 }
 
 /// [`hold`], with `folder` the settings folder.
 fn hold_in(folder: &Path) -> io::Result<Held> {
+    hold_with(folder, File::lock)
+}
+
+/// [`hold_in`], locking the lock file with `locks`.
+fn hold_with(folder: &Path, locks: fn(&File) -> io::Result<()>) -> io::Result<Held> {
+    loop {
+        if let Some(held) = try_hold_with(folder, locks, SystemTime::now())? {
+            return Ok(held);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// [`hold_with`] at `now`, or none when another run holds the keys and the wait would be for it.
+fn try_hold_with(
+    folder: &Path,
+    locks: fn(&File) -> io::Result<()>,
+    now: SystemTime,
+) -> io::Result<Option<Held>> {
     let opened = fs::create_dir_all(folder)
         .and_then(|()| crate::volume::open_unfollowed(&folder.join(LOCK), true));
     let file = match opened {
@@ -183,20 +226,64 @@ fn hold_in(folder: &Path) -> io::Result<Held> {
                 io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
             ) =>
         {
-            return Ok(Held { _lock: None });
+            return Ok(Some(Held {
+                _lock: None,
+                made: None,
+            }));
         }
         Err(err) => return Err(err),
     };
     loop {
-        match file.lock() {
-            Ok(()) => return Ok(Held { _lock: Some(file) }),
+        match locks(&file) {
+            Ok(()) => {
+                return Ok(Some(Held {
+                    _lock: Some(file),
+                    made: None,
+                }));
+            }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
             Err(err) => {
-                tracing::debug!(%err, "this filesystem has no file locks");
-                return Ok(Held { _lock: None });
+                tracing::debug!(%err, "this filesystem has no file locks, so a made file holds the keys");
+                return made(folder, now);
             }
         }
     }
+}
+
+/// holds the keys by making [`MADE`] in `folder`, or none while another run's is there. one
+/// older than [`STALE`] at `now` was left by a run that stopped, so it is taken over.
+fn made(folder: &Path, now: SystemTime) -> io::Result<Option<Held>> {
+    let path = folder.join(MADE);
+    for _ in 0..2 {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => {
+                return Ok(Some(Held {
+                    _lock: None,
+                    made: Some(path),
+                }));
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                let age = fs::symlink_metadata(&path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|made| now.duration_since(made).ok());
+                if age.is_none_or(|age| age <= STALE) {
+                    return Ok(None);
+                }
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err),
+                }
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(None)
 }
 
 /// saves `secret` for `id` in `place`, replacing what was saved for it before. the new key is
@@ -749,6 +836,52 @@ mod tests {
         },
         ..KEYRING
     };
+
+    /// a disk whose file locks fail, as an nfs home without its lock manager does.
+    fn unlocked(_: &File) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(37))
+    }
+
+    /// on a disk without file locks, a change still holds the keys alone: another change waits
+    /// until it is done, so neither loses the other's key.
+    #[test]
+    fn a_disk_without_file_locks_still_holds_the_keys_for_one_change() {
+        let folder = tempfile::tempdir().unwrap();
+        let now = SystemTime::now();
+        let first = hold_with(folder.path(), unlocked).unwrap();
+        assert!(
+            try_hold_with(folder.path(), unlocked, now)
+                .unwrap()
+                .is_none(),
+            "a second change went on while the first held the keys"
+        );
+        drop(first);
+        assert!(
+            try_hold_with(folder.path(), unlocked, now)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// a lock file a stopped run left is taken over once it is older than any change takes, and
+    /// never before.
+    #[test]
+    fn a_lock_file_a_stopped_run_left_is_taken_over_once_stale() {
+        let folder = tempfile::tempdir().unwrap();
+        let left = folder.path().join(MADE);
+        fs::write(&left, b"").unwrap();
+        let made = fs::metadata(&left).unwrap().modified().unwrap();
+        let held = |now| try_hold_with(folder.path(), unlocked, now).unwrap();
+        assert!(held(made + Duration::from_secs(5)).is_none());
+        assert!(held(made + STALE).is_none());
+        let taken = held(made + STALE + Duration::from_secs(1));
+        assert!(
+            taken.is_some(),
+            "a stopped run's lock file kept the keys held"
+        );
+        drop(taken);
+        assert!(!left.exists(), "the change removes the file it made");
+    }
 
     /// [`MEMORY`] as a store a desktop session reaches.
     const REACHED: Keyring = Keyring {
