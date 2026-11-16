@@ -887,11 +887,81 @@ fn unknown_keys_are_rejected_at_each_table_level() {
             "data.toml:4   exculde = ['a/b.csv']",
             "did you mean `exclude`?",
         ),
+        (
+            "[project]\nrequired_version = '>=0.1'\n",
+            "data.toml:2   required_version = '>=0.1'",
+            "required_version goes at the top of data.toml, above every [table]",
+        ),
     ] {
         let error = fails(text);
         assert_eq!(error.kind, Kind::ProjectInvalid);
         assert_eq!(error.details, [citation]);
         assert_eq!(error.help.as_deref(), Some(help));
+    }
+}
+
+/// `required_version` is read before every other key: a range this fetchloom is in reads as if
+/// the key were not there, and one it is not in stops the read with both versions and how to
+/// update, even where data.toml holds a key only a newer fetchloom knows. a value that is no
+/// range is refused at its line, as any other value.
+#[test]
+fn a_project_needing_another_fetchloom_says_so_before_anything_else() {
+    let running = required::RUNNING;
+    let met = parse(&format!(
+        "required_version = \">={running}\"\n\n[datasets.iris]\nref = \"zenodo:1\"\n"
+    ));
+    assert_eq!(met.datasets.keys().collect::<Vec<_>>(), ["iris"]);
+    let install = "https://nikhil-yn-aix.github.io/fetchloom/user/start/install/";
+    for (range, help) in [
+        (
+            ">=999.0",
+            format!(
+                "update fetchloom to a version that matches >=999.0, as {install} shows, then run the same command again"
+            ),
+        ),
+        (
+            "<0.0.1",
+            format!(
+                "install a fetchloom that matches <0.0.1, as {install} shows, then run the same command again"
+            ),
+        ),
+    ] {
+        let error = fails(&format!(
+            "# needs a newer fetchloom\nrequired_version = \"{range}\"\nreport = true\n\n[datasets.iris]\nref = \"zenodo:1\"\ncitation = \"a key a newer fetchloom reads\"\n"
+        ));
+        assert_eq!(error.kind, Kind::ProjectInvalid, "{range}");
+        assert_eq!(
+            error.message,
+            format!("this project needs fetchloom {range}, and this one is {running}")
+        );
+        assert_eq!(
+            error.details,
+            [format!("data.toml:2   required_version = \"{range}\"")]
+        );
+        assert_eq!(error.help.as_deref(), Some(help.as_str()));
+    }
+    for (text, message) in [
+        (
+            "required_version = \"0.2.0\"\n",
+            "required_version = \"0.2.0\" in data.toml is refused because 0.2.0 has no comparison before it, such as >=0.2.0 for 0.2.0 or newer",
+        ),
+        (
+            "required_version = \">=0.2 or so\"\n",
+            "required_version = \">=0.2 or so\" in data.toml is refused because 0.2 or so is no version of numbers and dots, such as 0.1.0",
+        ),
+        (
+            "required_version = 2\n",
+            "required_version in data.toml must be a string in quotes",
+        ),
+    ] {
+        let error = fails(text);
+        assert_eq!(error.kind, Kind::ProjectInvalid, "{text}");
+        assert_eq!(error.message, message, "{text}");
+        assert_eq!(
+            error.details,
+            [format!("data.toml:1   {}", text.trim_end())],
+            "{text}"
+        );
     }
 }
 
@@ -1414,6 +1484,19 @@ const PLAIN_LINES: [&str; 6] = [
     "# a note, with \"quotes\" and = signs",
     "  \t",
 ];
+/// `required_version` lines above the tables: ranges this fetchloom is in, then ones it is not
+/// in, or that are no range, or that the parser reads another way.
+const PLAIN_REQUIRED: [&str; 8] = [
+    "required_version = \">=0.0.1\"",
+    "required_version = \" >=0.0.1, <999 \"",
+    "required_version = \">=999\"",
+    "required_version = \"0.1\"",
+    "required_version = '>=0.0.1'",
+    "required_version = \">=0.0.1\" # a note",
+    "required_version=\">=0.0.1\"",
+    "required_version = \">=0.0.1\\u002C <999\"",
+];
+
 const NEAR_MISSES: [&str; 28] = [
     "[datasets.Iris]",
     "[datasets.\"iris\"]",
@@ -1452,6 +1535,8 @@ const NEAR_MISSES: [&str; 28] = [
 fn a_plain_data_toml_reads_as_the_parser_reads_it() {
     let mut rng = fastrand::Rng::with_seed(4);
     let mut plain_texts = 0;
+    let mut required_texts = 0;
+    let mut required_plain = 0;
     for round in 0..3_000 {
         let mut lines: Vec<String> = Vec::new();
         for _ in 0..rng.usize(0..4) {
@@ -1467,6 +1552,13 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
             let at = rng.usize(..lines.len());
             lines[at] = NEAR_MISSES[rng.usize(..NEAR_MISSES.len())].to_owned();
         }
+        if round % 3 == 0 {
+            lines.insert(
+                0,
+                PLAIN_REQUIRED[rng.usize(..PLAIN_REQUIRED.len())].to_owned(),
+            );
+            required_texts += 1;
+        }
         let mut text = lines.join(if round % 2 == 0 { "\n" } else { "\r\n" });
         if rng.bool() {
             text.push('\n');
@@ -1478,6 +1570,9 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
             continue;
         };
         plain_texts += 1;
+        if text.contains("required_version") {
+            required_plain += 1;
+        }
         let whole = Manifest::parse(&text)
             .unwrap_or_else(|error| panic!("{text:?} read plain, but {}", error.message));
         assert_eq!(plain.data_dir, whole.data_dir, "{text:?}");
@@ -1490,6 +1585,14 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
     }
     // a run that read nothing plain would prove nothing
     assert!(plain_texts > 500, "only {plain_texts} texts read plain");
+    assert!(
+        required_texts > 900,
+        "only {required_texts} texts had a range"
+    );
+    assert!(
+        required_plain > 50,
+        "only {required_plain} texts with a range read plain"
+    );
     let added = with_datasets(
         "# my project\n",
         &[

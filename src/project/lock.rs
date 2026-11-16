@@ -1437,7 +1437,10 @@ fn other_version(version: i64) -> Error {
                 "data.lock is in format {version}, which a newer fetchloom wrote, and this one reads format {VERSION}"
             ),
         )
-        .help("update fetchloom, as https://nikhil-yn-aix.github.io/fetchloom/user/start/install/ shows, then run the same command again");
+        .help(format!(
+            "update fetchloom, as {} shows, then run the same command again",
+            super::manifest::INSTALL
+        ));
     }
     Error::new(
         Kind::ProjectInvalid,

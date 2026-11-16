@@ -18,7 +18,7 @@ copy = true
 path = "measurements"
 ```
 
-`project` and `datasets` are optional tables. a dataset is fetched from a source, named by `ref`. each dataset entry has these keys:
+`project` and `datasets` are optional tables, and [`required_version`](#fetchloom-versions) an optional key above them. a dataset is fetched from a source, named by `ref`. each dataset entry has these keys:
 
 | key | meaning | default |
 |---|---|---|
@@ -176,6 +176,27 @@ sync placed only the 40 `.wav` and 40 `.txt` files of each shard, from `data/sha
 ```
 
 shards may differ, so each `select` pattern of a glob key needs a file in one archive the key covers, not in each, and a shard the table leaves no file places none: with `.flac` files in one of six shards, `select = ["*.flac", "*.txt"]` placed the `.txt` files of all six and the `.flac` files of that one. a pattern that matches in no shard, as the typo `"*.flca"`, is refused once every shard the key covers is unpacked here: `the select pattern "*.flca" in members."shard-*.tar" of datasets.shards matches no file inside the 6 archives it covers`. so is a table that leaves every shard it covers no file, as `exclude = ["*"]` does, naming the key: `select and exclude in members."shard-*.tar" of datasets.speech leave no file of the 8 archives it covers`. a table under an archive's own path wins over any glob, so `[datasets.shards.members."shard-000003.tar"]` alone chooses for that shard. `*` stays inside one folder: `"shard-*.tar"` does not match `train/shard-000000.tar`, which `"train/shard-*.tar"` or `"**/shard-*.tar"` does.
+
+## fetchloom versions
+
+`required_version` names the fetchloom versions a project works with, written as uv's `required-version` is: comparisons such as `>=0.2.0`, joined by commas, as `">=0.2, <0.4"`. a comparison is `>=`, `>`, `<=`, `<`, `==`, `!=`, `~=` or `===` before a version of numbers and dots; `==0.2.*` and `!=0.2.*` compare only the numbers written, and `~=0.2.1` means 0.2.1 or newer, below 0.3. it goes at the top of data.toml, above every table:
+
+```toml
+required_version = ">=0.2.0"
+
+[datasets.iris]
+ref = "zenodo:3608990"
+```
+
+it is read before every other key, so a project that uses a key a newer fetchloom added says what it needs rather than that the key is unknown. a fetchloom outside the range stops every command that reads data.toml, before it reads or writes anything else, with `project.invalid`, exit 50:
+
+```text
+error: this project needs fetchloom >=0.2.0, and this one is 0.1.0
+  data.toml:1   required_version = ">=0.2.0"
+  help: update fetchloom to a version that matches >=0.2.0, as https://nikhil-yn-aix.github.io/fetchloom/user/start/install/ shows, then run `fetchloom status` again
+```
+
+a value that is no range is refused at its line like any other value: `required_version = "0.2.0" in data.toml is refused because 0.2.0 has no comparison before it, such as >=0.2.0 for 0.2.0 or newer`. a version with no comparison, which uv reads as `==`, is refused for that reason, and so is a pre-release such as `0.2.0rc1`, since fetchloom compares release numbers.
 
 ## encoding and validation
 

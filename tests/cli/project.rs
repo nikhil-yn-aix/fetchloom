@@ -4407,3 +4407,82 @@ fn a_lock_a_newer_fetchloom_wrote_asks_for_that_fetchloom() -> Result {
     }
     Ok(())
 }
+
+/// a project whose data.toml asks for a newer fetchloom in `required_version` stops every
+/// command that reads it with both versions and how to update, before any other key is read and
+/// with nothing written; a version in its range works as before.
+#[test]
+fn a_project_needing_a_newer_fetchloom_stops_every_command() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("flowers")?;
+    fs::write(folder.join("sepals.csv"), b"length\n5.1\n")?;
+    let added = sandbox.run(&["add", "../flowers"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let path = sandbox.work().join("data.toml");
+    let manifest = fs::read_to_string(&path)?;
+    let running = env!("CARGO_PKG_VERSION");
+    fs::write(
+        &path,
+        format!("required_version = \">={running}\"\n{manifest}"),
+    )?;
+    for command in [&["status", "--check"][..], &["sync"], &["lock", "--check"]] {
+        let output = sandbox.run(command)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{command:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    let needing = format!(
+        "required_version = \">=999.0\"\n{manifest}citation = \"a key a newer fetchloom reads\"\n"
+    );
+    fs::write(&path, &needing)?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_string_lossy();
+    for command in [
+        &["status"][..],
+        &["sync"],
+        &["lock"],
+        &["list"],
+        &["path", "flowers"],
+        &["add", "../flowers", "--as", "petals"],
+        &["remove", "flowers"],
+        &["exclude", "data/flowers/sepals.csv"],
+        &["drop", "flowers"],
+        &["export"],
+        &["push", "--to", &mirror],
+    ] {
+        let output = sandbox.run(&[&["--json"][..], command].concat())?;
+        assert_eq!(output.status.code(), Some(50), "{command:?}");
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "project.invalid", "{command:?}");
+        assert_eq!(
+            error["message"],
+            format!("this project needs fetchloom >=999.0, and this one is {running}"),
+            "{command:?}"
+        );
+        let help = error["help"].as_str().unwrap_or_default();
+        assert!(
+            help.starts_with(
+                "update fetchloom to a version that matches >=999.0, as https://nikhil-yn-aix.github.io/fetchloom/user/start/install/ shows, then run `fetchloom --json "
+            ),
+            "{command:?}: {help}"
+        );
+        assert_eq!(fs::read_to_string(&path)?, needing, "{command:?}");
+        assert_eq!(
+            fs::read(sandbox.work().join("data.lock"))?,
+            lock,
+            "{command:?}"
+        );
+    }
+    let output = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&output.stderr)?,
+        format!(
+            "error: this project needs fetchloom >=999.0, and this one is {running}\n  data.toml:1   required_version = \">=999.0\"\n  help: update fetchloom to a version that matches >=999.0, as https://nikhil-yn-aix.github.io/fetchloom/user/start/install/ shows, then run `fetchloom status` again\n"
+        )
+    );
+    Ok(())
+}

@@ -91,6 +91,7 @@ data.toml holds what a person asked for, data.lock what it resolved to, and `.fe
 |---|---|---|---|
 | `src/project.rs` | the project folder: finding it, `Held`, the lock a command holds while it changes the project, and atomic writes | `Project`, `Held` | `Hold`, `Owner`, `find`, `hold`, `write`, `write_state`, `data_dir` |
 | `src/project/manifest.rs` | data.toml: each dataset's `Source`, with `ref`, `select`, `exclude` and `extract`, and every check of those keys; edits that keep comments, order and spacing, a new dataset in name order | `Manifest`, `Entry`, `Source` | `Reader`, `parse`, `with_dataset`, `without_dataset`, `with_dataset_from`, `tables`, `outside` |
+| `src/project/manifest/required.rs` | data.toml's `required_version`: the fetchloom versions a project works with, comparisons as uv's `required-version` takes them, read before any other key | `Range`, `Verdict` | `Range::parse`, `Range::verdict`, `RUNNING` |
 | `src/project/lock.rs` | data.lock: each resolved dataset (`Locked`) and the immutable byte pins of its files (`LockedFile`), their checks, and the fixed-order writer that gives the same bytes for the same inputs | `Lock`, `Locked`, `LockedFile` | `Drift`, `parse`, `render`, `spec`, `timestamp` |
 | `src/project/lock/canonical.rs` | a fast reader for data.lock as fetchloom writes it; any other TOML goes to the general reader and its exact errors | `read` |  |
 | `src/project/lock/archives.rs` | the archives among a dataset's pins, a split archive with its parts | `pinned` | `Archive`, `Pinned`, `archive`, `of` |

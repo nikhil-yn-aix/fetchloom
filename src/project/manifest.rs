@@ -1,6 +1,8 @@
 //! `data.toml`: the datasets a project needs. people write it, and `add` and `remove` edit it in
 //! place, keeping comments, order and spacing.
 
+mod required;
+
 use std::collections::BTreeMap;
 use std::ops::{Bound, Range};
 
@@ -11,6 +13,8 @@ use crate::glob::{self, Glob};
 use crate::name;
 
 pub(crate) const FILE: &str = "data.toml";
+/// the page that says how to install another fetchloom.
+pub(crate) const INSTALL: &str = "https://nikhil-yn-aix.github.io/fetchloom/user/start/install/";
 /// the data folder of a project whose data.toml names none.
 pub(crate) const DATA_DIR: &str = "data";
 /// the `path` that puts a dataset's files straight in the data folder.
@@ -19,7 +23,7 @@ pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
 const PROJECT_FILES: [&str; 3] = [FILE, "data.lock", "data.lock.d"];
 /// the files git reads its rules from in a repository's folders, besides its `.git` folder.
 const GIT_FILES: [&str; 3] = [".gitignore", ".gitattributes", ".gitmodules"];
-const TOP_KEYS: [&str; 2] = ["project", "datasets"];
+const TOP_KEYS: [&str; 3] = [required::KEY, "project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
 const DATASET_KEYS: [&str; 8] = [
     "ref", "select", "exclude", "extract", "members", "web_page", "copy", "path",
@@ -217,6 +221,10 @@ impl Manifest {
             starts: std::cell::OnceCell::new(),
             private: Some(private(root)),
         };
+        // before any other key, so a key a newer fetchloom added is not what stops the read
+        if let Some(item) = root.get(required::KEY) {
+            reader.required(item, required::RUNNING)?;
+        }
         reader.known(root, &TOP_KEYS, "")?;
         let data_dir = match root.get("project") {
             None => DATA_DIR.to_owned(),
@@ -252,14 +260,15 @@ impl Manifest {
 }
 
 /// data.toml as a settled sync reads it, when it holds only what `add` writes for a dataset of
-/// one ref: `[datasets.<name>]` tables of a `ref`, blank lines and comments. it
-/// reads them without a TOML parser, and only where [`Manifest::parse`] would read the same; none
-/// for anything else. an entry keeps no select its link implies and cites no line, so a sync that
-/// finds anything to do parses data.toml whole.
+/// one ref: `[datasets.<name>]` tables of a `ref`, blank lines and comments, below a
+/// `required_version` this fetchloom is in. it reads them without a TOML parser, and only where
+/// [`Manifest::parse`] would read the same; none for anything else. an entry keeps no select its
+/// link implies and cites no line, so a sync that finds anything to do parses data.toml whole.
 pub(crate) fn read_plain(text: &str) -> Option<Manifest> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut datasets = BTreeMap::new();
     let mut open: Option<(String, Option<String>)> = None;
+    let mut required = false;
     for line in text.split_inclusive('\n') {
         // a carriage return ends a line only before a line feed
         let line = line
@@ -290,7 +299,22 @@ pub(crate) fn read_plain(text: &str) -> Option<Manifest> {
             open = Some((name.to_owned(), None));
             continue;
         }
-        let (_, reference) = open.as_mut()?;
+        let Some((_, reference)) = open.as_mut() else {
+            // above the tables, only a range the parser lets this fetchloom through
+            let value = line
+                .strip_prefix(required::KEY)
+                .and_then(|rest| rest.strip_prefix(" = \""))
+                .and_then(|rest| rest.strip_suffix('"'))?;
+            if required || value.contains(['"', '\\']) || value.contains(char::is_control) {
+                return None;
+            }
+            let range = required::Range::parse(value).ok()?;
+            if range.verdict(required::RUNNING) != required::Verdict::Allowed {
+                return None;
+            }
+            required = true;
+            continue;
+        };
         let value = line
             .strip_prefix("ref = \"")
             .and_then(|rest| rest.strip_suffix('"'))?;
@@ -606,12 +630,40 @@ impl Reader<'_> {
                     format!("data.toml has a key fetchloom does not know: \"{key}\"{within}"),
                 );
                 return Err(match name::closest(key, known.iter().copied()) {
+                    _ if key == required::KEY => error.help(format!(
+                        "{key} goes at the top of data.toml, above every [table]"
+                    )),
                     Some(best) => error.help(format!("did you mean `{best}`?")),
                     None => error.help(format!("the keys here are {}", known.join(", "))),
                 });
             }
         }
         Ok(())
+    }
+
+    /// refuses data.toml when its `required_version`, `item`, leaves out fetchloom `running`, or
+    /// is no range of versions.
+    fn required(&self, item: &Item, running: &str) -> Result<(), Error> {
+        let written = self.string(item, required::KEY)?;
+        let range = required::Range::parse(written).map_err(|reason| {
+            self.error(
+                item.span(),
+                format!(
+                    "{} = \"{written}\" in data.toml is refused because {reason}",
+                    required::KEY
+                ),
+            )
+            .help("write the fetchloom versions the project works with as comparisons, such as \">=0.1.0\" for 0.1.0 or newer")
+        })?;
+        match range.verdict(running) {
+            required::Verdict::Allowed => Ok(()),
+            verdict => Err(self
+                .error(
+                    item.span(),
+                    format!("this project needs fetchloom {range}, and this one is {running}"),
+                )
+                .help(range.help(verdict))),
+        }
     }
 
     fn string<'b>(&self, item: &'b Item, key: &str) -> Result<&'b str, Error> {
