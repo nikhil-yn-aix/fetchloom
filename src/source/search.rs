@@ -307,22 +307,36 @@ pub(crate) async fn search(
     }
     let mut result = Search::default();
     let mut failed = Vec::new();
+    let (mut failed_at, mut late) = (Vec::new(), Vec::new());
     let mut lists = Vec::new();
     for (place, (catalog, answer)) in asked.into_iter().zip(answers).enumerate() {
         let source = catalog.label();
         match answer {
-            None => result.warnings.push(unanswered(catalog, words, grace)),
+            None => {
+                late.push(catalog);
+                result.warnings.push(unanswered(catalog, words, grace));
+            }
             Some(Ok(candidates)) => lists.push(offer(candidates, place, &mut offered).into_iter()),
             Some(Err(error)) => {
                 result.warnings.push(Short {
                     message: format!("{source} search failed: {error}"),
                     help: None,
                 });
+                failed_at.push(catalog);
                 failed.push(error);
             }
         }
     }
     if lists.is_empty() && !failed.is_empty() {
+        if !late.is_empty() {
+            return Err(unfinished(
+                &failed_at,
+                &late,
+                (words, grace),
+                &failed,
+                result.warnings,
+            ));
+        }
         return Err(everywhere(failed, result.warnings));
     }
     let mut ranked = Vec::new();
@@ -356,6 +370,41 @@ fn everywhere(mut failed: Vec<Error>, told: Vec<Short>) -> Error {
     } else {
         Some("fix the errors above, then run the same command again".into())
     };
+    error.need = failed.iter().find_map(|error| error.need.clone());
+    error.details = told.into_iter().map(|short| short.message).collect();
+    error
+}
+
+/// the error of a search whose sites `failed_at` failed, with their `failed` errors, while those
+/// `late` had not answered when the grace ended: no site failing everywhere, so the help names the
+/// command that waits for the late ones, as their warnings would have.
+fn unfinished(
+    failed_at: &[Catalog],
+    late: &[Catalog],
+    (words, grace): (&str, Duration),
+    failed: &[Error],
+    told: Vec<Short>,
+) -> Error {
+    let labels = |catalogs: &[Catalog]| {
+        let labels: Vec<&str> = catalogs.iter().map(|catalog| catalog.label()).collect();
+        crate::units::listed(&labels, "and")
+    };
+    let names: Vec<&str> = late.iter().map(|catalog| catalog.name()).collect();
+    let mut error = Error::new(
+        Kind::NetworkUnreachable,
+        format!(
+            "no site gave a search result: the search failed at {}, and {} did not answer within {} s of it",
+            labels(failed_at),
+            labels(late),
+            grace.as_secs()
+        ),
+    )
+    .help(format!(
+        "`fetchloom search {} --source {}` waits for {}",
+        crate::suggested::shell_word(words),
+        names.join(","),
+        if late.len() == 1 { "it" } else { "them" }
+    ));
     error.need = failed.iter().find_map(|error| error.need.clone());
     error.details = told.into_iter().map(|short| short.message).collect();
     error

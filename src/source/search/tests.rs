@@ -658,6 +658,40 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
     }
 }
 
+/// a site that fails at once while the others stay silent past the grace is no search that
+/// failed at every site: the error names the silent sites and the command that waits for them.
+#[test]
+fn a_quick_failure_and_silent_sites_name_the_wait() {
+    struct Refusing(Recorded);
+    impl Api for Refusing {
+        async fn get(&self, url: &url::Url) -> Result<crate::net::Response, Error> {
+            if url.host_str() != Some("api.kaggle.com") {
+                std::future::pending::<()>().await;
+            }
+            self.0.get(url).await
+        }
+    }
+    let api = Refusing(recorded().on(KAGGLE, 403, b"denied".to_vec()));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(search(&api, "iris", &[], Some(LIMIT)))
+        .unwrap_err();
+    assert_eq!(error.kind, Kind::NetworkUnreachable);
+    assert_eq!(
+        error.message,
+        "no site gave a search result: the search failed at kaggle, and hugging face, zenodo, GEO and openneuro did not answer within 3 s of it"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some("`fetchloom search iris --source hf,zenodo,geo,openneuro` waits for them")
+    );
+    assert_eq!(error.details.len(), 5, "{:?}", error.details);
+}
+
 #[test]
 fn sources_are_asked_concurrently() {
     use std::future::{Future as _, poll_fn};
