@@ -1,28 +1,29 @@
 //! this machine's service account: its email and tokens from google's metadata server at
 //! 169.254.169.254, asked through a client of its own once no application default credentials
-//! are on the machine and a listed bucket or drive item was refused without a token. no other
-//! request is let through to that private address.
+//! are on the machine and a listed bucket or drive item was refused without a token, on a machine
+//! that may be one of google cloud's. no other request is let through to that private address.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use reqwest::header::HeaderValue;
 use url::Url;
 
 use super::super::failure::{self, Failure, Retry};
+use super::super::metadata::{self, Unheard};
 use super::super::{Net, host};
 use super::Bearer;
 use crate::auth::oauth;
 use crate::error::{Error, Kind};
-use crate::work::Work;
 
 /// where a google cloud machine's metadata server answers, by its address as google's go client
 /// asks it, so no name lookup can send the request elsewhere.
 pub(super) const SERVER: &str = "http://169.254.169.254";
 /// the machine's default service account on that server.
 const ACCOUNT: &str = "/computeMetadata/v1/instance/service-accounts/default";
-/// how long the server may take to open a connection: it is on this machine's own network.
-const CONNECT: Duration = Duration::from_secs(5);
+/// where linux reads this machine's product name from its firmware, as google's own go client
+/// does: google's virtual machines name themselves "Google Compute Engine".
+const PRODUCT: &str = "/sys/class/dmi/id/product_name";
 const LARGEST_ANSWER: usize = 64 << 10;
 /// how long a token lives when the answer does not say: google's live an hour.
 const LIFETIME: Duration = Duration::from_hours(1);
@@ -32,27 +33,63 @@ const NO_ACCOUNT: &str = "give the virtual machine a service account, run `gclou
 /// what the metadata server's address answered.
 enum Answer {
     /// nothing, or a service that does not say it is google's, as off google cloud.
-    Elsewhere,
+    Elsewhere(Elsewhere),
     /// google's metadata server, with this status and body.
     Said(u16, Vec<u8>),
 }
 
+/// why no google metadata server answered at its address, as off google cloud.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Elsewhere {
+    /// nothing answered there.
+    Unheard(Unheard),
+    /// a service answered without saying it is google's.
+    Foreign,
+}
+
+/// google's metadata server, when this machine may be one of google cloud's: never a mac, and on
+/// linux one whose firmware names google, or that linux cannot tell.
+pub(super) fn server() -> Option<Url> {
+    let may_be = if cfg!(target_os = "linux") {
+        may_be_googles(&std::fs::read_to_string(PRODUCT))
+    } else {
+        !cfg!(target_os = "macos")
+    };
+    if may_be {
+        Url::parse(SERVER).ok()
+    } else {
+        None
+    }
+}
+
+/// whether a linux machine whose product name read as `product` may be one of google's: it is
+/// when that names google, and may be when linux cannot tell.
+pub(super) fn may_be_googles(product: &std::io::Result<String>) -> bool {
+    match product {
+        Ok(name) => matches!(name.trim(), "Google" | "Google Compute Engine" | ""),
+        Err(_) => true,
+    }
+}
+
 impl Net {
-    /// the email of this machine's service account, as the metadata server at `server` names it;
-    /// none when no google metadata server answers there.
+    /// the email of this machine's service account, as the metadata server at `server` names it,
+    /// or why no google metadata server answered there within the first ask's wait.
     ///
     /// # Errors
     ///
     /// `offline.missing` offline, `network.refused` in mirror-only mode, `auth.required` for a
     /// machine without a service account, `source.invalid` for a name that is no email, and
     /// `interrupted` once the run is stopped.
-    pub(super) async fn machine_account(&self, server: &Url) -> Result<Option<Arc<str>>, Error> {
+    pub(super) async fn machine_account(
+        &self,
+        server: &Url,
+    ) -> Result<Result<Arc<str>, Elsewhere>, Error> {
         let url = at(server, "email")?;
         let mut retry = Retry::new(self, &url);
         loop {
-            match self.ask_machine(&url).await {
-                Ok(Answer::Elsewhere) => return Ok(None),
-                Ok(Answer::Said(status, body)) => return account(status, &body).map(Some),
+            match self.ask_machine(&url, metadata::FIRST).await {
+                Ok(Answer::Elsewhere(elsewhere)) => return Ok(Err(elsewhere)),
+                Ok(Answer::Said(status, body)) => return account(status, &body).map(Ok),
                 Err(failure) => retry.after(failure, false).await?,
             }
         }
@@ -75,8 +112,8 @@ impl Net {
         url.query_pairs_mut().append_pair("scopes", scope);
         let mut retry = Retry::new(self, &url);
         let (token, lifetime) = loop {
-            match self.ask_machine(&url).await {
-                Ok(Answer::Elsewhere) => {
+            match self.ask_machine(&url, metadata::CONNECT + self.idle).await {
+                Ok(Answer::Elsewhere(_)) => {
                     return Err(Error::new(
                         Kind::AuthRequired,
                         "google's metadata server stopped answering for this machine's service account",
@@ -102,10 +139,10 @@ impl Net {
         Ok((bearer, Some(lifetime)))
     }
 
-    /// one GET of `url` with `Metadata-Flavor: Google`, through a client with no proxy, redirect,
-    /// cookie or other credential. no answer, or one that does not say it is google's, is the
-    /// answer of a machine elsewhere: nothing would ever answer there otherwise.
-    async fn ask_machine(&self, url: &Url) -> Result<Answer, Failure> {
+    /// one GET of `url` with `Metadata-Flavor: Google`, given up after `wait`. no answer, or one
+    /// that does not say it is google's, is the answer of a machine elsewhere: nothing would ever
+    /// answer there otherwise.
+    async fn ask_machine(&self, url: &Url, wait: Duration) -> Result<Answer, Failure> {
         if self.offline.enabled() {
             return Err(Failure::Final(
                 Error::new(
@@ -116,46 +153,24 @@ impl Net {
             ));
         }
         self.may_ask(url, false, None)?;
-        // the process may already have a provider, which is fine
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT)
-            .build()
-            .map_err(|err| {
-                Failure::Final(Error::new(
-                    Kind::NetworkUnreachable,
-                    format!("could not start the network client: {err}"),
-                ))
-            })?;
-        let ticket = self.pace(url).await.map_err(Failure::Final)?;
-        Work::add(&self.work.requests, 1);
         tracing::debug!(
             host = host(url),
             "asking google's metadata server for this machine's service account"
         );
-        let request = client
-            .get(url.clone())
-            .header("metadata-flavor", HeaderValue::from_static("Google"));
-        let mut response = tokio::select! {
-            sent = tokio::time::timeout(CONNECT + self.idle, request.send()) => match sent {
-                Ok(Ok(response)) => response,
-                _ => return Ok(Answer::Elsewhere),
-            },
-            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
+        let mut response = match self
+            .ask_metadata(url, Some(("metadata-flavor", "Google")), wait)
+            .await?
+        {
+            Ok(response) => response,
+            Err(unheard) => return Ok(Answer::Elsewhere(Elsewhere::Unheard(unheard))),
         };
-        let limits =
-            super::super::pace::limits(response.status(), response.headers(), SystemTime::now());
-        super::super::pace::Paces::heard(ticket, limits, Instant::now());
         // google's server says it is google's, as google's own clients check
         if response
             .headers()
             .get("metadata-flavor")
             .is_none_or(|flavor| flavor != "Google")
         {
-            return Ok(Answer::Elsewhere);
+            return Ok(Answer::Elsewhere(Elsewhere::Foreign));
         }
         let status = response.status();
         if failure::is_transient(status) {

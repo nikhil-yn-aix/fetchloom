@@ -721,6 +721,48 @@ fn a_machine_without_googles_metadata_server_has_no_credentials() {
     assert_eq!(authorizations(&asked), vec![None; 6]);
 }
 
+/// a machine that may be one of google's asks the metadata server's address once a run, and an
+/// address that takes the connection and never answers, as a firewall's may, is given up after
+/// the first ask's second: there are no credentials, and no longer wait.
+#[test]
+fn an_unanswering_metadata_address_is_asked_once_and_given_up_after_a_second() {
+    let (endpoint, _) = tokens();
+    let (local, _) = server(|_, _| reply("401 Unauthorized", &[], b""));
+    let silent = crate::net::metadata::tests::Silent::new();
+    let net = machine_net(&["lab-private"], &endpoint, Some(&silent.url));
+    let client = transport();
+    let link = "https://storage.googleapis.com/lab-private/a.csv";
+    for _ in 0..2 {
+        assert_eq!(block_on(through(&net, &client, &local, link)).status(), 401);
+    }
+    assert_eq!(silent.taken(), 1);
+    assert_eq!(
+        block_on(net.machine_account(&silent.url)).unwrap(),
+        Err(machine::Elsewhere::Unheard(
+            crate::net::metadata::Unheard::Waited(Duration::from_secs(1))
+        ))
+    );
+}
+
+/// linux names google's virtual machines "Google Compute Engine", or "Google", as google's own go
+/// client reads it: a machine it names otherwise is none of google's, and its metadata server is
+/// never asked, while one it cannot name may be google's.
+#[test]
+fn only_a_machine_linux_names_as_googles_or_cannot_name_may_be_googles() {
+    let unnamed = || Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+    for (product, may_be) in [
+        (Ok("Google Compute Engine\n".to_owned()), true),
+        (Ok("Google\n".to_owned()), true),
+        (Ok("\n".to_owned()), true),
+        (unnamed(), true),
+        (Ok("Virtual Machine\n".to_owned()), false),
+        (Ok("Standard PC (Q35 + ICH9, 2009)\n".to_owned()), false),
+        (Ok("HVM domU\n".to_owned()), false),
+    ] {
+        assert_eq!(machine::may_be_googles(&product), may_be, "{product:?}");
+    }
+}
+
 /// google's metadata server on a machine without a service account, or one that gives no token,
 /// stops the bucket's requests with what it said.
 #[test]

@@ -11,6 +11,7 @@ pub(crate) mod estimate;
 mod failure;
 pub(crate) mod google;
 mod headers;
+mod metadata;
 mod opened;
 mod pace;
 mod rate;

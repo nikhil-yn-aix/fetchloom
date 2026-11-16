@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::io::{Read, Write as _};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::*;
@@ -548,12 +549,19 @@ fn the_machines_managed_identity_reads_a_listed_container_once_refused() {
     );
     assert_eq!(asked.lock().unwrap().len(), 2);
     let identity_asked = identity_asked.lock().unwrap().clone();
-    assert_eq!(identity_asked.len(), 1);
+    let line = format!(
+        "get /metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3a%2f%2fstorage.azure.com%2f&client_id={CLIENT_ID} http/1.1"
+    );
     assert_eq!(
-        identity_asked[0].line,
-        format!(
-            "get /metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3a%2f%2fstorage.azure.com%2f&client_id={CLIENT_ID} http/1.1"
-        )
+        identity_asked
+            .iter()
+            .map(|asked| (
+                asked.line.as_str(),
+                asked.head.contains("\r\nmetadata: true\r\n")
+            ))
+            .collect::<Vec<_>>(),
+        [(line.as_str(), false), (line.as_str(), true)],
+        "the first ask goes without the header azure's service needs, which it refuses at once"
     );
     let project = Url::parse("http://169.254.169.254/metadata/identity/oauth2/token").unwrap();
     let refused = block_on(crate::net::Api::get(&net, &project)).unwrap_err();
@@ -608,12 +616,37 @@ fn a_managed_identity_that_cannot_be_had_says_why() {
     assert_eq!(lines(&asked).len(), 2);
 }
 
+/// the managed identity's first ask of a run is given up after a second, as azure's own sdk
+/// gives it, when the service's address takes the connection and never answers: off azure, no
+/// longer wait, and no token is asked for.
+#[test]
+fn an_unanswering_metadata_address_is_given_up_after_a_second() {
+    let silent = crate::net::metadata::tests::Silent::new();
+    let (local, _) = blob_host("never");
+    let net = azure_net_at(
+        &["azure:lab/raw"],
+        &[("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential")],
+        Some(silent.url.join("metadata/identity/oauth2/token").unwrap()),
+    );
+    let error = through(&net, &local, "https://lab.blob.core.windows.net/raw/a.csv").unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        error.message,
+        "this machine's managed identity could not be asked: no metadata service answered at 169.254.169.254 within 1 s, so this is no azure virtual machine, or something blocks its service"
+    );
+    assert_eq!(silent.taken(), 1);
+}
+
 /// a metadata service's answer with no bearer token a header can carry ends the request, in
 /// words that name the service.
 #[test]
 fn a_metadata_answer_without_a_usable_token_says_so() {
-    let (identity, _) = server(|_, count| {
-        let body: &[u8] = match count {
+    let asked = AtomicUsize::new(0);
+    let (identity, _) = server(move |head, _| {
+        if !head.contains("\r\nmetadata: true\r\n") {
+            return reply("400 Bad Request", &[], b"");
+        }
+        let body: &[u8] = match asked.fetch_add(1, Ordering::Relaxed) {
             0 => br#"{"access_token":"identity-token","token_type":"mac"}"#,
             1 => br#"{"access_token":"identity token","token_type":"Bearer"}"#,
             _ => b"<html>not json</html>",
@@ -651,7 +684,12 @@ fn a_metadata_answer_without_a_usable_token_says_so() {
 /// the cut one ends it.
 #[test]
 fn a_metadata_answer_is_read_whole_up_to_64_kib() {
-    let (identity, identity_asked) = server(|_, count| {
+    let asked = AtomicUsize::new(0);
+    let (identity, identity_asked) = server(move |head, _| {
+        if !head.contains("\r\nmetadata: true\r\n") {
+            return reply("400 Bad Request", &[], b"");
+        }
+        let count = asked.fetch_add(1, Ordering::Relaxed);
         let mut body =
             br#"{"access_token":"identity-token","expires_in":"86399","token_type":"Bearer"}"#
                 .to_vec();
@@ -696,7 +734,13 @@ fn a_metadata_answer_is_read_whole_up_to_64_kib() {
         cut.message,
         "gave up on 127.0.0.1 after 1 try: azure's metadata service broke off its answer"
     );
-    assert_eq!(identity_asked.lock().unwrap().len(), 4);
+    let tokens_asked = identity_asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|asked| asked.head.contains("\r\nmetadata: true\r\n"))
+        .count();
+    assert_eq!(tokens_asked, 4);
 }
 
 /// azure refusing a key or a token says which went and what lets it in.

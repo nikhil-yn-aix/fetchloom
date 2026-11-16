@@ -414,9 +414,11 @@ fn a_listed_private_container_is_read_with_the_machines_identity() -> Result {
         .output()?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
+    // the first ask goes without the header azure's service needs, so off azure it ends at once
     let asked = identity.requests();
-    assert_eq!(asked.len(), 1, "{asked:?}");
-    assert!(asked[0].contains("\r\nmetadata: true\r\n"), "{}", asked[0]);
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(!asked[0].contains("\r\nmetadata:"), "{}", asked[0]);
+    assert!(asked[1].contains("\r\nmetadata: true\r\n"), "{}", asked[1]);
     let heads = server.requests();
     assert_eq!(heads.len(), 3, "{heads:?}");
     assert!(!heads[0].contains("authorization"), "{}", heads[0]);

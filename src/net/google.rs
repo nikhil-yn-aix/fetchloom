@@ -86,8 +86,9 @@ pub(crate) struct Google {
     #[cfg(debug_assertions)]
     token_endpoint: Option<Url>,
     /// this machine's metadata server, asked when no application default credentials are here:
-    /// google's address, a server on this machine that stands in for it in tests, or none.
-    machine_server: Option<Url>,
+    /// google's address on a machine that may be one of google's, read once a run when first
+    /// needed, a server on this machine that stands in for it in tests, or none.
+    machine_server: OnceLock<Option<Url>>,
     /// the email of this machine's service account, asked once a run when first needed: none
     /// when no google metadata server answered.
     machine: Lease<Option<Arc<str>>>,
@@ -161,9 +162,9 @@ impl Google {
             token_endpoint: None,
             // a unit test never asks the metadata server of the machine it runs on
             machine_server: if cfg!(test) {
-                None
+                OnceLock::from(None)
             } else {
-                Url::parse(machine::SERVER).ok()
+                OnceLock::new()
             },
             machine: Lease::default(),
         }
@@ -188,7 +189,7 @@ impl Google {
     /// one. only tests need it.
     #[cfg(test)]
     pub(crate) fn with_machine_server(mut self, server: Option<Url>) -> Google {
-        self.machine_server = server;
+        self.machine_server = OnceLock::from(server);
         self
     }
 
@@ -198,7 +199,9 @@ impl Google {
     #[cfg(debug_assertions)]
     pub(crate) fn with_test_machine_server(mut self) -> Google {
         if std::env::var_os("FETCHLOOM_TEST_GOOGLE_METADATA").is_some() {
-            self.machine_server = super::api::local_test_server("FETCHLOOM_TEST_GOOGLE_METADATA");
+            self.machine_server = OnceLock::from(super::api::local_test_server(
+                "FETCHLOOM_TEST_GOOGLE_METADATA",
+            ));
         }
         self
     }
@@ -321,13 +324,19 @@ impl Google {
         if let Some(credentials) = self.credentials()? {
             return Ok(Some(Source::Credentials(credentials)));
         }
-        let Some(server) = &self.machine_server else {
+        let Some(server) = self.machine_server.get_or_init(machine::server) else {
             return Ok(None);
         };
         let account = self
             .machine
             .get(Instant::now, || {
-                Box::pin(async { Ok((net.machine_account(server).await?, None)) })
+                Box::pin(async {
+                    let account = net.machine_account(server).await?;
+                    if let Err(elsewhere) = &account {
+                        tracing::debug!(?elsewhere, "no google metadata server answered");
+                    }
+                    Ok((account.ok(), None))
+                })
             })
             .await?;
         Ok(account.map(|account| Source::Machine {

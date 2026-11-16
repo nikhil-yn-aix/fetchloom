@@ -2,25 +2,22 @@
 //! at 169.254.169.254, asked through a client of its own and only once `AZURE_TOKEN_CREDENTIALS`
 //! names the identity. no other request is let through to that private address.
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use reqwest::StatusCode;
-use reqwest::header::HeaderValue;
 use url::Url;
 
 use super::super::failure::{self, Failure, Retry};
+use super::super::metadata::{self, Unheard};
 use super::super::{Net, host};
 use crate::auth::azure::STORAGE;
 use crate::auth::oauth;
 use crate::error::{Error, Kind};
-use crate::work::Work;
 
 /// where every virtual machine's instance metadata service gives its identity's tokens.
 const ENDPOINT: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
 /// the version of the service's API that answers for a token.
 const VERSION: &str = "2018-02-01";
-/// how long the service may take to open a connection: it is on this machine's own network.
-const CONNECT: Duration = Duration::from_secs(5);
 const LARGEST_ANSWER: usize = 64 << 10;
 /// how long a token lives when the answer does not say: azure's tokens live an hour or more.
 const LIFETIME: Duration = Duration::from_hours(1);
@@ -54,6 +51,24 @@ impl Net {
         if let Some(client_id) = client_id {
             url.query_pairs_mut().append_pair("client_id", client_id);
         }
+        if self.offline.enabled() {
+            return Err(Error::new(
+                Kind::OfflineMissing,
+                "offline, and this needs a token of this machine's managed identity",
+            )
+            .help(self.offline.retry()));
+        }
+        self.may_ask(&url, false, None)
+            .map_err(|failure| failure.into_error(Kind::NetworkRefused))?;
+        // azure's own sdk asks first without the `metadata` header, which the service refuses at
+        // once, so a machine off azure waits no longer than that first ask
+        let first = self
+            .ask_metadata(&url, None, metadata::FIRST)
+            .await
+            .map_err(|failure| failure.into_error(Kind::AuthRequired))?;
+        if let Err(unheard) = first {
+            return Err(unanswered(unheard));
+        }
         let mut retry = Retry::new(self, &url);
         loop {
             match self.ask_identity(&url).await {
@@ -67,49 +82,21 @@ impl Net {
     /// unless another try may get past it, as for the 404 and 410 it sends while it starts. a
     /// service that does not answer fails at once: off azure, nothing ever will.
     async fn ask_identity(&self, url: &Url) -> Result<(u16, Vec<u8>), Failure> {
-        if self.offline.enabled() {
-            return Err(Failure::Final(
-                Error::new(
-                    Kind::OfflineMissing,
-                    "offline, and this needs a token of this machine's managed identity",
-                )
-                .help(self.offline.retry()),
-            ));
-        }
-        self.may_ask(url, false, None)?;
-        // the process may already have a provider, which is fine
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(CONNECT)
-            .build()
-            .map_err(|err| {
-                Failure::Final(Error::new(
-                    Kind::NetworkUnreachable,
-                    format!("could not start the network client: {err}"),
-                ))
-            })?;
-        let ticket = self.pace(url).await.map_err(Failure::Final)?;
-        Work::add(&self.work.requests, 1);
         tracing::debug!(
             host = host(url),
             "asking this machine's managed identity for an azure storage token"
         );
-        let request = client
-            .get(url.clone())
-            .header("metadata", HeaderValue::from_static("true"));
-        let mut response = tokio::select! {
-            sent = tokio::time::timeout(CONNECT + self.idle, request.send()) => match sent {
-                Ok(Ok(response)) => response,
-                _ => return Err(Failure::Final(unanswered())),
-            },
-            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
+        let mut response = match self
+            .ask_metadata(
+                url,
+                Some(("metadata", "true")),
+                metadata::CONNECT + self.idle,
+            )
+            .await?
+        {
+            Ok(response) => response,
+            Err(unheard) => return Err(Failure::Final(unanswered(unheard))),
         };
-        let limits =
-            super::super::pace::limits(response.status(), response.headers(), SystemTime::now());
-        super::super::pace::Paces::heard(ticket, limits, std::time::Instant::now());
         let status = response.status();
         if matches!(status, StatusCode::NOT_FOUND | StatusCode::GONE)
             || failure::is_transient(status)
@@ -144,11 +131,21 @@ impl Net {
     }
 }
 
-/// the error for a metadata service that does not answer, as off azure.
-fn unanswered() -> Error {
+/// the error for a metadata service that does not answer, as off azure, for the reason
+/// `unheard`.
+fn unanswered(unheard: Unheard) -> Error {
+    let unheard = match unheard {
+        Unheard::Refused => "169.254.169.254 refused the connection".to_owned(),
+        Unheard::Waited(wait) => format!(
+            "no metadata service answered at 169.254.169.254 within {} s",
+            wait.as_secs()
+        ),
+    };
     Error::new(
         Kind::AuthRequired,
-        "this machine's managed identity could not be asked: no metadata service answered at 169.254.169.254, so this is no azure virtual machine, or something blocks its service",
+        format!(
+            "this machine's managed identity could not be asked: {unheard}, so this is no azure virtual machine, or something blocks its service"
+        ),
     )
     .help("on azure, check that nothing blocks 169.254.169.254; elsewhere, unset AZURE_TOKEN_CREDENTIALS and sign in with `az login`")
 }

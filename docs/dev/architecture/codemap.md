@@ -215,6 +215,7 @@ a key lives where the source's own tools keep it, so one key serves both. `net` 
 | `src/net/azure.rs` | which azure blob requests carry a SAS, a key's signature or a token, never after a redirect | `Azure` | `Located`, `Sent`, `Blobbed` |
 | `src/net/azure/shared_key.rs` | azure's shared key signature; the key is never sent | `authorization` |  |
 | `src/net/azure/identity.rs` | the managed identity's token from 169.254.169.254, through a client of its own | `Net::identity_token` |  |
+| `src/net/metadata.rs` | one ask of a cloud's metadata service at 169.254.169.254 through a client of its own, given up after its wait: a second for the first ask of a run | `Net::ask_metadata`, `Unheard` | `FIRST`, `CONNECT` |
 | `src/net/roots.rs` | the one TLS configuration every client of a run shares on linux: the system's roots, read once, else the mozilla roots fetchloom carries, and an error when `SSL_CERT_FILE` or `SSL_CERT_DIR` names unreadable ones | `tls` |  |
 
 ## mirror
