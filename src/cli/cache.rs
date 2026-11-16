@@ -35,9 +35,19 @@ pub(super) struct Info {
     /// the `cache_budget` setting, which `bytes` is held against, none when no budget is set.
     budget: Option<u64>,
     projects: Vec<PathBuf>,
+    /// the fetched datasets of registered projects that wait for their file lists, none of whose
+    /// files `needed` counts, as gc counts none.
+    waiting: Vec<WaitingIn>,
     /// downloads runs left unfinished, which a later run continues where the server allows.
     unfinished_downloads: u64,
     unfinished_bytes: u64,
+}
+
+/// a fetched dataset waiting for its file list in the registered project at `project`.
+#[derive(Serialize)]
+struct WaitingIn {
+    project: PathBuf,
+    dataset: String,
 }
 
 pub(super) fn info(context: &Context) -> Result<Info, Error> {
@@ -48,6 +58,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         needed,
         projects,
         unread,
+        waiting,
         ..
     } = needed_with(&cache, None, &context.stop, false, true)?;
     // gc stops at a project it cannot read, so it frees nothing then
@@ -101,6 +112,9 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         output.label("Unfinished", &unfinished_line(&unfinished));
     }
     tell_usage(output, &usage, projects.len(), blocked);
+    if usage.unneeded_objects > 0 {
+        tell_waiting(output, &waiting);
+    }
     if unfinished.downloads > 0 {
         output.hint("`fetchloom cache gc --now` also frees unfinished downloads no fetchloom is running; those start over next time");
     }
@@ -110,6 +124,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         usage,
         budget,
         projects,
+        waiting,
         unfinished_downloads: unfinished.downloads,
         unfinished_bytes: unfinished.bytes,
     })
@@ -193,6 +208,26 @@ fn tell_projects(output: &Output, projects: &[PathBuf]) {
             &format!("{count} · `fetchloom cache -v` lists them"),
         );
     }
+}
+
+/// says that the files of each of `waiting`, a dataset that waits for its file list, count as
+/// unneeded, as gc counts them.
+fn tell_waiting(output: &Output, waiting: &[WaitingIn]) {
+    let text = match waiting {
+        [] => return,
+        [one] => format!(
+            "{} in {} waits for its file list, so the cache counts none of its files as needed and gc may free them, which a sync there downloads again once the list is back",
+            one.dataset,
+            units::path(&one.project)
+        ),
+        [first, ..] => format!(
+            "{} datasets wait for their file lists, as {} in {}, so the cache counts none of their files as needed and gc may free them, which a sync downloads again once each list is back",
+            waiting.len(),
+            first.dataset,
+            units::path(&first.project)
+        ),
+    };
+    output.hint(&text);
 }
 
 fn tell_usage(output: &Output, usage: &Usage, projects: usize, blocked: bool) {
@@ -967,6 +1002,9 @@ struct Found {
     /// for a report, each registered project whose data.lock could not be read, as one
     /// mid-merge, which only gc must stop at.
     unread: Vec<Error>,
+    /// the fetched datasets of registered projects that wait for their file lists, which
+    /// `needed` cannot count.
+    waiting: Vec<WaitingIn>,
 }
 
 /// what registered projects, and `current`, need. unreadable registrations, manifests and locks
@@ -997,6 +1035,7 @@ fn needed_focused(
     let mut stale_projects = Vec::new();
     let mut complete = true;
     let mut unread = Vec::new();
+    let mut waiting = Vec::new();
     for root in cache.registered_projects(stop)? {
         stop.check()?;
         let project = Project { root };
@@ -1062,6 +1101,15 @@ fn needed_focused(
             .filter(|_| !focus.is_some_and(|focus| focus.stands_for(&project.root)));
         if let Some(lock) = &lock {
             add_with_stop(&mut needed, cache, lock, kept.as_ref(), focus, stop)?;
+            // an import's files are all kept while it waits, so only a fetched one goes uncounted
+            waiting.extend(
+                lock.still_waiting()
+                    .filter(|waits| !crate::source::local::is_imported(&waits.pin().reference))
+                    .map(|waits| WaitingIn {
+                        project: project.root.clone(),
+                        dataset: waits.name.clone(),
+                    }),
+            );
         }
         projects.push(project.root);
     }
@@ -1074,6 +1122,7 @@ fn needed_focused(
         stale_projects,
         complete,
         unread,
+        waiting,
     })
 }
 

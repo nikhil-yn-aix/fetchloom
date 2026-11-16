@@ -5060,3 +5060,43 @@ fn a_reader_racing_a_writer_never_sees_a_false_wait() -> Result {
     assert!(stderr.contains("data.lock matches data.toml"), "{stderr}");
     Ok(())
 }
+
+/// the cache report, once only a clone where iris waits for its list could need iris's file,
+/// counts that file as unneeded, as gc does, and says why, naming iris and the clone, so
+/// "unneeded" does not read as "no project will ask for it".
+#[test]
+fn the_cache_report_names_a_waiting_dataset_it_cannot_count() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    for (name, path) in [("iris", PATH), ("b", "/files/b.csv")] {
+        let link = format!("{}{path}", routes.url);
+        let added = listing_in(&sandbox, &sandbox.work(), &["add", &link, "--as", name])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let (clone, _) = clone_without(&sandbox, "iris")?;
+    let synced = listing_in(&sandbox, &clone, &["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let removed = listing_in(&sandbox, &sandbox.work(), &["remove", "iris"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    let report = listing_in(&sandbox, &clone, &["cache"])?;
+    let stderr = text(&report.stderr)?;
+    assert_eq!(report.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Unneeded"), "{stderr}");
+    assert!(
+        stderr.contains("waits for its file list, so the cache counts none of its files as needed and gc may free them, which a sync there downloads again once the list is back"),
+        "{stderr}"
+    );
+    let report = listing_in(&sandbox, &clone, &["--json", "cache"])?;
+    let document = json(&report)?;
+    let result = &document["result"];
+    let waiting = &result["waiting"];
+    assert_eq!(waiting.as_array().map(Vec::len), Some(1), "{document}");
+    assert_eq!(waiting[0]["dataset"], "iris", "{document}");
+    let projects = result["projects"].as_array().ok_or("no projects")?;
+    assert!(projects.contains(&waiting[0]["project"]), "{document}");
+    Ok(())
+}
