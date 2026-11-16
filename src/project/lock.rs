@@ -261,26 +261,54 @@ impl Waiting {
     pub(crate) fn parts(&self) -> &[String] {
         &self.listed.parts
     }
+
+    /// whether `entry`, data.toml's table of its name if it has one, still asks for this pin:
+    /// nothing changed that decides what it downloads or what its archives unpack to. a pin that
+    /// no longer answers goes, and its name is pinned as one data.lock does not pin.
+    pub(crate) fn answers(&self, entry: Option<&Entry>) -> bool {
+        entry.is_some_and(|entry| self.pin.drift(entry).is_none())
+    }
+
+    /// `entry` waiting for `part` of its list, which is not there; `entry` back when it keeps no
+    /// list beside data.lock.
+    fn of(entry: Parsed, part: String) -> Result<Waiting, Box<Parsed>> {
+        match entry {
+            Parsed::Source(pin, Some(listed)) => Ok(Waiting {
+                name: pin.name.clone(),
+                part,
+                pin,
+                listed,
+            }),
+            other @ (Parsed::Source(_, None) | Parsed::Stated(_)) => Err(Box::new(other)),
+        }
+    }
+}
+
+/// the first part below `root` that is not there of the list `entry` names, when it names one as
+/// fetchloom writes it.
+fn missing_part(entry: &Parsed, root: &Path) -> Option<String> {
+    entry
+        .written()?
+        .parts
+        .iter()
+        .find(|part| lists::missing(root, part))
+        .cloned()
 }
 
 /// the datasets whose list data.lock's `text` names as fetchloom writes it and the project at
-/// `root` lacks a part of, by name, with the first such part. none if it does not read; a list's
-/// lines are not read.
-pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<(String, String)> {
+/// `root` lacks a part of, as [`Lock::read_waiting`] keeps them. none if it does not read; a
+/// list's lines are not read.
+pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<Waiting> {
     // no list, nothing to miss, without parsing a lock of only inline files
     if !text.contains("files_in") {
         return Vec::new();
     }
     parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX))
         .unwrap_or_default()
-        .iter()
+        .into_iter()
         .filter_map(|parsed| {
-            let part = parsed
-                .written()?
-                .parts
-                .iter()
-                .find(|part| lists::missing(root, part))?;
-            Some((parsed.name().to_owned(), part.clone()))
+            let part = missing_part(&parsed, root)?;
+            Waiting::of(parsed, part).ok()
         })
         .collect()
 }
@@ -779,25 +807,17 @@ impl Lock {
         let mut waiting = Vec::new();
         let mut listed = Vec::with_capacity(parsed.len());
         for entry in parsed {
-            let missing = entry.written().and_then(|listed| {
-                listed
-                    .parts
-                    .iter()
-                    .find(|part| lists::missing(root, part))
-                    .cloned()
-            });
-            match (missing, entry) {
+            let Some(part) = missing_part(&entry, root) else {
+                listed.push(entry);
+                continue;
+            };
+            match Waiting::of(entry, part) {
                 // written back as read, so its link is held to what any read allows
-                (Some(part), Parsed::Source(pin, Some(list))) => {
-                    check_resolved(&pin)?;
-                    waiting.push(Waiting {
-                        name: pin.name.clone(),
-                        part,
-                        pin,
-                        listed: list,
-                    });
+                Ok(waits) => {
+                    check_resolved(&waits.pin)?;
+                    waiting.push(waits);
                 }
-                (_, entry) => listed.push(entry),
+                Err(entry) => listed.push(*entry),
             }
         }
         let mut budget = Budget::of(&listed, memory)?;
@@ -835,7 +855,7 @@ impl Lock {
     }
 
     /// whether a list other than [`Lock::waiting`] pins `name`.
-    fn pins(&self, name: &str) -> bool {
+    pub(crate) fn pins(&self, name: &str) -> bool {
         self.get(name).is_some() || self.stated(name).is_some()
     }
 

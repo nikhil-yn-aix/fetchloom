@@ -486,9 +486,9 @@ impl Project {
     }
 
     /// refuses data.lock's new text `bytes` when it drops the pin of a dataset that waits for its
-    /// file list, one data.lock names and data.lock.d lacks, while data.toml still has it, or pins
-    /// it by another list: only that list, once it is back, says what it pins. every writer keeps
-    /// such a pin as it was read, so this stops only a mistake.
+    /// file list, one data.lock names and data.lock.d lacks, while data.toml still asks for that
+    /// pin, or pins it by another list: only that list, once it is back, says what it pins. every
+    /// writer keeps such a pin as it was read, so this stops only a mistake.
     fn keeps_waiting(&self, bytes: &[u8]) -> Result<(), Error> {
         let Ok(old) = fs::read_to_string(self.root.join(lock::FILE)) else {
             return Ok(());
@@ -499,17 +499,17 @@ impl Project {
         }
         let pinned = lock::listed(&String::from_utf8_lossy(bytes));
         let asked = self.manifest().ok().map(|(_, manifest)| manifest.datasets);
-        let lost = waiting.iter().find(|(waiting, part)| {
+        let lost = waiting.iter().find(|waiting| {
             let kept = pinned
                 .iter()
-                .any(|(name, parts)| name == waiting && parts.contains(part));
+                .any(|(name, parts)| *name == waiting.name && parts.contains(&waiting.part));
             !kept
                 && asked
                     .as_ref()
-                    .is_none_or(|asked| asked.contains_key(waiting))
+                    .is_none_or(|asked| waiting.answers(asked.get(&waiting.name)))
         });
         match lost {
-            Some((name, part)) => Err(lock::lists::not_there(name, part)),
+            Some(waiting) => Err(waiting.error()),
             None => Ok(()),
         }
     }

@@ -4531,3 +4531,68 @@ fn a_list_that_comes_back_is_placed_by_the_next_sync() -> Result {
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stdout)?);
     Ok(())
 }
+
+/// a waiting dataset whose table data.toml no longer has, deleted, renamed or changed, is no pin
+/// data.toml asks for: `lock` takes its entry out and says so, pins a new or changed table from
+/// its source, and `lock --check` passes after it, rather than `lock` saying all is up to date
+/// while `--check` fails.
+#[test]
+fn a_waiting_dataset_data_toml_no_longer_asks_for_goes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    for (name, path) in [("iris", PATH), ("b", "/files/b.csv")] {
+        let link = format!("{}{path}", routes.url);
+        let added = listing_in(&sandbox, &sandbox.work(), &["add", &link, "--as", name])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let (clone, _) = clone_without(&sandbox, "iris")?;
+    // what iris serves now gives its list another name than the one the clone lacks
+    routes.change(vec![
+        (PATH.to_owned(), file(b"sepal_length\n9.9\n", "\"v2\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b1\"")),
+    ]);
+    let manifest = clone.join("data.toml");
+    let text_of = fs::read_to_string(&manifest)?;
+    let table = format!("[datasets.iris]\nref = \"{}{PATH}\"\n", routes.url);
+    assert!(text_of.contains(&table), "{text_of}");
+    let lock = fs::read(clone.join("data.lock"))?;
+    let selected = text_of.replace(&table, &format!("{table}select = \"*.csv\"\n"));
+    for (edited, would, said, pinned) in [
+        (
+            text_of.replace(&table, ""),
+            "Would remove iris from data.lock",
+            "Removed iris from data.lock",
+            None,
+        ),
+        (
+            text_of.replace("[datasets.iris]", "[datasets.flowers]"),
+            "Would remove iris from data.lock",
+            "Removed iris from data.lock",
+            Some("flowers"),
+        ),
+        (selected, "Would pin iris", "Pinned iris", Some("iris")),
+    ] {
+        fs::write(clone.join("data.lock"), &lock)?;
+        fs::write(&manifest, &edited)?;
+        let dry = listing_in(&sandbox, &clone, &["lock", "--dry-run"])?;
+        let stderr = text(&dry.stderr)?;
+        assert_eq!(dry.status.code(), Some(0), "{stderr}");
+        assert!(stderr.contains(would), "{stderr}");
+        let locked = listing_in(&sandbox, &clone, &["lock"])?;
+        let stderr = text(&locked.stderr)?;
+        assert_eq!(locked.status.code(), Some(0), "{stderr}");
+        assert!(stderr.contains(said), "{stderr}");
+        let written = fs::read_to_string(clone.join("data.lock"))?;
+        match pinned {
+            Some(name) => assert!(written.contains(&format!("name = \"{name}\"")), "{written}"),
+            None => assert!(!written.contains("name = \"iris\""), "{written}"),
+        }
+        let checked = listing_in(&sandbox, &clone, &["lock", "--check"])?;
+        assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    }
+    Ok(())
+}

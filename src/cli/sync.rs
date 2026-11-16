@@ -31,7 +31,7 @@ use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::archives::{self, Archive};
-use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
+use crate::project::lock::{self, Drift, Lock, Locked, LockedFile, Waiting};
 use crate::project::manifest::{Entry, Manifest, Source};
 use crate::project::state::Synced;
 use crate::project::{Project, native};
@@ -723,16 +723,8 @@ impl<'a> Loop<'a> {
             locked
         }));
         let (mut lock, kept) = settled(&others, kept, drafted);
-        carried.back(&mut lock);
-        Ok((
-            lock,
-            Before {
-                existed,
-                others,
-                kept,
-                renamed,
-            },
-        ))
+        let gone = carried.back(&mut lock);
+        Ok((lock, Before::new(existed, others, gone, kept, renamed)))
     }
 
     /// the lock [`Loop::relock`] would make, found without downloading or unpacking, and that work;
@@ -781,13 +773,8 @@ impl<'a> Loop<'a> {
             drafted.push(locked);
         }
         let (mut lock, kept) = settled(&others, kept, drafted);
-        carried.back(&mut lock);
-        let before = Before {
-            existed,
-            others,
-            kept,
-            renamed,
-        };
+        let gone = carried.back(&mut lock);
+        let before = Before::new(existed, others, gone, kept, renamed);
         Ok(DryRelock {
             lock,
             before,
@@ -1950,7 +1937,8 @@ fn settled(others: &Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec
 /// were are moved into the new lock instead of copied, so they are found there.
 pub(super) struct Before {
     existed: bool,
-    /// the old entries relocking did not keep: those it replaced or dropped.
+    /// the old entries relocking did not keep: those it replaced or dropped, and the entries
+    /// waiting for their file lists whose pins data.toml no longer asks for.
     others: Lock,
     /// for each dataset of the new lock, in its order, whether it was kept from the old one.
     kept: Vec<bool>,
@@ -1959,6 +1947,26 @@ pub(super) struct Before {
 }
 
 impl Before {
+    /// data.lock as relocking left it: `others`, the old entries it did not keep, with `gone`, the
+    /// entries waiting for their lists whose pins data.toml no longer asks for.
+    fn new(
+        existed: bool,
+        others: Lock,
+        gone: Vec<Waiting>,
+        kept: Vec<bool>,
+        renamed: Vec<Rename>,
+    ) -> Before {
+        Before {
+            existed,
+            others: Lock {
+                waiting: gone,
+                ..others
+            },
+            kept,
+            renamed,
+        }
+    }
+
     /// data.lock, or its absence, as a lock of which nothing was kept.
     #[cfg(test)]
     pub(super) fn whole(old: Option<Lock>) -> Before {
@@ -1990,6 +1998,7 @@ impl Before {
                 .iter()
                 .all(|dataset| self.get(lock, &dataset.name) == Some(dataset))
             && self.dropped(lock).next().is_none()
+            && self.others.waiting.is_empty()
     }
 
     /// the old datasets `lock` no longer has.
@@ -1998,6 +2007,16 @@ impl Before {
             .datasets
             .iter()
             .filter(|dataset| lock.get(&dataset.name).is_none())
+    }
+
+    /// the names of the old entries that waited for their file lists and that `lock` pins no
+    /// more under those names.
+    fn unwaited<'a>(&'a self, lock: &'a Lock) -> impl Iterator<Item = &'a String> {
+        self.others
+            .waiting
+            .iter()
+            .map(|waiting| &waiting.name)
+            .filter(|name| !lock.pins(name))
     }
 }
 
@@ -2042,6 +2061,13 @@ pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
         })
         .map(|dataset| dataset.name.clone())
         .chain(before.dropped(lock).map(|dataset| dataset.name.clone()))
+        .chain(
+            before
+                .others
+                .waiting
+                .iter()
+                .map(|waiting| waiting.name.clone()),
+        )
         .chain(before.renamed.iter().flat_map(|rename| {
             let old = rename.moved.then(|| rename.old.clone());
             std::iter::once(rename.new.clone()).chain(old)
@@ -2148,7 +2174,11 @@ fn lock_lines(
             )
         });
     }
-    for name in before.dropped(lock).map(|dataset| &dataset.name) {
+    let dropped = before
+        .dropped(lock)
+        .map(|dataset| &dataset.name)
+        .chain(before.unwaited(lock));
+    for name in dropped {
         lines.push((verbs.dropped, format!("{name} from {}", lock::FILE)));
     }
     lines

@@ -22,14 +22,17 @@ pub(super) struct Carried {
     stated: Vec<Stated>,
     /// the datasets waiting for their file lists, which relocking never resolves.
     waiting: Vec<Waiting>,
+    /// those waiting whose pins data.toml no longer asks for, which go.
+    gone: Vec<Waiting>,
     /// when each dataset this run pins whole was pinned by its source's digests, by name: the data
     /// stays the same, so its date does too.
     dates: Vec<(String, String)>,
 }
 
 impl Carried {
-    /// puts the carried entries into `lock`, and each filled pin's date back.
-    pub(super) fn back(self, lock: &mut Lock) {
+    /// puts the carried entries into `lock`, and each filled pin's date back, giving the entries
+    /// waiting for their lists that go.
+    pub(super) fn back(self, lock: &mut Lock) -> Vec<Waiting> {
         for (name, date) in self.dates {
             if let Ok(index) = lock
                 .datasets
@@ -40,6 +43,7 @@ impl Carried {
         }
         lock.stated = self.stated;
         lock.waiting = self.waiting;
+        self.gone
     }
 }
 
@@ -60,11 +64,18 @@ impl Loop<'_> {
         let Some(mut old) = old else {
             return Ok((None, given, carried));
         };
-        // a dataset waiting for its list keeps its entry while data.toml has it; otherwise it is
-        // relocked as one data.lock does not pin
-        old.waiting
-            .retain(|waiting| manifest.datasets.contains_key(&waiting.name));
-        carried.waiting.clone_from(&old.waiting);
+        // a dataset waiting for its list keeps its entry while data.toml still asks for that pin,
+        // as one outside the run's scope does; otherwise the entry goes, as a changed pin goes,
+        // and its name is relocked as one data.lock does not pin
+        let (kept, gone): (Vec<Waiting>, Vec<Waiting>) = std::mem::take(&mut old.waiting)
+            .into_iter()
+            .partition(|waiting| {
+                !self.scope.includes(&waiting.name)
+                    || waiting.answers(manifest.datasets.get(&waiting.name))
+            });
+        old.waiting.clone_from(&kept);
+        carried.waiting = kept;
+        carried.gone = gone;
         let named: HashSet<String> = given
             .iter()
             .map(|given| match given {
