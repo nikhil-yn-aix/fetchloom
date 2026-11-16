@@ -416,9 +416,14 @@ def _as_typed(text: str, project: str | os.PathLike[str], placeholders: dict[str
                 shown = _folder_shown(folder, placeholders)
                 if shown is not None:
                     words = words.removeprefix(f"-C {hidden.get(shown, shown)} ")
-        before, separator, names = words.partition(" -- ")
+        # the folder after -C may hold " -- " itself, so the helper's own comes after it
+        shown = _folder_shown(_local(project), placeholders)
+        folder = "" if shown is None else f"-C {hidden.get(shown, shown)} "
+        if not words.startswith(folder):
+            folder = ""
+        before, separator, names = words[len(folder):].partition(" -- ")
         if separator and not any(name.lstrip("'\"").startswith("-") for name in names.split()):
-            words = f"{before} {names}"
+            words = f"{folder}{before} {names}"
         return f"`fetchloom {words}`"
 
     # a folder holding a backtick would end its command's backticks early, so a mark without one

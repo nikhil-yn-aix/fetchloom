@@ -464,6 +464,23 @@ class Errors(unittest.TestCase):
         call = f"fetchloom.path(\"iris\", project=\"{project}\")"
         self.assertEqual((raised.exception.help, raised.exception.details), (f"did you mean `{call}`?", []))
 
+    def test_a_folder_holding_a_double_dash_is_named_as_fetchloom_names_it(self):
+        # the `--` the helper puts before names is the one after the folder, not one inside it
+        project = "a -- b"
+        answer = {"status": "error", "warnings": [], "errors": [{
+            "kind": "usage",
+            "message": 'data.toml has no dataset called "irs"',
+            "details": [],
+            "help": 'did you mean `fetchloom --json --progress -C "a -- b" path -- iris`?',
+        }]}
+        response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+        with patch.object(fetchloom, "_WINDOWS", False), patch.object(fetchloom, "_program", return_value="fetchloom"), \
+             patch.object(fetchloom, "_call", return_value=response):
+            with self.assertRaises(fetchloom.Error) as raised:
+                fetchloom.path("irs", project)
+        call = f"fetchloom.path(\"iris\", project=\"{project}\")"
+        self.assertEqual(raised.exception.help, f"did you mean `{call}`?")
+
     def test_a_windows_folder_without_a_project_is_named_as_fetchloom_names_it(self):
         for project, shown, _ in self.FOLDERS:
             with self.subTest(project=project), patch.object(fetchloom, "_WINDOWS", True):
