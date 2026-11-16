@@ -1290,12 +1290,21 @@ fn every_adapter_refuses_a_hostile_name() {
 }
 
 /// the values an answer may name a page or a folder by: each recorded link, each value in their
-/// queries and each part of their paths long enough to be an id, and one no page has.
+/// queries, each id inside a value, as a graphql query names a folder's, and each part of their
+/// paths long enough to be an id, and one no page has.
 fn page_names(subject: &Subject) -> Vec<String> {
     let mut names = vec!["zz-loop".to_owned()];
     for link in subject.recorded.links() {
         let url = Url::parse(&link).unwrap();
-        names.extend(url.query_pairs().map(|(_, value)| value.into_owned()));
+        for (_, value) in url.query_pairs() {
+            names.extend(
+                value
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                    .filter(|id| id.len() >= 16)
+                    .map(str::to_owned),
+            );
+            names.push(value.into_owned());
+        }
         names.extend(
             url.path_segments()
                 .into_iter()
