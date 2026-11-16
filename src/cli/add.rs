@@ -749,13 +749,17 @@ async fn add_held(
     let [name] = names;
     let private = private_origins(&work, [&parsed.reference]);
     let has_files = outcome.placed.planned.contains(&name);
+    let list = match &parsed.reference {
+        Reference::List(list) => list.in_project(),
+        _ => None,
+    };
     render_add(
         &work,
         &new_manifest,
         (&name, has_files),
         here,
         (starting, adding.begins()),
-        &private,
+        (&private, list),
     )?;
     Ok(Report {
         project: project.root.clone(),
@@ -1343,18 +1347,19 @@ fn manifest_changed_meanwhile() -> Error {
 }
 
 /// the last lines of an add of the dataset `added`, a name and whether it has files, in a project
-/// it is `starting`, or whose first pins it `begins`, as [`AddProject::begins`] tells.
+/// it is `starting`, or whose first pins it `begins`, as [`AddProject::begins`] tells. `list` is
+/// the path of the list in the project it was added from, which a clone reads to lock it again.
 pub(super) fn render_add(
     work: &Loop<'_>,
     manifest: &Manifest,
     added: (&str, bool),
     here: &Path,
     (starting, begins): (bool, bool),
-    private: &[url::Origin],
+    (private, list): (&[url::Origin], Option<&str>),
 ) -> Result<(), Error> {
     tell_started(work, starting);
     ignore_data(work, manifest, starting || begins)?;
-    tell_added(work, manifest, added, here, private);
+    tell_added(work, manifest, added, here, (private, list));
     Ok(())
 }
 
@@ -1383,8 +1388,9 @@ fn private_origins<'r>(
 }
 
 /// the last lines of an add: a warning for each `private` origin the settings do not list, since
-/// typing its link trusted it for this run alone, then what to commit and what a clone runs.
-fn close(work: &Loop<'_>, private: &[url::Origin]) {
+/// typing its link trusted it for this run alone, then what to commit, the `list` in the project
+/// the add read among it, and what a clone runs.
+fn close(work: &Loop<'_>, private: &[url::Origin], list: Option<&str>) {
     let context = work.context;
     let unlisted: Vec<&url::Origin> = private
         .iter()
@@ -1414,7 +1420,13 @@ fn close(work: &Loop<'_>, private: &[url::Origin]) {
             &named,
         );
     }
-    let committed = committed(work.project);
+    let committed = match list {
+        Some(path) => format!(
+            "{} and {path}",
+            committed(work.project).replacen(" and ", ", ", 1)
+        ),
+        None => committed(work.project).to_owned(),
+    };
     if private.is_empty() {
         context.output.next(&format!(
             "commit {committed}; anyone who clones runs `fetchloom sync`"
@@ -1663,7 +1675,7 @@ fn tell_added(
     manifest: &Manifest,
     (name, has_files): (&str, bool),
     here: &Path,
-    private: &[url::Origin],
+    (private, list): (&[url::Origin], Option<&str>),
 ) {
     if has_files {
         let folder = from_here(work.project, here, &plan::folder(manifest, name));
@@ -1680,7 +1692,7 @@ fn tell_added(
             &format!("{name}, its archives contain no regular files"),
         );
     }
-    close(work, private);
+    close(work, private, list);
 }
 
 /// `path`, relative to the project's folder, as it reads from `here`, a folder inside it.

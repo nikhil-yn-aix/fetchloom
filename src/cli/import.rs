@@ -417,7 +417,7 @@ async fn import_new(
         (name, has_files),
         here,
         (starting, adding.begins()),
-        &[],
+        (&[], None),
     )?;
     Ok(Report {
         project: work.project.root.clone(),

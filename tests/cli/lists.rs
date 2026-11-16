@@ -272,6 +272,17 @@ fn a_list_in_the_project_is_one_dataset_a_clone_locks_again() -> Result {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let lock = fs::read_to_string(work.join("data.lock"))?;
     assert_eq!(pinned(&lock, "tips"), pins[1..], "{lock}");
+    #[cfg(target_os = "linux")]
+    if let Some(screen) =
+        sandbox.on_a_terminal(&["add", "-i", "lists/links.txt", "--as", "more"])?
+    {
+        assert!(
+            screen.contains(
+                "next: commit data.toml, data.lock and lists/links.txt; anyone who clones runs `fetchloom sync`"
+            ),
+            "{screen}"
+        );
+    }
     Ok(())
 }
 
