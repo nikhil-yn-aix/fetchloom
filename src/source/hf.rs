@@ -11,7 +11,7 @@ use percent_encoding::percent_decode_str;
 use url::Url;
 
 use super::malformed;
-use crate::error::Error;
+use crate::error::{Error, Kind};
 
 /// first path segments on huggingface.co that are pages, not model repositories.
 const PAGES: [&str; 24] = [
@@ -115,10 +115,7 @@ impl Repo {
 
     /// a pasted huggingface.co link, and the file or folder in it when the link names one.
     pub(super) fn from_link(url: &Url) -> Option<(Repo, Option<String>, Option<String>)> {
-        if !matches!(
-            url.host_str()?,
-            "huggingface.co" | "www.huggingface.co" | "hf.co"
-        ) {
+        if !on_hub(url) {
             return None;
         }
         let parts: Vec<String> = url
@@ -164,6 +161,47 @@ impl Repo {
         };
         Some((Repo { kind, id, revision }, file, folder))
     }
+}
+
+/// whether `url` is on huggingface.co, by any of its names.
+fn on_hub(url: &Url) -> bool {
+    matches!(
+        url.host_str(),
+        Some("huggingface.co" | "www.huggingface.co" | "hf.co")
+    )
+}
+
+/// a link into a hugging face bucket, a store of files its owner may change at any time, with no
+/// history and no SHA-256 stated: a file's link, fetched as a plain link pinned to the bytes it
+/// gives. any other is one of the bucket's pages, refused with the form of a file's link.
+pub(super) fn bucket(url: &Url) -> Option<Result<Url, Error>> {
+    if !on_hub(url) {
+        return None;
+    }
+    let parts: Vec<&str> = url
+        .path_segments()?
+        .filter(|part| !part.is_empty())
+        .collect();
+    let ["buckets", rest @ ..] = parts.as_slice() else {
+        return None;
+    };
+    if let [_, _, "resolve", _, ..] = rest {
+        return Some(Ok(url.clone()));
+    }
+    let named = match rest {
+        [owner, name, ..] => format!("{owner}/{name}"),
+        _ => "<owner>/<bucket>".to_owned(),
+    };
+    Some(Err(Error::new(
+        Kind::ReferenceInvalid,
+        format!(
+            "{} is a page of a hugging face bucket, and fetchloom takes a bucket's files by their own links",
+            crate::shown::Shown(url)
+        ),
+    )
+    .help(format!(
+        "paste the link of each file you want, as https://huggingface.co/buckets/{named}/resolve/<path>"
+    ))))
 }
 
 /// one or two parts of letters, digits, `-`, `_` and `.`.

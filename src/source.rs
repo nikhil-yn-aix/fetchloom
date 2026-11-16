@@ -968,6 +968,9 @@ fn link(text: &str) -> Result<Parsed, Error> {
     if let Some(error) = osf::stored_item(&url) {
         return Err(error);
     }
+    if let Some(bucket) = hf::bucket(&url) {
+        return bucket.map(|url| parsed(plain_link(url), None));
+    }
     let routed = doi::Doi::from_link(&url)
         .map(|doi| parsed(Reference::Doi(doi), None))
         .or_else(|| {
@@ -1031,12 +1034,15 @@ fn link(text: &str) -> Result<Parsed, Error> {
             )
             .help(other_page_help(source)));
         }
-        let url = raw_link(&url).unwrap_or(url);
-        // a checksum list's link names the files it lists, beside it
-        let reference = list::List::from_link(&url).map_or(Reference::Url(url), Reference::List);
-        return Ok(parsed(reference, None));
+        return Ok(parsed(plain_link(url), None));
     };
     Ok(routed)
+}
+
+/// a link no source reads: the file it names, or the files beside it a checksum list there names.
+fn plain_link(url: Url) -> Reference {
+    let url = raw_link(&url).unwrap_or(url);
+    list::List::from_link(&url).map_or(Reference::Url(url), Reference::List)
 }
 
 /// `text` read as a plain link: one with a host and no user name or password, which would end up

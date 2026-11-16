@@ -1391,6 +1391,64 @@ fn a_zenodo_record_pins_as_it_always_has() -> Result {
     Ok(())
 }
 
+/// a file in a hugging face bucket, which its owner may change at any time and which states no
+/// SHA-256, is a plain link pinned by the SHA-256 of its bytes, fetched from wherever hugging face
+/// sends the request; a link to the bucket's own page names the form of a file's link.
+#[test]
+fn a_hugging_face_bucket_file_is_a_plain_link_pinned_by_its_bytes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let resolve = "/huggingface.co/buckets/lab/plots/resolve/runs/rows.csv";
+    let stored = "/cas-bridge.xethub.hf.co/xet-bridge-us/rows";
+    let routes = Routes::start(vec![
+        (
+            resolve.to_owned(),
+            reply(
+                "302 Found",
+                &[
+                    ("Location", &format!("https:/{stored}")),
+                    ("Content-Length", "0"),
+                ],
+                b"",
+            ),
+        ),
+        (stored.to_owned(), file(ROWS, "\"b1\"")),
+    ])?;
+    let link = format!("https:/{resolve}");
+    let output = command(&sandbox, &routes, &["add", &link, "--as", "rows"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&format!("resolved = \"{link}\"")), "{lock}");
+    assert!(
+        lock.contains(&format!(
+            "{{ path = \"rows.csv\", size = {}, sha256 = \"{}\", url = \"{link}\" }}",
+            ROWS.len(),
+            sha256_hex(ROWS)
+        )),
+        "{lock}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("data/rows/rows.csv"))?, ROWS);
+    assert_eq!(routes.targets(), [resolve, stored], "no hub api is asked");
+
+    let page = "https://huggingface.co/buckets/lab/plots";
+    let output = command(&sandbox, &routes, &["--json", "add", page]).output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let error = json(&output)?["errors"][0].clone();
+    assert_eq!(
+        error["message"],
+        format!(
+            "{page} is a page of a hugging face bucket, and fetchloom takes a bucket's files by their own links"
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        error["help"],
+        "paste the link of each file you want, as https://huggingface.co/buckets/lab/plots/resolve/<path>",
+        "{error}"
+    );
+    assert_eq!(routes.targets().len(), 2, "a page is refused unasked");
+    Ok(())
+}
+
 const RDM_RECORD: &str = "/rdm.example.org/api/records/abcde-12345";
 
 /// an invenioRDM install at rdm.example.org holding record `abcde-12345`, registered as DOI
