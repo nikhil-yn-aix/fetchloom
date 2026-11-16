@@ -1,5 +1,6 @@
 //! `.netrc`, the file curl, wget and python's requests read a host's login from. a login saved
-//! here works in all of them.
+//! here for a host works in all of them; one kept to a port only in fetchloom, since they look a
+//! line up by host name alone.
 
 use std::fs;
 use std::io;
