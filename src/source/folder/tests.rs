@@ -184,6 +184,104 @@ fn listings_titled_otherwise_read_as_the_entries_they_show() {
     }
 }
 
+/// the file sizes a recorded listing of `folder` states, by name.
+fn sizes(fixture: &str, folder: &str) -> Vec<(String, Option<u64>)> {
+    let html = String::from_utf8(fixture_bytes(fixture)).unwrap();
+    file_sizes(&read_at(&html, folder).unwrap())
+}
+
+fn file_sizes(index: &Index) -> Vec<(String, Option<u64>)> {
+    index
+        .entries
+        .iter()
+        .filter(|entry| !entry.folder)
+        .map(|entry| (entry.name.clone(), entry.size))
+        .collect()
+}
+
+/// a row states its file's size in bytes, as `621`, as the last word of a list's row or in a
+/// table's column headed "Size". one rounded, as `9.3K` or caddy's `20 B`, states none, and so
+/// does every row of a list whose first line heads a description, as apache's does, or where a
+/// row ends in words, and every row of a table with no size column.
+#[test]
+fn a_row_states_its_files_size_in_bytes_alone() {
+    let owned = |sizes: &[(&str, Option<u64>)]| -> Vec<(String, Option<u64>)> {
+        sizes
+            .iter()
+            .map(|(name, size)| ((*name).to_owned(), *size))
+            .collect()
+    };
+    let gtf = "Saccharomyces_cerevisiae.R64-1-1.113";
+    let (abinitio, annotation) = (format!("{gtf}.abinitio.gtf.gz"), format!("{gtf}.gtf.gz"));
+    let sub = "http://127.0.0.1:19340/sub/";
+    for (fixture, folder, stated) in [
+        ("folder/data.html", DATA, owned(&[("iris.csv", Some(20))])),
+        (
+            "folder/apache.html",
+            "https://ftp.ensembl.org/pub/release-113/gtf/saccharomyces_cerevisiae/",
+            owned(&[
+                ("CHECKSUMS", Some(131)),
+                ("README", None),
+                (abinitio.as_str(), Some(116)),
+                (annotation.as_str(), None),
+            ]),
+        ),
+        (
+            "folder/ncei.html",
+            NCEI,
+            owned(&[
+                ("ghcnd-countries.txt", Some(3659)),
+                ("ghcnd_all.tar.gz", Some(3_825_956_509)),
+            ]),
+        ),
+        (
+            "folder/rclone.html",
+            sub,
+            owned(&[("iris.csv", Some(20)), ("read me.txt", Some(6))]),
+        ),
+        (
+            "folder/caddy.html",
+            sub,
+            owned(&[("iris.csv", None), ("read me.txt", None)]),
+        ),
+        (
+            "folder/ndbc.html",
+            "https://www.ndbc.noaa.gov/data/realtime2/",
+            owned(&[
+                ("32ST0.ocean", None),
+                ("32ST0.srad", None),
+                ("32ST0.txt", None),
+            ]),
+        ),
+    ] {
+        assert_eq!(sizes(fixture, folder), stated, "{fixture}");
+    }
+    let described = "<html><head><title>Index of /data/</title></head><body><pre>\
+Name  Last modified  Size  Description<hr><a href=\"../\">../</a>
+<a href=\"a.csv\">a.csv</a>  2026-11-16 09:00   20
+<a href=\"b.csv\">b.csv</a>  2026-11-16 09:00  1.3K  rows from 2020
+</pre></body></html>";
+    let worded = "<html><head><title>Index of /data/</title></head><body><pre>\
+<a href=\"../\">../</a>
+<a href=\"a.csv\">a.csv</a>  2026-11-16 09:00   20
+<a href=\"b.csv\">b.csv</a>  2026-11-16 09:00  1.3K  our rows
+</pre></body></html>";
+    let unheaded = "<html><head><title>Index of /data/</title></head><body><table>\
+<tr><th>Name</th><th>Description</th></tr>\
+<tr><td><a href=\"a.csv\">a.csv</a></td><td>2020</td></tr></table></body></html>";
+    for list in [described, worded] {
+        assert_eq!(
+            file_sizes(&read_at(list, DATA).unwrap()),
+            owned(&[("a.csv", None), ("b.csv", None)]),
+            "{list}"
+        );
+    }
+    assert_eq!(
+        file_sizes(&read_at(unheaded, DATA).unwrap()),
+        owned(&[("a.csv", None)])
+    );
+}
+
 /// a folder whose listing links a folder inside it without its `/`, under a name ending in `/`,
 /// as ncei's do, lists that folder at its link with the `/`, never asking for it as a file.
 #[test]
@@ -404,7 +502,7 @@ fn a_link_is_read_with_its_character_references_undone() {
 }
 
 /// a folder's files are those of its listing and of the listings of the folders inside it, by
-/// their paths below it, one request a folder.
+/// their paths below it, one request a folder, each at the size in bytes its listing states.
 #[test]
 fn a_folder_lists_every_file_below_it() {
     let recorded = nested();
@@ -417,7 +515,7 @@ fn a_folder_lists_every_file_below_it() {
         listing
             .files
             .iter()
-            .all(|file| file.sha256.is_none() && file.size.is_none() && !file.named_by_server)
+            .all(|file| file.sha256.is_none() && file.size == Some(20) && !file.named_by_server)
     );
     assert_eq!(listing.warnings, Vec::<String>::new());
     assert_eq!(recorded.asked(), [DATA.to_owned(), format!("{DATA}sub/")]);

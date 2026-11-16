@@ -37,8 +37,9 @@ const TITLES: [&str; 3] = [
 const LISTS: [&str; 3] = ["pre", "table", "ul"];
 
 /// one entry of a listing: a file, or a folder, whose link ends in `/`, by its name with its
-/// character references and percent escapes undone, its link, and the size its row ends with
-/// when that is in bytes, as `621`; one rounded, as `1.3M`, is none.
+/// character references and percent escapes undone, its link, and the size in bytes its row
+/// states, as nginx's `621` at a row's end or ncei's in a size column; one rounded, as `1.3M`,
+/// is none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Entry {
     pub(super) name: String,
@@ -86,8 +87,8 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
     // each link of each list, read against the page, but those a query or a fragment marks
     let lists: Vec<Vec<Link>> = lists(&lower)
         .into_iter()
-        .map(|(start, end)| {
-            links(&html[start..end], &lower[start..end])
+        .map(|(tag, start, end)| {
+            links(&html[start..end], &lower[start..end], tag)
                 .into_iter()
                 .filter(|anchor| !anchor.href.contains(['?', '#']))
                 .map(|anchor| {
@@ -229,16 +230,22 @@ fn inner(html: &str, lower: &str, tag: &str) -> Option<String> {
     let end = lower[start..]
         .find(&format!("</{tag}"))
         .map(|end| start + end)?;
+    Some(stripped(html, lower, start, end))
+}
+
+/// the text of `html` from `from` to `to`, without its tags, its character references undone and
+/// its spaces as one; `lower` is `html` in lowercase.
+fn stripped(html: &str, lower: &str, from: usize, to: usize) -> String {
     let mut text = String::new();
-    let mut from = start;
-    while let Some(offset) = lower[from..end].find('<') {
-        text.push_str(&html[from..from + offset]);
-        from = lower[from + offset..end]
+    let mut at = from;
+    while let Some(offset) = lower[at..to].find('<') {
+        text.push_str(&html[at..at + offset]);
+        at = lower[at + offset..to]
             .find('>')
-            .map_or(end, |close| from + offset + close + 1);
+            .map_or(to, |close| at + offset + close + 1);
     }
-    text.push_str(&html[from..end]);
-    Some(words(&unescape(&text)))
+    text.push_str(&html[at..to]);
+    words(&unescape(&text))
 }
 
 /// `text` with its spaces as one, none at its ends.
@@ -249,7 +256,7 @@ fn words(text: &str) -> String {
 /// where each list of the lowercase page `lower` holds its entries, between its tags, in order,
 /// up to its last whole list, so a list a page cut short leaves open is none. one pass reads
 /// the page, so a page of many lists takes no longer than its length.
-fn lists(lower: &str) -> Vec<(usize, usize)> {
+fn lists(lower: &str) -> Vec<(&'static str, usize, usize)> {
     let mut found = Vec::new();
     let mut at = 0;
     while let Some(offset) = lower[at..].find('<') {
@@ -267,7 +274,7 @@ fn lists(lower: &str) -> Vec<(usize, usize)> {
         else {
             break;
         };
-        found.push((start, end));
+        found.push((*tag, start, end));
         at = end;
     }
     found
@@ -307,22 +314,57 @@ struct Anchor {
     size: Option<u64>,
 }
 
-/// each link in `list`, in order; `lower` is the list in lowercase.
-fn links(list: &str, lower: &str) -> Vec<Anchor> {
+/// each link in `list`, a list written as the element `tag`, in order; `lower` is the list in
+/// lowercase. a row's size is its own when a table heads a column "Size", or in a `<pre>` list
+/// whose first line heads no description and none of whose rows ends in words, as apache's
+/// descriptions, which may end in a number too, would end them.
+fn links(list: &str, lower: &str, tag: &str) -> Vec<Anchor> {
+    let rows = if tag == "table" {
+        sized_rows(list, lower)
+    } else {
+        Vec::new()
+    };
+    let mut row = 0;
+    let mut described =
+        tag == "pre" && lower[..lower.find('\n').unwrap_or(lower.len())].contains("description");
     let mut found = Vec::new();
     let mut at = 0;
     while let Some(open) = opening(lower, at, "a") {
         let (href, end) = href(list, lower, open + 2);
         if let Some(href) = href {
             let text = words(&unescape(&text(list, lower, end)));
+            let size = match tag {
+                "pre" => match ending(&lower[end..]) {
+                    Ending::Bytes(bytes) => Some(bytes),
+                    Ending::Words => {
+                        described = true;
+                        None
+                    }
+                    Ending::Other => None,
+                },
+                "table" => {
+                    while rows.get(row + 1).is_some_and(|(start, _)| *start <= open) {
+                        row += 1;
+                    }
+                    rows.get(row)
+                        .filter(|(start, _)| *start <= open)
+                        .and_then(|(_, size)| *size)
+                }
+                _ => None,
+            };
             found.push(Anchor {
                 href: unescape(href),
                 names_folder: text.ends_with('/'),
                 names_parent: text.eq_ignore_ascii_case("parent directory"),
-                size: size(&lower[end..]),
+                size,
             });
         }
         at = end;
+    }
+    if described {
+        for anchor in &mut found {
+            anchor.size = None;
+        }
     }
     found
 }
@@ -347,18 +389,129 @@ fn text(list: &str, lower: &str, at: usize) -> String {
     text
 }
 
-/// the size in bytes a row states after a link whose text, then the rest of its row, `row`
-/// holds: the row's last word up to the next tag or line, as NCBI and nginx write `621`. a link
-/// whose text holds a tag, a rounded size, as `1.3M`, and a folder's `-` state none.
-fn size(row: &str) -> Option<u64> {
-    let close = row.find('<')?;
-    let rest = row[close..].strip_prefix("</a>")?;
+/// what a row of a `<pre>` list holds after a link: its last word up to the next tag or line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ending {
+    /// a size in bytes, as NCBI and nginx write `621`.
+    Bytes(u64),
+    /// words, as apache's description of a file, so no row's last word is sure to be its size.
+    Words,
+    /// a rounded size, as `1.3M`, a folder's `-`, nothing, or a link whose text holds a tag.
+    Other,
+}
+
+/// what the row `row`, a link's text and the rest of its row, ends with.
+fn ending(row: &str) -> Ending {
+    let rest = row
+        .find('<')
+        .and_then(|close| row[close..].strip_prefix("</a>"));
+    let Some(rest) = rest else {
+        return Ending::Other;
+    };
     let words = &rest[..rest.find(['<', '\n']).unwrap_or(rest.len())];
-    words
-        .split_ascii_whitespace()
-        .next_back()
-        .filter(|word| word.bytes().all(|byte| byte.is_ascii_digit()))
-        .and_then(|word| word.parse().ok())
+    let Some(last) = words.split_ascii_whitespace().next_back() else {
+        return Ending::Other;
+    };
+    if let Some(bytes) = whole(last) {
+        Ending::Bytes(bytes)
+    } else if last == "-" || rounded(last) {
+        Ending::Other
+    } else {
+        Ending::Words
+    }
+}
+
+/// the bytes `text` states when it is a whole number, as `3659`.
+fn whole(text: &str) -> Option<u64> {
+    (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| text.parse().ok())
+        .flatten()
+}
+
+/// whether `word` is a size rounded to a unit, as apache and nginx write `9.3K` or `34M`.
+fn rounded(word: &str) -> bool {
+    let number = word.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let unit = &word[number.len()..];
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, "0"));
+    !whole.is_empty()
+        && whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|byte| byte.is_ascii_digit())
+        && matches!(
+            unit.to_ascii_lowercase().as_str(),
+            "k" | "m"
+                | "g"
+                | "t"
+                | "p"
+                | "kb"
+                | "mb"
+                | "gb"
+                | "tb"
+                | "pb"
+                | "kib"
+                | "mib"
+                | "gib"
+                | "tib"
+                | "pib"
+        )
+}
+
+/// where each row of the table `list` starts, with the size in bytes it states in the column the
+/// table heads "Size", as apache, lighttpd, rclone and caddy head theirs: a cell that is a whole
+/// number, as `3659`; any other, as `9.3K`, `20 B` or `-`, states none. rows above that heading
+/// state none; `lower` is the table in lowercase.
+fn sized_rows(list: &str, lower: &str) -> Vec<(usize, Option<u64>)> {
+    let mut rows = Vec::new();
+    let mut column = None;
+    let mut at = 0;
+    while let Some(open) = opening(lower, at, "tr") {
+        let end = opening(lower, open + 1, "tr").unwrap_or(lower.len());
+        let cells = cells(lower, open, end);
+        match column {
+            None => {
+                column = cells.iter().position(|&(start, stop)| {
+                    starts_tag(lower, start, "th")
+                        && cell_text(list, lower, start, stop)
+                            .trim_end_matches(':')
+                            .eq_ignore_ascii_case("size")
+                });
+            }
+            Some(column) => {
+                let size = cells
+                    .get(column)
+                    .and_then(|&(start, stop)| whole(&cell_text(list, lower, start, stop)));
+                rows.push((open, size));
+            }
+        }
+        at = end;
+    }
+    rows
+}
+
+/// where each cell of the row between `from` and `to` of the lowercase table `lower` opens, and
+/// where the next one does.
+fn cells(lower: &str, from: usize, to: usize) -> Vec<(usize, usize)> {
+    let mut opens = Vec::new();
+    let mut at = from;
+    while let Some(offset) = lower[at..to].find('<') {
+        let open = at + offset;
+        if starts_tag(lower, open, "td") || starts_tag(lower, open, "th") {
+            opens.push(open);
+        }
+        at = open + 1;
+    }
+    opens
+        .iter()
+        .enumerate()
+        .map(|(index, &open)| (open, opens.get(index + 1).copied().unwrap_or(to)))
+        .collect()
+}
+
+/// the text of the cell that opens at `open` and ends by `to`, as [`stripped`] gives it.
+fn cell_text(list: &str, lower: &str, open: usize, to: usize) -> String {
+    let start = lower[open..to].find('>').map_or(to, |end| open + end + 1);
+    stripped(list, lower, start, to)
 }
 
 /// the `href` the tag whose attributes start at `at` has, and where the tag ends. a value is in
@@ -662,11 +815,9 @@ impl Walk<'_> {
                     self.folders.push_back((at, entry.link));
                 }
             } else if self.keeps(&at) {
-                // apache may end a row with a file's description, so a row's last word is no
-                // size to hold a download to
                 self.files.push(Remote {
                     path: at,
-                    size: None,
+                    size: entry.size,
                     sha256: None,
                     md5: None,
                     url: entry.link,

@@ -44,6 +44,27 @@ fn nginx(folder: &str, entries: &[&str]) -> Vec<Part> {
     ))
 }
 
+/// a listing as nginx's autoindex writes it, as dwd's states each file's size in bytes.
+fn nginx_sized(folder: &str, entries: &[&str]) -> Vec<Part> {
+    let rows = entries
+        .iter()
+        .map(|entry| {
+            let size = [("iris.csv", IRIS), ("tips.csv", TIPS), ("new.csv", NEW)]
+                .iter()
+                .find(|(name, _)| name == entry)
+                .map_or_else(|| "-".to_owned(), |(_, bytes)| bytes.len().to_string());
+            format!(
+                "<a href=\"{entry}\">{entry}</a>{:>40}{size:>20}\r\n",
+                "16-Nov-2026 09:00:07"
+            )
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    page(&format!(
+        "<html>\r\n<head><title>Index of {folder}</title></head>\r\n<body>\r\n<h1>Index of {folder}</h1><hr><pre><a href=\"../\">../</a>\r\n{rows}</pre><hr></body>\r\n</html>\r\n"
+    ))
+}
+
 /// a listing as ncei's apache writes it: a folder's link without its `/`, under its name with
 /// one, and the folder above as `..`.
 fn ncei(folder: &str, entries: &[&str]) -> Vec<Part> {
@@ -444,5 +465,56 @@ fn a_folder_linked_without_its_slash_is_listed_as_ncei_writes_it() -> Result {
     }
     let targets = server.targets();
     assert!(!targets.contains(&"/data/sub".to_owned()), "{targets:?}");
+    Ok(())
+}
+
+/// a listing that states each file's size in bytes, as nginx's does, sizes the folder before
+/// anything downloads: the dry run tells each file's size and their sum, past `ask_above` the
+/// add asks before its first download, and the add pins the files at those sizes.
+#[test]
+fn a_listing_that_states_sizes_sizes_the_folder_before_it_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(nginx_sized)?;
+    let folder = format!("{}/data/", server.url);
+    let dry = sandbox.run(&["--json", "add", &folder, "--dry-run"])?;
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stdout)?);
+    let changes = &json(&dry)?["result"]["changes"];
+    assert_eq!(
+        changes["download"],
+        serde_json::json!([
+            {"path": "data/iris.csv", "size": IRIS.len()},
+            {"path": "data/sub/tips.csv", "size": TIPS.len()},
+        ])
+    );
+    assert_eq!(changes["to_download"]["bytes"], IRIS.len() + TIPS.len());
+    assert_eq!(changes["to_download"]["sizes_unknown"], 0);
+
+    let before = server.targets().len();
+    let asked = sandbox
+        .command(&["--json", "add", &folder])
+        .env("FETCHLOOM_ASK_ABOVE", "30B")
+        .output()?;
+    assert_eq!(asked.status.code(), Some(1), "{}", text(&asked.stdout)?);
+    assert_eq!(
+        json(&asked)?["errors"][0]["message"],
+        "downloading 2 files needs 40 B, and fetchloom cannot ask you here"
+    );
+    let later = &server.targets()[before..];
+    assert!(
+        later.iter().all(|target| target.ends_with('/')),
+        "nothing downloads before the question: {later:?}"
+    );
+    assert!(!sandbox.work().join("data.lock").exists());
+
+    let added = sandbox.run(&["add", &folder])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(
+        pinned(&lock, "data"),
+        [
+            pin("iris.csv", IRIS, &format!("{folder}iris.csv")),
+            pin("sub/tips.csv", TIPS, &format!("{folder}sub/tips.csv")),
+        ]
+    );
     Ok(())
 }
