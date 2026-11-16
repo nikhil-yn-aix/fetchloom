@@ -398,6 +398,16 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
                     None => error,
                 });
             }
+            // a key of another kind than its value says how to take it out or save it right
+            let wrong = |said: String| {
+                Error::new(
+                    Kind::Usage,
+                    format!("{key} in the settings file {} {said}", path.display()),
+                )
+                .help(format!(
+                    "run `fetchloom settings unset {key}` to use its default, or save one with `fetchloom settings set {key} <value>`"
+                ))
+            };
             let value = match value {
                 toml::Value::String(text) => Value::Text(text),
                 toml::Value::Integer(number) => Value::Text(number.to_string()),
@@ -409,20 +419,22 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
                         .into_iter()
                         .map(|item| match item {
                             toml::Value::String(text) => Ok(text),
-                            other => Err(invalid(format!(
-                                "{key} in the settings file {} holds {}, not text in quotes",
-                                path.display(),
+                            other => Err(wrong(format!(
+                                "holds {}, not text in quotes",
                                 kind(&other)
                             ))),
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
                 other => {
-                    return Err(invalid(format!(
-                        "{key} in the settings file {} is {}, not a whole number or text in quotes",
-                        path.display(),
-                        kind(&other)
-                    )));
+                    let takes = if BOOLEANS.contains(&key.as_str()) {
+                        "true or false"
+                    } else if LISTS.contains(&key.as_str()) {
+                        "a list of text in quotes"
+                    } else {
+                        "a whole number or text in quotes"
+                    };
+                    return Err(wrong(format!("is {}, not {takes}", kind(&other))));
                 }
             };
             Ok((key, value))

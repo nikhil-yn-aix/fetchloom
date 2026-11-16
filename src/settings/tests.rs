@@ -336,6 +336,53 @@ fn only_a_plain_settings_file_of_a_sensible_size_is_read() {
     }
 }
 
+/// a value of the wrong kind says what its key takes, true or false, a list or a number or text,
+/// and how to take it out or save one right, never the whole list of keys.
+#[test]
+fn a_value_of_the_wrong_kind_says_what_its_key_takes() {
+    let path = "/home/ada/.config/fetchloom/settings.toml";
+    for (text, key, said) in [
+        (
+            "mirrors_only = [true]\n",
+            "mirrors_only",
+            "is a list, not true or false",
+        ),
+        (
+            "[allowed_origins]\nlab = \"http://10.0.0.5:8080\"\n",
+            "allowed_origins",
+            "is a table, not a list of text in quotes",
+        ),
+        (
+            "jobs = [4]\n",
+            "jobs",
+            "is a list, not a whole number or text in quotes",
+        ),
+        (
+            "mirrors = [1]\n",
+            "mirrors",
+            "holds a whole number, not text in quotes",
+        ),
+    ] {
+        let error = file(text).unwrap_err();
+        assert_eq!(error.kind, Kind::Usage, "{text}");
+        assert_eq!(
+            error.message,
+            format!("{key} in the settings file {path} {said}"),
+            "{text}"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                format!(
+                    "run `fetchloom settings unset {key}` to use its default, or save one with `fetchloom settings set {key} <value>`"
+                )
+                .as_str()
+            ),
+            "{text}"
+        );
+    }
+}
+
 /// settings under a heading, as `[settings]`, are told to go at the top, not taken for a key
 /// only a variable sets; a table of no setting is told as one, and `settings unset` takes it out.
 #[test]
