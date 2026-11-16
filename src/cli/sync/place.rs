@@ -17,7 +17,7 @@ use self::put::put_all;
 use self::tell::tell;
 pub(crate) use self::tell::{emptied, holding, restored_aside, tell_preview};
 use super::Scope;
-use super::disk::{Blocker, Entry, Freeing, LeftBehind, Retired, Survey};
+use super::disk::{Blocker, Entry, Freeing, LeftBehind, Retired, Survey, hash_plain};
 use crate::cache::{Cache, Doubt};
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
@@ -2181,7 +2181,7 @@ fn decide(
         None => {
             let block = Block::sized(target.size.saturating_add(1));
             let same = look.size == target.size
-                && Sha256::of_file(destination, block).map_err(|err| local(destination, &err))?
+                && hash_plain(destination, block).map_err(|err| local(destination, &err))?
                     == target.sha256;
             Ok(if same && (!target.copy || now_writable(destination)) {
                 Action::Adopt(*look)
@@ -2447,7 +2447,7 @@ fn still_placed<'s>(survey: &'s Survey, root: &'s Path) -> impl Fn(&str, &Placed
     move |path, placed, look| {
         let file = native(root, survey.listed.get(path).map_or(path, String::as_str));
         look.size == placed.look.size
-            && Sha256::of_file(&file, Block::sized(look.size.saturating_add(1)))
+            && hash_plain(&file, Block::sized(look.size.saturating_add(1)))
                 .is_ok_and(|digest| digest == placed.sha256)
     }
 }
@@ -2489,7 +2489,7 @@ fn adoption(target: &Target, look: Look, path: &Path, cache: &Cache, checked: u6
 /// whether the file at `path` holds the target's bytes; only a readable file of its size is hashed.
 pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
     look.size == target.size
-        && Sha256::of_file(path, Block::sized(look.size.saturating_add(1)))
+        && hash_plain(path, Block::sized(look.size.saturating_add(1)))
             .is_ok_and(|digest| digest == target.sha256)
 }
 
@@ -2512,7 +2512,7 @@ pub(crate) fn held(target: &Target, placed: &Placed, look: &Look, path: &Path) -
     if look.size != target.size && !earlier {
         return Held::Other;
     }
-    match Sha256::of_file(path, Block::sized(look.size.saturating_add(1))) {
+    match hash_plain(path, Block::sized(look.size.saturating_add(1))) {
         Ok(digest) if look.size == target.size && digest == target.sha256 => Held::Pinned,
         Ok(digest) if earlier && digest == placed.sha256 => Held::Earlier,
         _ => Held::Other,
@@ -2547,7 +2547,7 @@ pub(crate) fn placed_other_size(
     (placed.sha256 == *sha256
         && placed.look.size != size
         && now(path) == Some(placed.look)
-        && Sha256::of_file(path, Block::sized(placed.look.size.saturating_add(1)))
+        && hash_plain(path, Block::sized(placed.look.size.saturating_add(1)))
             .is_ok_and(|digest| digest == *sha256))
     .then_some(placed.look.size)
 }
@@ -2688,6 +2688,49 @@ mod tests {
         let stays = vec![(hidden.to_owned(), "data/d/sub".to_owned())];
         assert_eq!(track_aside(&root, &mut state, stays), (true, false));
         assert_eq!(state.aside.len(), 1);
+    }
+
+    /// a placed file swapped for a fifo, or for a link to an endless device, after the walk saw it
+    /// is refused rather than read, which would wait on the fifo or read forever.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_swapped_for_a_fifo_or_a_link_is_never_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let zero = dir.path().join("zero");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        let bytes = b"data";
+        let target = Target {
+            dataset: "d",
+            path: "data/d/x".to_owned(),
+            sha256: crate::digest::sha256(bytes),
+            size: 4,
+            copy: false,
+            holder: plan::Holder::Result,
+        };
+        let look = Look {
+            size: 4,
+            modified: 1,
+        };
+        let placed = Placed {
+            dataset: "d".to_owned(),
+            sha256: crate::digest::sha256(b"older"),
+            method: Method::Copy,
+            look,
+            writable: false,
+            checked: 0,
+            adopted: false,
+            racy_intact: std::sync::OnceLock::new(),
+        };
+        for path in [&fifo, &zero] {
+            assert!(!holds_target(&target, &look, path), "{}", path.display());
+            assert_eq!(held(&target, &placed, &look, path), Held::Other);
+        }
     }
 
     /// a file recorded as being replaced stays so only while its old record stands and nothing

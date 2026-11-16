@@ -520,7 +520,7 @@ impl Survey {
         );
         let unchanged = place::run_all(&racy, self.threads, |(path, placed)| {
             let block = Block::sized(placed.look.size.saturating_add(1));
-            Sha256::of_file(&native(root, path), block).is_ok_and(|digest| digest == placed.sha256)
+            hash_plain(&native(root, path), block).is_ok_and(|digest| digest == placed.sha256)
         });
         for ((path, placed), unchanged) in racy.into_iter().zip(unchanged) {
             if unchanged {
@@ -745,7 +745,7 @@ impl Survey {
         let files = &self.state.files;
         let intact = place::run_all(&doubted, self.threads, |path| {
             let block = Block::sized(files[path].look.size.saturating_add(1));
-            Sha256::of_file(&native(root, path), block).map(|digest| digest == files[path].sha256)
+            hash_plain(&native(root, path), block).map(|digest| digest == files[path].sha256)
         });
         let marks = cache.marks()?;
         for (path, intact) in doubted.into_iter().zip(intact) {
@@ -825,7 +825,7 @@ impl Survey {
             self.threads,
             ahead.as_ref(),
             |(path, placed)| {
-                let file = fs::File::open(native(root, path))?;
+                let file = crate::volume::read_unfollowed(&native(root, path))?;
                 let block = Block::sized(placed.look.size.saturating_add(1));
                 Sha256::of_reader_telling(file, block, &read).map(|digest| digest == placed.sha256)
             },
@@ -936,6 +936,12 @@ fn spelled_otherwise(root: &Path, path: &str, listings: &mut Listings) -> bool {
         folder.push(part);
     }
     false
+}
+
+/// hashes the plain file at `path` through `block`, never following a link in its place nor
+/// waiting on a fifo: what the walk saw as a file may have been swapped since.
+pub(crate) fn hash_plain(path: &Path, block: Block) -> std::io::Result<Sha256> {
+    Sha256::of_reader(crate::volume::read_unfollowed(path)?, block)
 }
 
 /// the coarsest clock step a data folder may keep: fat cuts a file's time down to two seconds.
