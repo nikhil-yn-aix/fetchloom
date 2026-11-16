@@ -689,7 +689,9 @@ fn a_semantic_scholar_link_past_its_expiry_is_asked_for_again() -> Result {
 const S3_EXPIRED: &[u8] = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Request has expired</Message><Expires>2026-11-20T13:36:33Z</Expires><ServerTime>2026-11-20T13:37:05Z</ServerTime><RequestId>VBVWVFN0V1TNHWXR</RequestId></Error>";
 
 /// adds `count` files, `jobs` at once, whose first links S3 calls expired, so each asks the listing
-/// again; one that held its place while asking would wait for ever, hence the short deadline.
+/// again; one that held its place while asking would wait for ever, hence the short deadline. S3
+/// answers the first links only once all of them were asked, so the downloads always meet the
+/// expiry together, whichever starts first.
 fn expired_links_are_asked_for_again(count: usize, jobs: &str) -> Result {
     let sandbox = Sandbox::new()?;
     let names = s2_names(count)?;
@@ -715,6 +717,7 @@ fn expired_links_are_asked_for_again(count: usize, jobs: &str) -> Result {
     }
     let routes = Routes::start(served)?;
     routes.turns(S2_LINKS_AT, vec![s2_json(&old)]);
+    routes.together(&old_targets);
     let output = command(&sandbox, &routes, &["add", "s2:tldrs"])
         .env("S2_API_KEY", S2_KEY)
         .env("FETCHLOOM_JOBS", jobs)

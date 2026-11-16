@@ -1241,6 +1241,8 @@ pub(crate) struct Routes {
     answers: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
     /// answers each served once, in order, before a target's own answer.
     turns: Arc<Mutex<std::collections::HashMap<String, std::collections::VecDeque<Vec<u8>>>>>,
+    /// targets none of which is answered before each of them was asked.
+    together: Arc<Mutex<std::collections::HashSet<String>>>,
     _running: ServerTask,
 }
 
@@ -1250,15 +1252,20 @@ impl Routes {
     pub(crate) fn start(routes: Vec<(String, Vec<Part>)>) -> Result<Routes> {
         let answers = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let turns = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let together = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let seen = requests.clone();
         let known = answers.clone();
         let queued = turns.clone();
+        let gated = together.clone();
         let running = ServerTask::start(listener, move |listener, stop| {
             let missing = head("404 Not Found", &[("Content-Length", "0")]);
-            while let Some((mut stream, _connection)) = stop.accept(&listener) {
+            // what was asked of the targets answered together, and the connections that wait
+            let mut asked_together = std::collections::HashSet::new();
+            let mut waiting = Vec::new();
+            while let Some((mut stream, connection)) = stop.accept(&listener) {
                 let asked = read_head(&mut stream);
                 let target = asked
                     .lines()
@@ -1282,8 +1289,22 @@ impl Routes {
                         .unwrap_or(&missing)
                         .clone()
                 });
+                let gate = gated.lock().unwrap_or_else(PoisonError::into_inner);
+                if gate.contains(&target) {
+                    asked_together.insert(target);
+                    if asked_together.len() < gate.len() {
+                        waiting.push((stream, connection, answer));
+                        continue;
+                    }
+                    for (mut stream, _connection, answer) in waiting.drain(..) {
+                        let _ = stream.write_all(&answer);
+                        let _ = stream.flush();
+                    }
+                }
+                drop(gate);
                 let _ = stream.write_all(&answer);
                 let _ = stream.flush();
+                drop(connection);
             }
         })?;
         let served = Routes {
@@ -1291,6 +1312,7 @@ impl Routes {
             requests,
             answers,
             turns,
+            together,
             _running: running,
         };
         served.change(routes);
@@ -1310,6 +1332,14 @@ impl Routes {
             }
             answers.insert(target, bytes);
         }
+    }
+
+    /// answers none of `targets` before each of them was asked once, then all of them, as a
+    /// service answers requests that came at one moment, so a test sees them meet whatever order
+    /// the requests were sent in.
+    pub(crate) fn together(&self, targets: &[String]) {
+        *self.together.lock().unwrap_or_else(PoisonError::into_inner) =
+            targets.iter().cloned().collect();
     }
 
     /// answers `target` with each of `answers` once, in order, before its own answer, as a
