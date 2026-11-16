@@ -36,6 +36,53 @@ pub(super) fn put_all<'t>(
     checked: u64,
     work: &Work,
 ) -> (BTreeMap<&'t str, Tally>, Option<Error>) {
+    let mut tallies: BTreeMap<&str, Tally> = BTreeMap::new();
+    let mut failure = None;
+    // windows gives each new file a short 8.3 name, which takes the name of a file still to place
+    // when that one's name has the form, as `abcdefghij.csv` takes `abcdef~1.csv`, so those go first
+    let (first, rest): (Vec<&Target>, Vec<&Target>) = todo
+        .iter()
+        .partition(|target| cfg!(windows) && short_name_shaped(&target.path));
+    for batch in [first, rest].into_iter().filter(|batch| !batch.is_empty()) {
+        let (counted, first_failure) =
+            put_batch(project, placer, cache, &batch, state, checked, work);
+        for (dataset, tally) in counted {
+            let sum = tallies.entry(dataset).or_default();
+            sum.files += tally.files;
+            sum.clones += tally.clones;
+            sum.links += tally.links;
+            sum.copied += tally.copied;
+            sum.unlinked += tally.unlinked;
+        }
+        failure = failure.or(first_failure);
+    }
+    (tallies, failure)
+}
+
+/// whether the last name of `path` has the form of a short 8.3 name windows makes up, a base of
+/// at most eight characters ending in `~` and digits, then at most three after a dot.
+fn short_name_shaped(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let (base, extension) = name.rsplit_once('.').unwrap_or((name, ""));
+    let Some((_, number)) = base.rsplit_once('~') else {
+        return false;
+    };
+    base.len() <= 8
+        && extension.len() <= 3
+        && !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// [`put_all`] of one batch, placed at once.
+fn put_batch<'t>(
+    project: &Project,
+    placer: &mut Placer,
+    cache: &Cache,
+    todo: &[&'t Target],
+    state: &mut State,
+    checked: u64,
+    work: &Work,
+) -> (BTreeMap<&'t str, Tally>, Option<Error>) {
     let order = |index: usize| {
         let target = todo[index];
         Order {
@@ -99,14 +146,32 @@ fn failed(target: &Target, object: &Path, destination: &Path, err: &io::Error) -
         )
         .help("run the same command again to download it");
     }
-    Error::io(
+    let error = Error::io(
         format_args!(
             "could not place {} at {}",
             object.display(),
             destination.display()
         ),
         err,
-    )
+    );
+    match short_name_taker(destination, err) {
+        Some(taker) => error.help(format!(
+            "windows gives {taker}, beside it, that name as its short name: rename {taker}, or delete it if fetchloom placed it and sync again, which places a file with a name of that form first"
+        )),
+        None => error,
+    }
+}
+
+/// the name of the file beside `destination` that windows answers its name for, as the short 8.3
+/// name it gave that file, when that is why `err` says the name is taken.
+fn short_name_taker(destination: &Path, err: &io::Error) -> Option<String> {
+    if !cfg!(windows) || err.kind() != io::ErrorKind::AlreadyExists {
+        return None;
+    }
+    let wanted = destination.file_name()?;
+    let found = std::fs::canonicalize(destination).ok()?;
+    let found = found.file_name()?;
+    (!found.eq_ignore_ascii_case(wanted)).then(|| found.to_string_lossy().into_owned())
 }
 
 /// `error`, with what unfinished downloads hold when `err` says the disk is full and the cache
@@ -146,6 +211,29 @@ mod tests {
     use super::*;
     use crate::plan::Holder;
     use crate::project::lock::LockedFile;
+
+    /// names of the form windows gives as short names are told apart from others.
+    #[test]
+    fn names_shaped_as_short_names_are_found() {
+        for path in [
+            "data/d/abcdef~1.csv",
+            "data/d/ABCDE~12.CSV",
+            "PROGRA~1",
+            "a~1.c",
+        ] {
+            assert!(short_name_shaped(path), "{path}");
+        }
+        for path in [
+            "data/d/abcdefghij.csv",
+            "data/d/abcdefg~1.csv",
+            "data/d/abcdef~1.csvx",
+            "data/d/abcdef~.csv",
+            "data/d/abc~x1.csv",
+            "data/d/ABCDEF~12.CSV",
+        ] {
+            assert!(!short_name_shaped(path), "{path}");
+        }
+    }
 
     #[test]
     fn a_full_disk_the_cache_shares_names_what_unfinished_downloads_hold() {

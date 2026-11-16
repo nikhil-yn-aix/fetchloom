@@ -2570,6 +2570,49 @@ fn force_discards_a_read_only_file_it_replaced() -> Result {
     Ok(())
 }
 
+/// windows gives each copied file a short 8.3 name, which can be the very name of another file of
+/// the dataset, as `abcdefghij.csv` gets `abcdef~1.csv`: both are placed, the short-named first.
+#[cfg(windows)]
+#[test]
+fn a_name_another_files_short_name_would_take_is_placed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let probe = sandbox.folder(".short")?;
+    fs::write(probe.join("abcdefghij.csv"), b"probe")?;
+    let shortens = probe.join("abcdef~1.csv").exists();
+    fs::remove_file(probe.join("abcdefghij.csv"))?;
+    fs::remove_dir(&probe)?;
+    if !shortens {
+        return skipped("short-names", "this disk makes no short 8.3 names");
+    }
+    let bytes = zip_of(&[
+        ("top/abcdefghij.csv", b"long\n"),
+        ("top/abcdef~1.csv", b"short\n"),
+    ])?;
+    let server = Server::start("/short.zip", vec![file(&bytes, "\"s\"")])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.short]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+
+    let synced = sandbox.run(&["sync"])?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    let folder = sandbox.work().join("data").join("short");
+    assert_eq!(
+        fs::read(folder.join("abcdefghij.csv"))?,
+        b"long\n",
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read(folder.join("abcdef~1.csv"))?,
+        b"short\n",
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a `sync --force` cut off at once after it moved a person's edit aside leaves the edit's name on
 /// record: status names it, and the next sync puts it back and blames no one.
 #[test]
