@@ -2736,6 +2736,51 @@ fn a_force_cut_off_at_once_keeps_an_edit_that_kept_its_look() -> Result {
     Ok(())
 }
 
+/// on a disk that ignores case, a person's file named as a folder data.lock places in another case
+/// is in that folder's way: sync keeps it and names it, and `--force` clears it, as for any file
+/// where a folder belongs. a disk that keeps the names apart has room for both.
+#[test]
+fn a_file_named_as_a_needed_folder_in_another_case_is_in_its_way() -> Result {
+    let sandbox = Sandbox::new()?;
+    let aliases = names_alias(&sandbox, "iris.csv", "Iris.csv")?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\n", server.url),
+    )?;
+    let data = sandbox.work().join("data");
+    fs::create_dir_all(&data)?;
+    fs::write(data.join("Iris"), b"my notes\n")?;
+
+    let kept = sandbox.run(&["sync"])?;
+    let stderr = text(&kept.stderr)?;
+    assert_eq!(kept.status.code(), Some(0), "{stderr}");
+    if !aliases {
+        assert_eq!(
+            fs::read(data.join("iris").join("iris.csv"))?,
+            V1,
+            "{stderr}"
+        );
+        assert_eq!(fs::read(data.join("Iris"))?, b"my notes\n", "{stderr}");
+        return Ok(());
+    }
+    assert!(
+        stderr.contains("data/Iris is a file where data.lock needs a folder"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(data.join("Iris"))?, b"my notes\n", "{stderr}");
+    let forced = sandbox.run(&["sync", "--force", "--offline"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(data.join("iris").join("iris.csv"))?,
+        V1,
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a folder whose path data.lock now gives a file goes with its files, though finder left a
 /// `.DS_Store` in it, which goes with it, so the file takes its place in the same run.
 #[test]

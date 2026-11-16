@@ -1625,11 +1625,11 @@ pub(crate) fn restore_aside(
         .collect();
     let mut restored = Vec::new();
     for (hidden, path) in aside {
-        let Some(look) = survey.disk.get(&hidden).copied() else {
+        if !survey.disk.contains_key(&hidden) {
             survey.state.aside.remove(&hidden);
             survey.needs_writing = true;
             continue;
-        };
+        }
         if !survey.is_free(&path) {
             continue;
         }
@@ -1645,11 +1645,7 @@ pub(crate) fn restore_aside(
             survey.state.aside.remove(&hidden);
             survey.needs_writing = true;
         }
-        survey.disk.remove(&hidden);
-        survey.disk.insert(path.clone(), look);
-        if survey.writable.remove(&hidden) {
-            survey.writable.insert(path.clone());
-        }
+        survey.renamed(&hidden, &path);
         restored.push(path);
     }
     restored

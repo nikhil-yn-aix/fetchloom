@@ -60,6 +60,12 @@ pub(crate) struct Survey {
     /// every folder the listing found something in, gathered the first time a blocker asks and
     /// dropped when a path takes another spelling.
     holding: OnceLock<HashSet<String>>,
+    /// each listed file by its path folded as [`name::fold`] folds it, gathered the first time a
+    /// blocker asks about a folder the listing lacks, which a disk that ignores case may take
+    /// for a file of another spelling.
+    folded: OnceLock<HashMap<String, String>>,
+    /// the project's folder, which paths in it are below.
+    root: std::path::PathBuf,
     /// the data folder, below which entries can stand in a file's way.
     data_dir: String,
     /// the files the state records outside the data folder that are still there, in order, as
@@ -274,6 +280,8 @@ impl Survey {
             temporaries,
             entries,
             holding: OnceLock::new(),
+            folded: OnceLock::new(),
+            root: project.root.clone(),
             data_dir: data_dir.to_owned(),
             outside: Vec::new(),
         };
@@ -502,6 +510,7 @@ impl Survey {
             };
             self.disk.insert(path.clone(), look);
             self.holding.take();
+            self.folded.take();
             self.listed.insert(path.clone(), listed);
             if let Some(placed) = self.state.files.get(path)
                 && placed.look.modified >= written
@@ -561,6 +570,7 @@ impl Survey {
             };
             self.disk.insert(path.clone(), look);
             self.holding.take();
+            self.folded.take();
             if self.writable.remove(&previous) {
                 self.writable.insert(path.clone());
             }
@@ -603,13 +613,13 @@ impl Survey {
             .strip_prefix('/')?;
         for (end, _) in below.match_indices('/') {
             let folder = &path[..start + end];
-            let found = if self.disk.contains_key(folder) {
-                Entry::File
+            let (folder, found) = if self.disk.contains_key(folder) {
+                (folder, Entry::File)
             } else {
                 match self.entries.get(folder) {
                     Some(Entry::Folder) => continue,
-                    Some(entry) => *entry,
-                    None => return None,
+                    Some(entry) => (folder, *entry),
+                    None => (self.file_taking(folder)?, Entry::File),
                 }
             };
             return Some(Blocker {
@@ -629,6 +639,33 @@ impl Survey {
             clearable,
             dataset: None,
         })
+    }
+
+    /// the listed file of another spelling that this disk takes for the folder `folder`, which the
+    /// listing lacks, as a disk that ignores case takes `data/Iris` for `data/iris`.
+    fn file_taking(&self, folder: &str) -> Option<&str> {
+        let by_fold = self.folded.get_or_init(|| {
+            self.disk
+                .keys()
+                .map(|path| (name::fold(path), path.clone()))
+                .collect()
+        });
+        let listed = by_fold.get(&name::fold(folder))?;
+        let look = self.disk.get(listed)?;
+        let found = fs::symlink_metadata(native(&self.root, folder)).ok()?;
+        (listed != folder && found.is_file() && Look::of(&found) == *look)
+            .then_some(listed.as_str())
+    }
+
+    /// takes what the listing found at `from` for `to`, once it was renamed there.
+    pub(crate) fn renamed(&mut self, from: &str, to: &str) {
+        if let Some(look) = self.disk.remove(from) {
+            self.disk.insert(to.to_owned(), look);
+        }
+        if self.writable.remove(from) {
+            self.writable.insert(to.to_owned());
+        }
+        self.folded.take();
     }
 
     /// whether nothing stands at `path` or on its way, so a file can take that name.
