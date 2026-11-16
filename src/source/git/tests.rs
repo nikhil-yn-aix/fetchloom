@@ -906,3 +906,61 @@ fn a_folder_on_another_server_asks_and_links_that_server_alone() {
     );
     assert_eq!(listing.resolved.written_origin(), Some(origin));
 }
+
+/// a file's link at a commit, as github and gitlab serve one raw, has no bytes on its server when
+/// it answers 404, since such a link never moves; a link at a branch, or anywhere else, may have
+/// moved.
+#[test]
+fn a_commit_links_404_says_its_server_has_no_bytes() {
+    let commit = "0bda0ce801be0fa2f464ff845a9d5ceae99aad7d";
+    for (link, host, path) in [
+        (
+            format!("https://github.com/lab/survey/raw/{commit}/data/rows.csv"),
+            "github.com",
+            "data/rows.csv",
+        ),
+        (
+            format!("https://raw.githubusercontent.com/lab/survey/{commit}/data/2020/big.bin"),
+            "raw.githubusercontent.com",
+            "data/2020/big.bin",
+        ),
+        (
+            format!(
+                "https://gitlab.com/lab/group/survey/-/raw/{commit}/data/2020/field%20notes.txt"
+            ),
+            "gitlab.com",
+            "data/2020/field notes.txt",
+        ),
+        (
+            format!("https://code.videolan.org/videolan/vlc/-/raw/{commit}/COPYING"),
+            "code.videolan.org",
+            "COPYING",
+        ),
+    ] {
+        let error = unserved(&Url::parse(&link).unwrap()).unwrap();
+        assert_eq!(error.kind, Kind::ReferenceUnresolved, "{link}");
+        assert_eq!(error.message, format!("{host} has nothing at {link} (404)"));
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                format!(
+                    "a link at a commit never moves, so {host} has no bytes for {path} at 0bda0ce: git-lfs may keep it with its object missing, or the commit may not hold it"
+                )
+                .as_str()
+            )
+        );
+        assert!(is_unserved(error.help.as_deref().unwrap()));
+    }
+    for link in [
+        "https://github.com/lab/survey/raw/main/data/rows.csv",
+        "https://raw.githubusercontent.com/lab/survey/main/data/rows.csv",
+        "https://gitlab.com/lab/group/survey/-/raw/main/data/rows.csv",
+        "https://gitlab.com/-/raw/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/rows.csv",
+        "http://gitlab.com/lab/group/survey/-/raw/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/rows.csv",
+        "https://github.com/lab/survey/raw/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d",
+        "https://example.org/files/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/rows.csv",
+        "https://api.github.com/repos/lab/secret/git/blobs/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d",
+    ] {
+        assert!(unserved(&Url::parse(link).unwrap()).is_none(), "{link}");
+    }
+}

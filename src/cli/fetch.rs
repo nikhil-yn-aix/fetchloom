@@ -2171,12 +2171,17 @@ fn cause(message: &str, label: &str) -> String {
 /// it. a pinned link with nothing at it now may still be on such a mirror. `damaged` is a folder
 /// mirror this run found a damaged copy of the file on.
 fn explain(error: Error, job: &Job, damaged: Option<std::path::PathBuf>) -> Error {
+    let at_commit = error
+        .help
+        .as_deref()
+        .is_some_and(crate::source::is_unserved);
     if let Some(again) = &job.again
-        && error.help.as_deref() == Some(crate::net::MOVED_HELP)
+        && (at_commit || error.help.as_deref() == Some(crate::net::MOVED_HELP))
     {
-        // a new link as ref would make a record of many files that one file
+        // a new link as ref would make a record of many files that one file, and a link at a
+        // commit never moves
         let on = match &job.dataset {
-            Some(dataset) if !again.alone => format!(
+            Some(dataset) if !again.alone || at_commit => format!(
                 "to pin the files its source lists now instead, run `{}`",
                 super::project::command(&format!("lock --upgrade {dataset}"))
             ),

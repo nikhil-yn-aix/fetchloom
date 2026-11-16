@@ -33,8 +33,8 @@ pub(crate) struct Rules {
     /// whether a link such a source gave expires before a moment, or too soon after it to start
     /// a download on.
     pub(crate) link_expired: fn(&Url, SystemTime) -> bool,
-    /// a source's own error for a download it refused with a status, when it says more than the
-    /// status does.
+    /// a source's own error for a download it refused with a status, or answered 404 for, when it
+    /// says more than the status does.
     pub(crate) refused_download: fn(&Url, u16) -> Option<Error>,
     /// what to do about the git-lfs pointer a link answered with, in its source's words: where it
     /// serves the file the pointer stands for, or why fetchloom cannot download that file.

@@ -358,8 +358,10 @@ impl Net {
         {
             return Failure::Final(error);
         }
-        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-            && let Some(error) = (self.rules.refused_download)(url, status.as_u16())
+        if matches!(
+            status,
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+        ) && let Some(error) = (self.rules.refused_download)(url, status.as_u16())
         {
             return Failure::Final(error);
         }

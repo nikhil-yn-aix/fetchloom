@@ -50,6 +50,7 @@ use crate::name;
 use crate::net::{self, Api, Fetch, Response};
 
 pub(crate) use git::Blob;
+pub(crate) use git::is_unserved;
 pub(crate) use github::PRIVATE_LFS;
 
 /// about the memory one listed file takes while a run works, from its listing to its placing,
@@ -998,11 +999,13 @@ pub(crate) fn paced_as(host: &str) -> String {
     access::paced_as(host).map_or_else(|| host.to_owned(), str::to_owned)
 }
 
-/// a source's own error for a download it refused, when it says more than the status.
+/// a source's own error for a download it refused, or answered 404 for, when it says more than
+/// the status.
 pub(crate) fn refused_download(url: &Url, status: u16) -> Option<Error> {
     match status {
         401 => dryad::refused_download(url),
         403 => kaggle::refused_download(url).or_else(|| dryad::refused_download(url)),
+        404 => git::unserved(url),
         _ => None,
     }
 }

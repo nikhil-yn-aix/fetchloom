@@ -924,9 +924,10 @@ fn some_missing(mut error: Error, name: &str, kept: usize, tree: Option<&str>) -
     error
 }
 
-/// whether `help` is a download's for a link with nothing at it.
+/// whether `help` is a download's for a link with nothing at it, which may have moved, or which
+/// is at a commit, whose server has no bytes for its file.
 fn is_moved(help: &str) -> bool {
-    help == crate::net::MOVED_HELP
+    help == crate::net::MOVED_HELP || crate::source::is_unserved(help)
 }
 
 /// whether `help` is a download's for a private repository's file git-lfs keeps.

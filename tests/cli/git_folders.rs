@@ -1059,6 +1059,15 @@ fn a_public_repository_keeps_its_raw_links_with_a_key() -> Result {
 /// `data` listed, and each of `files` served raw at the commit, as gitlab serves a file git-lfs
 /// keeps too. a listing in pages, which a stand-in cannot link, is the unit tests' to show.
 fn gitlab(host: &str, files: &[(&str, &[u8])]) -> Result<Vec<(String, Vec<Part>)>> {
+    gitlab_at(host, FIRST, files)
+}
+
+/// [`gitlab`]'s answers with `main` at `commit`.
+fn gitlab_at(
+    host: &str,
+    commit: &str,
+    files: &[(&str, &[u8])],
+) -> Result<Vec<(String, Vec<Part>)>> {
     let api = format!("/{host}/api/v4/projects/lab%2Fgroup%2Fsurvey");
     let entry = |path: &str, bytes: &[u8]| serde_json::json!({"id": blob_id(bytes), "name": path.rsplit('/').next(), "type": "blob", "path": path, "mode": "100644"});
     let mut listed = vec![
@@ -1069,19 +1078,19 @@ fn gitlab(host: &str, files: &[(&str, &[u8])]) -> Result<Vec<(String, Vec<Part>)
         (
             format!("{api}/repository/commits/main"),
             answer(
-                &serde_json::json!({"id": FIRST, "short_id": &FIRST[..8], "title": "add the survey"}),
+                &serde_json::json!({"id": commit, "short_id": &commit[..8], "title": "add the survey"}),
             )?,
         ),
         (
             format!(
-                "{api}/repository/tree?path=data&ref={FIRST}&recursive=true&per_page=100&pagination=keyset"
+                "{api}/repository/tree?path=data&ref={commit}&recursive=true&per_page=100&pagination=keyset"
             ),
             answer(&serde_json::Value::from(listed))?,
         ),
     ];
     for (path, bytes) in files {
         routes.push((
-            format!("/{host}/lab/group/survey/-/raw/{FIRST}/{}", encoded(path)),
+            format!("/{host}/lab/group/survey/-/raw/{commit}/{}", encoded(path)),
             file(bytes, "\"git\""),
         ));
     }
@@ -1148,6 +1157,80 @@ fn a_listed_file_its_server_has_no_bytes_for_is_left_out_by_name() -> Result {
         "{stderr}"
     );
     assert!(!stderr.contains("if it moved"), "{stderr}");
+    Ok(())
+}
+
+/// a link at a commit never moves, so its 404 never says it may have: not in a get, nor in an
+/// upgrade, which say why its server may have no bytes for the file, nor in a sync of a dataset of
+/// that one file, which says how to keep the pinned bytes.
+#[test]
+fn a_commit_links_404_never_says_it_moved() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(gitlab(
+        "gitlab.com",
+        &[("data/rows.csv", ROWS), ("data/lfs_object.iso", NOTES)],
+    )?)?;
+    let api = "/gitlab.com/api/v4/projects/lab%2Fgroup%2Fsurvey";
+    let gone = |commit: &str, path: &str| {
+        (
+            format!("/gitlab.com/lab/group/survey/-/raw/{commit}/data/{path}"),
+            reply("404 Not Found", &[("Content-Length", "0")], b""),
+        )
+    };
+    routes.change(vec![
+        (
+            format!("{api}/repository/commits/{FIRST}"),
+            answer(&serde_json::json!({"id": FIRST, "short_id": &FIRST[..8], "title": "add the survey"}))?,
+        ),
+        gone(FIRST, "lfs_object.iso"),
+    ]);
+    let link = "https://gitlab.com/lab/group/survey/-/tree/main/data";
+    let reason = |commit: &str, path: &str| {
+        format!(
+            "help: a link at a commit never moves, so gitlab.com has no bytes for data/{path} at {}: git-lfs may keep it with its object missing, or the commit may not hold it\n",
+            &commit[..7]
+        )
+    };
+
+    let other = sandbox.folder("other")?;
+    let got = sandbox
+        .command_in(&other, &["get", link])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .output()?;
+    let stderr = text(&got.stderr)?;
+    assert_eq!(got.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains(&reason(FIRST, "lfs_object.iso")),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("moved"), "{stderr}");
+
+    ok(&run(
+        &sandbox,
+        &routes,
+        &["add", link, "--as", "survey", "--select", "rows.csv"],
+    )?)?;
+    routes.change(vec![gone(FIRST, "rows.csv")]);
+    let (_, synced) = teammate_sync(&sandbox, &routes)?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("help: to keep the pinned bytes"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("moved"), "{stderr}");
+
+    routes.change(gitlab_at(
+        "gitlab.com",
+        SECOND,
+        &[("data/rows.csv", NOTES), ("data/lfs_object.iso", NOTES)],
+    )?);
+    routes.change(vec![gone(SECOND, "rows.csv")]);
+    let upgraded = run(&sandbox, &routes, &["lock", "--upgrade", "survey"])?;
+    let stderr = text(&upgraded.stderr)?;
+    assert_eq!(upgraded.status.code(), Some(10), "{stderr}");
+    assert!(stderr.contains(&reason(SECOND, "rows.csv")), "{stderr}");
+    assert!(!stderr.contains("moved"), "{stderr}");
     Ok(())
 }
 

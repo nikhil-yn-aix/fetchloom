@@ -669,6 +669,46 @@ pub(super) fn relative(entries: Vec<Entry>, folder: &str) -> Vec<Entry> {
         .collect()
 }
 
+/// how a download's help begins when its link, at a commit, has no bytes on its server.
+const UNSERVED: &str = "a link at a commit never moves, so ";
+
+/// the error for `url`, a file's link at a commit of a github or gitlab repository, which its
+/// server answered 404 for: the link cannot have moved, so the server has no bytes for the file,
+/// as for one git-lfs keeps whose object is missing. none for any other link.
+pub(super) fn unserved(url: &Url) -> Option<Error> {
+    if url.scheme() != "https" {
+        return None;
+    }
+    let parts = parts(url)?;
+    let (commit, path) = match (url.host_str()?, parts.as_slice()) {
+        ("github.com", [_, _, "raw", commit, path @ ..])
+        | ("raw.githubusercontent.com", [_, _, commit, path @ ..]) => (*commit, path),
+        _ => {
+            let raw = parts.windows(2).position(|pair| pair == ["-", "raw"])?;
+            let (commit, path) = parts.get(raw + 2..)?.split_first()?;
+            (raw > 0).then_some((*commit, path))?
+        }
+    };
+    let commit = commit_id(commit)?;
+    let path = decoded(path)?.join("/");
+    let host = crate::net::host(url);
+    Some(
+        Error::new(
+            Kind::ReferenceUnresolved,
+            format!("{host} has nothing at {} (404)", crate::shown::Shown(url)),
+        )
+        .help(format!(
+            "{UNSERVED}{host} has no bytes for {path} at {}: git-lfs may keep it with its object missing, or the commit may not hold it",
+            &commit[..7]
+        )),
+    )
+}
+
+/// whether `help` is a download's for a link at a commit whose server has no bytes for its file.
+pub(crate) fn is_unserved(help: &str) -> bool {
+    help.starts_with(UNSERVED)
+}
+
 /// a repository's name in its link, without the `.git` the link git clones ends in.
 fn cloned(name: &str) -> &str {
     name.strip_suffix(".git").unwrap_or(name)
