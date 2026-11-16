@@ -442,3 +442,32 @@ fn a_refetch_of_a_changed_cache_copy_that_fails_says_why() -> Result {
     );
     Ok(())
 }
+
+/// gc in another folder meets a registered project whose data.lock is far bigger than fetchloom
+/// ever writes, as a planted sparse file is: it refuses that data.lock by its size before reading
+/// a byte of it, so the run neither fills memory nor reads for long.
+#[cfg(unix)]
+#[test]
+fn gc_refuses_a_huge_data_lock_before_reading_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(b"iris", "\"v1\"")])?;
+    assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
+    let huge = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(sandbox.work().join("data.lock"))?;
+    huge.set_len(4 << 30)?;
+    drop(huge);
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let output = sandbox
+        .command_in(&elsewhere, &["--json", "cache", "gc"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document: Value = serde_json::from_slice(&output.stdout)?;
+    let error = &document["errors"][0];
+    assert_eq!(
+        error["details"][0], "data.lock is 4.0 GiB, more than the 1.0 GiB fetchloom reads of one",
+        "{document}"
+    );
+    Ok(())
+}

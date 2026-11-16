@@ -153,6 +153,16 @@ fn fits_text(what: &str, bytes: u64, room: u64) -> Result<(), Error> {
     )))
 }
 
+/// refuses, before it is read, a data.lock of `bytes` too big for the room a container leaves, as
+/// [`fits_text`] refuses its text.
+pub(crate) fn fits_file(bytes: u64) -> Result<(), Error> {
+    fits_text(
+        &format!("data.lock, which is {},", crate::units::size(bytes)),
+        bytes,
+        ROOM.get().copied().unwrap_or(u64::MAX),
+    )
+}
+
 /// the error for reading `what` of the project, which takes about `need` bytes of memory, more
 /// than the `room` its container leaves.
 fn too_big(what: &str, need: u64, room: u64) -> Error {

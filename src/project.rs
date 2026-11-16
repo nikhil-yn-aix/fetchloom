@@ -28,6 +28,9 @@ const OWNER_CAP: u64 = 64 << 10;
 /// the most of a .gitignore fetchloom reads to add the data folder's rule to it, many times what
 /// a person writes.
 const GITIGNORE_CAP: u64 = 1 << 20;
+/// the most bytes of data.lock a read takes, far past what fetchloom writes: a planted file, or
+/// a link to a huge one, is refused before it fills memory.
+const LOCK_MOST: u64 = 1 << 30;
 
 /// what the .gitignore of the git repository a project is in needs for its data folder.
 #[derive(Debug, PartialEq, Eq)]
@@ -372,22 +375,51 @@ impl Project {
         read: impl FnOnce(&str) -> Result<Lock, Error>,
     ) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
+        let Some(text) = self.lock_text()? else {
+            return Ok(None);
+        };
+        span.record("bytes", text.len());
+        let lock = read(&text).map_err(|error| unmerged(lock::FILE, &text).unwrap_or(error))?;
+        Ok(Some((lock, text)))
+    }
+
+    /// data.lock's text, or none when the project has none. it is opened once, without waiting
+    /// on a fifo, and refused before a byte is read when it is no plain file, or larger than
+    /// [`LOCK_MOST`] or the room a container leaves: gc reads every registered project's, so a
+    /// planted one must not hang or fill another person's run.
+    fn lock_text(&self) -> Result<Option<String>, Error> {
         let path = self.root.join(lock::FILE);
-        refuse_unreadable(
-            &path,
-            &format!(
-                "move it aside, then restore data.lock from git, or run `{}`, which resolves every dataset again",
-                crate::suggested::command("lock")
-            ),
-        )?;
-        match fs::read_to_string(&path) {
-            Ok(text) => {
-                span.record("bytes", text.len());
-                let lock =
-                    read(&text).map_err(|error| unmerged(lock::FILE, &text).unwrap_or(error))?;
-                Ok(Some((lock, text)))
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        let file = match open_waitless(&path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(self.unreadable(lock::FILE, &err)),
+        };
+        let found = file
+            .metadata()
+            .map_err(|err| self.unreadable(lock::FILE, &err))?;
+        let help = format!(
+            "move it aside, then restore data.lock from git, or run `{}`, which resolves every dataset again",
+            crate::suggested::command("lock")
+        );
+        if let Some(error) = no_file(&path, &found, &help) {
+            return Err(error);
+        }
+        if found.len() > LOCK_MOST {
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "data.lock is {}, more than the {} fetchloom reads of one",
+                    crate::units::size(found.len()),
+                    crate::units::size(LOCK_MOST)
+                ),
+            )
+            .help(lock::recovery()));
+        }
+        lock::fits_file(found.len())?;
+        // sized up front, as fs::read_to_string sizes it, so a big data.lock is copied once
+        let mut text = String::with_capacity(usize::try_from(found.len()).unwrap_or_default());
+        match file.take(LOCK_MOST).read_to_string(&mut text) {
+            Ok(_) => Ok(Some(text)),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
                 Kind::ProjectInvalid,
                 "data.lock cannot be read: it is not UTF-8 text",
@@ -1078,22 +1110,42 @@ fn read_gitignore(path: &Path) -> io::Result<String> {
 /// refuses the project file at `path` when it is a folder or a special file, as a link a clone
 /// holds to a device or a pipe, which a read would fail on or never finish. `help` says what to do.
 fn refuse_unreadable(path: &Path, help: &str) -> Result<(), Error> {
-    let Ok(found) = fs::metadata(path) else {
-        return Ok(());
-    };
+    match fs::metadata(path) {
+        Ok(found) => no_file(path, &found, help).map_or(Ok(()), Err),
+        Err(_) => Ok(()),
+    }
+}
+
+/// the refusal of `path`, which `found` shows is a folder or a special file rather than a file,
+/// with `help`; none for a file.
+fn no_file(path: &Path, found: &fs::Metadata, help: &str) -> Option<Error> {
     if found.is_file() {
-        return Ok(());
+        return None;
     }
     let what = if found.is_dir() {
         "a folder"
     } else {
         "a special file"
     };
-    Err(Error::new(
-        Kind::LocalIo,
-        format!("{} is {what}, not a file", path.display()),
+    Some(
+        Error::new(
+            Kind::LocalIo,
+            format!("{} is {what}, not a file", path.display()),
+        )
+        .help(help),
     )
-    .help(help))
+}
+
+/// `path` opened to read, without waiting on a fifo or a device, which a read then refuses.
+fn open_waitless(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        rustix::fs::OFlags::NONBLOCK.bits().cast_signed(),
+    );
+    options.open(path)
 }
 
 /// the error for project file `name` when its `text` holds git's conflict lines at a line start,
