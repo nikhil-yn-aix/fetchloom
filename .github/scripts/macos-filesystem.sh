@@ -5,9 +5,10 @@ set -euo pipefail
 : "${RUNNER_TEMP:?RUNNER_TEMP must name the runner scratch folder}"
 
 name=${1:?name hfs or exfat}
+# hfs+ keeps no sparse file, so a test that needs one takes the build's folder, never a skip
 case "$name" in
-  hfs) format=HFS+ size=4g volume=fetchloom scope=--disk ;;
-  exfat) format=ExFAT size=64m volume=FLX scope=--placing ;;
+  hfs) format=HFS+ size=4g volume=fetchloom scope=--disk require=sparse-files ;;
+  exfat) format=ExFAT size=64m volume=FLX scope=--placing require= ;;
   *) echo "::error::no disk image recipe for $name"; exit 2 ;;
 esac
 image="$RUNNER_TEMP/$name.dmg"
@@ -60,4 +61,4 @@ PY
 sudo mdutil -i off "$mount"
 echo "$name: mounted $device at $mount with indexing disabled"
 diskutil info "$mount"
-TMPDIR="$mount" python3 python/ci_tests.py run "$name" "$scope"
+TMPDIR="$mount" FETCHLOOM_TEST_REQUIRE="$require" python3 python/ci_tests.py run "$name" "$scope"

@@ -443,6 +443,19 @@ fn a_refetch_of_a_changed_cache_copy_that_fails_says_why() -> Result {
     Ok(())
 }
 
+/// whether `folder`'s disk keeps a file of 64 GiB sparse, as no disk this suite runs on has that
+/// much free: hfs+ keeps no sparse file, and gives every byte of one its own block.
+#[cfg(unix)]
+fn holds_sparse_files(folder: &std::path::Path) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+    let probe = folder.join("sparse.probe");
+    let file = fs::File::create(&probe)?;
+    let sparse = file.set_len(64 << 30).is_ok() && file.metadata()?.blocks() < 1 << 20;
+    drop(file);
+    fs::remove_file(&probe)?;
+    Ok(sparse)
+}
+
 /// gc in another folder meets a registered project whose data.lock is far bigger than fetchloom
 /// ever writes, as a planted sparse file is: it refuses that data.lock by its size before reading
 /// a byte of it, so the run neither fills memory nor reads for long.
@@ -450,12 +463,28 @@ fn a_refetch_of_a_changed_cache_copy_that_fails_says_why() -> Result {
 #[test]
 fn gc_refuses_a_huge_data_lock_before_reading_it() -> Result {
     let sandbox = Sandbox::new()?;
+    // the project goes to the build's folder where the sandbox's disk keeps no sparse file, and
+    // is chosen first, so a data.lock that cannot grow is never left empty for gc to report
+    let build = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+    let project = if holds_sparse_files(&sandbox.work())? {
+        sandbox.work()
+    } else if holds_sparse_files(build.path())? {
+        build.path().to_path_buf()
+    } else {
+        return crate::support::skipped(
+            "sparse-files",
+            "neither disk holds a sparse file of 64 GiB",
+        );
+    };
     let server = Server::start("/iris.csv", vec![file(b"iris", "\"v1\"")])?;
-    assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
+    let added = sandbox
+        .command_in(&project, &["add", &server.url])
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let huge = fs::OpenOptions::new()
         .write(true)
         .truncate(true)
-        .open(sandbox.work().join("data.lock"))?;
+        .open(project.join("data.lock"))?;
     huge.set_len(4 << 30)?;
     drop(huge);
     let elsewhere = sandbox.folder("elsewhere")?;
