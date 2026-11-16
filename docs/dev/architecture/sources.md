@@ -36,12 +36,12 @@ replace the adapter name in the module selector for figshare, hugging face, kagg
 
 ### conformance suite
 
-every adapter runs one suite, `src/source/conformance.rs` (`cargo test --locked --lib source::conformance::`), so a source that answers in an odd or hostile way cannot make one adapter loop, panic, place a bad name or trust a bad digest while the others refuse. a row is a reference and the answers its own tests recorded, and each property resolves every row on those answers, as recorded or made hostile one at a time:
+every adapter runs one suite, `src/source/conformance.rs` (`cargo test --locked --lib source::conformance::`), so a source that answers in an odd or hostile way cannot make one adapter loop, panic, place a bad name or trust a bad digest while the others refuse. a row is a reference and the answers its own tests recorded, one for each source and one for each listing that takes pages or folders, as OSF's, drive's, dandi's, cloud storage's and an arXiv month's, and each property resolves every row on those answers, as recorded or made hostile one at a time:
 
 | property | test | holds |
 |---|---|---|
 | origins | `every_adapter_asks_and_links_only_inside_its_descriptor` | each url it asks lies inside its source's descriptor, and each file link where its files are kept |
-| most files | `every_adapter_lists_at_most_the_files_a_run_allows` | a listing of one file more than `most_files` allows ends in the error that names the setting |
+| most files | `every_adapter_lists_at_most_the_files_a_run_allows` | a listing of one file more than `most_files` allows ends in the error that names the setting, without asking more than the whole listing asks |
 | network refusals | `every_adapter_ends_in_the_error_the_network_gives` | an answer past 64 MiB or past ten redirects ends the listing in the network's error, or leaves out only what the listing does without |
 | pages | `every_adapter_stops_at_a_page_it_was_sent_before` | a page that names itself or an earlier page, by link, by token or by a count past any page, on a server that sends its first page for any page it lacks, ends the listing without a loop |
 | hostile names | `every_adapter_refuses_a_hostile_name` | a name such as `../x`, `/x`, `a\x`, `a//x`, `C:x`, a control character, `CON`, `x:y` or `.git`, where a file's name was, is refused, or listed as written for the checks before placing; never changed or left out without a word |

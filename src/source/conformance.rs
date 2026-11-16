@@ -339,6 +339,7 @@ fn rows() -> Vec<Row> {
             ),
         ],
     ));
+    rows.extend(walks());
     let azure = "https://azureopendatastorage.blob.core.windows.net/mnist?restype=container&comp=list&prefix=processedManifest%2F";
     rows.push(row(
         "azure:azureopendatastorage/mnist/processedManifest/",
@@ -353,6 +354,120 @@ fn rows() -> Vec<Row> {
         ],
     ));
     rows
+}
+
+/// rows whose listing takes pages or folders one request each, as their sources' tests record
+/// them: osf's three pages and two folders, a drive folder of folders, dandi's two pages, and
+/// arXiv's months, of the mirror's folder and of a category's pages.
+#[expect(clippy::too_many_lines, reason = "a row for each walk")]
+fn walks() -> Vec<Row> {
+    let osf = "https://api.osf.io/v2/nodes/ytpuq";
+    let storage = format!("{osf}/files/osfstorage");
+    let drive = |id: &str| format!("https://drive.google.com/embeddedfolderview?id={id}");
+    let dandi = "https://api.dandiarchive.org/api/dandisets/001512/versions/0.250624.1820";
+    let mirror = |key: &str| {
+        format!(
+            "https://storage.googleapis.com/storage/v1/b/arxiv-dataset/o?prefix={}&fields=items%28name%2Csize%2Cmd5Hash%2Cgeneration%29%2CnextPageToken",
+            key.replace('/', "%2F")
+        )
+    };
+    let held = |numbers: &[&str]| {
+        let items: Vec<Value> = numbers
+            .iter()
+            .map(|number| {
+                serde_json::json!({
+                    "name": format!("arxiv/arxiv/pdf/2401/2401.{number}.pdf"),
+                    "size": "2215244",
+                    "md5Hash": "F+Ni5+W6b/tiSMSi6SPmPg==",
+                    "generation": "7",
+                })
+            })
+            .collect();
+        serde_json::to_vec(&serde_json::json!({ "items": items })).unwrap()
+    };
+    let feed = r#"<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns="http://www.w3.org/2005/Atom"><opensearch:totalResults>2</opensearch:totalResults><entry><id>http://arxiv.org/abs/2401.00001v1</id><title>Paper one</title><published>2024-01-10T10:00:00Z</published><author><name>Ada Lovelace</name></author></entry><entry><id>http://arxiv.org/abs/2401.00002v1</id><title>Paper two</title><published>2024-01-11T10:00:00Z</published><author><name>Ada Lovelace</name></author></entry></feed>"#;
+    let category = "https://export.arxiv.org/api/query?search_query=cat%3Acs.LG+AND+submittedDate%3A%5B202401010000+TO+202402010000%5D&sortBy=submittedDate&sortOrder=ascending&start=0&max_results=1000";
+    let folder = mirror("arxiv/arxiv/pdf/2401/");
+    vec![
+        row(
+            "osf:ytpuq",
+            &[
+                (
+                    &format!("{osf}/?embed=license&embed=identifiers&related_counts=children"),
+                    "osf/analysis-node.json",
+                ),
+                (&format!("{storage}/?page%5Bsize%5D=100"), "osf/page1.json"),
+                (
+                    &format!("{storage}/?page=2&page%5Bsize%5D=2"),
+                    "osf/page2.json",
+                ),
+                (
+                    &format!("{storage}/?page=3&page%5Bsize%5D=2"),
+                    "osf/page3.json",
+                ),
+                (
+                    &format!("{storage}/55a7dfbb8c5e4a66f26dcac4/?page%5Bsize%5D=100"),
+                    "osf/folder-55a7dfbb8c5e4a66f26dcac4.json",
+                ),
+                (
+                    &format!("{storage}/55d386c68c5e4a2d0b438d39/?page%5Bsize%5D=100"),
+                    "osf/folder-55d386c68c5e4a2d0b438d39.json",
+                ),
+            ],
+        ),
+        row(
+            "drive:folders/1oow464Z4Et95RAwtRZn6dLOFb_YYpLwL",
+            &[
+                (
+                    &drive("1oow464Z4Et95RAwtRZn6dLOFb_YYpLwL"),
+                    "drive/folder-deep.html",
+                ),
+                (
+                    &drive("1TMZoSAu4ecs_Q3GEEWfiyrQIPtj3DJAC"),
+                    "drive/folder-deep-1.html",
+                ),
+                (
+                    &drive("1RRfB3nFcMtg_ibfCjoU6P6DbsrXkwnPF"),
+                    "drive/folder-deep-2.html",
+                ),
+                (
+                    &drive("1-Z2wzjaaqqB1lBiPXNGfgkICA2Pc9q_U"),
+                    "drive/folder-deep-1-1.html",
+                ),
+            ],
+        ),
+        row(
+            "dandi:001512@0.250624.1820",
+            &[
+                (&format!("{dandi}/info/"), "dandi/paged-info.json"),
+                (
+                    &format!("{dandi}/assets/?metadata=true&order=path&page_size=1000"),
+                    "dandi/page-1.json",
+                ),
+                (
+                    &format!("{dandi}/assets/?metadata=true&order=path&page=2&page_size=2"),
+                    "dandi/page-2.json",
+                ),
+            ],
+        ),
+        Row {
+            reference: "arxiv:2401",
+            recorded: Recorded::default().on(
+                &folder,
+                200,
+                held(&["00001v1", "00002v1", "00002v2"]),
+            ),
+        },
+        Row {
+            reference: "arxiv:cs.LG/2401",
+            recorded: Recorded::default().on(category, 200, feed).on(
+                &folder,
+                200,
+                held(&["00001v1", "00002v1"]),
+            ),
+        },
+    ]
 }
 
 /// kaggle's answer about titanic as an account that accepted its rules gets it.
@@ -467,18 +582,22 @@ struct Subject {
     reference: Reference,
     recorded: Recorded,
     listed: Listing,
+    /// the requests the listing took.
+    asks: usize,
 }
 
 impl Subject {
     fn of(row: Row) -> Subject {
         let reference = Reference::parse(row.reference).unwrap().reference;
-        let listed = block_on(reference.resolve(&row.recorded.clone()))
+        let recorded = row.recorded.clone();
+        let listed = block_on(reference.resolve(&recorded))
             .unwrap_or_else(|error| panic!("{}: {}", row.reference, error.message));
         Subject {
             text: row.reference,
             reference,
             recorded: row.recorded,
             listed,
+            asks: recorded.asked().len(),
         }
     }
 
@@ -527,7 +646,7 @@ fn subjects() -> Vec<Subject> {
 /// findings in sources other builders are changing, handed to them: the property, the row, a
 /// part of the change and the start of the problem. a fix deletes its line, which the property
 /// then holds; a line no finding matches fails, so it cannot outlive its fix.
-const HANDED_OFF: [(&str, &str, &str, &str); 4] = [
+const HANDED_OFF: [(&str, &str, &str, &str); 2] = [
     // geo reads any page sent with 200 as a folder's index, an empty one when it is no index
     (
         "wrong answers",
@@ -541,19 +660,6 @@ const HANDED_OFF: [(&str, &str, &str, &str); 4] = [
         "geo:GSE1000",
         " as ",
         "left a file out without refusing its name",
-    ),
-    // a folder marker counts as a file, fixed on b-net
-    (
-        "most files",
-        "gs://cloud-samples-data/bigquery/us-states/",
-        "most ",
-        "did not list its own files",
-    ),
-    (
-        "most files",
-        "azure:azureopendatastorage/mnist/processedManifest/",
-        "most ",
-        "did not list its own files",
     ),
 ];
 
@@ -931,7 +1037,7 @@ fn names_in<'a>(subject: &'a Subject, body: &str) -> Vec<&'a str> {
 }
 
 /// the problem with a listing that holds `hostile`, written where a file's name was: a name
-/// changed rather than refused, or a file left out without a word.
+/// changed rather than refused, or a file left out without a warning.
 fn placed(subject: &Subject, listing: &Listing, hostile: &str) -> Option<String> {
     let before: std::collections::HashSet<&str> = subject.listed.paths().collect();
     // a file a source names by its link, the link's last part or what follows its `#`, is
@@ -957,6 +1063,7 @@ fn placed(subject: &Subject, listing: &Listing, hostile: &str) -> Option<String>
     }
     if crate::name::escapes(hostile).is_some()
         && listing.files.len() + listing.unavailable.len() < subject.count()
+        && listing.warnings.len() <= subject.listed.warnings.len()
     {
         return Some("left a file out without refusing its name".to_owned());
     }
@@ -987,48 +1094,53 @@ fn redirected_too_often(url: &str) -> Error {
     .help("open the link in a browser to see where it leads")
 }
 
-/// (a) a listing of more files than a run allows ends in the error that names the setting, and
-/// one of exactly that many is listed.
+/// (a) a listing of more files than a run allows ends in the error that names the setting,
+/// without asking more than the whole listing asks. a source may count more than files, as
+/// osf's walk counts its folders and an arXiv month the mirror's objects, so one of exactly
+/// that many files may be refused too.
 #[test]
 fn every_adapter_lists_at_most_the_files_a_run_allows() {
     let mut found = Found::of("most files");
     for subject in subjects() {
         let count = subject.count();
-        match subject.resolve(&subject.recorded.clone().most(count)) {
-            Outcome::Listed(listing) if subject.same_files(&listing) => {}
-            _ => found.add(
-                &subject,
-                &format!("most {count}"),
-                "did not list its own files",
-            ),
-        }
         // a run allows at least one file, so a listing of one has no fewer to be held to
         if count < 2 {
             continue;
         }
-        match subject.resolve(&subject.hostile().most(count - 1)) {
+        let recorded = subject.hostile().most(count - 1);
+        let change = format!("most {}", count - 1);
+        match subject.resolve(&recorded) {
             Outcome::Failed(error)
                 if error.kind == Kind::SourceInvalid
                     && error
                         .help
                         .as_deref()
-                        .is_some_and(|help| help.contains("most_files")) => {}
+                        .is_some_and(|help| help.contains("most_files")) =>
+            {
+                let asked = recorded.asked().len();
+                if asked > subject.asks {
+                    found.add(
+                        &subject,
+                        &change,
+                        &format!(
+                            "asked {asked} times, where its listing asks {}",
+                            subject.asks
+                        ),
+                    );
+                }
+            }
             Outcome::Failed(error) => found.add(
                 &subject,
-                &format!("most {}", count - 1),
+                &change,
                 &format!("failed otherwise: {:?} {}", error.kind, error.message),
             ),
             Outcome::Listed(listing) => found.add(
                 &subject,
-                &format!("most {}", count - 1),
+                &change,
                 &format!("listed {} files", listing.files.len()),
             ),
             Outcome::Panicked(message) => {
-                found.add(
-                    &subject,
-                    &format!("most {}", count - 1),
-                    &format!("panicked: {message}"),
-                );
+                found.add(&subject, &change, &format!("panicked: {message}"));
             }
         }
     }
@@ -1159,18 +1271,128 @@ fn every_adapter_refuses_a_hostile_name() {
     found.none();
 }
 
-/// the values an answer of `link` may name a page by: each recorded link, each value in their
-/// queries, and one no page has.
+/// the values an answer may name a page or a folder by: each recorded link, each value in their
+/// queries and each part of their paths long enough to be an id, and one no page has.
 fn page_names(subject: &Subject) -> Vec<String> {
     let mut names = vec!["zz-loop".to_owned()];
     for link in subject.recorded.links() {
         let url = Url::parse(&link).unwrap();
         names.extend(url.query_pairs().map(|(_, value)| value.into_owned()));
+        names.extend(
+            url.path_segments()
+                .into_iter()
+                .flatten()
+                .filter(|part| part.len() >= 8)
+                .map(str::to_owned),
+        );
         names.push(link);
     }
     names.sort_unstable();
     names.dedup();
     names
+}
+
+/// the link's answer made to name a page of its listing again, each on a server that sends
+/// the first page of a link's path for any page it lacks: by another page's link, token or id
+/// in its place, as its own next page, with a count past any page, and in its json values or
+/// the xml and html text that names a next page.
+fn page_loops(subject: &Subject, link: &str, names: &[String]) -> Vec<(String, Recorded)> {
+    let body = subject.recorded.body(link).to_vec();
+    let text = String::from_utf8_lossy(&body).into_owned();
+    let mut changes: Vec<(String, Recorded)> = names
+        .iter()
+        .filter(|name| name.len() >= 4 && text.contains(name.as_str()))
+        .flat_map(|name| {
+            names
+                .iter()
+                .filter(move |other| *other != name)
+                .map(move |other| (name, other))
+        })
+        .map(|(name, other)| {
+            let body = text.replace(name.as_str(), other).into_bytes();
+            (
+                format!("{link} names {other} for {name}"),
+                subject.hostile().echo().answer(link, 200, body),
+            )
+        })
+        .collect();
+    changes.extend([
+        (
+            format!("{link} names itself next"),
+            subject.hostile().echo().next(link, link),
+        ),
+        (
+            format!("{link} counts a billion items"),
+            subject.hostile().echo().total(link, 1_000_000_000),
+        ),
+    ]);
+    if let Ok(document) = serde_json::from_slice::<Value>(&body) {
+        let mut nodes = Vec::new();
+        pointers(&document, "", &mut nodes);
+        for pointer in &nodes {
+            let instead: Vec<Value> = match document.pointer(pointer).unwrap() {
+                Value::String(_) => names
+                    .iter()
+                    .map(|name| Value::from(name.as_str()))
+                    .collect(),
+                Value::Number(_) => vec![Value::from(1_000_000_000_u64)],
+                _ => Vec::new(),
+            };
+            for value in instead {
+                let what = format!("{link} {pointer} as {value}");
+                let body = changed(&document, pointer, Some(value));
+                changes.push((what, subject.hostile().echo().answer(link, 200, body)));
+            }
+        }
+    } else {
+        for (at, tag, value) in texts(&text) {
+            let tag = tag.to_ascii_lowercase();
+            let names_a_page = ["next", "token", "marker", "truncated"]
+                .iter()
+                .any(|word| tag.contains(word));
+            let mut instead: Vec<String> = Vec::new();
+            if names_a_page {
+                instead.extend(names.iter().map(|name| written(name, false)));
+            }
+            if value.bytes().all(|byte| byte.is_ascii_digit()) {
+                instead.push("1000000000".to_owned());
+            }
+            for name in instead {
+                let body = format!("{}{name}{}", &text[..at], &text[at + value.len()..]);
+                let what = format!("{link} <{tag}> {value:?} as {name}");
+                changes.push((
+                    what,
+                    subject
+                        .hostile()
+                        .echo()
+                        .answer(link, 200, body.into_bytes()),
+                ));
+            }
+        }
+        for (at, _) in text.match_indices("href=\"") {
+            let start = at + "href=\"".len();
+            let Some(end) = text[start..].find('"') else {
+                continue;
+            };
+            for name in names {
+                let body = format!(
+                    "{}{}{}",
+                    &text[..start],
+                    written(name, false),
+                    &text[start + end..]
+                );
+                let what = format!("{link} href {:?} as {name}", &text[start..start + end]);
+                changes.push((
+                    what,
+                    subject
+                        .hostile()
+                        .echo()
+                        .answer(link, 200, body.into_bytes()),
+                ));
+            }
+        }
+    }
+    changes
 }
 
 /// (a) a page that names itself or a page before it, by link, by token or by a count past
@@ -1182,84 +1404,7 @@ fn every_adapter_stops_at_a_page_it_was_sent_before() {
     for subject in subjects() {
         let names = page_names(&subject);
         for link in subject.recorded.links() {
-            let body = subject.recorded.body(&link).to_vec();
-            let mut changes = vec![
-                (
-                    format!("{link} names itself next"),
-                    subject.hostile().echo().next(&link, &link),
-                ),
-                (
-                    format!("{link} counts a billion items"),
-                    subject.hostile().echo().total(&link, 1_000_000_000),
-                ),
-            ];
-            if let Ok(document) = serde_json::from_slice::<Value>(&body) {
-                let mut nodes = Vec::new();
-                pointers(&document, "", &mut nodes);
-                for pointer in &nodes {
-                    let instead: Vec<Value> = match document.pointer(pointer).unwrap() {
-                        Value::String(_) => names
-                            .iter()
-                            .map(|name| Value::from(name.as_str()))
-                            .collect(),
-                        Value::Number(_) => vec![Value::from(1_000_000_000_u64)],
-                        _ => Vec::new(),
-                    };
-                    for value in instead {
-                        let what = format!("{link} {pointer} as {value}");
-                        let body = changed(&document, pointer, Some(value));
-                        changes.push((what, subject.hostile().echo().answer(&link, 200, body)));
-                    }
-                }
-            } else {
-                let text = String::from_utf8_lossy(&body).into_owned();
-                for (at, tag, value) in texts(&text) {
-                    let tag = tag.to_ascii_lowercase();
-                    let names_a_page = ["next", "token", "marker", "truncated"]
-                        .iter()
-                        .any(|word| tag.contains(word));
-                    let mut instead: Vec<String> = Vec::new();
-                    if names_a_page {
-                        instead.extend(names.iter().map(|name| written(name, false)));
-                    }
-                    if value.bytes().all(|byte| byte.is_ascii_digit()) {
-                        instead.push("1000000000".to_owned());
-                    }
-                    for name in instead {
-                        let body = format!("{}{name}{}", &text[..at], &text[at + value.len()..]);
-                        let what = format!("{link} <{tag}> {value:?} as {name}");
-                        changes.push((
-                            what,
-                            subject
-                                .hostile()
-                                .echo()
-                                .answer(&link, 200, body.into_bytes()),
-                        ));
-                    }
-                }
-                for (at, _) in text.match_indices("href=\"") {
-                    let start = at + "href=\"".len();
-                    let Some(end) = text[start..].find('"') else {
-                        continue;
-                    };
-                    for name in &names {
-                        let body = format!(
-                            "{}{}{}",
-                            &text[..start],
-                            written(name, false),
-                            &text[start + end..]
-                        );
-                        let what = format!("{link} href {:?} as {name}", &text[start..start + end]);
-                        changes.push((
-                            what,
-                            subject
-                                .hostile()
-                                .echo()
-                                .answer(&link, 200, body.into_bytes()),
-                        ));
-                    }
-                }
-            }
+            let changes = page_loops(&subject, &link, &names);
             for (what, recorded) in changes {
                 if let Some(problem) = misbehaved(&subject.resolve(&recorded)) {
                     found.add(&subject, &what, &problem);
