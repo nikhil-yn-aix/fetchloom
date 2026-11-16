@@ -2,7 +2,6 @@
 //! here for a host works in all of them; one kept to a port only in fetchloom, since they look a
 //! line up by host name alone.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,7 +47,7 @@ pub(crate) fn read(var: Var<'_>) -> Vec<Entry> {
     if too_open(&path) && !OPEN_TOLD.swap(true, Ordering::Relaxed) {
         tracing::warn!(path = %path.display(), "other users can open this .netrc");
     }
-    fs::read_to_string(path)
+    super::store::read_text(&path)
         .map(|text| parse(&text))
         .unwrap_or_default()
 }
@@ -59,7 +58,7 @@ pub(crate) fn too_open(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o077 != 0)
+        std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o077 != 0)
     }
     #[cfg(not(unix))]
     {
@@ -202,7 +201,7 @@ pub(crate) fn save(
     password: &str,
 ) -> io::Result<()> {
     let _held = super::store::hold(var)?;
-    let text = match fs::read_to_string(path) {
+    let text = match super::store::read_text(path) {
         Ok(text) => text,
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
         Err(err) => return Err(err),
@@ -223,7 +222,7 @@ pub(crate) fn save(
 /// removes the entry for `host`. returns whether there was one.
 pub(crate) fn remove(var: Var<'_>, path: &Path, host: &str) -> io::Result<bool> {
     let _held = super::store::hold(var)?;
-    let Ok(text) = fs::read_to_string(path) else {
+    let Ok(text) = super::store::read_text(path) else {
         return Ok(false);
     };
     let Some(entry) = parse(&text).into_iter().find(|entry| entry.host == host) else {
@@ -253,6 +252,7 @@ fn quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::fs;
 
     use super::*;
 

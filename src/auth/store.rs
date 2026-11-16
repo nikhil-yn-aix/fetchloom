@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -115,7 +115,7 @@ pub(crate) fn keyring_allowed(var: Var<'_>) -> bool {
 /// what was saved, and where.
 pub(crate) fn saved(var: Var<'_>) -> BTreeMap<String, Place> {
     crate::machine::settings_folder(var)
-        .and_then(|folder| fs::read_to_string(folder.join("accounts.json")).ok())
+        .and_then(|folder| read_text(&folder.join("accounts.json")).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
 }
@@ -378,7 +378,7 @@ fn forget_with(keyring: &Keyring, var: Var<'_>, id: &str) -> io::Result<Option<P
 
 fn file(var: Var<'_>) -> BTreeMap<String, String> {
     crate::machine::settings_folder(var)
-        .and_then(|folder| fs::read_to_string(folder.join("credentials.json")).ok())
+        .and_then(|folder| read_text(&folder.join("credentials.json")).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
 }
@@ -407,7 +407,7 @@ pub(crate) fn unreadable(var: Var<'_>) -> Option<crate::error::Error> {
 /// why the file at `path` cannot be read as `T`, as a clause after its name: `is not valid JSON
 /// (…)` or `could not be read: …`. none when it can, or is not there.
 fn problem<T: serde::de::DeserializeOwned>(path: &Path) -> Option<String> {
-    match fs::read_to_string(path) {
+    match read_text(path) {
         Ok(text) => serde_json::from_str::<T>(&text)
             .err()
             .map(|err| format!("is not valid JSON ({})", stopped(&err))),
@@ -419,7 +419,7 @@ fn problem<T: serde::de::DeserializeOwned>(path: &Path) -> Option<String> {
 /// what `path` holds, empty when it does not exist. a file that cannot be read or is not valid
 /// JSON is an error, so writing it back never drops the keys it held.
 fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> io::Result<T> {
-    match fs::read_to_string(path) {
+    match read_text(path) {
         Ok(text) => serde_json::from_str(&text).map_err(|err| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -468,8 +468,49 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .tempfile_in(folder)?;
     staged.write_all(bytes)?;
     staged.as_file().sync_all()?;
-    staged.persist(path).map_err(|err| err.error)?;
-    Ok(())
+    let mut tries = 0;
+    loop {
+        match staged.persist(path) {
+            Ok(_) => return Ok(()),
+            // on windows a run reading the file refuses its replacement while it holds it,
+            // which a reader does for a moment
+            Err(err)
+                if cfg!(windows)
+                    && err.error.kind() == io::ErrorKind::PermissionDenied
+                    && tries < REPLACE_TRIES =>
+            {
+                staged = err.file;
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => return Err(err.error),
+        }
+    }
+}
+
+/// how often a key file a reader holds is tried again before its replacement fails: half a
+/// second in all.
+const REPLACE_TRIES: u32 = 20;
+
+/// the text of `path`, opened so that another run may replace or remove the file meanwhile, as a
+/// sign-in does: on windows a reader that does not allow that refuses the change.
+pub(crate) fn read_text(path: &Path) -> io::Result<String> {
+    let mut text = String::new();
+    open_shared(path)?.read_to_string(&mut text)?;
+    Ok(text)
+}
+
+/// `path` opened to read, sharing it with a run that replaces or removes it.
+fn open_shared(path: &Path) -> io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        options.share_mode(0x7);
+    }
+    options.open(path)
 }
 
 #[cfg(test)]
@@ -836,6 +877,30 @@ mod tests {
         },
         ..KEYRING
     };
+
+    /// on windows a run reading the saved keys holds the file for a moment, without the lock, as
+    /// `auth` and every request's key lookup do: a sign-in or sign-out that replaces the file
+    /// meanwhile still saves its change, rather than failing as if permission were denied.
+    #[cfg(windows)]
+    #[test]
+    fn a_key_file_a_reader_holds_is_still_replaced() {
+        let folder = tempfile::tempdir().unwrap();
+        let index = folder.path().join("accounts.json");
+        write_private(&index, b"{}").unwrap();
+        let (held, holding) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                let file = open_shared(&index).unwrap();
+                held.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+                drop(file);
+            });
+            holding.recv().unwrap();
+            write_private(&index, br#"{"zenodo":"file"}"#).unwrap();
+            reader.join().unwrap();
+        });
+        assert_eq!(read_text(&index).unwrap(), r#"{"zenodo":"file"}"#);
+    }
 
     /// a disk whose file locks fail, as an nfs home without its lock manager does.
     fn unlocked(_: &File) -> io::Result<()> {
