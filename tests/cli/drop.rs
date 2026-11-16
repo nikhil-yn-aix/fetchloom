@@ -133,6 +133,31 @@ fn an_add_of_a_dropped_dataset_brings_it_back() -> Result {
     Ok(())
 }
 
+/// a line of a list naming a dropped dataset brings it back too, as the same link typed does.
+#[test]
+fn a_list_line_naming_a_dropped_dataset_brings_it_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = iris(&sandbox)?;
+    let placed = sandbox.work().join("data/iris/iris.csv");
+    ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
+    assert!(!placed.exists());
+    fs::write(
+        sandbox.work().join("links.txt"),
+        format!("{}/files/iris.csv\n", source.url),
+    )?;
+    let output = sandbox.run(&["add", "-i", "links.txt"])?;
+    ok(&output)?;
+    let told = text(&output.stderr)?;
+    assert!(
+        told.contains("Ok iris is already in data.toml and back on this machine"),
+        "{told}"
+    );
+    assert_eq!(fs::read(&placed)?, IRIS);
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["dropped"], json!([]), "{status}");
+    Ok(())
+}
+
 #[test]
 fn a_dataset_no_mirror_or_source_has_stays_and_a_mirror_brings_one_back() -> Result {
     let sandbox = Sandbox::new()?;

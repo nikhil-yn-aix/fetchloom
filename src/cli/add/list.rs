@@ -104,8 +104,16 @@ pub(super) async fn add_list_held(
         &mut lines,
         (extract, args.web_page),
     )?;
+    // a dataset a line names that was dropped here comes back, as an add of its link brings it
+    let dropped = project.dropped();
+    let back: Vec<String> = already
+        .iter()
+        .filter(|name| dropped.contains(*name))
+        .cloned()
+        .collect();
+    let placing: Vec<String> = names.iter().chain(&back).cloned().collect();
     // each dataset added gets one last line, so what it pinned and placed is told only with -v
-    let work = names.iter().fold(
+    let work = placing.iter().fold(
         Loop::new(context, project, net, cache).running("this add"),
         |work, name| work.adding(name),
     );
@@ -120,7 +128,7 @@ pub(super) async fn add_list_held(
         &manifest,
         updated,
         old,
-        (&names, given),
+        (&placing, given),
         &promised,
     )
     .await
@@ -136,7 +144,7 @@ pub(super) async fn add_list_held(
             .map(|((_, parsed), _)| &parsed.reference),
     );
     let added = (names.as_slice(), &outcome.placed.planned);
-    tell_list(&work, &manifest, added, &already, here, &private);
+    tell_list(&work, &manifest, added, (&already, &back), here, &private);
     Ok(Report {
         project: project.root.clone(),
         datasets: names,
@@ -391,7 +399,7 @@ fn tell_list(
     work: &Loop<'_>,
     manifest: &Manifest,
     (names, placed): (&[String], &std::collections::BTreeSet<String>),
-    already: &[String],
+    (already, back): (&[String], &[String]),
     here: &Path,
     private: &[url::Origin],
 ) {
@@ -417,13 +425,22 @@ fn tell_list(
     }
     if crate::cli::fetch::one_by_one(output, already.len()) {
         for name in already {
-            output.done("Ok", &format!("{name} is already in data.toml"));
+            let back = if back.contains(name) {
+                " and back on this machine"
+            } else {
+                ""
+            };
+            output.done("Ok", &format!("{name} is already in data.toml{back}"));
         }
     } else {
+        let back = match back.len() {
+            0 => String::new(),
+            count => format!(", {count} of them back on this machine"),
+        };
         output.done(
             "Ok",
             &format!(
-                "{} are already in data.toml · `-v` lists them",
+                "{} are already in data.toml{back} · `-v` lists them",
                 datasets(already.len())
             ),
         );
