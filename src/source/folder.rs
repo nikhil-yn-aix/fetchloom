@@ -60,13 +60,34 @@ pub(super) struct Index {
 
 /// a link of a list on a listing's page: its `href`, its character references undone, the link
 /// it makes against the page, none for one that makes none, whether its text reads "Parent
-/// Directory", and the size its row states. a link whose text names a folder, ending in `/`,
-/// while its `href` does not, as ncei's do, makes the folder's link, with the `/`.
+/// Directory" and whether it reads as a way up at all, and the size its row states. a link whose
+/// text names a folder, ending in `/`, while its `href` does not, as ncei's do, makes the
+/// folder's link, with the `/`.
 struct Link {
     href: String,
     url: Option<Url>,
     names_parent: bool,
+    goes_up: bool,
     size: Option<u64>,
+}
+
+impl Link {
+    /// the link `anchor` makes against `page`.
+    fn of(anchor: Anchor, page: &Url) -> Link {
+        let slashed = anchor.names_folder && !anchor.href.is_empty() && !anchor.href.ends_with('/');
+        let url = if slashed {
+            page.join(&format!("{}/", anchor.href))
+        } else {
+            page.join(&anchor.href)
+        };
+        Link {
+            url: url.ok(),
+            href: anchor.href,
+            names_parent: anchor.names_parent,
+            goes_up: anchor.goes_up,
+            size: anchor.size,
+        }
+    }
 }
 
 /// why a page is no listing to read.
@@ -91,27 +112,15 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
             links(&html[start..end], &lower[start..end], tag)
                 .into_iter()
                 .filter(|anchor| !anchor.href.contains(['?', '#']))
-                .map(|anchor| {
-                    let slashed = anchor.names_folder
-                        && !anchor.href.is_empty()
-                        && !anchor.href.ends_with('/');
-                    let url = if slashed {
-                        page.join(&format!("{}/", anchor.href))
-                    } else {
-                        page.join(&anchor.href)
-                    };
-                    Link {
-                        url: url.ok(),
-                        href: anchor.href,
-                        names_parent: anchor.names_parent,
-                        size: anchor.size,
-                    }
-                })
+                .map(|anchor| Link::of(anchor, page))
                 .collect()
         })
         .collect();
-    // the link to the folder above, as `../`, `..` or the parent's path
-    let above = |link: &Link| parent.is_some() && link.url == parent;
+    // the link to the folder above, as `../` or the parent's path, or `..` under words that go
+    // up, as ncei's "Parent Directory": a file's name over a link up is no way up
+    let above = |link: &Link| {
+        parent.is_some() && link.url == parent && (link.href.ends_with('/') || link.goes_up)
+    };
     let entries = |links: &[Link]| {
         links
             .iter()
@@ -312,13 +321,13 @@ fn starts_tag(lower: &str, open: usize, tag: &str) -> bool {
             .is_none_or(|next| *next == b'>' || *next == b'/' || next.is_ascii_whitespace())
 }
 
-/// a link as a list writes it: its `href`, its character references undone, whether its text
-/// ends in `/`, as a folder's name does, whether it reads "Parent Directory", as apache's link to
-/// the folder above does, and the size its row states.
+/// a link as a list writes it: its `href`, its character references undone, what its text says,
+/// and the size its row states.
 struct Anchor {
     href: String,
     names_folder: bool,
     names_parent: bool,
+    goes_up: bool,
     size: Option<u64>,
 }
 
@@ -345,7 +354,11 @@ fn links(list: &str, lower: &str, tag: &str) -> Vec<Anchor> {
             // where the link's text ends, when no tag sits in it, as in most
             let close = next_byte(lower, b'<', end, lower.len())
                 .filter(|&close| starts_tag(lower, close, "/a"));
-            let (names_folder, names_parent) = text_says(list, lower, end, close);
+            let Says {
+                names_folder,
+                names_parent,
+                goes_up,
+            } = text_says(list, lower, end, close);
             let size = match (tag == "pre").then(|| ending(lower, close)) {
                 Some(Ending::Bytes(bytes)) => Some(bytes),
                 Some(Ending::Words) => {
@@ -358,6 +371,7 @@ fn links(list: &str, lower: &str, tag: &str) -> Vec<Anchor> {
                 href: unescape(href),
                 names_folder,
                 names_parent,
+                goes_up,
                 size,
             });
         }
@@ -444,22 +458,41 @@ impl Rows {
     }
 }
 
-/// whether the text of the link whose tag ends at `at` in `list` ends in `/`, as a folder's name
-/// does, and whether it reads "Parent Directory", as apache's link to the folder above does;
-/// `lower` is the list in lowercase. a text that `close`s with no tag in it and holds no
-/// character reference, as most do, is read where it is.
-fn text_says(list: &str, lower: &str, at: usize, close: Option<usize>) -> (bool, bool) {
-    if let Some(close) = close {
-        let plain = list[at..close].trim_ascii();
-        if !plain.contains('&') && !plain.starts_with(['p', 'P']) {
-            return (plain.ends_with('/'), false);
+/// the words servers write on a link to the folder above, lowercase: apache's, nginx's, caddy's
+/// and rclone's.
+const UP: [&str; 5] = ["parent directory", "..", "../", "up", "go up"];
+
+/// what the text of a link says: whether it ends in `/`, as a folder's name does, whether it
+/// reads "Parent Directory", as apache's link to the folder above does, and whether it reads as
+/// any server's link to the folder above.
+struct Says {
+    names_folder: bool,
+    names_parent: bool,
+    goes_up: bool,
+}
+
+impl Says {
+    /// what `text`, its spaces as one and none at its ends, says.
+    fn of(text: &str) -> Says {
+        Says {
+            names_folder: text.ends_with('/'),
+            names_parent: text.eq_ignore_ascii_case(UP[0]),
+            goes_up: UP.iter().any(|up| text.eq_ignore_ascii_case(up)),
         }
     }
-    let text = words(&unescape(&text(list, lower, at)));
-    (
-        text.ends_with('/'),
-        text.eq_ignore_ascii_case("parent directory"),
-    )
+}
+
+/// what the text of the link whose tag ends at `at` in `list` says; `lower` is the list in
+/// lowercase. a text that `close`s with no tag in it and holds no character reference and no
+/// run of spaces, as most do, is read where it is.
+fn text_says(list: &str, lower: &str, at: usize, close: Option<usize>) -> Says {
+    if let Some(close) = close {
+        let plain = list[at..close].trim_ascii();
+        if !plain.contains(['&', '\n', '\r', '\t']) && !plain.contains("  ") {
+            return Says::of(plain);
+        }
+    }
+    Says::of(&words(&unescape(&text(list, lower, at))))
 }
 
 /// the text of the link whose tag ends at `at` in `list`, without the tags inside it, up to where

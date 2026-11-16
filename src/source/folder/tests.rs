@@ -410,9 +410,9 @@ fn a_page_no_server_made_as_a_listing_is_none() {
 }
 
 /// a listing's entries are its links into its folder, each once. the link to the folder above,
-/// as `../` or `..`, a column's sort link with a query, an anchor and every link outside its list
-/// go unsaid; any other link, to another host, out of the folder once decoded, or deeper than an
-/// entry, is told as it leads.
+/// as `../`, or `..` under words that go up, a column's sort link with a query, an anchor and
+/// every link outside its list go unsaid; any other link, to another host, out of the folder once
+/// decoded, deeper than an entry, or up under a file's name, is told as it leads.
 #[test]
 fn only_links_into_the_folder_are_entries() {
     let page = r##"<html><head><title>Index of /data/</title></head><body>
@@ -421,7 +421,7 @@ fn only_links_into_the_folder_are_entries() {
 <A HREF='iris.csv'><img src="/icons/text.gif"></A> <a class="x" href=iris.csv>iris.csv</a>
 <a href="sub/">sub/</a> <a href="https://other.example/x.csv">x.csv</a>
 <a href="%2e%2e/secret.csv">secret.csv</a> <a href="/data/sub/deeper.csv">deeper.csv</a>
-<a href="..">..</a> <a href="">here</a> <a href="C:x.csv">C:x.csv</a>
+<a href="..">..</a> <a href="..">notes.csv</a> <a href="">here</a> <a href="C:x.csv">C:x.csv</a>
 </pre><a href="https://other.example/footer.html">footer</a></body></html>"##;
     let index = read_at(page, DATA).unwrap();
     assert_eq!(names(&index), [("iris.csv", false), ("sub", true)]);
@@ -432,6 +432,7 @@ fn only_links_into_the_folder_are_entries() {
             "https://other.example/x.csv",
             "https://example.org/secret.csv",
             "https://example.org/data/sub/deeper.csv",
+            "https://example.org/",
             "https://example.org/data/",
             "c:x.csv",
         ]
