@@ -694,6 +694,7 @@ fn closing(
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
         && placement.adopted.is_empty()
+        && placement.relinked.is_empty()
     {
         let found = in_place(manifest, scope, verified, &waiting);
         let text = if verified {

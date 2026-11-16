@@ -1817,6 +1817,11 @@ fn a_data_folder_copied_without_links_is_linked_again() -> Result {
             placed_method(&sandbox.work(), "data/iris/iris.csv")?,
             "hardlink"
         );
+        // linking is work done, so the run says it synced rather than that nothing was to do
+        assert!(
+            stderr.contains("     Synced 1 dataset into data\n"),
+            "{stderr}"
+        );
         // what the copy took on the disk is free again
         #[cfg(unix)]
         assert!(
