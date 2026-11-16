@@ -867,3 +867,52 @@ fn a_file_named_with_a_star_is_excluded_by_its_name() -> Result {
     );
     Ok(())
 }
+
+/// an exclude killed once data.toml is written, before data.lock is, leaves data.lock for the
+/// next command that holds the project to write: that sync writes the pin the exclude meant, and
+/// leaves the file out, where it would otherwise refuse the import's changed `exclude`.
+#[cfg(debug_assertions)]
+#[test]
+fn an_exclude_cut_short_between_its_writes_is_finished_by_the_next_sync() -> Result {
+    use crate::support::{Running, wait_until};
+    let sandbox = Sandbox::new()?;
+    let placed = tree(&sandbox)?;
+    let lock = sandbox.work().join("data.lock");
+    let before = fs::read_to_string(&lock)?;
+    let release = sandbox.folder("hold")?.join("release");
+    let mut command = sandbox.command(&["exclude", "data/tree/sub/s2.txt"]);
+    command.env("FETCHLOOM_TEST_HOLD_EXCLUDE", &release);
+    let mut running = Running::start(&mut command)?;
+    let mut held = release.as_os_str().to_owned();
+    held.push(".held");
+    wait_until("the exclude to hold between its writes", || {
+        Ok(std::path::Path::new(&held).exists())
+    })?;
+    running.kill()?;
+    running.wait()?;
+    let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    assert!(manifest.contains("sub/s2.txt"), "{manifest}");
+    assert_eq!(
+        fs::read_to_string(&lock)?,
+        before,
+        "the kill came before data.lock"
+    );
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Finished data.lock, which a stopped command left behind data.toml"),
+        "{stderr}"
+    );
+    assert!(!sandbox.work().join(".fetchloom/pending-lock").exists());
+    let written = fs::read_to_string(&lock)?;
+    assert!(
+        !written.contains("s2.txt") && written.contains("s3.txt"),
+        "{written}"
+    );
+    assert!(!placed.join("sub/s2.txt").exists(), "{stderr}");
+    assert!(placed.join("sub/s3.txt").is_file(), "{stderr}");
+    let checked = sandbox.run(&["lock", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    Ok(())
+}

@@ -256,12 +256,20 @@ fn write(
     updated: &str,
     lock: Option<&Lock>,
 ) -> Result<(), Error> {
+    let Some(lock) = lock else {
+        return project.write(manifest::FILE, updated.as_bytes());
+    };
+    context.wrote_lists(&project.root, project.write_lists(lock)?);
+    let text = lock.render();
+    // a stop between the two writes leaves the next command that holds the project data.lock to
+    // write, rather than a data.toml it would refuse or resolve anew
+    project.write_pending(updated.as_bytes(), &text)?;
     project.write(manifest::FILE, updated.as_bytes())?;
-    if let Some(lock) = lock {
-        context.wrote_lists(&project.root, project.write_lists(lock)?);
-        project.write(lock::FILE, lock.render().as_bytes())?;
-        project.sweep_lists(lock);
-    }
+    #[cfg(debug_assertions)]
+    crate::stop::hold("FETCHLOOM_TEST_HOLD_EXCLUDE");
+    project.write(lock::FILE, text.as_bytes())?;
+    project.forget_pending();
+    project.sweep_lists(lock);
     Ok(())
 }
 

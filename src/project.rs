@@ -31,6 +31,9 @@ const GITIGNORE_CAP: u64 = 1 << 20;
 /// the most bytes of data.lock a read takes, far past what fetchloom writes: a planted file, or
 /// a link to a huge one, is refused before it fills memory.
 const LOCK_MOST: u64 = 1 << 30;
+/// in fetchloom's folder, the data.lock a command writes after data.toml, below the SHA-256 of
+/// that data.toml, from before the first write until the second is done.
+const PENDING: &str = "pending-lock";
 
 /// what the .gitignore of the git repository a project is in needs for its data folder.
 #[derive(Debug, PartialEq, Eq)]
@@ -529,6 +532,51 @@ impl Project {
         }
         write_atomically(&self.root.join(name), bytes)
             .map_err(|err| self.refused(format_args!("could not write {name}"), &err))
+    }
+
+    /// records, before data.toml becomes `manifest`, that data.lock becomes `lock` after it, so a
+    /// run cut short between the two writes leaves the next holder of the project what to finish.
+    pub(crate) fn write_pending(&self, manifest: &[u8], lock: &str) -> Result<(), Error> {
+        let path = self.inner()?.join(PENDING);
+        let record = format!("{}\n{lock}", crate::digest::sha256(manifest).hex());
+        write_atomically(&path, record.as_bytes())
+            .map_err(|err| self.refused(format_args!("could not write {}", path.display()), &err))
+    }
+
+    /// forgets the record [`Project::write_pending`] made, once both files are written.
+    pub(crate) fn forget_pending(&self) {
+        let path = self.own_folder().join(PENDING);
+        if let Err(err) = fs::remove_file(&path)
+            && err.kind() != io::ErrorKind::NotFound
+        {
+            tracing::debug!(%err, "could not remove the record of a data.lock to write");
+        }
+    }
+
+    /// writes the data.lock a run cut short between data.toml and data.lock recorded, when
+    /// data.toml is the one that run wrote, and forgets the record either way: a data.toml it
+    /// never wrote, or one edited since, keeps data.lock as it is. says whether it wrote data.lock.
+    /// a holder of the project calls it before it reads either file.
+    pub(crate) fn finish_pending(&self) -> Result<bool, Error> {
+        let path = self.own_folder().join(PENDING);
+        let record = match read_capped(&path, LOCK_MOST) {
+            Ok(record) => record,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => {
+                tracing::debug!(%err, "the record of a data.lock to write cannot be read");
+                self.forget_pending();
+                return Ok(false);
+            }
+        };
+        let written = record.split_once('\n').filter(|(manifest, _)| {
+            fs::read(self.manifest_path())
+                .is_ok_and(|bytes| crate::digest::sha256(&bytes).hex() == *manifest)
+        });
+        if let Some((_, lock)) = written {
+            self.write(lock::FILE, lock.as_bytes())?;
+        }
+        self.forget_pending();
+        Ok(written.is_some())
     }
 
     /// refuses data.lock's new text `bytes` when it drops the pin of a dataset that waits for its
@@ -1150,6 +1198,15 @@ fn no_file(path: &Path, found: &fs::Metadata, help: &str) -> Option<Error> {
     )
 }
 
+/// the text of the plain file at `path`, read without following a link, up to `most` bytes.
+fn read_capped(path: &Path, most: u64) -> io::Result<String> {
+    let mut text = String::new();
+    crate::volume::read_unfollowed(path)?
+        .take(most)
+        .read_to_string(&mut text)?;
+    Ok(text)
+}
+
 /// `path` opened to read, without waiting on a fifo or a device, which a read then refuses.
 fn open_waitless(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
@@ -1448,6 +1505,30 @@ mod tests {
             root: dir.path().to_path_buf(),
         };
         (dir, project)
+    }
+
+    /// the data.lock a command recorded is written only while data.toml is the one that command
+    /// wrote: before that write, or after an edit, data.lock stays as it is. either way the record
+    /// goes.
+    #[test]
+    fn a_pending_data_lock_follows_only_its_own_data_toml() {
+        let old_lock = "version = 1\n";
+        let new_lock = "version = 1\n# the new one\n";
+        for (manifest, finished) in [("[datasets]\n# written\n", true), ("[datasets]\n", false)] {
+            let (_dir, project) = project(&[("data.toml", manifest), ("data.lock", old_lock)]);
+            project
+                .write_pending(b"[datasets]\n# written\n", new_lock)
+                .unwrap();
+            assert_eq!(project.finish_pending().unwrap(), finished, "{manifest}");
+            let lock = fs::read_to_string(project.root.join(lock::FILE)).unwrap();
+            assert_eq!(
+                lock,
+                if finished { new_lock } else { old_lock },
+                "{manifest}"
+            );
+            assert!(!project.own_folder().join(PENDING).exists());
+            assert!(!project.finish_pending().unwrap(), "the record is gone");
+        }
     }
 
     /// links `path` to the file `target`, or false where no symbolic link can be made, as on

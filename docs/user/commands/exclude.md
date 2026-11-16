@@ -123,7 +123,7 @@ exclude plans everything before it writes, which in a dataset of many files take
     Stopped at your request, so nothing changed
 ```
 
-once exclude starts writing `data.toml`, a ctrl-c lets it finish, as [interruptions](../concepts/questions-and-interruptions.md#interruptions) explains.
+once exclude starts writing `data.toml`, a ctrl-c lets it finish, as [interruptions](../concepts/questions-and-interruptions.md#interruptions) explains. a hard kill between its writes of `data.toml` and `data.lock` leaves the data.lock it meant in `.fetchloom/pending-lock`, and the next command that changes the project, such as `sync`, writes it, saying `Finished data.lock, which a stopped command left behind data.toml`.
 
 ## JSON
 

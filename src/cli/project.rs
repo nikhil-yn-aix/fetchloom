@@ -1694,6 +1694,12 @@ pub(super) async fn hold_until<T>(
                         ),
                     );
                 }
+                if project.finish_pending()? {
+                    context.output.step(
+                        "Finished",
+                        "data.lock, which a stopped command left behind data.toml",
+                    );
+                }
                 return Ok(Waited::Held(held));
             }
             Hold::Busy(holder) if !told => {
