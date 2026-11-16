@@ -541,9 +541,10 @@ fn refused(checked: &Checked, asked: &[String], yes: bool) -> Option<Error> {
     };
     let it = if kept.len() == 1 { "it" } else { "them" };
     let names = kept.join(" ");
+    // a plain push leaves a damaged copy of the right size, which a drop then cannot count
     let push = format!(
-        "`{}` keeps a copy on a folder mirror, then `{}` frees {it}",
-        super::project::command(&format!("push {names} --to <folder>")),
+        "`{}` keeps a checked copy on a folder mirror, replacing a damaged one, then `{}` frees {it}",
+        super::project::command(&format!("push {names} --verify --to <folder>")),
         super::project::command(&format!("drop {names} --mirror <folder>"))
     );
     let lost: Vec<&String> = lacks.iter().flat_map(|lacks| &lacks.lost).collect();
