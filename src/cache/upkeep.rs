@@ -187,7 +187,12 @@ fn disk_of(path: &Path) -> Option<u64> {
     {
         use std::os::unix::fs::MetadataExt;
         let device = fs::metadata(path).ok()?.dev();
-        (rustix::fs::major(device) != 0).then_some(device)
+        // macos keeps a device number in an i32
+        #[cfg(target_os = "macos")]
+        let major = rustix::fs::major(i32::try_from(device).ok()?);
+        #[cfg(not(target_os = "macos"))]
+        let major = rustix::fs::major(device);
+        (major != 0).then_some(device)
     }
     #[cfg(windows)]
     {

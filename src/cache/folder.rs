@@ -114,6 +114,10 @@ impl Folder {
     #[cfg(unix)]
     pub(super) fn create_new_with(&self, name: &str, mode: u32) -> io::Result<File> {
         use rustix::fs::{Mode, OFlags};
+        #[cfg(target_os = "macos")]
+        let mode = u16::try_from(mode).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "a file mode is out of range")
+        })?;
         let flags = OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW;
         let mode = Mode::from_bits_truncate(mode);
         Ok(rustix::fs::openat(&self.handle, name, flags | OFlags::CLOEXEC, mode)?.into())
