@@ -7,6 +7,7 @@ use std::path::Path;
 use super::{Changes, Report, dry_run_done};
 use crate::cli::Context;
 use crate::cli::args;
+use crate::cli::sync::Scope;
 use crate::error::{Error, Kind};
 use crate::output::Warning;
 use crate::project::Project;
@@ -95,6 +96,9 @@ pub(super) fn merge(
     })?;
     for warning in &merged.warnings {
         context.output.warn(Warning::MergeFormatting, warning);
+    }
+    if let Some(lock) = &merged.lock {
+        super::tell_waiting(&context.output, &super::waiting_in(lock), &Scope::All);
     }
     let rendered = merged.lock.as_ref().map(Lock::render);
     let lock_changed = rendered.is_some() && rendered != conflicted.lock;

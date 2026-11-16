@@ -1090,3 +1090,55 @@ fn a_merge_that_sweeps_the_last_list_names_it_in_git_add() -> Result {
     assert_eq!(text(&parts.stdout)?, "", "the merge commit keeps a part");
     Ok(())
 }
+
+/// in a clone whose data.lock.d lacks core's list, which no commit holds either, a merge that
+/// conflicts over two new datasets leaves core waiting, its entry written back as it was.
+#[test]
+fn lock_merges_while_a_list_waits() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = three_files()?;
+    sandbox.allow(&routes.url);
+    if ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let link = |name: &str| format!("{}/{name}.csv", routes.url);
+    succeeded(&run_listed(&sandbox, &["add", &link("core")])?)?;
+    ok(&sandbox, &["add", "data.toml", "data.lock"])?;
+    ok(&sandbox, &["commit", "-qm", "core, data.lock.d left out"])?;
+    fs::remove_dir_all(sandbox.work().join("data.lock.d"))?;
+    let core = table(
+        &fs::read_to_string(sandbox.work().join("data.lock"))?,
+        "core",
+    )?;
+    ok(&sandbox, &["checkout", "-qb", "theirs"])?;
+    succeeded(&run(&sandbox, &["add", &link("beta")])?)?;
+    ok(&sandbox, &["commit", "-qam", "beta"])?;
+    ok(&sandbox, &["checkout", "-q", "main"])?;
+    succeeded(&run(&sandbox, &["add", &link("alpha")])?)?;
+    ok(&sandbox, &["commit", "-qam", "alpha"])?;
+    stopped(&sandbox, &["merge", "-q", "theirs"])?;
+    let merged = run(&sandbox, &["lock"])?;
+    succeeded(&merged)?;
+    let stderr = text(&merged.stderr)?;
+    assert!(stderr.contains("so core waits for it"), "{stderr}");
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(table(&lock, "core")?, core);
+    for name in ["alpha", "beta"] {
+        assert!(lock.contains(&format!("name = \"{name}\"")), "{lock}");
+    }
+    let checked = run(&sandbox, &["--json", "lock", "--check"])?;
+    assert_eq!(
+        checked.status.code(),
+        Some(50),
+        "{}",
+        text(&checked.stderr)?
+    );
+    assert!(
+        json(&checked)?["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.ends_with("the file list of core, which is not there")),
+        "{}",
+        text(&checked.stdout)?
+    );
+    Ok(())
+}

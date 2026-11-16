@@ -843,9 +843,10 @@ fn chosen_records(
 
 /// the merged data.lock of `records`, each list read below `root`, or from the commit of the side
 /// it comes from, as `committed` gives it, where git's merge deleted it: a repin on one side that
-/// replaced a list deletes it, though the other side still names it. a pin that does not read
-/// stops the merge with how to restore its side, never with advice to pin anew. the lists
-/// together are read within `memory`, what a container leaves.
+/// replaced a list deletes it, though the other side still names it. a pin whose list neither
+/// has waits for it, as any read leaves it. a pin that does not read stops the merge with how to
+/// restore its side, never with advice to pin anew. the lists together are read within `memory`,
+/// what a container leaves.
 fn kept(
     records: Vec<Parsed>,
     locks: &Locks,
@@ -875,6 +876,19 @@ fn kept(
         } else {
             None
         };
+        // neither this folder nor the side's commit holds the list, as in a clone of a commit that
+        // left data.lock.d out: the pin waits for it, written back as read
+        let record = match super::missing_part(&record, root).filter(|_| found.is_none()) {
+            Some(part) => match super::Waiting::of(record, part) {
+                Ok(waiting) => {
+                    super::check_resolved(waiting.pin())?;
+                    lock.waiting.push(waiting);
+                    continue;
+                }
+                Err(record) => *record,
+            },
+            None => record,
+        };
         let read = super::resolve_from(
             vec![record],
             Some(super::lists::Parts::Folder(
@@ -897,6 +911,7 @@ fn kept(
         lock.datasets.extend(read.datasets);
         lock.stated.extend(read.stated);
     }
+    lock.waiting.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(lock)
 }
 
