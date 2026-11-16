@@ -487,16 +487,28 @@ impl Says {
 }
 
 /// what the text of the link whose tag ends at `at` in `list` says; `lower` is the list in
-/// lowercase. a text that `close`s with no tag in it and holds no character reference and no
-/// run of spaces, as most do, is read where it is.
+/// lowercase. a text that `close`s with no tag in it and is [`plain`], as most are, is read where
+/// it is.
 fn text_says(list: &str, lower: &str, at: usize, close: Option<usize>) -> Says {
     if let Some(close) = close {
-        let plain = list[at..close].trim_ascii();
-        if !plain.contains(['&', '\n', '\r', '\t']) && !plain.contains("  ") {
-            return Says::of(plain);
+        let text = list[at..close].trim_ascii();
+        if plain(text) {
+            return Says::of(text);
         }
     }
     Says::of(&words(&unescape(&text(list, lower, at))))
+}
+
+/// whether `text` reads the same with its character references undone and its spaces as one: it
+/// holds no `&`, line break or tab and no two spaces in a row. one pass over its bytes tells, as
+/// `str::contains("  ")` on a text this short calls `memcmp` for each pair of its bytes.
+fn plain(text: &str) -> bool {
+    let mut space = false;
+    text.bytes().all(|byte| {
+        let run = space && byte == b' ';
+        space = byte == b' ';
+        !run && !matches!(byte, b'&' | b'\n' | b'\r' | b'\t')
+    })
 }
 
 /// the text of the link whose tag ends at `at` in `list`, without the tags inside it, up to where

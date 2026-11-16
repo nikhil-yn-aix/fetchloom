@@ -325,6 +325,39 @@ fn the_listing_is_the_list_that_holds_the_entries() {
     assert_eq!(index.elsewhere, Vec::<String>::new());
 }
 
+/// a link's text says the same however its server spaces or escapes it: "Parent Directory" over
+/// a run of spaces, a line break, a tab or a character reference, and a folder's name ending in
+/// an escaped `/`.
+#[test]
+fn a_links_text_says_the_same_however_it_is_spaced_or_escaped() {
+    // the text closes where it is when no tag sits in it, as `links` finds it
+    let says = |text: &str| {
+        let list = format!("<a href=\"..\">{text}</a>");
+        let lower = list.to_ascii_lowercase();
+        let at = "<a href=\"..\">".len();
+        let close = Some(at + lower[at..].find('<').unwrap())
+            .filter(|&close| lower[close..].starts_with("</a>"));
+        text_says(&list, &lower, at, close)
+    };
+    for text in [
+        "Parent Directory",
+        " Parent Directory ",
+        "Parent  Directory",
+        "Parent\nDirectory",
+        "Parent\r\nDirectory",
+        "Parent\tDirectory",
+        "Parent&#32;Directory",
+        "parent <b>directory</b>",
+    ] {
+        let read = says(text);
+        assert!(read.names_parent && read.goes_up, "{text:?}");
+    }
+    for (text, folder) in [("sub/", true), ("sub&#47;", true), ("sub", false)] {
+        assert_eq!(says(text).names_folder, folder, "{text:?}");
+    }
+    assert!(!says("Parent Directory.csv").goes_up);
+}
+
 /// a listing a site titled as it likes reads only by its own folder: its list's link to the
 /// folder above, on the folder's origin, reads "Parent Directory", as apache writes it. that
 /// link on another host, scheme or port makes the page none, and an entry on another origin is
