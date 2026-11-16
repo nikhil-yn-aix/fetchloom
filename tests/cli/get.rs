@@ -447,6 +447,41 @@ fn a_304_after_a_one_off_left_the_cache_says_what_the_server_serves() -> Result 
     Ok(())
 }
 
+/// another run may take the bytes out of the cache while this one asks whether they changed, as
+/// a one-off `-o` of another link to the same bytes does: this run downloads them again.
+#[test]
+fn bytes_another_run_took_from_the_cache_meanwhile_are_downloaded_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let taken = crate::support::object(&sandbox.cache(), IRIS);
+    let mut unchanged = vec![Part::Action(Box::new(move || {
+        let _ = crate::support::delete(&taken);
+    }))];
+    unchanged.extend(reply("304 Not Modified", &[("ETag", "\"v1\"")], b""));
+    let server = Server::start(
+        PATH,
+        vec![file(IRIS, "\"v1\""), unchanged, file(IRIS, "\"v1\"")],
+    )?;
+    let first = sandbox.run(&["get", &server.url, "--dir", "kept"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    assert_eq!(
+        objects(&sandbox),
+        1,
+        "a folder's files keep their bytes cached"
+    );
+    let output = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Restarting iris.csv · its bytes left the cache before they were saved"),
+        "{stderr}"
+    );
+    let asked = server.requests();
+    assert!(asked[1].contains("if-none-match: \"v1\""), "{}", asked[1]);
+    assert_eq!(asked.len(), 3, "{stderr}");
+    assert_eq!(fs::read(sandbox.work().join("data.csv"))?, IRIS);
+    Ok(())
+}
+
 #[test]
 fn output_copies_bytes_a_project_needs_and_keeps_them_cached() -> Result {
     let sandbox = Sandbox::new()?;

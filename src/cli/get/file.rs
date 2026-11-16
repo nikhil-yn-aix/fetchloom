@@ -307,31 +307,51 @@ async fn put(
     }
     let done = match early {
         Early::Kept(kept) => kept,
-        Early::Download(known) => {
-            let fetched =
-                download(context, net, cache, remote, (known.held, args.web_page)).await?;
-            // bytes this run wrote may leave the cache for the file, so it holds the link until
-            // they are there, for a run waiting for the link to find them in one or the other
-            let _link = if context.work.cached_before(&fetched.digest) {
-                None
-            } else {
-                Some(claimed(context, cache, remote, false).await?.0)
-            };
-            if let Some(expected) = &expected
-                && let Some(sha256) = expected.sha256()
-            {
-                matches_sha256(&remote.path, &fetched.digest, &sha256, expected)?;
+        Early::Download(mut known) => {
+            let mut again = false;
+            loop {
+                let fetched =
+                    download(context, net, cache, remote, (known.held, args.web_page)).await?;
+                // bytes this run wrote may leave the cache for the file, so it holds the link
+                // until they are there, for a run waiting for the link to find them in one or the
+                // other
+                let _link = if context.work.cached_before(&fetched.digest) {
+                    None
+                } else {
+                    Some(claimed(context, cache, remote, false).await?.0)
+                };
+                if let Some(expected) = &expected
+                    && let Some(sha256) = expected.sha256()
+                {
+                    matches_sha256(&remote.path, &fetched.digest, &sha256, expected)?;
+                }
+                refuse_zipped(cache, remote, &fetched.digest)?;
+                if let Some(done) = settle(
+                    context,
+                    cache,
+                    remote,
+                    &fetched,
+                    args.force,
+                    &destination,
+                    &known,
+                )? {
+                    break done;
+                }
+                // another run took the bytes out of the cache meanwhile, as a one-off `-o` of
+                // another link to them does: they come once more, and the path is looked at anew
+                if again || context.offline.enabled() {
+                    return Err(lost(remote));
+                }
+                again = true;
+                context.output.mark(
+                    "Restarting",
+                    &format!(
+                        "{} · its bytes left the cache before they were saved",
+                        remote.path
+                    ),
+                );
+                known = Known::default();
             }
-            refuse_zipped(cache, remote, &fetched.digest)?;
-            settle(
-                context,
-                cache,
-                remote,
-                &fetched,
-                args.force,
-                &destination,
-                &known,
-            )?
         }
     };
     if let (Some(key), [got]) = (key, done.1.files.as_slice()) {
@@ -608,7 +628,8 @@ async fn download(
 }
 
 /// keeps, refuses or writes the file once the link's bytes are in the cache or the server said the
-/// file's are unchanged. a file looked at before a slow download is looked at again.
+/// file's are unchanged. a file looked at before a slow download is looked at again. none when
+/// the bytes left the cache before the file had them.
 fn settle(
     context: &Context,
     cache: &Cache,
@@ -617,7 +638,7 @@ fn settle(
     force: bool,
     destination: &Destination,
     known: &Known,
-) -> Result<(PathBuf, Done), Error> {
+) -> Result<Option<(PathBuf, Done)>, Error> {
     let found = match &known.found {
         Some(found) if fetched.origin != Origin::Network => found.clone(),
         _ => existing(destination)?,
@@ -655,7 +676,12 @@ fn settle(
         if one_off(context, cache, &fetched.digest) {
             forget(cache, &fetched.digest);
         }
-        return Ok(kept(context, Wanted::Served, destination, record(None)));
+        return Ok(Some(kept(
+            context,
+            Wanted::Served,
+            destination,
+            record(None),
+        )));
     }
     // another run of the link may write the file between that look and this write, moving the
     // bytes out of the cache to do so, and a file it wrote with them is kept as a rerun keeps it
@@ -667,13 +693,14 @@ fn settle(
     };
     let Some(object) = cache.find(&fetched.digest, Some(fetched.size)) else {
         if holds_them() {
-            return Ok(kept(context, Wanted::Served, destination, record(None)));
+            return Ok(Some(kept(
+                context,
+                Wanted::Served,
+                destination,
+                record(None),
+            )));
         }
-        return Err(Error::new(
-            Kind::LocalIo,
-            format!("the cache lost {} while writing it", remote.path),
-        )
-        .help("run the same command again to download it"));
+        return Ok(None);
     };
     // the last look for a stop: once the file is being written, the get ends as it would
     context.stop.check().map_err(Error::unchanged)?;
@@ -693,7 +720,12 @@ fn settle(
             if one_off {
                 forget(cache, &fetched.digest);
             }
-            return Ok(kept(context, Wanted::Served, destination, record(None)));
+            return Ok(Some(kept(
+                context,
+                Wanted::Served,
+                destination,
+                record(None),
+            )));
         }
         Err(err) => return Err(unwritten(&destination.shown, &err)),
     };
@@ -702,7 +734,16 @@ fn settle(
         &destination.shown,
     );
     warn_packed(context, remote, fetched, destination);
-    Ok(written(destination, record(Some(how))))
+    Ok(Some(written(destination, record(Some(how)))))
+}
+
+/// the bytes left the cache before the file had them, again after one more download.
+fn lost(remote: &Remote) -> Error {
+    Error::new(
+        Kind::LocalIo,
+        format!("the cache lost {} while writing it", remote.path),
+    )
+    .help("run the same command again to download it")
 }
 
 /// gives `path` the bytes of `object`, the cache's copy of `digest`: moved out of the cache for a
@@ -1562,11 +1603,12 @@ mod tests {
                 &known,
             );
             if there == served {
-                let (written, done) = settled.unwrap();
+                let (written, done) = settled.unwrap().unwrap();
                 assert_eq!(written, path, "{index}");
                 assert_eq!(done.files[0].method, None, "{index}: nothing was written");
             } else {
-                assert!(settled.is_err(), "{index}");
+                // refused, or the bytes are gone and the run downloads them again
+                assert!(!matches!(settled, Ok(Some(_))), "{index}");
             }
             assert_eq!(fs::read(&path).unwrap(), there, "{index}");
         }
