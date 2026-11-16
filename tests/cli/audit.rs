@@ -542,3 +542,35 @@ fn a_dataset_its_source_deleted_fails_the_check() -> Result {
     );
     Ok(())
 }
+
+/// a retry while asking about a file names it as its dataset knows it, as a download's retry
+/// does, and not by its link's last part, which may be an id, a hash or `content`.
+#[test]
+fn a_retry_names_the_file_not_its_link() -> Result {
+    let sandbox = Sandbox::new()?;
+    let target = "/records/1/files/iris.csv/content";
+    let named = || {
+        let length = IRIS.len().to_string();
+        let headers = [
+            ("Content-Length", length.as_str()),
+            ("Content-Disposition", "attachment; filename=\"iris.csv\""),
+        ];
+        reply("200 OK", &headers, IRIS)
+    };
+    let source = Routes::start(vec![(target.to_owned(), named())])?;
+    sandbox.allow(&source.url);
+    let link = format!("{}{target}", source.url);
+    ok(&sandbox.run(&["add", &link, "--as", "iris"])?)?;
+    let busy = reply(
+        "503 Service Unavailable",
+        &[("Content-Length", "0"), ("Retry-After", "0")],
+        b"",
+    );
+    source.turns(target, vec![busy]);
+    let output = sandbox.run(&["audit"])?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert!(stderr.contains("trying iris/iris.csv again in"), "{stderr}");
+    assert!(!stderr.contains("trying content again"), "{stderr}");
+    Ok(())
+}

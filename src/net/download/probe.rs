@@ -99,7 +99,7 @@ impl Net {
         let mut from = fetch.from.clone();
         let (mut diversions, mut relinks) = (0, 0);
         let mut permits = Some(self.permit(&fetch.from).await?);
-        let mut retry = Retry::new(self, &fetch.url);
+        let mut retry = Retry::named(self, fetch);
         loop {
             self.keep_permit(&fetch.from, &mut permits).await?;
             let failure = match self.ask_first_byte(&from, fetch, &mut permits).await {

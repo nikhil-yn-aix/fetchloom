@@ -116,9 +116,15 @@ impl<'a> Retry<'a> {
     /// the tries of the download `fetch`, told to `on`, whose retry lines name the file by its
     /// label, as its progress line does.
     pub(super) fn downloading(net: &'a Net, fetch: &'a Fetch, on: Listener<'a>) -> Retry<'a> {
+        Retry::named(net, fetch).telling(on)
+    }
+
+    /// the tries of the request for `fetch`, whose retry lines name the file by its label when it
+    /// has one.
+    pub(super) fn named(net: &'a Net, fetch: &'a Fetch) -> Retry<'a> {
         Retry {
             named: fetch.label.as_deref(),
-            ..Retry::new(net, &fetch.url).telling(on)
+            ..Retry::new(net, &fetch.url)
         }
     }
 

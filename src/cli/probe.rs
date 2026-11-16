@@ -109,8 +109,9 @@ impl<'a> Pinned<'a> {
                 })
     }
 
-    /// the request for its first byte at its source, as a sync asks for the file, or why it has
-    /// none: an import names no link, and a broken link names nothing.
+    /// the request for its first byte at its source, as a sync asks for the file, its retry lines
+    /// naming it as its dataset does, or why it has none: an import names no link, and a broken
+    /// link names nothing.
     fn request(&self) -> Result<Fetch, Lack> {
         if self.url.is_empty() {
             return Err(Lack::Imported);
@@ -128,6 +129,7 @@ impl<'a> Pinned<'a> {
                 size: Some(self.size),
             },
             page: self.page,
+            label: Some(self.label()),
             ..crate::source::fetch_plan(&url)
         })
     }
@@ -389,8 +391,13 @@ async fn held_on(
             })
         })),
         Look::Ask(request) => {
+            // a retry line names the file, not the mirror's name for its bytes
             let probed = each(context, net, asked, |at| {
-                files[at].wanted().map(|wanted| request(&wanted))
+                let wanted = files[at].wanted()?;
+                Some(Fetch {
+                    label: Some(wanted.label.clone()),
+                    ..request(&wanted)
+                })
             })
             .await?;
             let mut held: Vec<bool> = asked
