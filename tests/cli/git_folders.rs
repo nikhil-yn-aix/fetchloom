@@ -625,6 +625,80 @@ fn a_gitlab_folder_pins_every_file_at_its_commit() -> Result {
     Ok(())
 }
 
+/// gitlab's answer to a request it limits: 429 with the wait, counted by address for a request
+/// without a key, as gitlab.com says in `RateLimit-Name`.
+fn limited() -> Vec<Part> {
+    reply(
+        "429 Too Many Requests",
+        &[
+            ("Retry-After", "1891"),
+            ("RateLimit-Name", "unauthenticated_traffic_per_ip"),
+            ("Content-Length", "0"),
+        ],
+        b"",
+    )
+}
+
+/// gitlab limits the requests that come without a key by their address, which a whole lab may
+/// share, so the error names the key that gives a limit of one's own: for an add and a teammate's
+/// sync on gitlab.com, and for another server its own sign-in. a run whose key went is told only
+/// to wait.
+#[test]
+fn gitlabs_rate_limit_without_a_key_names_the_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let key = "set GITLAB_TOKEN to a gitlab.com token, or sign in with `fetchloom auth login gitlab`, for a limit of your own";
+    let commit = "/gitlab.com/api/v4/projects/lab%2Fgroup%2Fsurvey/repository/commits/main";
+    let link = "https://gitlab.com/lab/group/survey/-/tree/main/data";
+    let routes = Routes::start(vec![(commit.to_owned(), limited())])?;
+    let output = run(&sandbox, &routes, &["add", link])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(20), "{stderr}");
+    assert!(
+        stderr.contains("error: gitlab.com asked to wait 31 min 31 s before the next request"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(key), "{stderr}");
+    let keyed = sandbox
+        .command(&["add", link])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("GITLAB_TOKEN", "glpat-test-key-that-is-never-printed")
+        .output()?;
+    let stderr = text(&keyed.stderr)?;
+    assert_eq!(keyed.status.code(), Some(20), "{stderr}");
+    assert!(!stderr.contains("GITLAB_TOKEN"), "{stderr}");
+
+    let routes = Routes::start(gitlab("gitlab.com", &[("data/rows.csv", ROWS)])?)?;
+    ok(&run(&sandbox, &routes, &["add", link, "--as", "survey"])?)?;
+    routes.change(vec![(
+        format!("/gitlab.com/lab/group/survey/-/raw/{FIRST}/data/rows.csv"),
+        limited(),
+    )]);
+    let (_, synced) = teammate_sync(&sandbox, &routes)?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(20), "{stderr}");
+    assert!(stderr.contains(key), "{stderr}");
+
+    let elsewhere = Routes::start(vec![(
+        "/code.example.org/api/v4/projects/lab%2Fgroup%2Fsurvey/repository/commits/main".to_owned(),
+        limited(),
+    )])?;
+    let output = run(
+        &sandbox,
+        &elsewhere,
+        &[
+            "add",
+            "https://code.example.org/lab/group/survey/-/tree/main/data",
+        ],
+    )?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(20), "{stderr}");
+    assert!(
+        stderr.contains("save a key for it with `fetchloom auth login code.example.org --token`, for a limit of your own"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a folder on another gitlab server, with a key saved for that server, asks that server alone,
 /// for its listing and its files alike.
 #[test]

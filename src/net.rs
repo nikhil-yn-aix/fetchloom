@@ -1221,37 +1221,55 @@ impl Net {
         let mut request = client.get(url.clone());
         let site = self.site_headers(url, credentials);
         let mut carried = !site.is_empty();
-        if self.carries(url)
-            && let Some(host) = url.host_str()
-        {
-            let port = url.port_or_known_default();
-            let mut sent: Vec<&HeaderName> = Vec::new();
-            // a key for this very port goes before one for every port of the host
-            for every_port in [false, true] {
-                for key in self
-                    .credentials
-                    .iter()
-                    .filter(|key| key.every_port == every_port)
-                {
-                    if (credentials || key.every_hop)
-                        && (every_port || port == Some(key.port))
-                        && host.eq_ignore_ascii_case(&key.host)
-                        && !site.iter().any(|(name, _)| *name == key.name)
-                        && !sent.contains(&&key.name)
-                    {
-                        // the header name only; the value is the secret
-                        tracing::debug!(host, header = %key.name, "sending a stored credential");
-                        request = request.header(key.name.clone(), key.value.clone());
-                        sent.push(&key.name);
-                        carried = true;
-                    }
-                }
-            }
+        for key in self.stored_keys(url, credentials, &site) {
+            // the header name only; the value is the secret
+            tracing::debug!(host = key.host, header = %key.name, "sending a stored credential");
+            request = request.header(key.name.clone(), key.value.clone());
+            carried = true;
         }
         for (name, value) in site {
             request = request.header(name, value);
         }
         (request, carried)
+    }
+
+    /// the stored keys a request for `url` carries, when `credentials` allows, beside `site`, the
+    /// headers a website's saved credential adds, whose names win.
+    fn stored_keys(
+        &self,
+        url: &Url,
+        credentials: bool,
+        site: &[(HeaderName, HeaderValue)],
+    ) -> Vec<&Key> {
+        let mut keys: Vec<&Key> = Vec::new();
+        let Some(host) = url.host_str().filter(|_| self.carries(url)) else {
+            return keys;
+        };
+        let port = url.port_or_known_default();
+        // a key for this very port goes before one for every port of the host
+        for every_port in [false, true] {
+            for key in self
+                .credentials
+                .iter()
+                .filter(|key| key.every_port == every_port)
+            {
+                if (credentials || key.every_hop)
+                    && (every_port || port == Some(key.port))
+                    && host.eq_ignore_ascii_case(&key.host)
+                    && !site.iter().any(|(name, _)| *name == key.name)
+                    && !keys.iter().any(|sent| sent.name == key.name)
+                {
+                    keys.push(key);
+                }
+            }
+        }
+        keys
+    }
+
+    /// whether a request that starts at `url` carries a key: a stored one, or a website's saved
+    /// credential.
+    pub(crate) fn sends_key(&self, url: &Url) -> bool {
+        self.site_of(url).is_some() || !self.stored_keys(url, true, &[]).is_empty()
     }
 
     /// waits while a rate limit of the URL's host is used up, telling the person watching once

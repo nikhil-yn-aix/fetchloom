@@ -276,23 +276,23 @@ impl<'a> Retry<'a> {
                 through.as_ref(),
             );
             if self.limited == 0 {
-                return Err(error);
+                return Err(self.limit_said(error));
             }
-            return Err(error.detail(format!(
+            return Err(self.limit_said(error.detail(format!(
                 "{} of them waited for {}'s rate limit to reset",
                 self.limited,
                 host(self.url)
-            )));
+            ))));
         }
         // a host that refused for load pauses its next request, and the wait says how long
         let paced = self.net.paced(self.url);
         if self.net.paces.busy(&paced) {
-            return Err(busy(self.url));
+            return Err(self.limit_said(busy(self.url)));
         }
         let now = tokio::time::Instant::now().into_std();
         let asked = asked.max(self.net.paces.pause(&paced, now));
         let wait = backoff(self.net.first_wait, self.attempt, asked)
-            .map_err(|asked| rate_limited(self.url, asked))?;
+            .map_err(|asked| self.limit_said(rate_limited(self.url, asked)))?;
         self.attempt += 1;
         self.tries += 1;
         tracing::debug!(attempt = self.attempt, ?wait, %reason, "retrying");
@@ -313,6 +313,15 @@ impl<'a> Retry<'a> {
             () = tokio::time::sleep(wait) => Ok(()),
             () = self.net.stop.asked() => Err(interrupted(self.url)),
         }
+    }
+
+    /// `error`, in its source's words when it is a rate limit that stopped a request no key went
+    /// with, which may name the key that lifts it.
+    fn limit_said(&self, error: Error) -> Error {
+        if error.kind != Kind::NetworkRateLimited || self.net.sends_key(self.url) {
+            return error;
+        }
+        (self.net.rules.keyless_limit)(self.url, error)
     }
 
     /// waits before the next try after `failure`, as [`Retry::limited`], [`Retry::unreachable`]

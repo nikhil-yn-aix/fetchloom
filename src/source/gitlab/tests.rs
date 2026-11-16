@@ -196,7 +196,9 @@ fn a_missing_release_and_a_hidden_project_say_which_they_are() {
     let elsewhere = Release::parse("//code.videolan.org/videolan/dav1d").unwrap();
     assert_eq!(
         elsewhere.no_release().help.as_deref(),
-        Some("check the releases at https://code.videolan.org/videolan/dav1d/-/releases; a tag without a release has no files to list. to pin the project's own files at its default branch instead, run `fetchloom add https://code.videolan.org/videolan/dav1d/-/tree/HEAD`")
+        Some(
+            "check the releases at https://code.videolan.org/videolan/dav1d/-/releases; a tag without a release has no files to list. to pin the project's own files at its default branch instead, run `fetchloom add https://code.videolan.org/videolan/dav1d/-/tree/HEAD`"
+        )
     );
 
     let recorded = Recorded::default().on(RELEASE, 404, fixture_bytes("gitlab/no-project.json"));
@@ -218,6 +220,41 @@ fn a_missing_release_and_a_hidden_project_say_which_they_are() {
         .hidden(true, "releases");
     assert!(keyed.message.ends_with("or this key cannot see it"));
     assert!(keyed.need.is_none(), "a key went already");
+}
+
+/// a rate limit on a request without a key offers the key that lifts it: gitlab.com's account,
+/// or a key saved for another gitlab server, known by its raw links and its api; any other host's
+/// limit stays as the network said it.
+#[test]
+fn a_keyless_rate_limit_offers_the_key_of_the_gitlab_that_set_it() {
+    let limited = || Error::new(Kind::NetworkRateLimited, "asked to wait").help("later");
+    let at = |link: &str| keyless_limit(&Url::parse(link).unwrap(), limited());
+    let com =
+        at("https://gitlab.com/lab/survey/-/raw/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d/a.csv");
+    assert_eq!(com.need.unwrap().account, Account::GitLab);
+    for link in [
+        "https://code.example.org/lab/survey/-/raw/main/a.csv",
+        "https://code.example.org/api/v4/projects/lab%2Fsurvey/repository/commits/main",
+    ] {
+        let error = at(link);
+        let need = error.need.unwrap();
+        assert_eq!(
+            need.account,
+            Account::Login("code.example.org".to_owned()),
+            "{link}"
+        );
+        assert!(need.site, "{link}");
+        assert!(
+            error
+                .help
+                .unwrap()
+                .contains("`fetchloom auth login code.example.org --token`"),
+            "{link}"
+        );
+    }
+    let other = at("https://example.org/data/a.csv");
+    assert!(other.need.is_none());
+    assert_eq!(other.help.as_deref(), Some("later"));
 }
 
 #[test]

@@ -890,6 +890,7 @@ pub(crate) fn rules() -> net::Rules {
             })
         },
         account_at: access::account_at,
+        keyless_limit: gitlab::keyless_limit,
     }
 }
 

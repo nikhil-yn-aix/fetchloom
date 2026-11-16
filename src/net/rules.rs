@@ -46,6 +46,10 @@ pub(crate) struct Rules {
     pub(crate) drive_name: for<'a> fn(&'a Net, &'a str) -> Asking<'a, String>,
     /// the account whose source answered from a host, for a refusal that names no account.
     pub(crate) account_at: fn(&str) -> Option<Account>,
+    /// a source's words for a rate limit that stopped a request to a link sent with no key: the
+    /// key that lifts it, as gitlab's for its servers, which limit requests without one by
+    /// address.
+    pub(crate) keyless_limit: fn(&Url, Error) -> Error,
 }
 
 /// a file a source links only for a while, by the stable link data.lock keeps: the request that
@@ -79,6 +83,7 @@ impl Default for Rules {
             drive_search: unsearched,
             drive_name: unnamed,
             account_at: |_| None,
+            keyless_limit: |_, error| error,
         }
     }
 }

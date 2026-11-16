@@ -571,7 +571,7 @@ impl Net {
 
     /// the website with a saved credential at the host and port of `url`, when a request may
     /// carry what it keeps there.
-    fn site_of(&self, url: &Url) -> Option<&Site> {
+    pub(super) fn site_of(&self, url: &Url) -> Option<&Site> {
         if !self.carries(url) {
             return None;
         }

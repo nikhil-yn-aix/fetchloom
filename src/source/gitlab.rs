@@ -620,6 +620,28 @@ fn token_command(host: &str) -> String {
     format!("{} --token", Account::Login(host.to_owned()).command())
 }
 
+/// `error`, a rate limit that stopped a request to `url` that went with no key, naming the key
+/// that lifts it when `url` is gitlab.com's or another gitlab server's: gitlab counts requests
+/// without a key by the address they come from, which everyone behind it shares, and a key's by
+/// its account.
+pub(super) fn keyless_limit(url: &Url, error: Error) -> Error {
+    if url.host_str() == Some(GITLAB_COM) {
+        return error
+            .help("gitlab.com limits the requests that come without a key by the address they come from: set GITLAB_TOKEN to a gitlab.com token, or sign in with `fetchloom auth login gitlab`, for a limit of your own; or run the same command again later")
+            .needs(Account::GitLab, None);
+    }
+    let gitlab = url.path().contains("/-/raw/") || url.path().starts_with("/api/v4/projects/");
+    match server_of(url).filter(|_| gitlab) {
+        Some(server) => error
+            .help(format!(
+                "{server} limits the requests that come without a key by the address they come from: save a key for it with `{}`, for a limit of your own; or run the same command again later",
+                token_command(&server)
+            ))
+            .needs_site(server),
+        None => error,
+    }
+}
+
 /// where a link's file is downloaded from: the link's own address, since its gitlab.com address
 /// answers a program with a warning page for a link to another host. an address that is not
 /// https, or that holds a secret, is not kept.
