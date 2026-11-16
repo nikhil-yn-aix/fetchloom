@@ -658,6 +658,27 @@ pub(crate) fn delete_folder(path: &Path) -> Result {
     Ok(std::fs::remove_dir(path)?)
 }
 
+/// copies `from` to `to` as `rsync -a` without -H does, each file a new one with the same bytes,
+/// time and read-only flag, so one file under two names becomes two.
+pub(crate) fn copy_apart(from: &Path, to: &Path) -> Result {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let path = entry?.path();
+        let target = to.join(path.file_name().ok_or("an entry has no name")?);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            copy_apart(&path, &target)?;
+        } else if metadata.is_file() {
+            let mut copied = std::fs::File::create_new(&target)?;
+            std::io::copy(&mut std::fs::File::open(&path)?, &mut copied)?;
+            copied.set_modified(metadata.modified()?)?;
+            drop(copied);
+            std::fs::set_permissions(&target, metadata.permissions())?;
+        }
+    }
+    Ok(())
+}
+
 /// whether a variable of the machine running the tests could change what fetchloom does.
 fn leaks(name: &str) -> bool {
     let name = name.to_ascii_uppercase();

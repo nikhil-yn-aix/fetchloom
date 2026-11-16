@@ -1690,8 +1690,9 @@ fn adopted_iris(sandbox: &Sandbox, server: &Server) -> Result<String> {
     Ok(stderr)
 }
 
-/// where the disk makes hardlinks, linking keeps one copy on disk; elsewhere the file stays as it
-/// is, and the run says which.
+/// where the disk links, the file is linked as placing links a new one, so one copy stays on disk:
+/// a clone where read-only files are cloned, else a hardlink; elsewhere the file stays as it is,
+/// and the run says which.
 #[test]
 fn a_file_already_in_place_is_linked_to_the_download_it_matches() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1699,7 +1700,20 @@ fn a_file_already_in_place_is_linked_to_the_download_it_matches() -> Result {
     let stderr = adopted_iris(&sandbox, &server)?;
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     let linked = same_file::is_same_file(&placed, iris_object(&sandbox, &sandbox.work())?)?;
-    if sandbox.links()?.hardlink {
+    let links = sandbox.links()?;
+    if links.reflinks_read_only() {
+        assert!(!linked, "a clone is a file of its own: {stderr}");
+        assert_eq!(
+            placed_method(&sandbox.work(), "data/iris/iris.csv")?,
+            "reflink"
+        );
+        assert!(
+            stderr.contains(
+                "Adopted data/iris · 1 file already held the pinned bytes, so it is now cloned from the cache"
+            ),
+            "{stderr}"
+        );
+    } else if links.hardlink {
         assert!(linked, "{stderr}");
         assert!(fs::metadata(&placed)?.permissions().readonly());
         assert!(
@@ -1723,6 +1737,318 @@ fn a_file_already_in_place_is_linked_to_the_download_it_matches() -> Result {
         "         Ok everything matches data.lock by size and time\n"
     );
     assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+/// how the state of `project` records the file at `path` placed: `hardlink`, `reflink` or `copy`.
+fn placed_method(project: &Path, path: &str) -> Result<String> {
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.join(".fetchloom").join("state"))?)?;
+    Ok(state["files"][path]["method"]
+        .as_str()
+        .ok_or("a placed file has a method")?
+        .to_owned())
+}
+
+/// what the files below `folders` take on the disk, each file once however many names it has, as
+/// `du` counts them.
+#[cfg(unix)]
+fn on_disk(folders: &[&Path]) -> Result<u64> {
+    use std::os::unix::fs::MetadataExt;
+    let mut seen = std::collections::HashSet::new();
+    let mut pending: Vec<PathBuf> = folders.iter().map(|folder| folder.to_path_buf()).collect();
+    let mut bytes = 0;
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&path)? {
+                pending.push(entry?.path());
+            }
+        } else if seen.insert((metadata.dev(), metadata.ino())) {
+            bytes += metadata.blocks() * 512;
+        }
+    }
+    Ok(bytes)
+}
+
+/// a project whose data folder was put back from a copy that kept no links, as `rsync -a` without
+/// -H leaves it: each file that was linked to the cache is a file of its own with the same size
+/// and time. returns the placed iris file and its cached object.
+fn copied_back(sandbox: &Sandbox, server: &Server) -> Result<(PathBuf, PathBuf)> {
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let data = sandbox.work().join("data");
+    let backup = sandbox.folder("backup")?;
+    crate::support::copy_apart(&data, &backup)?;
+    delete_folder(&data)?;
+    crate::support::copy_apart(&backup, &data)?;
+    let placed = data.join("iris").join("iris.csv");
+    let object = iris_object(sandbox, &sandbox.work())?;
+    assert!(!same_file::is_same_file(&placed, &object)?);
+    Ok((placed, object))
+}
+
+/// sync links each such copy again where it placed links, after reading it to be sure of its
+/// bytes, so the disk holds them once, and a second sync has nothing to do. a clone cannot be
+/// told from a copy by how it looks, so a disk that clones keeps them, as does one that links
+/// nothing.
+#[test]
+fn a_data_folder_copied_without_links_is_linked_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let (placed, object) = copied_back(&sandbox, &server)?;
+    #[cfg(unix)]
+    let before = on_disk(&[&sandbox.work().join("data"), &sandbox.cache()])?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
+    let linked = same_file::is_same_file(&placed, &object)?;
+    if sandbox.links()?.hardlinks_read_only() {
+        assert!(linked, "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "     Linked data/iris · 1 copy of a cached file is now linked to the cache, freeing {} B\n",
+                V1.len()
+            )),
+            "{stderr}"
+        );
+        assert_eq!(
+            placed_method(&sandbox.work(), "data/iris/iris.csv")?,
+            "hardlink"
+        );
+        // what the copy took on the disk is free again
+        #[cfg(unix)]
+        assert!(
+            on_disk(&[&sandbox.work().join("data"), &sandbox.cache()])? < before,
+            "{stderr}"
+        );
+        let report = json(&sandbox.run(&["--json", "cache"])?)?;
+        assert_eq!(report["result"]["copies"], 0, "{report}");
+    } else {
+        assert!(!linked, "{stderr}");
+        assert!(!stderr.contains("Linked "), "{stderr}");
+    }
+    let again = sandbox.run(&["sync"])?;
+    let told = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{told}");
+    assert!(told.contains("nothing to do"), "{told}");
+    assert_eq!(same_file::is_same_file(&placed, &object)?, linked, "{told}");
+    Ok(())
+}
+
+/// a project copied with its data folder to a machine whose cache never held its files adopts
+/// them as they are. once a push took them into the cache, two copies of each are on the disk,
+/// so the next sync links the project's to the cache's, as it places a new file.
+#[test]
+fn files_taken_into_an_empty_cache_are_linked_by_the_next_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let moved = sandbox.folder("moved")?;
+    crate::support::copy_apart(&sandbox.work(), &moved)?;
+    let cache = sandbox.folder("new-cache")?;
+    let mirror = sandbox.folder("mirror")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&moved, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let adopted = run(&["sync"])?;
+    let stderr = text(&adopted.stderr)?;
+    assert_eq!(adopted.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("so it stays as it is"), "{stderr}");
+    let mirror_arg = mirror.to_string_lossy();
+    let pushed = run(&["push", "--to", &mirror_arg, "--yes"])?;
+    let stderr = text(&pushed.stderr)?;
+    assert_eq!(pushed.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("from data into the cache"), "{stderr}");
+    let placed = moved.join("data").join("iris").join("iris.csv");
+    let digest = {
+        let state: serde_json::Value =
+            serde_json::from_slice(&fs::read(moved.join(".fetchloom").join("state"))?)?;
+        state["files"]["data/iris/iris.csv"]["sha256"]
+            .as_str()
+            .ok_or("a placed file has a digest")?
+            .to_owned()
+    };
+    let object = cache.join("objects").join(&digest[..2]).join(&digest[2..]);
+    assert!(object.exists());
+    let synced = run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
+    let links = sandbox.links()?;
+    let how = if links.reflinks_read_only() {
+        Some(("cloned from", "reflink"))
+    } else if links.hardlink {
+        Some(("linked to", "hardlink"))
+    } else {
+        None
+    };
+    match how {
+        Some((said, method)) => {
+            assert!(
+                stderr.contains(&format!(
+                    "     Linked data/iris · 1 copy of a cached file is now {said} the cache, freeing {} B\n",
+                    V1.len()
+                )),
+                "{stderr}"
+            );
+            assert_eq!(placed_method(&moved, "data/iris/iris.csv")?, method);
+            assert_eq!(
+                same_file::is_same_file(&placed, &object)?,
+                method == "hardlink"
+            );
+        }
+        None => assert!(!stderr.contains("Linked "), "{stderr}"),
+    }
+    let again = run(&["sync"])?;
+    let told = text(&again.stderr)?;
+    assert!(told.contains("nothing to do"), "{told}");
+    Ok(())
+}
+
+/// sets the file at `path` to `bytes` of the same length, keeping its time and read-only flag, as
+/// a tool that puts a file's time back after writing it does.
+fn edit_keeping_look(path: &Path, bytes: &[u8]) -> Result {
+    let metadata = fs::metadata(path)?;
+    assert_eq!(metadata.len(), bytes.len() as u64);
+    let mut writable = metadata.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the file is made read-only again next"
+    )]
+    writable.set_readonly(false);
+    fs::set_permissions(path, writable)?;
+    fs::write(path, bytes)?;
+    let file = fs::File::options().write(true).open(path)?;
+    file.set_modified(metadata.modified()?)?;
+    drop(file);
+    fs::set_permissions(path, metadata.permissions())?;
+    assert_eq!(fs::metadata(path)?.modified()?, metadata.modified()?);
+    Ok(())
+}
+
+/// sync never links a file of a dataset that asks for copies, nor one whose bytes are not the
+/// pinned ones though it looks as placed. it reads such a file once and remembers it, so the next
+/// sync reads nothing.
+#[test]
+fn copies_asked_for_and_hidden_edits_are_never_linked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        ("/iris.csv".to_owned(), file(V1, "\"v1\"")),
+        ("/penguins.csv".to_owned(), file(b"bill,39\n", "\"p1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.iris]\nref = \"{0}/iris.csv\"\ncopy = true\n\n[datasets.penguins]\nref = \"{0}/penguins.csv\"\n",
+            routes.url
+        ),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let data = sandbox.work().join("data");
+    let backup = sandbox.folder("backup")?;
+    crate::support::copy_apart(&data, &backup)?;
+    delete_folder(&data)?;
+    crate::support::copy_apart(&backup, &data)?;
+    let iris = data.join("iris").join("iris.csv");
+    let penguins = data.join("penguins").join("penguins.csv");
+    edit_keeping_look(&penguins, b"bill,99\n")?;
+    let traces = sandbox.folder("traces")?;
+    let trace = |name: &str| -> Result<(String, String)> {
+        let path = traces.join(name);
+        let output = sandbox
+            .command(&["sync"])
+            .env("FETCHLOOM_TRACE", &path)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        Ok((stderr, fs::read_to_string(&path)?))
+    };
+    let (stderr, events) = trace("first.json")?;
+    assert_eq!(fs::read(&iris)?, V1, "{stderr}");
+    assert!(!fs::metadata(&iris)?.permissions().readonly(), "{stderr}");
+    assert_eq!(fs::read(&penguins)?, b"bill,99\n", "{stderr}");
+    assert!(!stderr.contains("Linked "), "{stderr}");
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(sandbox.work().join(".fetchloom").join("state"))?)?;
+    assert_eq!(state["files"]["data/iris/iris.csv"]["method"], "copy");
+    if sandbox.links()?.hardlinks_read_only() {
+        // the copy was read, its other bytes found and remembered
+        assert!(events.contains("\"name\":\"link_copies\""), "{events}");
+        assert_eq!(
+            state["files"]["data/penguins/penguins.csv"]["unlinkable"], true,
+            "{state}"
+        );
+    }
+    let (stderr, events) = trace("second.json")?;
+    assert!(stderr.contains("nothing to do"), "{stderr}");
+    assert!(!events.contains("\"name\":\"link_copies\""), "{events}");
+    assert_eq!(fs::read(&penguins)?, b"bill,99\n", "{stderr}");
+    Ok(())
+}
+
+/// a program reading a copy while sync links it keeps reading the bytes it opened: the link takes
+/// the copy's name in one step, and the copy lasts while it is open.
+#[test]
+fn a_copy_open_in_a_reader_keeps_its_bytes() -> Result {
+    use std::io::Read;
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlinks_read_only() {
+        return skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let (placed, object) = copied_back(&sandbox, &server)?;
+    let mut reader = fs::File::open(&placed)?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    let mut read = Vec::new();
+    reader.read_to_end(&mut read)?;
+    assert_eq!(read, V1, "{stderr}");
+    assert!(same_file::is_same_file(&placed, &object)?, "{stderr}");
+    Ok(())
+}
+
+/// windows refuses to rename over a file another program holds open without sharing its
+/// deletion, so sync leaves it as it is, with no error, and links it at the next sync once it
+/// is closed.
+#[cfg(windows)]
+#[test]
+fn a_copy_another_program_holds_is_linked_once_it_is_closed() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlinks_read_only() {
+        return skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let (placed, object) = copied_back(&sandbox, &server)?;
+    let held = hold(&placed)?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("Linked "), "{stderr}");
+    assert!(!stderr.contains("iris.csv"), "{stderr}");
+    assert!(!same_file::is_same_file(&placed, &object)?, "{stderr}");
+    assert!(fs::metadata(&placed)?.permissions().readonly(), "{stderr}");
+    drop(held);
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Linked data/iris · 1 copy"), "{stderr}");
+    assert!(same_file::is_same_file(&placed, &object)?, "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1);
     Ok(())
 }
 

@@ -234,6 +234,7 @@ fn record(root: &Path, path: &str, bytes: &[u8], method: Method) -> crate::proje
         writable: method == Method::Copy,
         checked: 0,
         adopted: false,
+        unlinkable: false,
         racy_intact: std::sync::OnceLock::new(),
     }
 }

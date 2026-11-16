@@ -298,6 +298,45 @@ impl Location {
         }
     }
 
+    /// clones `object` under a name hidden in this location's folder, read-only as a placed clone
+    /// is, which goes again when the result is dropped, unless it took this location's name. one
+    /// `fclonefileat` call makes the whole clone, so it needs no flush.
+    #[cfg(target_os = "macos")]
+    pub(super) fn stage_clone(&self, object: &File) -> io::Result<Staged> {
+        let identity = self.parent.identity()?;
+        loop {
+            let hidden = format!(".fetchloom-{:016x}.copy", fastrand::u64(..));
+            match native::fclonefileat(
+                object,
+                &self.parent.file,
+                hidden.as_str(),
+                native::CloneFlags::empty(),
+            ) {
+                Ok(()) => {
+                    let staged = Staged {
+                        root: Arc::clone(&self.root),
+                        relative: self.relative.clone(),
+                        identity,
+                        retained: Some(self.parent.clone()),
+                        hidden,
+                        published: false,
+                        name: self.name.clone(),
+                    };
+                    let file = File::from(native::openat(
+                        &self.parent.file,
+                        staged.hidden.as_str(),
+                        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )?);
+                    super::set_clone_writable(&file, false)?;
+                    return Ok(staged);
+                }
+                Err(Errno::EXIST) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
     pub(super) fn create(&self, mode: u32, retained: bool) -> io::Result<(Staged, File)> {
         #[cfg(target_os = "macos")]
         let mode = u16::try_from(mode).map_err(|_| invalid("a placement mode is out of range"))?;

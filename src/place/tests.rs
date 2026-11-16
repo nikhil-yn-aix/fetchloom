@@ -250,38 +250,84 @@ fn a_clone_takes_no_write_bit_for_others() {
     assert_eq!(format!("{:o}", mode & 0o777), "644");
 }
 
-/// a file holding an object's bytes is replaced by a hardlink to the object in one rename, only
-/// while it still looks as it did; a file changed since stays, and no hidden link is left.
+/// links the file at `destination` to `object` in place, as `relink_all` does with one file,
+/// saying what `holds` and `unchanged` say of it.
+fn relink_one(
+    placer: &Placer,
+    object: &Path,
+    destination: &Path,
+    holds: Option<bool>,
+    unchanged: impl Fn(&Metadata) -> bool + Sync,
+) -> Relinked {
+    let mut relinked = placer.relink_all(
+        1,
+        |_| Relink {
+            object: object.to_path_buf(),
+            destination: destination.to_path_buf(),
+        },
+        |_| holds,
+        |_, now| unchanged(now),
+    );
+    relinked.pop().unwrap()
+}
+
+/// a copy of an object's bytes is replaced by a link to the object in one rename, as placing
+/// links a new file, only once it is found to hold the bytes and while it still looks as it did.
+/// a file that holds other bytes, could not be read or changed meanwhile stays, and no hidden link
+/// is left beside it.
 #[test]
-fn a_file_is_relinked_to_its_object_only_while_it_looks_as_it_did() {
+fn a_copy_is_linked_only_while_it_holds_its_bytes_and_looks_as_it_did() {
     let (folder, object) = cache(true);
-    // FAT32 and exFAT make no hardlinks, so a found file stays as it is there
+    // FAT32 and exFAT link nothing, so a copy stays as it is there
     if !makes_hardlinks(folder.path()) {
         return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let destination = folder.path().join("found.csv");
     fs::write(&destination, CONTENTS).unwrap();
+    let seen = fs::symlink_metadata(&destination).unwrap();
+    let looks_as_seen =
+        |now: &Metadata| now.len() == seen.len() && now.modified().ok() == seen.modified().ok();
     let placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
 
-    let changed = placer.relink(&object, &destination, |_| false).unwrap();
+    for (holds, unchanged, stays) in [
+        (Some(false), true, "other bytes"),
+        (None, true, "unread"),
+        (Some(true), false, "changed"),
+    ] {
+        let relinked = relink_one(&placer, &object, &destination, holds, |now| {
+            unchanged && looks_as_seen(now)
+        });
+        let expected = if holds == Some(false) {
+            matches!(relinked, Relinked::Other)
+        } else {
+            matches!(relinked, Relinked::Kept)
+        };
+        assert!(expected, "{stays}: {relinked:?}");
+        assert!(!same_file::is_same_file(&object, &destination).unwrap());
+        assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+        assert_eq!(placed_names(folder.path()), ["found.csv"], "{stays}");
+    }
 
-    assert!(changed.is_none());
-    assert!(!same_file::is_same_file(&object, &destination).unwrap());
-    assert_eq!(placed_names(folder.path()), ["found.csv"]);
-    let seen = fs::symlink_metadata(&destination).unwrap();
-    let linked = placer
-        .relink(&object, &destination, |now| {
-            now.len() == seen.len() && now.modified().ok() == seen.modified().ok()
-        })
-        .unwrap();
-    assert!(linked.is_some());
-    assert!(same_file::is_same_file(&object, &destination).unwrap());
+    let relinked = relink_one(&placer, &object, &destination, Some(true), looks_as_seen);
+
+    let Relinked::Linked(method, metadata) = relinked else {
+        panic!("not linked: {relinked:?}");
+    };
+    // a disk that clones gets a clone, as a new placement would
+    assert_eq!(
+        same_file::is_same_file(&object, &destination).unwrap(),
+        method == Method::Hardlink
+    );
+    assert_ne!(method, Method::Copy);
+    assert_eq!(metadata.len(), CONTENTS.len() as u64);
+    assert!(is_read_only(&destination));
     assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
     assert_eq!(placed_names(folder.path()), ["found.csv"]);
 }
 
-/// a sync client breaks hardlinks or uploads each as a whole file, so a file in a synced folder
-/// is never relinked, though the same folder outside a client's would be.
+/// a sync client breaks hardlinks or uploads each as a whole file, so a copy in a synced folder is
+/// never relinked as a hardlink, though it may be cloned where the disk clones, and the same
+/// folder outside a client's gets a link.
 #[test]
 fn a_synced_folder_gets_no_relinked_hardlink() {
     let (folder, object) = cache(true);
@@ -292,20 +338,123 @@ fn a_synced_folder_gets_no_relinked_hardlink() {
     fs::write(&destination, CONTENTS).unwrap();
     let root = folder.path().to_path_buf();
     let synced = Placer::starting_at(root.clone(), Method::Reflink, Some("onedrive"));
-    assert!(
-        synced
-            .relink(&object, &destination, |_| true)
-            .unwrap()
-            .is_none()
-    );
-    assert!(!same_file::is_same_file(&object, &destination).unwrap());
+    match relink_one(&synced, &object, &destination, Some(true), |_| true) {
+        Relinked::Linked(method, _) => assert_eq!(method, Method::Reflink),
+        Relinked::Refused => {
+            assert!(!same_file::is_same_file(&object, &destination).unwrap());
+        }
+        other => panic!("{other:?}"),
+    }
+    let destination = folder.path().join("unsynced.csv");
+    fs::write(&destination, CONTENTS).unwrap();
     let unsynced = Placer::starting_at(root, Method::Reflink, None);
-    assert!(
-        unsynced
-            .relink(&object, &destination, |_| true)
-            .unwrap()
-            .is_some()
+    let relinked = relink_one(&unsynced, &object, &destination, Some(true), |_| true);
+    assert!(matches!(relinked, Relinked::Linked(..)), "{relinked:?}");
+}
+
+/// a link the disk refuses for one file, as linux's `protected_hardlinks` refuses a link to
+/// another user's object, leaves that file as it is, unread, and says it is refused, so sync
+/// remembers it rather than reading it again at every run.
+#[test]
+fn a_refused_link_leaves_the_copy_unread() {
+    let (folder, object) = cache(true);
+    let destination = folder.path().join("found.csv");
+    fs::write(&destination, CONTENTS).unwrap();
+    let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
+    placer.link_refusal = Some(|| io::ErrorKind::PermissionDenied.into());
+    let read = std::sync::atomic::AtomicBool::new(false);
+
+    let relinked = placer.relink_all(
+        1,
+        |_| Relink {
+            object: object.clone(),
+            destination: destination.clone(),
+        },
+        |_| {
+            read.store(true, std::sync::atomic::Ordering::Relaxed);
+            Some(true)
+        },
+        |_, _| true,
     );
+
+    assert!(matches!(relinked[..], [Relinked::Refused]), "{relinked:?}");
+    assert!(!read.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+    assert_eq!(placed_names(folder.path()), ["found.csv"]);
+}
+
+/// a crash can empty a clone whose blocks are not on disk yet, so a clone takes the place of a
+/// copy only once they are: in a batch of many it waits for the one flush, and when that fails
+/// every copy stays as it was, while a few are flushed on their own.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_clone_takes_the_place_of_a_copy_only_once_flushed() {
+    use crate::volume::MOST_FLUSHED_ALONE;
+    use rustix::fs::{Mode, OFlags};
+
+    let (folder, object) = cache(true);
+    for files in [MOST_FLUSHED_ALONE, MOST_FLUSHED_ALONE + 1] {
+        let root = folder.path().join(format!("data-{files}"));
+        fs::create_dir(&root).unwrap();
+        let mut placer = Placer::starting_at(root.clone(), Method::Reflink, None);
+        // the test's disk may clone nothing, so its clone writes the bytes instead
+        placer.clone_with = Some(|file, source| io::copy(&mut &*source, &mut &*file).map(drop));
+        // syncfs rejects an O_PATH handle, so a batch that waits for one flush fails
+        let handle = rustix::fs::open(folder.path(), OFlags::PATH | OFlags::CLOEXEC, Mode::empty());
+        placer.batch.set(Some(File::from(handle.unwrap()))).unwrap();
+        let destinations: Vec<PathBuf> = (0..files)
+            .map(|index| root.join(format!("{index}.csv")))
+            .collect();
+        for destination in &destinations {
+            fs::write(destination, CONTENTS).unwrap();
+        }
+        let copies: Vec<u64> = destinations
+            .iter()
+            .map(|path| {
+                use std::os::unix::fs::MetadataExt;
+                fs::metadata(path).unwrap().ino()
+            })
+            .collect();
+
+        let relinked = placer.relink_all(
+            files,
+            |index| Relink {
+                object: object.clone(),
+                destination: destinations[index].clone(),
+            },
+            |_| Some(true),
+            |_, _| true,
+        );
+
+        let inodes: Vec<u64> = destinations
+            .iter()
+            .map(|path| {
+                use std::os::unix::fs::MetadataExt;
+                fs::metadata(path).unwrap().ino()
+            })
+            .collect();
+        if files > MOST_FLUSHED_ALONE {
+            assert!(
+                relinked
+                    .iter()
+                    .all(|result| matches!(result, Relinked::Kept)),
+                "{relinked:?}"
+            );
+            assert_eq!(inodes, copies);
+            assert_eq!(placed_names(&root).len(), files, "no hidden clone is left");
+        } else {
+            assert!(
+                relinked
+                    .iter()
+                    .all(|result| matches!(result, Relinked::Linked(Method::Reflink, _))),
+                "{relinked:?}"
+            );
+            assert!(inodes.iter().zip(&copies).all(|(now, was)| now != was));
+        }
+        for destination in &destinations {
+            assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+        }
+    }
 }
 
 #[test]

@@ -115,6 +115,75 @@ pub(crate) struct Order {
     pub(crate) size: u64,
 }
 
+/// a file that is a copy of its own of `object`'s bytes, to link to `object` where it stands.
+pub(crate) struct Relink {
+    pub(crate) object: PathBuf,
+    pub(crate) destination: PathBuf,
+}
+
+/// what became of a file [`Placer::relink_all`] was to link.
+#[derive(Debug)]
+pub(crate) enum Relinked {
+    /// it is now a link of this kind to its object, and looks as the metadata says.
+    Linked(Method, Metadata),
+    /// no link to its object can stand here: the disk refused one, or allows none.
+    Refused,
+    /// it does not hold its object's bytes, as far as reading it could tell.
+    Other,
+    /// it stays as it is for now: it changed meanwhile, its bytes could not be read, or it could
+    /// not be renamed over, as windows refuses while another program holds it open.
+    Kept,
+}
+
+/// a link [`Placer::relink_all`] staged beside the file it is to take the place of.
+struct StagedLink {
+    method: Method,
+    staged: Staged,
+    /// whether it waits for the batch's one flush before it takes a name.
+    waits: bool,
+}
+
+impl StagedLink {
+    fn new(method: Method, staged: Staged, waits: bool) -> StagedLink {
+        StagedLink {
+            method,
+            staged,
+            waits,
+        }
+    }
+
+    /// renames the link over its file while `unchanged` says the file still looks as it did.
+    fn replace(self, unchanged: impl FnOnce(&Metadata) -> bool) -> Relinked {
+        match self.staged.replace(unchanged) {
+            Ok(Some(metadata)) => Relinked::Linked(self.method, metadata),
+            Ok(None) => Relinked::Kept,
+            Err(error) => {
+                tracing::debug!(%error, "could not rename a link over its copy");
+                Relinked::Kept
+            }
+        }
+    }
+}
+
+/// how far [`Placer::relink_all`] got with one file.
+enum Step {
+    Done(Relinked),
+    /// a clone that takes its name once the batch is flushed.
+    Waiting(StagedLink),
+}
+
+/// whether `error`, from making a link, refuses that link for good, rather than failing for now,
+/// as a full disk does: the disk links nothing, or not across volumes, the object has as many
+/// names as the disk allows, or linux's `protected_hardlinks` or a permission refuses it.
+fn refuses_link(error: &io::Error) -> bool {
+    refuses_links(error)
+        || crosses_volumes(error)
+        || matches!(
+            error.kind(),
+            io::ErrorKind::TooManyLinks | io::ErrorKind::PermissionDenied
+        )
+}
+
 /// what putting one file in place did.
 enum Put<T> {
     /// placed it by a method, with what was kept of its metadata.
@@ -271,6 +340,11 @@ impl Placer {
 
     pub(crate) fn stop(&self) -> &Stop {
         &self.stop
+    }
+
+    /// the folder this placer places into.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
     }
 
     /// why files were copied rather than linked, as far as the filesystem told.
@@ -760,29 +834,189 @@ impl Placer {
         Ok(Method::Copy)
     }
 
-    /// replaces the plain file at `destination`, holding `object`'s bytes, with a hardlink to it
-    /// while `unchanged` says the file still looks as it did, renaming the link over it in one
-    /// step. none when no hardlink is allowed here or the file changed.
-    pub(crate) fn relink(
+    /// links each file `order` names in place to its object, as placing links a new file: a
+    /// reflink, else a hardlink, a hardlink first on windows, never a hardlink inside a synced
+    /// folder, and never a copy. each link is made under a hidden name beside its file; once
+    /// `holds` says the file holds its object's bytes, the link is renamed over it while
+    /// `unchanged` says it still looks as it did, so the file keeps its bytes until the link takes
+    /// its name. a linux clone in a batch of many waits for one flush first, as a copy does. the
+    /// first file goes alone to learn what the disk allows; `holds` runs outside the folder
+    /// permits, so reading a file holds up no change in its folder.
+    pub(crate) fn relink_all(
+        &self,
+        count: usize,
+        order: impl Fn(usize) -> Relink + Sync,
+        holds: impl Fn(usize) -> Option<bool> + Sync,
+        unchanged: impl Fn(usize, &Metadata) -> bool + Sync,
+    ) -> Vec<Relinked> {
+        let mut folders = schedule::Folders::new(count);
+        for index in 0..count {
+            folders.record(index, &order(index).destination);
+        }
+        let grouped = folders.finish(count > 0 && self.filesystem().serializes());
+        let threads = grouped.threads(self.threads);
+        // as in placing: a few clones flush one by one, since one flush of the filesystem also
+        // waits for everything other programs wrote there
+        let batch = count > crate::volume::MOST_FLUSHED_ALONE && self.batches_copies();
+        let relink = |index: &usize| {
+            let Relink {
+                object,
+                destination,
+            } = order(*index);
+            let staged = {
+                let _permit = grouped.enter(*index);
+                self.stage_relink(&object, &destination, batch)
+            };
+            let step = match staged {
+                Err(error) => {
+                    tracing::debug!(path = %destination.display(), %error, "could not link a copy to its object");
+                    Step::Done(Relinked::Kept)
+                }
+                Ok(None) => Step::Done(Relinked::Refused),
+                Ok(Some(staged)) => match holds(*index) {
+                    None => Step::Done(Relinked::Kept),
+                    Some(false) => Step::Done(Relinked::Other),
+                    Some(true) if staged.waits => Step::Waiting(staged),
+                    Some(true) => {
+                        let _permit = grouped.enter(*index);
+                        Step::Done(staged.replace(|now| unchanged(*index, now)))
+                    }
+                },
+            };
+            (*index, step)
+        };
+        let indexes: Vec<usize> = (0..count).collect();
+        let mut steps = Vec::with_capacity(count);
+        if let Some((first, rest)) = indexes.split_first() {
+            steps.push(relink(first));
+            steps.extend(run_all(rest, threads, relink));
+        }
+        let mut results = Vec::with_capacity(count);
+        let mut waiting = Vec::new();
+        for (index, step) in steps {
+            match step {
+                Step::Done(relinked) => results.push((index, relinked)),
+                Step::Waiting(staged) => waiting.push((index, staged)),
+            }
+        }
+        if !waiting.is_empty() {
+            // a clone takes a name only once its blocks are on disk, so a failed flush names none
+            // and each copy stays as it was
+            let flushed = self.stop.check_io().and_then(|()| self.flush_copies());
+            if let Err(error) = &flushed {
+                tracing::debug!(%error, "could not flush the clones made to link copies");
+            }
+            let replace = |(index, staged): (usize, StagedLink)| {
+                let _permit = grouped.enter(index);
+                let relinked = if flushed.is_ok() && !self.stop.is_asked() {
+                    staged.replace(|now| unchanged(index, now))
+                } else {
+                    Relinked::Kept
+                };
+                (index, relinked)
+            };
+            results.extend(run_owned(waiting, threads, replace));
+        }
+        in_order(count, results)
+    }
+
+    /// a link to `object` staged under a hidden name beside `destination`, by the first method
+    /// placing would use that the disk allows, with whether it waits for the batch's flush. none
+    /// when the disk refused each it tried, or allows none here; an error that refuses nothing,
+    /// as a full disk, is returned, so the copy is tried again another time.
+    fn stage_relink(
         &self,
         object: &Path,
         destination: &Path,
-        unchanged: impl FnOnce(&Metadata) -> bool,
-    ) -> io::Result<Option<Metadata>> {
+        batch: bool,
+    ) -> io::Result<Option<StagedLink>> {
         self.stop.check_io()?;
-        if self.synced.is_some() || !self.can_hardlink.load(Ordering::Relaxed) {
-            return Ok(None);
-        }
-        check_object(object)?;
         let location = Arc::new(self.location(destination, false)?);
-        let staged = match location.stage_link(object) {
-            Ok(staged) => staged,
-            Err(error) => {
-                self.learn(Method::Hardlink, error, object)?;
-                return Ok(None);
+        let hardlinks = self.synced.is_none();
+        let early_hardlink = cfg!(windows) && hardlinks;
+        let mut failed = None;
+        let mut refused = |method: Method, error: io::Error| -> io::Result<()> {
+            if !refuses_link(&error) {
+                failed = Some(io::Error::new(error.kind(), error.to_string()));
             }
+            self.learn(method, error, object)
         };
-        staged.replace(unchanged)
+        if early_hardlink && self.can_hardlink.load(Ordering::Relaxed) {
+            check_object(object)?;
+            match self.stage_hardlink(&location, object) {
+                Ok(staged) => return Ok(Some(StagedLink::new(Method::Hardlink, staged, false))),
+                Err(error) => refused(Method::Hardlink, error)?,
+            }
+        }
+        if self.can_reflink.load(Ordering::Relaxed) {
+            check_object(object)?;
+            match self.stage_clone(object, &location, batch) {
+                Ok((staged, waits)) => {
+                    return Ok(Some(StagedLink::new(Method::Reflink, staged, waits)));
+                }
+                Err(error) => refused(Method::Reflink, error)?,
+            }
+        }
+        if !early_hardlink && hardlinks && self.can_hardlink.load(Ordering::Relaxed) {
+            check_object(object)?;
+            match self.stage_hardlink(&location, object) {
+                Ok(staged) => return Ok(Some(StagedLink::new(Method::Hardlink, staged, false))),
+                Err(error) => refused(Method::Hardlink, error)?,
+            }
+        }
+        failed.map_or(Ok(None), Err)
+    }
+
+    /// a clone of `object` under a hidden name at `location`, with the mode a placed clone gets,
+    /// and whether it waits for the batch's flush: on linux a clone is held to a copy's rule,
+    /// since a crash can empty one whose blocks are not on disk yet.
+    #[cfg(target_os = "linux")]
+    fn stage_clone(
+        &self,
+        object: &Path,
+        location: &Arc<Location>,
+        batch: bool,
+    ) -> io::Result<(Staged, bool)> {
+        let source = read_unfollowed(object)?;
+        let mode = clone_mode(&source.metadata()?.permissions(), false);
+        let waits = batch && !Self::flushes_alone(location, batch);
+        let (staged, file) = location.create(mode, !waits)?;
+        self.seal_clone(&file, &source, mode)?;
+        if waits {
+            self.unflushed.store(true, Ordering::Relaxed);
+        } else {
+            file.sync_all()?;
+        }
+        Ok((staged, waits))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[expect(
+        clippy::unused_self,
+        reason = "linux clones through the placer, which a test can stand in for"
+    )]
+    fn stage_clone(
+        &self,
+        object: &Path,
+        location: &Arc<Location>,
+        _batch: bool,
+    ) -> io::Result<(Staged, bool)> {
+        let source = read_unfollowed(object)?;
+        location.stage_clone(&source).map(|staged| (staged, false))
+    }
+
+    #[cfg(windows)]
+    #[expect(
+        clippy::unused_self,
+        reason = "linux clones through the placer, which a test can stand in for"
+    )]
+    fn stage_clone(
+        &self,
+        object: &Path,
+        location: &Arc<Location>,
+        _batch: bool,
+    ) -> io::Result<(Staged, bool)> {
+        location.stage_clone(object).map(|staged| (staged, false))
     }
 
     /// deletes a temporary file through its parent; it is not a recorded placement.
@@ -818,15 +1052,9 @@ impl Placer {
         batch: bool,
         flush: bool,
     ) -> io::Result<Put<Metadata>> {
-        use std::os::unix::fs::PermissionsExt;
         let source = read_unfollowed(object)?;
         let mode = clone_mode(&source.metadata()?.permissions(), writable);
-        let seal = |file: &File| {
-            if file.metadata()?.permissions().mode() & 0o7777 != mode {
-                file.set_permissions(Permissions::from_mode(mode))?;
-            }
-            self.clone_into(file, &source)
-        };
+        let seal = |file: &File| self.seal_clone(file, &source, mode);
         if batch {
             let (staged, file) = location.create(mode, false)?;
             seal(&file)?;
@@ -838,6 +1066,16 @@ impl Placer {
             if flush { file.sync_all() } else { Ok(()) }
         })?;
         Ok(Put::Placed(Method::Reflink, metadata))
+    }
+
+    /// gives `file`, a new hidden file, a clone's `mode` and the blocks of `source`.
+    #[cfg(target_os = "linux")]
+    fn seal_clone(&self, file: &File, source: &File, mode: u32) -> io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        if file.metadata()?.permissions().mode() & 0o7777 != mode {
+            file.set_permissions(Permissions::from_mode(mode))?;
+        }
+        self.clone_into(file, source)
     }
 
     /// clones the blocks of `source` into `file`, or does what a test asks instead.
@@ -852,6 +1090,19 @@ impl Placer {
             return clone(file, source);
         }
         rustix::fs::ioctl_ficlone(file, source).map_err(io::Error::from)
+    }
+
+    /// gives `object` a second name hidden beside `location`, as [`Location::stage_link`] does.
+    #[cfg_attr(
+        not(test),
+        expect(clippy::unused_self, reason = "tests refuse links through the placer")
+    )]
+    fn stage_hardlink(&self, location: &Arc<Location>, object: &Path) -> io::Result<Staged> {
+        #[cfg(test)]
+        if let Some(refusal) = self.link_refusal {
+            return Err(refusal());
+        }
+        location.stage_link(object)
     }
 
     /// links `object` at `location` as [`link_object`] does.

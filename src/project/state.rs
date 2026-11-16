@@ -138,6 +138,11 @@ pub(crate) struct Placed {
     /// as placed, so a removal of it can say so.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) adopted: bool,
+    /// whether a sync found this file, a copy of its own, cannot be linked to the cache's copy:
+    /// reading it found other bytes than the pinned ones, or the disk refused the link. no later
+    /// sync reads it or tries again while its record stays.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) unlinkable: bool,
     /// this survey's intact racy hash, kept inline rather than in another set of paths.
     #[serde(skip)]
     pub(crate) racy_intact: OnceLock<()>,
@@ -986,6 +991,7 @@ mod tests {
             writable: false,
             checked: 43,
             adopted: false,
+            unlinkable: false,
             racy_intact: OnceLock::new(),
         }
     }
@@ -1076,6 +1082,7 @@ mod tests {
                 writable: true,
                 checked: 43,
                 adopted: false,
+                unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
         );
@@ -1133,6 +1140,7 @@ mod tests {
                     writable: false,
                     checked: 43,
                     adopted: size == 2,
+                    unlinkable: false,
                     racy_intact: std::sync::OnceLock::new(),
                 },
             );
@@ -1180,6 +1188,7 @@ mod tests {
                 writable: false,
                 checked: 43,
                 adopted: false,
+                unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
         );

@@ -198,6 +198,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
                 writable,
                 checked: 1,
                 adopted: false,
+                unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
         );
@@ -284,6 +285,7 @@ fn a_damaged_file_is_replaced_without_force() {
                 writable: true,
                 checked: 1,
                 adopted: false,
+                unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
         );
@@ -330,6 +332,7 @@ fn only_a_writable_copy_fetchloom_made_goes_once_copies_are_not_asked_for() {
                 writable: true,
                 checked: 1,
                 adopted,
+                unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
         );
@@ -384,6 +387,7 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
                     writable: true,
                     checked: 123,
                     adopted: false,
+                    unlinkable: false,
                     racy_intact: std::sync::OnceLock::new(),
                 },
             );

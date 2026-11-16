@@ -49,6 +49,9 @@ pub(crate) struct Survey {
     /// files the disk lets their owner write. a link to the cache's copy among them leaves the
     /// copy every project shares open to an edit.
     pub(crate) writable: HashSet<String>,
+    /// files the state records as hardlinks that now have no other name: copies of their own, as a
+    /// copy of the data folder that kept no links leaves them.
+    pub(crate) alone: HashSet<String>,
     /// whether hashing found files as new as the state unchanged, so a state written now settles
     /// them for later runs, or a record moved to another spelling of its path.
     pub(crate) needs_writing: bool,
@@ -264,7 +267,17 @@ impl Survey {
             temporaries,
             entries,
             writable,
+            alone,
         } = scanned?;
+        let alone = alone
+            .into_iter()
+            .filter(|path| {
+                state
+                    .files
+                    .get(path)
+                    .is_some_and(|placed| placed.method == Method::Hardlink)
+            })
+            .collect();
         let mut survey = Survey {
             threads,
             started,
@@ -276,6 +289,7 @@ impl Survey {
             edited: HashSet::new(),
             damaged: HashSet::new(),
             writable,
+            alone,
             needs_writing: false,
             temporaries,
             entries,
@@ -460,20 +474,42 @@ impl Survey {
     }
 
     /// windows listings keep a hardlink's size, time and read-only flag as this name last saw
-    /// them, hiding an edit through another link, so each file placed as a hardlink is opened.
+    /// them, hiding an edit through another link, so each file placed as a hardlink is opened,
+    /// once, which also tells whether it still has another name.
     #[cfg(windows)]
     fn look_through_links(&mut self, root: &Path) {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
         for (path, placed) in &self.state.files {
-            if placed.method == Method::Hardlink
-                && let Some(seen) = self.disk.get_mut(path)
-                && let Ok(metadata) = fs::metadata(native(root, path))
+            if placed.method != Method::Hardlink {
+                continue;
+            }
+            let Some(seen) = self.disk.get_mut(path) else {
+                continue;
+            };
+            // opened as `fs::metadata` opens it, asking for no access, so a program holding the
+            // file open keeps no look from this survey
+            let Ok(file) = fs::OpenOptions::new()
+                .access_mode(0)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(native(root, path))
+            else {
+                continue;
+            };
+            let Ok(metadata) = file.metadata() else {
+                continue;
+            };
+            *seen = Look::of(&metadata);
+            if metadata.permissions().readonly() {
+                self.writable.remove(path);
+            } else {
+                self.writable.insert(path.clone());
+            }
+            let handle = winapi_util::Handle::from_file(file);
+            if winapi_util::file::information(&handle)
+                .is_ok_and(|information| information.number_of_links() == 1)
             {
-                *seen = Look::of(&metadata);
-                if metadata.permissions().readonly() {
-                    self.writable.remove(path);
-                } else {
-                    self.writable.insert(path.clone());
-                }
+                self.alone.insert(path.clone());
             }
         }
     }
@@ -574,6 +610,9 @@ impl Survey {
             if self.writable.remove(&previous) {
                 self.writable.insert(path.clone());
             }
+            if self.alone.remove(&previous) {
+                self.alone.insert(path.clone());
+            }
             if let Some(record) = record {
                 self.state.files.remove(&previous);
                 self.state.files.insert(path.clone(), record);
@@ -664,6 +703,9 @@ impl Survey {
         }
         if self.writable.remove(from) {
             self.writable.insert(to.to_owned());
+        }
+        if self.alone.remove(from) {
+            self.alone.insert(to.to_owned());
         }
         self.folded.take();
     }
@@ -1117,6 +1159,25 @@ struct Scanned {
     /// every other entry: folders, links and special files.
     entries: HashMap<String, Entry>,
     writable: HashSet<String>,
+    /// the read-only files with no other name, of which the survey keeps those the state records
+    /// as hardlinks. a hardlink that lost its other name stays read-only, while a dataset that
+    /// asks for copies has writable ones, so those cost nothing to list.
+    alone: Vec<String>,
+}
+
+/// whether a file `metadata` describes is read-only with no other name. unix counts names in
+/// every listing; a windows listing does not, so there the survey asks each hardlink.
+fn read_only_alone(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        metadata.nlink() == 1 && metadata.permissions().readonly()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 /// lists the data folder, or with `within` only those folders and what stands on the way down to
@@ -1179,10 +1240,13 @@ fn scan_pending(
     scanned: &mut Scanned,
 ) {
     let metadata = |(entry, _, _): &(fs::DirEntry, String, bool)| {
-        entry
-            .metadata()
-            .ok()
-            .map(|found| (Look::of(&found), !found.permissions().readonly()))
+        entry.metadata().ok().map(|found| {
+            (
+                Look::of(&found),
+                !found.permissions().readonly(),
+                read_only_alone(&found),
+            )
+        })
     };
     let looks = if pending.len() < 512 {
         pending.iter().map(metadata).collect()
@@ -1190,12 +1254,15 @@ fn scan_pending(
         place::run_all(pending, threads, metadata)
     };
     for ((_, path, temporary), look) in pending.drain(..).zip(looks) {
-        if let Some((look, writable)) = look {
+        if let Some((look, writable, alone)) = look {
             if temporary {
                 scanned.temporaries.push(path.clone());
             }
             if writable {
                 scanned.writable.insert(path.clone());
+            }
+            if alone {
+                scanned.alone.push(path.clone());
             }
             scanned.found.insert(path, look);
         }
@@ -1241,6 +1308,9 @@ fn way_down(
             }
             if !found.permissions().readonly() {
                 scanned.writable.insert(path.clone());
+            }
+            if read_only_alone(&found) {
+                scanned.alone.push(path.clone());
             }
             scanned.found.insert(path, Look::of(&found));
         } else if kind.is_symlink() {

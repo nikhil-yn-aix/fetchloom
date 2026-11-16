@@ -378,7 +378,7 @@ impl<'a> Loop<'a> {
                 placing = self.placed_again(manifest, lock, force, placing)?;
             }
             let found = self
-                .missing_after_fill(manifest, &placing, &unknown)
+                .missing_after_fill(manifest, &mut placing, &unknown)
                 .await?;
             failed = first_left(
                 failed,
@@ -394,7 +394,7 @@ impl<'a> Loop<'a> {
         }
         let missing = match missing {
             Some(missing) => missing,
-            None => self.missing_after_fill(manifest, &placing, &[]).await?,
+            None => self.missing_after_fill(manifest, &mut placing, &[]).await?,
         };
         let (unpacking, files): (Vec<_>, Vec<_>) = missing
             .into_iter()
@@ -431,8 +431,9 @@ impl<'a> Loop<'a> {
         manifest: &'p Manifest,
         lock: &'p Lock,
         force: bool,
-        placing: Placing<'p>,
+        mut placing: Placing<'p>,
     ) -> Result<Placing<'p>, Error> {
+        let proven = placing.take_proven();
         let survey = placing.into_survey();
         let mut placing = Placing::new(
             self.project,
@@ -444,6 +445,7 @@ impl<'a> Loop<'a> {
             survey,
         )?;
         placing.listed(self.unlisted());
+        placing.proven(proven);
         Ok(placing)
     }
 
@@ -453,7 +455,7 @@ impl<'a> Loop<'a> {
     async fn missing_after_fill<'f>(
         &self,
         manifest: &Manifest,
-        placing: &Placing<'f>,
+        placing: &mut Placing<'f>,
         unknown: &[(String, Archive<'_>)],
     ) -> Result<Vec<(String, &'f LockedFile)>, Error> {
         let folder = DataFolder::found(self.project, manifest, placing.holding());
@@ -474,6 +476,7 @@ impl<'a> Loop<'a> {
         })
         .await
         .map_err(|error| self.as_left(error))?;
+        placing.proven(folder.taken());
         placing.missing(&self.cache)
     }
 

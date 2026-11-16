@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use super::put::Tally;
 use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope};
 use crate::output::{Output, Warning};
-use crate::place::{Because, Placer, Unlinked};
+use crate::place::{Because, Method, Placer, Unlinked};
 use crate::plan;
 use crate::project::manifest::Manifest;
 use crate::units;
@@ -65,10 +65,16 @@ pub(super) fn tell(
     for (folder, paths) in by_folder(manifest, &placement.adopted) {
         let (linked, kept): (Vec<&String>, Vec<&String>) = paths
             .into_iter()
-            .partition(|path| placement.relinked.contains(*path));
-        tell_adopted(output, &folder, &linked, true);
-        tell_adopted(output, &folder, &kept, false);
+            .partition(|path| placement.relinked.contains_key(*path));
+        tell_adopted(
+            output,
+            &folder,
+            &linked,
+            Some(&linked_how(placement, &linked)),
+        );
+        tell_adopted(output, &folder, &kept, None);
     }
+    tell_linked(output, manifest, placement);
     tell_removed(output, manifest, ["Retired", "Removed"], placement);
     warn_adopted_removed(output, &placement.removed_adopted, "removed");
     if tallies.values().any(|tally| tally.unlinked > 0)
@@ -369,19 +375,20 @@ fn by_folder<'p>(
     folders
 }
 
-/// the files sync adopted in `folder`, now `linked` to the cache or not. `-v` names each file.
-fn tell_adopted(output: &Output, folder: &str, paths: &[&String], linked: bool) {
+/// the files sync adopted in `folder`, linked to the cache as `linked` says, as in `linked to the
+/// cache`, or staying as they are. `-v` names each file.
+fn tell_adopted(output: &Output, folder: &str, paths: &[&String], linked: Option<&str>) {
     let said = match (paths.len(), linked) {
         (0, _) => return,
-        (1, true) => {
-            "1 file already held the pinned bytes, so it is now linked to the cache".to_owned()
+        (1, Some(how)) => {
+            format!("1 file already held the pinned bytes, so it is now {how}")
         }
-        (1, false) => "1 file already held the pinned bytes, so it stays as it is".to_owned(),
-        (count, true) => format!(
-            "{} files already held the pinned bytes, so they are now linked to the cache",
+        (1, None) => "1 file already held the pinned bytes, so it stays as it is".to_owned(),
+        (count, Some(how)) => format!(
+            "{} files already held the pinned bytes, so they are now {how}",
             units::grouped(count as u64)
         ),
-        (count, false) => {
+        (count, None) => {
             format!(
                 "{} files already held the pinned bytes, so they stay as they are",
                 units::grouped(count as u64)
@@ -391,6 +398,57 @@ fn tell_adopted(output: &Output, folder: &str, paths: &[&String], linked: bool) 
     output.step("Adopted", &format!("{folder} · {said}"));
     for path in paths {
         output.detail(path);
+    }
+}
+
+/// how the files `paths` of [`Placement::relinked`] were linked: `linked to the cache`, `cloned
+/// from the cache`, or both.
+fn linked_how(placement: &Placement, paths: &[&String]) -> String {
+    let clones = paths
+        .iter()
+        .filter(|path| {
+            placement
+                .relinked
+                .get(**path)
+                .is_some_and(|linked| linked.method == Method::Reflink)
+        })
+        .count() as u64;
+    crate::place::placed_how(clones, paths.len() as u64 - clones, 0, 0)
+}
+
+/// a line for each folder whose copies of cached files, which fetchloom placed or took as placed
+/// before this run, sync linked to the cache, with the bytes that frees. `-v` names each file.
+fn tell_linked(output: &Output, manifest: &Manifest, placement: &Placement) {
+    let adopted: HashSet<&String> = placement.adopted.values().flatten().collect();
+    let mut by_dataset: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (path, linked) in &placement.relinked {
+        if !adopted.contains(path) {
+            by_dataset
+                .entry(linked.dataset.clone())
+                .or_default()
+                .push(path.clone());
+        }
+    }
+    for (folder, paths) in by_folder(manifest, &by_dataset) {
+        let freed = paths
+            .iter()
+            .filter_map(|path| placement.relinked.get(*path))
+            .fold(0_u64, |sum, linked| sum.saturating_add(linked.size));
+        let how = linked_how(placement, &paths);
+        let said = match paths.len() {
+            1 => format!("1 copy of a cached file is now {how}"),
+            count => format!(
+                "{} copies of cached files are now {how}",
+                units::grouped(count as u64)
+            ),
+        };
+        output.step(
+            "Linked",
+            &format!("{folder} · {said}, freeing {}", units::size(freed)),
+        );
+        for path in paths {
+            output.detail(path);
+        }
     }
 }
 

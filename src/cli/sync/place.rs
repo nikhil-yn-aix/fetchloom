@@ -77,9 +77,10 @@ pub(crate) struct Placement {
     /// files that already held the pinned bytes, adopted and counted as unchanged, by dataset.
     #[serde(skip)]
     pub(crate) adopted: BTreeMap<String, Vec<String>>,
-    /// those of `adopted` now linked to the cache's copy of their bytes.
+    /// files that were copies of their own, now linked to the cache's copy of their bytes, by
+    /// path: files `adopted` holds, and files fetchloom recorded before.
     #[serde(skip)]
-    pub(crate) relinked: HashSet<String>,
+    pub(crate) relinked: HashMap<String, Linked>,
     /// the files `removed` counts that were already there when sync adopted them.
     #[serde(skip)]
     pub(crate) removed_adopted: Vec<String>,
@@ -184,6 +185,15 @@ impl Placement {
             .filter(|found| scope.includes(&found.dataset))
             .collect();
     }
+}
+
+/// how a copy of its own was linked to the cache's copy of its bytes.
+#[derive(Debug)]
+pub(crate) struct Linked {
+    pub(crate) dataset: String,
+    pub(crate) method: Method,
+    /// the bytes the copy held, which the link frees.
+    pub(crate) size: u64,
 }
 
 /// a file `--force` moved aside, deleted once its replacement is in place, else moved back.
@@ -404,6 +414,9 @@ pub(crate) struct Placing<'a> {
     /// were settled before the run, as [`Placing::vouch_rest`] says. only then does placing every
     /// file settle the project.
     vouched: bool,
+    /// files of the data folder this run read and found holding their pinned bytes, as taking
+    /// them into the cache does, so linking them to the cache reads none again.
+    proven: HashSet<String>,
 }
 
 impl<'a> Placing<'a> {
@@ -483,6 +496,7 @@ impl<'a> Placing<'a> {
             scope: scope.clone(),
             unlisted: plan::Unlisted::new(),
             vouched: *scope == Scope::All,
+            proven: HashSet::new(),
         })
     }
 
@@ -497,6 +511,17 @@ impl<'a> Placing<'a> {
     /// as reaching into an archive, since data.lock keeps no file an exclude left out.
     pub(crate) fn listed(&mut self, unlisted: plan::Unlisted) {
         self.unlisted = unlisted;
+    }
+
+    /// notes the files of the data folder this run read and found holding their pinned bytes, as
+    /// taking them into the cache reads them, so linking them to the cache reads none again.
+    pub(crate) fn proven(&mut self, paths: HashSet<String>) {
+        self.proven.extend(paths);
+    }
+
+    /// the files [`Placing::proven`] noted, for a placing decided again from the same survey.
+    pub(crate) fn take_proven(&mut self) -> HashSet<String> {
+        std::mem::take(&mut self.proven)
     }
 
     /// what the data folder held when this placing was decided, to decide again from.
@@ -1003,6 +1028,7 @@ impl<'a> Placing<'a> {
             scope,
             unlisted,
             vouched,
+            proven,
         } = self;
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
@@ -1026,7 +1052,7 @@ impl<'a> Placing<'a> {
         let folders = swept(&scope, &targets, &actions);
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
         let adding = told.map(|names| added_here(names, &targets, &actions));
-        let found = found_in_place(&targets, &actions, &survey);
+        let found = copies_to_link(&targets, &actions, &survey, &proven);
         placement.notice(
             manifest, &targets, &actions, &survey, &scope, &unknown, &unlisted,
         );
@@ -1064,10 +1090,20 @@ impl<'a> Placing<'a> {
                 .flush_copies()
                 .map_err(|err| Error::io("could not flush the copied files to disk", &err))
         };
-        // linking adopted files only after a full success leaves them alone in a rolled-back add
-        if !stopped && failure.is_none() && flushed.is_ok() {
-            link_adopted(project, &placer, cache, work, &found, state, &mut placement);
-        }
+        // linking copies only after a full success leaves an add's files alone if it is rolled back
+        let linked = !stopped
+            && failure.is_none()
+            && flushed.is_ok()
+            && link_copies(
+                project,
+                &placer,
+                cache,
+                work,
+                &found,
+                (state, &survey.alone),
+                checked,
+                &mut placement,
+            );
         let stays = settle_aside(project, &data_dir, threads, &placement, |(path, sha256)| {
             flushed.is_ok()
                 && state
@@ -1090,7 +1126,7 @@ impl<'a> Placing<'a> {
         let whole = vouched && unknown.is_empty() && waiting.is_empty();
         let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
-        let recorded = removed || adopted || undone || kept_aside || !tallies.is_empty();
+        let recorded = removed || adopted || undone || kept_aside || linked || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
         record(project, state, synced, recorded, needs_writing || dropped).map_err(ended)?;
         if stopped {
@@ -1283,73 +1319,238 @@ pub(crate) fn untouched(
     }))
 }
 
-/// the files fetchloom did not place that sync adopts, each with how the scan saw it, for
-/// [`link_adopted`]. a dataset that asks for writable copies keeps its own files as they are.
-fn found_in_place<'t, 'a>(
+/// a file sync may link to the cache's copy of its bytes once placing is done.
+struct ToLink<'t, 'a> {
+    target: &'t Target<'a>,
+    /// how the scan saw it, as it must still look when the link takes its name.
+    seen: Look,
+    /// whether this run read it and found the pinned bytes, so it is not read again.
+    proven: bool,
+}
+
+/// the files of `targets` that may be copies of their own sync can link to the cache, as
+/// `actions` leave them: kept files the state records as copies or as hardlinks that lost their
+/// other name, and files this run read and took as placed. those of a dataset that asks for copies
+/// stay as they are. `proven` names the files this run took into the cache, which it read too.
+fn copies_to_link<'t, 'a>(
     targets: &'t [Target<'a>],
     actions: &[Action],
     survey: &Survey,
-) -> Vec<(&'t Target<'a>, Look)> {
+    proven: &HashSet<String>,
+) -> Vec<ToLink<'t, 'a>> {
     targets
         .iter()
         .zip(actions)
-        .filter_map(|(target, action)| match action {
-            Action::Adopt(seen)
-                if !target.copy && !survey.state.files.contains_key(&target.path) =>
-            {
-                Some((target, *seen))
+        .filter(|(target, _)| !target.copy)
+        .filter_map(|(target, action)| {
+            let alone = survey.alone.contains(&target.path);
+            match action {
+                Action::Keep => {
+                    let placed = survey.state.files.get(&target.path)?;
+                    is_copy(placed, alone).then(|| ToLink {
+                        target,
+                        seen: placed.look,
+                        proven: placed.racy_intact.get().is_some() || proven.contains(&target.path),
+                    })
+                }
+                Action::Adopt(seen) => Some(ToLink {
+                    target,
+                    seen: *seen,
+                    proven: true,
+                }),
+                Action::Vouch(seen) if alone => Some(ToLink {
+                    target,
+                    seen: *seen,
+                    proven: true,
+                }),
+                _ => None,
             }
-            _ => None,
         })
         .collect()
 }
 
-/// links each adopted file of `found` that still looks as scanned to the cache's copy, so one copy
-/// stays on disk. a file with another name stays, since linking it frees nothing, as does one the
-/// cache cannot vouch for or a drive cannot link; a failure leaves the file as it was.
-fn link_adopted(
+/// whether the file `placed` records is a copy of its own of its cached object that sync may
+/// link: placed read-only as a copy, or as a hardlink that is now `alone`, with no other name,
+/// and never found to hold other bytes or refused a link. a clone shares its blocks with the
+/// cache's copy already, and no look tells it from a copy, so it stays as it is.
+fn is_copy(placed: &Placed, alone: bool) -> bool {
+    !placed.writable
+        && !placed.unlinkable
+        && match placed.method {
+            Method::Copy => true,
+            Method::Hardlink => alone,
+            Method::Reflink => false,
+        }
+}
+
+/// whether files in the data folder at `folder` can be links to the cache at `cache`, as far as a
+/// look at the two tells, before any file is read: both on one disk, which is not FAT or exFAT,
+/// and the cache not mounted read-only.
+fn links_possible(folder: &Path, cache: &Path) -> bool {
+    crate::space::same_disk(folder, cache) == Some(true)
+        && !crate::space::Filesystem::of(folder).serializes()
+        && !crate::volume::read_only(cache)
+}
+
+/// whether a sync of `scope` with nothing else to do would link a file to the cache: a copy of its
+/// own, as [`is_copy`] tells, of a dataset placed by link, looking as recorded, whose object the
+/// cache holds out of doubt, where [`links_possible`]. the state and the survey tell which files
+/// may be such copies; a project with none pays nothing, and one that cannot link a look at two
+/// folders, before any object is looked at.
+pub(crate) fn links_copies(
+    project: &Project,
+    manifest: &Manifest,
+    survey: &Survey,
+    cache: &Cache,
+    scope: &Scope,
+) -> bool {
+    let copies: Vec<&Placed> = survey
+        .state
+        .files
+        .iter()
+        .filter(|(path, placed)| {
+            scope.includes(&placed.dataset)
+                && is_copy(placed, survey.alone.contains(*path))
+                && survey.disk.get(*path) == Some(&placed.look)
+                && manifest
+                    .datasets
+                    .get(&placed.dataset)
+                    .is_some_and(|entry| !entry.copy)
+        })
+        .map(|(_, placed)| placed)
+        .collect();
+    if copies.is_empty() {
+        return false;
+    }
+    let Ok(folder) = project.planned_data_dir(manifest) else {
+        return false;
+    };
+    if !links_possible(&folder, cache.root()) {
+        return false;
+    }
+    let Ok(marks) = cache.doubts() else {
+        return false;
+    };
+    copies
+        .iter()
+        .any(|placed| cache.holds_trusted(&placed.sha256, placed.look.size, &marks))
+}
+
+/// links each file of `found` that the state still records as a copy of its own to the cache's
+/// copy of its bytes, as placing links a new file, where [`links_possible`]: the file is read
+/// first unless this run already read it, and a file whose bytes prove other than the pinned ones,
+/// or that the disk refuses a link for, is marked so no later sync tries it again. a file with
+/// another name stays, since a link frees nothing, as does one the cache cannot vouch for; a file
+/// changed meanwhile or held open, as windows holds one, stays as it is for the next sync. says
+/// whether the state changed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a part of the placing whose copies are linked"
+)]
+fn link_copies(
     project: &Project,
     placer: &Placer,
     cache: &Cache,
     work: &Work,
-    found: &[(&Target, Look)],
-    state: &mut State,
+    found: &[ToLink],
+    (state, alone): (&mut State, &HashSet<String>),
+    checked: u64,
     placement: &mut Placement,
-) {
-    if found.is_empty() {
-        return;
+) -> bool {
+    let found: Vec<&ToLink> = found
+        .iter()
+        .filter(|item| {
+            state
+                .files
+                .get(&item.target.path)
+                .is_some_and(|placed| is_copy(placed, alone.contains(&item.target.path)))
+        })
+        .collect();
+    if found.is_empty() || !links_possible(placer.root(), cache.root()) {
+        return false;
     }
     let Ok(marks) = cache.doubts() else {
-        return;
+        return false;
     };
-    for (target, seen) in found {
-        if placer.stop().is_asked() {
-            break;
-        }
-        let Some(record) = state.files.get_mut(&target.path) else {
+    let mut changed = false;
+    let mut chosen: Vec<(&ToLink, std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    for item in found {
+        let destination = native(&project.root, &item.target.path);
+        let Some(record) = state.files.get_mut(&item.target.path) else {
             continue;
         };
-        let destination = native(&project.root, &target.path);
-        if !record.adopted || place::has_other_names(&destination) {
+        if record.method == Method::Copy && place::has_other_names(&destination) {
+            record.unlinkable = true;
+            changed = true;
             continue;
         }
-        let Ok(Some(object)) = cache.trusted(&target.sha256, Some(target.size), &marks) else {
-            continue;
-        };
-        match placer.relink(&object, &destination, |now| Look::of(now) == *seen) {
-            Ok(Some(linked)) => {
-                record.method = Method::Hardlink;
-                record.look = Look::of(&linked);
-                record.writable = false;
-                Work::add(&work.hardlinks, 1);
-                placement.relinked.insert(target.path.clone());
-            }
-            Ok(None) => {}
-            Err(err) => {
-                tracing::debug!(path = %target.path, %err, "could not link an adopted file to the cache");
-            }
+        if let Ok(Some(object)) = cache.trusted(&item.target.sha256, Some(item.target.size), &marks)
+        {
+            chosen.push((item, object, destination));
         }
     }
+    if chosen.is_empty() {
+        return changed;
+    }
+    let _span = tracing::debug_span!("link_copies", files = chosen.len()).entered();
+    let relinked = placer.relink_all(
+        chosen.len(),
+        |index| place::Relink {
+            object: chosen[index].1.clone(),
+            destination: chosen[index].2.clone(),
+        },
+        |index| {
+            let (item, _, destination) = &chosen[index];
+            if item.proven {
+                return Some(true);
+            }
+            let block = Block::sized(item.target.size.saturating_add(1));
+            match hash_plain(destination, block) {
+                Ok(digest) => Some(digest == item.target.sha256),
+                // a file this user may not read is no copy sync can vouch for
+                Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => Some(false),
+                Err(_) => None,
+            }
+        },
+        |index, now| Look::of(now) == chosen[index].0.seen,
+    );
+    for ((item, _, _), relinked) in chosen.iter().zip(relinked) {
+        let Some(record) = state.files.get_mut(&item.target.path) else {
+            continue;
+        };
+        match relinked {
+            place::Relinked::Linked(method, linked) => {
+                record.method = method;
+                record.look = Look::of(&linked);
+                record.writable = false;
+                record.checked = checked;
+                Work::add(
+                    if method == Method::Reflink {
+                        &work.reflinks
+                    } else {
+                        &work.hardlinks
+                    },
+                    1,
+                );
+                placement.relinked.insert(
+                    item.target.path.clone(),
+                    Linked {
+                        dataset: item.target.dataset.to_owned(),
+                        method,
+                        size: item.target.size,
+                    },
+                );
+                changed = true;
+            }
+            place::Relinked::Refused | place::Relinked::Other => {
+                tracing::debug!(path = %item.target.path, "a copy that stays a file of its own");
+                record.unlinkable = true;
+                changed = true;
+            }
+            place::Relinked::Kept => {}
+        }
+    }
+    changed
 }
 
 /// the paths of the files of the datasets `names` a placing records afresh, each with whether it
@@ -2391,6 +2592,7 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: 
         writable,
         checked,
         adopted: false,
+        unlinkable: false,
         racy_intact: std::sync::OnceLock::new(),
     }
 }
@@ -2570,6 +2772,42 @@ mod tests {
     use crate::output::{Level, Style};
     use crate::project::state::State;
 
+    /// a file sync may link to the cache is a read-only copy, or a hardlink left with no other
+    /// name; never a clone, which no look tells from a copy, a dataset's writable copy, or a file
+    /// a sync found holding other bytes or the disk refused a link for.
+    #[test]
+    fn only_a_copy_of_its_own_is_linked_to_the_cache() {
+        let record = |method, writable, unlinkable| Placed {
+            dataset: "set".to_owned(),
+            sha256: crate::digest::sha256(b"set"),
+            method,
+            look: Look {
+                size: 3,
+                modified: 1,
+            },
+            writable,
+            checked: 0,
+            adopted: false,
+            unlinkable,
+            racy_intact: std::sync::OnceLock::new(),
+        };
+        for (method, writable, unlinkable, alone, linked) in [
+            (Method::Copy, false, false, false, true),
+            (Method::Hardlink, false, false, true, true),
+            (Method::Hardlink, false, false, false, false),
+            (Method::Reflink, false, false, true, false),
+            (Method::Copy, true, false, true, false),
+            (Method::Copy, false, true, true, false),
+            (Method::Hardlink, false, true, true, false),
+        ] {
+            assert_eq!(
+                is_copy(&record(method, writable, unlinkable), alone),
+                linked,
+                "{method:?}, writable {writable}, unlinkable {unlinkable}, alone {alone}"
+            );
+        }
+    }
+
     /// a data folder cannot leave its project, so it is the project that moves.
     #[test]
     fn a_copy_warning_names_the_project_when_the_cache_is_on_another_drive() {
@@ -2663,6 +2901,7 @@ mod tests {
             writable: false,
             checked: 0,
             adopted: false,
+            unlinkable: false,
             racy_intact: std::sync::OnceLock::new(),
         };
         for path in [&fifo, &zero] {
@@ -2688,6 +2927,7 @@ mod tests {
             writable: false,
             checked,
             adopted: false,
+            unlinkable: false,
             racy_intact: std::sync::OnceLock::new(),
         };
         let mut state = State::default();
@@ -2828,6 +3068,7 @@ mod tests {
                 writable: true,
                 checked: 0,
                 adopted: false,
+                unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
         );
@@ -2847,6 +3088,7 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
+            proven: HashSet::new(),
         };
 
         placing
@@ -2889,6 +3131,7 @@ mod tests {
                 writable: true,
                 checked: 0,
                 adopted: false,
+                unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
         );
@@ -3011,6 +3254,7 @@ mod tests {
                         writable: false,
                         checked: 0,
                         adopted: false,
+                        unlinkable: false,
                         racy_intact: std::sync::OnceLock::new(),
                     },
                 );
@@ -3040,6 +3284,7 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
+            proven: HashSet::new(),
         };
         placing
             .apply(
@@ -3109,6 +3354,7 @@ mod tests {
                 scope: Scope::All,
                 unlisted: plan::Unlisted::new(),
                 vouched: true,
+                proven: HashSet::new(),
             };
 
             let placed = placing.apply(
@@ -3182,6 +3428,7 @@ mod tests {
                 scope: Scope::All,
                 unlisted: plan::Unlisted::new(),
                 vouched: true,
+                proven: HashSet::new(),
             };
 
             let placed = placing.apply(
@@ -3260,6 +3507,7 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
+            proven: HashSet::new(),
         };
 
         placing
@@ -3418,6 +3666,7 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
+            proven: HashSet::new(),
         };
         let holding: Vec<String> = placing
             .holding()

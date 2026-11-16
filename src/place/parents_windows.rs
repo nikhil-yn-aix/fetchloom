@@ -127,6 +127,22 @@ impl Location {
         Ok(staged)
     }
 
+    /// clones `object` under a name hidden in this location's folder, which goes again when the
+    /// result is dropped, unless it took this location's name. a clone takes its object's
+    /// attributes, so the read-only flag of a cached object comes with it.
+    pub(super) fn stage_clone(self: &Arc<Self>, object: &Path) -> io::Result<Staged> {
+        let (staged, _) = self.claim(|path| {
+            reflink_copy::reflink(object, path)?;
+            fs::OpenOptions::new()
+                .access_mode(FILE_READ_ATTRIBUTES)
+                .open(path)
+                .inspect_err(|_| {
+                    let _ = fs::remove_file(path);
+                })
+        })?;
+        Ok(staged)
+    }
+
     pub(super) fn create_file(&self, readonly: bool) -> io::Result<File> {
         const FILE_ATTRIBUTE_READONLY: u32 = 1;
         let mut options = fs::OpenOptions::new();
@@ -248,6 +264,9 @@ impl Staged {
 
     /// gives the staged file its name in place of the plain file there while `unchanged` says that
     /// file still looks as it did, and returns the new look; none, the staged file gone, otherwise.
+    /// windows refuses to rename over a read-only file, so the flag of one with no other name,
+    /// as a copy has, is cleared through a handle for the rename and put back if it still fails,
+    /// as while another program holds the file open without sharing its deletion.
     pub(super) fn replace(
         mut self,
         unchanged: impl FnOnce(&Metadata) -> bool,
@@ -262,7 +281,28 @@ impl Staged {
         }
         // tempfile's own rename clears the file's attributes, which a hardlink shares with the
         // cached object and every other link to it
-        fs::rename(&*temporary, &self.location.path)?;
+        match fs::rename(&*temporary, &self.location.path) {
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    && found.permissions().readonly()
+                    && !super::has_other_names(&self.location.path) =>
+            {
+                let held = crate::volume::open_attributes(&self.location.path)?;
+                let before = held.metadata()?.permissions();
+                let mut writable = before.clone();
+                #[expect(
+                    clippy::permissions_set_readonly_false,
+                    reason = "the file loses its name next, or gets its flag back"
+                )]
+                writable.set_readonly(false);
+                held.set_permissions(writable)?;
+                if let Err(error) = fs::rename(&*temporary, &self.location.path) {
+                    let _ = held.set_permissions(before);
+                    return Err(error);
+                }
+            }
+            renamed => renamed?,
+        }
         temporary.disable_cleanup(true);
         self.location.metadata().map(Some)
     }

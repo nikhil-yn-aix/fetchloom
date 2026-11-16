@@ -547,6 +547,7 @@ mod tests {
                 writable: true,
                 checked: 1,
                 adopted: false,
+                unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
         );

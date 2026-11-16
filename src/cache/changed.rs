@@ -86,6 +86,23 @@ impl Cache {
         }
     }
 
+    /// whether the cache holds the object for `digest` at `size` and could place it without
+    /// hashing it first, by one look at it and `marks` from [`Cache::doubts`]. an object in doubt
+    /// counts as missing here; the run that places from it hashes it.
+    pub(crate) fn holds_trusted(
+        &self,
+        digest: &Sha256,
+        size: u64,
+        marks: &HashMap<Sha256, u64>,
+    ) -> bool {
+        let path = self.object_path(digest);
+        fs::symlink_metadata(&path).is_ok_and(|metadata| {
+            is_plain(&metadata)
+                && metadata.len() == size
+                && !doubted(&path, &metadata, marks.get(digest).copied())
+        })
+    }
+
     /// remembers that the object for `digest` no longer held its bytes, as of now, and the copy at
     /// its name, which projects' links still name after a repair gives the object a new one.
     pub(crate) fn mark_changed(&self, digest: &Sha256) -> io::Result<()> {

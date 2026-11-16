@@ -560,6 +560,7 @@ fn settled_named(
     disk::audit(project, &survey, &work.cache)?;
     let Some(placement) = place::untouched(project, manifest, &survey, &seen, true, scope)?
         .filter(|_| !survey.needs_writing)
+        .filter(|_| !place::links_copies(project, manifest, &survey, &work.cache, scope))
     else {
         return Ok(None);
     };
@@ -1307,7 +1308,8 @@ fn surveyed(work: &Loop<'_>, data_dir: &str, verify: bool) -> Result<Survey, Err
     Ok(survey)
 }
 
-/// a sync with nothing to do, finished: none unless [`place::untouched`] finds it settled.
+/// a sync with nothing to do, finished: none unless [`place::untouched`] finds it settled and no
+/// copy of a cached file waits to be linked to it.
 fn settle(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -1319,6 +1321,9 @@ fn settle(
     else {
         return Ok(None);
     };
+    if place::links_copies(work.project, manifest, survey, &work.cache, &work.scope) {
+        return Ok(None);
+    }
     // files hashing found unchanged settle with a state written now; a project folder
     // that takes no write fails no run that changed nothing
     if survey.needs_writing

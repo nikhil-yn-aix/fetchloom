@@ -217,7 +217,7 @@ fn tell_usage(output: &Output, usage: &Usage, projects: usize, blocked: bool) {
         output.hint("`fetchloom cache gc` frees what no project needs once it is a day old; `fetchloom cache gc --now` frees it now");
     }
     if usage.unlinked_copies > 0 {
-        output.hint("to link those files to the cache again, delete their project's data folder, if it holds nothing else you need, and run `fetchloom sync` there");
+        output.hint("`fetchloom sync` in a project links its copies to the cache again");
     }
 }
 

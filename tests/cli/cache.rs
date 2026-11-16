@@ -423,9 +423,8 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
 }
 
 /// a data folder put back from a copy made by `rsync -a` without -H holds files of its own where it
-/// had links to the cache, which the report counts as copies that were linked when placed. a copy
-/// of the whole project would not stay so: its state names the folder it came from, so its first
-/// sync checks each file and links it again.
+/// had links to the cache, which the report counts as copies that were linked when placed, until
+/// a sync in the project links them again.
 #[test]
 fn a_project_copied_without_hardlinks_is_reported() -> Result {
     let sandbox = Sandbox::new()?;
@@ -441,9 +440,9 @@ fn a_project_copied_without_hardlinks_is_reported() -> Result {
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let data = sandbox.work().join("data");
     let backup = sandbox.folder("backup")?;
-    copy_apart(&data, &backup)?;
+    crate::support::copy_apart(&data, &backup)?;
     crate::support::delete_folder(&data)?;
-    copy_apart(&backup, &data)?;
+    crate::support::copy_apart(&backup, &data)?;
     let report = json(&sandbox.run(&["--json", "cache"])?)?;
     let result = &report["result"];
     assert_eq!(result["linked"], 0, "{report}");
@@ -457,28 +456,10 @@ fn a_project_copied_without_hardlinks_is_reported() -> Result {
         ),
         "{story}"
     );
-    assert!(story.contains("run `fetchloom sync` there"), "{story}");
-    Ok(())
-}
-
-/// copies `from` to `to` as `rsync -a` without -H does, each file a new one with the same bytes,
-/// time and read-only flag, so one file under two names becomes two.
-fn copy_apart(from: &std::path::Path, to: &std::path::Path) -> Result {
-    fs::create_dir_all(to)?;
-    for entry in fs::read_dir(from)? {
-        let path = entry?.path();
-        let target = to.join(path.file_name().ok_or("an entry has no name")?);
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.is_dir() {
-            copy_apart(&path, &target)?;
-        } else if metadata.is_file() {
-            let mut copied = fs::File::create_new(&target)?;
-            std::io::copy(&mut fs::File::open(&path)?, &mut copied)?;
-            copied.set_modified(metadata.modified()?)?;
-            drop(copied);
-            fs::set_permissions(&target, metadata.permissions())?;
-        }
-    }
+    assert!(
+        story.contains("hint: `fetchloom sync` in a project links its copies to the cache again"),
+        "{story}"
+    );
     Ok(())
 }
 

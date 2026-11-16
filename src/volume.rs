@@ -424,7 +424,7 @@ pub(crate) fn unseal_alone(path: &Path, len: u64) -> io::Result<bool> {
 }
 
 /// opens `path` only to read and change its attributes, never following a link at its end.
-fn open_attributes(path: &Path) -> io::Result<File> {
+pub(crate) fn open_attributes(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     #[cfg(windows)]
     {
