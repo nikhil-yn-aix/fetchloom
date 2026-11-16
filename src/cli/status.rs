@@ -987,6 +987,12 @@ impl Status {
                 .all(|path| !self.hashed_only.contains(path))
     }
 
+    /// whether a file of `missing` is one a sync can bring, as no import this cache lacks is.
+    fn fetchable_missing(&self) -> bool {
+        let elsewhere: HashSet<&String> = self.imported_elsewhere.values().flatten().collect();
+        self.missing.iter().any(|path| !elsewhere.contains(path))
+    }
+
     /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.
     fn places(&self) -> bool {
         !self.removed.is_empty()
@@ -995,12 +1001,7 @@ impl Status {
                 .unlocked
                 .iter()
                 .any(|name| !self.waiting.contains_key(name) && !self.imports.contains_key(name))
-            || self.missing.iter().any(|path| {
-                !self
-                    .imported_elsewhere
-                    .values()
-                    .any(|paths| paths.contains(path))
-            })
+            || self.fetchable_missing()
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
             || !self.untracked.is_empty()
@@ -1350,6 +1351,17 @@ mod tests {
         assert!(!damaged.needs_sync(), "only sync --verify finds it");
         assert!(!damaged.sync_repairs_all());
         assert!(sum_up(&output, &damaged));
+        // a file of an import this cache lacks is none a sync can bring, while one beside it is
+        let mut missing = Status {
+            missing: vec!["data/raw/a.csv".to_owned(), "data/set/file.csv".to_owned()],
+            ..Status::default()
+        };
+        missing
+            .imported_elsewhere
+            .insert("raw".to_owned(), vec!["data/raw/a.csv".to_owned()]);
+        assert!(missing.needs_sync());
+        missing.missing.pop();
+        assert!(!missing.needs_sync());
         let mut unlocked = Status {
             unlocked: vec!["set".to_owned()],
             ..Status::default()
