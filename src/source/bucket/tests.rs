@@ -891,6 +891,33 @@ fn a_listing_answered_with_another_status_names_it_and_what_the_service_said() {
     );
 }
 
+/// folder markers are no files, so a prefix of exactly `most_files` files and its markers lists,
+/// and one file more is refused.
+#[test]
+fn folder_markers_do_not_count_against_most_files() {
+    let url = listing_url("https://bucket.s3.amazonaws.com/", "d/");
+    let objects = [
+        ("d/", "\"m\""),
+        ("d/a.csv", "\"a\""),
+        ("d/sub/", "\"m\""),
+        ("d/sub/b.csv", "\"b\""),
+    ];
+    let recorded = Recorded::default()
+        .most(2)
+        .on(&url, 200, page(false, &objects));
+    let listing = resolve("s3://bucket/d/", &recorded).unwrap();
+    assert_eq!(listing.files.len(), 2);
+    let recorded = Recorded::default()
+        .most(1)
+        .on(&url, 200, page(false, &objects));
+    let error = resolve("s3://bucket/d/", &recorded).unwrap_err();
+    assert!(
+        error.message.contains("lists more than 1 file"),
+        "{}",
+        error.message
+    );
+}
+
 #[test]
 fn escaped_keys_are_decoded_and_linked_escaped_again() {
     let url = listing_url("https://bucket.s3.amazonaws.com/", "d/");

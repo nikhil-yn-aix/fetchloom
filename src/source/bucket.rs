@@ -112,6 +112,21 @@ struct Object {
     url: Url,
 }
 
+impl Object {
+    /// whether it is an empty object whose name ends in `/`, which marks a folder in S3 and cloud
+    /// storage and is no file.
+    fn marks_a_folder(&self) -> bool {
+        self.size == 0 && self.key.ends_with('/')
+    }
+}
+
+/// whether a listing that holds `objects`, `marks` of them folder marks it leaves out, holds more
+/// files than `most`. marks count once there are more than `most` of them, so a listing of marks
+/// alone stays bounded.
+fn past_most(objects: usize, marks: usize, most: usize) -> bool {
+    objects - marks.min(most) > most
+}
+
 impl Prefix {
     /// whether it names a folder, its key ending in `/`, or a whole bucket or container, rather
     /// than one object.

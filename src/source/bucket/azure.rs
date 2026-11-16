@@ -30,7 +30,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
     listing.set_path(blobs_at.path().trim_end_matches('/'));
     let mut marker: Option<String> = None;
     let mut pages = super::Pages::new(api.most_files());
-    let mut objects = Vec::new();
+    let (mut objects, mut empty) = (Vec::new(), 0);
     let mut credentials = false;
     loop {
         let mut pairs = vec![
@@ -55,15 +55,22 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
             .children("Blobs")
             .flat_map(|blobs| blobs.children("Blob"))
         {
-            objects.push(object(prefix, &blobs_at, blob)?);
-            if objects.len() > api.most_files() {
+            let object = object(prefix, &blobs_at, blob)?;
+            // an empty blob may mark a folder, which only the whole listing tells
+            empty += usize::from(object.size == 0);
+            objects.push(object);
+            if super::past_most(objects.len(), empty, api.most_files()) {
                 return Err(prefix.too_many(api.most_files()));
             }
         }
         match page.text_of("NextMarker").filter(|next| !next.is_empty()) {
             None => {
+                let objects = without_folder_marks(objects);
+                if objects.len() > api.most_files() {
+                    return Err(prefix.too_many(api.most_files()));
+                }
                 return Ok(Listed {
-                    objects: without_folder_marks(objects),
+                    objects,
                     credentials,
                 });
             }

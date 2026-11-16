@@ -66,6 +66,19 @@ fn a_container_lists_its_blobs_with_the_md5_azure_states() {
     assert_eq!(recorded.asked(), [format!("{LISTING}&prefix=")]);
 }
 
+/// the empty blobs that mark folders are no files, so a container of exactly `most_files` files
+/// and its marks lists, and one file more is refused.
+#[test]
+fn folder_marks_do_not_count_against_most_files() {
+    for (most, lists) in [(30, true), (29, false)] {
+        let recorded = Recorded::default()
+            .most(most)
+            .fixture(&format!("{LISTING}&prefix="), "azure/mnist.xml");
+        let listing = listed("azure:azureopendatastorage/mnist/", &recorded);
+        assert_eq!(listing.is_ok(), lists, "{most}");
+    }
+}
+
 #[test]
 fn a_prefix_naming_a_blob_is_that_one_file() {
     let recorded = Recorded::default().fixture(

@@ -45,7 +45,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
     .map_err(|_| bad())?;
     let mut token: Option<String> = None;
     let mut pages = super::Pages::new(api.most_files());
-    let mut objects = Vec::new();
+    let (mut objects, mut marks) = (Vec::new(), 0);
     let mut credentials = false;
     loop {
         let mut pairs = vec![("prefix", prefix.key.as_str()), ("fields", FIELDS)];
@@ -63,8 +63,10 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Listed, Erro
         let page: Page = response.json()?;
         credentials |= super::with_credentials(&response);
         for item in page.items {
-            objects.push(object(prefix, &objects_at, item)?);
-            if objects.len() > api.most_files() {
+            let object = object(prefix, &objects_at, item)?;
+            marks += usize::from(object.marks_a_folder());
+            objects.push(object);
+            if super::past_most(objects.len(), marks, api.most_files()) {
                 return Err(prefix.too_many(api.most_files()));
             }
         }
