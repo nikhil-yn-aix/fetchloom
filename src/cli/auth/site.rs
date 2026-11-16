@@ -724,15 +724,7 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
         return super::asking_store(&context.output, || {
             site::save(var, host, saved, store::Place::Keyring)
         })
-        .map_err(|err| {
-            let locked = store::locked(&err);
-            let error = failed(err);
-            if locked || site::too_big_for_windows(saved) {
-                error.help(super::elsewhere(it, locked))
-            } else {
-                error
-            }
-        });
+        .map_err(|err| not_saved(host, saved, &err, it));
     }
     let file = crate::machine::settings_folder(var)
         .unwrap_or_default()
@@ -773,6 +765,40 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
     }
     super::warn_if_shared(&context.output, &file, super::KEYRING_OR_PROFILE);
     Ok(origin)
+}
+
+/// the error for `saved`, which the credential store would not keep for `host`, for `err`, with
+/// how to keep `it` elsewhere when the store is locked or `saved` outgrows windows' entries.
+fn not_saved(host: &str, saved: &Saved, err: &std::io::Error, it: &str) -> Error {
+    let locked = store::locked(err);
+    let too_long = err
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<keyring::Error>())
+        .is_some_and(|inner| matches!(inner, keyring::Error::TooLong(..)));
+    if too_long {
+        let why = match site::windows_room(saved) {
+            Some((has, room)) => format!(
+                "it has {} characters, and windows credential manager keeps at most {}",
+                crate::units::grouped(has as u64),
+                crate::units::grouped(room as u64)
+            ),
+            None => format!(
+                "they take more than the {} bytes windows credential manager keeps for one entry",
+                crate::units::grouped(site::WINDOWS_ENTRY as u64)
+            ),
+        };
+        return Error::new(
+            Kind::LocalIo,
+            format!("could not save {} for {host}: {why}", saved.what()),
+        )
+        .help(super::elsewhere(it, false));
+    }
+    let error = Error::io(format!("could not save {} for {host}", saved.what()), err);
+    if locked || site::too_big_for_windows(saved) {
+        error.help(super::elsewhere(it, locked))
+    } else {
+        error
+    }
 }
 
 /// what is saved, as a line names it: "a token", "the X-API-Key header" or "3 cookies from
@@ -937,6 +963,40 @@ pub(super) fn sign_out(context: &Context, logout: &Logout) -> Result<Option<Repo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a key longer than windows credential manager keeps is told plainly, with the most it keeps
+    /// and how to keep the key in fetchloom's own file instead.
+    #[test]
+    fn a_key_past_what_windows_keeps_says_so_plainly() {
+        let too_long = || {
+            std::io::Error::other(keyring::Error::TooLong(
+                "password encoded as UTF-16".to_owned(),
+                2_560,
+            ))
+        };
+        let token = Saved::Token {
+            token: "t".repeat(1_254),
+        };
+        let error = not_saved("lab.example", &token, &too_long(), "it");
+        assert_eq!(
+            error.message,
+            "could not save the token for lab.example: it has 1,254 characters, and windows credential manager keeps at most 1,253"
+        );
+        assert!(
+            error
+                .help
+                .is_some_and(|help| help.contains("FETCHLOOM_KEYRING=false")),
+        );
+        let cookies = Saved::Cookies {
+            from: Taken::Browser("firefox".to_owned()),
+            cookies: Vec::new(),
+        };
+        let error = not_saved("lab.example", &cookies, &too_long(), "them");
+        assert_eq!(
+            error.message,
+            "could not save the cookies for lab.example: they take more than the 2,560 bytes windows credential manager keeps for one entry"
+        );
+    }
 
     /// a typo of an account's name never becomes a website's host, which a token would then go
     /// to, while a host a person names stays one.

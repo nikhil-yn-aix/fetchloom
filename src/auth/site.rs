@@ -252,7 +252,33 @@ pub(crate) fn find(var: Var<'_>, host: &str) -> Option<(Saved, Origin)> {
 }
 
 /// the most bytes windows' credential store keeps for an entry, `CRED_MAX_CREDENTIAL_BLOB_SIZE`.
-const WINDOWS_ENTRY: usize = 2_560;
+pub(crate) const WINDOWS_ENTRY: usize = 2_560;
+
+/// the characters of `saved`'s token or header value, and the most of them windows' credential
+/// store keeps beside what is saved with them; none for cookies, which take many values.
+pub(crate) fn windows_room(saved: &Saved) -> Option<(usize, usize)> {
+    let (empty, value) = match saved {
+        Saved::Token { token } => (
+            Saved::Token {
+                token: String::new(),
+            },
+            token,
+        ),
+        Saved::Header { name, value } => (
+            Saved::Header {
+                name: name.clone(),
+                value: String::new(),
+            },
+            value,
+        ),
+        Saved::Cookies { .. } => return None,
+    };
+    let around = serde_json::to_string(&empty).ok()?.encode_utf16().count();
+    Some((
+        value.encode_utf16().count(),
+        (WINDOWS_ENTRY / 2).saturating_sub(around),
+    ))
+}
 
 /// whether `saved` outgrows windows' credential store, which keeps [`WINDOWS_ENTRY`] bytes an
 /// entry and takes the saved text as UTF-16, two bytes a unit.
