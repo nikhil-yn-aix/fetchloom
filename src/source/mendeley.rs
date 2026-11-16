@@ -14,6 +14,10 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 
+/// the longest path a folder may have, in bytes, as for an archive's entries: linux takes no
+/// longer one.
+const LONGEST_PATH: usize = 4096;
+
 const SITE: &str = "https://data.mendeley.com";
 
 /// a mendeley data dataset, at one published version or the newest.
@@ -111,7 +115,9 @@ impl Dataset {
         Ok(described)
     }
 
-    /// every folder of the version, with its path from the dataset's top folder.
+    /// every folder of the version, with its path from the dataset's top folder. a path past
+    /// [`LONGEST_PATH`] is refused as its folders are walked, so a long chain of folders costs no
+    /// more steps each than that path holds.
     async fn folders(&self, api: &impl Api, version: u64) -> Result<Vec<(String, String)>, Error> {
         let url = self.url(&["folders", &version.to_string()])?;
         let folders: Vec<Folder> = self.answer(&api.get(&url).await?)?;
@@ -128,15 +134,29 @@ impl Dataset {
                 return Err(invalid(self, "a folder has an id that is no UUID"));
             }
             let mut names = vec![folder.name.as_str()];
+            let mut length = folder.name.len();
             let mut at = folder;
             while let Some(parent) = at.parent_id.as_deref() {
                 at = by_id
                     .get(parent)
                     .ok_or_else(|| invalid(self, "a folder lies in a folder it does not list"))?;
                 names.push(at.name.as_str());
+                length += at.name.len() + 1;
                 if names.len() > folders.len() {
                     return Err(invalid(self, "its folders hold each other"));
                 }
+                if length > LONGEST_PATH {
+                    break;
+                }
+            }
+            if length > LONGEST_PATH {
+                return Err(invalid(
+                    self,
+                    &format!(
+                        "its folders nest past a path of {}, the longest fetchloom takes",
+                        crate::units::count(LONGEST_PATH as u64, "byte", "bytes")
+                    ),
+                ));
             }
             names.reverse();
             paths.push((folder.id.clone(), names.join("/")));

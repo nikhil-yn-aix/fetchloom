@@ -321,9 +321,10 @@ fn a_refusal_names_no_account_to_sign_in_to() {
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "a row for each answer")]
 fn an_answer_that_cannot_be_trusted_says_why() {
     type Change = fn(&mut serde_json::Value);
-    let rows: [(&str, &str, Change, &str); 8] = [
+    let rows: [(&str, &str, Change, &str); 9] = [
         (
             "another dataset",
             "dataset",
@@ -358,6 +359,23 @@ fn an_answer_that_cannot_be_trusted_says_why() {
                 ]);
             },
             "its folders hold each other",
+        ),
+        (
+            "a chain of folders nested past the longest path",
+            "folders",
+            |value| {
+                let id = |level: u64| format!("{level:08x}-0000-4000-8000-000000000000");
+                *value = (0..2_100)
+                    .map(|level| {
+                        json!({
+                            "id": id(level),
+                            "name": "ab",
+                            "parent_id": (level > 0).then(|| id(level - 1)),
+                        })
+                    })
+                    .collect();
+            },
+            "nest past a path of 4,096 bytes",
         ),
         (
             "a file id that is no UUID",
