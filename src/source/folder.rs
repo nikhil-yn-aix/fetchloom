@@ -18,7 +18,7 @@ use super::drive::html::unescape;
 use super::{Access, Listing, Reference, Remote};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
-use crate::net::{Api, Response};
+use crate::net::{Api, Extra, Response};
 use crate::shown::Shown;
 
 /// how a refusal of a web page says to keep the page itself, where no entry of data.toml asks
@@ -31,6 +31,10 @@ const TITLES: [&str; 3] = [
     "directory listing for /",
     "directory listing of /",
 ];
+
+/// what a request for a listing accepts: a web page before anything else, since caddy answers a
+/// request that prefers json, as fetchloom's do, with its listing as json.
+const LISTING: Extra = &[("accept", "text/html, */*;q=0.1")];
 
 /// the elements a server writes the entries of a listing in: nginx's and apache's `<pre>`,
 /// apache's and lighttpd's `<table>`, python's `<ul>`.
@@ -708,7 +712,7 @@ impl Folder {
     /// the folders the `select` patterns may reach, when each says where its files lie. a link
     /// ending in `/` that answers with a file, not a page, is that file's plain link.
     pub(super) async fn resolve(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
-        let response = api.get(&self.url).await?;
+        let response = api.get_with(&self.url, LISTING).await?;
         self.answered(&response, &self.url, "")?;
         let text = response.text();
         let page = text
@@ -736,7 +740,7 @@ impl Folder {
         };
         walk.add("", &self.url, index)?;
         while let Some((path, url)) = walk.folders.pop_front() {
-            let response = api.get(&url).await?;
+            let response = api.get_with(&url, LISTING).await?;
             self.answered(&response, &url, &path)?;
             let index = self.listed(&response.text(), &response, &url, &path)?;
             walk.add(&path, &url, index)?;

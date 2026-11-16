@@ -29,6 +29,11 @@ fn names(index: &Index) -> Vec<(&str, bool)> {
         .collect()
 }
 
+/// how a recorded network says the listing at `link` was asked for: as a web page.
+fn listed(link: &str) -> String {
+    format!("{link} accept: text/html, */*;q=0.1")
+}
+
 fn read_at(html: &str, folder: &str) -> Result<Index, Unread> {
     read(html, &url(folder), &url(folder))
 }
@@ -297,7 +302,7 @@ fn a_folder_linked_without_its_slash_is_listed_as_a_folder() {
     let listing = block_on(folder(DATA).resolve(&recorded, &[])).unwrap();
     assert_eq!(paths(&listing), ["iris.csv", "sub/tips.csv"]);
     assert_eq!(listing.warnings, Vec::<String>::new());
-    assert_eq!(recorded.asked(), [DATA.to_owned(), sub]);
+    assert_eq!(recorded.asked(), [listed(DATA), listed(&sub)]);
 }
 
 /// the listing is the list that holds the folder's entries, whatever lists a page shows above
@@ -503,7 +508,8 @@ fn a_link_is_read_with_its_character_references_undone() {
 }
 
 /// a folder's files are those of its listing and of the listings of the folders inside it, by
-/// their paths below it, one request a folder, each at the size in bytes its listing states.
+/// their paths below it, one request a folder that asks for a web page, as caddy sends one only
+/// then, each file at the size in bytes its listing states.
 #[test]
 fn a_folder_lists_every_file_below_it() {
     let recorded = nested();
@@ -519,7 +525,10 @@ fn a_folder_lists_every_file_below_it() {
             .all(|file| file.sha256.is_none() && file.size == Some(20) && !file.named_by_server)
     );
     assert_eq!(listing.warnings, Vec::<String>::new());
-    assert_eq!(recorded.asked(), [DATA.to_owned(), format!("{DATA}sub/")]);
+    assert_eq!(
+        recorded.asked(),
+        [listed(DATA), listed(&format!("{DATA}sub/"))]
+    );
 }
 
 /// patterns that each say where their files lie list only the folders they reach, and the
@@ -545,6 +554,7 @@ fn a_pattern_lists_only_the_folders_it_reaches() {
         let recorded = nested();
         let select = [Glob::new(pattern).unwrap()];
         let listing = block_on(folder(DATA).resolve(&recorded, &select)).unwrap();
+        let asked: Vec<String> = asked.iter().map(|link| listed(link)).collect();
         assert_eq!(recorded.asked(), asked, "{pattern}");
         assert_eq!(paths(&listing), files, "{pattern}");
         assert_eq!(listing.within, within, "{pattern}");
