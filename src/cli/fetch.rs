@@ -39,11 +39,32 @@ pub(super) struct Job {
 const HEAD: usize = 1024;
 
 /// the tags a page may open with that no data file does, as a sign-in redirect's script or
-/// refresh does.
-const PAGE_TAGS: [&[u8]; 5] = [b"<script", b"<meta", b"<head", b"<body", b"<title"];
+/// refresh does, or a sign-in form does.
+const PAGE_TAGS: [&[u8]; 20] = [
+    b"<script",
+    b"<meta",
+    b"<head",
+    b"<body",
+    b"<title",
+    b"<form",
+    b"<div",
+    b"<p",
+    b"<h1",
+    b"<h2",
+    b"<h3",
+    b"<h4",
+    b"<h5",
+    b"<h6",
+    b"<iframe",
+    b"<noscript",
+    b"<style",
+    b"<link",
+    b"<svg",
+    b"<center",
+];
 
-/// whether `head`, a file's first bytes, is html: past a utf-8 or utf-16 byte order mark, white
-/// space and comments, it opens with `<!doctype html` or a tag only a page opens with, or it
+/// whether `head`, a file's first bytes, is html: past a utf-8, utf-16 or utf-32 byte order mark,
+/// white space and comments, it opens with `<!doctype html` or a tag only a page opens with, or it
 /// holds `<html`, in any case.
 fn reads_as_html(head: &[u8]) -> bool {
     let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| -> Vec<u8> {
@@ -53,7 +74,18 @@ fn reads_as_html(head: &[u8]) -> bool {
             .collect::<String>()
             .into_bytes()
     };
+    let utf32 = |rest: &[u8], unit: fn([u8; 4]) -> u32| -> Vec<u8> {
+        rest.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&four| char::from_u32(unit(four)).unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect::<String>()
+            .into_bytes()
+    };
+    // utf-32's little-endian mark starts as utf-16's does
     let text = match head {
+        [0xff, 0xfe, 0, 0, rest @ ..] => utf32(rest, u32::from_le_bytes),
+        [0, 0, 0xfe, 0xff, rest @ ..] => utf32(rest, u32::from_be_bytes),
         [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
         [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
         _ => head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head).to_vec(),
@@ -3220,6 +3252,23 @@ mod tests {
                 true,
             ),
             (b"\xfe\xff\0<\0h\0t\0m\0l\0>", true),
+            (b"<form action='/login' method='post'>", true),
+            (b"<div class='login'>", true),
+            (b"<p>Please sign in</p>", true),
+            (b"<h1>Sign in</h1>", true),
+            (b"<H3>Sign in</H3>", true),
+            (b"<iframe src='/sso'></iframe>", true),
+            (b"<noscript>enable scripts</noscript>", true),
+            (b"<style>body{}</style>", true),
+            (b"<link rel='stylesheet' href='/a.css'>", true),
+            (b"<svg xmlns='http://www.w3.org/2000/svg'>", true),
+            (
+                b"\xff\xfe\0\0<\0\0\0h\0\0\0t\0\0\0m\0\0\0l\0\0\0>\0\0\0",
+                true,
+            ),
+            (b"\0\0\xfe\xff\0\0\0<\0\0\0p\0\0\0>", true),
+            (b"<pre>a,b</pre>", false),
+            (b"<price>1</price>", false),
             (b"a,b\n1,2\n", false),
             (b"<?xml version=\"1.0\"?><rows/>", false),
             (b"<id>,<name>\n1,iris\n", false),

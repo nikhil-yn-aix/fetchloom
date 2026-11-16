@@ -32,10 +32,8 @@ pub(super) fn is_html(headers: &HeaderMap) -> bool {
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| {
-            value
-                .trim_start()
-                .to_ascii_lowercase()
-                .starts_with("text/html")
+            let value = value.trim_start().to_ascii_lowercase();
+            value.starts_with("text/html") || value.starts_with("application/xhtml+xml")
         })
 }
 
@@ -428,6 +426,10 @@ mod tests {
         assert!(is_html(&headers(&[(
             header::CONTENT_TYPE,
             "text/html; charset=utf-8"
+        )])));
+        assert!(is_html(&headers(&[(
+            header::CONTENT_TYPE,
+            "application/xhtml+xml; charset=utf-8"
         )])));
         assert!(!is_html(&headers(&[(
             header::CONTENT_TYPE,
