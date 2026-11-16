@@ -3,6 +3,9 @@ use crate::source::recorded::{Recorded, block_on, fixture_bytes};
 
 const DATA: &str = "https://example.org/data/";
 
+/// the folder `folder/ncei.html` lists, as ncei's server sent it.
+const NCEI: &str = "https://www.ncei.noaa.gov/pub/data/ghcn/daily/";
+
 fn url(text: &str) -> Url {
     Url::parse(text).unwrap()
 }
@@ -105,6 +108,16 @@ fn every_servers_listing_reads_as_the_entries_it_shows() {
                 ("suppl".to_owned(), true),
             ],
         ),
+        (
+            "folder/ncei.html",
+            NCEI,
+            vec![
+                ("all".to_owned(), true),
+                ("papers".to_owned(), true),
+                ("ghcnd-countries.txt".to_owned(), false),
+                ("ghcnd_all.tar.gz".to_owned(), false),
+            ],
+        ),
     ] {
         let html = String::from_utf8(fixture_bytes(fixture)).unwrap();
         let index = read_at(&html, folder).unwrap();
@@ -126,6 +139,27 @@ fn every_servers_listing_reads_as_the_entries_it_shows() {
         index.entries[2].link.as_str(),
         "http://127.0.0.1:19340/data/sub/"
     );
+    let ncei = String::from_utf8(fixture_bytes("folder/ncei.html")).unwrap();
+    let index = read_at(&ncei, NCEI).unwrap();
+    assert_eq!(index.entries[0].link.as_str(), format!("{NCEI}all/"));
+}
+
+/// a folder whose listing links a folder inside it without its `/`, under a name ending in `/`,
+/// as ncei's do, lists that folder at its link with the `/`, never asking for it as a file.
+#[test]
+fn a_folder_linked_without_its_slash_is_listed_as_a_folder() {
+    let sub = format!("{DATA}sub/");
+    let top = "<html><head><title>Index of /data</title></head><body><table>\
+<tr><td><a href=\"..\">Parent Directory</a></td></tr>\
+<tr><td><a href=\"iris.csv\">iris.csv</a></td></tr>\
+<tr><td><a href=\"sub\">sub/</a></td></tr></table></body></html>";
+    let recorded = Recorded::default()
+        .on(DATA, 200, top.as_bytes().to_vec())
+        .on(&sub, 200, nginx(&sub, &["tips.csv"]));
+    let listing = block_on(folder(DATA).resolve(&recorded, &[])).unwrap();
+    assert_eq!(paths(&listing), ["iris.csv", "sub/tips.csv"]);
+    assert_eq!(listing.warnings, Vec::<String>::new());
+    assert_eq!(recorded.asked(), [DATA.to_owned(), sub]);
 }
 
 /// a page no server made as a listing is none, though it links files below its folder: a site's
@@ -147,9 +181,9 @@ fn a_page_no_server_made_as_a_listing_is_none() {
 }
 
 /// a listing's entries are its links into its folder, each once. the link to the folder above,
-/// a column's sort link with a query, an anchor and every link outside its list go unsaid; any
-/// other link, to another host, out of the folder once decoded, or deeper than an entry, is told
-/// as it leads.
+/// as `../` or `..`, a column's sort link with a query, an anchor and every link outside its list
+/// go unsaid; any other link, to another host, out of the folder once decoded, or deeper than an
+/// entry, is told as it leads.
 #[test]
 fn only_links_into_the_folder_are_entries() {
     let page = r##"<html><head><title>Index of /data/</title></head><body>
@@ -169,7 +203,6 @@ fn only_links_into_the_folder_are_entries() {
             "https://other.example/x.csv",
             "https://example.org/secret.csv",
             "https://example.org/data/sub/deeper.csv",
-            "https://example.org/",
             "https://example.org/data/",
             "c:x.csv",
         ]

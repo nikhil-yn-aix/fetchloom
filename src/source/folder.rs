@@ -57,7 +57,9 @@ pub(super) struct Index {
 }
 
 /// a link of a list on a listing's page: its `href`, its character references undone, the link
-/// it makes against the page, none for one that makes none, and the size its row states.
+/// it makes against the page, none for one that makes none, and the size its row states. a link
+/// whose text names a folder, ending in `/`, while its `href` does not, as ncei's do, makes the
+/// folder's link, with the `/`.
 struct Link {
     href: String,
     url: Option<Url>,
@@ -88,17 +90,27 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
         .map(|(start, end)| {
             links(&html[start..end], &lower[start..end])
                 .into_iter()
-                .filter(|(href, _)| !href.contains(['?', '#']))
-                .map(|(href, size)| Link {
-                    url: page.join(&href).ok(),
-                    href,
-                    size,
+                .filter(|anchor| !anchor.href.contains(['?', '#']))
+                .map(|anchor| {
+                    let slashed = anchor.names_folder
+                        && !anchor.href.is_empty()
+                        && !anchor.href.ends_with('/');
+                    let url = if slashed {
+                        page.join(&format!("{}/", anchor.href))
+                    } else {
+                        page.join(&anchor.href)
+                    };
+                    Link {
+                        url: url.ok(),
+                        href: anchor.href,
+                        size: anchor.size,
+                    }
                 })
                 .collect()
         })
         .collect();
-    // the link to the folder above ends in `/`, as `../` or the parent's path
-    let above = |link: &Link| link.href.ends_with('/') && parent.is_some() && link.url == parent;
+    // the link to the folder above, as `../`, `..` or the parent's path
+    let above = |link: &Link| parent.is_some() && link.url == parent;
     // a header a server shows above its listing may be a list too, so the listing is the list
     // that links the folder above, as apache's, nginx's and lighttpd's do, else the first with a
     // link, as python's has no such link
@@ -232,19 +244,50 @@ fn starts_tag(lower: &str, open: usize, tag: &str) -> bool {
             .is_none_or(|next| *next == b'>' || *next == b'/' || next.is_ascii_whitespace())
 }
 
-/// the `href` of each link in `list`, in order, its character references undone, with the size
-/// its row states; `lower` is the list in lowercase.
-fn links(list: &str, lower: &str) -> Vec<(String, Option<u64>)> {
+/// a link as a list writes it: its `href`, its character references undone, whether its text
+/// ends in `/`, as a folder's name does, and the size its row states.
+struct Anchor {
+    href: String,
+    names_folder: bool,
+    size: Option<u64>,
+}
+
+/// each link in `list`, in order; `lower` is the list in lowercase.
+fn links(list: &str, lower: &str) -> Vec<Anchor> {
     let mut found = Vec::new();
     let mut at = 0;
     while let Some(open) = opening(lower, at, "a") {
         let (href, end) = href(list, lower, open + 2);
         if let Some(href) = href {
-            found.push((unescape(href), size(&lower[end..])));
+            found.push(Anchor {
+                href: unescape(href),
+                names_folder: unescape(&text(list, lower, end)).trim_end().ends_with('/'),
+                size: size(&lower[end..]),
+            });
         }
         at = end;
     }
     found
+}
+
+/// the text of the link whose tag ends at `at` in `list`, without the tags inside it, up to where
+/// the link closes or the next one opens; `lower` is the list in lowercase.
+fn text(list: &str, lower: &str, at: usize) -> String {
+    let mut text = String::new();
+    let mut from = at;
+    while let Some(offset) = lower[from..].find('<') {
+        let open = from + offset;
+        text.push_str(&list[from..open]);
+        if starts_tag(lower, open, "/a") || starts_tag(lower, open, "a") {
+            return text;
+        }
+        let Some(close) = lower[open..].find('>') else {
+            return text;
+        };
+        from = open + close + 1;
+    }
+    text.push_str(&list[from..]);
+    text
 }
 
 /// the size in bytes a row states after a link whose text, then the rest of its row, `row`

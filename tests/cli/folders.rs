@@ -44,6 +44,24 @@ fn nginx(folder: &str, entries: &[&str]) -> Vec<Part> {
     ))
 }
 
+/// a listing as ncei's apache writes it: a folder's link without its `/`, under its name with
+/// one, and the folder above as `..`.
+fn ncei(folder: &str, entries: &[&str]) -> Vec<Part> {
+    let rows = entries
+        .iter()
+        .map(|entry| {
+            let href = entry.strip_suffix('/').unwrap_or(entry);
+            format!(
+                "<tr>\n<td><a href=\"{href}\">{entry}</a></td>\n<td align=\"right\">2026-11-16 10:00</td>\n<td align=\"right\">-</td>\n<td> </td>\n</tr>\n"
+            )
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    page(&format!(
+        "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 3.2 Final//EN\">\n<html>\n<head>\n<title>Index of {folder}</title>\n</head>\n<body>\n<h1>Index of {folder}</h1>\n<table><tbody>\n<tr>\n<th>Name</th>\n<th>Last modified</th>\n<th>Size</th>\n<th>Description</th>\n</tr>\n<tr>\n<td><a href=\"..\">Parent Directory</a></td>\n<td> </td>\n<td align=\"right\">-</td>\n<td> </td>\n</tr>\n{rows}</tbody></table>\n</body>\n</html>\n"
+    ))
+}
+
 /// a web page answered with 200.
 fn page(html: &str) -> Vec<Part> {
     reply(
@@ -81,7 +99,7 @@ fn pin(path: &str, bytes: &[u8], url: &str) -> String {
 /// alone and never asks for a listing.
 #[test]
 fn a_listed_folder_is_one_dataset_of_every_file_below_it() -> Result {
-    for lister in [python as Lister, nginx] {
+    for lister in [python as Lister, nginx, ncei] {
         let sandbox = Sandbox::new()?;
         let server = served(lister)?;
         let folder = format!("{}/data/", server.url);
@@ -352,5 +370,49 @@ fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
         let help = run["help"].as_str().unwrap_or_default();
         assert_eq!(help.starts_with(&offered), offers, "{help}");
     }
+    Ok(())
+}
+
+/// ncei links each folder inside a listing without its `/`, under its name with one, and the
+/// folder above as `..`: the dry run tells the files of the folders inside as the add then pins
+/// them, neither asks for a folder as a file, and neither warns of the folder above.
+#[test]
+fn a_folder_linked_without_its_slash_is_listed_as_ncei_writes_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(ncei)?;
+    server.change(vec![(
+        "/data/sub".to_owned(),
+        reply(
+            "301 Moved Permanently",
+            &[("Location", "/data/sub/"), ("Content-Length", "0")],
+            b"",
+        ),
+    )]);
+    let folder = format!("{}/data/", server.url);
+    let dry = sandbox.run(&["--json", "add", &folder, "--dry-run"])?;
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stdout)?);
+    let dry = json(&dry)?;
+    assert_eq!(
+        dry["result"]["changes"]["place"],
+        serde_json::json!(["data/data/iris.csv", "data/data/sub/tips.csv"])
+    );
+    let added = sandbox.run(&["--json", "add", &folder])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stdout)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(
+        pinned(&lock, "data"),
+        [
+            pin("iris.csv", IRIS, &format!("{folder}iris.csv")),
+            pin("sub/tips.csv", TIPS, &format!("{folder}sub/tips.csv")),
+        ]
+    );
+    for document in [&dry, &json(&added)?] {
+        assert_eq!(
+            warning(document, "source.partial"),
+            &serde_json::Value::Null
+        );
+    }
+    let targets = server.targets();
+    assert!(!targets.contains(&"/data/sub".to_owned()), "{targets:?}");
     Ok(())
 }

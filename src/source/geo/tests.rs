@@ -387,7 +387,7 @@ fn an_index_that_cannot_be_trusted_says_why() {
             "names an entry that is no file name",
         ),
         ("an empty name", &[""][..], "links away"),
-        ("a name a step up", &[".."][..], "links away"),
+        ("a name two steps up", &["../.."][..], "links away"),
         ("a link away", &["../GSE1001/"][..], "links away"),
         (
             "a name holding a drive",
