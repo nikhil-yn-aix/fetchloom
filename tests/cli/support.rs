@@ -815,9 +815,10 @@ impl Server {
     }
 
     /// [`Server::slow_file`], except that the first connection holds back its last 64 KiB until
-    /// its client hangs up, so a stop lands inside the body however busy the machine is. a download
-    /// puts its first bytes on disk at its first checkpoint, a second in, so a test waiting for
-    /// them waits that long.
+    /// its client hangs up, so a stop lands inside the body however busy the machine is. bytes
+    /// reach the disk once more than the 1 MiB a download's writer gathers arrived, or at its
+    /// once-a-second save, which comes only as more bytes arrive: of a 1 MiB body, a writer that
+    /// opened a tenth of a second late keeps every byte in memory until the stop.
     #[cfg(unix)]
     pub(crate) fn held_file(path: &str, body: Vec<u8>) -> Result<Server> {
         Server::file_twice(path, body, true)

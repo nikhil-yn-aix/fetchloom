@@ -2,11 +2,10 @@
 
 use std::fs;
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
 
 use crate::support::{
     Part, Result, Sandbox, Server, delete_folder, file, json, link_folder, partial_files, reply,
-    text, zip_of,
+    text, wait_until, zip_of,
 };
 
 const IRIS: &[u8] =
@@ -1033,7 +1032,7 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    let on_disk = part_reaches(&sandbox, 1024 * 1024, &mut child)?;
+    let on_disk = part_reaches(&sandbox, &server, 1024 * 1024, &mut child)?;
     child.kill()?;
     child.wait()?;
     assert!(
@@ -1065,7 +1064,9 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
 #[cfg(unix)]
 #[test]
 fn a_stopped_get_says_so_in_a_plain_line() -> Result {
-    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    // more than the writer gathers before it writes: its once-a-second save needs bytes still
+    // arriving, and on a busy machine they can all arrive within its first second, then stop
+    let body: Vec<u8> = (0..2u32 << 20).map(|n| (n % 251) as u8).collect();
     let sandbox = Sandbox::new()?;
     let server = Server::held_file("/big.bin", body)?;
     let mut child = sandbox
@@ -1074,7 +1075,7 @@ fn a_stopped_get_says_so_in_a_plain_line() -> Result {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
-    let arrived = part_reaches(&sandbox, 1, &mut child)?;
+    let arrived = part_reaches(&sandbox, &server, 1, &mut child)?;
     let sent = std::process::Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .status()?;
@@ -1128,7 +1129,7 @@ fn a_stop_promises_only_what_the_server_allows() -> Result {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
-    let arrived = part_reaches(&sandbox, 1, &mut child)?;
+    let arrived = part_reaches(&sandbox, &server, 1, &mut child)?;
     let sent = std::process::Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .status()?;
@@ -1163,13 +1164,13 @@ fn a_stop_promises_only_what_the_server_allows() -> Result {
     Ok(())
 }
 
-/// waits until an unfinished download in the cache holds `size` bytes, or the run ends, and says
-/// how many it holds.
-fn part_reaches(sandbox: &Sandbox, size: u64, run: &mut Child) -> Result<u64> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+/// waits until `server` has the run's request, then until an unfinished download in the cache
+/// holds `size` bytes, or the run ends, and says how many it holds. a slow start counts against
+/// the first wait only.
+fn part_reaches(sandbox: &Sandbox, server: &Server, size: u64, run: &mut Child) -> Result<u64> {
+    server.wait_for_requests(1)?;
     let mut on_disk = 0;
-    while on_disk < size && run.try_wait()?.is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
+    wait_until(&format!("{size} bytes of the download on disk"), || {
         // the size a folder listing shows lags behind a file another process still writes on
         // windows, so each file is asked directly
         on_disk = partial_files(&sandbox.cache())
@@ -1182,7 +1183,8 @@ fn part_reaches(sandbox: &Sandbox, size: u64, run: &mut Child) -> Result<u64> {
             .map(|metadata| metadata.len())
             .max()
             .unwrap_or_default();
-    }
+        Ok(on_disk >= size || run.try_wait()?.is_some())
+    })?;
     Ok(on_disk)
 }
 
