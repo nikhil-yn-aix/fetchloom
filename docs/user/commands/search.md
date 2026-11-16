@@ -78,7 +78,7 @@ error: there is no file or folder "flowerz/" here
   help: did you mean `fetchloom add ./flowers`? or run `fetchloom search flowerz/` to search for these words
 ```
 
-with interactive stdin and stderr, an arrow-key picker asks which dataset you mean, in the same columns. up/down or j/k moves, enter selects the current row, and 1-9 selects a numbered row. q or esc cancels with exit 2, and ctrl-c with exit 130; either way stderr shows `Cancelled the choice of a dataset, so nothing changed`, not an error. `--yes` approves downloads but never selects a dataset.
+with interactive stdin and stderr, an arrow-key picker asks which dataset you mean, in the same columns. up/down or j/k moves, enter selects the current row, and 1-9 selects a numbered row. q or esc cancels with exit 1, and ctrl-c with exit 130; either way stderr shows `Cancelled the choice of a dataset, so nothing changed`, not an error. `--yes` approves downloads but never selects a dataset.
 
 with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same rows come once, numbered, and nothing on the screen moves: type the number of a row and press enter. a number not on the list asks again, and q cancels, as above. from a real run at a 100-column terminal, shortened:
 

@@ -1,6 +1,6 @@
 # push
 
-`push` copies the files `data.lock` pins from this machine's cache into a folder [mirror](../guides/mirrors.md), downloading first what the cache lacks, so a teammate, a machine without a network or a reviewer can sync the project from there.
+`push` copies the files `data.lock` pins from this machine's cache into a folder or S3 bucket [mirror](../guides/mirrors.md), downloading first what the cache lacks, so a teammate, a machine without a network or a reviewer can sync the project from there.
 
 ```sh
 fetchloom push --to /mnt/lab/fetchloom
@@ -18,7 +18,7 @@ fetchloom push [options] [name]...
 
 | option | effect |
 |---|---|
-| `--to <folder>` | the mirror's folder. without it, the `push_to` setting names it, from the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_PUSH_TO`; with neither, push stops with `usage`, exit 2 |
+| `--to <folder>` | the mirror's folder, or an S3 bucket below a prefix, as `s3://lab-data/fetchloom`. without it, the `push_to` setting names it, from the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_PUSH_TO`; with neither, push stops with `usage`, exit 2 |
 | `--verify` | read back each copy already on a folder mirror and replace one whose bytes are not the pinned ones; without it a copy of the right size counts as there. a bucket refuses it, since S3 checked each file when push sent it |
 | `-n`, `--dry-run` | say what would be downloaded, what would be copied and what is there already; change nothing |
 
@@ -72,11 +72,11 @@ two pushes into one mirror at once need no lock. each holds a lock of its own in
 | not there, nor the folder above it | stops with `local.io`, exit 50, as when a disk is not mounted |
 | a web address | stops with `usage`, exit 2 |
 
-push writes folders only: a lab nas, a network share or a usb drive. to fill a web mirror or a bucket, push to a folder, then copy that folder with a tool such as rclone or rsync, which copy only what changed:
+push writes to a folder, such as a lab nas, a network share or a usb drive, or to an [S3 bucket mirror](../guides/mirrors.md#an-s3-bucket-mirror), as `--to s3://lab-data/fetchloom`, signed with the [AWS keys](../reference/credentials.md#aws-keys) fetchloom finds. a web address is refused, so to fill a web mirror, push to a folder, then copy that folder to the web server with a tool such as rclone or rsync, which copy only what changed:
 
 ```sh
 fetchloom push --to /srv/fetchloom
-rclone copy /srv/fetchloom lab-bucket:fetchloom
+rsync -a /srv/fetchloom/ www.lab.example:/srv/www/fetchloom/
 ```
 
 a FAT32 drive refuses a file larger than 4 GiB, so push stops at the first one with `local.io`; exFAT has no such limit.
@@ -94,7 +94,7 @@ push copies what this machine's cache holds, and fills it first with what it lac
          Ok every file iris, pets and twin need is on the mirror
 ```
 
-offline, push downloads nothing, and in [mirror-only mode](../guides/mirrors.md#mirror-only-mode) it asks no source, so a file it would have to download stops it before anything is written, with `offline.missing` or `network.refused`, exit 20, naming the files. offline, from the same copy:
+offline, push downloads nothing, and in [mirror-only mode](../guides/mirrors.md#mirror-only-mode) it asks no source, so a file it would have to download stops it before anything is written, with `offline.missing`, exit 20, or `network.refused`, exit 10, naming the files. offline, from the same copy:
 
 ```text
 error: offline, and 1 file data.lock names is not in the cache

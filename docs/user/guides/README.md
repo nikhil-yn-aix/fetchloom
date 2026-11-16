@@ -13,7 +13,7 @@
 | [Use private cloud storage](private-cloud-storage.md) | |
 | [Use fetchloom with other tools](other-tools.md) | fetchloom takes over one job from the tools people fetch dataset files with: getting the files, checking them and pinning them so the next person gets the same bytes. |
 | [Use fetchloom in CI](ci.md) | a CI job can restore a project's data without downloading it on every run: keep the fetchloom cache between jobs, keyed on `data.lock`, so the bytes come down once per change to the lock. |
-| [Share data through a mirror](mirrors.md) | a mirror is a folder or a web server that holds pinned files under their SHA-256, so a lab disk, a usb drive or a company server can give a project's files instead of their sources. |
+| [Share data through a mirror](mirrors.md) | a mirror is a folder, a web server or an S3 bucket that holds pinned files under their SHA-256, so a lab disk, a usb drive, a company server or a bucket can give a project's files instead of their sources. |
 | [Use a coding agent](ai-agents.md) | coding agents such as claude code, github copilot, codex and cursor run fetchloom the way a person does, through the shell. |
 | [Clusters and shared machines](clusters.md) | a cluster or a shared server has a small home folder, a large scratch disk and jobs that run on other machines, often without the internet. |
 | [Notebooks and containers](notebooks-and-containers.md) | hosted notebooks and containers often start each session on a fresh disk, so fetchloom's cache needs a folder that lasts, or every session downloads the data again. |

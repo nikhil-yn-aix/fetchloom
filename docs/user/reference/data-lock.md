@@ -35,10 +35,11 @@ files = [
 | `dataset[].title`, `license`, `doi` | optional strings supplied by the source; omitted when absent |
 | `dataset[].access` | who may read the data, as the source said: `public`, `login` for an account, or `terms` for accepted terms; omitted when the source said nothing, which means unknown |
 | `dataset[].locked` | UTC timestamp, `YYYY-MM-DDTHH:MM:SSZ` |
+| `dataset[].downloaded` | `false` for a dataset `add --no-sync` pinned by what its source states of each file, before anything downloaded it: each file has its `size` and the `sha256` or `md5` the source gives, and no `unpacks_to`. the next sync downloads it, checks each file, and pins it whole, without this key. omitted for a downloaded dataset |
 | `dataset[].files` | selected source files, including archives as single files |
 | `files[].path` | relative path inside the dataset, with `/` separators |
 | `files[].size` | byte count, unsigned 64-bit integer |
-| `files[].sha256` | 64 hex digits, without a prefix |
+| `files[].sha256` | 64 hex digits, without a prefix; in a dataset with `downloaded = false`, only where its source gives one |
 | `files[].md5` | optional source checksum, 32 hex digits |
 | `files[].url` | download URL recorded before redirects; empty for an imported file, which no source holds |
 | `files[].unpacks_to` | optional `sha256:` plus the 64-digit archive tree hash |

@@ -54,13 +54,13 @@ stderr for a single-file addition in a new project, from a test snapshot, where 
   hint: scripts can find it with `fetchloom path iris`
 ```
 
-a typed link to this machine or your network, such as a lab server, is trusted for that run alone. a later run that downloads from its origin, the scheme, host and port, here or in a clone, is refused with `network.refused`, exit 20, until the [`allowed_origins`](../reference/environment.md#settings-file) setting lists it. so the add warns, under `-q` too, with the line to write, and its closing line asks anyone who clones to list the origin too, even when your settings list it, since each machine has its own. the last lines of a real run in a git repository, on stderr:
+a typed link to this machine or your network, such as a lab server, is trusted for that run alone. a later run that downloads from its origin, the scheme, host and port, here or in a clone, is refused with `network.refused`, exit 10, until the [`allowed_origins`](../reference/environment.md#settings-file) setting lists it. so the add warns, under `-q` too, with the line to write, and its closing line asks anyone who clones to list the origin too, even when your settings list it, since each machine has its own. the last lines of a real run in a git repository, on stderr:
 
 ```text
       Added cows, its files are in data/cows
   hint: scripts can find it with `fetchloom path cows`
 warning: a later run downloads from http://127.0.0.1:19450, a private address, only once allowed_origins lists it
-  help: save it with `fetchloom settings set allowed_origins http://127.0.0.1:19450`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:19450` for one run
+  help: save it with `fetchloom settings set allowed_origins http://127.0.0.1:19450`, or put `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:19450` before the command for that run alone
   next: commit data.toml, data.lock and .gitignore; anyone who clones runs `fetchloom settings set allowed_origins http://127.0.0.1:19450`, with any origins they list already, then `fetchloom sync`
 ```
 

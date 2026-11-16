@@ -1,6 +1,6 @@
 # mirrors
 
-a mirror is a folder or a web server that holds pinned files under their SHA-256, so a lab disk, a usb drive or a company server can give a project's files instead of their sources.
+a mirror is a folder, a web server or an S3 bucket that holds pinned files under their SHA-256, so a lab disk, a usb drive, a company server or a bucket can give a project's files instead of their sources.
 
 data.lock names every file by its SHA-256, so any copy with that hash is the same file. fetchloom looks in the cache first, then in the project's data folder, at the paths data.lock places the file at, as [moving a project](../commands/cache.md#moving-a-project-to-another-machine) describes, then in [other caches](other-tools.md#reusing-other-caches) on this machine, then asks each mirror in the order given, then the file's source. every file a mirror gives is checked against its pin before the cache keeps it, so a mirror can withhold a file but never change one.
 
@@ -16,7 +16,7 @@ mirrors = ["/mnt/lab/fetchloom", "https://data.lab.example/fetchloom"]
 fetchloom sync --mirror /media/usb/fetchloom
 ```
 
-text holding `://` is a web address and anything else a folder, so `C:\lab` is a folder. `--mirror` can be repeated; its mirrors come first, in the order given, then those of `FETCHLOOM_MIRRORS`, or of the settings file when the variable is unset. a relative folder in the settings file is taken from the file's folder, and one on the command line or in the variable from the working folder. [`fetchloom settings`](../commands/settings.md) shows the mirrors a run would ask, those of `--mirror` first, and where each came from.
+text starting with `s3:` is an S3 bucket, other text holding `://` a web address, and anything else a folder, so `C:\lab` is a folder. `--mirror` can be repeated; its mirrors come first, in the order given, then those of `FETCHLOOM_MIRRORS`, or of the settings file when the variable is unset. a relative folder in the settings file is taken from the file's folder, and one on the command line or in the variable from the working folder. [`fetchloom settings`](../commands/settings.md) shows the mirrors a run would ask, those of `--mirror` first, and where each came from.
 
 ## a folder mirror
 
@@ -57,6 +57,10 @@ so a reviewer whose copy of a paper's data is gone from its source restores it f
 
 a mirror you name may be on this machine or your network, such as `http://10.0.0.5:8080/fetchloom`: like a link typed on the command line, its origin, the scheme, host and port of its address, may be reached whatever its address is. another port or scheme of that host is not trusted, so it reaches public addresses only, unless [`allowed_origins`](../reference/environment.md) lists it. a login for it goes in `.netrc`, which `fetchloom auth login data.lab.example` writes, with the port for a mirror on another one, as `fetchloom auth login 10.0.0.5:8080`, and is sent over https only. over plain http the hashes still check every byte, but anyone on the network can see what is fetched.
 
+## an S3 bucket mirror
+
+an S3 bucket mirror is the same layout in a bucket, below a key prefix: `s3://lab-data/fetchloom`, or `s3:https://<host>/<bucket>/<prefix>` at another service that speaks S3's API. fetchloom reads it as a web mirror, and signs its requests with the [AWS keys](../reference/credentials.md#aws-keys) it finds, as for a bucket `s3_buckets` lists; it sends no key over plain http unless `allowed_origins` lists the address. `fetchloom push --to s3://lab-data/fetchloom` fills one.
+
 ## what goes wrong
 
 | a mirror | what fetchloom does |
@@ -68,7 +72,7 @@ a mirror you name may be on this machine or your network, such as `http://10.0.0
 
 in [mirror-only mode](#mirror-only-mode) the source is never asked, so a file no mirror gives fails the run, named.
 
-a file [imported](../commands/add.md#files-on-this-machine) from a folder has no source, so one no mirror gives fails the run in every mode, named as a missing download is: with `network.refused` in mirror-only mode and `offline.missing` offline, both exit 20, and otherwise with `reference.unresolved`, exit 10, and what each mirror said, from a real run:
+a file [imported](../commands/add.md#files-on-this-machine) from a folder has no source, so one no mirror gives fails the run in every mode, named as a missing download is: with `network.refused`, exit 10, in mirror-only mode and `offline.missing`, exit 20, offline, and otherwise with `reference.unresolved`, exit 10, and what each mirror said, from a real run:
 
 ```text
 error: flowers was imported from files, and neither this machine's cache nor a mirror holds them
@@ -102,7 +106,7 @@ mirrors = ["https://data.corp.internal/fetchloom"]
 mirrors_only = true
 ```
 
-then no request goes anywhere but to the mirrors: not to a source, not to a search site, not to check a key. each request is checked before its name is looked up, and every redirect too, so one that leads off a mirror's address is refused. a request to a mirror's host for anything but what the mirror holds is refused as well. `sync --locked` asks the mirror alone, and a file no mirror holds fails at once, before any download, naming each file and what each mirror said, with kind `network.refused`, exit 20:
+then no request goes anywhere but to the mirrors: not to a source, not to a search site, not to check a key. each request is checked before its name is looked up, and every redirect too, so one that leads off a mirror's address is refused. a request to a mirror's host for anything but what the mirror holds is refused as well. `sync --locked` asks the mirror alone, and a file no mirror holds fails at once, before any download, naming each file and what each mirror said, with kind `network.refused`, exit 10:
 
 ```text
 error: 1 file data.lock names is on no mirror, and mirrors_only lets fetchloom ask its mirrors alone
@@ -129,7 +133,7 @@ mirrors = ["/mnt/lab/fetchloom"]
 push_to = "/mnt/lab/fetchloom"
 ```
 
-whoever synced the project runs `fetchloom push`, and their teammates' syncs then take the files from the nas. push copies the project's files alone, never the rest of a cache other projects share. [push](../commands/push.md) shows a run, what it asks first, how a web mirror or a bucket gets a folder mirror through a copying tool such as rclone, and how it replaces a damaged copy.
+whoever synced the project runs `fetchloom push`, and their teammates' syncs then take the files from the nas. push copies the project's files alone, never the rest of a cache other projects share. [push](../commands/push.md) shows a run, what it asks first, how it fills an S3 bucket, how a web mirror gets a folder mirror through a copying tool such as rclone, and how it replaces a damaged copy.
 
 ## privacy
 
