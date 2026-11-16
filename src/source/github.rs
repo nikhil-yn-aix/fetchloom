@@ -347,16 +347,15 @@ impl Repo {
                 .await?;
             if listed.truncated {
                 let named = if path.is_empty() {
-                    "at the top"
+                    "the top folder".to_owned()
                 } else {
-                    path.as_str()
+                    format!("the folder {path}")
                 };
-                return Err(invalid(
-                    self,
-                    &format!(
-                        "it lists only part of the folder {named}, which holds more entries than github's api gives at once"
-                    ),
-                ));
+                return Err(Error::new(
+                    Kind::SourceInvalid,
+                    format!("github lists only part of {named} of {self}, which holds more entries than its api gives at once"),
+                )
+                .help("copy the link of a folder inside it that holds fewer files"));
             }
             for entry in listed.entries {
                 if let Held::Folder(id) = &entry.held

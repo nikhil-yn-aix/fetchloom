@@ -330,6 +330,32 @@ fn a_tree_github_cuts_short_is_walked_folder_by_folder() {
     assert_eq!(asked.len(), 8, "{asked:?}");
 }
 
+/// a folder of more entries than github's api gives at once, even alone, cannot be listed whole,
+/// so it is refused with what to pin instead, never pinned in part.
+#[test]
+fn a_folder_github_cannot_list_whole_is_refused() {
+    let at = |recursive: bool| {
+        let whole = if recursive { "?recursive=1" } else { "" };
+        format!("{API}/git/trees/{COMMIT}{whole}")
+    };
+    let cut = tree(&serde_json::json!([blob("a.csv", 1)]), true);
+    let recorded = Recorded::default()
+        .on(&format!("{API}/commits/main"), 200, COMMIT)
+        .on(&at(true), 200, cut.clone())
+        .on(&at(false), 200, cut);
+    let link = "https://github.com/lab/survey/tree/main";
+    let error = block_on(folder(link).listing(&recorded, false)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert_eq!(
+        error.message,
+        "github lists only part of the top folder of lab/survey, which holds more entries than its api gives at once"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some("copy the link of a folder inside it that holds fewer files")
+    );
+}
+
 /// a folder the tree lacks, or a file the link names as a folder, says which, and so does a
 /// folder of git's links alone.
 #[test]
