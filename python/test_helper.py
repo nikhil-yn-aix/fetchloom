@@ -149,27 +149,34 @@ class HelperOptions(unittest.TestCase):
 
     # the words of the cli's own case table, quoted as it quotes them, and one that opens and
     # closes on a single quote, which then stands outside the quotes. on windows a word no quoting
-    # keeps literal there is withheld, shown as <file> for a path to a file and <name> otherwise
+    # keeps literal there is withheld, shown as "<file>" for a path to a file and "<name>"
+    # otherwise, and so is one holding the marks fetchloom puts around a withheld word, everywhere
     QUOTED = [
         ("plain", "plain", "plain"),
         ("", '""', '""'),
-        ("hi!.csv", "'hi!.csv'", "<name>"),
-        ("$notes", "'$notes'", "<name>"),
-        ("a`b`", "'a`b`'", "<name>"),
+        ("hi!.csv", "'hi!.csv'", '"<name>"'),
+        ("$notes", "'$notes'", '"<name>"'),
+        ("a`b`", "'a`b`'", '"<name>"'),
         ("ada's data", '"ada\'s data"', '"ada\'s data"'),
-        ("it's $5!", "'it'\\''s $5!'", "<name>"),
+        ("it's $5!", "'it'\\''s $5!'", '"<name>"'),
         ("my data", '"my data"', '"my data"'),
         ("données é.csv", '"données é.csv"', '"données é.csv"'),
         ("data\\notes", "'data'\\\\'notes'", '"data\\notes"'),
-        ('a"b', "'a\"b'", "<name>"),
+        ('a"b', "'a\"b'", '"<name>"'),
         ("~notes.csv", '"~notes.csv"', '"~notes.csv"'),
         ("=notes.csv", '"=notes.csv"', '"=notes.csv"'),
         ("@notes.csv", '"@notes.csv"', '"@notes.csv"'),
-        ("ada’s “best” data", '"ada’s “best” data"', "<name>"),
+        ("ada’s “best” data", '"ada’s “best” data"', '"<name>"'),
         ("ada’s data", '"ada’s data"', '"ada’s data"'),
-        ("notes$ & mkdir PWNED-arch & x.csv", "'notes$ & mkdir PWNED-arch & x.csv'", "<name>"),
-        ("a%PATH%b.csv", "a%PATH%b.csv", "<name>"),
-        ("'$5'", "\\''$5'\\'", "<name>"),
+        ("notes$ & mkdir PWNED-arch & x.csv", "'notes$ & mkdir PWNED-arch & x.csv'", '"<name>"'),
+        ("a%PATH%b.csv", "a%PATH%b.csv", '"<name>"'),
+        ("'$5'", "\\''$5'\\'", '"<name>"'),
+        ("x,1kb", "x,1kb", '"x,1kb"'),
+        ("k=~", '"k=~"', '"k=~"'),
+        ("%self", '"%self"', '"<name>"'),
+        ("-ox.part1.rar", "-ox.part1.rar", '"-ox.part1.rar"'),
+        ("D:\\", "'D:'\\\\", '"D:\\\\"'),
+        ("a\uf8e0b", '"<name>"', '"<name>"'),
     ]
 
     def test_suggested_words_are_quoted_as_fetchloom_quotes_them(self):
@@ -179,14 +186,14 @@ class HelperOptions(unittest.TestCase):
                 self.assertEqual(fetchloom._shell_word(word, windows=True), windows)
 
     def test_a_withheld_path_to_a_file_is_a_file_and_a_link_a_name(self):
-        self.assertEqual(fetchloom._shell_word("results\\R&D\\iris.csv", windows=True), "<file>")
-        self.assertEqual(fetchloom._shell_word("results\\R&D", windows=True), "<name>")
-        self.assertEqual(fetchloom._shell_word("https://example.org/a.csv?x=1&y=2", windows=True), "<name>")
+        self.assertEqual(fetchloom._shell_word("results\\R&D\\iris.csv", windows=True), '"<file>"')
+        self.assertEqual(fetchloom._shell_word("results\\R&D", windows=True), '"<name>"')
+        self.assertEqual(fetchloom._shell_word("https://example.org/a.csv?x=1&y=2", windows=True), '"<name>"')
 
     @unittest.skipUnless(os.name == "posix", "runs the quoted words in posix shells")
     def test_a_quoted_word_reads_back_whole_in_interactive_bash(self):
         # interactive bash expands `!` inside double quotes from its history
-        words = [word for word, _, _ in self.QUOTED]
+        words = [word for word, posix, _ in self.QUOTED if not posix.startswith('"<')]
         line = "printf '%s\\n' " + " ".join(fetchloom._shell_word(word, windows=False) for word in words) + "\n"
         for shell in [["bash", "--norc", "--noprofile", "-i", "-s"], ["sh", "-s"]]:
             with self.subTest(shell=shell[0]):
@@ -411,7 +418,7 @@ class Errors(unittest.TestCase):
     # on windows fetchloom shows a folder no command there can hold safely, as one holding &, by a
     # placeholder and a line naming it, and an ordinary folder double-quoted
     FOLDERS = [
-        (r"C:\data\R&D", "<folder>", [r"<folder> is C:\data\R&D, which no command here can hold safely"]),
+        (r"C:\data\R&D", '"<folder>"', [r"<folder> is C:\data\R&D, which no command here can hold safely"]),
         (r"C:\data\study", '"C:\\data\\study"', []),
     ]
 
@@ -438,6 +445,25 @@ class Errors(unittest.TestCase):
                 call = f"fetchloom.path(\"iris\", project={json.dumps(project)})"
                 self.assertEqual((raised.help, raised.details), (f"did you mean `{call}`?", []))
 
+    def test_a_folder_holding_the_marks_is_named_as_fetchloom_names_it_everywhere(self):
+        # fetchloom withholds a word holding the marks it puts around a withheld word on every
+        # system, and writes the marks out in the line naming it
+        project = "p\uf8e0q"
+        named = r"<name> is p\u{f8e0}q, which no command here can hold safely"
+        answer = {"status": "error", "warnings": [], "errors": [{
+            "kind": "usage",
+            "message": 'data.toml has no dataset called "irs"',
+            "details": [named],
+            "help": 'did you mean `fetchloom --json --progress -C "<name>" path -- iris`?',
+        }]}
+        response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+        with patch.object(fetchloom, "_WINDOWS", False), patch.object(fetchloom, "_program", return_value="fetchloom"), \
+             patch.object(fetchloom, "_call", return_value=response):
+            with self.assertRaises(fetchloom.Error) as raised:
+                fetchloom.path("irs", project)
+        call = f"fetchloom.path(\"iris\", project=\"{project}\")"
+        self.assertEqual((raised.exception.help, raised.exception.details), (f"did you mean `{call}`?", []))
+
     def test_a_windows_folder_without_a_project_is_named_as_fetchloom_names_it(self):
         for project, shown, _ in self.FOLDERS:
             with self.subTest(project=project), patch.object(fetchloom, "_WINDOWS", True):
@@ -449,11 +475,11 @@ class Errors(unittest.TestCase):
         folder = r"C:\data\R&D -C"
         named = rf"<folder> is {folder}, which no command here can hold safely"
         refused = {"kind": "build.unbuilt", "message": "clean is not built yet", "details": [named],
-                   "help": "run `fetchloom -C <folder> build clean`"}
+                   "help": 'run `fetchloom -C "<folder>" build clean`'}
         answer = {"status": "error", "errors": [refused], "warnings": [refused]}
         response = subprocess.CompletedProcess([], 1, json.dumps(answer), "")
         for project, cwd, help, details in [
-            (folder, r"C:\work", "run `fetchloom -C <folder> build clean`", [named]),
+            (folder, r"C:\work", 'run `fetchloom -C "<folder>" build clean`', [named]),
             (".", folder, "run `fetchloom build clean`", []),
         ]:
             with self.subTest(project=project):

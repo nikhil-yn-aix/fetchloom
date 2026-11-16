@@ -51,9 +51,11 @@ _NO_PROJECT = "there is no data.toml in this folder or any folder above it"
 _TAIL = 20
 # whether fetchloom words the commands it suggests for powershell and cmd, as on windows
 _WINDOWS = sys.platform == "win32"
+# the marks fetchloom puts around a word it withholds from a command, as src/suggested.rs does
+_MARKS = frozenset("\uf8e0\uf8e1")
 # what fetchloom withholds from a command on windows, as src/suggested.rs lists it: what cmd acts
 # on even inside quotes, and what powershell's quoting cannot keep, a double quote straight or curly
-_UNSAFE_ON_WINDOWS = frozenset('&|<>^%!$`"\u201c\u201d\u201e\uf8e0\uf8e1')
+_UNSAFE_ON_WINDOWS = frozenset('&|<>^%!$`"\u201c\u201d\u201e') | _MARKS
 # the line fetchloom adds for each word it withheld, naming it by the placeholder it shows instead
 _WITHHELD = re.compile(r"(<(?:file|folder|name)(?: \d+)?>) is (.*), which no command here can hold safely")
 
@@ -260,28 +262,38 @@ def _local(path: str | os.PathLike[str]) -> str:
 def _shell_word(word: str, windows: bool | None = None) -> str:
     """``word`` as fetchloom shows it in the commands it suggests, so a shell reads it as typed.
 
-    a word starting with ``~`` or ``=``, which zsh expands, or ``@``, which powershell splats, is
-    quoted. on ``windows``, this machine's system unless given, a word holding what cmd acts on
-    even inside quotes, ``& | < > ^ % !``, or what powershell's quoting cannot keep, ``$``, a
-    backtick or a double quote, straight or curly, is withheld: fetchloom shows ``<file>`` for a
-    path to a file and ``<name>`` for any other, and names the word on a line of its own. any
-    other word there is double-quoted, which powershell and cmd both read as written. elsewhere
-    double quotes keep a word literal unless it holds ``$``, a backtick, a double quote, ``!``,
-    which bash and zsh expand from their history, or a backslash; then it is single-quoted, and a
-    single quote or a backslash goes outside the quotes, escaped, since fish reads a backslash
-    inside them as an escape too.
+    a word starting with ``~`` or ``=``, which zsh expands, ``@``, which powershell splats, or
+    ``%``, as fish's ``%self``, is quoted, as is one holding ``~`` after an ``=``, which bash
+    expands. a word holding the marks fetchloom puts around a word it withholds is withheld
+    everywhere, and on ``windows``, this machine's system unless given, so is a word holding what
+    cmd acts on even inside quotes, ``& | < > ^ % !``, or what powershell's quoting cannot keep,
+    ``$``, a backtick or a double quote, straight or curly: fetchloom shows ``"<file>"`` for a path
+    to a file and ``"<name>"`` for any other, and names the word on a line of its own. any other
+    word there is double-quoted, which powershell and cmd both read as written, as is one holding a
+    comma or starting with one ``-`` and holding a dot, which powershell would change, and a
+    backslash ending it is doubled inside the quotes. elsewhere double quotes keep a word literal
+    unless it holds ``$``, a backtick, a double quote, ``!``, which bash and zsh expand from their
+    history, or a backslash; then it is single-quoted, and a single quote or a backslash goes
+    outside the quotes, escaped, since fish reads a backslash inside them as an escape too.
     """
     if windows is None:
         windows = _WINDOWS
-    if windows and _UNSAFE_ON_WINDOWS.intersection(word):
+    if _MARKS.intersection(word) or (windows and _UNSAFE_ON_WINDOWS.intersection(word)):
         # a path to a file, not a host or a link, which only look like one
         file = ("/" in word or "\\" in word) and "://" not in word and ntpath.splitext(word)[1] != ""
-        return "<file>" if file else "<name>"
-    if word[:1] not in ("", "~", "=", "@") and all(
-        c.isascii() and (c.isalnum() or c in "-_./:@%+=,~") for c in word
-    ):
+        return '"<file>"' if file else '"<name>"'
+    quoted_anyway = (
+        word[:1] in ("", "~", "=", "@", "%")
+        or "~" in word.partition("=")[2]
+        or (windows and word.startswith("-") and not word.startswith("--") and "." in word)
+    )
+    bare = "-_./:@%+=~" if windows else "-_./:@%+=,~"
+    if not quoted_anyway and all(c.isascii() and (c.isalnum() or c in bare) for c in word):
         return word
-    if windows or not any(c in '$`"!\\' for c in word):
+    if windows:
+        doubled = word + "\\" * (len(word) - len(word.rstrip("\\")))
+        return f'"{doubled}"'
+    if not any(c in '$`"!\\' for c in word):
         return f'"{word}"'
     quoted, inside = [], False
     for c in word:
@@ -374,11 +386,14 @@ def _still_named(details: list[str], *texts: str | None) -> list[str]:
 
 
 def _folder_shown(folder: str, placeholders: dict[str, str]) -> str | None:
-    """``folder`` as fetchloom shows it after ``-C``: quoted as :func:`_shell_word` quotes it, or on
-    windows, where it withholds a folder no command there can hold, the placeholder ``placeholders``
-    gives it. none for one withheld without one."""
-    if _WINDOWS and _UNSAFE_ON_WINDOWS.intersection(folder):
-        return placeholders.get(folder)
+    """``folder`` as fetchloom shows it after ``-C``: quoted as :func:`_shell_word` quotes it, or,
+    where it withholds a folder no command can hold, the placeholder ``placeholders`` gives it, in
+    double quotes. none for one withheld without one."""
+    if _MARKS.intersection(folder) or (_WINDOWS and _UNSAFE_ON_WINDOWS.intersection(folder)):
+        # the line naming a folder holding the marks writes them out
+        written = folder.replace("\uf8e0", "\\u{f8e0}").replace("\uf8e1", "\\u{f8e1}")
+        placeholder = placeholders.get(written)
+        return None if placeholder is None else f'"{placeholder}"'
     return _shell_word(folder)
 
 
@@ -557,9 +572,9 @@ def _forward(stream: IO[str], tail: collections.deque[str]) -> None:
 
 def _no_project(project: str | os.PathLike[str]) -> str:
     """the help for a ``project`` that holds no data.toml, and has none above it. a folder windows
-    commands cannot hold is shown as ``<folder>``, which the end of the help names."""
+    commands cannot hold is shown as ``"<folder>"``, which the end of the help names."""
     folder = _local(project)
-    shown = _folder_shown(folder, {}) or "<folder>"
+    shown = _folder_shown(folder, {}) or '"<folder>"'
     add = "fetchloom add <link>" if os.fspath(project) == "." else f"fetchloom -C {shown} add <link>"
     return (
         "give project= the folder that holds data.toml, "
