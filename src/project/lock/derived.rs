@@ -121,7 +121,7 @@ pub(super) fn check_files(derived: &Derived) -> Result<(), Error> {
                 lists::FOLDER
             ),
         )
-        .help(lists::BROKEN));
+        .help(lists::recovery()));
     }
     Ok(())
 }

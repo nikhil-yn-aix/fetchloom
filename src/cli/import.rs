@@ -904,10 +904,19 @@ fn in_data_folder(
         Ok(inside) => format!("{}{own}", "../".repeat(inside.components().count() + 1)),
         Err(_) => shown.trim().to_owned(),
     };
+    let to = moved.strip_prefix("./").unwrap_or(&moved).to_owned();
+    // after -C the folder the person ran in is another, so the paths go whole
+    let whole =
+        |path: String| std::path::absolute(&path).map_or(path, |whole| whole.display().to_string());
+    let (from, to) = if crate::suggested::ran_elsewhere() {
+        (whole(from), whole(to))
+    } else {
+        (from, to)
+    };
     error.help(format!(
         "move it out first, with `mv {} {}`, then run `{}` to place its files in {up}{data_dir}/{name}, or {keep}",
         super::shell_word(&from),
-        super::shell_word(moved.strip_prefix("./").unwrap_or(&moved)),
+        super::shell_word(&to),
         super::project::command(&format!("add {}{renamed}", super::shell_word(&moved)))
     ))
 }

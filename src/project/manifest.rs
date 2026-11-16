@@ -2023,7 +2023,10 @@ fn with_dataset_from(text: &str, other: &str, name: &str) -> Result<String, Erro
             Kind::ProjectInvalid,
             "data.toml writes its datasets inline, so fetchloom cannot merge them",
         )
-        .help("merge data.toml by hand, then run `fetchloom lock`"));
+        .help(format!(
+            "merge data.toml by hand, then run `{}`",
+            crate::suggested::command("lock")
+        )));
     }
     Ok(document.to_string())
 }

@@ -470,7 +470,7 @@ fn complete(report: &Report, format: Format) -> Result<(), Error> {
                     |error, line| error.detail(line.clone()),
                 ),
             };
-            Err(error.help(lock::BROKEN))
+            Err(error.help(lock::recovery()))
         }
         _ => Ok(()),
     }
@@ -615,7 +615,7 @@ fn unwritable(path: &str, reason: &str) -> Error {
         Kind::ProjectInvalid,
         format!("{path} cannot be exported because {reason}"),
     )
-    .help(lock::BROKEN)
+    .help(lock::recovery())
 }
 
 #[cfg(test)]

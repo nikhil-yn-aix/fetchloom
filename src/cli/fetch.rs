@@ -2003,8 +2003,9 @@ fn keep_pinned(damaged: Option<std::path::PathBuf>) -> String {
 /// what to do about pinned bytes of `dataset` that its source no longer serves.
 fn changed_upstream(dataset: &str, damaged: Option<std::path::PathBuf>) -> String {
     format!(
-        "{} if the new bytes are intended, run `fetchloom lock --upgrade {dataset}`",
-        keep_pinned(damaged)
+        "{} if the new bytes are intended, run `{}`",
+        keep_pinned(damaged),
+        super::project::command(&format!("lock --upgrade {dataset}"))
     )
 }
 

@@ -308,7 +308,8 @@ impl Relink {
                     ),
                 )
                 .help(format!(
-                    "pin the files it lists now with `fetchloom lock --upgrade`, or move to a newer release, as {}",
+                    "pin the files it lists now with `{}`, or move to a newer release, as {}",
+                    crate::suggested::command("lock --upgrade"),
                     Dataset {
                         name: self.dataset.name.clone(),
                         release: None

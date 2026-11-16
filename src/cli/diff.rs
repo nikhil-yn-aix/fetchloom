@@ -287,9 +287,12 @@ fn commit(git: &Path, root: &Path, revision: &str) -> Result<String, Error> {
                 let from = if from.is_empty() { "HEAD" } else { from };
                 let to = if to.is_empty() { "HEAD" } else { to };
                 return error.help(format!(
-                    "diff takes two commits, not a range: `fetchloom diff {} {}`",
-                    shell_word(from),
-                    shell_word(to)
+                    "diff takes two commits, not a range: `{}`",
+                    super::project::command(&format!(
+                        "diff {} {}",
+                        shell_word(from),
+                        shell_word(to)
+                    ))
                 ));
             }
             if git::shallow(git, root) {

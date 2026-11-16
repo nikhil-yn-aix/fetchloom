@@ -32,6 +32,23 @@ pub(crate) fn command(words: &str) -> String {
     })
 }
 
+/// whether the run was given `-C`, so a path from the folder it worked in names another file
+/// from the folder the person ran it in.
+pub(crate) fn ran_elsewhere() -> bool {
+    DIRECTORY.get().is_some()
+}
+
+/// `git` and `words` for the project at `root`, the paths in `words` given from there: after a
+/// run given `-C`, with git's own `-C` and the project's folder, so it finds the same repository
+/// from the folder the person ran in.
+pub(crate) fn git(root: &std::path::Path, words: &str) -> String {
+    if ran_elsewhere() {
+        format!("git -C {} {words}", shell_folder_path(root))
+    } else {
+        format!("git {words}")
+    }
+}
+
 /// `fetchloom` and `words`, for a command that reads no project, as `auth` and `help` do, so it
 /// runs the same from any folder.
 pub(crate) fn anywhere(words: &str) -> String {
@@ -830,6 +847,117 @@ pub(crate) mod tests {
         assert_eq!(
             command_words("fetchloom get 'a\u{201c}b'", true).unwrap(),
             ["fetchloom", "get", "a\u{201c}b"],
+        );
+    }
+
+    /// a command a help names for this project goes through [`command`], so after `-C` it names
+    /// the folder the run worked in: a literal one, as "run `fetchloom sync`", sends a person who
+    /// pasted it from the folder they ran in to another project or none. the ones below are run
+    /// elsewhere or are no line to run: by another person or in another project or clone, a
+    /// command's name alone, an example of a link, `--help`. clap's help and the usage errors,
+    /// which come before `-C` moves anything, are left out.
+    #[test]
+    fn helps_name_this_projects_commands_through_command() {
+        const PROJECT: [&str; 13] = [
+            "add", "remove", "exclude", "drop", "sync", "lock", "build", "status", "diff", "list",
+            "export", "push", "path",
+        ];
+        let elsewhere = [
+            ("src/cli/add.rs", "fetchloom sync"),
+            ("src/cli/add.rs", "fetchloom sync"),
+            ("src/cli/cache.rs", "fetchloom add <folder> --as <name>"),
+            ("src/cli/cache.rs", "fetchloom sync"),
+            ("src/cli/cache.rs", "fetchloom sync"),
+            ("src/cli/cache.rs", "fetchloom sync"),
+            ("src/cli/cache.rs", "fetchloom sync"),
+            ("src/cli/cache.rs", "fetchloom sync"),
+            ("src/cli/exclude.rs", "fetchloom sync"),
+            ("src/cli/fetch.rs", "fetchloom push --to <folder>"),
+            ("src/cli/fetch.rs", "fetchloom push --verify --to {}"),
+            (
+                "src/cli/fetch/mirrors.rs",
+                "fetchloom push --verify --to {}",
+            ),
+            ("src/cli/project.rs", "fetchloom build"),
+            ("src/cli/remove.rs", "fetchloom remove --help"),
+            ("src/cli/remove.rs", "fetchloom sync"),
+            ("src/cli/search.rs", "fetchloom sync --offline"),
+            ("src/cli/settings.rs", "fetchloom push --to {}"),
+            ("src/net/failure.rs", "fetchloom add"),
+            (
+                "src/source.rs",
+                "fetchloom add https://huggingface.co/datasets/scikit-learn/iris",
+            ),
+            (
+                "src/source.rs",
+                "fetchloom add https://zenodo.org/records/3608990",
+            ),
+            ("src/source/drive/folder.rs", "fetchloom add"),
+            ("src/source/drive/folder.rs", "fetchloom add"),
+            ("src/source/drive/private.rs", "fetchloom add"),
+        ];
+        let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        let mut folders = vec![crate_root.join("src")];
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(folder).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if path.is_dir() {
+                    if name != "tests" {
+                        folders.push(path);
+                    }
+                } else if path.extension().is_some_and(|ext| ext == "rs")
+                    && !name.ends_with("tests.rs")
+                {
+                    files.push(path);
+                }
+            }
+        }
+        let mut found = Vec::new();
+        for path in files {
+            let relative = path.strip_prefix(crate_root).unwrap();
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if ["src/cli/args.rs", "src/cli/help.rs", "src/cli/usage.rs"].contains(&&*relative) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            // a file's own tests come last, in a module of their own
+            let tests = [
+                "\n#[cfg(test)]\nmod tests",
+                "\n#[cfg(test)]\npub(crate) mod tests",
+            ]
+            .iter()
+            .filter_map(|start| text.find(start))
+            .min()
+            .unwrap_or(text.len());
+            let code = &text[..tests];
+            for line in code
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+            {
+                for (at, _) in line.match_indices("`fetchloom ") {
+                    let quoted = &line[at + 1..];
+                    let Some(end) = quoted.find('`') else {
+                        continue;
+                    };
+                    let command = &quoted[..end];
+                    let word = command["fetchloom ".len()..].split(' ').next();
+                    if word.is_some_and(|word| PROJECT.contains(&word)) {
+                        found.push((relative.clone(), command.to_owned()));
+                    }
+                }
+            }
+        }
+        found.sort();
+        let mut elsewhere: Vec<(String, String)> = elsewhere
+            .iter()
+            .map(|(file, command)| ((*file).to_owned(), (*command).to_owned()))
+            .collect();
+        elsewhere.sort();
+        assert_eq!(
+            found, elsewhere,
+            "route new ones through suggested::command"
         );
     }
 

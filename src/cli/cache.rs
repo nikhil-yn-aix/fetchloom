@@ -1118,7 +1118,9 @@ fn needed_focused(
                 super::shell_word(&project.root.to_string_lossy())
             );
             let help = match err.help.as_deref() {
-                Some(lock::BROKEN) => format!("in that project, {}", lock::BROKEN),
+                Some(help) if help == lock::recovery() => {
+                    format!("in that project, {}", help.replace(&here, &there))
+                }
                 Some(help) => help.replace(&here, &there),
                 None => "fix that project's data.lock, then try again".to_owned(),
             };

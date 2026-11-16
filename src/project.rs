@@ -377,7 +377,10 @@ impl Project {
         let path = self.root.join(lock::FILE);
         refuse_unreadable(
             &path,
-            "move it aside, then restore data.lock from git, or run `fetchloom lock`, which resolves every dataset again",
+            &format!(
+                "move it aside, then restore data.lock from git, or run `{}`, which resolves every dataset again",
+                crate::suggested::command("lock")
+            ),
         )?;
         match fs::read_to_string(&path) {
             Ok(text) => {
@@ -391,7 +394,7 @@ impl Project {
                 Kind::ProjectInvalid,
                 "data.lock cannot be read: it is not UTF-8 text",
             )
-            .help(lock::BROKEN)),
+            .help(lock::recovery())),
             Err(err) => Err(self.unreadable(lock::FILE, &err)),
         }
     }
@@ -2264,7 +2267,7 @@ mod tests {
         let lock = project.lock_and_text().unwrap_err();
         assert_eq!(lock.kind, Kind::ProjectInvalid);
         assert!(lock.message.contains("UTF-8"));
-        assert_eq!(lock.help.as_deref(), Some(lock::BROKEN));
+        assert_eq!(lock.help.as_deref(), Some(lock::recovery().as_str()));
     }
 
     /// the message names the merge, not the TOML mistake its conflict lines make, in either of

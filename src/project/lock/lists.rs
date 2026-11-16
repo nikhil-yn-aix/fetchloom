@@ -46,7 +46,12 @@ pub(crate) const LONGEST_URL: usize = 64 << 10;
 /// what to do about a list whose columns this fetchloom does not know.
 const NEWER: &str = "install a newer fetchloom to read it; if someone edited data.lock.d by hand, restore it from git";
 /// how to recover a list fetchloom cannot use.
-pub(super) const BROKEN: &str = "restore data.lock and data.lock.d from git, or delete data.lock and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
+pub(super) fn recovery() -> String {
+    format!(
+        "restore data.lock and data.lock.d from git, or delete data.lock and run `{}`, which resolves every dataset again and may pin newer data",
+        crate::suggested::command("lock")
+    )
+}
 
 /// a dataset's list as data.lock names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -557,7 +562,7 @@ fn unescape(text: &str) -> Option<String> {
 }
 
 fn broken(message: String) -> Error {
-    Error::new(Kind::ProjectInvalid, message).help(BROKEN)
+    Error::new(Kind::ProjectInvalid, message).help(recovery())
 }
 
 /// the error for `part` of `name`'s list, which did not read as `err` says.
@@ -851,7 +856,7 @@ mod tests {
                 "{reason}: {}",
                 error.message
             );
-            assert_eq!(error.help.as_deref(), Some(BROKEN), "{reason}");
+            assert_eq!(error.help.as_deref(), Some(recovery().as_str()), "{reason}");
         }
         // a part fetchloom does not write, such as one outside its folder
         let elsewhere = Listed {
@@ -965,7 +970,7 @@ mod tests {
                 format!("{} is damaged at line {line}", listed.parts[0]),
                 "{reason}"
             );
-            assert_eq!(error.help.as_deref(), Some(BROKEN), "{reason}");
+            assert_eq!(error.help.as_deref(), Some(recovery().as_str()), "{reason}");
         }
     }
 
@@ -1039,7 +1044,7 @@ mod tests {
                 tree.parts[0]
             )
         );
-        assert_eq!(error.help.as_deref(), Some(BROKEN));
+        assert_eq!(error.help.as_deref(), Some(recovery().as_str()));
         let source = write(root.path(), "other", &files(3));
         let error = read::<Member>(Parts::Folder(root.path()), "other", &source).unwrap_err();
         assert!(

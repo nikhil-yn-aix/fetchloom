@@ -51,9 +51,12 @@ fn gc_says_where_another_projects_lock_is_fixed() -> Result {
     let server = Server::start("/iris.csv", vec![file(b"iris", "\"v1\"")])?;
     assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
     let elsewhere = sandbox.folder("elsewhere")?;
+    let project = sandbox.work().display().to_string();
+    // gc runs elsewhere, so the lock that fixes the project names it after -C
+    let named = BROKEN.replace("`fetchloom lock`", "`fetchloom -C <project> lock`");
     for (contents, advice) in [
         ("version = 2\n", newer("cache gc")),
-        ("version = [", format!("in that project, {BROKEN}")),
+        ("version = [", format!("in that project, {named}")),
     ] {
         fs::write(sandbox.work().join("data.lock"), contents)?;
         let output = sandbox
@@ -64,9 +67,11 @@ fn gc_says_where_another_projects_lock_is_fixed() -> Result {
         let message = document["errors"][0]["message"]
             .as_str()
             .ok_or("no message")?;
-        let project = sandbox.work().display().to_string();
         assert!(message.contains(&project), "{message}");
-        assert_eq!(help(&output)?, advice);
+        let told = help(&output)?
+            .replace(&format!("\"{project}\""), "<project>")
+            .replace(&project, "<project>");
+        assert_eq!(told, advice);
     }
     Ok(())
 }

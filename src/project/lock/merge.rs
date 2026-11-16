@@ -352,7 +352,10 @@ fn read_merged(text: &str) -> Result<Manifest, Error> {
             Kind::ProjectInvalid,
             format!("the merged data.toml would not read: {}", error.message),
         )
-        .help("merge data.toml by hand, then run `fetchloom lock`")
+        .help(format!(
+            "merge data.toml by hand, then run `{}`",
+            crate::suggested::command("lock")
+        ))
     })
 }
 
@@ -521,7 +524,7 @@ fn frame(sides: &Sides) -> Result<Side, Error> {
             Kind::ProjectInvalid,
             "data.toml differs outside its datasets on each side of the merge, as in [project] or a comment",
         )
-        .help("in data.toml, keep one side's lines of that part and delete the other side's and git's conflict lines by hand, then run `fetchloom lock`")),
+        .help(format!("in data.toml, keep one side's lines of that part and delete the other side's and git's conflict lines by hand, then run `{}`", crate::suggested::command("lock")))),
     }
 }
 
@@ -611,7 +614,10 @@ fn unmergeable() -> Error {
         Kind::ProjectInvalid,
         "fetchloom could not write the merged data.toml in its layout",
     )
-    .help("merge data.toml by hand, then run `fetchloom lock`")
+    .help(format!(
+        "merge data.toml by hand, then run `{}`",
+        crate::suggested::command("lock")
+    ))
 }
 
 /// data.lock's datasets on each side, and at the base when it reads.
@@ -778,8 +784,9 @@ fn entry_gone(name: &str, side: Side) -> Error {
     )
     .detail("git on PATH gives fetchloom each side of data.toml whole while the merge is under way")
     .help(format!(
-        "copy [datasets.{name}] from {} side's data.toml into data.toml by hand, then run `fetchloom lock`",
-        side.whose()
+        "copy [datasets.{name}] from {} side's data.toml into data.toml by hand, then run `{}`",
+        side.whose(),
+        crate::suggested::command("lock")
     ))
 }
 
@@ -907,11 +914,11 @@ fn kept(
             &mut budget,
         )
         .map_err(|error| {
-            let broken = [super::BROKEN, super::lists::BROKEN];
+            let broken = [super::recovery(), super::lists::recovery()];
             if error
                 .help
                 .as_deref()
-                .is_some_and(|help| broken.contains(&help))
+                .is_some_and(|help| broken.iter().any(|broken| broken == help))
             {
                 unreadable_pin(&name, side, locks.whole, &error)
             } else {
@@ -1028,8 +1035,9 @@ fn unreadable_pin(name: &str, side: Side, whole: bool, error: &Error) -> Error {
         );
     }
     unread.help(format!(
-        "copy the whole [[dataset]] table of {name} from {} side's data.lock, and the files of data.lock.d it names, by hand, then run `fetchloom lock`",
-        side.whose()
+        "copy the whole [[dataset]] table of {name} from {} side's data.lock, and the files of data.lock.d it names, by hand, then run `{}`",
+        side.whose(),
+        crate::suggested::command("lock")
     ))
 }
 
@@ -1352,7 +1360,8 @@ fn unreadable(file: &str, side: Side, error: &Error) -> Error {
     )
     .detail(error.message.clone())
     .help(format!(
-        "resolve the conflict in {file} by hand, then run `fetchloom lock`"
+        "resolve the conflict in {file} by hand, then run `{}`",
+        crate::suggested::command("lock")
     ))
 }
 
@@ -1410,9 +1419,11 @@ fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary, shown: bool) 
             "no merge base was found: git on PATH, before `git add` marks the files resolved, or `git config merge.conflictStyle zdiff3` before merging or rebasing, lets fetchloom see what each side changed"
         });
     }
-    let error = error.help(
-        "choose a side for each with `fetchloom lock --ours <name>` or `fetchloom lock --theirs <name>`; both repeat",
-    );
+    let error = error.help(format!(
+        "choose a side for each with `{}` or `{}`; both repeat",
+        crate::suggested::command("lock --ours <name>"),
+        crate::suggested::command("lock --theirs <name>")
+    ));
     match serde_json::to_value(summary) {
         Ok(merge) => error.with_result(serde_json::json!({ "merge": merge })),
         Err(_) => error,

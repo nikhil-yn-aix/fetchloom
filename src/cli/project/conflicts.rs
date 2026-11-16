@@ -140,7 +140,10 @@ fn nothing_to_choose(conflicted: &Conflicted, git: Option<&Path>, root: &Path) -
         "--ours and --theirs choose a side in a merge, and neither data.toml nor data.lock holds git's conflict lines",
     );
     let Some(git) = git else {
-        return error.help("run `fetchloom lock` without them");
+        return error.help(format!(
+            "run `{}` without them",
+            crate::suggested::command("lock")
+        ));
     };
     let held = || {
         [manifest::FILE, lock::FILE]
@@ -158,7 +161,12 @@ fn nothing_to_choose(conflicted: &Conflicted, git: Option<&Path>, root: &Path) -
             format!("the git {operation} is still under way")
         }
         None if held() => "git still holds both sides of the conflict".to_owned(),
-        None => return error.help("run `fetchloom lock` without them"),
+        None => {
+            return error.help(format!(
+                "run `{}` without them",
+                crate::suggested::command("lock")
+            ));
+        }
     };
     let files = if conflicted.lock.is_some() {
         "data.toml data.lock"
@@ -170,7 +178,8 @@ fn nothing_to_choose(conflicted: &Conflicted, git: Option<&Path>, root: &Path) -
             "{why}, so a side chosen before can be chosen again"
         ))
         .help(format!(
-            "bring back git's conflict lines with `git checkout -m {files}`, then run the same command again"
+            "bring back git's conflict lines with `{}`, then run the same command again",
+            crate::suggested::git(root, &format!("checkout -m {files}"))
         ))
 }
 
@@ -359,7 +368,10 @@ fn tell(
             &format!(
                 "{names} {are} not pinned, as neither side of data.lock pins {them} as data.toml now asks"
             ),
-            &format!("run `fetchloom sync`, which pins {them}"),
+            &format!(
+                "run `{}`, which pins {them}",
+                crate::suggested::command("sync")
+            ),
         );
     }
     let manifest = Manifest::parse(&merged.manifest).ok();
@@ -384,22 +396,27 @@ fn tell(
     if super::names_lists(project) {
         files.push(lock::lists::FOLDER);
     }
-    let add = format!("`git add {}`", files.join(" "));
+    let git = |words: &str| crate::suggested::git(&project.root, words);
+    let add = format!("`{}`", git(&format!("add {}", files.join(" "))));
     let finish = match operation {
-        Some(Operation::Merge) => format!("{add} and `git commit` to finish the merge"),
-        Some(Operation::Rebase) => {
-            format!("{add} and `git rebase --continue` to finish the rebase")
-        }
-        Some(Operation::CherryPick) => {
-            format!("{add} and `git cherry-pick --continue` to finish the cherry-pick")
-        }
-        Some(Operation::Revert) => {
-            format!("{add} and `git revert --continue` to finish the revert")
-        }
+        Some(Operation::Merge) => format!("{add} and `{}` to finish the merge", git("commit")),
+        Some(Operation::Rebase) => format!(
+            "{add} and `{}` to finish the rebase",
+            git("rebase --continue")
+        ),
+        Some(Operation::CherryPick) => format!(
+            "{add} and `{}` to finish the cherry-pick",
+            git("cherry-pick --continue")
+        ),
+        Some(Operation::Revert) => format!(
+            "{add} and `{}` to finish the revert",
+            git("revert --continue")
+        ),
         None => format!("{add} to mark the conflict resolved"),
     };
     output.hint(&format!(
-        "run `fetchloom sync` to update {data_dir}/, then {finish}"
+        "run `{}` to update {data_dir}/, then {finish}",
+        crate::suggested::command("sync")
     ));
 }
 

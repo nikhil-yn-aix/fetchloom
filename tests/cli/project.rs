@@ -457,6 +457,45 @@ fn hints_after_a_run_with_c_name_the_project_and_the_dataset_placed() -> Result 
     Ok(())
 }
 
+/// after `-C`, a help names fetchloom's commands with the project's folder and another program's
+/// paths whole, so each runs as written from the folder the person ran fetchloom in.
+#[cfg(target_os = "linux")]
+#[test]
+fn helps_after_a_run_with_c_reach_the_project_from_where_it_ran() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let typed = work.to_string_lossy().into_owned();
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let told = |args: &[&str]| -> Result<String> {
+        let output = sandbox.command_in(&elsewhere, args).output()?;
+        text(&output.stderr)
+    };
+    fs::write(work.join("data.toml"), "[datasets]\n")?;
+    fs::write(work.join("data.lock"), "version = [\n")?;
+    let broken = told(&["-C", &typed, "sync"])?;
+    assert!(
+        broken.contains(&format!("delete it and run `fetchloom -C {typed} lock`")),
+        "{broken}"
+    );
+    fs::remove_file(work.join("data.lock"))?;
+    let ours = told(&["-C", &typed, "lock", "--ours", "iris"])?;
+    assert!(
+        ours.contains(&format!("run `fetchloom -C {typed} lock` without them")),
+        "{ours}"
+    );
+    let visits = work.join("data").join("visits");
+    fs::create_dir_all(&visits)?;
+    fs::write(visits.join("a.csv"), "a\n")?;
+    let inside = told(&["-C", &typed, "add", "data/visits"])?;
+    assert!(
+        inside.contains(&format!(
+            "`mv {typed}/data/visits {typed}/visits`, then run `fetchloom -C {typed} add ./visits`"
+        )),
+        "{inside}"
+    );
+    Ok(())
+}
+
 /// the folder the last `fetchloom -C <folder> ...` before `then` in `told` names, unquoted.
 fn folder_before(told: &str, then: &str) -> Option<std::path::PathBuf> {
     let (before, _) = told.split_once(then)?;

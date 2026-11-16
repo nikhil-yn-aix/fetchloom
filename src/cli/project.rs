@@ -1305,7 +1305,8 @@ fn check(
                 stale.push(format!("{name} changed in data.toml"));
             }
             Some(Some(Drift::Extract)) => stale.push(format!(
-                "{name} changed extract in data.toml; `fetchloom lock` needs no network for it while its archives are cached"
+                "{name} changed extract in data.toml; `{}` needs no network for it while its archives are cached",
+                super::project::command("lock")
             )),
             Some(None) => {}
         }
@@ -1818,7 +1819,7 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
             );
             let below = projects_below(&here);
             let Some(first) = below.first() else {
-                return error.help("run `fetchloom add <link>` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`");
+                return error.help(format!("run `{}` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`", command("add <link>")));
             };
             // after -C, the folder below it is named whole, as the run's own folder is
             let run = super::typed::in_folder(first).map_or_else(
@@ -1843,7 +1844,7 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
             Kind::ProjectInvalid,
             "there is no data.toml in this folder or any folder above it",
         )
-        .help("run `fetchloom add <link>` to start a project here"),
+        .help(format!("run `{}` to start a project here", command("add <link>"))),
     })?;
     tracing::debug!(root = %project.root.display(), "found data.toml");
     if project.root != here {

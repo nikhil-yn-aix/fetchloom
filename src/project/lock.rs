@@ -173,8 +173,9 @@ fn too_big(what: &str, need: u64, room: u64) -> Error {
 /// how to give a read that is `short` bytes short the memory it takes.
 fn raise(short: u64) -> String {
     format!(
-        "raise the container's memory limit by {} or more, or name one dataset, as in `fetchloom path <name>`, which reads only its files",
-        crate::units::size(short)
+        "raise the container's memory limit by {} or more, or name one dataset, as in `{}`, which reads only its files",
+        crate::units::size(short),
+        crate::suggested::command("path <name>")
     )
 }
 
@@ -183,7 +184,12 @@ const NEWER: &str = "install a newer fetchloom to read it; if someone edited dat
 
 /// how to recover a data.lock this fetchloom cannot use. `fetchloom lock` alone reads the same
 /// file first and fails the same way.
-pub(crate) const BROKEN: &str = "restore data.lock from git, or delete it and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
+pub(crate) fn recovery() -> String {
+    format!(
+        "restore data.lock from git, or delete it and run `{}`, which resolves every dataset again and may pin newer data",
+        crate::suggested::command("lock")
+    )
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Lock {
@@ -1655,7 +1661,7 @@ fn other_version(version: i64) -> Error {
     if version > i64::from(VERSION) {
         error.help("install a newer fetchloom, then run the same command again")
     } else {
-        error.help(BROKEN)
+        error.help(recovery())
     }
 }
 
@@ -1719,7 +1725,7 @@ fn newer(text: &str, err: &toml::de::Error) -> Option<Error> {
 }
 
 fn broken(message: String) -> Error {
-    Error::new(Kind::ProjectInvalid, message).help(BROKEN)
+    Error::new(Kind::ProjectInvalid, message).help(recovery())
 }
 
 /// the hash in `sha256:` and 64 hex digits, as data.lock writes a hash of a list or a tree.
@@ -1770,7 +1776,7 @@ fn check_links<'a>(
         };
         if let Some(carried) = Carried::by(&url) {
             let help = if is_listed {
-                lists::BROKEN.to_owned()
+                lists::recovery()
             } else {
                 carried.mend()
             };
@@ -2169,7 +2175,7 @@ mod tests {
             let error = Lock::parse(&text).unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
             assert_eq!(error.message, "data.lock lists the dataset iris twice");
-            assert_eq!(error.help.as_deref(), Some(BROKEN));
+            assert_eq!(error.help.as_deref(), Some(recovery().as_str()));
         }
     }
 
@@ -2184,7 +2190,7 @@ mod tests {
             let error = Lock::parse(&text).unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
             assert!(error.message.contains("twice"), "{}", error.message);
-            assert_eq!(error.help.as_deref(), Some(BROKEN));
+            assert_eq!(error.help.as_deref(), Some(recovery().as_str()));
         }
     }
 
@@ -2204,7 +2210,7 @@ mod tests {
                         "data.lock names a dataset \"{name}\", which is not a valid dataset name"
                     ),
                 );
-                assert_eq!(error.help.as_deref(), Some(BROKEN));
+                assert_eq!(error.help.as_deref(), Some(recovery().as_str()));
             }
         }
     }
@@ -2251,14 +2257,14 @@ mod tests {
         for text in ["version = 0\n", "version = 1\n[[dataset]]\nname = 3\n"] {
             let broken = Lock::parse(text).unwrap_err();
             assert_eq!(broken.kind, Kind::ProjectInvalid);
-            assert_eq!(broken.help.as_deref(), Some(BROKEN), "{text}");
+            assert_eq!(broken.help.as_deref(), Some(recovery().as_str()), "{text}");
         }
         for (version, help) in [
             (
                 "4294967296",
                 "install a newer fetchloom, then run the same command again",
             ),
-            ("-1", BROKEN),
+            ("-1", recovery().as_str()),
         ] {
             let error = Lock::parse(&format!("version = {version}\n")).unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
@@ -2269,7 +2275,7 @@ mod tests {
             assert_eq!(error.help.as_deref(), Some(help));
         }
         assert!(
-            BROKEN.contains("delete it and run `fetchloom lock`, which resolves every dataset")
+            recovery().contains("delete it and run `fetchloom lock`, which resolves every dataset")
         );
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
     }
@@ -2287,7 +2293,7 @@ mod tests {
             error.message,
             format!("data.lock cannot be read: line {line} is damaged")
         );
-        assert_eq!(error.help.as_deref(), Some(BROKEN));
+        assert_eq!(error.help.as_deref(), Some(recovery().as_str()));
         assert!(
             error.details[0].starts_with("the toml reader says: "),
             "{:?}",
@@ -2386,7 +2392,11 @@ mod tests {
                     "data.lock cannot be read: version is {what}, not a whole number such as 1"
                 )
             );
-            assert_eq!(error.help.as_deref(), Some(BROKEN), "{version}");
+            assert_eq!(
+                error.help.as_deref(),
+                Some(recovery().as_str()),
+                "{version}"
+            );
         }
     }
 
@@ -3102,7 +3112,7 @@ mod tests {
             let err = Lock::parse(&text).unwrap_err();
             assert_eq!(err.kind, Kind::ProjectInvalid, "{path}");
             assert!(err.message.contains("data.lock"), "{}", err.message);
-            assert_eq!(err.help.as_deref(), Some(BROKEN), "{path}");
+            assert_eq!(err.help.as_deref(), Some(recovery().as_str()), "{path}");
         }
     }
 
@@ -3207,7 +3217,14 @@ mod tests {
                 let listed = form == 2;
                 assert_eq!(
                     error.help.as_deref(),
-                    Some(if listed { lists::BROKEN } else { help })
+                    Some(
+                        if listed {
+                            lists::recovery()
+                        } else {
+                            help.to_owned()
+                        }
+                        .as_str()
+                    )
                 );
                 assert!(!format!("{error:?}").contains(CANARY), "{error:?}");
             }

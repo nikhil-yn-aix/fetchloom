@@ -176,7 +176,10 @@ fn unreached_said(found: &plan::Unreached) -> (String, String) {
         1 => ("a file".to_owned(), format!("run `{command}`")),
         count => (
             format!("{} files", units::grouped(count as u64)),
-            format!("run `fetchloom exclude` with their paths, as `{command}`"),
+            format!(
+                "run `{}` with their paths, as `{command}`",
+                crate::cli::project::command("exclude")
+            ),
         ),
     };
     (

@@ -211,7 +211,8 @@ fn out_of_order(file: &str, number: usize) -> Error {
     )
     .detail(format!("{file}:{}", number + 1))
     .help(format!(
-        "resolve the conflict in {file} by hand, then run `fetchloom lock`"
+        "resolve the conflict in {file} by hand, then run `{}`",
+        crate::suggested::command("lock")
     ))
 }
 
