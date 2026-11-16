@@ -4596,3 +4596,43 @@ fn a_waiting_dataset_data_toml_no_longer_asks_for_goes() -> Result {
     }
     Ok(())
 }
+
+/// a sync that cannot get one dataset's files while big waits for its list places small alone:
+/// its error never counts big as placed, and it warns that big waits for its list.
+#[test]
+fn a_partial_sync_never_counts_a_waiting_dataset_as_placed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let two = vec![b'y'; 1024];
+    let server = Server::start("/two.bin", vec![file(&two, "\"b\"")])?;
+    sandbox.allow(&server.url);
+    let added = listing_in(&sandbox, &sandbox.work(), &["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let (clone, _) = clone_without_big(&sandbox)?;
+    delete(&crate::support::object(&sandbox.cache(), &two))?;
+    let output = listing_in(&sandbox, &clone, &["--json", "sync", "--offline"])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(20), "{document}");
+    let details = document["errors"][0]["details"].to_string();
+    assert!(
+        details.contains("placed small, whose files are all on this machine")
+            && details.contains("two waits for files this run could not get"),
+        "{document}"
+    );
+    let result = &document["result"];
+    assert_eq!(
+        result["datasets"],
+        serde_json::json!(["small"]),
+        "{document}"
+    );
+    assert_eq!(result["waiting"], serde_json::json!(["two"]), "{document}");
+    assert!(
+        crate::support::warned(&document)
+            .iter()
+            .any(|warning| warning
+                .contains("the file list of big, which is not there, so big waits for it")),
+        "{document}"
+    );
+    assert_eq!(fs::read(clone.join("data/small/c.csv"))?, b"c.csv");
+    assert!(!clone.join("data/big").exists());
+    Ok(())
+}

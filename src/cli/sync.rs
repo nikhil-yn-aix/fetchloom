@@ -318,11 +318,15 @@ impl<'a> Loop<'a> {
             .into_iter()
             .chain(placing.unknown().into_iter().map(|(dataset, _)| dataset))
             .collect();
+        // one waiting for its file list has nothing to place either, which the run warns of
         let whole: BTreeSet<String> = manifest
             .datasets
             .iter()
             .filter(|(name, entry)| {
-                entry.place && self.scope.includes(name) && !waiting.contains(*name)
+                entry.place
+                    && self.scope.includes(name)
+                    && !waiting.contains(*name)
+                    && lock.waits(name).is_none()
             })
             .map(|(name, _)| name.clone())
             .collect();

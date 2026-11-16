@@ -342,23 +342,22 @@ async fn sync_held(
         .within(scope)
         .filling()
         .verifying(args.verify);
+    let run = Run {
+        upgrade: Upgrade::Nothing,
+        force: args.force,
+        verify: args.verify,
+        read: Read::Settled(&seen),
+    };
     let Outcome {
         lock_changed,
         pins,
         placed: placement,
-    } = sync_all(
-        &work,
-        &manifest,
-        old,
-        None,
-        Run {
-            upgrade: Upgrade::Nothing,
-            force: args.force,
-            verify: args.verify,
-            read: Read::Settled(&seen),
-        },
-    )
-    .await?;
+    } = waited(
+        &context.output,
+        &waiting,
+        &work.scope,
+        sync_all(&work, &manifest, old, None, run).await,
+    )?;
     // a project that became a git repository after its add gets its ignore rule now
     ignore_data(&work, &manifest, begins)?;
     let closing = closing(
@@ -385,6 +384,20 @@ async fn sync_held(
 /// the datasets of `lock` that wait for their file list.
 fn waiting_in(lock: &Lock) -> Vec<lock::Waiting> {
     lock.still_waiting().cloned().collect()
+}
+
+/// `result`, having warned of `waiting` in `scope` first when it failed, as the report of a run
+/// that ends well does.
+fn waited<T>(
+    output: &Output,
+    waiting: &[lock::Waiting],
+    scope: &Scope,
+    result: Result<T, Error>,
+) -> Result<T, Error> {
+    if result.is_err() {
+        tell_waiting(output, waiting, scope);
+    }
+    result
 }
 
 /// data.toml's `text` as [`manifest::read_plain`] reads it, with its SHA-256, for a plain sync of
@@ -439,8 +452,11 @@ async fn sync_plain(
             verify: false,
             read: Read::Settled(&seen),
         };
-        let outcome = sync_surveyed(&work, &whole, old, None, run, survey).await?;
-        (Some(whole), outcome)
+        let outcome = sync_surveyed(&work, &whole, old, None, run, survey).await;
+        (
+            Some(whole),
+            waited(&context.output, &waiting, &work.scope, outcome)?,
+        )
     };
     let manifest = whole.as_ref().unwrap_or(plain);
     let Outcome {
