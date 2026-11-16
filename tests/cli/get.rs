@@ -2804,3 +2804,129 @@ fn one_failing_link_of_several_is_told_and_the_rest_go_on() -> Result {
     assert_eq!(fs::read(sandbox.work().join("iris/iris.csv"))?, IRIS);
     Ok(())
 }
+
+/// an ftp link is asked once over https: a host that serves the same tree there gets its https
+/// link pinned and the output says so; one that does not is named, with no retry.
+#[cfg(debug_assertions)]
+#[test]
+fn an_ftp_link_is_taken_over_https_when_its_host_serves_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let hosts = crate::support::Routes::start(vec![
+        (
+            "/ftp.example.org/geo/iris.csv".to_owned(),
+            file(IRIS, "\"v1\""),
+        ),
+        (
+            "/ftp-only.example.org/pub/iris.csv".to_owned(),
+            reply("503 Service Unavailable", &[("Content-Length", "0")], b""),
+        ),
+    ])?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &hosts.url)
+            .output()
+    };
+    let added = run(&["add", "ftp://ftp.example.org/geo/iris.csv"])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Using https://ftp.example.org/geo/iris.csv, since fetchloom does not speak ftp\n"
+        ),
+        "{stderr}"
+    );
+    let toml = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    assert!(
+        toml.contains("ref = \"https://ftp.example.org/geo/iris.csv\""),
+        "{toml}"
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(
+        lock.contains("url = \"https://ftp.example.org/geo/iris.csv\""),
+        "{lock}"
+    );
+    assert!(!lock.contains("ftp://"), "{lock}");
+    let got = run(&[
+        "get",
+        "ftp://ftp.example.org/geo/iris.csv",
+        "-o",
+        "iris.csv",
+    ])?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    assert_eq!(fs::read(sandbox.work().join("iris.csv"))?, IRIS);
+    for args in [
+        &["add", "ftp://ftp-only.example.org/pub/iris.csv"][..],
+        &[
+            "get",
+            "ftp://ftp-only.example.org/pub/iris.csv",
+            "-o",
+            "x.csv",
+        ],
+    ] {
+        let before = hosts.targets().len();
+        let refused = run(args)?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(10), "{stderr}");
+        assert!(
+            stderr.contains("error: ftp-only.example.org serves no https copy of ftp://ftp-only.example.org/pub/iris.csv, and fetchloom does not speak ftp\n"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("again in"), "{stderr}");
+        assert_eq!(hosts.targets().len(), before + 1, "{:?}", hosts.targets());
+    }
+    Ok(())
+}
+
+/// a data.lock link of a scheme fetchloom never asks fails at once, with no retry, and offers no
+/// `allowed_origins` value that would then be refused.
+#[cfg(debug_assertions)]
+#[test]
+fn a_locked_link_of_another_scheme_fails_at_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url, "--as", "iris"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock_path = sandbox.work().join("data.lock");
+    let lock = fs::read_to_string(&lock_path)?;
+    let port = server
+        .url
+        .split(':')
+        .nth(2)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or_default()
+        .to_owned();
+    for scheme in [
+        format!("ftp://127.0.0.1:{port}"),
+        "ftp://data.example.org".to_owned(),
+        "s3://data.example.org".to_owned(),
+        "gs://data.example.org".to_owned(),
+        "ws://data.example.org".to_owned(),
+    ] {
+        let changed = lock.replace(&format!("http://127.0.0.1:{port}"), &scheme);
+        assert_ne!(changed, lock);
+        fs::write(&lock_path, changed)?;
+        for folder in [sandbox.cache(), sandbox.work().join("data")] {
+            if folder.exists() {
+                fs::remove_dir_all(folder)?;
+            }
+        }
+        let synced = sandbox
+            .command(&["sync"])
+            .env("FETCHLOOM_RETRIES", "3")
+            .output()?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(10), "{scheme}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "error: fetchloom will not follow {scheme}{PATH}: fetchloom speaks http and https alone\n"
+            )),
+            "{scheme}: {stderr}"
+        );
+        assert!(!stderr.contains("again in"), "{scheme}: {stderr}");
+        assert!(!stderr.contains("ALLOWED_ORIGINS"), "{scheme}: {stderr}");
+        assert!(!stderr.contains("allowed_origins"), "{scheme}: {stderr}");
+    }
+    Ok(())
+}

@@ -641,6 +641,7 @@ async fn add_held(
         project.check_writable()?;
     }
     let manifest = &adding.manifest;
+    let link = &super::ftp::over_https(context, link).await?;
     let net = Arc::new(context.net());
     let parsed = validate_add(context, manifest, &net, &args, link)?;
     let cache = if dry_run {

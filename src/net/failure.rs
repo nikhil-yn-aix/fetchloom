@@ -897,6 +897,12 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
         Kind::NetworkRefused,
         format!("fetchloom will not follow {}: {reason}", Shown(url)),
     );
+    if !matches!(url.scheme(), "http" | "https") {
+        return error.help(format!(
+            "use the https link to the file, if {} serves one",
+            host(url)
+        ));
+    }
     let Some(allowed) = &reason.allowed else {
         return error.help("open the link in a browser to see where it leads");
     };

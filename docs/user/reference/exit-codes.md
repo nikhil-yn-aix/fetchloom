@@ -30,7 +30,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | `reference.ambiguous` | choose a returned canonical reference and rerun; `--yes` never chooses |
 | `network.unreachable`, `network.status` | check connectivity and the link before retrying |
 | `network.rate_limited` | respect the source's wait |
-| `network.refused` | a link fetchloom will not follow, such as one on a private address `allowed_origins` does not list, or a redirect to a link that is not http or https: `help` says what lifts it, when a setting does |
+| `network.refused` | a link fetchloom will not follow, such as one on a private address `allowed_origins` does not list, or a link or redirect that is not http or https: `help` says what lifts it, when a setting does |
 | `offline.missing` | prepare the missing data online |
 | `integrity.mismatch` | investigate changed bytes. when a source no longer serves the bytes data.lock pins, keep them from a folder mirror that holds them: someone who has them runs `fetchloom push --to <folder>`, then `fetchloom sync --mirror <folder>`. run `fetchloom lock --upgrade <name>` only if the new bytes are intended; `errors[0].fix` is null for it, since only a person may choose other bytes than data.lock pins |
 | `auth.required` | obtain access and set supported credentials |

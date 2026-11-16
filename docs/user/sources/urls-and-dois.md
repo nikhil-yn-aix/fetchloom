@@ -13,6 +13,7 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 | spelling | behavior |
 |---|---|
 | HTTP or HTTPS URL | fetch one file, a release file's own link included |
+| `ftp://ftp.ncbi.nlm.nih.gov/geo/...` | in `add` or `get`, ask the same host and path over https once; pin that https link and say so, or stop with `reference.unresolved`, exit 10, naming the host, since fetchloom does not speak ftp |
 | `doi:10.5281/zenodo.3608990` | ask doi.org where it points, and list the dataset there |
 | `10.5281/zenodo.3608990` | accept a bare DOI |
 | `https://doi.org/10.5281/zenodo.3608990` | accept the DOI link |
@@ -96,5 +97,7 @@ a plain link is recorded as both `resolved` and the file's download link, and it
 project commands refuse a link holding a login or a known secret, such as `token=`, since data.toml and data.lock are shared. `get` takes such a link for a one-off download. what it prints masks the login and each query or fragment value whose name is not known to be harmless, such as `dl`, `version` or `rlkey`, so a secret under a name fetchloom does not know stays out of its output; a project command cannot tell that secret apart, so check a link's query before you add it. the cache's [records of links](../reference/cache-folder.md#url-and-partial-records) keep a fingerprint of each link, not its text. a server's own login goes in `.netrc`, which `fetchloom auth login <host>` writes.
 
 ## limits
+
+fetchloom speaks http and https alone. many ftp hosts serve the same tree over https, which `add` and `get` try for an ftp link; a host that serves files over ftp alone stays out of reach, so fetch such a file with an ftp client and add the file it saved. a data.lock link of another scheme, as `ftp://` or `s3://`, stops with `network.refused`, exit 10, with no retry.
 
 a DOI must lead to a dataset at a known source. one that leads to another site, or to a page of a known source that is no dataset, such as a kaggle notebook, is refused with `reference.unresolved`, exit 10. a DOI gives no right to download, nor a lasting copy of the bytes.

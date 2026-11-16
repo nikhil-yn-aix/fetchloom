@@ -10,6 +10,7 @@ mod drop;
 mod exclude;
 mod export;
 mod fetch;
+mod ftp;
 mod get;
 mod help;
 mod import;

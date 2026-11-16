@@ -324,13 +324,13 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
             super::project::command(&format!("get \"{example}\""))
         )));
     }
-    let mut asked: Vec<Asked> = links
-        .iter()
-        .map(|link| Asked {
-            link: link.clone(),
+    let mut asked = Vec::with_capacity(links.len());
+    for link in links {
+        asked.push(Asked {
+            link: super::ftp::over_https(context, link).await?,
             expected: None,
-        })
-        .collect();
+        });
+    }
     let Some(path) = &args.input_file else {
         return Ok(asked);
     };

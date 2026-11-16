@@ -181,6 +181,10 @@ impl Typed {
     /// origin is trusted, and any whose name holds a character no host name has. names are
     /// checked later, on the addresses they resolve to.
     pub(crate) fn check(&self, url: &Url) -> Result<(), Refused> {
+        // no setting lets a request use another scheme, so the refusal names none
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(Refused::new("fetchloom speaks http and https alone"));
+        }
         let Some(host) = url.host_str() else {
             return Err(Refused::new(format!("{} has no host", Shown(url))));
         };
