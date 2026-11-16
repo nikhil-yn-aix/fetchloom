@@ -702,21 +702,18 @@ def _program(windows: bool = sys.platform == "win32") -> str:
 
 def _on_path(windows: bool) -> str | None:
     """the fetchloom program in the first absolute folder of PATH that holds it as a file this
-    user may run, with each extension PATHEXT names on ``windows``. a relative folder, an empty
-    entry among them, is passed over, and so is the working folder, which python's own search
-    tries first on windows: a cloned project could hold a program of that name."""
+    user may run, on ``windows`` only ``fetchloom.exe``: windows runs a ``.cmd`` or ``.bat``
+    through cmd.exe, which would read a link or a path given to it as commands. a relative folder,
+    an empty entry among them, is passed over, and so is the working folder, which python's own
+    search tries first on windows: a cloned project could hold a program of that name."""
     paths = ntpath if windows else posixpath
-    names = ["fetchloom"]
-    if windows:
-        extensions = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
-        names = [f"fetchloom{extension}" for extension in extensions if extension]
+    name = "fetchloom.exe" if windows else "fetchloom"
     for folder in os.environ.get("PATH", paths.defpath).split(paths.pathsep):
         if not _absolute(folder, windows):
             continue
-        for name in names:
-            program = paths.join(folder, name)
-            if os.path.isfile(program) and os.access(program, os.X_OK):
-                return program
+        program = paths.join(folder, name)
+        if os.path.isfile(program) and os.access(program, os.X_OK):
+            return program
     return None
 
 

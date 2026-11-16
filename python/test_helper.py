@@ -1084,8 +1084,17 @@ class ProgramDiscovery(unittest.TestCase):
             self.assertIsNone(fetchloom._on_path(windows=True))
         self.assertEqual(
             tried,
-            ["C:\\tools\\fetchloom.EXE", "\\\\lab\\share\\tools\\fetchloom.EXE", "D:/tools\\fetchloom.EXE"],
+            ["C:\\tools\\fetchloom.exe", "\\\\lab\\share\\tools\\fetchloom.exe", "D:/tools\\fetchloom.exe"],
         )
+
+    def test_windows_runs_only_fetchloom_exe_never_a_batch_file(self):
+        # windows runs a .cmd or .bat through cmd.exe, which would read a link or a path given to
+        # it as commands of its own
+        present = {"C:\\one\\fetchloom.CMD", "C:\\one\\fetchloom.BAT", "C:\\two\\fetchloom.exe"}
+        with patch.dict(os.environ, {"PATH": "C:\\one;C:\\two", "PATHEXT": ".CMD;.BAT;.EXE"}), \
+             patch.object(fetchloom.os.path, "isfile", side_effect=lambda program: program in present), \
+             patch.object(fetchloom.os, "access", return_value=True):
+            self.assertEqual(fetchloom._on_path(windows=True), "C:\\two\\fetchloom.exe")
 
     def test_user_scripts_follow_the_interpreters_preferred_scheme(self):
         with patch.object(fetchloom.sysconfig, "get_preferred_scheme", return_value="custom_user") as preferred:
