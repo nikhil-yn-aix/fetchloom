@@ -1008,6 +1008,23 @@ impl<'a> Loop<'a> {
         jobs.retain(|job| !available(job));
         self.refuse_offline_with(&jobs, available)?;
         self.refuse_unasked(jobs.iter().map(|job| &job.fetch.from))?;
+        // the run itself would ask before downloads the cache's disk may lack room for
+        if !self.net.offline().enabled() {
+            let needed = jobs
+                .iter()
+                .filter_map(|job| job.fetch.expect.size)
+                .fold(0, u64::saturating_add);
+            // a dry run makes no cache, so its disk is the one the nearest folder is on
+            let free = self.cache.root().ancestors().find_map(crate::space::free);
+            if crate::space::short(needed, free).is_some() {
+                super::warn_short(
+                    &self.context.output,
+                    self.run,
+                    (needed, free.unwrap_or_default()),
+                    &format!("the cache at {}", units::path(self.cache.root())),
+                );
+            }
+        }
         let mut preview = placing.preview(guessed);
         preview.changes.to_download = Some(fetch::planned(
             self.context,

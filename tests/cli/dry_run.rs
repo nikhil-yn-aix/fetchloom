@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Result, Routes, Sandbox, Server, file, json, text, warning};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, reply, text, warning};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -931,5 +931,35 @@ fn a_link_a_sync_refuses_is_never_announced_as_a_download() -> Result {
         assert!(!announced(&stderr), "{args:?}: {stderr}");
     }
     assert_eq!(server.requests().len(), 1, "the clone asked nothing");
+    Ok(())
+}
+
+/// a dry run of a file larger than the cache's disk has free says so, as the add itself would
+/// before any download, rather than ending as if the add would go through.
+#[cfg(debug_assertions)]
+#[test]
+fn a_dry_run_tells_a_download_the_disk_has_no_room_for() -> Result {
+    let sandbox = Sandbox::new()?;
+    let huge = reply(
+        "206 Partial Content",
+        &[
+            ("Content-Range", "bytes 0-0/1048576"),
+            ("Content-Length", "1"),
+            ("ETag", "\"v1\""),
+        ],
+        b"x",
+    );
+    let server = Server::start("/huge.bin", vec![huge])?;
+    let output = sandbox
+        .command(&["add", &server.url, "--dry-run"])
+        .env("FETCHLOOM_TEST_FREE", "1000")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr
+            .contains("warning: this add needs at least 1.0 MiB on the disk holding the cache at "),
+        "{stderr}"
+    );
+    assert!(stderr.contains(", which has 1000 B free\n"), "{stderr}");
     Ok(())
 }

@@ -157,7 +157,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `settings.overridden` | `settings set` or `settings unset` changed a setting that a `FETCHLOOM_` variable set here gives its own value, so runs where it is set keep that value |
 | `settings.switch_unread` | `FETCHLOOM_ACCESSIBLE` or `FETCHLOOM_NO_HINTS` holds neither true nor false, so it stays off rather than stopping the run |
 | `settings.unknown_variable` | a variable set is one typo from one fetchloom reads, so it changes nothing; `details` names it |
-| `space.short` | a run told `--yes` goes on though a disk may lack the room it needs, which the message measures |
+| `space.short` | a run told `--yes` goes on though a disk may lack the room it needs, or a dry run's downloads would lack it, which the message measures |
 | `source.moved` | a file is gone from its link in data.lock and came from where the source lists it now |
 | `source.partial` | what a source lists may not be all of the dataset, as for an osf project with components or a record that holds only a README |
 | `trace.unwritable` | `FETCHLOOM_TRACE` names a file fetchloom cannot write, so the run records no timeline |
