@@ -158,7 +158,7 @@ mod tests {
     fn detected(name: &str, bytes: &[u8]) -> Detected {
         let scratch = Scratch::new();
         detect(
-            &Input::File(scratch.file(name, bytes)),
+            &Input::file(&scratch.file(name, bytes)).unwrap(),
             crate::archive::Limits::default().memory,
         )
         .unwrap()

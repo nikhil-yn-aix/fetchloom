@@ -4,9 +4,7 @@
 mod directory;
 
 use std::collections::HashSet;
-use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
-use std::path::Path;
 
 use ::zip::read::ZipFileEntry;
 use ::zip::{SUPPORTED_COMPRESSION_METHODS, System, ZipArchive};
@@ -145,8 +143,8 @@ fn repeated_name(input: &Input, directory: u64) -> Option<String> {
 }
 
 /// the name of the one entry a zip holds, when it holds exactly one and that one is a file.
-pub(super) fn sole_member(archive: &Path) -> Option<String> {
-    let mut file = BufReader::new(File::open(archive).ok()?);
+pub(super) fn sole_member(archive: &Input) -> Option<String> {
+    let mut file = BufReader::new(Joined::open(archive).ok()?);
     let limits = crate::archive::Limits {
         members: 1,
         ..crate::archive::Limits::default()
@@ -473,7 +471,7 @@ pub(super) mod tests {
         let scratch = Scratch::new();
         let path = scratch.file("shared.zip", &bytes);
         let result = crate::archive::unpack(
-            &crate::archive::Input::File(path),
+            &crate::archive::Input::file(&path).unwrap(),
             Format::Zip,
             &limits,
             &scratch.cache,

@@ -1,27 +1,128 @@
 //! an archive's bytes as its readers take them: one file, or a split archive's parts in order,
 //! one file open at a time. zip and 7z read through [`Source`], which counts every byte read.
+//! every open is of the file judged at the start, never through a link, so someone sharing the
+//! cache who puts a link or another file at an archive's name meanwhile is never read.
 
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::guard::Meter;
 use super::{BUFFER, unreadable};
+use crate::cache::Cache;
+use crate::digest::Sha256;
 use crate::error::Error;
+use crate::volume::read_unfollowed;
 
-/// an archive's bytes: one file, or a split archive's parts in order, each with its size.
+/// an archive's bytes: one file, or a split archive's parts in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Input {
-    File(PathBuf),
-    Joined(Vec<(PathBuf, u64)>),
+    File(Part),
+    Joined(Vec<Part>),
+}
+
+/// a file of an archive: where it is, the size it must have, and which file it was when judged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Part {
+    path: PathBuf,
+    size: u64,
+    id: Id,
+}
+
+/// which file a handle has open: its disk and its index there, which a hardlink shares.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Id(u64, u64);
+
+impl Id {
+    fn of(file: &File) -> io::Result<Id> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let found = file.metadata()?;
+            Ok(Id(found.dev(), found.ino()))
+        }
+        #[cfg(windows)]
+        {
+            let found = winapi_util::file::information(file)?;
+            Ok(Id(found.volume_serial_number(), found.file_index()))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = file;
+            Ok(Id(0, 0))
+        }
+    }
+}
+
+impl Part {
+    /// the plain file `file` has open at `path`, which must hold `size` bytes.
+    fn opened(path: PathBuf, size: u64, file: &File) -> io::Result<Part> {
+        Ok(Part {
+            path,
+            size,
+            id: Id::of(file)?,
+        })
+    }
+
+    /// opens the part to read, never through a link, refusing a file other than the one judged.
+    fn open(&self) -> io::Result<File> {
+        let file = read_unfollowed(&self.path)?;
+        if Id::of(&file)? != self.id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "it is not the file fetchloom checked, as when someone sharing the cache put another one at its name",
+            ));
+        }
+        Ok(file)
+    }
 }
 
 impl Input {
+    /// the plain file at `path` as it is now, never followed as a link.
+    #[cfg(test)]
+    pub(crate) fn file(path: &Path) -> io::Result<Input> {
+        let file = read_unfollowed(path)?;
+        let size = file.metadata()?.len();
+        Part::opened(path.to_path_buf(), size, &file).map(Input::File)
+    }
+
+    /// the parts at `parts`, in order, each the size given, as they are now.
+    #[cfg(test)]
+    pub(crate) fn joined(parts: Vec<(PathBuf, u64)>) -> io::Result<Input> {
+        parts
+            .into_iter()
+            .map(|(path, size)| {
+                let file = read_unfollowed(&path)?;
+                Part::opened(path, size, &file)
+            })
+            .collect::<io::Result<Vec<Part>>>()
+            .map(Input::Joined)
+    }
+
+    /// the cache's object holding `digest`, as [`Cache::open_object`] opens and judges it.
+    pub(crate) fn cached(cache: &Cache, digest: &Sha256, size: Option<u64>) -> io::Result<Input> {
+        let file = cache.open_object(digest, size)?;
+        let size = file.metadata()?.len();
+        Part::opened(cache.object_path(digest), size, &file).map(Input::File)
+    }
+
+    /// a split archive's `parts`, each the SHA-256 and size of an object of the cache, in order.
+    pub(crate) fn cached_parts(cache: &Cache, parts: &[(Sha256, u64)]) -> io::Result<Input> {
+        parts
+            .iter()
+            .map(|(digest, size)| {
+                let file = cache.open_object(digest, Some(*size))?;
+                Part::opened(cache.object_path(digest), *size, &file)
+            })
+            .collect::<io::Result<Vec<Part>>>()
+            .map(Input::Joined)
+    }
+
     /// the file an error reading the archive names: the archive, or its first part.
     pub(super) fn first(&self) -> &Path {
         match self {
-            Input::File(path) => path,
-            Input::Joined(parts) => parts.first().map_or(Path::new(""), |(path, _)| path),
+            Input::File(part) => &part.path,
+            Input::Joined(parts) => parts.first().map_or(Path::new(""), |part| &part.path),
         }
     }
 
@@ -35,7 +136,7 @@ impl Input {
 
 /// an archive's bytes as one stream, with only the part holding the next byte open.
 pub(crate) struct Joined {
-    parts: Vec<PathBuf>,
+    parts: Vec<Part>,
     /// where each part starts in the archive, and last, where the archive ends.
     starts: Vec<u64>,
     /// the part open, by its index, its file, and where in it the file reads next.
@@ -47,47 +148,42 @@ impl Joined {
     /// opens `input`, checking that each part holds the bytes its size says: one shorter or
     /// longer would move every byte after it.
     pub(crate) fn open(input: &Input) -> Result<Joined, (&Path, io::Error)> {
-        match input {
-            Input::File(path) => {
-                let file = File::open(path).map_err(|err| (path.as_path(), err))?;
-                let metadata = file.metadata().map_err(|err| (path.as_path(), err))?;
-                plain(path, &metadata)?;
-                let size = metadata.len();
-                Ok(Joined {
-                    parts: vec![path.clone()],
-                    starts: vec![0, size],
-                    open: Some((0, file, 0)),
-                    position: 0,
-                })
-            }
-            Input::Joined(parts) => {
-                let mut starts = Vec::with_capacity(parts.len() + 1);
-                starts.push(0);
-                for (path, size) in parts {
-                    let metadata = fs::metadata(path).map_err(|err| (path.as_path(), err))?;
-                    plain(path, &metadata)?;
-                    let found = metadata.len();
-                    let end = starts
-                        .last()
-                        .and_then(|start: &u64| start.checked_add(*size))
-                        .filter(|_| found == *size)
-                        .ok_or_else(|| {
-                            let changed = io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!("it holds {found} bytes, not the {size} it was pinned at"),
-                            );
-                            (path.as_path(), changed)
-                        })?;
-                    starts.push(end);
-                }
-                Ok(Joined {
-                    parts: parts.iter().map(|(path, _)| path.clone()).collect(),
-                    starts,
-                    open: None,
-                    position: 0,
-                })
+        let parts = match input {
+            Input::File(part) => std::slice::from_ref(part),
+            Input::Joined(parts) => parts.as_slice(),
+        };
+        let mut starts = Vec::with_capacity(parts.len() + 1);
+        starts.push(0);
+        let mut open = None;
+        for (index, part) in parts.iter().enumerate() {
+            let at = |err| (part.path.as_path(), err);
+            let file = part.open().map_err(at)?;
+            let found = file.metadata().map_err(at)?.len();
+            let end = starts
+                .last()
+                .and_then(|start: &u64| start.checked_add(part.size))
+                .filter(|_| found == part.size)
+                .ok_or_else(|| {
+                    at(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "it holds {found} bytes, not the {} it was pinned at",
+                            part.size
+                        ),
+                    ))
+                })?;
+            starts.push(end);
+            // a lone file stays open; of a split archive's parts only the one read is
+            if parts.len() == 1 && index == 0 {
+                open = Some((0, file, 0));
             }
         }
+        Ok(Joined {
+            parts: parts.to_vec(),
+            starts,
+            open,
+            position: 0,
+        })
     }
 
     pub(crate) fn size(&self) -> u64 {
@@ -111,7 +207,7 @@ impl Read for Joined {
             Some((open, file, at)) if *open == index => (file, at),
             open => {
                 *open = None;
-                let file = File::open(&self.parts[index])?;
+                let file = self.parts[index].open()?;
                 let (_, file, at) = open.insert((index, file, 0));
                 (file, at)
             }
@@ -197,18 +293,6 @@ impl Seek for Source<'_> {
     }
 }
 
-/// refuses `path` unless it is a plain file: linux opens a folder too, and the size its disk gives
-/// one would be read as an archive's.
-fn plain<'a>(path: &'a Path, metadata: &fs::Metadata) -> Result<(), (&'a Path, io::Error)> {
-    if metadata.is_file() {
-        return Ok(());
-    }
-    Err((
-        path,
-        io::Error::new(io::ErrorKind::InvalidInput, "it is not a file"),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, ErrorKind, Read, Seek, SeekFrom};
@@ -228,7 +312,7 @@ mod tests {
             parts.push((path, (end - start) as u64));
             start = end;
         }
-        Input::Joined(parts)
+        Input::joined(parts).unwrap()
     }
 
     /// a folder, which linux opens, is refused at once as a local problem, not read as an archive.
@@ -237,12 +321,9 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let part = folder.path().join("part");
         std::fs::create_dir(&part).unwrap();
-        for input in [
-            Input::File(folder.path().to_path_buf()),
-            Input::Joined(vec![(part, 0)]),
-        ] {
-            let Err((_, refused)) = Joined::open(&input) else {
-                panic!("a folder opened as an archive");
+        for input in [Input::file(folder.path()), Input::joined(vec![(part, 0)])] {
+            let Err(refused) = input else {
+                panic!("a folder taken as an archive");
             };
             // windows will not open a folder at all; elsewhere it opens and the check refuses it
             assert!(
@@ -309,12 +390,12 @@ mod tests {
         let Input::Joined(mut pinned) = parts(folder.path(), b"0123456789", &[4]) else {
             unreachable!()
         };
-        pinned[0].1 += 1;
+        pinned[0].size += 1;
         let off = Input::Joined(pinned.clone());
         let Err((path, err)) = Joined::open(&off) else {
             panic!("a part one byte off its pin opened");
         };
-        assert_eq!(path, pinned[0].0);
+        assert_eq!(path, pinned[0].path);
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 

@@ -43,7 +43,7 @@ impl Scratch {
             parts.push((path, (end - start) as u64));
             start = end;
         }
-        Input::Joined(parts)
+        Input::joined(parts).unwrap()
     }
 
     pub(super) fn unpack(&self, format: Format, bytes: &[u8]) -> Result<Unpacked, Error> {
@@ -58,7 +58,14 @@ impl Scratch {
         watch: &dyn Fn(u64) -> bool,
     ) -> Result<Unpacked, Error> {
         let path = self.file("archive", bytes);
-        unpack(&Input::File(path), format, limits, &self.cache, watch, None)
+        unpack(
+            &Input::file(&path).unwrap(),
+            format,
+            limits,
+            &self.cache,
+            watch,
+            None,
+        )
     }
 
     /// unpacks an archive the guard must refuse, and checks it left nothing behind.

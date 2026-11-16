@@ -16,7 +16,7 @@ fn fixture(name: &str) -> Result<Unpacked, Error> {
     let path = crate::test_paths::workspace()
         .join("tests/fixtures/archives")
         .join(name);
-    let input = Input::File(path);
+    let input = Input::file(&path).unwrap();
     let Detected::Archive(format) = detect(&input, Limits::default().memory).unwrap() else {
         panic!("{name} is not detected as an archive");
     };
@@ -380,6 +380,133 @@ fn names_unpack_in_nfc() {
     }
 }
 
+/// in a cache a group shares, someone may put a link where an archive's fan folder or the archive
+/// itself sits, to a private archive of whoever unpacks it next, as one in their own cache: the
+/// unpack reads only the shared cache's own file, so none of the private files lands there.
+#[test]
+fn a_cached_archive_is_never_read_through_a_link() {
+    let private = Scratch::new();
+    if !crate::cache::tests::hardlinks(private.cache.root()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no links");
+    }
+    let secret = crate::cache::tests::store(&private.cache, &tar_of(&[("secret.csv", b"ill\n")]));
+    let hex = secret.digest.hex();
+    let theirs = private.cache.root().join("objects").join(&hex[..2]);
+    // windows makes a link to a file only with a privilege, so its case is unix's
+    let planted: &[(&str, bool)] = if cfg!(unix) {
+        &[("fan", false), ("fan", true), ("object", false)]
+    } else {
+        &[("fan", false), ("fan", true)]
+    };
+    for &(planted, split) in planted {
+        let shared = Scratch::new();
+        let fan = shared.cache.root().join("objects").join(&hex[..2]);
+        if planted == "fan" {
+            crate::test_links::link_folder(&theirs, &fan).unwrap();
+        } else {
+            std::fs::create_dir_all(&fan).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(theirs.join(&hex[2..]), fan.join(&hex[2..])).unwrap();
+        }
+        let never = |_| false;
+        let limits = Limits::default();
+        let unpacked = if split {
+            let parts = [(secret.digest, secret.size)];
+            super::unpack_cached_parts(&shared.cache, &parts, None, &limits, &never, None)
+        } else {
+            let (digest, size) = (&secret.digest, secret.size);
+            super::unpack_cached(&shared.cache, digest, size, None, &limits, &never, None)
+        };
+        assert!(unpacked.is_err(), "{planted}, split: {split}");
+        let leaked = crate::digest::sha256(b"ill\n");
+        assert!(
+            !shared.cache.object_path(&leaked).exists(),
+            "{planted}, split: {split}"
+        );
+    }
+}
+
+/// a read-only file with another name put at a cached archive's name, as a hardlink someone
+/// sharing the cache makes to a private archive where links to others' files are allowed, passes
+/// for the archive only if it hashes to the archive's name.
+#[test]
+fn a_cached_archive_with_another_name_must_hash_to_its_name() {
+    let scratch = Scratch::new();
+    if !crate::cache::tests::hardlinks(scratch.cache.root()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let archive = crate::cache::tests::store(&scratch.cache, &tar_of(&[("open.csv", b"a\n")]));
+    let secret = scratch.file("secret.tar", &tar_of(&[("secret.csv", b"ill\n")]));
+    crate::cache::tests::seal(&secret);
+    let object = scratch.cache.object_path(&archive.digest);
+    let mut permissions = std::fs::metadata(&object).unwrap().permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "windows removes no read-only file"
+    )]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&object, permissions).unwrap();
+    std::fs::remove_file(&object).unwrap();
+    std::fs::hard_link(&secret, &object).unwrap();
+    assert_eq!(std::fs::metadata(&object).unwrap().len(), archive.size);
+    let unpacked = super::unpack_cached(
+        &scratch.cache,
+        &archive.digest,
+        archive.size,
+        None,
+        &Limits::default(),
+        &|_| false,
+        None,
+    );
+    let leaked = crate::digest::sha256(b"ill\n");
+    assert!(
+        !scratch.cache.object_path(&leaked).exists(),
+        "the private archive's file landed in the cache"
+    );
+    assert_eq!(
+        unpacked.err().map(|err| (err.kind, err.message)),
+        Some((
+            Kind::SourceInvalid,
+            format!(
+                "the cached archive at {} changed: its bytes no longer hash to its name",
+                scratch.cache.object_path(&archive.digest).display()
+            )
+        ))
+    );
+}
+
+/// an archive is judged as it is opened, then read again by its name: a file someone sharing the
+/// cache puts at that name meanwhile, as a hardlink to a private archive, is never read.
+#[cfg(unix)]
+#[test]
+fn a_cached_archive_swapped_once_judged_is_never_read() {
+    let scratch = Scratch::new();
+    let archive = crate::cache::tests::store(&scratch.cache, &tar_of(&[("open.csv", b"a\n")]));
+    let secret = scratch.file("secret.tar", &tar_of(&[("secret.csv", b"ill\n")]));
+    let object = scratch.cache.object_path(&archive.digest);
+    crate::cache::swap_meanwhile(move || {
+        std::fs::remove_file(&object).unwrap();
+        std::fs::hard_link(&secret, &object).unwrap();
+    });
+    let unpacked = super::unpack_cached(
+        &scratch.cache,
+        &archive.digest,
+        archive.size,
+        None,
+        &Limits::default(),
+        &|_| false,
+        None,
+    );
+    assert!(crate::cache::swapped(), "the archive was swapped");
+    let leaked = crate::digest::sha256(b"ill\n");
+    assert!(
+        !scratch.cache.object_path(&leaked).exists(),
+        "the private archive's file landed in the cache"
+    );
+    let err = unpacked.err().map(|err| err.message).unwrap_or_default();
+    assert!(err.contains("is not the file fetchloom checked"), "{err}");
+}
+
 /// a tar has no checksum of its files, so changed cached bytes unpack to another tree silently.
 #[test]
 fn unpacking_again_never_replaces_the_tree_data_lock_pins() {
@@ -720,7 +847,7 @@ fn a_member_the_cache_disk_cannot_hold_is_refused_before_it_is_written() {
     for format in FAMILIES {
         let scratch = Scratch::new();
         let files: &[(&str, &[u8])] = &[("small.csv", b"abc"), ("large.csv", b"abcd")];
-        let path = Input::File(scratch.file("archive", &archive(format, files)));
+        let path = Input::file(&scratch.file("archive", &archive(format, files))).unwrap();
         let meter = Meter::default();
         let mut guard =
             Guard::new(&limits, &|_| false, &meter).holding_at_most(scratch.cache.root(), 3);

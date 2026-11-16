@@ -71,20 +71,20 @@ pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
     if let Some(members) = cache.unpacked(digest, None) {
         return matches!(members.as_slice(), [only] if only.path == name);
     }
-    let Some(object) = cache.find(digest, None) else {
+    let Ok(input) = Input::cached(cache, digest, None) else {
         return false;
     };
     matches!(
-        detect::signature(&Input::File(object.clone())),
+        detect::signature(&input),
         Ok(Some(Detected::Archive(Format::Zip)))
-    ) && zip::sole_member(&object).is_some_and(|member| nfc(&member) == name)
+    ) && zip::sole_member(&input).is_some_and(|member| nfc(&member) == name)
 }
 
 /// the format of an archive fetchloom does not unpack, such as rar, when that is what the cache
 /// holds under `digest`, whatever the file's name says.
 pub(crate) fn unsupported(cache: &Cache, digest: &Sha256, size: u64) -> Option<&'static str> {
-    let object = cache.find(digest, Some(size))?;
-    match detect::signature(&Input::File(object)) {
+    let input = Input::cached(cache, digest, Some(size)).ok()?;
+    match detect::signature(&input) {
         Ok(Some(Detected::Unsupported(format))) => Some(format),
         _ => None,
     }
@@ -360,16 +360,9 @@ pub(crate) fn unpack_cached(
     watch: &dyn Fn(u64) -> bool,
     writers: Option<usize>,
 ) -> Result<Option<Unpacked>, Error> {
-    let object = cache.find(archive, Some(size)).ok_or_else(lost)?;
-    unpack_recorded(
-        cache,
-        archive,
-        &Input::File(object),
-        tree,
-        limits,
-        watch,
-        writers,
-    )
+    let input = Input::cached(cache, archive, Some(size))
+        .map_err(|err| unopened(&cache.object_path(archive), &err))?;
+    unpack_recorded(cache, archive, &input, tree, limits, watch, writers)
 }
 
 /// [`unpack_cached`], failing as it does, for an archive split into `parts`, each the SHA-256 and
@@ -382,21 +375,11 @@ pub(crate) fn unpack_cached_parts(
     watch: &dyn Fn(u64) -> bool,
     writers: Option<usize>,
 ) -> Result<Option<Unpacked>, Error> {
-    let found = parts
-        .iter()
-        .map(|(part, size)| Some((cache.find(part, Some(*size))?, *size)))
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(lost)?;
+    let first = parts.first().map(|(part, _)| cache.object_path(part));
+    let input = Input::cached_parts(cache, parts)
+        .map_err(|err| unopened(first.as_deref().unwrap_or(cache.root()), &err))?;
     let key = parts_key(parts.iter().copied());
-    unpack_recorded(
-        cache,
-        &key,
-        &Input::Joined(found),
-        tree,
-        limits,
-        watch,
-        writers,
-    )
+    unpack_recorded(cache, &key, &input, tree, limits, watch, writers)
 }
 
 /// unpacks `input` and records what it unpacked to under `key`, as [`unpack_cached`] describes.
@@ -436,6 +419,20 @@ fn lost() -> Error {
         "the cache lost an archive while unpacking it",
     )
     .help("run the same command again to download it")
+}
+
+/// the error for a cached archive at `path` that could not be opened as the cache's own file.
+fn unopened(path: &Path, err: &io::Error) -> Error {
+    match err.kind() {
+        io::ErrorKind::NotFound => lost(),
+        // changed bytes fail as a damaged archive's checksum does, which sync checks and fetches
+        io::ErrorKind::InvalidData => Error::new(
+            Kind::SourceInvalid,
+            format!("the cached archive at {} changed: {err}", path.display()),
+        )
+        .help("run the same command again to download it"),
+        _ => unreadable(path, err),
+    }
 }
 
 const REFUSED_HELP: &str = "keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract";

@@ -505,6 +505,19 @@ fn meanwhile() {
     }
 }
 
+/// has `swap` happen once a test's next record or object is looked at, as [`meanwhile`] runs it,
+/// for a test outside the cache's own.
+#[cfg(all(test, unix))]
+pub(crate) fn swap_meanwhile(swap: impl FnOnce() + 'static) {
+    MEANWHILE.set(Some(Box::new(swap)));
+}
+
+/// whether the swap a test asked [`swap_meanwhile`] for happened.
+#[cfg(all(test, unix))]
+pub(crate) fn swapped() -> bool {
+    MEANWHILE.with_borrow(Option::is_none)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Cache {
     root: PathBuf,
@@ -806,6 +819,35 @@ impl Cache {
             return None;
         }
         Some(path)
+    }
+
+    /// the object holding `digest`'s bytes, opened to read through its fan folder held from the
+    /// cache's root, never through a link, and judged as [`Cache::find`] judges an object, by the
+    /// file opened: one that also has another name, as a hardlink someone sharing the cache put
+    /// there has, must hash to its name too. `NotFound` when the cache does not hold the bytes,
+    /// `InvalidData` when the file there no longer hashes to its name, which is then marked.
+    pub(crate) fn open_object(&self, digest: &Sha256, size: Option<u64>) -> io::Result<File> {
+        let hex = digest.hex();
+        let gone = || io::Error::from(io::ErrorKind::NotFound);
+        let folder = folder::Folder::existing(&self.root, &Path::new("objects").join(&hex[..2]))?;
+        let file = folder.read_file(&hex[2..])?;
+        let metadata = file.metadata()?;
+        if size.is_some_and(|size| metadata.len() != size) {
+            return Err(gone());
+        }
+        let marked = self.changed_at(digest).map_err(|_| gone())?;
+        if (changed::doubted(&folder.join(&hex[2..]), &metadata, marked) || name_count(&file)? > 1)
+            && Sha256::of_reader(&file, Block::sized(metadata.len().saturating_add(1)))? != *digest
+        {
+            // so the next look at it doubts it and it downloads again, not trusted by its name
+            let _ = self.mark_changed(digest);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "its bytes no longer hash to its name",
+            ));
+        }
+        meanwhile();
+        Ok(file)
     }
 
     /// a new object in `staging` with the bytes `source`, a person's file opened without following

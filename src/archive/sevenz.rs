@@ -340,10 +340,14 @@ mod tests {
     #[test]
     fn a_read_error_stays_local() {
         let scratch = Scratch::new();
-        let folder = tempfile::tempdir().unwrap();
+        let path = scratch.file("archive.7z", b"7z");
+        let input = crate::archive::Input::file(&path).unwrap();
+        // what was a file is a folder once the reader opens it
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
         let limits = Limits::default();
         let err = unpack(
-            &crate::archive::Input::File(folder.path().to_path_buf()),
+            &input,
             Format::SevenZ,
             &limits,
             &scratch.cache,
