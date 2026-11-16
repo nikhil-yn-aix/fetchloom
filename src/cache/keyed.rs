@@ -22,7 +22,7 @@ impl Cache {
     /// takes its name, so the object is never there without it.
     pub(crate) fn mark_keyed(&self, digest: &Sha256) -> io::Result<()> {
         let hex = digest.hex();
-        let folder = Folder::open(&self.root, &Path::new(KEYED).join(&hex[..2]))?;
+        let folder = Folder::open(&self.root, &Path::new(KEYED).join(&hex[..2]), self.sharing)?;
         match folder.create_new(&hex[2..]) {
             Err(err) if err.kind() != io::ErrorKind::AlreadyExists => Err(err),
             _ => Ok(()),
@@ -46,8 +46,9 @@ impl Cache {
         stop.check()?;
         // listed through folders held from the cache's root, so a link someone put in place of
         // one names no files elsewhere
-        let listed =
-            |below: &Path| Folder::existing(&self.root, below).and_then(|folder| folder.list());
+        let listed = |below: &Path| {
+            Folder::existing(&self.root, below, self.sharing).and_then(|folder| folder.list())
+        };
         let fans = match listed(Path::new(KEYED)) {
             Ok(fans) => fans,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),

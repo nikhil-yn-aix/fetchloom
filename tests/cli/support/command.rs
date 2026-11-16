@@ -48,7 +48,7 @@ impl Fetchloom {
 
     /// another command, `make` builds from this one, such as a shell that runs it, keeping its
     /// debug log and its deadline. its streams are its own.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pub(crate) fn through(&self, make: impl FnOnce(&Command) -> Command) -> Fetchloom {
         Fetchloom {
             command: make(&self.command),
@@ -56,6 +56,30 @@ impl Fetchloom {
             deadline: self.deadline,
             set: Streams::default(),
         }
+    }
+
+    /// this command, started by a shell that sets the umask to `umask` first, so the test's own
+    /// process, whose umask every test running in it shares, keeps its own.
+    #[cfg(unix)]
+    pub(crate) fn with_umask(&self, umask: &str) -> Fetchloom {
+        self.through(|inner| {
+            let mut shell = Command::new("sh");
+            shell
+                .arg("-c")
+                .arg(format!("umask {umask} && exec \"$0\" \"$@\""))
+                .arg(inner.get_program())
+                .args(inner.get_args());
+            if let Some(folder) = inner.get_current_dir() {
+                shell.current_dir(folder);
+            }
+            for (name, value) in inner.get_envs() {
+                match value {
+                    Some(value) => shell.env(name, value),
+                    None => shell.env_remove(name),
+                };
+            }
+            shell
+        })
     }
 
     /// ends the command after `deadline` in place of [`DEADLINE`].

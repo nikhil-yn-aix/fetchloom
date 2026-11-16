@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use super::folder::Folder;
+use super::sharing::Sharing;
 use super::{UrlRecord, recorded_url_matches};
 use crate::digest;
 
@@ -64,7 +65,7 @@ impl Index {
     /// reads the entries past those read before: a first read grouped, a later one as recent.
     fn read_on(&mut self, root: &Path, shard: usize) -> io::Result<()> {
         if self.file.is_none() {
-            match urls(root, false).and_then(|urls| urls.read_file(&names(shard).1)) {
+            match urls(root, None).and_then(|urls| urls.read_file(&names(shard).1)) {
                 Ok(file) => self.file = Some(file),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
                 Err(err) => return Err(err),
@@ -120,13 +121,13 @@ impl Index {
 /// own writes and by reading on when a lookup misses.
 pub(crate) struct Shards {
     indexes: Vec<Mutex<Index>>,
+    /// what the group the cache is shared with gets of the files written in `urls/`.
+    sharing: Sharing,
 }
 
 impl Default for Shards {
     fn default() -> Shards {
-        Shards {
-            indexes: (0..SHARDS).map(|_| Mutex::default()).collect(),
-        }
+        Shards::shared(Sharing::default())
     }
 }
 
@@ -137,6 +138,14 @@ impl std::fmt::Debug for Shards {
 }
 
 impl Shards {
+    /// shards whose files give the group the cache is shared with what `sharing` says.
+    pub(crate) fn shared(sharing: Sharing) -> Shards {
+        Shards {
+            indexes: (0..SHARDS).map(|_| Mutex::default()).collect(),
+            sharing,
+        }
+    }
+
     /// the record kept for `url` in the cache at `root`.
     pub(crate) fn find(&self, root: &Path, url: &str) -> Option<UrlRecord> {
         let (shard, key) = place(url);
@@ -151,7 +160,7 @@ impl Shards {
                 index.latest(key)?
             };
             if index.log.is_none() {
-                let urls = urls(root, false).ok()?;
+                let urls = urls(root, None).ok()?;
                 index.log = Some(Arc::new(urls.read_file(&names(shard).0).ok()?));
             }
             (Arc::clone(index.log.as_ref()?), start)
@@ -186,7 +195,7 @@ impl Shards {
         // windows locks keep other handles off what they cover and refuse one opened to append.
         // none of these files is opened through a link, nor through a link put where `urls/` was,
         // since a line holds text a server chose
-        let urls = urls(root, true)?;
+        let urls = urls(root, Some(self.sharing))?;
         let held = urls.open_or_make(&format!("{shard:x}.lock"))?;
         match lock(&held) {
             Err(err) if !crate::volume::gives_no_locks(&err) => return Err(err),
@@ -235,7 +244,7 @@ impl Shards {
         *self.indexes[shard]
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Index::default();
-        let urls = urls(root, false)?;
+        let urls = urls(root, None)?;
         if kept.lines.is_empty() {
             for name in [records, entries] {
                 match urls.remove(&name) {
@@ -248,7 +257,7 @@ impl Shards {
             let below = scratch.strip_prefix(root).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidInput, "scratch outside the cache")
             })?;
-            let scratch = Folder::existing(root, below)?;
+            let scratch = Folder::existing(root, below, self.sharing)?;
             // the lines first: an index never names lines its file does not hold
             urls.replace(&records, &kept.lines, &scratch)?;
             urls.replace(&entries, &kept.index, &scratch)
@@ -281,7 +290,7 @@ struct Kept {
 /// record.
 fn kept(root: &Path, shard: usize, keep: &dyn Fn(&UrlRecord) -> bool) -> io::Result<Option<Kept>> {
     let (records, entries) = names(shard);
-    let read = |name: &str| urls(root, false).and_then(|urls| urls.read(name));
+    let read = |name: &str| urls(root, None).and_then(|urls| urls.read(name));
     let (lines, index) = match (read(&records), read(&entries)) {
         (Ok(lines), Ok(index)) => (lines, index),
         (Err(err), _) | (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
@@ -377,13 +386,13 @@ fn names(shard: usize) -> (String, String) {
     (format!("{shard:x}.log"), format!("{shard:x}.idx"))
 }
 
-/// the `urls/` folder below the cache's `root`, reached without following a link and made where
-/// missing when `make` says so.
-fn urls(root: &Path, make: bool) -> io::Result<Folder> {
-    if make {
-        Folder::open(root, Path::new("urls"))
-    } else {
-        Folder::existing(root, Path::new("urls"))
+/// the `urls/` folder below the cache's `root`, reached without following a link. with `make` it
+/// is made where missing, and what is made in it gets what that sharing gives the group the cache
+/// is shared with.
+fn urls(root: &Path, make: Option<Sharing>) -> io::Result<Folder> {
+    match make {
+        Some(sharing) => Folder::open(root, Path::new("urls"), sharing),
+        None => Folder::existing(root, Path::new("urls"), Sharing::default()),
     }
 }
 
@@ -557,8 +566,8 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &planted).unwrap();
         fastrand::seed(7);
 
-        let scratch = Folder::existing(root, Path::new("")).unwrap();
-        let replaced = urls(root, false)
+        let scratch = Folder::existing(root, Path::new(""), Sharing::default()).unwrap();
+        let replaced = urls(root, None)
             .unwrap()
             .replace("0.log", b"a line\n", &scratch);
 

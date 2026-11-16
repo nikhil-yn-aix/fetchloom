@@ -37,6 +37,7 @@ impl Cache {
                 .join(format!("{:016x}.stage", fastrand::u64(..)));
             match namespace.create_folder(&folder) {
                 Ok(()) => {
+                    self.sharing.share_folder(&self.root, &folder);
                     break Staging {
                         cache: self.clone(),
                         folder,
@@ -51,6 +52,7 @@ impl Cache {
         };
         let opening = staging.folder.join("lock.new");
         let lock = staging.namespace.create_file(&opening, false)?;
+        self.sharing.share(&lock);
         match lock.try_lock() {
             Ok(()) => {
                 staging
@@ -308,7 +310,9 @@ fn all_old(folder: &Path, deeper: bool, now: SystemTime, stop: &Stop) -> bool {
 
 impl Staging {
     pub(super) fn create_member(&self, path: &Path) -> io::Result<File> {
-        self.namespace.create_file(path, true)
+        let member = self.namespace.create_file(path, true)?;
+        self.cache.sharing.share(&member);
+        Ok(member)
     }
 
     pub(super) fn remove_member(&self, path: &Path) -> io::Result<()> {
@@ -324,7 +328,7 @@ impl Staging {
         let folder = self.folder.join(format!("{shard:02x}"));
         if !self.shards[shard].load(Ordering::Relaxed) {
             match self.namespace.create_folder(&folder) {
-                Ok(()) => {}
+                Ok(()) => self.cache.sharing.share_folder(&self.cache.root, &folder),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     self.namespace.check_parent(&folder.join(".member"))?;
                 }

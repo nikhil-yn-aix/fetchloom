@@ -146,7 +146,7 @@ impl Cache {
         let partial = self.partial_folder(&key);
         let below = partial.strip_prefix(&self.root).unwrap_or(&partial);
         // a folder that cannot be made is refused by the one it would be made in
-        let shard = Folder::open(&self.root, below)
+        let shard = Folder::open(&self.root, below, self.sharing)
             .map_err(|err| self.explained(partial.parent().unwrap_or(&self.root), err))?;
         let shard = Arc::new(shard);
         // the lock gets its own file because windows locks are mandatory: a locked download
@@ -176,7 +176,7 @@ impl Cache {
                 if made {
                     let _ = shard.remove(&lock_name);
                 }
-                let tmp = Folder::open(&self.root, Path::new("tmp"))
+                let tmp = Folder::open(&self.root, Path::new("tmp"), self.sharing)
                     .map_err(|err| self.explained(&self.root, err))?;
                 let stem = format!("{key}.{:016x}", fastrand::u64(..));
                 (Arc::new(tmp), stem, None)
@@ -905,7 +905,7 @@ impl PartialWriter {
             })
             .collect();
         let text = serde_json::to_vec(&self.record).map_err(io::Error::other)?;
-        let scratch = Folder::open(self.cache.root(), Path::new("tmp"))?;
+        let scratch = Folder::open(self.cache.root(), Path::new("tmp"), self.cache.sharing)?;
         self.folder
             .replace(name_of(&self.record_path), &text, &scratch)?;
         self.saved = Instant::now();

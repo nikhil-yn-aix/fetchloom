@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
+use super::sharing::Sharing;
 use crate::place::{FolderUse, found_folder};
 
 /// a folder below the cache's root, and where it is.
@@ -18,6 +19,9 @@ pub(super) struct Folder {
     _held: Held,
     root: PathBuf,
     below: PathBuf,
+    /// what the group the cache is shared with gets of each file made in the folder.
+    #[cfg(unix)]
+    sharing: Sharing,
 }
 
 /// on windows, the folders from the cache's root down to a [`Folder`], held while it lives.
@@ -36,20 +40,24 @@ impl std::fmt::Debug for Held {
 impl Folder {
     /// opens the folder `below` the cache's `root`, making what is missing and refusing a link or a
     /// file where a folder should be. `root` itself may be a link, as a cache folder someone named.
-    pub(super) fn open(root: &Path, below: &Path) -> io::Result<Folder> {
-        Folder::reach(root, below, true)
+    /// each folder and file made gets what `sharing` gives the group the cache is shared with.
+    pub(super) fn open(root: &Path, below: &Path, sharing: Sharing) -> io::Result<Folder> {
+        Folder::reach(root, below, true, sharing)
     }
 
     /// [`Folder::open`], making nothing: a missing folder is `NotFound`.
-    pub(super) fn existing(root: &Path, below: &Path) -> io::Result<Folder> {
-        Folder::reach(root, below, false)
+    pub(super) fn existing(root: &Path, below: &Path, sharing: Sharing) -> io::Result<Folder> {
+        Folder::reach(root, below, false, sharing)
     }
 
-    fn reach(root: &Path, below: &Path, make: bool) -> io::Result<Folder> {
+    fn reach(root: &Path, below: &Path, make: bool, sharing: Sharing) -> io::Result<Folder> {
         #[cfg(unix)]
-        let handle = walk(root, below, make)?;
+        let handle = walk(root, below, make.then_some(sharing))?;
         #[cfg(not(unix))]
-        checked(root, below, make)?;
+        {
+            let _ = sharing;
+            checked(root, below, make)?;
+        }
         Ok(Folder {
             #[cfg(unix)]
             handle,
@@ -62,6 +70,8 @@ impl Folder {
             },
             below: below.to_path_buf(),
             root: root.to_path_buf(),
+            #[cfg(unix)]
+            sharing,
         })
     }
 
@@ -79,7 +89,7 @@ impl Folder {
     pub(super) fn check(&self) -> io::Result<()> {
         #[cfg(unix)]
         {
-            let now = rustix::fs::fstat(walk(&self.root, &self.below, false)?)?;
+            let now = rustix::fs::fstat(walk(&self.root, &self.below, None)?)?;
             let held = rustix::fs::fstat(&self.handle)?;
             if (now.st_dev, now.st_ino) == (held.st_dev, held.st_ino) {
                 return Ok(());
@@ -110,7 +120,8 @@ impl Folder {
             .open(self.join(name))
     }
 
-    /// [`Folder::create_new`] with the permissions `mode` before the umask takes its part.
+    /// [`Folder::create_new`] with the permissions `mode` before the umask takes its part, and the
+    /// group the cache is shared with given its own.
     #[cfg(unix)]
     pub(super) fn create_new_with(&self, name: &str, mode: u32) -> io::Result<File> {
         use rustix::fs::{Mode, OFlags};
@@ -120,7 +131,10 @@ impl Folder {
         })?;
         let flags = OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW;
         let mode = Mode::from_bits_truncate(mode);
-        Ok(rustix::fs::openat(&self.handle, name, flags | OFlags::CLOEXEC, mode)?.into())
+        let file: File =
+            rustix::fs::openat(&self.handle, name, flags | OFlags::CLOEXEC, mode)?.into();
+        self.sharing.share(&file);
+        Ok(file)
     }
 
     /// the names the folder holds.
@@ -336,10 +350,10 @@ fn refused(path: &Path) -> io::Error {
     )
 }
 
-/// the folder `below` `root`, opened folder by folder without following a link, making a missing
-/// one when `make` says so.
+/// the folder `below` `root`, opened folder by folder without following a link. with `make`,
+/// a missing one is made, and gets what that sharing gives the group the cache is shared with.
 #[cfg(unix)]
-pub(super) fn walk(root: &Path, below: &Path, make: bool) -> io::Result<File> {
+pub(super) fn walk(root: &Path, below: &Path, make: Option<Sharing>) -> io::Result<File> {
     use rustix::fs::{Mode, OFlags};
     use rustix::io::Errno;
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
@@ -353,10 +367,12 @@ pub(super) fn walk(root: &Path, below: &Path, make: bool) -> io::Result<File> {
             ));
         };
         path.push(name);
+        let mut share = None;
         let opened = match rustix::fs::openat(&folder, name, flags, Mode::empty()) {
-            Err(Errno::NOENT) if make => {
+            Err(Errno::NOENT) if make.is_some() => {
                 match rustix::fs::mkdirat(&folder, name, Mode::from_bits_truncate(0o777)) {
-                    Ok(()) | Err(Errno::EXIST) => {}
+                    Ok(()) => share = make,
+                    Err(Errno::EXIST) => {}
                     Err(err) => return Err(err.into()),
                 }
                 rustix::fs::openat(&folder, name, flags, Mode::empty())
@@ -364,7 +380,13 @@ pub(super) fn walk(root: &Path, below: &Path, make: bool) -> io::Result<File> {
             opened => opened,
         };
         folder = match opened {
-            Ok(opened) => File::from(opened),
+            Ok(opened) => {
+                let opened = File::from(opened);
+                if let Some(sharing) = share {
+                    sharing.share(&opened);
+                }
+                opened
+            }
             Err(Errno::LOOP | Errno::NOTDIR) => {
                 found_folder(&path, &std::fs::symlink_metadata(&path)?, FolderUse::Cache)?;
                 return Err(Errno::NOTDIR.into());
@@ -423,7 +445,7 @@ mod tests {
     #[test]
     fn a_record_with_a_second_name_is_never_written() {
         let dir = tempfile::tempdir().unwrap();
-        let urls = Folder::open(dir.path(), Path::new("urls")).unwrap();
+        let urls = Folder::open(dir.path(), Path::new("urls"), Sharing::default()).unwrap();
         let theirs = dir.path().join(".bashrc");
         std::fs::write(&theirs, b"someone's own file\n").unwrap();
         if std::fs::hard_link(&theirs, urls.join("0.log")).is_err() {
@@ -447,7 +469,7 @@ mod tests {
     #[test]
     fn a_folder_of_the_cache_cannot_be_swapped_while_it_is_open() {
         let dir = tempfile::tempdir().unwrap();
-        let shard = Folder::open(dir.path(), Path::new("partial/ab")).unwrap();
+        let shard = Folder::open(dir.path(), Path::new("partial/ab"), Sharing::default()).unwrap();
         let aside = dir.path().join("aside");
 
         for held in [shard.path(), dir.path().join("partial")] {
@@ -463,7 +485,7 @@ mod tests {
     #[test]
     fn a_file_another_writer_makes_between_the_look_and_the_make_is_opened() {
         let dir = tempfile::tempdir().unwrap();
-        let urls = Folder::open(dir.path(), Path::new("urls")).unwrap();
+        let urls = Folder::open(dir.path(), Path::new("urls"), Sharing::default()).unwrap();
         let theirs = RefCell::new(None);
 
         let mine = open_or_make(
@@ -489,7 +511,7 @@ mod tests {
     #[test]
     fn a_make_that_finds_nothing_is_tried_again_a_few_times() {
         let dir = tempfile::tempdir().unwrap();
-        let urls = Folder::open(dir.path(), Path::new("urls")).unwrap();
+        let urls = Folder::open(dir.path(), Path::new("urls"), Sharing::default()).unwrap();
         let refusals = Cell::new(1);
         let made = open_or_make(
             || urls.open_file("0.lock"),

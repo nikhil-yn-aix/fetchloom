@@ -291,7 +291,7 @@ impl Cache {
 
     /// `changed/`, held from the cache's root without following a link.
     fn held_changed(&self) -> io::Result<super::folder::Folder> {
-        super::folder::Folder::existing(&self.root, Path::new("changed"))
+        super::folder::Folder::existing(&self.root, Path::new("changed"), self.sharing)
     }
 }
 

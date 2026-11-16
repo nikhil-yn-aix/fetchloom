@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::Cache;
+use super::sharing::Sharing;
 use crate::stop::Stop;
 use crate::volume::{open_unfollowed, read_unfollowed};
 
@@ -30,6 +31,7 @@ impl Cache {
     /// run: `waiting` is called once, and `stop` gives [`io::ErrorKind::Interrupted`]. shared
     /// access goes on unheld on a disk that gives no locks; every other lock error fails.
     pub(crate) fn hold(self, access: Access, stop: &Stop, waiting: &dyn Fn()) -> io::Result<Cache> {
+        let sharing = self.sharing;
         self.hold_with(
             access,
             stop,
@@ -39,7 +41,7 @@ impl Cache {
                 Access::Exclusive => file.try_lock(),
             },
             || std::thread::sleep(RETRY),
-            open_lock,
+            |path| open_lock(path, sharing),
         )
     }
 
@@ -104,13 +106,12 @@ impl Cache {
     }
 }
 
-/// the lock file at `path`, made the first time. a read-only root can serve shared readers
-/// without creating it, but cannot authorize collection of writable child mounts.
-fn open_lock(path: &Path) -> io::Result<Option<File>> {
-    if path
-        .symlink_metadata()
-        .is_ok_and(|metadata| metadata.is_dir())
-    {
+/// the lock file at `path`, made the first time, when it gets what `sharing` gives the group the
+/// cache is shared with. a read-only root can serve shared readers without creating it, but
+/// cannot authorize collection of writable child mounts.
+fn open_lock(path: &Path, sharing: Sharing) -> io::Result<Option<File>> {
+    let found = path.symlink_metadata();
+    if found.as_ref().is_ok_and(std::fs::Metadata::is_dir) {
         return Err(io::Error::new(
             io::ErrorKind::IsADirectory,
             format!(
@@ -120,7 +121,12 @@ fn open_lock(path: &Path) -> io::Result<Option<File>> {
         ));
     }
     match open_unfollowed(path, true) {
-        Ok(file) => Ok(Some(file)),
+        Ok(file) => {
+            if found.is_err_and(|err| err.kind() == io::ErrorKind::NotFound) {
+                sharing.share(&file);
+            }
+            Ok(Some(file))
+        }
         // another user's lock file in a shared cache still locks when opened only to read
         Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
             read_unfollowed(path).map(Some)
@@ -228,7 +234,7 @@ mod tests {
                         Err(TryLockError::Error(io::Error::new(kind, "lock refused")))
                     },
                     || panic!("a lock error must not be retried"),
-                    open_lock,
+                    |path| open_lock(path, Sharing::default()),
                 )
                 .unwrap_err();
             assert_eq!(error.kind(), kind);
@@ -247,7 +253,7 @@ mod tests {
                     &|| panic!("a lock error is not contention"),
                     |_, _| Err(TryLockError::Error(io::Error::new(kind, "lock refused"))),
                     || panic!("a lock error must not be retried"),
-                    open_lock,
+                    |path| open_lock(path, Sharing::default()),
                 )
                 .unwrap_err();
             assert_eq!(error.kind(), kind);
@@ -265,7 +271,7 @@ mod tests {
                 &|| panic!("unsupported locking is not contention"),
                 |_, _| Err(TryLockError::Error(io::ErrorKind::Unsupported.into())),
                 || panic!("unsupported locking must not be retried"),
-                open_lock,
+                |path| open_lock(path, Sharing::default()),
             )
             .unwrap();
         assert!(held.held.is_none());
@@ -286,7 +292,7 @@ mod tests {
                 &|| panic!("missing locks are not contention"),
                 take,
                 || panic!("missing locks must not be retried"),
-                open_lock,
+                |path| open_lock(path, Sharing::default()),
             )
             .unwrap();
         assert!(held.held.is_none());
@@ -298,7 +304,7 @@ mod tests {
                 &|| panic!("missing locks are not contention"),
                 take,
                 || panic!("missing locks must not be retried"),
-                open_lock,
+                |path| open_lock(path, Sharing::default()),
             )
             .unwrap_err();
         assert!(crate::volume::gives_no_locks(&refused), "{refused}");
@@ -324,7 +330,7 @@ mod tests {
                     }
                 },
                 || retries.set(retries.get() + 1),
-                open_lock,
+                |path| open_lock(path, Sharing::default()),
             )
             .unwrap();
         assert!(held.held.is_some());

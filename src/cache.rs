@@ -9,6 +9,7 @@ mod imported;
 mod keyed;
 mod object;
 mod partial;
+mod sharing;
 mod staging;
 mod unpacked;
 mod upkeep;
@@ -35,6 +36,7 @@ pub(crate) use object::{Copied, NewObject, Sealed, holds_pinned, sha256_of};
 #[cfg(test)]
 pub(crate) use partial::partial_key;
 pub(crate) use partial::{Claim, Hashing, Partial, PartialWriter, names};
+use sharing::Sharing;
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, members_of, parts_key, tree, tree_hash};
 #[cfg(test)]
@@ -422,18 +424,31 @@ fn tag_begun(root: &Path) -> bool {
 }
 
 /// writes the tag backup tools look for with `write`, unless one is there, before any folder of
-/// the cache, since a folder without it is no cache. a failed write passes once a whole tag is in
-/// place, as another run opening the cache may have written it meanwhile.
-fn tag(root: &Path, write: impl FnOnce(&Path, &[u8]) -> io::Result<()>) -> io::Result<()> {
+/// the cache, since a folder without it is no cache; true when this call wrote it. a failed write
+/// passes once a whole tag is in place, as another run opening the cache may have written it
+/// meanwhile.
+fn tag(root: &Path, write: impl FnOnce(&Path, &[u8]) -> io::Result<()>) -> io::Result<bool> {
     if tagged(root) {
-        return Ok(());
+        return Ok(false);
     }
     #[cfg(target_os = "macos")]
     exclude_native_backup_and_indexing(root)?;
     match write(&root.join("CACHEDIR.TAG"), TAG.as_bytes()) {
-        Err(_) if tagged(root) => Ok(()),
-        written => written,
+        Err(_) if tagged(root) => Ok(false),
+        written => written.map(|()| true),
     }
+}
+
+/// makes the folder `path` of the cache at `root` where missing, as [`real_folder`] does: one it
+/// makes gets what `sharing` gives the group the cache is shared with.
+fn make_folder(root: &Path, path: &Path, sharing: Sharing) -> io::Result<()> {
+    let missing = sharing.is_shared()
+        && fs::symlink_metadata(path).is_err_and(|err| err.kind() == io::ErrorKind::NotFound);
+    real_folder(path, FolderUse::Cache)?;
+    if missing {
+        sharing.share_folder(root, path);
+    }
+    Ok(())
 }
 
 /// writes `bytes` over the start of the file at `path`, made if missing, never through a link nor
@@ -629,6 +644,8 @@ pub(crate) struct Cache {
     urls: Arc<urls::Shards>,
     /// the room the cache's disk had free for the archives this run unpacks at once.
     room: Arc<Room>,
+    /// what the group the cache is shared with gets of what this run makes in it.
+    sharing: Sharing,
     /// on windows, what removes the cache's files, shared by every clone.
     #[cfg(not(unix))]
     remover: Arc<Remover>,
@@ -788,9 +805,14 @@ impl Cache {
         #[cfg(not(unix))]
         fs::create_dir_all(&root)?;
         adoptable(&root)?;
-        tag(&root, write)?;
+        let sharing = Sharing::of(&root);
+        if tag(&root, write)? {
+            sharing.share_file(&root.join("CACHEDIR.TAG"));
+            #[cfg(target_os = "macos")]
+            sharing.share_file(&root.join(NEVER_INDEX));
+        }
         for folder in FOLDERS {
-            real_folder(&root.join(folder), FolderUse::Cache)?;
+            make_folder(&root, &root.join(folder), sharing)?;
         }
         Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
@@ -798,8 +820,9 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
-            urls: Arc::default(),
+            urls: Arc::new(urls::Shards::shared(sharing)),
             room: Arc::default(),
+            sharing,
             #[cfg(not(unix))]
             remover: Arc::default(),
             #[cfg(test)]
@@ -829,14 +852,16 @@ impl Cache {
                 Err(err) => return Err(err),
             }
         }
+        let sharing = Sharing::of(&root);
         Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
-            urls: Arc::default(),
+            urls: Arc::new(urls::Shards::shared(sharing)),
             room: Arc::default(),
+            sharing,
             #[cfg(not(unix))]
             remover: Arc::default(),
             #[cfg(test)]
@@ -949,7 +974,8 @@ impl Cache {
     pub(crate) fn open_object(&self, digest: &Sha256, size: Option<u64>) -> io::Result<File> {
         let hex = digest.hex();
         let gone = || io::Error::from(io::ErrorKind::NotFound);
-        let folder = folder::Folder::existing(&self.root, &Path::new("objects").join(&hex[..2]))?;
+        let below = Path::new("objects").join(&hex[..2]);
+        let folder = folder::Folder::existing(&self.root, &below, self.sharing)?;
         let file = folder.read_file(&hex[2..])?;
         let metadata = file.metadata()?;
         if size.is_some_and(|size| metadata.len() != size) {
@@ -1105,9 +1131,13 @@ impl Cache {
 
     pub(crate) fn save_stated_md5(&self, md5: &Md5, url: &str, stated: &Stated) -> io::Result<()> {
         let path = self.stated_path(md5, url);
-        real_folder(&self.root.join("stated").join("md5"), FolderUse::Cache)?;
+        make_folder(
+            &self.root,
+            &self.root.join("stated").join("md5"),
+            self.sharing,
+        )?;
         if let Some(parent) = path.parent() {
-            real_folder(parent, FolderUse::Cache)?;
+            make_folder(&self.root, parent, self.sharing)?;
         }
         let line = match stated {
             Stated {
@@ -1158,9 +1188,9 @@ impl Cache {
                     format!("{} is not a record in the cache", path.display()),
                 ));
             };
-            let folder = folder::Folder::open(&self.root, below)
+            let folder = folder::Folder::open(&self.root, below, self.sharing)
                 .map_err(|err| self.explained(parent, err))?;
-            let tmp = folder::Folder::open(&self.root, Path::new("tmp"))
+            let tmp = folder::Folder::open(&self.root, Path::new("tmp"), self.sharing)
                 .map_err(|err| self.explained(&scratch, err))?;
             let (temporary, file) = loop {
                 let temporary = format!("{:016x}.tmp", fastrand::u64(..));
@@ -1237,7 +1267,7 @@ impl Cache {
         let first = usize::from(digest.bytes()[0]);
         if !self.checked[first].load(Ordering::Relaxed) {
             if let Some(folder) = path.parent() {
-                real_folder(folder, FolderUse::Cache)?;
+                make_folder(&self.root, folder, self.sharing)?;
             }
             self.checked[first].store(true, Ordering::Relaxed);
         }
@@ -1261,7 +1291,7 @@ impl Cache {
             // something removed the object's folder since this run checked it
             Err(err) if err.kind() == io::ErrorKind::NotFound && source.exists() => {
                 if let Some(parent) = path.parent() {
-                    real_folder(parent, FolderUse::Cache)?;
+                    make_folder(&self.root, parent, self.sharing)?;
                 }
                 return self.link_new(source, path, digest, size);
             }
@@ -2321,6 +2351,131 @@ pub(crate) mod tests {
                 && told.contains("lets every user of this machine write"),
             "{told}"
         );
+    }
+
+    /// in a cache a group shares, a setgid folder its group may write, every part of the cache
+    /// gives that group what each folder and file it makes gives its owner, whatever the umask,
+    /// and never anything to others; an object stays read-only. it runs under `umask 022` in a
+    /// process of its own, so the umask of the process running the tests stays as it was.
+    #[cfg(unix)]
+    #[test]
+    fn each_part_of_a_groups_cache_shares_what_it_makes() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        const CHILD: &str = "FETCHLOOM_TEST_UMASK_022";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cache::tests::each_part_of_a_groups_cache_shares_what_it_makes",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            // a name that matched no test would pass without running it
+            assert!(
+                result.status.success() && stdout.contains(" 1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cache");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o2770)).unwrap();
+        if fs::metadata(&root).unwrap().mode() & 0o7777 != 0o2770 {
+            return crate::test_skips::skip("permissions", "this disk keeps no setgid folder");
+        }
+        let cache = Cache::open(root.clone())
+            .unwrap()
+            .hold(Access::Shared, &crate::stop::Stop::default(), &|| {})
+            .unwrap();
+        let stored = store(&cache, b"abc");
+        let staging = cache.staging().unwrap();
+        let member = staging.new_object().unwrap();
+        let Claim::Owned(partial) = cache.claim("https://example.org/a").unwrap() else {
+            panic!("nothing else holds the download");
+        };
+        let mut writer = partial
+            .writer(0, Some(6), Validators::default(), true, false)
+            .unwrap();
+        writer.write_all(b"abc").unwrap();
+        writer.save().unwrap();
+        cache.mark_keyed(&stored.digest).unwrap();
+        let md5 = Md5::from_hex("900150983cd24fb0d6963f7d28e17f72").unwrap();
+        let stated = Stated {
+            digest: stored.digest,
+            size: 3,
+            version: None,
+        };
+        cache
+            .save_stated_md5(&md5, "https://example.org/abc", &stated)
+            .unwrap();
+        cache.mark_changed(&stored.digest).unwrap();
+        cache
+            .save_url_record(&UrlRecord {
+                url: "https://example.org/abc".to_owned(),
+                sha256: stored.digest,
+                size: 3,
+                name: None,
+                validators: Validators::default(),
+                page: false,
+            })
+            .unwrap();
+        cache.register(dir.path()).unwrap();
+        let members = [Member {
+            path: "a.csv".to_owned(),
+            size: 3,
+            sha256: stored.digest,
+        }];
+        cache.record_unpacked(&stored.digest, &members).unwrap();
+        cache.mark_imported(&[stored.digest]).unwrap();
+
+        let wrong = unshared_below(&root);
+        drop((writer, member, staging));
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// what below the cache folder `root` its group, which a root of mode 2770 gives every bit,
+    /// cannot use as the owner can, and what every user may write, sorted.
+    #[cfg(unix)]
+    fn unshared_below(root: &Path) -> Vec<String> {
+        use std::os::unix::fs::MetadataExt;
+        let group = fs::metadata(root).unwrap().gid();
+        let mut wrong = Vec::new();
+        let mut folders = vec![root.to_path_buf()];
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                let found = fs::symlink_metadata(&path).unwrap();
+                let mode = found.mode() & 0o7777;
+                let shown = format!("{mode:o} {}", path.display());
+                if mode & 0o002 != 0 {
+                    wrong.push(format!("every user may write {shown}"));
+                }
+                if found.is_dir() {
+                    if mode & 0o070 != 0o070 || found.gid() != group {
+                        wrong.push(format!("the group cannot add to {shown}"));
+                    }
+                    folders.push(path);
+                    continue;
+                }
+                if mode & 0o040 == 0 {
+                    wrong.push(format!("the group cannot read {shown}"));
+                }
+                if mode & 0o200 != 0 && mode & 0o020 == 0 {
+                    wrong.push(format!("only its owner may write {shown}"));
+                }
+                if path.starts_with(root.join("objects")) && mode & 0o222 != 0 {
+                    wrong.push(format!("an object may be written {shown}"));
+                }
+            }
+        }
+        wrong.sort();
+        wrong
     }
 
     #[test]

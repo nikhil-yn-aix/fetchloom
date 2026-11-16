@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use super::Cache;
 use crate::digest::Sha256;
-use crate::place::{FolderUse, real_folder};
 
 impl Cache {
     /// remembers that the objects for `digests` hold bytes imported from files, in one list
@@ -23,7 +22,7 @@ impl Cache {
             text.push('\n');
         }
         let folder = self.imported_folder();
-        real_folder(&folder, FolderUse::Cache)?;
+        super::make_folder(&self.root, &folder, self.sharing)?;
         let path = folder.join(crate::digest::sha256(text.as_bytes()).hex());
         if fs::symlink_metadata(&path).is_ok() {
             return Ok(());

@@ -288,6 +288,120 @@ fn a_folder_the_group_cannot_write_in_a_shared_cache_is_told() -> Result {
     Ok(())
 }
 
+/// a lab's cache is a setgid folder its group may write. what a run makes there with the usual
+/// `umask 022` lets the group's other members add to each folder, as `umask 002` would, and with
+/// `umask 077` read each file too; nothing becomes writable by every user, and an object stays
+/// read-only for everyone.
+#[cfg(unix)]
+#[test]
+fn the_group_may_add_to_what_a_run_makes_in_its_cache() -> Result {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    for umask in ["022", "077"] {
+        let sandbox = Sandbox::new()?;
+        let cache = sandbox.cache();
+        fs::create_dir_all(&cache)?;
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o2770))?;
+        if fs::metadata(&cache)?.mode() & 0o7777 != 0o2770 {
+            return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+        }
+        let source = sandbox.folder("measured")?;
+        fs::write(source.join("m.csv"), b"measured\n")?;
+        let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+        let notes = crate::support::zip_of(&[("notes.txt", NOTES)])?;
+        let archive = Server::start("/notes.zip", vec![file(&notes, "\"z1\"")])?;
+        let source = source.display().to_string();
+        for args in [
+            ["add", source.as_str(), "--as", "meas"],
+            ["add", server.url.as_str(), "--as", "iris"],
+            ["add", archive.url.as_str(), "--as", "notes"],
+        ] {
+            let output = sandbox.command(&args).with_umask(umask).output()?;
+            assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        }
+
+        let group = fs::metadata(&cache)?.gid();
+        let mut wrong = Vec::new();
+        for (path, found) in below(&cache)? {
+            let mode = found.mode() & 0o7777;
+            let shown = format!("{mode:o} {}", path.display());
+            if mode & 0o002 != 0 {
+                wrong.push(format!("every user may write {shown}"));
+            }
+            if found.is_dir() {
+                if mode & 0o070 != 0o070 || found.gid() != group {
+                    wrong.push(format!("the group cannot add to {shown}"));
+                }
+                continue;
+            }
+            if mode & 0o040 == 0 {
+                wrong.push(format!("the group cannot read {shown}"));
+            }
+            if mode & 0o200 != 0 && mode & 0o020 == 0 {
+                wrong.push(format!("only its owner may write {shown}"));
+            }
+            if path.starts_with(cache.join("objects")) && mode & 0o222 != 0 {
+                wrong.push(format!("an object may be written {shown}"));
+            }
+        }
+        assert!(wrong.is_empty(), "umask {umask}:\n{}", wrong.join("\n"));
+    }
+    Ok(())
+}
+
+/// a cache no group shares, as a person's own, or a folder that is not setgid or that its group
+/// may not write, keeps the modes the umask gives what a run makes there.
+#[cfg(unix)]
+#[test]
+fn a_cache_no_group_shares_keeps_the_umask() -> Result {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    for root in [None, Some(0o770), Some(0o2750)] {
+        let sandbox = Sandbox::new()?;
+        let cache = sandbox.cache();
+        if let Some(root) = root {
+            fs::create_dir_all(&cache)?;
+            fs::set_permissions(&cache, fs::Permissions::from_mode(root))?;
+            if fs::metadata(&cache)?.mode() & 0o7777 != root {
+                return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+            }
+        }
+        let source = sandbox.folder("measured")?;
+        fs::write(source.join("m.csv"), b"measured\n")?;
+        let source = source.display().to_string();
+        let output = sandbox
+            .command(&["add", &source, "--as", "meas"])
+            .with_umask("022")
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+
+        let given: Vec<String> = below(&cache)?
+            .into_iter()
+            .filter(|(_, found)| found.mode() & 0o020 != 0)
+            .map(|(path, found)| format!("{:o} {}", found.mode() & 0o7777, path.display()))
+            .collect();
+        let root = root.map_or_else(
+            || "made by fetchloom".to_owned(),
+            |root| format!("{root:o}"),
+        );
+        assert!(given.is_empty(), "root {root}:\n{}", given.join("\n"));
+    }
+    Ok(())
+}
+
+/// every file and folder below `folder`, with what it is, never looked at through a link.
+#[cfg(unix)]
+fn below(folder: &std::path::Path) -> Result<Vec<(std::path::PathBuf, fs::Metadata)>> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(folder)? {
+        let path = entry?.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            found.extend(below(&path)?);
+        }
+        found.push((path, metadata));
+    }
+    Ok(found)
+}
+
 /// a changed file imported from a folder comes back from no source, so verify says so, and its
 /// help names what does bring it back rather than promise a download sync cannot make.
 #[test]

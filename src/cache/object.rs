@@ -213,7 +213,7 @@ impl Cache {
         loop {
             let path = folder.join(format!("{:016x}.new", fastrand::u64(..)));
             let created = staging.as_ref().map_or_else(
-                || create_sealed(&path),
+                || create_sealed(&path).inspect(|file| self.sharing.share(file)),
                 |staging| staging.create_member(&path),
             );
             match created {
