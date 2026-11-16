@@ -266,6 +266,41 @@ fn a_mark_swapped_for_a_link_meanwhile_is_never_read_through_it() {
     );
 }
 
+/// a fan folder someone made a link, as a junction on windows, is reported as the link it is, with
+/// help to remove it, and never listed: gc would count, and verify hash, the files it leads to.
+#[test]
+fn scanning_never_follows_a_fan_folder_swapped_for_a_link() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let hex = "cd".repeat(32);
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join(&hex[2..]), b"theirs").unwrap();
+    let fan = cache.root.join("objects").join(&hex[..2]);
+    let _ = fs::remove_dir(&fan);
+    crate::test_links::link_folder(&outside, &fan).unwrap();
+
+    let scan = cache
+        .scan_objects(
+            crate::threads::Threads::default(),
+            &crate::stop::Stop::default(),
+        )
+        .unwrap();
+
+    assert_eq!(scan.objects.len(), 0, "a file the link leads to");
+    let [failure] = scan.unreadable.as_slice() else {
+        panic!("one failure, not {:?}", scan.unreadable);
+    };
+    assert_eq!(failure.path, fan);
+    assert!(
+        failure.advice().contains("remove the link"),
+        "{}",
+        failure.advice()
+    );
+}
+
 /// an archive's object dropped once its files are unpacked goes through its fan folder reached from
 /// the cache's root, so a fan folder someone swapped for a link sends the removal nowhere else.
 #[test]

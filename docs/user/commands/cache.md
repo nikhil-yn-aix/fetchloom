@@ -107,7 +107,7 @@ every sync registers its project, also the sync inside `add` or `path`; `get` an
 
 removing a cached file leaves placed files intact. a cached file another name outside the cache still links keeps its bytes on the disk, so what gc removes can be more than the space it frees; `fetchloom cache` tells the two apart beforehand, as `unneeded` and `freeable`.
 
-gc warns about paths it could not remove, and keeps what it removed: JSON keeps the counts and the failures in `result.not_removed`, each with `path`, `kind`, `os_code` and `message`, beside a `local.io` error, exit 50. fix the cause, then run it again.
+gc warns about paths it could not remove, and keeps what it removed: JSON keeps the counts and the failures in `result.not_removed`, each with `path`, `kind`, `os_code` and `message`, beside a `local.io` error, exit 50. fix the cause, then run it again. a link or a file where the cache keeps a folder of its own, as a junction someone made in `objects`, is named as one, with help to remove the link itself, not what it leads to; gc and verify never list, remove or hash what is behind it.
 
 ### old pins and moved projects
 

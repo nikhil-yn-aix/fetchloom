@@ -19,6 +19,9 @@ pub(crate) struct Failure {
     /// the failure in fetchloom's words, without the system's error number.
     #[serde(skip)]
     said: String,
+    /// a link, when true, or a file someone put where the cache keeps a folder of its own.
+    #[serde(skip)]
+    planted: Option<bool>,
 }
 
 impl Failure {
@@ -30,14 +33,37 @@ impl Failure {
             message: error.to_string(),
             cause: error.kind(),
             said: crate::error::said(error),
+            planted: error
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<crate::place::NotCacheFolder>())
+                .map(|refused| refused.link),
         }
     }
 
+    /// the path and what went wrong there, naming the path once when the cause names it already.
     pub(crate) fn description(&self) -> String {
-        format!("{}: {}", self.path.display(), self.said)
+        let path = self.path.display().to_string();
+        if self
+            .said
+            .strip_prefix(&path)
+            .is_some_and(|rest| rest.starts_with(' '))
+        {
+            return self.said.clone();
+        }
+        format!("{path}: {}", self.said)
     }
 
     pub(crate) fn advice(&self) -> &'static str {
+        // a disk check finds nothing wrong with a link or a file someone put in the cache
+        match self.planted {
+            Some(true) => {
+                return "remove the link itself, not the folder it leads to, since fetchloom never puts one in the cache; then run the command again";
+            }
+            Some(false) => {
+                return "move that file out of the cache, which keeps only its own folders there; then run the command again";
+            }
+            None => {}
+        }
         let error = self
             .os_code
             .map_or_else(|| self.cause.into(), io::Error::from_raw_os_error);

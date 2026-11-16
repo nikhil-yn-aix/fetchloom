@@ -376,7 +376,7 @@ impl Cache {
         let folder = self.root.join("objects");
         // a file the system leaves behind, such as finder's .DS_Store, is no fan folder. a fan's
         // own name that is not a folder is damage, and is reported as unreadable
-        let fans: Vec<(String, PathBuf)> = scan_entries(&folder, &mut scan.unreadable, stop)?
+        let mut fans: Vec<(String, PathBuf)> = scan_entries(&folder, &mut scan.unreadable, stop)?
             .into_iter()
             .filter_map(|fan| {
                 let prefix = fan.file_name().to_string_lossy().into_owned();
@@ -384,6 +384,21 @@ impl Cache {
                     .then(|| (prefix, fan.path()))
             })
             .collect();
+        // a fan someone made a link is never listed, which would count, verify and remove the
+        // files it leads to as if they were the cache's
+        fans.retain(|(_, fan)| {
+            let real = fs::symlink_metadata(fan).and_then(|found| {
+                crate::place::found_folder(fan, &found, crate::place::FolderUse::Cache)
+            });
+            match real {
+                Ok(()) => true,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                Err(err) => {
+                    scan.unreadable.push(Failure::new(fan, &err));
+                    false
+                }
+            }
+        });
         let read = crate::place::run_coarse(&fans, threads, FANS_PER_WORKER, |(prefix, fan)| {
             scan_fan(prefix, fan, stop)
         });

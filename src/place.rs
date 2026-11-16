@@ -1392,6 +1392,26 @@ pub(crate) fn real_folder(folder: &Path, usage: FolderUse) -> io::Result<()> {
     found_folder(folder, &metadata, usage)
 }
 
+/// a link or a file where the cache keeps a folder of its own, which fetchloom never puts there.
+#[derive(Debug)]
+pub(crate) struct NotCacheFolder {
+    pub(crate) path: PathBuf,
+    pub(crate) link: bool,
+}
+
+impl std::fmt::Display for NotCacheFolder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = if self.link { "a link" } else { "a file" };
+        write!(
+            formatter,
+            "{} is {what}, and the cache keeps only real folders",
+            self.path.display()
+        )
+    }
+}
+
+impl std::error::Error for NotCacheFolder {}
+
 /// refuses what [`real_folder`] refuses, given what is at `folder`, creating nothing.
 pub(crate) fn found_folder(
     folder: &Path,
@@ -1404,14 +1424,13 @@ pub(crate) fn found_folder(
     }
     let (kind, message) = match usage {
         FolderUse::Cache => {
-            let what = if is_link { "a link" } else { "a file" };
-            (
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!(
-                    "{} is {what}, and the cache keeps only real folders",
-                    folder.display()
-                ),
-            )
+                NotCacheFolder {
+                    path: folder.to_path_buf(),
+                    link: is_link,
+                },
+            ));
         }
         FolderUse::Place { .. } if is_link => (
             io::ErrorKind::InvalidInput,
