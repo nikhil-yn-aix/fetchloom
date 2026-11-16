@@ -1,8 +1,9 @@
 //! what this machine remembers of each host's speed: how fast transfers big enough to measure
 //! received, and how long each file waited for its answer, smoothed over recent runs. it lives in
-//! a small file of fetchloom's state folder, apart from the cache, which a lab may share between
-//! machines of different speeds. the file holds host names and numbers only, never leaves the
-//! machine, and is started again from nothing when it cannot be read.
+//! a small file of fetchloom's state folder, never in a cache folder a person names, which a lab
+//! may share between machines of different speeds; on windows it sits in the default cache folder.
+//! the file holds host names and numbers only, never leaves the machine, and is started again from
+//! nothing when it cannot be read.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::estimate::Speed;
 
 /// the file in the state folder.
-pub(crate) const FILE: &str = "speeds.json";
+const FILE: &str = crate::machine::SPEEDS;
 /// the most hosts the file keeps; those heard from longest ago go first.
 const MOST_HOSTS: usize = 256;
 /// a transfer counts toward its host's rate once it received this much, since a shorter one is
@@ -22,28 +23,6 @@ const MOST_HOSTS: usize = 256;
 const MEASURED: u64 = 1 << 20;
 /// how much a run moves what a host's speed was: a third, so a few recent runs decide it.
 const WEIGHT: f64 = 1.0 / 3.0;
-
-/// fetchloom's folder for what it remembers on this machine: `$XDG_STATE_HOME/fetchloom`, else
-/// `~/.local/state/fetchloom` on linux and other unix systems, the settings folder on macos and
-/// `%LOCALAPPDATA%\fetchloom\state` on windows, none without a home.
-pub(crate) fn folder(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
-    let set = |name: &str| {
-        var(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    if cfg!(windows) {
-        return set("LOCALAPPDATA").map(|local| local.join("fetchloom").join("state"));
-    }
-    if cfg!(target_os = "macos") {
-        return set("HOME").map(|home| home.join("Library/Application Support/fetchloom"));
-    }
-    // the XDG spec has a relative value ignored, which would move the file with the working folder
-    set("XDG_STATE_HOME")
-        .filter(|path| path.is_absolute())
-        .or_else(|| set("HOME").map(|home| home.join(".local").join("state")))
-        .map(|state| state.join("fetchloom"))
-}
 
 /// what one run heard from one host.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -355,26 +334,5 @@ mod tests {
         assert!(written.file_type().is_file());
         assert_eq!(written.permissions().mode() & 0o777, 0o600);
         assert!(Memory::read(&path).speed("zenodo.org").is_some());
-    }
-
-    #[test]
-    fn the_state_folder_follows_each_system() {
-        let var = |name: &str| match name {
-            "HOME" => Some("/home/ada".into()),
-            "XDG_STATE_HOME" => Some("relative".into()),
-            "LOCALAPPDATA" => Some("C:\\Users\\ada\\AppData\\Local".into()),
-            _ => None,
-        };
-        let expected = if cfg!(windows) {
-            PathBuf::from("C:\\Users\\ada\\AppData\\Local")
-                .join("fetchloom")
-                .join("state")
-        } else if cfg!(target_os = "macos") {
-            PathBuf::from("/home/ada/Library/Application Support/fetchloom")
-        } else {
-            PathBuf::from("/home/ada/.local/state/fetchloom")
-        };
-        assert_eq!(folder(&var), Some(expected));
-        assert_eq!(folder(&|_| None), None);
     }
 }

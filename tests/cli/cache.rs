@@ -851,6 +851,40 @@ fn gc_and_verify_refuse_a_missing_folder_and_answer_an_empty_one() -> Result {
     Ok(())
 }
 
+/// windows keeps fetchloom's state in the default cache folder, `%LOCALAPPDATA%\fetchloom\state`,
+/// so a download with the cache elsewhere writes it there before any cache: a later run without
+/// `FETCHLOOM_CACHE` still takes that folder for its cache.
+#[cfg(windows)]
+#[test]
+fn the_state_a_run_leaves_never_bars_the_default_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/iris.csv",
+        vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")],
+    )?;
+    ok(&sandbox.run(&["get", &server.url, "-o", "first.csv"])?)?;
+    let default = sandbox.folder("home")?.join("fetchloom");
+    let speeds = sandbox.speeds();
+    assert!(
+        speeds.starts_with(&default) && speeds.is_file(),
+        "{}",
+        speeds.display()
+    );
+    let report = sandbox
+        .command(&["--json", "cache"])
+        .env_remove("FETCHLOOM_CACHE")
+        .output()?;
+    assert_eq!(report.status.code(), Some(0), "{}", text(&report.stdout)?);
+    let got = sandbox
+        .command(&["--json", "get", &server.url, "-o", "second.csv"])
+        .env_remove("FETCHLOOM_CACHE")
+        .output()?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stdout)?);
+    assert!(default.join("CACHEDIR.TAG").is_file());
+    assert!(speeds.is_file());
+    Ok(())
+}
+
 #[test]
 fn verify_reports_unenumerable_object_folders() -> Result {
     let sandbox = Sandbox::new()?;

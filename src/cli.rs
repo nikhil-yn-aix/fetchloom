@@ -844,7 +844,7 @@ pub(crate) fn run() -> ExitCode {
     }
     context.yes = global.yes;
     context.projectless = matches!(args.command, Some(args::Command::Get(_)));
-    context.speeds = net::speeds::Speeds::at(net::speeds::folder(&var));
+    context.speeds = net::speeds::Speeds::at(crate::machine::state_folder(&var));
     context.building = var("FETCHLOOM_BUILDING")
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from);

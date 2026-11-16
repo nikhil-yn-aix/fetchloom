@@ -74,10 +74,10 @@ const SYSTEM_NAMES: [&str; 7] = [
 ];
 
 /// refuses `root` as the cache unless it holds fetchloom's tag, or nothing but what a system keeps
-/// there and what a first run stopped before its tag was whole leaves: the start of the tag and
-/// macos's mark against indexing. gc clears old files from tmp/, and the tag tells backup tools to
-/// skip the whole folder, which a folder of a person's own files must not get, as a home named by
-/// mistake, or a scratch folder whose folders have a cache's names.
+/// there, fetchloom's own state and what a first run stopped before its tag was whole leaves: the
+/// start of the tag and macos's mark against indexing. gc clears old files from tmp/, and the tag
+/// tells backup tools to skip the whole folder, which a folder of a person's own files must not
+/// get, as a home named by mistake, or a scratch folder whose folders have a cache's names.
 fn adoptable(root: &Path) -> io::Result<()> {
     if is_cache(root) {
         return Ok(());
@@ -164,6 +164,7 @@ fn lost_its_tag(root: &Path) -> bool {
         system(name)
             || (FOLDERS.contains(&name.as_str()) && found.is_dir())
             || (["gc.lock", "reminded", NEVER_INDEX].contains(&name.as_str()) && found.is_file())
+            || own_state(root, std::ffi::OsStr::new(name))
     }) && fs::symlink_metadata(root.join("objects")).is_ok_and(|found| found.is_dir())
         && within("objects", &|name, found| found.is_dir() && hex(name, 2))
         && within("projects", &|name, found| {
@@ -229,12 +230,31 @@ pub(crate) fn refused(root: &Path) -> Option<String> {
     })
 }
 
-/// whether `name` in `root` is what a system keeps in a folder, or what a first run stopped
-/// before its tag was whole leaves: the start of the tag and macos's mark against indexing.
+/// whether `name` in `root` is what a system keeps in a folder, fetchloom's own state, or what a
+/// first run stopped before its tag was whole leaves: the start of the tag and macos's mark against
+/// indexing.
 fn left_before_tag(root: &Path, name: &std::ffi::OsStr) -> bool {
     SYSTEM_NAMES.iter().any(|system| name == *system)
         || name == NEVER_INDEX
         || (name == "CACHEDIR.TAG" && tag_begun(root))
+        || own_state(root, name)
+}
+
+/// whether `name` in `root` is the folder fetchloom keeps what it remembers on this machine in,
+/// which windows keeps in the default cache folder, `%LOCALAPPDATA%\fetchloom\state`, so a run with
+/// the cache elsewhere makes it before any cache there: a real folder holding only its files.
+fn own_state(root: &Path, name: &std::ffi::OsStr) -> bool {
+    let folder = root.join(name);
+    name == crate::machine::STATE
+        && fs::symlink_metadata(&folder).is_ok_and(|found| found.is_dir())
+        && fs::read_dir(&folder).is_ok_and(|mut entries| {
+            entries.all(|entry| {
+                entry.is_ok_and(|entry| {
+                    crate::machine::kept_in_state(&entry.file_name())
+                        && entry.file_type().is_ok_and(|kind| kind.is_file())
+                })
+            })
+        })
 }
 
 /// whether `root` holds no cache yet: it is missing, or holds no tag and nothing but what
@@ -1867,12 +1887,15 @@ pub(crate) mod tests {
     /// tag.
     #[test]
     fn a_folder_of_other_files_never_becomes_the_cache() {
-        let folders: [&[&str]; 5] = [
+        let folders: [&[&str]; 8] = [
             &["tmp/important.txt", "thesis.tex"],
             &["tmp/important.txt"],
             &["tmp/notes.txt", "objects/pack1"],
             &["projects/myapp/main.py"],
             &["objects/ab/cdef", "partial/0/", "gc.lock"],
+            &["state/speeds.json", "state/notes.txt"],
+            &["state/old/speeds.json"],
+            &["state"],
         ];
         for files in folders {
             let dir = tempfile::tempdir().unwrap();
@@ -1939,6 +1962,37 @@ pub(crate) mod tests {
         }
     }
 
+    /// windows keeps fetchloom's state folder in the default cache folder, so a run with the cache
+    /// elsewhere can write it there before any cache: that folder is still no cache yet, and
+    /// becomes the cache with the state kept.
+    #[test]
+    fn fetchloom_state_alone_leaves_a_folder_free_for_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("fetchloom");
+        let state = root.join("state");
+        let speeds = crate::net::speeds::Speeds::at(Some(state.clone()));
+        speeds
+            .run
+            .answered("zenodo.org", std::time::Duration::from_millis(5));
+        speeds.save();
+        // what a run stopped while it wrote the file leaves
+        fs::write(state.join(".speeds.json.x7Yz2q.tmp"), b"{").unwrap();
+        let before = entries(&root);
+        Cache::unopened(root.clone()).unwrap();
+        assert!(absent(&root));
+        assert_eq!(entries(&root), before);
+        Cache::open(root.clone()).unwrap();
+        assert!(tagged(&root));
+        assert!(state.join("speeds.json").is_file());
+        #[cfg(unix)]
+        {
+            let linked = dir.path().join("linked");
+            fs::create_dir(&linked).unwrap();
+            std::os::unix::fs::symlink(&state, linked.join("state")).unwrap();
+            assert!(Cache::open(linked).is_err(), "a link is no state folder");
+        }
+    }
+
     /// a new cache gets its tag before any of its folders, so a first run stopped while writing
     /// the tag leaves only the tag's start, which the next run still takes for its cache.
     #[test]
@@ -1964,6 +2018,9 @@ pub(crate) mod tests {
         let (_dir, cache) = cache();
         store(&cache, b"abc");
         fs::remove_file(cache.root.join("CACHEDIR.TAG")).unwrap();
+        // windows keeps fetchloom's state folder in the default cache folder
+        fs::create_dir(cache.root.join("state")).unwrap();
+        fs::write(cache.root.join("state").join("speeds.json"), b"{}").unwrap();
         let stopped = tempfile::tempdir().unwrap();
         for folder in FOLDERS {
             fs::create_dir(stopped.path().join(folder)).unwrap();

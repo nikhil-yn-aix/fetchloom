@@ -355,6 +355,50 @@ pub(crate) fn settings_folder(var: Var<'_>) -> Option<PathBuf> {
         .map(|config| config.join("fetchloom"))
 }
 
+/// fetchloom's folder for what it remembers on this machine: `$XDG_STATE_HOME/fetchloom`, else
+/// `~/.local/state/fetchloom` on linux and other unix systems, the settings folder on macos and
+/// `%LOCALAPPDATA%\fetchloom\state` on windows, inside the default cache folder there; none
+/// without a home. it lives apart from a cache a person names, which a lab may share between
+/// machines of different speeds.
+pub(crate) fn state_folder(var: Var<'_>) -> Option<PathBuf> {
+    let set = |name: &str| {
+        var(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    if cfg!(windows) {
+        return set("LOCALAPPDATA").map(|local| local.join("fetchloom").join(STATE));
+    }
+    if cfg!(target_os = "macos") {
+        return set("HOME").map(|home| home.join("Library/Application Support/fetchloom"));
+    }
+    // the XDG spec has a relative value ignored, which would move the file with the working folder
+    set("XDG_STATE_HOME")
+        .filter(|path| path.is_absolute())
+        .or_else(|| set("HOME").map(|home| home.join(".local").join("state")))
+        .map(|state| state.join("fetchloom"))
+}
+
+/// the state folder's own name on windows, where the default cache folder holds it.
+pub(crate) const STATE: &str = "state";
+
+/// the file in the state folder where fetchloom remembers how fast each host is.
+pub(crate) const SPEEDS: &str = "speeds.json";
+
+/// whether `name` is a file fetchloom keeps in its state folder: [`SPEEDS`], or the new copy of it
+/// a run stopped while writing leaves, `.speeds.json.<random>.tmp`.
+pub(crate) fn kept_in_state(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        name == SPEEDS
+            || name
+                .strip_prefix(&format!(".{SPEEDS}."))
+                .and_then(|rest| rest.strip_suffix(".tmp"))
+                .is_some_and(|random| {
+                    !random.is_empty() && random.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                })
+    })
+}
+
 /// whether `path` is inside this user's profile, `USERPROFILE`, where windows keeps a person's
 /// files to themselves: a folder elsewhere takes its permissions from the folders above it, which
 /// may let other users in. both are resolved first, so a link counts where it leads and a file
@@ -428,6 +472,27 @@ pub(crate) fn switched(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_state_folder_follows_each_system() {
+        let var = |name: &str| match name {
+            "HOME" => Some("/home/ada".into()),
+            "XDG_STATE_HOME" => Some("relative".into()),
+            "LOCALAPPDATA" => Some("C:\\Users\\ada\\AppData\\Local".into()),
+            _ => None,
+        };
+        let expected = if cfg!(windows) {
+            PathBuf::from("C:\\Users\\ada\\AppData\\Local")
+                .join("fetchloom")
+                .join("state")
+        } else if cfg!(target_os = "macos") {
+            PathBuf::from("/home/ada/Library/Application Support/fetchloom")
+        } else {
+            PathBuf::from("/home/ada/.local/state/fetchloom")
+        };
+        assert_eq!(state_folder(&var), Some(expected));
+        assert_eq!(state_folder(&|_| None), None);
+    }
 
     /// windows keeps a file private inside the user's profile, told part by part and in any case,
     /// so a folder whose name only starts with the profile's is outside it.
