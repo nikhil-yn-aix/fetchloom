@@ -24,6 +24,8 @@ use crate::place::Placer;
 use crate::plan;
 use crate::project::lock::{self, Lock, Locked, Waiting};
 use crate::project::manifest::{Entry, Manifest};
+use crate::source::Reference;
+use crate::source::list::List;
 
 #[derive(Default, Serialize)]
 pub(super) struct Report {
@@ -429,14 +431,12 @@ fn imported(manifest: &Manifest, locked: &Locked) -> bool {
         .is_some_and(Entry::is_import)
 }
 
-/// the link a reader can open for `locked` where it has no DOI: the link it was pinned from, or
-/// the page of the dataset its ref names, when that is a web link export would write.
+/// the link a reader can open for `locked` where it has no DOI: the link it was pinned from, a
+/// list's own link, or the page of the dataset its ref names, when that is a web link export would
+/// write.
 fn link_of(locked: &Locked) -> Option<String> {
-    match crate::source::Reference::parse(&locked.resolved)
-        .ok()?
-        .reference
-    {
-        crate::source::Reference::Url(url) => link(url.as_str()).ok(),
+    match Reference::parse(&locked.resolved).ok()?.reference {
+        Reference::Url(url) | Reference::List(List::Link(url)) => link(url.as_str()).ok(),
         reference => link(&reference.page()?).ok(),
     }
 }

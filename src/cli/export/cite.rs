@@ -868,8 +868,8 @@ mod tests {
         assert_eq!(version("zenodo:3608990"), None);
     }
 
-    /// a dataset with no DOI whose ref has a page links to that page, and the statement gives the
-    /// version the page leaves out.
+    /// a dataset with no DOI whose ref has a page, or is a list at a link, links to that page or
+    /// list, and the statement gives the version the page leaves out.
     #[test]
     fn a_dataset_without_a_doi_links_to_the_page_its_ref_names() {
         let commit = "0bda0ce801be0fa2f464ff845a9d5ceae99aad7d";
@@ -894,6 +894,11 @@ mod tests {
                 "https://example.org/iris/",
                 None,
             ),
+            (
+                "list:https://physionet.org/files/mitdb/1.0.0/SHA256SUMS.txt".to_owned(),
+                "https://physionet.org/files/mitdb/1.0.0/SHA256SUMS.txt",
+                None,
+            ),
         ] {
             let mut pin = locked("iris", Some("Iris"), None);
             pin.resolved = resolved;
@@ -914,5 +919,9 @@ mod tests {
             };
             assert!(text.contains(&said), "{said} in\n{text}");
         }
+        // a list in the project has no link a reader can open
+        let mut pin = locked("iris", Some("Iris"), None);
+        pin.resolved = "list:lists/files.txt".to_owned();
+        assert_eq!(super::super::link_of(&pin), None);
     }
 }
