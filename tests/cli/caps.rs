@@ -1014,3 +1014,33 @@ fn settings_set_says_a_variable_wins_and_refuses_no_config() -> Result {
     assert_eq!(shown(&document, "push_to")["value"], pushed, "{document}");
     Ok(())
 }
+
+/// a yes to one question answers that question alone: a download of no stated size that a person
+/// let past `ask_above` still asks once it takes all of the `cache_budget`.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_yes_to_the_size_question_does_not_answer_the_budget_one() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'x'; 6 << 20];
+    let server = Server::start("/huge.bin", vec![reply("200 OK", &[], &body)])?;
+    let mut get = sandbox.command(&["get", &server.url, "-o", "huge.bin"]);
+    get.env("FETCHLOOM_ASK_ABOVE", "1M")
+        .env("FETCHLOOM_CACHE_BUDGET", "3M");
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &get,
+        "",
+        "download huge.bin (more than 1.0 MiB)?",
+        "y\rn\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("took all of the 3.0 MiB cache_budget, and its server never said its size. go on anyway?"),
+        "{screen}"
+    );
+    assert_ne!(code, Some(0), "{screen}");
+    assert!(!sandbox.work().join("huge.bin").exists(), "{screen}");
+    Ok(())
+}

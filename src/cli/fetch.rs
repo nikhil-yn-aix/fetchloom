@@ -343,10 +343,28 @@ fn batch(done: usize, count: usize) -> String {
     )
 }
 
-/// the one answer a run's downloads share once a large download asks, the size above which a
-/// download asks, and the cache folder whose disk a download needs room on.
+/// a question a download asks, whose answer every download of the run then shares: a yes to one
+/// says nothing of another.
+#[derive(Clone, Copy)]
+enum Question {
+    /// a download larger than `ask_above`.
+    Size,
+    /// a download the disk holding the cache has no room for.
+    Room,
+    /// a download whose stated size takes the cache past `cache_budget`.
+    Budget,
+    /// downloads of no stated size took all of what `cache_budget` leaves the cache.
+    Took,
+}
+
+/// the answers a run's downloads share once a download asks, the size above which a download
+/// asks, and the cache folder whose disk a download needs room on.
 struct Approval {
-    answer: OnceLock<Result<(), Error>>,
+    answers: [OnceLock<Result<(), Error>>; 4],
+    /// one question at a time for those asked each time they come up.
+    asking: Mutex<()>,
+    /// what the downloads of no stated size received so far, which shares the room among them.
+    taken: AtomicU64,
     above: u64,
     cache: Option<std::path::PathBuf>,
     /// what the disk holding a folder has free, which tests give.
@@ -362,7 +380,9 @@ struct Approval {
 impl Approval {
     fn new(above: u64) -> Approval {
         Approval {
-            answer: OnceLock::new(),
+            answers: std::array::from_fn(|_| OnceLock::new()),
+            asking: Mutex::new(()),
+            taken: AtomicU64::new(0),
             above,
             cache: None,
             free: crate::space::free,
@@ -387,12 +407,16 @@ impl Approval {
     }
 
     /// the most a download of no stated size may take, with what bounds it, from what the cache's
-    /// disk has `free`: the disk, or the budget when that leaves less. none when neither is known.
-    fn unbounded_room(&self, free: Option<u64>) -> Option<(u64, Bound)> {
+    /// disk has `free` and what such downloads `taken` already: the disk, or the budget when that
+    /// leaves less. none when neither is known.
+    fn unbounded_room(&self, free: Option<u64>, taken: u64) -> Option<(u64, Bound)> {
         let disk = free.map(|free| (free, Bound::Disk));
-        let budget = self
-            .budget
-            .map(|(held, budget)| (budget.saturating_sub(held), Bound::Budget { budget, held }));
+        let budget = self.budget.map(|(held, budget)| {
+            (
+                budget.saturating_sub(held).saturating_sub(taken),
+                Bound::Budget { budget, held },
+            )
+        });
         match (disk, budget) {
             (Some(disk), Some(budget)) if budget.0 < disk.0 => Some(budget),
             (Some(disk), _) => Some(disk),
@@ -471,11 +495,15 @@ struct Watch<'a> {
     unbounded: AtomicBool,
     received: AtomicU64,
     /// for a download of no stated size, the room it may take as it started, `u64::MAX` when
-    /// unwatched, what bounds that room, and `received` then: bytes past it stop the download,
-    /// in [`Watch::room`].
+    /// unwatched, what bounds that room, `received` then, and what all such downloads had taken
+    /// then: what they take from then on, together, stops the download past it, in
+    /// [`Watch::room`].
     free: AtomicU64,
     bound: Mutex<Bound>,
     free_from: AtomicU64,
+    taken_from: AtomicU64,
+    /// what this download added to what the downloads of no stated size took, this try.
+    reported: AtomicU64,
     /// what this download holds for the next run. the batch owns it, to say what a stop kept.
     held: &'a Held,
     /// the bytes an earlier run kept, so a start from the first byte can say they were lost.
@@ -531,6 +559,8 @@ impl<'a> Watch<'a> {
             free: AtomicU64::new(u64::MAX),
             bound: Mutex::new(Bound::Disk),
             free_from: AtomicU64::new(0),
+            taken_from: AtomicU64::new(0),
+            reported: AtomicU64::new(0),
             held,
             earlier: AtomicU64::new(0),
             restarted: AtomicBool::new(false),
@@ -576,13 +606,34 @@ impl<'a> Watch<'a> {
             .get_or_init(|| self.output.bar("Downloading", self.job.label.clone()))
     }
 
-    /// the run's one answer, asking `question` when no download asked before. the time the
-    /// download waits for it, asking or while another download asks, is no time it takes.
-    fn approve(&self, question: impl FnOnce() -> Result<(), Error>) -> Result<(), Error> {
-        if let Some(answer) = self.approval.answer.get() {
+    /// the run's answer to `asked`, asking `question` when no download asked it before.
+    fn approve(
+        &self,
+        asked: Question,
+        question: impl FnOnce() -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let answer = &self.approval.answers[asked as usize];
+        if let Some(answer) = answer.get() {
             return answer.clone();
         }
-        let decide = || self.approval.answer.get_or_init(question).clone();
+        self.waiting_for(|| answer.get_or_init(question).clone())
+    }
+
+    /// asks `question` whatever the run answered before, one question at a time.
+    fn ask_again(&self, question: impl FnOnce() -> Result<(), Error>) -> Result<(), Error> {
+        self.waiting_for(|| {
+            let _asking = self
+                .approval
+                .asking
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            question()
+        })
+    }
+
+    /// what `decide` answers. the time the download waits for it, asking or while another
+    /// download asks, is no time it takes.
+    fn waiting_for(&self, decide: impl FnOnce() -> Result<(), Error>) -> Result<(), Error> {
         let waiting = std::time::Instant::now();
         // a terminal question must not occupy a network worker while it waits for an answer
         let answer = if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
@@ -704,7 +755,11 @@ impl<'a> Watch<'a> {
         let Some(cache) = self.approval.cache.as_deref() else {
             return Ok(());
         };
-        if room == u64::MAX || crate::space::short(arrived, Some(room)).is_none() {
+        if room == u64::MAX {
+            return Ok(());
+        }
+        let taken = self.taking(arrived);
+        if crate::space::short(taken, Some(room)).is_none() {
             return Ok(());
         }
         let bound = *self.bound.lock().unwrap_or_else(PoisonError::into_inner);
@@ -717,7 +772,7 @@ impl<'a> Watch<'a> {
                 &format!("{took}; --yes goes on while the disk has room"),
                 &cache_budget::freeing_help(told.0, told.1),
             );
-            self.on_the_disk(arrived, cache);
+            self.on_the_disk(taken, cache);
             return Ok(());
         }
         // the budget is a question no one answered, as when the size is known; the disk is full
@@ -731,7 +786,7 @@ impl<'a> Watch<'a> {
             return stop();
         }
         let label = &self.job.label;
-        self.approve(|| {
+        let question = || {
             let cancel = format!("the download of {label}");
             match self
                 .output
@@ -746,22 +801,34 @@ impl<'a> Watch<'a> {
                 .cancelled(cancel)),
                 None => stop(),
             }
-        })?;
+        };
+        // a full disk is full again each time a download reaches it, so it asks each time
         if budgeted {
-            self.on_the_disk(arrived, cache);
+            self.approve(Question::Took, question)?;
         } else {
-            self.free.store(u64::MAX, Ordering::Relaxed);
+            self.ask_again(question)?;
         }
+        self.on_the_disk(taken, cache);
         Ok(())
     }
 
-    /// once a download of no stated size may go past the budget, the room the disk holding
-    /// `cache` has free now bounds it, past the `arrived` bytes it took so far.
-    fn on_the_disk(&self, arrived: u64, cache: &std::path::Path) {
+    /// counts this try's `arrived` bytes in what the downloads of no stated size took, and says
+    /// what they took together since this download began.
+    fn taking(&self, arrived: u64) -> u64 {
+        let before = self.reported.swap(arrived, Ordering::Relaxed);
+        let added = arrived.saturating_sub(before);
+        let taken = self.approval.taken.fetch_add(added, Ordering::Relaxed) + added;
+        taken.saturating_sub(self.taken_from.load(Ordering::Relaxed))
+    }
+
+    /// once a download of no stated size may go past its room, the room the disk holding `cache`
+    /// has free now bounds it, past the `taken` bytes the downloads of no stated size took since
+    /// it began.
+    fn on_the_disk(&self, taken: u64, cache: &std::path::Path) {
         let free = (self.approval.free)(cache);
         *self.bound.lock().unwrap_or_else(PoisonError::into_inner) = Bound::Disk;
         self.free.store(
-            free.map_or(u64::MAX, |free| arrived.saturating_add(free)),
+            free.map_or(u64::MAX, |free| taken.saturating_add(free)),
             Ordering::Relaxed,
         );
     }
@@ -827,12 +894,14 @@ impl<'a> Watch<'a> {
                     format!("downloading {}", self.job.label)
                 };
                 let free = free.unwrap_or_default();
-                self.approve(|| super::ask_room(self.output, &doing, needed, free, cache))?;
+                self.approve(Question::Room, || {
+                    super::ask_room(self.output, &doing, needed, free, cache)
+                })?;
             } else if unknown && let Some(past) = self.past_budget(total) {
-                self.approve(|| self.ask_budget(past))?;
+                self.approve(Question::Budget, || self.ask_budget(past))?;
             } else if left > self.approval.above {
                 let size = units::size(left);
-                self.approve(|| {
+                self.approve(Question::Size, || {
                     super::ask(
                         self.output,
                         self.yes,
@@ -853,10 +922,18 @@ impl<'a> Watch<'a> {
             }
             self.unbounded.store(total.is_none(), Ordering::Relaxed);
             self.received.store(resumed, Ordering::Relaxed);
+            // a try that starts over takes again what its last try took
+            let mine = self.reported.swap(0, Ordering::Relaxed);
+            let taken = self
+                .approval
+                .taken
+                .fetch_sub(mine, Ordering::Relaxed)
+                .saturating_sub(mine);
+            self.taken_from.store(taken, Ordering::Relaxed);
             // with --yes too: a body of no stated size has no end but this
             let watched = self
                 .approval
-                .unbounded_room(free.flatten())
+                .unbounded_room(free.flatten(), taken)
                 .filter(|_| total.is_none());
             if let Some((_, bound)) = watched {
                 *self.bound.lock().unwrap_or_else(PoisonError::into_inner) = bound;
@@ -1008,7 +1085,7 @@ impl<'a> Watch<'a> {
                 let received = self.received.fetch_add(bytes, Ordering::Relaxed) + bytes;
                 if self.unbounded.load(Ordering::Relaxed) && received > self.approval.above {
                     let size = format!("more than {}", units::size(self.approval.above));
-                    self.approve(|| {
+                    self.approve(Question::Size, || {
                         super::ask(
                             self.output,
                             self.yes,
@@ -2426,6 +2503,62 @@ mod tests {
             stopped.message,
             "downloading big.bin took the 1.5 KiB the disk holding the cache at /cache had free, and its server never said its size"
         );
+    }
+
+    /// downloads of no stated size at once share the room the budget or the disk leaves, rather
+    /// than each taking all of it; a try that starts over takes back what its last try took.
+    #[test]
+    fn downloads_of_no_stated_size_share_their_room() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let job = |name: &str| Job {
+            fetch: Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap()),
+            label: name.to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let (one, two) = (job("one.bin"), job("two.bin"));
+        let overall = overall();
+        let held = Held::default();
+        let unknown = |resumed| Event::Started {
+            total: None,
+            resumed,
+            resumable: Resumable::No,
+        };
+        let cache = std::path::Path::new("/cache");
+        for budget in [Some((1000, 0)), None] {
+            let mut approval = Approval::new(crate::settings::ASK_ABOVE).with_room(cache);
+            approval.free = |_| Some(1000);
+            if let Some((budget, held)) = budget {
+                approval = approval.with_budget(budget, held);
+            }
+            let first = Watch::new(&one, &output, &overall, &approval, false, &held);
+            let second = Watch::new(&two, &output, &overall, &approval, false, &held);
+            first.on(&unknown(0)).unwrap();
+            second.on(&unknown(0)).unwrap();
+            first.on(&Event::Bytes(600)).unwrap();
+            second.on(&Event::Bytes(400)).unwrap();
+            assert!(second.on(&Event::Bytes(1)).is_err(), "{budget:?}");
+            if budget.is_none() {
+                continue;
+            }
+            // the first starts over: its 600 bytes no longer count, and its new ones do, beside
+            // the 401 the second took
+            first.on(&unknown(0)).unwrap();
+            first.on(&Event::Bytes(599)).unwrap();
+            assert!(first.on(&Event::Bytes(1)).is_err());
+        }
     }
 
     /// a budget an empty cache leaves whole is named once, and the help raises the budget where it
