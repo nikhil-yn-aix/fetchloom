@@ -2331,3 +2331,39 @@ fn cookies_that_all_expired_ask_for_a_new_sign_in() -> Result {
     assert!(!listed.to_string().contains(host), "{listed}");
     Ok(())
 }
+
+/// a key file a windows editor saved as UTF-8 starts with a byte order mark, which is no part of
+/// the key: it is left out, and a key holding another character outside plain ASCII, as a line
+/// separator, is refused rather than saved and sent.
+#[test]
+fn a_keys_byte_order_mark_is_left_out_and_other_unicode_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let site = Routes::start(vec![("/data.csv".to_owned(), file(b"a,b\n", "\"v1\""))])?;
+    let host = host_of(&site);
+    sign_in_with_token(&sandbox, &host, "\u{feff}t-of-the-test")?;
+    let get = sandbox
+        .command(&["get", &format!("{}/data.csv", site.url), "-o", "data.csv"])
+        .output()?;
+    assert!(get.status.success(), "{}", text(&get.stderr)?);
+    assert_eq!(
+        heard(&site, "authorization"),
+        [Some("bearer t-of-the-test".to_owned())]
+    );
+    for typed in [
+        "t-of\u{2028}the-test",
+        "t-of\u{85}the-test",
+        "t-\u{e9}t\u{e9}",
+    ] {
+        let login = with_stdin(
+            sandbox.command(&["auth", "login", &host, "--token", "--with-token"]),
+            &format!("{typed}\n"),
+        )?;
+        let stderr = text(&login.stderr)?;
+        assert_eq!(login.status.code(), Some(2), "{typed:?}: {stderr}");
+        assert!(
+            stderr.contains("the key holds a character no request header can carry"),
+            "{stderr}"
+        );
+    }
+    Ok(())
+}

@@ -543,7 +543,8 @@ fn secret(context: &Context, login: &Login, host: &str, asked: &Asked) -> Result
             "in your own terminal, run `{command}`. a script can pipe the key in, as in `{command} --with-token`"
         )));
     };
-    let text = text.trim().to_owned();
+    // a file a windows editor saved as UTF-8 starts with a byte order mark, which no key holds
+    let text = text.trim().trim_start_matches('\u{feff}').trim().to_owned();
     if text.is_empty() {
         return Err(
             Error::new(Kind::Usage, "--with-token read nothing from stdin").help(format!(
@@ -551,7 +552,7 @@ fn secret(context: &Context, login: &Login, host: &str, asked: &Asked) -> Result
             )),
         );
     }
-    if reqwest::header::HeaderValue::from_str(&format!("Bearer {text}")).is_err() {
+    if !text.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
         return Err(Error::new(
             Kind::Usage,
             "the key holds a character no request header can carry, such as a line break",
