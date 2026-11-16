@@ -479,6 +479,7 @@ impl Reference {
         match self {
             Reference::Url(url) => Some(url.origin()),
             Reference::Dataverse(dataset) => dataset.origin(),
+            Reference::GitLab(release) => release.origin(),
             Reference::Bucket(prefix) => prefix.written_origin(),
             _ => None,
         }
@@ -770,6 +771,7 @@ impl Reference {
             Reference::Dryad(_) => &access::DRYAD,
             Reference::Mendeley(_) => &access::MENDELEY,
             Reference::GitHub(_) => &access::GITHUB,
+            Reference::GitLab(release) if release.is_elsewhere() => &access::GITLAB_SERVER,
             Reference::GitLab(_) => &access::GITLAB,
             Reference::Ena(_) => &access::ENA,
             Reference::Geo(_) => &access::GEO,
@@ -895,6 +897,10 @@ fn link(text: &str) -> Result<Parsed, Error> {
         })
         .or_else(|| {
             bucket::Prefix::from_link(&url).map(|prefix| parsed(Reference::Bucket(prefix), None))
+        })
+        .or_else(|| {
+            gitlab::Release::from_server_link(&url)
+                .map(|release| parsed(Reference::GitLab(release), None))
         });
     let Some(routed) = routed else {
         if let Some(source) = access::page_of(&url) {
@@ -944,62 +950,61 @@ fn repository_link(url: &Url) -> Option<(Reference, Option<String>)> {
         .or_else(|| ia::Item::from_link(url).map(|item| whole(Reference::InternetArchive(item))))
 }
 
-/// repository file pages have a stable raw endpoint, unlike their HTML view.
+/// repository file pages have a stable raw endpoint, unlike their HTML view: github's, and on
+/// any gitlab server, a page its `/-/blob/` names.
 fn raw_link(url: &Url) -> Option<Url> {
     let parts: Vec<_> = url.path_segments()?.collect();
     if parts.last().is_none_or(|part| part.is_empty()) {
         return None;
     }
     let mut raw = url.clone();
-    match url.host_str()? {
-        "github.com" if parts.len() >= 5 && matches!(parts[2], "blob" | "raw") => {
-            raw.set_scheme("https").ok()?;
-            raw.set_host(Some("raw.githubusercontent.com")).ok()?;
-            raw.set_path(&format!(
-                "/{}/{}/{}",
-                parts[0],
-                parts[1],
-                parts[3..].join("/")
-            ));
+    if url.host_str()? == "github.com" {
+        if parts.len() < 5 || !matches!(parts[2], "blob" | "raw") {
+            return None;
         }
-        "gitlab.com" => {
-            let marker = parts.windows(2).position(|pair| pair == ["-", "blob"])?;
-            if marker < 2 || parts.len() < marker + 4 {
-                return None;
-            }
-            let mut parts = parts;
-            parts[marker + 1] = "raw";
-            raw.set_path(&format!("/{}", parts.join("/")));
-        }
-        _ => return None,
+        raw.set_scheme("https").ok()?;
+        raw.set_host(Some("raw.githubusercontent.com")).ok()?;
+        raw.set_path(&format!(
+            "/{}/{}/{}",
+            parts[0],
+            parts[1],
+            parts[3..].join("/")
+        ));
+        return Some(raw);
     }
+    let marker = parts.windows(2).position(|pair| pair == ["-", "blob"])?;
+    if marker < 2 || parts.len() < marker + 4 {
+        return None;
+    }
+    let mut parts = parts;
+    parts[marker + 1] = "raw";
+    raw.set_path(&format!("/{}", parts.join("/")));
     Some(raw)
 }
 
 /// the link that serves the file git-lfs keeps for a raw repository link: github's media host,
-/// or gitlab's api asked for the file. it leaves out the link's query, which may hold a token.
+/// or the api of the gitlab server the link is on, asked for the file. it leaves out the link's
+/// query, which may hold a token.
 fn lfs_link(url: &Url) -> Option<String> {
-    match url.host_str()? {
-        "raw.githubusercontent.com" => Some(format!(
+    if url.host_str()? == "raw.githubusercontent.com" {
+        return Some(format!(
             "https://media.githubusercontent.com/media{}",
             url.path()
-        )),
-        "gitlab.com" => {
-            let (project, rest) = url.path().trim_start_matches('/').split_once("/-/raw/")?;
-            let (reference, path) = rest.split_once('/')?;
-            let encoded = |text: &str| {
-                let decoded = percent_decode_str(text).decode_utf8_lossy();
-                utf8_percent_encode(&decoded, NON_ALPHANUMERIC).to_string()
-            };
-            Some(format!(
-                "https://gitlab.com/api/v4/projects/{}/repository/files/{}/raw?ref={}&lfs=true",
-                encoded(project),
-                encoded(path),
-                encoded(reference)
-            ))
-        }
-        _ => None,
+        ));
     }
+    let (project, rest) = url.path().trim_start_matches('/').split_once("/-/raw/")?;
+    let (reference, path) = rest.split_once('/')?;
+    let encoded = |text: &str| {
+        let decoded = percent_decode_str(text).decode_utf8_lossy();
+        utf8_percent_encode(&decoded, NON_ALPHANUMERIC).to_string()
+    };
+    Some(format!(
+        "{}/api/v4/projects/{}/repository/files/{}/raw?ref={}&lfs=true",
+        url.origin().ascii_serialization(),
+        encoded(project),
+        encoded(path),
+        encoded(reference)
+    ))
 }
 
 /// what to give instead of a link to a page of `source` that names no dataset or paper: a paper
@@ -1477,6 +1482,12 @@ mod tests {
                     "https://gitlab.com/api/v4/projects/lab%2Fvision%2Fscans/repository/files/data%2Fmodel%20one%2Ebin/raw?ref=v1%2E0&lfs=true",
                 ),
             ),
+            (
+                "https://code.videolan.org:8443/videolan/dav1d/-/raw/1.5.3/tests/big%20file.bin",
+                Some(
+                    "https://code.videolan.org:8443/api/v4/projects/videolan%2Fdav1d/repository/files/tests%2Fbig%20file%2Ebin/raw?ref=1%2E5%2E3&lfs=true",
+                ),
+            ),
             ("https://example.org/model.bin", None),
         ] {
             assert_eq!(
@@ -1521,6 +1532,10 @@ mod tests {
                 "https://gitlab.com/group/sub/repo/-/blob/main/data.csv",
                 "https://gitlab.com/group/sub/repo/-/raw/main/data.csv",
             ),
+            (
+                "https://code.videolan.org/videolan/dav1d/-/blob/master/README.md",
+                "https://code.videolan.org/videolan/dav1d/-/raw/master/README.md",
+            ),
         ] {
             let parsed = parse(typed);
             assert_eq!(parsed.reference.to_string(), raw);
@@ -1538,6 +1553,7 @@ mod tests {
             "https://github.com/org/repo/blob/main/",
             "https://github.com.example.org/org/repo/blob/main/data.csv",
             "https://gitlab.com/group/repo/-/blob/main",
+            "https://code.videolan.org/videolan/dav1d/-/blob/master",
             "https://example.org/org/repo/blob/main/data.csv",
         ] {
             assert_eq!(parse(unchanged).reference.to_string(), unchanged);

@@ -95,6 +95,13 @@ fn every_source() -> Vec<Case> {
             )],
         ),
         case(
+            "gitlab://code.videolan.org/videolan/dav1d@1.5.3",
+            &[(
+                "https://code.videolan.org/api/v4/projects/videolan%2Fdav1d/releases/1.5.3",
+                "gitlab/dav1d-release.json",
+            )],
+        ),
+        case(
             "ena:SRR390728",
             &[
                 (

@@ -763,6 +763,60 @@ fn get_downloads_a_gitlab_release_link_at_its_path() -> Result {
     Ok(())
 }
 
+/// a release on another gitlab server, pasted as its page, is pinned from that server's api, its
+/// link named by the address it ends with, and a teammate's sync reads the lock alone.
+#[test]
+fn a_release_on_another_gitlab_server_pins_and_syncs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut release = fixture("gitlab/dav1d-release.json")?;
+    let link = "https://downloads.videolan.org/videolan/dav1d/1.5.3/dav1d-1.5.3.sha256";
+    release["assets"]["links"][0]["url"] = link.into();
+    release["assets"]["links"][0]["direct_asset_url"] = link.into();
+    let routes = Routes::start(vec![
+        (
+            "/code.videolan.org/api/v4/projects/videolan%2Fdav1d/releases/1.5.3".to_owned(),
+            answer(&release)?,
+        ),
+        (
+            "/downloads.videolan.org/videolan/dav1d/1.5.3/dav1d-1.5.3.sha256".to_owned(),
+            file(NOTES, "\"v1\""),
+        ),
+    ])?;
+    let page = "https://code.videolan.org/videolan/dav1d/-/releases/1.5.3";
+    let output = command(&sandbox, &routes, &["add", page, "--as", "dav1d"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains(
+            "[datasets.dav1d]\nref = \"gitlab://code.videolan.org/videolan/dav1d@1.5.3\"\n"
+        ),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains(&format!(
+            "{{ path = \"dav1d-1.5.3.sha256\", size = {}, sha256 = \"{}\", url = \"{link}\" }}",
+            NOTES.len(),
+            sha256_hex(NOTES)
+        )),
+        "{lock}"
+    );
+    let listed = routes.targets().len();
+    let (teammate, synced) = teammate_sync(&sandbox, &routes, &["sync", "--locked"])?;
+    ok(&synced)?;
+    assert_eq!(
+        fs::read(teammate.join("data/dav1d/dav1d-1.5.3.sha256"))?,
+        NOTES
+    );
+    assert_eq!(
+        routes.targets()[listed..],
+        ["/downloads.videolan.org/videolan/dav1d/1.5.3/dav1d-1.5.3.sha256"],
+        "the lock alone says what to download"
+    );
+    Ok(())
+}
+
 const ENA_API: &str = "/www.ebi.ac.uk/ena/portal/api";
 
 /// a file a stand-in serves: its name, its bytes and the hash its source states.

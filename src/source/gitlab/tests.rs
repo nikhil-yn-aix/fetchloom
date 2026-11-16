@@ -315,6 +315,154 @@ fn release_pages_name_releases_and_other_links_stay_as_they_were() {
     );
 }
 
+const DAV1D: &str = "https://code.videolan.org/api/v4/projects/videolan%2Fdav1d/releases/1.5.3";
+
+/// a release on another gitlab server is listed from that server's own api, and a link it gives
+/// no path in the release, as dav1d's, takes the name its address ends with.
+#[test]
+fn a_release_on_another_server_is_listed_from_its_own_api() {
+    let recorded = Recorded::default().fixture(DAV1D, "gitlab/dav1d-release.json");
+    let reference = Reference::parse("gitlab://code.videolan.org/videolan/dav1d@1.5.3")
+        .unwrap()
+        .reference;
+    assert_eq!(
+        reference.written_origin(),
+        Some(Url::parse("https://code.videolan.org/").unwrap().origin())
+    );
+    let listing = block_on(reference.resolve(&recorded)).unwrap();
+    assert_eq!(
+        listing.resolved.to_string(),
+        "gitlab://code.videolan.org/videolan/dav1d@1.5.3"
+    );
+    assert_eq!(listing.title.as_deref(), Some("dav1d 1.5.3"));
+    assert_eq!(
+        listing.files,
+        [Remote {
+            path: "dav1d-1.5.3.tar.xz".to_owned(),
+            size: None,
+            sha256: None,
+            md5: None,
+            url: Url::parse(
+                "https://downloads.videolan.org/videolan/dav1d/1.5.3/dav1d-1.5.3.tar.xz"
+            )
+            .unwrap(),
+            named_by_server: false,
+            etag: None,
+        }]
+    );
+    assert_eq!(recorded.asked(), [DAV1D]);
+}
+
+/// another server's reference is marked by `//` before its host, which no project path on
+/// gitlab.com can start with, so a group named like a host stays gitlab.com's; a pasted release
+/// page on any https host is read as that server's.
+#[test]
+fn another_servers_references_are_marked_by_their_host() {
+    for (text, expected, origin) in [
+        (
+            "gitlab://code.videolan.org/videolan/dav1d@1.5.3",
+            "gitlab://code.videolan.org/videolan/dav1d@1.5.3",
+            Some("https://code.videolan.org"),
+        ),
+        (
+            "gitlab://Code.VideoLAN.org/videolan/dav1d",
+            "gitlab://code.videolan.org/videolan/dav1d",
+            Some("https://code.videolan.org"),
+        ),
+        (
+            "gitlab://gitlab.example.org:8443/group/sub/tools@v1",
+            "gitlab://gitlab.example.org:8443/group/sub/tools@v1",
+            Some("https://gitlab.example.org:8443"),
+        ),
+        (
+            "gitlab://gitlab.example.org:443/group/tools@v1",
+            "gitlab://gitlab.example.org/group/tools@v1",
+            Some("https://gitlab.example.org"),
+        ),
+        (
+            "gitlab://gitlab.com/gitlab-org/gitlab-runner@v19.3.6",
+            "gitlab:gitlab-org/gitlab-runner@v19.3.6",
+            None,
+        ),
+        (
+            "gitlab:code.videolan.org/videolan/dav1d",
+            "gitlab:code.videolan.org/videolan/dav1d",
+            None,
+        ),
+        (
+            "https://code.videolan.org/videolan/dav1d/-/releases/1.5.3",
+            "gitlab://code.videolan.org/videolan/dav1d@1.5.3",
+            Some("https://code.videolan.org"),
+        ),
+        (
+            "https://gitlab.example.org:8443/group/tools/-/releases/permalink/latest",
+            "gitlab://gitlab.example.org:8443/group/tools",
+            Some("https://gitlab.example.org:8443"),
+        ),
+    ] {
+        let reference = Reference::parse(text).unwrap().reference;
+        assert_eq!(reference.to_string(), expected, "{text}");
+        assert_eq!(Reference::parse(expected).unwrap().reference, reference);
+        assert_eq!(
+            reference.written_origin(),
+            origin.map(|origin| Url::parse(origin).unwrap().origin()),
+            "{text}"
+        );
+    }
+    for text in [
+        "gitlab://",
+        "gitlab://code.videolan.org",
+        "gitlab://code.videolan.org/dav1d",
+        "gitlab://ada@code.videolan.org/videolan/dav1d",
+        "gitlab:///videolan/dav1d",
+        "gitlab://code.videolan.org//dav1d",
+        "gitlab://code.videolan.org/videolan/dav1d@",
+    ] {
+        let error = Reference::parse(text).unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceInvalid, "{text}");
+    }
+    let plain = "http://gitlab.example.org/group/tools/-/releases/v1";
+    assert_eq!(
+        Reference::parse(plain).unwrap().reference,
+        Reference::Url(Url::parse(plain).unwrap())
+    );
+}
+
+/// another server's refusal names the sign-in that saves a key for that host alone, never
+/// gitlab.com's.
+#[test]
+fn another_servers_refusal_names_its_own_sign_in() {
+    let reference = Reference::parse("gitlab://code.videolan.org/videolan/dav1d@1.5.3")
+        .unwrap()
+        .reference;
+    for (status, body, message) in [
+        (
+            404,
+            fixture_bytes("gitlab/no-project.json"),
+            "code.videolan.org has no project videolan/dav1d, or it is private",
+        ),
+        (
+            401,
+            br#"{"message":"401 Unauthorized"}"#.to_vec(),
+            "code.videolan.org refused access to gitlab://code.videolan.org/videolan/dav1d@1.5.3",
+        ),
+    ] {
+        let recorded = Recorded::default().on(DAV1D, status, body);
+        let error = block_on(reference.resolve(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired, "{status}");
+        assert_eq!(error.message, message);
+        let help = error.help.unwrap_or_default();
+        assert!(
+            help.contains("`fetchloom auth login code.videolan.org --token`"),
+            "{status}: {help}"
+        );
+        assert!(!help.contains("GITLAB_TOKEN"), "{status}: {help}");
+        let need = error.need.unwrap();
+        assert_eq!(need.account, Account::Login("code.videolan.org".to_owned()));
+        assert!(need.site, "{status}");
+    }
+}
+
 #[test]
 #[ignore = "live: talks to gitlab.com"]
 fn live_gitlab() {
@@ -335,5 +483,24 @@ fn live_gitlab() {
         listing.resolved.to_string(),
         "gitlab:gitlab-org/gitlab-runner@v19.3.6"
     );
+    assert_eq!(asked(&work), 1);
+}
+
+#[test]
+#[ignore = "live: talks to code.videolan.org"]
+fn live_gitlab_server() {
+    let (net, work) = crate::source::recorded::live(Vec::new());
+    let start = Instant::now();
+    let reference = Reference::parse("gitlab://code.videolan.org/videolan/dav1d@1.5.3")
+        .unwrap()
+        .reference;
+    let listing = block_on(reference.resolve(&net)).unwrap();
+    eprintln!(
+        "gitlab server: {} files, {} requests, {:?}",
+        listing.files.len(),
+        asked(&work),
+        start.elapsed()
+    );
+    assert_eq!(listing.files[0].path, "dav1d-1.5.3.tar.xz");
     assert_eq!(asked(&work), 1);
 }

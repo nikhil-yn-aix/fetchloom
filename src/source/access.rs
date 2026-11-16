@@ -189,6 +189,19 @@ pub(crate) static GITLAB: Access = Access {
     pace: &[],
 };
 
+/// a gitlab server other than gitlab.com, at the origin its reference names. its key is the one
+/// `auth login <host>` saves for that host alone, which goes with every request to it.
+pub(crate) static GITLAB_SERVER: Access = Access {
+    name: "gitlab",
+    api: Origins::Written,
+    // a release links its files on any host
+    files: Origins::Public,
+    key: None,
+    sites: &[],
+    pages: no_page,
+    pace: &[],
+};
+
 pub(crate) static ENA: Access = Access {
     name: "ena",
     api: Origins::Fixed(&["https://www.ebi.ac.uk"]),
@@ -421,7 +434,7 @@ pub(crate) static LOCAL: Access = Access {
 };
 
 /// every source, in the order a link's page is matched to one.
-static ALL: [&Access; 23] = [
+static ALL: [&Access; 24] = [
     &ZENODO,
     &DRYAD,
     &MENDELEY,
@@ -441,6 +454,7 @@ static ALL: [&Access; 23] = [
     &S2,
     &GITHUB,
     &GITLAB,
+    &GITLAB_SERVER,
     &DATAVERSE,
     &BUCKET,
     &LINK,

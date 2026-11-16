@@ -20,7 +20,7 @@ fetchloom auth
 | `osf` | private projects | `OSF_TOKEN` |
 | `dryad` | every download | `DRYAD_TOKEN` |
 | `github` | more than 60 requests an hour | `GH_TOKEN` or `GITHUB_TOKEN` |
-| `gitlab` | private projects | `GITLAB_TOKEN` |
+| `gitlab` | private projects on gitlab.com; another gitlab server takes `fetchloom auth login <host> --token` | `GITLAB_TOKEN` |
 | `s2` | semantic scholar's dataset files, and a rate of your own for papers and search | `S2_API_KEY` |
 | a dataverse installation's host, with `--header x-dataverse-key` | restricted files, on that installation alone | `DATAVERSE_API_TOKEN`, for the installation `DATAVERSE_URL` names |
 | `earthdata`, `physionet` or a host name | a server that asks for a username and password | a `machine` line in `.netrc` |

@@ -8,7 +8,7 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 | kaggle | `KAGGLE_API_TOKEN`, a key or a file holding one; `access_token` or `access_token.txt` in `~/.kaggle`, as kagglesdk reads it; then a username and key: `KAGGLE_USERNAME` and `KAGGLE_KEY`, each over the same field of `kaggle.json` in `KAGGLE_CONFIG_DIR`, else `~/.kaggle`, else on linux `kaggle` in `XDG_CONFIG_HOME`. a `KAGGLE_API_TOKEN` that is set but unusable skips the `~/.kaggle` token files, as kagglesdk does |
 | zenodo, figshare, osf, dryad | `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`, `DRYAD_TOKEN`; then a key saved by `fetchloom auth login` |
 | github | `GH_TOKEN`, then `GITHUB_TOKEN`, as the gh command reads them; then a key saved by `fetchloom auth login github` |
-| gitlab | `GITLAB_TOKEN`; then a key saved by `fetchloom auth login gitlab` |
+| gitlab | `GITLAB_TOKEN`; then a key saved by `fetchloom auth login gitlab`, both for gitlab.com alone. another gitlab server: the key `fetchloom auth login <host> --token` saved for that host |
 | semantic scholar | `S2_API_KEY`, as semantic scholar's examples read it; then a key saved by `fetchloom auth login s2` |
 | dataverse | `DATAVERSE_API_TOKEN` for the installation `DATAVERSE_URL` names, as pyDataverse reads them; then the key saved for that host with `auth login <host> --header x-dataverse-key` |
 | a host's login | the `machine` entry for that host in `.netrc`, or the file `NETRC` names; on windows `_netrc` when `.netrc` does not exist. `default` entries are ignored |
