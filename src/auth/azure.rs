@@ -320,7 +320,10 @@ fn read_cli(printed: &[u8]) -> Result<(String, SystemTime), &'static str> {
         _ => None,
     }
     .ok_or("it has no expires_on, which the az cli writes from version 2.54")?;
-    Ok((token.to_owned(), UNIX_EPOCH + Duration::from_secs(seconds)))
+    let expires = UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds))
+        .ok_or("its expires_on is later than any time this machine's clock holds")?;
+    Ok((token.to_owned(), expires))
 }
 
 /// where `fetchloom auth` says azure containers would get their credentials, from the variables
@@ -688,6 +691,14 @@ mod tests {
             (
                 r#"{"accessToken": "printed-token", "expiresOn": "2026-11-12 23:59:59.000000"}"#,
                 "it has no expires_on, which the az cli writes from version 2.54",
+            ),
+            (
+                r#"{"accessToken": "printed-token", "expires_on": 9223372036854775808}"#,
+                "its expires_on is later than any time this machine's clock holds",
+            ),
+            (
+                r#"{"accessToken": "printed-token", "expires_on": "18446744073709551615"}"#,
+                "its expires_on is later than any time this machine's clock holds",
             ),
         ] {
             assert_eq!(read_cli(printed.as_bytes()).err(), Some(wrong), "{printed}");
