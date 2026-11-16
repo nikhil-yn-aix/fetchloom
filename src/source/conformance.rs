@@ -1148,7 +1148,8 @@ fn every_adapter_lists_at_most_the_files_a_run_allows() {
 }
 
 /// (a) an answer the network would not read, as one past 64 MiB or past ten redirects, ends
-/// the listing in the network's own error, or leaves out only what the listing can do without.
+/// the listing in the network's own error, or leaves out only what the listing can do without,
+/// and one that came from another host after redirects ends in an error with help or a listing.
 #[test]
 fn every_adapter_ends_in_the_error_the_network_gives() {
     let mut found = Found::of("network refusals");
@@ -1170,20 +1171,37 @@ fn every_adapter_ends_in_the_error_the_network_gives() {
                     }
                 }
             }
+            let recorded = subject
+                .hostile()
+                .redirected(&link, "https://example.org/elsewhere");
+            if let Some(problem) = misbehaved(&subject.resolve(&recorded)) {
+                found.add(&subject, &format!("{link} redirected elsewhere"), &problem);
+            }
         }
     }
     found.none();
 }
 
+/// the statuses the network gives back to an adapter rather than trying again, each on the
+/// answer's own body.
+const STATUSES: [u16; 8] = [400, 401, 403, 404, 410, 418, 451, 501];
+
 /// (c) an answer of the wrong shape, as a sign-in page sent with 200, json cut short or of
-/// another kind, or a value missing, null or of another kind, ends in an error that says what
-/// to do, never a panic or a loop, and a sign-in page is never read as a listing.
+/// another kind, a value missing, null or of another kind, or a status the network does not
+/// try again, ends in an error that says what to do, never a panic or a loop, and a sign-in
+/// page is never read as a listing.
 #[test]
 fn every_adapter_ends_a_wrong_answer_in_an_error_with_help() {
     let mut found = Found::of("wrong answers");
     for subject in subjects() {
         for link in subject.recorded.links() {
             let body = subject.recorded.body(&link).to_vec();
+            for status in STATUSES {
+                let recorded = subject.hostile().answer(&link, status, body.clone());
+                if let Some(problem) = misbehaved(&subject.resolve(&recorded)) {
+                    found.add(&subject, &format!("{link} answered {status}"), &problem);
+                }
+            }
             let wrong = wrong_answers(&body).into_iter().chain(wrong_values(&body));
             for change in wrong {
                 let recorded = subject.hostile().answer(&link, 200, change.body);
