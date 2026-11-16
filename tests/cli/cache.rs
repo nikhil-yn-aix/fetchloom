@@ -177,6 +177,69 @@ fn warnings_name_the_problem_with_or_without_color() -> Result {
     Ok(())
 }
 
+/// `status` warns, as `sync` and `fetchloom cache` do, when other users may change the files
+/// projects place from the cache, as through a folder in it every user may write.
+#[cfg(unix)]
+#[test]
+fn status_warns_of_a_cache_others_may_change() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("measured")?;
+    fs::write(source.join("m.csv"), b"measured\n")?;
+    let output = sandbox.run(&["add", &source.display().to_string(), "--as", "meas"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    fs::set_permissions(sandbox.cache(), fs::Permissions::from_mode(0o755))?;
+    let objects = sandbox.cache().join("objects");
+    fs::set_permissions(&objects, fs::Permissions::from_mode(0o777))?;
+
+    let output = sandbox.run(&["status"])?;
+
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains(&format!(
+            "warning: the folder {} in the cache lets every user of this machine write to it",
+            objects.display()
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a cached file every user may write, though fetchloom keeps each read-only, lets them change
+/// the files projects placed from it, so the cache report warns of it.
+#[cfg(unix)]
+#[test]
+fn the_cache_report_warns_of_a_file_others_may_write() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("measured")?;
+    fs::write(source.join("m.csv"), b"measured\n")?;
+    let output = sandbox.run(&["add", &source.display().to_string(), "--as", "meas"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let mut objects = Vec::new();
+    for fan in fs::read_dir(sandbox.cache().join("objects"))? {
+        for entry in fs::read_dir(fan?.path())? {
+            objects.push(entry?.path());
+        }
+    }
+    let [object] = objects.as_slice() else {
+        return Err(format!("one object, not {objects:?}").into());
+    };
+    fs::set_permissions(object, fs::Permissions::from_mode(0o666))?;
+
+    let output = sandbox.run(&["cache"])?;
+
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains(&format!(
+            "warning: the file {} in the cache lets every user of this machine write to it",
+            object.display()
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a changed file imported from a folder comes back from no source, so verify says so, and its
 /// help names what does bring it back rather than promise a download sync cannot make.
 #[test]

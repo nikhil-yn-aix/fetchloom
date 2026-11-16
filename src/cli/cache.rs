@@ -69,6 +69,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     if let Some(failure) = scan.unreadable.first() {
         return Err(failure.error("cannot inspect"));
     }
+    tell_writable(&context.output, &scan.exposed);
     let usage = Usage::measure(
         &scan,
         &needed,
@@ -116,6 +117,28 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         unfinished_downloads: unfinished.downloads,
         unfinished_bytes: unfinished.bytes,
     })
+}
+
+/// warns of the cached files at `exposed`, which every user may write, though fetchloom keeps each
+/// read-only: through them others can change the files projects placed from them.
+fn tell_writable(output: &Output, exposed: &[PathBuf]) {
+    let said = match exposed {
+        [] => return,
+        [one] => format!(
+            "the file {} in the cache lets every user of this machine write to it, so they can change the files projects placed from it",
+            one.display()
+        ),
+        [first, ..] => format!(
+            "{} in the cache, as {}, let every user of this machine write to them, so they can change the files projects placed from them",
+            units::count(exposed.len() as u64, "file", "files"),
+            first.display()
+        ),
+    };
+    output.warn_with(
+        Warning::CacheForeign,
+        &said,
+        "take away their write permission, as fetchloom keeps every file there read-only",
+    );
 }
 
 /// the downloads runs left unfinished, and which of them a later run continues: those with the

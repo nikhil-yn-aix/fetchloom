@@ -657,7 +657,7 @@ fn open_unheld() -> Result<Cache, Error> {
 fn peek_cache() -> Result<Cache, Error> {
     let root = cache_root()?;
     blocked(&root)?;
-    Cache::unopened(root.clone()).map_err(|err| {
+    let cache = Cache::unopened(root.clone()).map_err(|err| {
         moved_by_variable(
             Error::io(
                 format_args!("could not open the cache at {}", root.display()),
@@ -666,7 +666,12 @@ fn peek_cache() -> Result<Cache, Error> {
             &err,
             &root,
         )
-    })
+    })?;
+    // a command that only reads, as status, says what others may change as one that writes does
+    if let Some((output, _)) = WAITS.get() {
+        tell_exposed(output, cache.root());
+    }
+    Ok(cache)
 }
 
 /// for a command that only frees or checks a cache, as gc and verify do: the cache folder when it

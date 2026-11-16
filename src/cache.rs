@@ -190,16 +190,30 @@ pub(crate) fn exposed(root: &Path) -> Option<String> {
         if found.mode() & 0o001 == 0 {
             return None;
         }
-        FOLDERS.iter().find_map(|name| {
+        let told = |folder: &Path, what: &str| {
+            format!(
+                "the folder {} in the cache {what}, so they can change the files projects place from it",
+                folder.display()
+            )
+        };
+        let inner = FOLDERS.iter().find_map(|name| {
             let folder = root.join(name);
             let inside = fs::symlink_metadata(&folder)
                 .ok()
                 .filter(fs::Metadata::is_dir)?;
-            exposure(inside.uid(), inside.mode(), user).map(|what| {
-                format!(
-                    "the folder {} in the cache {what}, so they can change the files projects place from it",
-                    folder.display()
-                )
+            exposure(inside.uid(), inside.mode(), user).map(|what| told(&folder, what))
+        });
+        // a fan of objects/ every user may write, as `umask 000` makes them, lets them put any
+        // bytes under an object's name; each member of a team may own some of them
+        inner.or_else(|| {
+            let objects = root.join("objects");
+            if fs::metadata(&objects).ok()?.mode() & 0o001 == 0 {
+                return None;
+            }
+            fs::read_dir(&objects).ok()?.flatten().find_map(|fan| {
+                let found = fan.metadata().ok().filter(fs::Metadata::is_dir)?;
+                (found.mode() & 0o002 != 0)
+                    .then(|| told(&fan.path(), "lets every user of this machine write to it"))
             })
         })
     }
@@ -1816,6 +1830,37 @@ pub(crate) mod tests {
                 "{inner} in a folder only its owner enters"
             );
         }
+    }
+
+    /// a fan folder of `objects/` every user may write, as a run with `umask 000` makes them,
+    /// lets them put any bytes under an object's name, as `objects/` itself would.
+    #[cfg(unix)]
+    #[test]
+    fn a_fan_folder_that_anyone_writes_is_exposed() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"abc");
+        let fan = cache
+            .object_path(&stored.digest)
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(
+            cache.root.join("objects"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert_eq!(exposed(&cache.root), None, "a fan only its owner writes");
+        fs::set_permissions(&fan, fs::Permissions::from_mode(0o777)).unwrap();
+
+        let told = exposed(&cache.root).unwrap_or_default();
+
+        assert!(
+            told.contains(&fan.display().to_string())
+                && told.contains("lets every user of this machine write"),
+            "{told}"
+        );
     }
 
     #[test]

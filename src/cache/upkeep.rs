@@ -53,6 +53,9 @@ impl Object {
 pub(crate) struct Scan {
     pub(crate) objects: Vec<Object>,
     pub(crate) unreadable: Vec<Failure>,
+    /// the objects every user of this machine may write, though fetchloom keeps each read-only,
+    /// so others can change the files projects placed from them.
+    pub(crate) exposed: Vec<PathBuf>,
 }
 
 /// what the projects using a cache need from it.
@@ -419,6 +422,9 @@ impl Cache {
                     object.push(&hex[2..]);
                     object
                 };
+                if found.exposed {
+                    scan.exposed.push(path.clone());
+                }
                 scan.objects.push(Object {
                     digest: found.digest,
                     size: found.size,
@@ -833,6 +839,8 @@ struct Found {
     changed: SystemTime,
     names: Option<u64>,
     disk: Option<u64>,
+    /// whether every user may write it.
+    exposed: bool,
 }
 
 /// the objects in the fan folder `fan`, whose name is `prefix`.
@@ -859,16 +867,20 @@ fn scan_fan(prefix: &str, fan: &Path, stop: &Stop) -> Result<Fan, Error> {
             // the metadata unix gives counts names, so this takes no further call; what a windows
             // listing gives does not count them
             #[cfg(unix)]
-            let (names, disk) = {
+            let (names, disk, exposed) = {
                 use std::os::unix::fs::MetadataExt;
                 // unix counts blocks of 512 bytes, whatever the disk's own block size
-                (Some(metadata.nlink()), metadata.blocks().checked_mul(512))
+                (
+                    Some(metadata.nlink()),
+                    metadata.blocks().checked_mul(512),
+                    metadata.mode() & 0o002 != 0,
+                )
             };
             #[cfg(not(unix))]
-            let (names, disk) = (None, None);
-            Ok((metadata.len(), changed, names, disk))
+            let (names, disk, exposed) = (None, None, false);
+            Ok((metadata.len(), changed, names, disk, exposed))
         }) {
-            Ok((size, changed, names, disk)) => {
+            Ok((size, changed, names, disk, exposed)) => {
                 if !hex
                     .iter()
                     .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
@@ -881,6 +893,7 @@ fn scan_fan(prefix: &str, fan: &Path, stop: &Stop) -> Result<Fan, Error> {
                     changed,
                     names,
                     disk,
+                    exposed,
                 });
             }
             Err(err) => unreadable.push(Failure::new(&entry.path(), &err)),

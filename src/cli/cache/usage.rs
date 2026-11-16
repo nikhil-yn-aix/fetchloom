@@ -233,7 +233,7 @@ mod tests {
                 object("needed and linked", 1_000, old, 2),
                 object("needed", 10_000, young, 1),
             ],
-            unreadable: Vec::new(),
+            ..Scan::default()
         };
         let mut needed = Needed::default();
         for name in ["needed and linked", "needed"] {
@@ -273,7 +273,7 @@ mod tests {
         let now = SystemTime::now();
         let scan = Scan {
             objects: vec![object("input", 1, now, 1), object("placed", 10, now, 1)],
-            unreadable: Vec::new(),
+            ..Scan::default()
         };
         let mut needed = Needed {
             told: true,
