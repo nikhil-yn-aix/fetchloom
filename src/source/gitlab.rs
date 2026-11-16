@@ -148,6 +148,13 @@ impl Release {
             return Err(self.refused());
         }
         let answer: Answer = super::json(self, &response)?;
+        // the tag is pinned in data.lock, which must read back as written
+        if !answer.tag_name.is_empty() && tag_name(&answer.tag_name).is_none() {
+            return Err(invalid(
+                self,
+                "the release's tag is no tag a reference can hold",
+            ));
+        }
         if answer.tag_name.is_empty() {
             return Err(invalid(self, "the release names no tag"));
         }

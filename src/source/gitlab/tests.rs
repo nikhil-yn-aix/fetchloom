@@ -76,6 +76,21 @@ fn the_newest_release_pins_its_tag() {
     assert_eq!(recorded.asked(), [LATEST, RELEASE]);
 }
 
+/// a tag gitlab names that no reference can hold is refused, never pinned where it would not
+/// read back.
+#[test]
+fn a_tag_no_reference_can_hold_is_refused() {
+    let spaced = changed(|release| release["tag_name"] = "v19 3.6".into());
+    let recorded = Recorded::default().on(LATEST, 200, spaced);
+    let error = block_on(release("gitlab-org/gitlab-runner").resolve(&recorded)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert!(
+        error.message.contains("no tag a reference can hold"),
+        "{}",
+        error.message
+    );
+}
+
 #[test]
 fn a_project_in_nested_groups_is_one_encoded_path() {
     let url = "https://gitlab.com/api/v4/projects/group%2Fsub%2Ftools/releases/v1";

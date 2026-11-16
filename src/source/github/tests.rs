@@ -63,6 +63,21 @@ fn the_latest_release_pins_its_tag() {
     assert_eq!(recorded.asked(), [LATEST, RELEASE]);
 }
 
+/// a tag github names that no reference can hold is refused, never pinned where it would not
+/// read back.
+#[test]
+fn a_tag_no_reference_can_hold_is_refused() {
+    let spaced = changed(|release| release["tag_name"] = "jq 1.8.2".into());
+    let recorded = Recorded::default().on(LATEST, 200, spaced);
+    let error = block_on(release("jqlang/jq").resolve(&recorded)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert!(
+        error.message.contains("no tag a reference can hold"),
+        "{}",
+        error.message
+    );
+}
+
 #[test]
 fn a_tag_with_a_slash_stays_one_tag() {
     let url = "https://api.github.com/repos/jqlang/jq/releases/tags/release%2F1.0";

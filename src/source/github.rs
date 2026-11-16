@@ -89,6 +89,13 @@ impl Release {
         if answer.tag_name.is_empty() {
             return Err(invalid(self, "the release names no tag"));
         }
+        // the tag is pinned in data.lock, which must read back as written
+        if tag_name(&answer.tag_name).is_none() {
+            return Err(invalid(
+                self,
+                "the release's tag is no tag a reference can hold",
+            ));
+        }
         if self.tag.as_ref().is_some_and(|tag| *tag != answer.tag_name) {
             return Err(invalid(self, "the answer names another tag"));
         }

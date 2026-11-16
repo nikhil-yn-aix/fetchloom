@@ -83,6 +83,13 @@ impl Dandiset {
             Some(version) => version.clone(),
             None => self.newest(api, &mut warnings).await?,
         };
+        // the version is pinned in data.lock, which must read back as written
+        if version_of(&version).is_none() {
+            return Err(invalid(
+                self,
+                "the answer names a version no reference can hold",
+            ));
+        }
         let pinned = Dandiset {
             id: self.id.clone(),
             version: Some(version.clone()),

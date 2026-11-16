@@ -136,6 +136,25 @@ fn a_dandiset_never_published_is_read_at_its_draft_and_says_so() {
     );
 }
 
+/// a version dandi names that no reference can hold is refused before anything is asked of it,
+/// never pinned where it would not read back.
+#[test]
+fn a_version_no_reference_can_hold_is_refused() {
+    let recorded = Recorded::default().on(
+        SET,
+        200,
+        r#"{"embargo_status":"OPEN","most_recent_published_version":{"version":"0.1 x"}}"#,
+    );
+    let error = listed("dandi:000027", &recorded).unwrap_err();
+    assert_eq!(error.kind, crate::error::Kind::SourceInvalid);
+    assert!(
+        error.message.contains("a version no reference can hold"),
+        "{}",
+        error.message
+    );
+    assert_eq!(recorded.asked(), [SET]);
+}
+
 /// a zarr asset is a folder of chunks with no bytes of its own.
 #[test]
 fn a_zarr_asset_is_listed_without_bytes_and_says_why() {
