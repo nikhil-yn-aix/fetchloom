@@ -202,7 +202,7 @@ pub(in crate::cli) fn page_refused(job: &Job, named: bool, slashed: bool) -> Err
         .help(format!("open it in a browser: a page that asks you to sign in needs `{sign_in}`, else look for a download or raw link. if the page itself is the data, {asked}"));
     }
     let url = &job.fetch.url;
-    if url.path().ends_with('/') {
+    if url.path().ends_with('/') || source::folder::forge(url).is_some() {
         return source::folder::no_listing(url, &asked);
     }
     let mut folder = url.clone();

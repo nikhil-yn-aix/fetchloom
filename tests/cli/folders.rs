@@ -431,6 +431,44 @@ fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
     Ok(())
 }
 
+/// a git repository's page on a forge fetchloom reads no folders of, as codeberg's, is refused
+/// with what works there, with its `/` or without, and never offered its link with a `/`.
+#[test]
+fn a_forge_page_says_what_works_there() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = "/codeberg.org/Codeberg/Documentation/src/branch/main/content";
+    let forge = || {
+        page(
+            "<!DOCTYPE html><html><head><title>Documentation/content at main</title></head><body><table><tr><td><a href=\"/Codeberg/Documentation/src/branch/main/content/a.md\">a.md</a></td></tr></table></body></html>",
+        )
+    };
+    let routes = Routes::start(vec![
+        (folder.to_owned(), forge()),
+        (format!("{folder}/"), forge()),
+    ])?;
+    let link = "https://codeberg.org/Codeberg/Documentation/src/branch/main/content";
+    for link in [link.to_owned(), format!("{link}/")] {
+        let added = sandbox
+            .command(&["--json", "add", &link, "--dry-run"])
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()?;
+        assert_eq!(added.status.code(), Some(10), "{}", text(&added.stdout)?);
+        let document = json(&added)?;
+        let error = &document["errors"][0];
+        assert_eq!(
+            error["message"],
+            format!(
+                "{link} answered with a web page of a git repository on codeberg.org, not a file or a folder listing"
+            )
+        );
+        assert_eq!(
+            error["help"],
+            "fetchloom reads the folders of github and gitlab repositories. for one on codeberg.org, give fetchloom the repository's archive link, the .zip or .tar.gz of a branch its page offers to download, or clone the repository with git, then pin the folder from your clone with `fetchloom add <folder> --as <name>`"
+        );
+    }
+    Ok(())
+}
+
 /// ncei links each folder inside a listing without its `/`, under its name with one, and the
 /// folder above as `..`: the dry run tells the files of the folders inside as the add then pins
 /// them, neither asks for a folder as a file, and neither warns of the folder above.

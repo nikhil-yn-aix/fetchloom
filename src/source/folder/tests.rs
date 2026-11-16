@@ -6,6 +6,9 @@ const DATA: &str = "https://example.org/data/";
 /// the folder `folder/ncei.html` lists, as ncei's server sent it.
 const NCEI: &str = "https://www.ncei.noaa.gov/pub/data/ghcn/daily/";
 
+/// where ncei's global-hourly folder sends a request: its bucket's page on S3.
+const S3_PAGE: &str = "https://noaa-global-hourly-pds.s3.amazonaws.com/index.html";
+
 fn url(text: &str) -> Url {
     Url::parse(text).unwrap()
 }
@@ -580,8 +583,9 @@ fn a_folder_that_lists_a_folder_above_it_again_is_refused() {
     assert_eq!(recorded.asked().len(), 2);
 }
 
-/// a listing that comes from outside its folder after a redirect is refused, and so is a folder
-/// with more files and folders than a run lists.
+/// a listing that comes from outside its folder after a redirect is refused for where it came
+/// from, as one its site titled from https for an http link, and so is a folder with more files
+/// and folders than a run lists.
 #[test]
 fn a_redirect_out_of_the_folder_and_too_many_entries_are_refused() {
     let elsewhere = "https://example.org/elsewhere/";
@@ -591,6 +595,18 @@ fn a_redirect_out_of_the_folder_and_too_many_entries_are_refused() {
     assert_eq!(
         error.message,
         format!("{DATA}sub/ sends fetchloom on to {elsewhere}, outside the folder")
+    );
+    let http = "http://example.org/data/";
+    let titled = "<html><head><title>Our files</title></head><body><table>\
+<tr><td><a href=\"/\">Parent Directory</a></td></tr>\
+<tr><td><a href=\"x.csv\">x.csv</a></td></tr></table></body></html>";
+    let recorded = Recorded::default()
+        .on(http, 200, titled.as_bytes().to_vec())
+        .redirected(http, DATA);
+    let error = block_on(folder(http).resolve(&recorded, &[])).unwrap_err();
+    assert_eq!(
+        error.message,
+        format!("{http} sends fetchloom on to {DATA}, outside the folder")
     );
     let error = block_on(folder(DATA).resolve(&nested().most(1), &[])).unwrap_err();
     assert!(
@@ -656,10 +672,88 @@ fn answers_that_are_no_listing_end_in_what_to_do() {
             Kind::SourceInvalid,
             format!("{DATA} lists \"a/b.csv\", which fetchloom refuses because its name holds a /"),
         ),
+        (
+            Recorded::default()
+                .on(DATA, 200, page.to_vec())
+                .redirected(DATA, S3_PAGE),
+            Kind::SourceInvalid,
+            format!(
+                "{DATA} sends fetchloom on to {S3_PAGE}, a page of the S3 bucket noaa-global-hourly-pds, not a folder listing"
+            ),
+        ),
     ] {
         let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
         assert_eq!((error.kind, error.message), (kind, message.clone()));
         assert!(error.help.is_some(), "{message}");
+    }
+    for bucket_page in [
+        S3_PAGE,
+        "https://s3.amazonaws.com/noaa-global-hourly-pds/index.html",
+    ] {
+        let recorded = Recorded::default()
+            .on(DATA, 200, page.to_vec())
+            .redirected(DATA, bucket_page);
+        let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+        assert!(
+            error.message.contains("S3 bucket noaa-global-hourly-pds"),
+            "{bucket_page}"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "fetchloom lists a bucket's folder by its s3 link: run `fetchloom add s3://noaa-global-hourly-pds/<folder>/` with the folder's path in the bucket, which that page shows"
+            )
+        );
+    }
+    // a name S3 refuses, as a server may put a shell's words in, is offered as no bucket
+    for elsewhere in [
+        "https://s3.amazonaws.com/$(touch%20x)/index.html",
+        "https://s3.amazonaws.com/a;b/index.html",
+        "https://s3.amazonaws.com/index.html",
+        "https://x.s3.amazonaws.com/index.html",
+    ] {
+        let recorded = Recorded::default()
+            .on(DATA, 200, page.to_vec())
+            .redirected(DATA, elsewhere);
+        let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!("{DATA} sends fetchloom on to {elsewhere}, outside the folder")
+        );
+    }
+}
+
+/// a link to a git repository's page on a forge fetchloom reads no folders of names the forge's
+/// host: gitea's and forgejo's on any host, gogs's, gin's and bitbucket's on their own, and
+/// sourcehut's. github's and gitlab's are no such page, nor is any other.
+#[test]
+fn a_forge_page_is_known_by_its_link() {
+    for (link, host) in [
+        (
+            "https://codeberg.org/Codeberg/Documentation/src/branch/main/content",
+            Some("codeberg.org"),
+        ),
+        (
+            "https://git.lab.example/lab/survey/src/tag/v1/data/",
+            Some("git.lab.example"),
+        ),
+        (
+            "https://gin.g-node.org/robintibor/high-gamma-dataset/src/master/data/train",
+            Some("gin.g-node.org"),
+        ),
+        (
+            "https://bitbucket.org/franrruiz/data_nyt_largev_4/src/master/",
+            Some("bitbucket.org"),
+        ),
+        (
+            "https://git.sr.ht/~sircmpwn/hare/tree/master/item/docs",
+            Some("git.sr.ht"),
+        ),
+        ("https://example.org/lab/survey/src/main/data", None),
+        ("https://github.com/lab/survey/tree/main/data", None),
+        ("https://example.org/data/", None),
+    ] {
+        assert_eq!(forge(&url(link)), host, "{link}");
     }
 }
 

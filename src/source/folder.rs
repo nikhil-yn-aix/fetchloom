@@ -814,10 +814,19 @@ impl Folder {
         url: &Url,
         path: &str,
     ) -> Result<Index, Error> {
+        let inside =
+            response.url.origin() == url.origin() && response.url.path().starts_with(url.path());
         let index = match read(text, &response.url, url) {
-            Ok(index) => index,
+            Ok(index) if inside => index,
+            Ok(_) => return Err(sent_outside(url, &response.url)),
+            // a redirect can hide a listing its site titled, as http to https does, so a page from
+            // outside is told by where it came from. a forge's page is none wherever it came from
             Err(Unread::NoListing) if path.is_empty() => {
-                return Err(no_listing(&self.url, PAGE_FLAG));
+                return Err(if inside || forge(url).is_some() {
+                    no_listing(&self.url, PAGE_FLAG)
+                } else {
+                    sent_outside(url, &response.url)
+                });
             }
             Err(Unread::NoListing) => {
                 return Err(Error::new(
@@ -840,19 +849,6 @@ impl Folder {
                 return Err(super::refused_name(&self.shown(), &at, reason));
             }
         };
-        let inside =
-            response.url.origin() == url.origin() && response.url.path().starts_with(url.path());
-        if !inside {
-            return Err(Error::new(
-                Kind::SourceInvalid,
-                format!(
-                    "{} sends fetchloom on to {}, outside the folder",
-                    Shown(url),
-                    Shown(&response.url)
-                ),
-            )
-            .help("fetchloom reads no listing outside the folder it was given. if that is the same folder, give its link instead"));
-        }
         Ok(index)
     }
 
@@ -867,9 +863,41 @@ impl fmt::Display for Folder {
     }
 }
 
+/// the refusal of the folder `url`, whose server sent fetchloom on to `answered`, outside it, as
+/// to the page of an S3 bucket, whose folders fetchloom lists by their s3 links.
+fn sent_outside(url: &Url, answered: &Url) -> Error {
+    let sent = format!("{} sends fetchloom on to {}", Shown(url), Shown(answered));
+    if let Some(bucket) = bucket_of(answered) {
+        return Error::new(
+            Kind::SourceInvalid,
+            format!("{sent}, a page of the S3 bucket {bucket}, not a folder listing"),
+        )
+        .help(format!(
+            "fetchloom lists a bucket's folder by its s3 link: run `{}` with the folder's path in the bucket, which that page shows",
+            crate::suggested::command(&format!("add s3://{bucket}/<folder>/"))
+        ));
+    }
+    Error::new(Kind::SourceInvalid, format!("{sent}, outside the folder"))
+        .help("fetchloom reads no listing outside the folder it was given. if that is the same folder, give its link instead")
+}
+
 /// the refusal of the web page `link`, a folder's link, answered with that is no listing
-/// fetchloom reads, with `asked` saying how to keep the page itself.
+/// fetchloom reads, with `asked` saying how to keep the page itself. a git repository's page on a
+/// forge fetchloom reads no folders of says what works there instead.
 pub(crate) fn no_listing(link: &Url, asked: &str) -> Error {
+    if let Some(host) = forge(link) {
+        return Error::new(
+            Kind::SourceInvalid,
+            format!(
+                "{} answered with a web page of a git repository on {host}, not a file or a folder listing",
+                Shown(link)
+            ),
+        )
+        .help(format!(
+            "fetchloom reads the folders of github and gitlab repositories. for one on {host}, give fetchloom the repository's archive link, the .zip or .tar.gz of a branch its page offers to download, or clone the repository with git, then pin the folder from your clone with `{}`",
+            crate::suggested::command("add <folder> --as <name>")
+        ));
+    }
     Error::new(
         Kind::SourceInvalid,
         format!(
@@ -880,6 +908,37 @@ pub(crate) fn no_listing(link: &Url, asked: &str) -> Error {
     .help(format!(
         "fetchloom reads the folder listings apache, nginx, lighttpd, caddy, rclone and python's http.server make, and this page is none of them. open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}"
     ))
+}
+
+/// the host of the forge whose git repository's page `link` is, as its path shows one: gitea's and
+/// forgejo's, as codeberg's `/<owner>/<repo>/src/branch/<branch>/…`, on any host; gogs's,
+/// gin's and bitbucket's `/<owner>/<repo>/src/<ref>/…` on their own hosts; and sourcehut's
+/// `/~<owner>/<repo>/tree/…`. fetchloom reads the folders of none of them.
+pub(crate) fn forge(link: &Url) -> Option<&str> {
+    let host = link.host_str()?;
+    let parts: Vec<&str> = link.path_segments()?.collect();
+    let page = match parts.as_slice() {
+        [_, _, "src", "branch" | "tag" | "commit", ..] => true,
+        [_, _, "src", _, ..] => matches!(
+            host,
+            "bitbucket.org" | "gin.g-node.org" | "codeberg.org" | "gitea.com" | "notabug.org"
+        ),
+        [owner, _, "tree", ..] => host == "git.sr.ht" && owner.starts_with('~'),
+        _ => false,
+    };
+    page.then_some(host)
+}
+
+/// the S3 bucket whose page `url` is, as `noaa-global-hourly-pds.s3.amazonaws.com/index.html`
+/// and `s3.amazonaws.com/noaa-global-hourly-pds/index.html` are that bucket's, by a name S3
+/// allows, which a shell runs nothing in.
+fn bucket_of(url: &Url) -> Option<&str> {
+    let (named, _) = crate::net::s3::s3_host(url.host_str()?)?;
+    let bucket = named.or_else(|| {
+        let mut path = url.path_segments()?;
+        path.next().filter(|_| path.next().is_some())
+    })?;
+    crate::net::s3::is_bucket(bucket).then_some(bucket)
 }
 
 /// a folder's walk: the files listed so far, the folders still to list, by path and link, and
