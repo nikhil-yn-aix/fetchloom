@@ -583,6 +583,7 @@ impl Net {
             expired: None,
             expect: fetch.expect,
             revalidate: false,
+            record: fetch.record,
             held: None,
             unpack: fetch.unpack,
             mirror: fetch.mirror,

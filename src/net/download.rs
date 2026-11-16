@@ -86,6 +86,10 @@ pub(crate) struct Fetch {
     /// ask the server whether the file changed since the last download, instead of trusting the
     /// cache. for links fetched outside a project, where nothing pins the bytes.
     pub(crate) revalidate: bool,
+    /// keep what the server sent with the bytes, as a revalidated download does, though nothing
+    /// asks it now: for a pinned file only its server vouches for, which a later upgrade asks
+    /// whether it changed.
+    pub(crate) record: bool,
     /// the bytes a revalidated download may find unchanged, in the cache or a caller's file such
     /// as `get -o` wrote. when the url's record names them, the server is asked whether they
     /// changed, and a large file asks about its size only once the server sends it.
@@ -148,6 +152,7 @@ impl Fetch {
             expired: None,
             expect: Expect::default(),
             revalidate: false,
+            record: false,
             held: None,
             unpack: false,
             mirror: false,
@@ -700,6 +705,7 @@ impl Net {
             expired: fetch.expired,
             expect: fetch.expect,
             revalidate: false,
+            record: fetch.record,
             held: None,
             unpack: fetch.unpack,
             mirror: fetch.mirror,
@@ -1690,7 +1696,7 @@ impl Net {
         {
             tracing::debug!(%err, "could not record the stated md5");
         }
-        if fetch.revalidate {
+        if fetch.revalidate || fetch.record {
             let record = UrlRecord {
                 url: fetch.url.as_str().to_owned(),
                 sha256: stored.digest,

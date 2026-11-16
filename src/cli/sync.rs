@@ -2578,6 +2578,8 @@ fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url, page: bool
                 size: Some(file.size),
             },
             revalidate: false,
+            record: pinned
+                .is_some_and(|locked| draft::vouched_by_server(&locked.resolved, &file.url)),
             unpack: false,
             page,
             ..source::fetch_plan(url)

@@ -431,6 +431,7 @@ impl Draft {
             let fetch = Fetch {
                 expect,
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
+                record: vouched_by_server(&self.resolved, remote.url.as_str()),
                 held: held[index],
                 unpack: whole[index],
                 page: self.web_page,
@@ -474,6 +475,7 @@ impl Draft {
                         md5: file.remote.md5,
                         size: Some(size),
                     },
+                    record: vouched_by_server(&self.resolved, file.remote.url.as_str()),
                     ..source::fetch_plan(&file.remote.url)
                 };
                 Some(Job {
@@ -872,6 +874,13 @@ pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
             crate::cli::project::command(&format!("lock --upgrade {dataset}"))
         ))
     })
+}
+
+/// whether the file at `url` of the dataset resolved as `resolved` is one only its server vouches
+/// for: the dataset's own link, or a file below its folder's link, which no source's checksum
+/// pins, so a download of it keeps what the server sent for an upgrade to ask whether it changed.
+pub(super) fn vouched_by_server(resolved: &str, url: &str) -> bool {
+    url == resolved || (resolved.ends_with('/') && url.starts_with(resolved))
 }
 
 /// a hash no bytes have, standing for one only a download learns, for a dry run or the clash check.

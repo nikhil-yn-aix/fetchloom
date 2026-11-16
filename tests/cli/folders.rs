@@ -553,3 +553,55 @@ fn sizes_only_a_server_states_count_together() -> Result {
     }
     Ok(())
 }
+
+/// a machine that only synced a folder keeps what each file's server sent, as the machine that
+/// added it does, so its first `lock --upgrade` asks each server whether its file changed, and a
+/// server's "not modified" downloads nothing again.
+#[test]
+fn a_synced_folder_upgrades_by_asking_whether_its_files_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(python)?;
+    let folder = format!("{}/data/", server.url);
+    let added = sandbox.run(&["add", &folder])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+    sandbox.allow(&server.url);
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let synced = run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+
+    let unchanged = |etag: &str| reply("304 Not Modified", &[("ETag", etag)], b"");
+    server.change(vec![
+        ("/data/iris.csv".to_owned(), unchanged("\"i1\"")),
+        ("/data/sub/tips.csv".to_owned(), unchanged("\"t1\"")),
+    ]);
+    let before = server.requests().len();
+    let upgraded = run(&["--json", "lock", "--upgrade"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stdout)?
+    );
+    assert_eq!(json(&upgraded)?["result"]["lock_changed"], false);
+    let asked = &server.requests()[before..];
+    for (file, etag) in [
+        ("/data/iris.csv", "\"i1\""),
+        ("/data/sub/tips.csv", "\"t1\""),
+    ] {
+        let head = asked
+            .iter()
+            .find(|head| head.starts_with(&format!("get {file} ")))
+            .ok_or_else(|| format!("{file} was not asked: {asked:?}"))?;
+        assert!(
+            head.contains(&format!("if-none-match: {etag}")),
+            "{file} was asked without its etag: {head}"
+        );
+    }
+    Ok(())
+}
