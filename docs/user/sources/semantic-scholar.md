@@ -87,8 +87,8 @@ with a key, the same dry run listed the 30 files in 5.0 s, its first two request
 ```text
 $ fetchloom add s2:tldrs --dry-run
   Resolving s2:tldrs
-warning: api.semanticscholar.org answered 429. trying again in 2.0 s (try 2 of 4)
-warning: api.semanticscholar.org answered 429. trying again in 1.5 s (try 2 of 4)
+warning: api.semanticscholar.org answered 429. trying latest again in 2.0 s (try 2 of 4)
+warning: api.semanticscholar.org answered 429. trying tldrs again in 1.5 s (try 2 of 4)
    Resolved s2:tldrs@2026-11-10 · A short natural-language summary of the contents… · 30 files · ODC-By-1.0
       Would pin tldrs, new in data.lock: s2:tldrs@2026-11-10 · A short natural-language summary of the contents… · 30 files · size unknown
 ```
@@ -98,7 +98,7 @@ the API states no file's size, so a size is known once the file has downloaded. 
 ```text
 $ fetchloom add s2:publication-venues
   Resolving s2:publication-venues
-warning: api.semanticscholar.org answered 429. trying again in 1.9 s (try 2 of 4)
+warning: api.semanticscholar.org answered 429. trying latest again in 1.9 s (try 2 of 4)
    Resolved s2:publication-venues@2026-11-10 · Details about the venues in which papers are… · 1 file · ODC-By-1.0
 Downloading publication-venues/20261113_123241_00043_gief7_83d699d7-c621-48bd-809a-7e4064a0a6e0.gz · 15.3 MiB
  Downloaded 1 file · 15.3 MiB in 599 ms
@@ -133,9 +133,9 @@ semantic scholar's API answers anyone, but every program without a key shares on
 
 ```text
 $ fetchloom add s2:CorpusId:2180281 --dry-run
-warning: api.semanticscholar.org answered 429. trying again in 5.3 s (try 2 of 4)
-warning: api.semanticscholar.org answered 429. trying again in 11.5 s (try 3 of 4)
-warning: api.semanticscholar.org answered 429. trying again in 12.7 s (try 4 of 4)
+warning: api.semanticscholar.org answered 429. trying CorpusId:2180281 again in 5.3 s (try 2 of 4)
+warning: api.semanticscholar.org answered 429. trying CorpusId:2180281 again in 11.5 s (try 3 of 4)
+warning: api.semanticscholar.org answered 429. trying CorpusId:2180281 again in 12.7 s (try 4 of 4)
 error: api.semanticscholar.org refused one request after another because it is busy, so this run asks it nothing more
   help: every program without a key shares one pool of semantic scholar's requests: run `fetchloom add s2:CorpusId:2180281 --dry-run` again later, or get a free key at https://www.semanticscholar.org/product/api#api-key-form and sign in with `fetchloom auth login s2`, for a rate of your own
 ```

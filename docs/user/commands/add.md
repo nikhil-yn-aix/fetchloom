@@ -59,8 +59,8 @@ a typed link to this machine or your network, such as a lab server, is trusted f
       Added cows, its files are in data/cows
   hint: scripts can find it with `fetchloom path cows`
 warning: a later run downloads from http://127.0.0.1:19450, a private address, only once allowed_origins lists it
-  help: put `allowed_origins = ["http://127.0.0.1:19450"]` in ~/.config/fetchloom/settings.toml, or set `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:19450` for one run
-  next: commit data.toml, data.lock and .gitignore; anyone who clones adds `allowed_origins = ["http://127.0.0.1:19450"]` to their settings file, then runs `fetchloom sync`
+  help: save it with `fetchloom settings set allowed_origins http://127.0.0.1:19450`, or set `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:19450` for one run
+  next: commit data.toml, data.lock and .gitignore; anyone who clones runs `fetchloom settings set allowed_origins http://127.0.0.1:19450`, with any origins they list already, then `fetchloom sync`
 ```
 
 a new link with nothing at it, or an id its source does not know, is fixed on the command line, since data.toml has no entry for it yet. from a real run in an empty folder:
