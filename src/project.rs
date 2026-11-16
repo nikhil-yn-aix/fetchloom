@@ -18,6 +18,7 @@ use self::manifest::Manifest;
 use self::state::{Folder, Look, State, Synced};
 use crate::cache::names;
 use crate::error::{Error, Kind};
+use crate::volume::Volume;
 
 const FOLDER: &str = ".fetchloom";
 
@@ -559,8 +560,9 @@ impl Project {
     }
 
     /// removes the parts of file lists `lock` no longer names, and any a run left half written,
-    /// and their folder once it is empty. other files there stay. a part that cannot be removed
-    /// is left for the next write, and a data.lock.d that is a link or a file is left alone.
+    /// and their folder once it is empty. other files there stay. a read-only part goes too, on
+    /// every disk. a part that cannot be removed is left for the next write, and a data.lock.d
+    /// that is a link or a file is left alone.
     pub(crate) fn sweep_lists(&self, lock: &Lock) {
         let Ok(folder) = lock::lists::folder(&self.root) else {
             return;
@@ -568,6 +570,7 @@ impl Project {
         let Ok(entries) = fs::read_dir(&folder) else {
             return;
         };
+        let volume = Volume::new(self.own_folder());
         // the parts there of a list that waits for another stay with it
         let named: std::collections::HashSet<String> = lock
             .lists()
@@ -583,7 +586,7 @@ impl Project {
             let unnamed = lock::lists::is_part(&file)
                 && !named.contains(&format!("{}/{file}", lock::lists::FOLDER));
             if (unnamed || lock::lists::is_unfinished(&file))
-                && let Err(err) = fs::remove_file(entry.path())
+                && let Err(err) = volume.remove(&entry.path())
             {
                 tracing::debug!(%err, file, "could not remove a file list data.lock no longer names");
             }
@@ -777,15 +780,18 @@ impl Project {
     }
 
     /// removes what a write killed between staging a file in `.fetchloom` and naming it left
-    /// there. only a command that holds the project stages one, so none is being written now.
+    /// there, read-only as one stopped while naming a read-only file. only a command that holds
+    /// the project stages one, so none is being written now.
     fn sweep_staged(&self) {
-        let Ok(entries) = fs::read_dir(self.own_folder()) else {
+        let own = self.own_folder();
+        let Ok(entries) = fs::read_dir(&own) else {
             return;
         };
+        let volume = Volume::new(own);
         for entry in entries.flatten() {
             let staged = entry.file_name().to_str().is_some_and(is_staged)
                 && entry.file_type().is_ok_and(|found| found.is_file());
-            if staged && let Err(err) = fs::remove_file(entry.path()) {
+            if staged && let Err(err) = volume.remove(&entry.path()) {
                 tracing::debug!(%err, path = %entry.path().display(), "could not remove what a stopped write left");
             }
         }
@@ -1926,6 +1932,26 @@ mod tests {
         }
         for name in kept {
             assert!(own.join(name).exists(), "{name}");
+        }
+    }
+
+    /// a write stopped as it named a read-only file leaves its staged copy read-only, and a person
+    /// may make a part so: fat and exfat remove neither until the flag is cleared.
+    #[cfg(windows)]
+    #[test]
+    fn a_sweep_removes_read_only_files_on_every_disk() {
+        let staged = ".fetchloom/.data.toml.0123abcd.tmp";
+        let part = "data.lock.d/old.0123456789ab.tsv.zst";
+        let (_dir, project) = project(&[(staged, "x"), (part, "x")]);
+        for file in [staged, part] {
+            crate::volume::set_read_only(&project.root.join(file), true).unwrap();
+        }
+        let Hold::Held(_held) = project.hold("sync").unwrap() else {
+            panic!("free")
+        };
+        project.sweep_lists(&Lock::default());
+        for file in [staged, part] {
+            assert!(!project.root.join(file).exists(), "{file} was left");
         }
     }
 
