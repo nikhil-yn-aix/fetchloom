@@ -775,7 +775,11 @@ fn a_full_reply_replaces_saved_ranges_when_prefix_empty() {
         );
         let net = net(&server.url, 1);
         let (_folder, cache) = cache();
-        let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
+        let pin = pinned.then(|| sha256(&body));
+        let claimed = cache
+            .claim_pinned(server.url.as_str(), pin.as_ref())
+            .unwrap();
+        let crate::cache::Claim::Owned(partial) = claimed else {
             panic!("nothing else holds the download");
         };
         let validators = Validators {

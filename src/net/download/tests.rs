@@ -613,8 +613,15 @@ fn a_fresh_request_answered_416_is_refused() {
 /// leaves what a run killed once every byte of `body` from `url` arrived, before the file took
 /// its name, leaves: the bytes and a record naming them all, of a file `length` long, sealed for
 /// publication when `sealed`.
-fn kept_whole(cache: &Cache, url: &Url, body: &[u8], length: Option<u64>, sealed: bool) {
-    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+fn kept_whole(
+    cache: &Cache,
+    url: &Url,
+    pinned: Option<&Sha256>,
+    body: &[u8],
+    length: Option<u64>,
+    sealed: bool,
+) {
+    let Claim::Owned(partial) = cache.claim_pinned(url.as_str(), pinned).unwrap() else {
         panic!("nothing else holds the download");
     };
     let validators = Validators {
@@ -626,7 +633,7 @@ fn kept_whole(cache: &Cache, url: &Url, body: &[u8], length: Option<u64>, sealed
     writer.save().unwrap();
     drop(writer);
     if sealed {
-        let key = crate::digest::sha256(url.as_str().as_bytes()).hex();
+        let key = crate::cache::partial_key(url.as_str(), pinned);
         let part = cache.root().join("partial").join(&key[..1]);
         crate::cache::tests::seal(&part.join(format!("{key}.part")));
     }
@@ -671,7 +678,7 @@ fn a_whole_answer_as_long_as_a_part_kept_whole_finishes_it() {
             let (url, asked) = serve(vec![reply("200 OK", answer, sent)]);
             let folder = tempfile::tempdir().unwrap();
             let cache = Cache::open(folder.path().join("cache")).unwrap();
-            kept_whole(&cache, &url, &body, length, sealed);
+            kept_whole(&cache, &url, expect.sha256.as_ref(), &body, length, sealed);
             let mut fetch = Fetch::new(url.clone());
             fetch.expect = expect;
             let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
@@ -690,12 +697,12 @@ fn a_whole_answer_as_long_as_a_part_kept_whole_finishes_it() {
 /// leaves what a run killed before it recorded any of `bytes` from `url` leaves, as a small file
 /// all of whose bytes came does, or any file in its first second: the bytes and no record of
 /// them, sealed for publication when `sealed`.
-fn unrecorded_part(cache: &Cache, url: &Url, bytes: &[u8], sealed: bool) {
-    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+fn unrecorded_part(cache: &Cache, url: &Url, pinned: Option<&Sha256>, bytes: &[u8], sealed: bool) {
+    let Claim::Owned(partial) = cache.claim_pinned(url.as_str(), pinned).unwrap() else {
         panic!("nothing else holds the download");
     };
     drop(partial);
-    let key = crate::digest::sha256(url.as_str().as_bytes()).hex();
+    let key = crate::cache::partial_key(url.as_str(), pinned);
     let part = cache
         .root()
         .join("partial")
@@ -765,7 +772,7 @@ fn bytes_no_record_names_are_kept_when_a_pin_checks_them() {
             let (url, heads) = serve(vec![answer.clone()]);
             let folder = tempfile::tempdir().unwrap();
             let cache = Cache::open(folder.path().join("cache")).unwrap();
-            unrecorded_part(&cache, &url, kept, sealed);
+            unrecorded_part(&cache, &url, expect.sha256.as_ref(), kept, sealed);
             let mut fetch = Fetch::new(url.clone());
             fetch.expect = expect;
             let case = format!(
@@ -808,7 +815,15 @@ fn a_pinned_file_kept_whole_needs_no_request() {
         let (url, asked) = serve(vec![reply("200 OK", &[("ETag", "\"v1\"")], &body)]);
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
-        kept_whole(&cache, &url, &body, Some(body.len() as u64), sealed);
+        let pinned = crate::digest::sha256(&body);
+        kept_whole(
+            &cache,
+            &url,
+            Some(&pinned),
+            &body,
+            Some(body.len() as u64),
+            sealed,
+        );
         let mut fetch = Fetch::new(url.clone());
         fetch.expect.sha256 = Some(crate::digest::sha256(&body));
         fetch.expect.size = Some(body.len() as u64);
@@ -849,7 +864,7 @@ fn a_file_kept_whole_asks_only_for_its_last_byte() {
         ]);
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
-        kept_whole(&cache, &url, &body, Some(total as u64), sealed);
+        kept_whole(&cache, &url, None, &body, Some(total as u64), sealed);
         let fetch = Fetch::new(url.clone());
         let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
         assert_eq!(
@@ -892,7 +907,7 @@ fn a_last_byte_of_no_stated_length_finishes_a_part_of_the_same_version() {
         ]);
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
-        kept_whole(&cache, &url, &body, Some(total as u64), false);
+        kept_whole(&cache, &url, None, &body, Some(total as u64), false);
         let fetch = Fetch::new(url.clone());
         let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
         assert_eq!(fetched.digest, crate::digest::sha256(&body), "{tag:?}");
@@ -959,7 +974,7 @@ fn a_416_at_the_end_of_the_bytes_kept_finishes_them() {
         ]);
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
-        kept_whole(&cache, &url, &body, None, sealed);
+        kept_whole(&cache, &url, None, &body, None, sealed);
         let fetch = Fetch::new(url.clone());
         let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
         assert_eq!(
@@ -2298,7 +2313,8 @@ fn a_checksum_restart_reacquires_released_download_slots() {
     ]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
-    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+    let pinned = crate::digest::sha256(b"bbbbbbbb");
+    let Claim::Owned(partial) = cache.claim_pinned(url.as_str(), Some(&pinned)).unwrap() else {
         panic!("the fixture owns its partial")
     };
     let mut writer = partial
@@ -2319,7 +2335,7 @@ fn a_checksum_restart_reacquires_released_download_slots() {
     drop(partial);
     let net = net(&url);
     let mut fetch = Fetch::new(url);
-    fetch.expect.sha256 = Some(crate::digest::sha256(b"bbbbbbbb"));
+    fetch.expect.sha256 = Some(pinned);
     let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
     assert_eq!(
         fs::read(cache.object_path(&fetched.digest)).unwrap(),

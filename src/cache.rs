@@ -31,6 +31,8 @@ pub(crate) use held::Access;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use object::{Batch, batch_in};
 pub(crate) use object::{Copied, NewObject, Sealed, holds_pinned, sha256_of};
+#[cfg(test)]
+pub(crate) use partial::partial_key;
 pub(crate) use partial::{Claim, Hashing, Partial, PartialWriter, names};
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, members_of, parts_key, tree, tree_hash};

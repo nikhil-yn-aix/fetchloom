@@ -737,7 +737,8 @@ impl Net {
         known: Option<UrlRecord>,
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
-        let (partial, waited) = self.claim(&fetch.url, cache, on).await?;
+        let pinned = fetch.expect.sha256;
+        let (partial, waited) = self.claim(&fetch.url, pinned.as_ref(), cache, on).await?;
         // another run can publish between the lookup and a claim that never reports contention
         if let Some(found) = self.in_cache(fetch, cache) {
             return Ok(found);
@@ -936,17 +937,18 @@ impl Net {
         Some(fetched)
     }
 
-    /// claims the download of `url`, waiting while another fetchloom downloads the same URL.
-    /// says whether it had to wait.
+    /// claims the download of `url`, or of the file `pinned` names from any link, waiting while
+    /// another fetchloom downloads the same. says whether it had to wait.
     async fn claim(
         &self,
         url: &Url,
+        pinned: Option<&Sha256>,
         cache: &Cache,
         on: Listener<'_>,
     ) -> Result<(Partial, bool), Error> {
         let mut waited = false;
         loop {
-            match cache.claim(url.as_str()) {
+            match cache.claim_pinned(url.as_str(), pinned) {
                 Ok(Claim::Owned(partial)) => return Ok((partial, waited)),
                 Ok(Claim::Busy) => {
                     let cache = cache.clone();

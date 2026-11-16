@@ -56,6 +56,38 @@ fn a_saved_partial_resumes_and_hashes_the_whole_file() {
     );
 }
 
+/// bytes a mirror or a dead link sent of a pinned file are the same file's from any link, so
+/// another link goes on from them, without the first server's version, which it never stated; an
+/// unpinned download of another link starts over.
+#[test]
+fn another_link_to_a_pinned_file_goes_on_from_its_bytes() {
+    let (_dir, cache) = cache();
+    let pinned = crate::digest::sha256(b"abcdef");
+    let owned_pinned = |url: &str| match cache.claim_pinned(url, Some(&pinned)).unwrap() {
+        Claim::Owned(partial) => partial,
+        Claim::Busy => panic!("nothing else holds {url}"),
+    };
+    let mirror = owned_pinned("https://mirror.example.org/objects/ab/cdef");
+    let validators = Validators {
+        etag: Some("\"mirror\"".to_owned()),
+        ..Validators::default()
+    };
+    let mut writer = mirror.writer(0, Some(6), validators, true, false).unwrap();
+    writer.write_all(b"abc").unwrap();
+    writer.save().unwrap();
+    drop(writer);
+    drop(mirror);
+    let source = owned_pinned("https://data.example.org/big");
+    assert_eq!(source.resumable(), Some((3, Validators::default())));
+    let mut resumed = source
+        .writer(3, Some(6), Validators::default(), true, false)
+        .unwrap();
+    resumed.write_all(b"def").unwrap();
+    assert_eq!(resumed.finish().unwrap().digest, pinned);
+    let unpinned = owned(&cache, "https://data.example.org/other");
+    assert_eq!(unpinned.resumable(), None);
+}
+
 #[test]
 fn bytes_that_differ_from_their_record_are_never_continued() {
     let (_dir, cache) = cache();

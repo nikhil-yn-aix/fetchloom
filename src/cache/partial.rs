@@ -41,11 +41,16 @@ pub(crate) enum Claim {
     Busy,
 }
 
-/// an unfinished download of one URL. this process owns it until every clone is dropped.
+/// an unfinished download of one URL, or of one pinned file from any link. this process owns it
+/// until every clone is dropped.
 #[derive(Clone)]
 pub(crate) struct Partial {
     cache: Cache,
-    url: String,
+    // a box, so the flag below leaves a claim no larger than one of a link alone
+    url: Box<str>,
+    /// whether the download is keyed by the pinned SHA-256, so bytes another link of the same file
+    /// left, as a mirror's or a dead link's, are continued, their hash checked once all are in.
+    pinned: bool,
     /// the folder `bytes` and `record` are in, held as it was claimed: every file of the download
     /// is made, read and removed through it, so a link put at its name never takes one elsewhere.
     folder: Arc<Folder>,
@@ -126,7 +131,13 @@ struct Run {
 impl Cache {
     /// claims the unfinished download of `url` for this process, unless another process has it.
     pub(crate) fn claim(&self, url: &str) -> io::Result<Claim> {
-        let key = digest::sha256(url.as_bytes()).hex();
+        self.claim_pinned(url, None)
+    }
+
+    /// [`Cache::claim`], keyed by `pinned`, the SHA-256 the bytes must hash to, when there is one,
+    /// so any link to the same file goes on from the bytes another link left.
+    pub(crate) fn claim_pinned(&self, url: &str, pinned: Option<&Sha256>) -> io::Result<Claim> {
+        let key = partial_key(url, pinned);
         let partial = self.partial_folder(&key);
         let below = partial.strip_prefix(&self.root).unwrap_or(&partial);
         // a folder that cannot be made is refused by the one it would be made in
@@ -178,12 +189,22 @@ impl Cache {
         });
         Ok(Claim::Owned(Partial {
             cache: self.clone(),
-            url: url.to_owned(),
+            url: url.into(),
+            pinned: pinned.is_some(),
             folder,
             bytes,
             record,
             lock,
         }))
+    }
+}
+
+/// the name an unfinished download's files take: of the pinned SHA-256 when there is one, so
+/// every link to the file shares them, else of the URL.
+pub(crate) fn partial_key(url: &str, pinned: Option<&Sha256>) -> String {
+    match pinned {
+        Some(digest) => digest::sha256(format!("sha256:{}", digest.hex()).as_bytes()).hex(),
+        None => digest::sha256(url.as_bytes()).hex(),
     }
 }
 
@@ -493,7 +514,7 @@ impl Partial {
             bytes: self.bytes.clone(),
             record_path: self.record.clone(),
             record: Record {
-                url: self.url.clone(),
+                url: self.url.to_string(),
                 received: offset,
                 sha256,
                 length,
@@ -604,9 +625,14 @@ impl Partial {
         let text = self.folder.read(name_of(&self.record)).ok()?;
         let mut record: Record = serde_json::from_slice(&text).ok()?;
         if !super::recorded_url_matches(&record.url, &self.url) {
-            return None;
+            if !self.pinned {
+                return None;
+            }
+            // another link's server named the version and the name, which this one never stated
+            record.validators = Validators::default();
+            record.name = None;
         }
-        record.url.clone_from(&self.url);
+        record.url = self.url.to_string();
         Some(record)
     }
 }
