@@ -683,6 +683,9 @@ impl Reference {
     pub(crate) fn page(&self) -> Option<String> {
         match self {
             Reference::Invenio(record) => Some(record.page()),
+            Reference::HuggingFace(repo) => Some(repo.page()),
+            Reference::Kaggle(dataset) => Some(dataset.page()),
+            Reference::InternetArchive(item) => Some(item.page()),
             _ => None,
         }
     }

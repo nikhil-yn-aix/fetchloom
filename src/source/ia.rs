@@ -45,6 +45,11 @@ impl Item {
         })
     }
 
+    /// the item's page on archive.org.
+    pub(super) fn page(&self) -> String {
+        format!("https://archive.org/details/{}", self.id)
+    }
+
     /// a pasted link to an item's page or to its folder of downloads on archive.org. a link to
     /// one file stays a plain link, since it may name a file inside one of the item's zips.
     pub(super) fn from_link(url: &Url) -> Option<Item> {
@@ -88,8 +93,8 @@ impl Item {
                 format!("{self} is a collection of items, which holds no data of its own"),
             )
             .help(format!(
-                "add the items you need from https://archive.org/details/{}, each as ia:<identifier>",
-                self.id
+                "add the items you need from {}, each as ia:<identifier>",
+                self.page()
             )));
         }
         if answer.files.len() > api.most_files() {
@@ -117,8 +122,8 @@ impl Item {
                 format!("archive.org keeps every file of {self} private"),
             )
             .help(format!(
-                "check the item at https://archive.org/details/{}: archive.org lends or holds back its files, which fetchloom does not download",
-                self.id
+                "check the item at {}: archive.org lends or holds back its files, which fetchloom does not download",
+                self.page()
             )));
         }
         let warnings = if private.is_empty() {

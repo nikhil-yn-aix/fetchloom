@@ -70,7 +70,7 @@ impl Repo {
     }
 
     /// the repository's page, where its terms are accepted.
-    pub(super) fn page(&self) -> String {
+    pub(in crate::source) fn page(&self) -> String {
         format!("https://huggingface.co/{}", self.page_segments().join("/"))
     }
 }

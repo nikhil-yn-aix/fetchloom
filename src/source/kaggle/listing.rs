@@ -221,7 +221,7 @@ impl Dataset {
     }
 
     /// the dataset's page on kaggle.com.
-    fn page(&self) -> String {
+    pub(in crate::source) fn page(&self) -> String {
         format!(
             "https://www.kaggle.com/datasets/{}/{}",
             self.owner, self.slug

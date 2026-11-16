@@ -39,7 +39,7 @@ pub(super) struct Cited {
     container: Option<String>,
     version: Option<String>,
     doi: Option<String>,
-    /// its DOI's link, else data.lock's link for it.
+    /// its DOI's link, else data.lock's link for it or the page its ref names.
     url: Option<String>,
     license: Option<String>,
     /// when data.lock pinned it, as `2026-11-13`.
@@ -657,7 +657,7 @@ fn csl(cited: &[Cited]) -> String {
 pub(super) struct Stated<'a> {
     pub(super) locked: &'a Locked,
     pub(super) imported: bool,
-    /// data.lock's link for it, when it has one a reader can open.
+    /// data.lock's link for it, or the page its ref names, when it has one a reader can open.
     pub(super) link: Option<String>,
     /// its files, by their path in it, with their SHA-256, or the MD5 its source states.
     pub(super) files: Vec<(&'a str, String)>,
@@ -708,7 +708,10 @@ pub(super) fn statement(datasets: &[Stated<'_>]) -> String {
         } else if let Some(doi) = doi {
             said.push(doi_link(&doi));
         } else if let Some(link) = &dataset.link {
-            said.push(link.clone());
+            match version(&locked.resolved) {
+                Some(version) => said.push(format!("{link} at version {version}")),
+                None => said.push(link.clone()),
+            }
         } else {
             let written = match version(&locked.resolved) {
                 Some(version) => {
@@ -863,5 +866,48 @@ mod tests {
         assert_eq!(version("kaggle:uciml/iris@2").as_deref(), Some("2"));
         assert_eq!(version("https://example.org/a@b.csv"), None);
         assert_eq!(version("zenodo:3608990"), None);
+    }
+
+    /// a dataset with no DOI whose ref has a page links to that page, and the statement gives the
+    /// version the page leaves out.
+    #[test]
+    fn a_dataset_without_a_doi_links_to_the_page_its_ref_names() {
+        let commit = "0bda0ce801be0fa2f464ff845a9d5ceae99aad7d";
+        for (resolved, page, version) in [
+            (
+                format!("hf:datasets/scikit-learn/iris@{commit}"),
+                "https://huggingface.co/datasets/scikit-learn/iris",
+                Some(commit),
+            ),
+            (
+                "kaggle:uciml/iris@2".to_owned(),
+                "https://www.kaggle.com/datasets/uciml/iris",
+                Some("2"),
+            ),
+            (
+                "ia:iris_20240626".to_owned(),
+                "https://archive.org/details/iris_20240626",
+                None,
+            ),
+        ] {
+            let mut pin = locked("iris", Some("Iris"), None);
+            pin.resolved = resolved;
+            let link = super::super::link_of(&pin);
+            let entry = Cited::of_lock(&pin, link.clone());
+            assert_eq!(entry.url.as_deref(), Some(page), "{}", pin.resolved);
+            assert_eq!(entry.missing, ["author", "year"], "{}", pin.resolved);
+            let text = statement(&[Stated {
+                locked: &pin,
+                imported: false,
+                link,
+                files: Vec::new(),
+                by_source: None,
+            }]);
+            let said = match version {
+                Some(version) => format!("iris: Iris, {page} at version {version}, 0 files:\n"),
+                None => format!("iris: Iris, {page}, 0 files:\n"),
+            };
+            assert!(text.contains(&said), "{said} in\n{text}");
+        }
     }
 }
