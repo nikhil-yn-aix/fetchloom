@@ -497,7 +497,10 @@ fn gathered(context: &Context, report: &mut Report, pinned: &[Pinned<'_>], found
                 dataset
                     .mirrors
                     .insert(context.mirrors.mirrors.list[index].to_string());
-                if let Some(lack) = source.filter(Lack::lost) {
+                // an import has no source that could lose it: the mirror simply serves it
+                if let Some(lack) =
+                    source.filter(|lack| lack.lost() && !matches!(lack, Lack::Imported))
+                {
                     dataset.lost_at_source.push(unserved(pinned, lack));
                 }
             }

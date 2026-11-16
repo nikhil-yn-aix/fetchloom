@@ -574,3 +574,44 @@ fn a_retry_names_the_file_not_its_link() -> Result {
     assert!(!stderr.contains("trying content again"), "{stderr}");
     Ok(())
 }
+
+/// an import has no source to lose a file, so a mirror that holds its files simply serves them,
+/// and one that does not leaves them not served, as imported.
+#[test]
+fn an_import_a_mirror_holds_is_served_by_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("flowers")?;
+    std::fs::write(folder.join("sepals.csv"), b"length,width\n5.1,3.5\n")?;
+    ok(&sandbox.run(&["add", "../flowers"])?)?;
+    let output = sandbox.run(&["--json", "audit"])?;
+    ok(&output)?;
+    let document = json(&output)?;
+    let flowers = dataset(&document, "flowers")?;
+    assert_eq!(flowers["not_served"][0]["outcome"], "imported", "{flowers}");
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let mirror = root.to_string_lossy().into_owned();
+    let output = sandbox.run(&["--json", "audit", "--check", "--mirror", &mirror])?;
+    ok(&output)?;
+    let document = json(&output)?;
+    let flowers = dataset(&document, "flowers")?;
+    assert_eq!(
+        (&flowers["served"], &flowers["on_mirrors"]),
+        (&1.into(), &1.into()),
+        "{flowers}"
+    );
+    assert_eq!(
+        flowers["lost_at_source"],
+        serde_json::json!([]),
+        "{flowers}"
+    );
+    let output = sandbox.run(&["audit", "--mirror", &mirror])?;
+    ok(&output)?;
+    assert_eq!(text(&output.stdout)?, "");
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains(&format!("     Served flowers · 1 file · 1 on {mirror}\n")),
+        "{stderr}"
+    );
+    Ok(())
+}
