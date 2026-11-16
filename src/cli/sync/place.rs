@@ -1085,8 +1085,9 @@ impl<'a> Placing<'a> {
         let ended = |error: Error| kept_copies(error, &placement.changed_copies);
         flushed.map_err(ended)?;
         // a run of named datasets vouches for the others only as its caller says, else the next
-        // sync looks at all
-        let whole = vouched && unknown.is_empty();
+        // sync looks at all; one that leaves a dataset waiting for its list never settles, since
+        // the list can come back with data.toml and data.lock as they are
+        let whole = vouched && unknown.is_empty() && waiting.is_empty();
         let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let recorded = removed || adopted || undone || kept_aside || !tallies.is_empty();

@@ -4486,3 +4486,48 @@ fn a_project_needing_a_newer_fetchloom_stops_every_command() -> Result {
     );
     Ok(())
 }
+
+/// big, imported from files, and small, each with its list in data.lock.d, then a clone that
+/// lacks big's list: gives the clone's folder and the part it lacks.
+fn clone_without_big(sandbox: &Sandbox) -> Result<(std::path::PathBuf, String)> {
+    for (name, files) in [("big", &["a.csv", "b.csv"][..]), ("small", &["c.csv"])] {
+        let folder = sandbox.folder(name)?;
+        for each in files {
+            fs::write(folder.join(each), each)?;
+        }
+        let added = listing_in(
+            sandbox,
+            &sandbox.work(),
+            &["add", &folder.to_string_lossy(), "--as", name],
+        )?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    clone_without(sandbox, "big")
+}
+
+/// a sync while big waits leaves the project unsettled, so once big's list is back with data.lock
+/// as it was, as pulling the commit that adds data.lock.d brings it, status finds big missing and
+/// the next sync places it.
+#[test]
+fn a_list_that_comes_back_is_placed_by_the_next_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (clone, part) = clone_without_big(&sandbox)?;
+    let synced = listing_in(&sandbox, &clone, &["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let lock = fs::read(clone.join("data.lock"))?;
+    fs::copy(sandbox.work().join(&part), clone.join(&part))?;
+    let checked = listing_in(&sandbox, &clone, &["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(1), "{}", text(&checked.stdout)?);
+    let synced = listing_in(&sandbox, &clone, &["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(clone.join("data/big/a.csv"))?,
+        b"a.csv",
+        "{stderr}"
+    );
+    assert_eq!(fs::read(clone.join("data.lock"))?, lock);
+    let checked = listing_in(&sandbox, &clone, &["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stdout)?);
+    Ok(())
+}
