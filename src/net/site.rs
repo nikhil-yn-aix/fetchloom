@@ -753,9 +753,10 @@ impl Net {
         let way = challenge(headers);
         let account = Account::Login(named.clone());
         let command = account.command();
-        // a server that asks for a username and password takes the login a person saves for
-        // its host, as curl and wget would send from .netrc, on any hop that reaches it
-        if way.as_deref() == Some("basic") {
+        // a server that asks for a username and password, or whose login fetchloom knows by name
+        // though it asks for none, as physionet's, takes the login a person saves for its host,
+        // as curl and wget would send from .netrc, on any hop that reaches it
+        if way.as_deref() == Some("basic") || Account::named_login(&named).is_some() {
             return Some(
                 error
                     .help(format!("if it needs a login, sign in with `{command}`, then run the same command again"))

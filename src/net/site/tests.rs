@@ -778,9 +778,10 @@ fn an_unasked_page_a_redirect_led_to_is_refused_with_its_own_link() {
 }
 
 /// a website's 401 or 403, with no key of its own sent, offers a sign-in for its host and port:
-/// the login a basic challenge asks for, a token for a bearer one, else the person's choice.
-/// over plain http, only where a key could go.
+/// the login a basic challenge or a host fetchloom knows by name asks for, a token for a bearer
+/// one, else the person's choice. over plain http, only where a key could go.
 #[test]
+#[expect(clippy::too_many_lines, reason = "a row for each way a site asks")]
 fn a_websites_refusal_offers_a_sign_in_where_a_key_could_go() {
     let allowed = Allowed {
         origins: vec![Url::parse("http://lab.example:8080").unwrap().origin()],
@@ -829,6 +830,13 @@ fn a_websites_refusal_offers_a_sign_in_where_a_key_could_go() {
             "basic",
             "if it needs a login, sign in with `fetchloom auth login data.example.org:8443`, then run the same command again".to_owned(),
             "data.example.org:8443",
+            false,
+        ),
+        (
+            "https://physionet.org/files/mimiciv/3.1/SHA256SUMS.txt",
+            "",
+            "if it needs a login, sign in with `fetchloom auth login physionet`, then run the same command again".to_owned(),
+            "physionet.org",
             false,
         ),
         (

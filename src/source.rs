@@ -1342,7 +1342,7 @@ pub(crate) fn refused(host: &str, reference: &str) -> Error {
         Kind::AuthRequired,
         format!("{host} refused access to {reference}"),
     );
-    match access::account_at(host) {
+    match access::account_at(host).or_else(|| crate::account::Account::named_login(host)) {
         Some(account) => error
             .help(format!(
                 "if the dataset is private or restricted, sign in with `{}`, then run the same command again",
@@ -1515,10 +1515,24 @@ mod tests {
                 Account::Kaggle,
                 "fetchloom auth login kaggle",
             ),
+            (
+                "physionet.org",
+                Account::Login("physionet.org".to_owned()),
+                "fetchloom auth login physionet",
+            ),
+            (
+                "urs.earthdata.nasa.gov",
+                Account::Login("urs.earthdata.nasa.gov".to_owned()),
+                "fetchloom auth login earthdata",
+            ),
         ] {
             let error = refused(host, "x");
+            assert_eq!(
+                error.help.as_deref(),
+                Some(format!("if the dataset is private or restricted, sign in with `{command}`, then run the same command again").as_str()),
+                "{host}"
+            );
             assert_eq!(error.need.map(|need| need.account), Some(account), "{host}");
-            assert!(error.help.unwrap_or_default().contains(command), "{host}");
         }
         let unknown = refused("example.org", "x");
         assert!(unknown.need.is_none());

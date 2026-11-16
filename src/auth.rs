@@ -49,6 +49,8 @@ pub(crate) enum Step {
 
 const EARTHDATA: &str = "urs.earthdata.nasa.gov";
 const PHYSIONET: &str = "physionet.org";
+/// the hosts whose login fetchloom knows by a name of its own.
+const NAMED_LOGINS: [&str; 2] = [EARTHDATA, PHYSIONET];
 /// semantic scholar's API, the only host its key goes to.
 pub(crate) const S2_HOST: &str = "api.semanticscholar.org";
 /// where semantic scholar gives a person a key.
@@ -265,6 +267,15 @@ impl Account {
             other => quoted(&other.id()),
         };
         format!("fetchloom auth login {named}")
+    }
+
+    /// the login fetchloom knows by name for `host`, as physionet's for physionet.org, which a
+    /// refusal from there names even when no challenge asks for it.
+    pub(crate) fn named_login(host: &str) -> Option<Account> {
+        let host = host.to_ascii_lowercase();
+        NAMED_LOGINS
+            .contains(&host.as_str())
+            .then_some(Account::Login(host))
     }
 
     pub(crate) fn secret(&self) -> Secret {
@@ -565,14 +576,15 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
     found
 }
 
-/// every account worth listing in `auth`/// every account worth listing in `auth`: the sources, and each login host a key is known for.
+/// every account worth listing in `auth`: the sources, the logins fetchloom knows by name and
+/// each login host a key is known for.
 pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
     let mut accounts = Account::SOURCES.to_vec();
     let mut logins: Vec<String> = netrc::read(var)
         .into_iter()
         .map(|entry| entry.host)
         .collect();
-    for host in [EARTHDATA, PHYSIONET] {
+    for host in NAMED_LOGINS {
         if !logins.iter().any(|known| known == host) {
             logins.push(host.to_owned());
         }
