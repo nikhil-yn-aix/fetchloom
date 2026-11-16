@@ -279,6 +279,36 @@ fn a_proxy_is_named_by_the_variable_that_set_it() {
     );
 }
 
+/// lookups keep a proxy's private address once a request went through it, so a link to the
+/// proxy's host on another port that `NO_PROXY` sends straight there would reach the proxy's
+/// machine, as a request through the proxy at the same time lets it. such a link is refused before
+/// it goes, whether or not one went through the proxy yet, unless a person trusted its origin.
+#[test]
+fn a_link_to_the_proxy_host_itself_never_goes_straight_there() {
+    let mut proxies = proxies(&[
+        ("HTTPS_PROXY", "http://proxy.corp.example:3128"),
+        ("HTTP_PROXY", "http://proxy.corp.example:3128"),
+        ("NO_PROXY", ".corp.example"),
+    ]);
+    proxies.test_lookup = Some(Arc::new(|_, _| Box::pin(async { None })));
+    let typed = Typed::default();
+    let straight = Url::parse("http://proxy.corp.example:9000/admin").unwrap();
+    let carried = Url::parse("https://data.example.org/iris.csv").unwrap();
+    let before = block_on(proxies.check(&straight, &typed));
+    block_on(proxies.check(&carried, &typed)).unwrap();
+    let after = block_on(proxies.check(&straight, &typed));
+    for checked in [before, after] {
+        assert_eq!(
+            checked.map_err(|refused| refused.to_string()),
+            Err("it asks for the proxy this machine sends requests through".to_owned())
+        );
+    }
+    let other = Url::parse("http://files.corp.example:9000/iris.csv").unwrap();
+    assert!(block_on(proxies.check(&other, &typed)).is_ok());
+    typed.add(&Url::parse("http://proxy.corp.example:9000/").unwrap());
+    assert!(block_on(proxies.check(&straight, &typed)).is_ok());
+}
+
 /// the proxy is checked once a request through it has waited three seconds, and the check gives up
 /// five later, not after each try's connect timeout. later requests are told at once.
 #[tokio::test(start_paused = true)]

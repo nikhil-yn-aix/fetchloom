@@ -205,10 +205,7 @@ impl Typed {
         }
         let host = key(host);
         if hosts.proxies.contains(&host) {
-            return Err(hosts.refused(
-                "it asks for the proxy this machine sends requests through".to_owned(),
-                &host,
-            ));
+            return Err(hosts.refused(PROXY_ASKED.to_owned(), &host));
         }
         let ip = match url.host() {
             Some(Host::Ipv4(ip)) => IpAddr::V4(ip),
@@ -397,6 +394,9 @@ pub(crate) struct Proxies {
     test_probe: Option<TestProbe>,
 }
 
+/// why a link to a proxy's own host is refused.
+const PROXY_ASKED: &str = "it asks for the proxy this machine sends requests through";
+
 /// the proxy variables, each pair in the order the proxy matcher reads it: the lowercase name
 /// counts only when the uppercase one is unset.
 const VARIABLES: [[&str; 2]; 3] = [
@@ -557,7 +557,7 @@ impl Proxies {
             .ok()
             .and_then(|uri| self.matcher.intercept(&uri))
         else {
-            return Ok(());
+            return self.straight(url, typed);
         };
         if let Some(host) = proxy.uri().host() {
             typed.add_proxy(host);
@@ -594,6 +594,35 @@ impl Proxies {
     /// must not route by the variables itself.
     pub(super) fn direct(&self) -> bool {
         self.direct
+    }
+
+    /// refuses `url`, which goes straight to its host, when that host is a proxy's and no person
+    /// trusted its origin: once any request went through the proxy, lookups keep its private
+    /// address for every client, and checking only then would let one at the same time through.
+    fn straight(&self, url: &Url, typed: &Typed) -> Result<(), Refused> {
+        let Some(host) = url.host_str().map(key) else {
+            return Ok(());
+        };
+        if typed.trusts(url) || !self.hosts().contains(&host) {
+            return Ok(());
+        }
+        Err(typed.refused(PROXY_ASKED.to_owned(), &host))
+    }
+
+    /// the hosts of the proxies requests go through, as [`key`] gives them: those the variables
+    /// name, and those the system's settings name for a request of either scheme.
+    fn hosts(&self) -> Vec<String> {
+        let named = self
+            .named
+            .iter()
+            .filter(|_| !self.direct)
+            .filter_map(|(_, proxy)| proxy.host().map(key));
+        ["http://fetchloom.invalid/", "https://fetchloom.invalid/"]
+            .into_iter()
+            .filter_map(|probe| self.matcher.intercept(&http::Uri::from_static(probe)))
+            .filter_map(|proxy| proxy.uri().host().map(key))
+            .chain(named)
+            .collect()
     }
 
     #[cfg(test)]
