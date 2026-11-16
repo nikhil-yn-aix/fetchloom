@@ -105,9 +105,10 @@ const ENVIRONMENT: &str = "fetchloom environment
                        their sources, separated by commas
   FETCHLOOM_MIRRORS_ONLY
                        true asks the mirrors alone, never a source
-  FETCHLOOM_REUSE      folders read for a pinned file the cache lacks before
-                       any mirror, separated by commas; hugging face's and
-                       kagglehub's caches by default, empty for none
+  FETCHLOOM_REUSE      folders searched for a file of a pinned size the cache
+                       lacks, before any mirror, separated by commas; unset,
+                       hugging face's and kagglehub's caches by their own
+                       layout alone; empty for none
   FETCHLOOM_WEB_ARCHIVES
                        false asks software heritage and the wayback machine
                        nothing for a pinned file whose source is gone

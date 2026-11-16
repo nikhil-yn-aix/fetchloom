@@ -332,8 +332,41 @@ fn a_reuse_folder_gives_a_file_under_another_name() -> Result {
     Ok(())
 }
 
+/// hugging face's cache is read by default through its own layout alone, so a pinned file it holds
+/// under a name no shortcut finds, as a plain git file's blob is named, is downloaded. listing the
+/// cache in `reuse` has every file of the pinned size there looked at, and gives it with no request.
+#[test]
+fn only_a_listed_folder_is_searched_for_a_file_no_shortcut_finds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let hub = in_home(&sandbox, &[".cache", "huggingface", "hub"])?;
+    let blobs = hub.join("datasets--lab--iris").join("blobs");
+    fs::create_dir_all(&blobs)?;
+    fs::write(blobs.join(CARD_GIT), IRIS)?;
+    let sync = |name: &str, reuse: Option<&Path>| -> Result<serde_json::Value> {
+        let teammate = clone(&sandbox, name)?;
+        let mut command = sandbox.command_in(&teammate, &["--json", "sync"]);
+        command.env("FETCHLOOM_CACHE", sandbox.folder(&format!("{name} cache"))?);
+        if let Some(reuse) = reuse {
+            command.env("FETCHLOOM_REUSE", reuse);
+        }
+        let output = command.output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        json(&output)
+    };
+    let unlisted = sync("unlisted", None)?;
+    assert_eq!(unlisted["work"]["reused_objects"], 0, "{unlisted}");
+    assert_eq!(unlisted["work"]["requests"], 1, "{unlisted}");
+    let listed = sync("listed", Some(&hub))?;
+    assert_eq!(listed["work"]["reused_objects"], 1, "{listed}");
+    assert_eq!(listed["work"]["requests"], 0, "{listed}");
+    Ok(())
+}
+
 /// kagglehub marks a version complete once it has every file; one it has not marked may still be
-/// arriving, so its files are never taken, though they would hash right.
+/// arriving, so its files are never taken, though they would hash right, even from kagglehub's
+/// cache listed in `reuse`, where any file of the pinned size is looked at.
 #[test]
 fn a_kagglehub_version_without_its_marker_is_not_used() -> Result {
     let sandbox = Sandbox::new()?;
@@ -346,11 +379,13 @@ fn a_kagglehub_version_without_its_marker_is_not_used() -> Result {
     let version = dataset.join("versions").join("2");
     fs::create_dir_all(&version)?;
     fs::write(version.join("Iris.csv"), IRIS)?;
+    let kagglehub = in_home(&sandbox, &[".cache", "kagglehub"])?;
     let run = |name: &str| -> Result<serde_json::Value> {
         let teammate = clone(&sandbox, name)?;
         let output = sandbox
             .command_in(&teammate, &["--json", "sync"])
             .env("FETCHLOOM_CACHE", sandbox.folder(&format!("{name} cache"))?)
+            .env("FETCHLOOM_REUSE", &kagglehub)
             .output()?;
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
         json(&output)

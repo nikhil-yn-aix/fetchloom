@@ -2,7 +2,9 @@
 //! setting names, holds: taken into the cache before any mirror or source is asked, as a clone
 //! where the disk makes one, else as a copy, once their bytes hash to the pin. those folders are
 //! only read. a file another tool keeps is never linked, so deleting it there leaves the cache
-//! whole, and a link would seal that tool's file read-only.
+//! whole, and a link would seal that tool's file read-only. the caches read by default give what
+//! their own layout names alone; any file of a pinned size is looked at only in folders a person
+//! lists, since that walk costs every run that downloads something.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
@@ -26,6 +28,8 @@ const COPIES: usize = 8;
 #[derive(Default)]
 pub(in crate::cli) struct Reused {
     folders: Vec<Folder>,
+    /// whether a person listed the folders, so every file of a pinned size in them is looked at.
+    listed: bool,
     /// each folder's hugging face repository folders, read once a run: none for a folder that is
     /// no hugging face cache.
     repositories: OnceLock<Vec<Vec<PathBuf>>>,
@@ -50,9 +54,10 @@ struct Got {
 }
 
 impl Reused {
-    pub(in crate::cli) fn new(folders: Vec<Folder>) -> Reused {
+    pub(in crate::cli) fn new(folders: Vec<Folder>, listed: bool) -> Reused {
         Reused {
             folders,
+            listed,
             ..Reused::default()
         }
     }
@@ -115,8 +120,9 @@ impl Reused {
     }
 
     /// takes into the cache each of `wanted` a folder holds, and returns the rest: first from
-    /// where a tool keeps it, then from any file of its size a scan of the folders finds, each
-    /// once its bytes hash to the pin. fails at a stop or when the cache cannot be written.
+    /// where a tool keeps it, then, in folders a person listed, from any file of its size a scan
+    /// finds, each once its bytes hash to the pin. fails at a stop or when the cache cannot be
+    /// written.
     pub(in crate::cli) fn take(
         &self,
         context: &Context,
@@ -156,7 +162,8 @@ impl Reused {
             .collect())
     }
 
-    /// takes in what the shortcuts find of `ask`, then what a scan finds of the rest.
+    /// takes in what the shortcuts find of `ask`, then what a scan of listed folders finds of the
+    /// rest.
     fn take_all(&self, context: &Context, cache: &Cache, ask: &[&Wanted]) -> io::Result<Vec<Got>> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let batch = if ask.len() > crate::volume::MOST_FLUSHED_ALONE {
@@ -189,7 +196,7 @@ impl Reused {
                 None => rest.push(*want),
             }
         }
-        if !rest.is_empty() {
+        if self.listed && !rest.is_empty() {
             taken.extend(self.scanned(context, cache, &rest, flush)?);
         }
         #[cfg(any(target_os = "linux", target_os = "macos"))]

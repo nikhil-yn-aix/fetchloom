@@ -143,7 +143,8 @@ impl Context {
         if let Some(threads) = settings.threads {
             self.threads = self.threads.at_most(threads.value);
         }
-        self.reuse = fetch::reuse::Reused::new(settings.reuse.value.clone());
+        let listed = settings.reuse.origin != crate::settings::Origin::Default;
+        self.reuse = fetch::reuse::Reused::new(settings.reuse.value.clone(), listed);
         self.archived = Arc::new(fetch::archived::Archived::new(&settings));
         share(&settings);
         self.rate = settings
