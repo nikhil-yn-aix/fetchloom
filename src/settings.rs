@@ -217,9 +217,10 @@ impl File {
                 } else {
                     "check its permissions, or set FETCHLOOM_SETTINGS to a settings file fetchloom may read"
                 };
-                return Err(Error::io(
+                return Err(Error::io_at(
                     format_args!("could not read the settings file {}", path.display()),
                     &err,
+                    &path,
                 )
                 .or_help(help));
             }

@@ -203,14 +203,7 @@ pub(crate) fn is_cache(root: &Path) -> bool {
 /// the file on the way to `root`, or `root` itself, where a folder of the cache's path must be,
 /// which no run can make the cache through, said as a reason.
 pub(crate) fn in_the_way(root: &Path) -> Option<String> {
-    let file = root
-        .ancestors()
-        .find(|path| fs::metadata(path).is_ok_and(|found| !found.is_dir()))?;
-    Some(if file == root {
-        "it is a file, not a folder".to_owned()
-    } else {
-        format!("{} is a file, not a folder", file.display())
-    })
+    crate::error::file_in_the_way(root)
 }
 
 /// why a run would refuse `root` as the cache, read as it is with nothing created: none for a

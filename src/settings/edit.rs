@@ -444,9 +444,10 @@ fn open(var: Var<'_>, making: bool) -> Result<Opened, Error> {
         _ => path,
     };
     let unread = |err: &io::Error| {
-        Error::io(
+        Error::io_at(
             format_args!("could not read the settings file {}", path.display()),
             err,
+            &path,
         )
     };
     // what is no file to change is told as such, before a lock is made beside it

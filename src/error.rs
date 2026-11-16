@@ -173,6 +173,20 @@ impl Error {
         }
     }
 
+    /// [`Error::io`] for `err` about `path`, which names a file where a folder of the path must
+    /// be.
+    pub(crate) fn io_at(
+        doing: impl fmt::Display,
+        err: &io::Error,
+        path: &std::path::Path,
+    ) -> Error {
+        let error = Error::new(Kind::LocalIo, format!("{doing}: {}", said_at(err, path)));
+        match advice(err) {
+            Some(help) => error.help(help),
+            None => error,
+        }
+    }
+
     pub(crate) fn with_result(mut self, result: serde_json::Value) -> Error {
         self.result = Some(Box::new(result));
         self
@@ -405,6 +419,30 @@ pub(crate) fn io_cause<'e>(
     }
 }
 
+/// [`said`] for `err` about `path`: a file where a folder of the path must be is named.
+pub(crate) fn said_at(err: &io::Error, path: &std::path::Path) -> String {
+    if err.kind() == io::ErrorKind::NotADirectory
+        && err.raw_os_error().is_some()
+        && let Some(file) = file_in_the_way(path)
+    {
+        return file;
+    }
+    said(err)
+}
+
+/// the file on the way to `path`, or `path` itself, where a folder of the path must be, said as
+/// a reason.
+pub(crate) fn file_in_the_way(path: &std::path::Path) -> Option<String> {
+    let file = path
+        .ancestors()
+        .find(|path| std::fs::metadata(path).is_ok_and(|found| !found.is_dir()))?;
+    Some(if file == path {
+        "it is a file, not a folder".to_owned()
+    } else {
+        format!("{} is a file, not a folder", file.display())
+    })
+}
+
 /// what went wrong on the machine in plain words, without the system's own phrasing and its
 /// error number, which mean little to a person.
 pub(crate) fn said(err: &io::Error) -> String {
@@ -413,7 +451,8 @@ pub(crate) fn said(err: &io::Error) -> String {
     match err.kind() {
         io::ErrorKind::NotFound if bare => "it does not exist".to_owned(),
         io::ErrorKind::PermissionDenied if bare => "permission was denied".to_owned(),
-        io::ErrorKind::NotADirectory if bare => "it is a file, not a folder".to_owned(),
+        // the system does not say which name on the path is the file
+        io::ErrorKind::NotADirectory if bare => "it, or a folder above it, is a file".to_owned(),
         io::ErrorKind::IsADirectory if bare => "it is a folder, not a file".to_owned(),
         io::ErrorKind::StorageFull if bare => "the disk is full".to_owned(),
         _ => {
@@ -583,6 +622,26 @@ pub(crate) mod tests {
             full.or_help("fallback").help.as_deref(),
             Some("free some space on that disk, then run the command again")
         );
+    }
+
+    /// a file where a folder must be is named where the path is known, as a file above the path
+    /// asked for or the path itself; without the path the words fit either.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_in_the_way_is_named_by_its_own_path() {
+        let folder = tempfile::tempdir().unwrap();
+        let blocker = folder.path().join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let below = blocker.join("sub").join("deeper");
+        let err = std::fs::read_dir(&below).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotADirectory);
+        assert_eq!(
+            said_at(&err, &below),
+            format!("{} is a file, not a folder", blocker.display())
+        );
+        let err = std::fs::read_dir(&blocker).unwrap_err();
+        assert_eq!(said_at(&err, &blocker), "it is a file, not a folder");
+        assert_eq!(said(&err), "it, or a folder above it, is a file");
     }
 
     /// a sentence's first word reads on after a colon; a drive letter or an acronym keeps its case.

@@ -813,7 +813,7 @@ fn unusable(
             format!(
                 "cannot work in {}: {}",
                 folder.display(),
-                crate::error::said(err)
+                crate::error::said_at(err, folder)
             ),
         )
         .help(exists);
