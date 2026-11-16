@@ -285,6 +285,11 @@ fn a_folder_the_group_cannot_write_in_a_shared_cache_is_told() -> Result {
             .is_some_and(|message| message.contains(&fan.display().to_string())),
         "{told}"
     );
+    assert_eq!(
+        told["help"],
+        "whoever owns a folder the group cannot write gives the group its write with `chmod g+rwx`",
+        "{told}"
+    );
     Ok(())
 }
 
@@ -311,12 +316,19 @@ fn the_group_may_add_to_what_a_run_makes_in_its_cache() -> Result {
         let archive = Server::start("/notes.zip", vec![file(&notes, "\"z1\"")])?;
         let source = source.display().to_string();
         for args in [
-            ["add", source.as_str(), "--as", "meas"],
-            ["add", server.url.as_str(), "--as", "iris"],
-            ["add", archive.url.as_str(), "--as", "notes"],
+            ["--json", "add", source.as_str(), "--as", "meas"],
+            ["--json", "add", server.url.as_str(), "--as", "iris"],
+            ["--json", "add", archive.url.as_str(), "--as", "notes"],
         ] {
             let output = sandbox.command(&args).with_umask(umask).output()?;
             assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+            // the umask no longer matters to what the group may do in the cache
+            let document = json(&output)?;
+            let kinds = crate::support::kinds(&document);
+            assert!(
+                !kinds.contains(&"cache.unshared"),
+                "umask {umask}: {document}"
+            );
         }
 
         let group = fs::metadata(&cache)?.gid();

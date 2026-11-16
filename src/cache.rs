@@ -353,11 +353,12 @@ fn exposed_on(root: &Path) -> Option<String> {
 }
 
 /// what keeps the cache at `root`, which its group shares, from staying one the group may add to:
-/// a folder in it that lets only its owner write to it, or `umask`, this run's on linux, which
-/// takes the group's write from what the run makes. none for a cache that is no group's, whose
-/// folder is not setgid and writable by its group, as the clusters guide makes a lab's.
+/// a folder in it that lets only its owner write to it, as one another program or an account
+/// outside the group made may, since a run gives the group its write on each folder it makes
+/// there. none for a cache that is no group's, whose folder is not setgid and writable by its
+/// group, as the clusters guide makes a lab's.
 #[cfg(unix)]
-pub(crate) fn unshared(root: &Path, umask: Option<u32>) -> Option<String> {
+pub(crate) fn unshared(root: &Path) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     if fs::metadata(root).ok()?.mode() & 0o2020 != 0o2020 {
         return None;
@@ -374,17 +375,12 @@ pub(crate) fn unshared(root: &Path, umask: Option<u32>) -> Option<String> {
             fs::symlink_metadata(folder)
                 .is_ok_and(|found| found.is_dir() && found.mode() & 0o020 == 0)
         });
-    if let Some(folder) = closed {
-        return Some(format!(
+    closed.map(|folder| {
+        format!(
             "the folder {} in the cache lets only its owner write to it, though a group shares the cache, so the group's other members cannot add to it",
             folder.display()
-        ));
-    }
-    let umask = umask.filter(|umask| umask & 0o020 != 0)?;
-    Some(format!(
-        "this run's umask, {umask:03o}, keeps the group from writing what it adds to the cache {}, which a group shares",
-        root.display()
-    ))
+        )
+    })
 }
 
 /// [`exposed`] for a folder of `owner` with `mode`, as `user` sees it; `shared` when a group
@@ -2300,26 +2296,6 @@ pub(crate) mod tests {
             exposed_as(&cache.root, member, &|gid| gid == group).is_some(),
             "every user may write it"
         );
-    }
-
-    /// in a cache a group shares, a run whose umask takes the group's write from what it makes is
-    /// told so before it adds anything; a cache that is no group's is none of its business.
-    #[cfg(unix)]
-    #[test]
-    fn a_umask_that_takes_the_groups_write_is_told_in_a_shared_cache() {
-        use std::os::unix::fs::PermissionsExt;
-        let (_dir, cache) = cache();
-        for folder in FOLDERS {
-            fs::set_permissions(cache.root.join(folder), fs::Permissions::from_mode(0o2770))
-                .unwrap();
-        }
-        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o2770)).unwrap();
-        assert_eq!(unshared(&cache.root, Some(0o002)), None);
-        assert_eq!(unshared(&cache.root, None), None, "a umask not known");
-        let told = unshared(&cache.root, Some(0o022)).unwrap_or_default();
-        assert!(told.contains("umask, 022,"), "{told}");
-        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o700)).unwrap();
-        assert_eq!(unshared(&cache.root, Some(0o022)), None, "no group's cache");
     }
 
     /// a fan folder of `objects/` every user may write, as a run with `umask 000` makes them,

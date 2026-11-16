@@ -29,9 +29,8 @@ pub(crate) enum Warning {
     CacheForeign,
     /// a run told `--yes` goes on though its downloads take the cache past `cache_budget`.
     CacheOverBudget,
-    /// in a cache its group shares, a folder lets only its owner write to it, or the run's umask
-    /// keeps the group from writing what the run adds, so the group's other members cannot add to
-    /// the cache.
+    /// in a cache its group shares, a folder lets only its owner write to it, so the group's other
+    /// members cannot add to the cache.
     #[cfg_attr(
         all(not(unix), not(test)),
         expect(
