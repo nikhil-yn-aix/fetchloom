@@ -1984,6 +1984,8 @@ fn copies_asked_for_and_hidden_edits_are_never_linked() -> Result {
     let iris = data.join("iris").join("iris.csv");
     let penguins = data.join("penguins").join("penguins.csv");
     edit_keeping_look(&penguins, b"bill,99\n")?;
+    // a writable copy, or a writable clone where the disk clones
+    let copied = placed_method(&sandbox.work(), "data/iris/iris.csv")?;
     let traces = sandbox.folder("traces")?;
     let trace = |name: &str| -> Result<(String, String)> {
         let path = traces.join(name);
@@ -2002,7 +2004,11 @@ fn copies_asked_for_and_hidden_edits_are_never_linked() -> Result {
     assert!(!stderr.contains("Linked "), "{stderr}");
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(sandbox.work().join(".fetchloom").join("state"))?)?;
-    assert_eq!(state["files"]["data/iris/iris.csv"]["method"], "copy");
+    assert_eq!(
+        state["files"]["data/iris/iris.csv"]["method"],
+        copied.as_str()
+    );
+    assert_ne!(copied, "hardlink");
     if sandbox.links()?.hardlinks_read_only() {
         // the copy was read, its other bytes found and remembered
         assert!(events.contains("\"name\":\"link_copies\""), "{events}");
