@@ -368,6 +368,57 @@ fn a_source_that_states_no_size_needs_a_yes() -> Result {
     Ok(())
 }
 
+/// zenodo's answer for record 101 holding iris.csv, stating `md5` for it.
+fn zenodo_record(md5: &str) -> Result<Vec<crate::support::Part>> {
+    let record = json!({
+        "id": 101,
+        "conceptrecid": "100",
+        "doi": "10.5281/zenodo.101",
+        "metadata": { "title": "DatasetIris", "access_right": "open" },
+        "files": [{ "key": "iris.csv", "size": IRIS.len(), "checksum": format!("md5:{md5}") }],
+    });
+    Ok(reply(
+        "200 OK",
+        &[("Content-Type", "application/json")],
+        &serde_json::to_vec(&record)?,
+    ))
+}
+
+/// a source that states the MD5 data.lock pins a file by, as zenodo does, shows more than a size:
+/// the dataset drops without `--yes`. one stating another MD5 shows a size alone.
+#[test]
+fn a_source_stating_the_pinned_md5_needs_no_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let pinned = crate::support::md5_hex(IRIS);
+    let record = "/zenodo.org/api/records/101".to_owned();
+    let routes = Routes::start(vec![
+        (record.clone(), zenodo_record(&pinned)?),
+        (
+            "/zenodo.org/api/records/101/files/iris.csv/content".to_owned(),
+            file(IRIS, "\"i\""),
+        ),
+    ])?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()
+    };
+    ok(&run(&["add", "zenodo:101", "--as", "iris"])?)?;
+    let placed = sandbox.work().join("data/iris/iris.csv");
+    routes.change(vec![(record.clone(), zenodo_record(&"0".repeat(32))?)]);
+    let output = run(&["--json", "drop", "iris"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    assert_eq!(json(&output)?["errors"][0]["kind"], "unconfirmed");
+    assert!(placed.exists());
+    routes.change(vec![(record, zenodo_record(&pinned)?)]);
+    let output = run(&["--json", "drop", "iris"])?;
+    ok(&output)?;
+    assert_eq!(json(&output)?["result"]["dropped"], json!(["iris"]));
+    assert!(!placed.exists());
+    Ok(())
+}
+
 /// in a copy of the project, whose state is not used, drop takes the files that hold the pinned
 /// bytes as placed, as status counts them in place, and frees them, so status then agrees; one with
 /// other bytes stays, and drop says why.

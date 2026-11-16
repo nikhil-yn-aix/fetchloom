@@ -64,6 +64,10 @@ struct Named<'a> {
     files: Vec<LockedFile>,
     /// whether data.toml asks for its link's web page.
     page: bool,
+    /// the version data.lock pins, as `zenodo:3608990`, and data.toml's patterns, which its
+    /// source lists again to say what checksums it states.
+    resolved: String,
+    select: Vec<crate::glob::Glob>,
 }
 
 impl Named<'_> {
@@ -90,7 +94,7 @@ struct Lacks {
     /// those no clear answer came for, as lines, each with the error a download of it would meet.
     unchecked: Vec<(String, Error)>,
     /// how many a web or bucket mirror or source serves at their size alone, which does not show
-    /// their bytes.
+    /// their bytes, while their source states no checksum data.lock records for them.
     sized: u64,
     /// how many their source serves without saying their size, which shows still less of them.
     no_size: u64,
@@ -340,6 +344,8 @@ fn pinned_files<'a>(
         name,
         files: locked.files.clone(),
         page: entry.source.web_page,
+        resolved: locked.resolved.clone(),
+        select: entry.source.select.clone(),
     })
 }
 
@@ -359,7 +365,7 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
     let net = Arc::new(context.net());
     let mut checked = Checked::default();
     let found = on_folders(context, &net, &locked, &pinned, &mut checked).await?;
-    let mut rest: Vec<Pinned<'_>> = Vec::new();
+    let (mut rest, mut rest_at): (Vec<Pinned<'_>>, Vec<usize>) = (Vec::new(), Vec::new());
     for (at, pinned) in pinned.iter().enumerate().filter(|(at, _)| !found[*at]) {
         let lacks = checked.lacks(pinned.dataset);
         // a size from a web or bucket mirror is too little for bytes no source gives back
@@ -382,22 +388,28 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
                 .push((format!("{} · {}", pinned.label(), error.message), error));
         } else {
             rest.push(*pinned);
+            rest_at.push(at);
         }
     }
     if rest.is_empty() {
         return Ok(checked);
     }
     let answers = probe::find(context, &net, &rest, Ask::Elsewhere).await?;
-    for (pinned, answer) in rest.iter().zip(answers) {
+    // the files served at their size alone or with none, by their place in `locked`, each with
+    // whether it came with none
+    let mut by_size: Vec<(usize, bool)> = Vec::new();
+    for ((pinned, answer), &at) in rest.iter().zip(answers).zip(&rest_at) {
         let lacks = checked.lacks(pinned.dataset);
         let why = match answer {
             Found::Mirror { .. } | Found::Source => {
                 lacks.sized += 1;
+                by_size.push((at, false));
                 continue;
             }
             // its source answered with the file, and asking again gets that answer again
             Found::Nowhere(Lack::Unsized(_)) => {
                 lacks.no_size += 1;
+                by_size.push((at, true));
                 continue;
             }
             Found::Nowhere(why) => why,
@@ -411,7 +423,82 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
             lacks.unchecked.push((said, error));
         }
     }
+    if !context.yes {
+        stated(&net, &locked, &by_size, &mut checked).await?;
+    }
     Ok(checked)
+}
+
+/// takes off the counts in `checked` each file of `by_size`, by its place in `locked`, whose
+/// source states at the version data.lock pins a checksum data.lock records for it: its SHA-256,
+/// or an MD5 data.lock keeps, as zenodo states one. each dataset's source lists it once; one that
+/// does not answer leaves its files counted by their size. fails at a stop.
+async fn stated(
+    net: &Arc<crate::net::Net>,
+    locked: &[(&Named<'_>, &LockedFile)],
+    by_size: &[(usize, bool)],
+    checked: &mut Checked,
+) -> Result<(), Error> {
+    let mut asked: Vec<&Named<'_>> = Vec::new();
+    for &(at, _) in by_size {
+        let named = locked[at].0;
+        if !asked.iter().any(|seen| seen.name == named.name) {
+            asked.push(named);
+        }
+    }
+    let mut tasks = tokio::task::JoinSet::new();
+    for (index, named) in asked.iter().enumerate() {
+        let (net, resolved, select) = (
+            Arc::clone(net),
+            named.resolved.clone(),
+            named.select.clone(),
+        );
+        tasks.spawn(async move {
+            let listing = match crate::source::Reference::parse(&resolved) {
+                Ok(parsed) => parsed.reference.resolve_in(&*net, &select).await,
+                Err(error) => Err(error),
+            };
+            (index, listing)
+        });
+    }
+    let mut listings: Vec<Option<crate::source::Listing>> = asked.iter().map(|_| None).collect();
+    while let Some(joined) = tasks.join_next().await {
+        let Ok((index, listing)) = joined else {
+            continue;
+        };
+        match listing {
+            Ok(listing) => listings[index] = Some(listing),
+            Err(error) if error.kind == Kind::Interrupted => {
+                tasks.abort_all();
+                return Err(error);
+            }
+            Err(error) => tracing::debug!(%error, "a source did not list a dataset to drop"),
+        }
+    }
+    for &(at, without_size) in by_size {
+        let (named, file) = locked[at];
+        let Some(listing) = asked
+            .iter()
+            .position(|seen| seen.name == named.name)
+            .and_then(|index| listings[index].as_ref())
+        else {
+            continue;
+        };
+        let states = listing.files.iter().any(|remote| {
+            remote.url.as_str() == file.url
+                && (remote.sha256 == Some(file.sha256)
+                    || (file.md5.is_some() && remote.md5 == file.md5))
+        });
+        if states {
+            let lacks = checked.lacks(named.name);
+            if without_size {
+                lacks.no_size = lacks.no_size.saturating_sub(1);
+            } else {
+                lacks.sized = lacks.sized.saturating_sub(1);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// which of `pinned` a folder mirror holds a copy of that hashes to its pin, noting in `checked`
