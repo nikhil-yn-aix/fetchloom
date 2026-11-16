@@ -177,6 +177,57 @@ fn warnings_name_the_problem_with_or_without_color() -> Result {
     Ok(())
 }
 
+/// a changed file imported from a folder comes back from no source, so verify says so, and its
+/// help names what does bring it back rather than promise a download sync cannot make.
+#[test]
+fn verify_tells_a_changed_import_apart() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("measured")?;
+    fs::write(source.join("m.csv"), b"measured 1\n")?;
+    let output = sandbox.run(&["add", &source.display().to_string(), "--as", "meas"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let mut objects = Vec::new();
+    for fan in fs::read_dir(sandbox.cache().join("objects"))? {
+        for entry in fs::read_dir(fan?.path())? {
+            objects.push(entry?.path());
+        }
+    }
+    let [object] = objects.as_slice() else {
+        return Err(format!("one object, not {objects:?}").into());
+    };
+    let mut permissions = fs::metadata(object)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test changes a cached object as an edit through a link would"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(object, permissions)?;
+    fs::write(object, b"measured 2\n")?;
+
+    let output = sandbox.run(&["--json", "cache", "verify"])?;
+
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(30), "{document}");
+    let warning = document["warnings"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert_eq!(
+        warning,
+        format!(
+            "{} has changed, and it was imported from files, which no source gives back",
+            object.display()
+        ),
+        "{document}"
+    );
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(
+        help.contains("fetchloom add <folder> --as <name>"),
+        "{document}"
+    );
+    assert!(!warning.contains("downloads it again"), "{document}");
+    Ok(())
+}
+
 #[test]
 fn an_unused_empty_file_is_not_reported_as_needed() -> Result {
     let sandbox = Sandbox::new()?;

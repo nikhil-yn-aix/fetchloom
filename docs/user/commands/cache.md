@@ -217,7 +217,7 @@ JSON adds `result.inputs`: `freed_objects` and `freed_bytes`; `datasets`, a reco
 ## verify
 
 1. hash every cached file again.
-2. mark each changed file, so the next run that needs it downloads it again.
+2. mark each changed file, so the next run that needs it downloads it again. a file [imported](add.md#files-on-this-machine) from a folder comes back from no source, so its warning says so, and the help names what brings it back: a folder mirror that holds it, or `fetchloom add <folder> --as <name>` again where the files are.
 3. report how many files it checked, the changed ones and the ones it could not read.
 
 a file it cannot read is named in a warning and not marked. JSON keeps the counts and findings in `result` beside the error. sync and get refuse a change mark they cannot read with `local.io`, exit 50, since they cannot tell then whether the cached bytes are safe: fix the named path's storage or permissions, verify the cache and run it again, and never delete the marks to get past the error.

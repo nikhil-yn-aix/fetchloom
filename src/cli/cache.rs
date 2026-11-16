@@ -730,15 +730,25 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
             &checked.unreadable,
         ));
     }
+    // a file imported from a folder comes back from no source, only from a mirror or its folder
+    let imported = cache.imported();
+    let mut lost = false;
     for digest in &checked.changed {
         if !checked.stuck.contains(digest) {
-            output.warn(
-                Warning::CacheChanged,
-                &format!(
+            let object = cache.object_path(digest);
+            let said = if imported.contains_key(digest) {
+                lost = true;
+                format!(
+                    "{} has changed, and it was imported from files, which no source gives back",
+                    object.display()
+                )
+            } else {
+                format!(
                     "{} has changed, so fetchloom downloads it again the next time it is needed",
-                    cache.object_path(digest).display()
-                ),
-            );
+                    object.display()
+                )
+            };
+            output.warn(Warning::CacheChanged, &said);
         }
     }
     let verb = if checked.unreadable.is_empty() {
@@ -754,11 +764,14 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
         ),
     );
     if checked.stuck.is_empty() {
-        return Err(error.help(if checked.unreadable.is_empty() {
-            "run `fetchloom sync` in each project; it puts the pinned file back wherever a project's file is linked to a changed copy"
-        } else {
+        let help = if !checked.unreadable.is_empty() {
             "close programs using the unreadable files or check their permissions, then run `fetchloom cache verify` again and `fetchloom sync` in each project"
-        }));
+        } else if lost {
+            "run `fetchloom sync` in each project; it puts the pinned file back wherever a project's file is linked to a changed copy. a file imported from files comes back only from a folder mirror that holds it, or by running `fetchloom add <folder> --as <name>` again where the files are"
+        } else {
+            "run `fetchloom sync` in each project; it puts the pinned file back wherever a project's file is linked to a changed copy"
+        };
+        return Err(error.help(help));
     }
     error = error.detail(format!(
         "fetchloom could not note that {} had changed:",
