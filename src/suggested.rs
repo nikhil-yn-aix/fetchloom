@@ -954,9 +954,13 @@ pub(crate) mod tests {
 
     /// each `` `program …` `` the code below src/ writes outside comments and tests, with its
     /// file, sorted. clap's help and the usage errors, which come before `-C` moves anything, are
-    /// left out.
+    /// left out. nextest names the package's folder when it runs tests from an archive elsewhere.
     fn literal(program: &str) -> Vec<(String, String)> {
-        let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let crate_root = std::env::var_os("CARGO_MANIFEST_DIR").map_or_else(
+            || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            std::path::PathBuf::from,
+        );
+        let crate_root = crate_root.as_path();
         let mut files = Vec::new();
         let mut folders = vec![crate_root.join("src")];
         while let Some(folder) = folders.pop() {
