@@ -1220,7 +1220,14 @@ fn checked_names(files: &[Found], shown: &str) -> Result<(), Error> {
                     if other == named && was_folder && is_folder {
                         continue;
                     }
-                    let problem = if other != named {
+                    let problem = if other != named && name::same_to_hfs(other, named) {
+                        format!(
+                            "{shown} holds \"{}\" and \"{}\", one name on {}",
+                            name::spelled(other),
+                            name::spelled(named),
+                            name::ON_HFS
+                        )
+                    } else if other != named {
                         format!(
                             "{shown} holds \"{other}\" and \"{named}\", which are one name on disks that ignore case"
                         )
@@ -2055,6 +2062,10 @@ mod tests {
             (
                 &["a", "a/b.csv"],
                 "./flowers holds \"a\" both as a file and as a folder",
+            ),
+            (
+                &["ab.csv", "a\u{200d}b.csv"],
+                "./flowers holds \"ab.csv\" and \"a\\u{200d}b.csv\", one name on a mac os extended (hfs+) disk, which ignores the invisible code point they differ in",
             ),
         ] {
             let error = checked_names(&found(paths), "./flowers").unwrap_err();

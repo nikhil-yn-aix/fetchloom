@@ -686,6 +686,33 @@ fn a_clash_of_two_unicode_spellings_says_so() {
     );
 }
 
+/// two names that differ only in a code point hfs+ ignores are one file on such a disk: the clash
+/// says so and writes the code point out, since it prints as nothing.
+#[test]
+fn a_clash_of_names_hfs_reads_alike_says_so() {
+    let error = targets(
+        &manifest(ONE),
+        &lock(&[("a", &["ab.csv", "a\u{200c}b.csv"])]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.message,
+        "data/a/ab.csv and data/a/a\\u{200c}b.csv are one file on a mac os extended (hfs+) disk, which ignores the invisible code point they differ in"
+    );
+    let flat = manifest(
+        "[datasets.a]\nref = \"x\"\npath = \".\"\n[datasets.b]\nref = \"y\"\npath = \".\"\n",
+    );
+    let error = targets(
+        &flat,
+        &lock(&[("a", &["\u{feff}ab.csv"]), ("b", &["ab.csv"])]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.message,
+        "datasets a and b would place data/\\u{feff}ab.csv and data/ab.csv, one file on a mac os extended (hfs+) disk, which ignores the invisible code point they differ in"
+    );
+}
+
 /// of two clashes the first by path is named, whatever order a hash map would keep them in.
 #[test]
 fn of_two_clashes_the_first_by_path_is_named() {

@@ -859,6 +859,7 @@ fn clash(
 ) -> Error {
     let datasets = format!("datasets {} and {}", first.dataset, second.dataset);
     let spellings = first.path != second.path && name::same_composed(&first.path, &second.path);
+    let ignored = !spellings && name::same_to_hfs(&first.path, &second.path);
     let (one, other) = (name::spelled(&first.path), name::spelled(&second.path));
     let message = match (first.path == second.path, first.dataset == second.dataset) {
         (true, true) => match (first.archive(), second.archive()) {
@@ -874,6 +875,11 @@ fn clash(
         ),
         (false, false) if spellings => format!(
             "{datasets} would place {one} and {other}, one name in two unicode spellings, which macos disks take for one file"
+        ),
+        (false, true) if ignored => format!("{one} and {other} are one file on {}", name::ON_HFS),
+        (false, false) if ignored => format!(
+            "{datasets} would place {one} and {other}, one file on {}",
+            name::ON_HFS
         ),
         (false, true) => format!(
             "{} and {} would be the same file on a disk that ignores case",

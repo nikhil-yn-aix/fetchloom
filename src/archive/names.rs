@@ -192,6 +192,14 @@ impl Names {
         let old_name = old.name.as_deref().unwrap_or(&*seen.key().1);
         if old_name != name {
             let old_path = format!("{}{old_name}", &path[..at]);
+            if name::same_to_hfs(old_name, name) {
+                return Err(refused(format!(
+                    "the archive holds \"{}\" and \"{}\", one name on {}",
+                    name::spelled(&old_path),
+                    name::spelled(path),
+                    name::ON_HFS
+                )));
+            }
             return Err(refused(format!(
                 "the archive holds \"{old_path}\" and \"{path}\", which are one name on disks that ignore case"
             )));
@@ -363,6 +371,15 @@ mod tests {
     fn folders_that_differ_only_in_case_are_refused() {
         assert!(add_all(&["Data/a.csv", "data/b.csv"]).is_err());
         assert!(add_all(&["data/a.csv", "data/b.csv"]).is_ok());
+    }
+
+    #[test]
+    fn names_hfs_reads_alike_are_refused() {
+        let err = add_all(&["ab.txt", "a\u{206a}b.txt"]).unwrap_err();
+        assert_eq!(
+            err,
+            "the archive holds \"ab.txt\" and \"a\\u{206a}b.txt\", one name on a mac os extended (hfs+) disk, which ignores the invisible code point they differ in"
+        );
     }
 
     #[test]

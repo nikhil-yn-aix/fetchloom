@@ -485,22 +485,30 @@ pub(crate) fn metadata(path: &str) -> Option<&'static str> {
 }
 
 /// `part` without the code points hfs+ ignores in names, so `.g\u{200c}it` names `.git` there.
-/// the set is the one git skips before its own `.git` check.
 fn visible_to_hfs(part: &str) -> std::borrow::Cow<'_, str> {
-    if part.is_ascii() {
+    if part.is_ascii() || !part.chars().any(ignored_by_hfs) {
         return std::borrow::Cow::Borrowed(part);
     }
-    part.chars()
-        .filter(|character| {
-            !matches!(
-                character,
-                '\u{200c}'..='\u{200f}'
-                    | '\u{202a}'..='\u{202e}'
-                    | '\u{206a}'..='\u{206f}'
-                    | '\u{feff}'
-            )
-        })
-        .collect()
+    part.chars().filter(|c| !ignored_by_hfs(*c)).collect()
+}
+
+/// whether hfs+ ignores `character` in names, as the invisible joiners and format marks. the set
+/// is the one git skips before its own `.git` check.
+fn ignored_by_hfs(character: char) -> bool {
+    matches!(
+        character,
+        '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'
+    )
+}
+
+/// where two names that [`same_to_hfs`] finds alike are one, for a message that names them.
+pub(crate) const ON_HFS: &str =
+    "a mac os extended (hfs+) disk, which ignores the invisible code point they differ in";
+
+/// whether `a` and `b` differ at most in the code points hfs+ ignores in names and in how their
+/// unicode is composed, as `ab.csv` and `a\u{200c}b.csv` do: one name on an hfs+ disk.
+pub(crate) fn same_to_hfs(a: &str, b: &str) -> bool {
+    same_composed(&visible_to_hfs(a), &visible_to_hfs(b))
 }
 
 /// why this machine's disks cannot store a path, if they cannot. checked before anything is
@@ -583,15 +591,16 @@ fn windows_refuses(part: &str) -> Option<String> {
         .then(|| format!("\"{part}\" is a name windows reserves for devices"))
 }
 
-/// a key for portable collision checks and possible filesystem aliases: composed and lowercased,
-/// joining both sharp-s forms, then through uppercase and back, joining the two greek sigmas.
-/// equal keys still need a filesystem check before two paths count as one file.
+/// a key for portable collision checks and possible filesystem aliases: without the code points
+/// hfs+ ignores, composed and lowercased, joining both sharp-s forms, then through uppercase and
+/// back, joining the two greek sigmas. equal keys still need a filesystem check before two paths
+/// count as one file.
 pub(crate) fn fold(path: &str) -> String {
     if path.is_ascii() {
         return path.to_ascii_lowercase();
     }
     ComposingNormalizerBorrowed::new_nfc()
-        .normalize(path)
+        .normalize(&visible_to_hfs(path))
         .to_lowercase()
         .to_uppercase()
         .to_lowercase()
@@ -611,15 +620,20 @@ pub(crate) fn same_composed(a: &str, b: &str) -> bool {
 }
 
 /// `path` as it prints, but with its non-ascii characters written as code points when its unicode
-/// is not composed, as `cafe\u{301}.csv`, so two spellings of one name that print alike read apart.
+/// is not composed, as `cafe\u{301}.csv`, and a code point hfs+ ignores, which prints as nothing,
+/// written so too, as `a\u{200c}b.csv`, so two names that print alike read apart.
 pub(crate) fn spelled(path: &str) -> Cow<'_, str> {
-    if path.is_ascii() || ComposingNormalizerBorrowed::new_nfc().is_normalized(path) {
+    if path.is_ascii() {
+        return Cow::Borrowed(path);
+    }
+    let composed = ComposingNormalizerBorrowed::new_nfc().is_normalized(path);
+    if composed && !path.chars().any(ignored_by_hfs) {
         return Cow::Borrowed(path);
     }
     Cow::Owned(
         path.chars()
             .map(|c| {
-                if c.is_ascii() {
+                if c.is_ascii() || (composed && !ignored_by_hfs(c)) {
                     c.to_string()
                 } else {
                     c.escape_unicode().to_string()
@@ -1174,6 +1188,21 @@ mod tests {
         ] {
             assert_eq!(fold(a), fold(b), "{a} and {b}");
         }
+    }
+
+    /// hfs+ reads a name without the code points it ignores, so with one it is the name without
+    /// it there; a zero width space is no such code point.
+    #[test]
+    fn code_points_hfs_ignores_have_the_same_portable_key() {
+        for ignored in ['\u{200c}', '\u{200d}', '\u{206a}', '\u{206f}', '\u{feff}'] {
+            assert_eq!(
+                fold(&format!("A{ignored}b.csv")),
+                fold("ab.csv"),
+                "{ignored:?}"
+            );
+        }
+        assert_ne!(fold("a\u{200b}b.csv"), fold("ab.csv"));
+        assert_eq!(spelled("a\u{200c}b/\u{e9}.csv"), "a\\u{200c}b/\u{e9}.csv");
     }
 
     #[test]
