@@ -634,7 +634,10 @@ pub(crate) fn no_folder(name: &str, entry: &Entry, path: &str) -> Error {
             crate::name::escaped(path).escape_debug()
         ),
     )
-    .help("put the file's link on that line, or use the list by its own link, as `fetchloom add https://example.org/data/SHA256SUMS` does")
+    .help(format!(
+        "put the file's link on that line, or use the list by its own link, as `{}` does",
+        crate::suggested::command("add https://example.org/data/SHA256SUMS")
+    ))
 }
 
 /// the link `text` a line gives a file, refused when it is no plain link, holds a control
