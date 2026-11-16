@@ -38,6 +38,9 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     let (_, manifest) = project.manifest()?;
     let target = placed(&project, &manifest, &args.target).unwrap_or(args.target);
     named(&manifest, &target)?;
+    if let Some(error) = in_no_folder(&project, &manifest, &target) {
+        return Err(error);
+    }
     let (name, file) = match target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
         None => (target.as_str(), None),
@@ -168,6 +171,55 @@ fn placed(project: &Project, manifest: &Manifest, target: &str) -> Option<String
         rest if rest.is_empty() => dataset.clone(),
         rest => format!("{dataset}/{rest}"),
     })
+}
+
+/// the refusal of `target`, typed as a path in the data folder that no dataset's folder holds, as a
+/// typo in `data/irs/iris.csv` leaves it: with the path one dataset's folder a typo away gives.
+fn in_no_folder(project: &Project, manifest: &Manifest, target: &str) -> Option<Error> {
+    let first = target.split(['/', '\\']).next().unwrap_or(target);
+    if manifest.datasets.contains_key(first) {
+        return None;
+    }
+    let here = std::env::current_dir().ok()?;
+    let path = super::exclude::in_data_folder(
+        &project.root,
+        &here,
+        &manifest.data_dir,
+        std::path::Path::new(target),
+    )
+    .ok()?;
+    let inside = format!("{}/", manifest.data_dir);
+    let parts: Vec<&str> = path.strip_prefix(&inside)?.split('/').collect();
+    let mut near = manifest.datasets.keys().filter_map(|dataset| {
+        let folder = plan::folder(manifest, dataset);
+        let theirs: Vec<&str> = folder.strip_prefix(&inside)?.split('/').collect();
+        let close = parts.len() >= theirs.len()
+            && theirs.iter().zip(&parts).all(|(theirs, typed)| {
+                name::fold(theirs) == name::fold(typed) || name::one_typo(theirs, typed)
+            });
+        close.then_some((dataset, theirs.len()))
+    });
+    let error = Error::new(Kind::Usage, format!("{path} is in no dataset's folder"));
+    if let (Some((dataset, depth)), None) = (near.next(), near.next()) {
+        let meant = match parts[depth..].join("/") {
+            rest if rest.is_empty() => dataset.clone(),
+            rest => format!("{dataset}/{rest}"),
+        };
+        let instead = format!("fetchloom path {}", super::shell_word(&meant));
+        return Some(error.help(format!(
+            "did you mean `{}`?",
+            super::meant(&[target], &[&meant], instead)
+        )));
+    }
+    let example = manifest
+        .datasets
+        .keys()
+        .next()
+        .map_or("iris", String::as_str);
+    Some(error.help(format!(
+        "name a dataset, as in `{}`",
+        super::project::command(&format!("path {example}"))
+    )))
 }
 
 /// the help for `target`, which names no dataset, when the folder of one dataset alone holds a

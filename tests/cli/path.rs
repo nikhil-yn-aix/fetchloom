@@ -96,6 +96,41 @@ fn path_takes_a_placed_path_as_ls_shows_it() -> Result {
     Ok(())
 }
 
+/// a path in the data folder with a typo in a dataset's folder, as `ls` output retyped by hand
+/// gives, is answered with the path that folder gives, and the line it suggests answers; one near
+/// no dataset's folder says it is in none, never that `data` is no dataset.
+#[test]
+fn a_typo_in_a_placed_folder_is_answered_with_the_folder_meant() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let output = sandbox.run(&["path", "data/irs/iris.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.starts_with("error: data/irs/iris.csv is in no dataset's folder\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: did you mean `fetchloom path iris/iris.csv`?"),
+        "{stderr}"
+    );
+    let meant = sandbox.run(&["path", "iris/iris.csv"])?;
+    assert_eq!(meant.status.code(), Some(0), "{}", text(&meant.stderr)?);
+    let output = sandbox.run(&["path", "data/zzz/iris.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.starts_with("error: data/zzz/iris.csv is in no dataset's folder\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: name a dataset, as in `fetchloom path iris`"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn path_answers_a_file_a_dataset_lacks_with_paths_it_holds() -> Result {
     let sandbox = Sandbox::new()?;

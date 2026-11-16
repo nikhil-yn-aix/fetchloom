@@ -19,7 +19,7 @@ fetchloom path [options] <name>[/file]
 |---|---|
 | `--locked` | fail instead of updating data.lock when the dataset's entry is out of date with data.toml, for CI |
 
-[global options](global-options.md) also apply. use `/` between the dataset name and file path on both platforms. the target starts with a dataset's name, or is a path to a dataset's folder or to something in it as `ls` shows it, read from the folder you are in: `data/iris/Iris.csv` from the project's folder, `../data/iris/Iris.csv` from a folder in it, or `Iris.csv` inside `data/iris`, each answered as `iris/Iris.csv` is. a file name alone that one dataset's folder holds, such as `Iris.csv` from the project's folder, gets ``did you mean `fetchloom path iris/Iris.csv`?``. an empty target, or a path on this machine outside the data folder such as `/etc/passwd`, is refused with `usage`, exit 2, quoting it as typed.
+[global options](global-options.md) also apply. use `/` between the dataset name and file path on both platforms. the target starts with a dataset's name, or is a path to a dataset's folder or to something in it as `ls` shows it, read from the folder you are in: `data/iris/Iris.csv` from the project's folder, `../data/iris/Iris.csv` from a folder in it, or `Iris.csv` inside `data/iris`, each answered as `iris/Iris.csv` is. a file name alone that one dataset's folder holds, such as `Iris.csv` from the project's folder, gets ``did you mean `fetchloom path iris/Iris.csv`?``, and so does a path in the data folder with a typo in a dataset's folder, such as `data/irs/Iris.csv`. an empty target, or a path on this machine outside the data folder such as `/etc/passwd`, is refused with `usage`, exit 2, quoting it as typed.
 
 ## what happens
 
