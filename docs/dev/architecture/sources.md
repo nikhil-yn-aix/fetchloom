@@ -50,7 +50,7 @@ every adapter runs one suite, `src/source/conformance.rs` (`cargo test --locked 
 | hostile links | `every_adapter_refuses_a_hostile_link` | a file's link an answer gives, made `ftp:`, `file:`, `javascript:`, a cloud's metadata address, one with a login or another port, ends in an error with help or a listing whose links are http or https, carry no login and lie where the source's files are kept |
 | keys | `every_key_is_read_by_its_own_source_alone` | the invariant that keys have readers, above |
 
-for these runs `Recorded` answers a link it never recorded with 404, and panics past 1,000 requests, which the suite reports as a loop. a name an adapter takes from its link, as gitlab's and semantic scholar's, is the link's own once parsed. a name refused only on some disks, as `CON` on windows, reaches the plan's check before placing as it was listed. a new source adds its descriptor and a row in `rows()`. a finding in a source another change is rewriting goes in `HANDED_OFF` with its reason, and its property fails once the finding is gone, so the line leaves with the fix.
+for these runs `Recorded` answers a link it never recorded with 404, and panics past 1,000 requests, which the suite reports as a loop. a name an adapter takes from its link, as gitlab's and semantic scholar's, is the link's own once parsed, or the name fetchloom gives a plain link's file. a name refused only on some disks, as `CON` on windows, reaches the plan's check before placing as it was listed. a new source adds its descriptor and a row in `rows()`. a finding in a source another change is rewriting goes in `HANDED_OFF` with its reason, and its property fails once the finding is gone, so the line leaves with the fix.
 
 ## how it works
 

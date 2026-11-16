@@ -646,13 +646,20 @@ fn subjects() -> Vec<Subject> {
 /// findings in sources other builders are changing, handed to them: the property, the row, a
 /// part of the change and the start of the problem. a fix deletes its line, which the property
 /// then holds; a line no finding matches fails, so it cannot outlive its fix.
-const HANDED_OFF: [(&str, &str, &str, &str); 2] = [
+const HANDED_OFF: [(&str, &str, &str, &str); 3] = [
     // geo reads any page sent with 200 as a folder's index, an empty one when it is no index
     (
         "wrong answers",
         "geo:GSE1000",
         "a sign-in page",
         "read a sign-in page as a listing",
+    ),
+    // geo takes any answer for suppl/filelist.txt as the filelist, and its length as its size
+    (
+        "wrong answers",
+        "geo:GSE1000",
+        "suppl/filelist.txt",
+        "trusted",
     ),
     // geo's index reader leaves out an entry that starts with `.` or holds `:` without a word
     (
@@ -879,7 +886,11 @@ fn wrong_values(body: &[u8]) -> Vec<Change> {
             Value::Array(_) => {
                 instead.push(("an object", Some(Value::Object(serde_json::Map::new()))));
             }
-            Value::String(_) => instead.push(("a number", Some(Value::from(7)))),
+            // text of digits becomes the same number, as an answer may give either
+            Value::String(text) => instead.push((
+                "a number",
+                Some(text.parse::<u64>().map_or(Value::from(7), Value::from)),
+            )),
             Value::Number(number) => {
                 instead.push(("its digits as text", Some(Value::from(number.to_string()))));
             }
@@ -1049,16 +1060,17 @@ fn names_in<'a>(subject: &'a Subject, body: &str) -> Vec<&'a str> {
 fn placed(subject: &Subject, listing: &Listing, hostile: &str) -> Option<String> {
     let before: std::collections::HashSet<&str> = subject.listed.paths().collect();
     // a file a source names by its link, the link's last part or what follows its `#`, is
-    // named by where the link leads once parsed
+    // named by where the link leads once parsed, or as fetchloom names a plain link's file
     let linked = |path: &str| {
         let name = path.rsplit('/').next().unwrap_or(path);
         listing.files.iter().any(|file| {
             let last = file.url.path_segments().and_then(Iterator::last);
             file.path == path
-                && last
+                && (last
                     .into_iter()
                     .chain(file.url.fragment())
                     .any(|part| percent_decode_str(part).decode_utf8_lossy() == name)
+                    || crate::name::from_url(&file.url).as_deref() == Some(name))
         })
     };
     if let Some(path) = listing.paths().find(|path| {
