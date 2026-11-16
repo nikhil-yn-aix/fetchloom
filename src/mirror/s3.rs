@@ -238,7 +238,7 @@ impl Look {
     pub(crate) fn refused_help(top: &Top, keyed: Option<&Keyed>) -> String {
         match keyed {
             Some(Keyed::Signed { key, .. }) => format!(
-                "ask the owner of {} to let the AWS key {key} read it: its policy must grant s3:GetObject on {}",
+                "ask the owner of {} to let the AWS key {key} read it: its policy must grant s3:GetObject on {} and s3:ListBucket on the bucket, without which a file the mirror lacks is refused rather than not found",
                 top.bucket,
                 top.keys()
             ),

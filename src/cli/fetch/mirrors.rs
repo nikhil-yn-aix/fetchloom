@@ -309,26 +309,51 @@ fn web_missing(location: &Location, look: web::Look) -> Option<Skip> {
 }
 
 /// the warning and help for the mirror at `location`, skipped once a request to it ended with
-/// `error`, as `otherwise` words it. a mirror that asked to wait answered, so it is called busy
-/// and its address is not blamed.
+/// `error`, as `otherwise` words it. a mirror that answered is never told to check its address:
+/// one that asked to wait is busy, one that refused names its sign-in, and a server error points
+/// at whoever keeps it.
 fn skip_warning(
     location: &Location,
     error: &Error,
     otherwise: impl FnOnce() -> String,
 ) -> (String, String) {
-    if error.kind == Kind::NetworkRateLimited {
-        return (
+    match error.kind {
+        Kind::NetworkRateLimited => (
             format!(
                 "the mirror {location} is busy: {}, so this run skips it",
                 error.message
             ),
             "try again later, or ask whoever keeps the mirror".to_owned(),
-        );
+        ),
+        Kind::AuthRequired => (
+            format!(
+                "the mirror {location} refused access: {}, so this run skips it",
+                error.message
+            ),
+            refused_help(location, 401, None),
+        ),
+        Kind::NetworkStatus => (
+            otherwise(),
+            "ask whoever keeps the mirror, or try again later".to_owned(),
+        ),
+        _ => (
+            otherwise(),
+            "check the address, and that this machine can reach it".to_owned(),
+        ),
     }
-    (
-        otherwise(),
-        "check the address, and that this machine can reach it".to_owned(),
-    )
+}
+
+/// what a mirror's failure to give a file says of the file, when it says the mirror lacks it
+/// rather than that the mirror failed: a 404, or on S3 a refusal, since S3 answers 403 for a key
+/// that is not there to a reader not allowed to list the bucket.
+fn lacking(location: &Location, error: &Error) -> Option<String> {
+    match (error.kind, location) {
+        (Kind::ReferenceUnresolved, _) => Some("not there".to_owned()),
+        (Kind::AuthRequired, Location::S3(_)) => {
+            Some("not there, or not readable without s3:ListBucket".to_owned())
+        }
+        _ => None,
+    }
 }
 
 /// why the S3 mirror at `location`, `top`, is skipped, after its marker was asked for.
@@ -742,10 +767,11 @@ async fn from_web(
             }
             Err(error) => error,
         };
+        if let Some(said) = lacking(location, &error) {
+            mirrored.lacked(index, want.digest, said);
+            continue;
+        }
         match error.kind {
-            Kind::ReferenceUnresolved => {
-                mirrored.lacked(index, want.digest, "not there".to_owned());
-            }
             Kind::IntegrityMismatch => {
                 mirrored.lacked(index, want.digest, DAMAGED.to_owned());
                 damaged.push(want.label);
@@ -817,6 +843,9 @@ pub(in crate::cli) async fn trees<'f>(
 enum Got {
     Bytes(Vec<u8>),
     Absent,
+    /// an S3 mirror's refusal, which a reader not allowed to list the bucket gets for a key that
+    /// is not there.
+    Unlisted,
     Damaged,
     /// the mirror failed, with its answer in short.
     Trouble(String),
@@ -859,6 +888,9 @@ async fn tree_from_mirrors(
                 match web::read_tree(net, &base, &tree).await? {
                     web::Tree::Bytes(bytes) => Got::Bytes(bytes),
                     web::Tree::Absent => Got::Absent,
+                    web::Tree::Answered(403) if matches!(location, Location::S3(_)) => {
+                        Got::Unlisted
+                    }
                     web::Tree::Answered(status) => Got::Trouble(format!("answered {status}")),
                     web::Tree::Failed(error) => Got::Trouble(error.message),
                 }
@@ -868,6 +900,11 @@ async fn tree_from_mirrors(
             Got::Bytes(bytes) => bytes,
             Got::Absent => {
                 mirrored.lacked(index, tree, "not there".to_owned());
+                continue;
+            }
+            Got::Unlisted => {
+                let said = "not there, or not readable without s3:ListBucket".to_owned();
+                mirrored.lacked(index, tree, said);
                 continue;
             }
             Got::Damaged => Vec::new(),
@@ -1026,6 +1063,52 @@ mod tests {
         }))
         .unwrap();
         assert!(!listed.load(Ordering::Relaxed));
+    }
+
+    /// a mirror whose objects refuse a run says how to sign in to it, by host and port, a server
+    /// error points at whoever keeps it, and only a mirror no one reached blames the address.
+    #[test]
+    fn a_failed_mirror_is_told_by_how_it_failed() {
+        let web = Location::Web(url::Url::parse("http://127.0.0.1:34271/m/").unwrap());
+        let refused = Error::new(
+            Kind::AuthRequired,
+            "127.0.0.1 refused access to http://127.0.0.1:34271/m/objects/96/ee (401)",
+        );
+        let (warning, help) = skip_warning(&web, &refused, || "not this".to_owned());
+        assert_eq!(
+            warning,
+            "the mirror http://127.0.0.1:34271/m refused access: 127.0.0.1 refused access to http://127.0.0.1:34271/m/objects/96/ee (401), so this run skips it"
+        );
+        assert_eq!(
+            help,
+            "if it needs a login, sign in with `fetchloom auth login 127.0.0.1:34271`"
+        );
+        let failed = Error::new(Kind::NetworkStatus, "127.0.0.1 answered 503");
+        let (_, help) = skip_warning(&web, &failed, || "failed".to_owned());
+        assert_eq!(help, "ask whoever keeps the mirror, or try again later");
+        let gone = Error::new(Kind::NetworkUnreachable, "nothing listens there");
+        let (_, help) = skip_warning(&web, &gone, || "failed".to_owned());
+        assert_eq!(
+            help,
+            "check the address, and that this machine can reach it"
+        );
+    }
+
+    /// S3 answers 403, not 404, for a key a mirror lacks when its reader may not list the bucket,
+    /// so on an S3 mirror that answered at all, a refusal is a file not there, or not readable,
+    /// and the mirror is still asked for the rest.
+    #[test]
+    fn an_s3_mirror_s_refusal_of_one_file_is_a_file_it_lacks() {
+        let bucket = Location::parse("s3://lab-data/fetchloom", None).unwrap();
+        let web = Location::Web(url::Url::parse("https://mirror.lab.example/").unwrap());
+        let refused = Error::new(Kind::AuthRequired, "refused without a key");
+        assert_eq!(
+            lacking(&bucket, &refused),
+            Some("not there, or not readable without s3:ListBucket".to_owned())
+        );
+        assert_eq!(lacking(&web, &refused), None);
+        let gone = Error::new(Kind::ReferenceUnresolved, "404");
+        assert_eq!(lacking(&web, &gone), Some("not there".to_owned()));
     }
 
     /// a mirror skipped once it answered, as when its objects fail, is asked nothing more that
