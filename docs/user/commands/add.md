@@ -169,7 +169,7 @@ a list of files is one dataset: a checksum list such as `SHA256SUMS` or `MD5SUMS
 
 a hash is an MD5 or a SHA-256, bare, where its length tells which, or after `md5:` or `sha256:`. a stated MD5 is checked on the first download, and data.lock pins the SHA-256 that download has. any other hash is refused by its name, as `line 1 of SHA1SUMS gives a SHA-1 hash, and fetchloom checks only MD5 and SHA-256`. blank lines and lines starting with `#` are skipped.
 
-a link to a list whose name says it holds checksums, as `SHA256SUMS`, `MD5SUMS`, `SHA256SUMS.txt` or `md5sums.txt` do, adds every file it lists, each at the list's folder plus its path. `list:` and a link adds a list of any other name, as `fetchloom add list:https://example.org/data/registry.txt`. the dataset is named after the list's folder for a checksum list, as `mitdb-1-0-0` for physionet's, and after the list for any other.
+a link to a list whose name says it holds checksums, as `SHA256SUMS`, `MD5SUMS`, `SHA256SUMS.txt`, `md5sums.txt` or NCBI's `md5checksums.txt` do, adds every file it lists, each at the list's folder plus its path. `list:` and a link adds a list of any other name, as `fetchloom add list:https://example.org/data/registry.txt`. the dataset is named after the list's folder for a checksum list, as `mitdb-1-0-0` for physionet's, and after the list for any other.
 
 `-i <file>` adds a list in the project, which gives each file's link, since a list on this machine has no folder for a path below it:
 

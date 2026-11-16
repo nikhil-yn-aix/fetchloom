@@ -316,6 +316,14 @@ fn a_list_is_named_by_its_link_or_its_path_in_the_project() {
             "list:https://example.org/md5sums.txt",
         ),
         (
+            "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/md5checksums.txt",
+            "list:https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/md5checksums.txt",
+        ),
+        (
+            "https://example.org/data/checksums.txt",
+            "https://example.org/data/checksums.txt",
+        ),
+        (
             "https://github.com/o/r/blob/main/SHA1SUMS",
             "list:https://raw.githubusercontent.com/o/r/main/SHA1SUMS",
         ),

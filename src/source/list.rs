@@ -239,13 +239,14 @@ impl fmt::Display for List {
     }
 }
 
-/// whether a list's file `name` says it holds checksums, as `SHA256SUMS`, `MD5SUMS` and
-/// `sha1sum.txt` do, in any case.
+/// whether a list's file `name` says it holds checksums, as `SHA256SUMS`, `MD5SUMS`,
+/// `sha1sum.txt` and NCBI's `md5checksums.txt` do, in any case.
 fn is_named_for_sums(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     let stem = name.strip_suffix(".txt").unwrap_or(&name);
-    stem.strip_suffix("sums")
-        .or_else(|| stem.strip_suffix("sum"))
+    ["checksums", "checksum", "sums", "sum"]
+        .iter()
+        .find_map(|kind| stem.strip_suffix(kind))
         .is_some_and(|function| {
             ["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "b2"].contains(&function)
         })
