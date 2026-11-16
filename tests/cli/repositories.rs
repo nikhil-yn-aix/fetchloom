@@ -2346,6 +2346,49 @@ fn an_offline_dry_run_counts_a_stated_file_a_mirror_holds_as_its_run_does() -> R
     Ok(())
 }
 
+/// offline, a pin by the SHA-256 its source states fills from a folder `reuse` lists that holds
+/// the file under any name, and its dry run, which only looks there, says the same: the same exit
+/// code, and the lock the run makes or the refusal it gives.
+#[test]
+fn an_offline_dry_run_counts_a_stated_file_a_reuse_folder_holds_as_its_run_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let digest = sha256_hex(ROWS);
+    let routes = dryad_stating("sha-256", &[("rows.csv", ROWS, &digest)])?;
+    added_unsynced(&sandbox, &routes)?;
+    let folder = sandbox.folder("downloads")?;
+    fs::write(folder.join("sites.csv"), ROWS)?;
+    let reuse = folder.to_string_lossy().into_owned();
+    let envs = [("FETCHLOOM_REUSE", reuse.as_str())];
+    // the dry run first, while the teammate's cache lacks the file and only the folder holds it
+    let (_, dry) = teammate_sync_with(
+        &sandbox,
+        &routes,
+        &["--offline", "sync", "--dry-run"],
+        &envs,
+    )?;
+    let (teammate, run) = teammate_sync_with(&sandbox, &routes, &["--offline", "sync"], &envs)?;
+    let (dry_said, run_said) = (text(&dry.stderr)?, text(&run.stderr)?);
+    // the lock line, by the run's verb, and every line of a refusal
+    let told = |said: &str| -> Vec<String> {
+        let refused = said.lines().skip_while(|line| !line.starts_with("error:"));
+        said.lines()
+            .map(str::trim)
+            .filter(|line| line.ends_with(" in data.lock"))
+            .map(|line| line.replacen("Would lock", "Locked", 1))
+            .chain(refused.map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(
+        (dry.status.code(), told(&dry_said)),
+        (run.status.code(), told(&run_said)),
+        "dry run:\n{dry_said}\nrun:\n{run_said}"
+    );
+    if run.status.success() {
+        assert_eq!(fs::read(teammate.join("data/archiving/rows.csv"))?, ROWS);
+    }
+    Ok(())
+}
+
 /// `--locked` refuses a pin a sync would complete, since data.lock would change, saying which
 /// sync completes it; the check without it counts the pin as locked.
 #[test]
