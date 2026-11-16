@@ -596,9 +596,9 @@ pub(crate) fn edit(path: &Path, bytes: &[u8]) -> Result {
 }
 
 /// the 2 MiB [`Server::held_file`] serves. a download puts bytes on disk once more than the 1 MiB
-/// its writer gathers arrived, its reader keeping back up to 256 KiB, or at its once-a-second
-/// save, which comes only as more bytes arrive: all of a 1 MiB body can arrive in the first
-/// second of a writer that opened late, and stay in memory until the stop.
+/// its writer gathers arrived, its reader keeping back up to 256 KiB, or at its save, once a
+/// second while bytes arrive and a second after the last: all of a 1 MiB body can arrive in the
+/// first second of a writer that opened late and wait for that save, so a stop finds it in memory.
 #[cfg(unix)]
 pub(crate) fn held_body() -> Vec<u8> {
     (0..2u32 << 20).map(|n| (n % 251) as u8).collect()

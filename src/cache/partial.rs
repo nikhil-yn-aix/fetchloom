@@ -25,7 +25,7 @@ pub(crate) use hashing::Hashing;
 use hashing::HashPipe;
 
 /// how often a download records its progress, so a killed run loses about this much of it.
-const SAVE_EVERY: Duration = Duration::from_secs(1);
+pub(crate) const SAVE_EVERY: Duration = Duration::from_secs(1);
 /// how much a download writes before it starts writing to the disk while it arrives, so a small
 /// one leaves that to the system.
 const WRITEBACK_AFTER: u64 = 64 << 20;

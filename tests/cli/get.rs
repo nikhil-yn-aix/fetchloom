@@ -4,8 +4,8 @@ use std::fs;
 use std::process::{Child, Stdio};
 
 use crate::support::{
-    Part, Result, Sandbox, Server, delete_folder, file, json, link_folder, partial_files, reply,
-    text, wait_until, zip_of,
+    Part, Result, Running, Sandbox, Server, delete_folder, file, json, link_folder, partial_files,
+    reply, text, wait_until, zip_of,
 };
 
 const IRIS: &[u8] =
@@ -1059,6 +1059,76 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
     assert!(asked.contains("if-range: \"v1\""), "{asked}");
     assert_eq!(fs::read(sandbox.work().join("big").join("big.bin"))?, body);
     Ok(())
+}
+
+/// a server that goes quiet in the middle of a file has every byte it sent recorded within a
+/// second, though they are fewer than a stream hands its writer at once, so a run killed while it
+/// waits, as a job a scheduler ends is, loses none of them: the next run asks for the rest alone.
+#[test]
+fn a_run_killed_while_its_server_is_quiet_keeps_every_byte_it_got() -> Result {
+    let body: Vec<u8> = (0..65_536u32).flat_map(u32::to_le_bytes).collect();
+    let sent = 96 * 1024;
+    let sandbox = Sandbox::new()?;
+    let (release, quiet) = std::sync::mpsc::channel();
+    let length = body.len().to_string();
+    let mut first = reply(
+        "200 OK",
+        &[
+            ("Content-Length", &length),
+            ("ETag", "\"v1\""),
+            ("Accept-Ranges", "bytes"),
+        ],
+        &body[..sent],
+    );
+    first.push(Part::Wait(quiet));
+    let rest = (body.len() - sent).to_string();
+    let range = format!("bytes {sent}-{}/{}", body.len() - 1, body.len());
+    let second = reply(
+        "206 Partial Content",
+        &[
+            ("Content-Length", &rest),
+            ("Content-Range", &range),
+            ("ETag", "\"v1\""),
+        ],
+        &body[sent..],
+    );
+    let server = Server::start("/big.bin", vec![first, second])?;
+    // the run would wait ten minutes for the quiet server before it gave up on the answer
+    let mut running = Running::start(
+        sandbox
+            .command(&["get", &server.url])
+            .env("FETCHLOOM_TIMEOUT", "600"),
+    )?;
+    server.wait_for_requests(1)?;
+    wait_until("a record of every byte the quiet server sent", || {
+        Ok(recorded(&sandbox) == Some(sent as u64))
+    })?;
+    running.kill()?;
+    running.wait()?;
+    release.send(())?;
+
+    let output = sandbox.run(&["--json", "get", &server.url])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let asked = &server.requests()[1];
+    assert!(asked.contains(&format!("range: bytes={sent}-")), "{asked}");
+    assert!(asked.contains("if-range: \"v1\""), "{asked}");
+    assert_eq!(fs::read(sandbox.work().join("big").join("big.bin"))?, body);
+    Ok(())
+}
+
+/// how many bytes the record of the one unfinished download in the sandbox's cache says it
+/// received, once it has one.
+fn recorded(sandbox: &Sandbox) -> Option<u64> {
+    partial_files(&sandbox.cache())
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .find_map(|path| {
+            let record: serde_json::Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+            record["received"].as_u64()
+        })
 }
 
 /// a stop the person asked for is no error: a note offers a second ctrl-c, then a `Stopped` line

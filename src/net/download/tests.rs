@@ -45,9 +45,71 @@ async fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     assert!(reason.contains("sent nothing for 0 s"), "{reason}");
     assert_eq!(net.work.counts().bytes_down, 3072);
     assert_eq!(
-        written.try_recv().unwrap(),
+        written.try_recv().unwrap().chunks,
         vec![Bytes::from(vec![b'x'; 3072])]
     );
+}
+
+/// a server that goes quiet in the middle of a file leaves what it sent with the stream, in a
+/// batch smaller than the writer takes at once. once the quiet lasts a second, the stream hands
+/// every byte to the writer, so a run killed while it waits loses none of them.
+#[tokio::test(start_paused = true)]
+async fn a_quiet_servers_bytes_go_to_the_writer_within_a_second() {
+    let url = Url::parse("https://example.org/file").unwrap();
+    let mut net = net(&url);
+    net.idle = std::time::Duration::from_secs(30);
+    let (source, mut chunks) = tokio::sync::mpsc::channel(16);
+    source.send(Bytes::from(vec![b'x'; 4096])).await.unwrap();
+    let (sender, mut written) = tokio::sync::mpsc::channel(16);
+    let listener = |_| Ok(());
+    let mut reading =
+        std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, None));
+    assert!(poll(reading.as_mut()).is_pending());
+    let moment = std::time::Duration::from_millis(1);
+    tokio::time::advance(SAVE_EVERY.saturating_sub(moment)).await;
+    assert!(poll(reading.as_mut()).is_pending());
+    assert!(written.try_recv().is_err(), "a moment's quiet is no stall");
+    tokio::time::advance(moment).await;
+    assert!(poll(reading.as_mut()).is_pending());
+    let handed = written
+        .try_recv()
+        .expect("a second's quiet hands the bytes to the writer");
+    assert_eq!(handed.chunks, vec![Bytes::from(vec![b'x'; 4096])]);
+    assert!(handed.record, "the writer records them at once");
+    tokio::time::advance(5 * SAVE_EVERY).await;
+    assert!(poll(reading.as_mut()).is_pending());
+    assert!(written.try_recv().is_err(), "nothing new came to hand over");
+}
+
+/// a slow server, never quiet for a second, fills a batch only after many seconds, so the bytes
+/// of a batch go to the writer once the first of them waited a second.
+#[tokio::test(start_paused = true)]
+async fn a_slow_servers_bytes_go_to_the_writer_a_second_after_they_came() {
+    let url = Url::parse("https://example.org/file").unwrap();
+    let mut net = net(&url);
+    net.idle = std::time::Duration::from_secs(30);
+    let (source, mut chunks) = tokio::sync::mpsc::channel(16);
+    let (sender, mut written) = tokio::sync::mpsc::channel(16);
+    let listener = |_| Ok(());
+    let mut reading =
+        std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, None));
+    source.send(Bytes::from(vec![b'x'; 4096])).await.unwrap();
+    assert!(poll(reading.as_mut()).is_pending());
+    let gap = SAVE_EVERY * 2 / 5;
+    for _ in 0..2 {
+        tokio::time::advance(gap).await;
+        source.send(Bytes::from(vec![b'x'; 4096])).await.unwrap();
+        assert!(poll(reading.as_mut()).is_pending());
+        assert!(written.try_recv().is_err(), "the first bytes waited less");
+    }
+    tokio::time::advance(gap).await;
+    source.send(Bytes::from(vec![b'x'; 4096])).await.unwrap();
+    assert!(poll(reading.as_mut()).is_pending());
+    let handed = written
+        .try_recv()
+        .expect("bytes that waited a second go to the writer");
+    assert_eq!(handed.chunks, vec![Bytes::from(vec![b'x'; 4096]); 4]);
+    assert!(handed.record, "the writer records them at once");
 }
 
 /// a server that sends a byte every 2 s is never silent for the 5 s timeout, yet a window as
@@ -78,7 +140,10 @@ async fn a_body_that_trickles_in_fails_the_try_as_a_silence_does() {
                 panic!("a body trickling in went on");
             };
             assert_eq!(reason, "example.org sent only 3 B in 5 s");
-            let kept: usize = written.try_recv().unwrap().iter().map(Bytes::len).sum();
+            let mut kept = 0;
+            while let Ok(handed) = written.try_recv() {
+                kept += handed.chunks.iter().map(Bytes::len).sum::<usize>();
+            }
             assert_eq!(kept, 3, "the bytes the reason counts are kept");
         } else {
             assert!(read.is_pending(), "1.5 KiB in 6 s is slow, not stalled");
@@ -2267,7 +2332,13 @@ async fn waiting_for_the_rate_cap_is_no_network_silence() {
         poll(reading.as_mut()),
         std::task::Poll::Ready(Ok(None))
     ));
-    let lengths: Vec<usize> = written.try_recv().unwrap().iter().map(Bytes::len).collect();
+    let lengths: Vec<usize> = written
+        .try_recv()
+        .unwrap()
+        .chunks
+        .iter()
+        .map(Bytes::len)
+        .collect();
     assert_eq!(lengths, [2048, 2048]);
 }
 
@@ -2299,7 +2370,7 @@ async fn waiting_for_an_answer_is_no_network_silence() {
         std::task::Poll::Ready(Ok(None))
     ));
     assert_eq!(
-        written.try_recv().unwrap(),
+        written.try_recv().unwrap().chunks,
         vec![Bytes::from_static(b"da"), Bytes::from_static(b"ta")]
     );
 }

@@ -15,7 +15,9 @@ use url::Url;
 use super::failure::{self, Failure, Retry};
 use super::headers::{self, NoVersion, if_range};
 use super::{Net, Splitting, host};
-use crate::cache::{Cache, Claim, Partial, PartialWriter, Stored, UrlRecord, Validators};
+use crate::cache::{
+    Cache, Claim, Partial, PartialWriter, SAVE_EVERY, Stored, UrlRecord, Validators,
+};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::units;
@@ -532,15 +534,27 @@ pub(super) fn trickled(url: &Url, moved: u64, timeout: Duration) -> Failure {
 /// the writer for each, which cost more than the download on a fast link.
 const BATCH: usize = 256 * 1024;
 
-/// chunks on their way to the writer thread, handed over together without copying.
+/// chunks on their way to the writer thread, handed over together without copying. on a link so
+/// slow that a batch takes longer to fill than saves are apart, or once its server goes quiet,
+/// they go early, and the writer records them at once, so a killed run loses no more than
+/// [`SAVE_EVERY`] promises.
 #[derive(Default)]
 struct Batch {
     chunks: Vec<Bytes>,
     bytes: usize,
+    /// when the first of them came.
+    first: Option<tokio::time::Instant>,
+}
+
+/// what a stream hands the writer thread: chunks, and whether to record all it holds at once.
+struct Handed {
+    chunks: Vec<Bytes>,
+    record: bool,
 }
 
 impl Batch {
-    fn push(&mut self, chunk: Bytes) {
+    fn push(&mut self, chunk: Bytes, at: tokio::time::Instant) {
+        self.first.get_or_insert(at);
         self.bytes += chunk.len();
         self.chunks.push(chunk);
     }
@@ -549,16 +563,25 @@ impl Batch {
         self.bytes >= BATCH
     }
 
-    /// sends what was gathered. an error means the writer stopped.
-    async fn flush(&mut self, sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>) -> Result<(), ()> {
-        if self.chunks.is_empty() {
+    /// whether its first chunk has waited as long as saves are apart, at `now`.
+    fn late(&self, now: tokio::time::Instant) -> bool {
+        self.first.is_some_and(|first| now >= first + SAVE_EVERY)
+    }
+
+    /// sends what was gathered, and with `record` asks the writer to record all it holds, which
+    /// is sent even with nothing gathered. an error means the writer stopped.
+    async fn hand(
+        &mut self,
+        sender: &tokio::sync::mpsc::Sender<Handed>,
+        record: bool,
+    ) -> Result<(), ()> {
+        if self.chunks.is_empty() && !record {
             return Ok(());
         }
         self.bytes = 0;
-        sender
-            .send(std::mem::take(&mut self.chunks))
-            .await
-            .map_err(|_| ())
+        self.first = None;
+        let chunks = std::mem::take(&mut self.chunks);
+        sender.send(Handed { chunks, record }).await.map_err(|_| ())
     }
 }
 
@@ -1404,11 +1427,14 @@ impl Net {
         watch: Option<u64>,
     ) -> Result<Run, Failure> {
         let reached = writer.written();
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<Bytes>>(16);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Handed>(16);
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
-            while let Some(batch) = receiver.blocking_recv() {
-                for chunk in &batch {
+            while let Some(handed) = receiver.blocking_recv() {
+                for chunk in &handed.chunks {
                     writer.write_chunk(writer.written(), chunk)?;
+                }
+                if handed.record {
+                    writer.save()?;
                 }
             }
             writer.save()?;
@@ -1453,7 +1479,7 @@ impl Net {
         &self,
         url: &Url,
         response: &mut impl Chunks,
-        sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
+        sender: &tokio::sync::mpsc::Sender<Handed>,
         reached: u64,
         on: Listener<'_>,
         watch: Option<u64>,
@@ -1463,19 +1489,20 @@ impl Net {
             .read_batches(url, response, sender, &mut batch, reached, on, watch)
             .await;
         // whatever arrived is kept, so a resume or a split goes on from the last byte received
-        let _ = batch.flush(sender).await;
+        let _ = batch.hand(sender, false).await;
         read
     }
 
     #[expect(
         clippy::too_many_arguments,
-        reason = "the stream's state, passed as it was"
+        clippy::too_many_lines,
+        reason = "the stream's state, passed as it was, and all it waits for, in one loop"
     )]
     async fn read_batches(
         &self,
         url: &Url,
         response: &mut impl Chunks,
-        sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
+        sender: &tokio::sync::mpsc::Sender<Handed>,
         batch: &mut Batch,
         mut reached: u64,
         on: Listener<'_>,
@@ -1486,8 +1513,10 @@ impl Net {
         tokio::pin!(lap);
         let (mut since, mut moved) = (Instant::now(), 0u64);
         // the idle deadline moves with every chunk without touching the timer, which is reset
-        // only when it fires early
+        // only when it fires early. while bytes wait to be recorded, the timer is for the nearer
+        // `settle`, a second after the last one came
         let mut idle = tokio::time::Instant::now() + self.idle;
+        let mut settle: Option<tokio::time::Instant> = None;
         let quiet = tokio::time::sleep_until(idle);
         tokio::pin!(quiet);
         let stopped = self.stop.asked();
@@ -1498,8 +1527,19 @@ impl Net {
             let next = tokio::select! {
                 next = response.chunk() => next,
                 () = &mut quiet => {
-                    if tokio::time::Instant::now() < idle {
+                    let now = tokio::time::Instant::now();
+                    if settle.is_some_and(|settle| now >= settle) {
+                        settle = None;
+                        // the server went quiet: what it sent is recorded, so a run killed while
+                        // it waits loses none of it
+                        if batch.hand(sender, true).await.is_err() {
+                            break Ok(None);
+                        }
                         quiet.as_mut().reset(idle);
+                        continue;
+                    }
+                    if now < idle {
+                        quiet.as_mut().reset(settle.map_or(idle, |settle| settle.min(idle)));
                         continue;
                     }
                     // a process stopped past its deadline, as a sleeping laptop's is, finds the
@@ -1548,18 +1588,20 @@ impl Net {
                     if let Err(err) = on(Event::Bytes(length)) {
                         break Err(Failure::Final(err));
                     }
-                    batch.push(chunk);
+                    let mut heard = tokio::time::Instant::now();
+                    batch.push(chunk, heard);
                     if let Some(moved) = stalled {
                         break Err(trickled(url, moved, self.idle));
                     }
-                    if batch.full() {
+                    let late = batch.late(heard);
+                    if batch.full() || late {
                         // a writer with every slot taken is the disk falling behind, which the
                         // bar tells apart from a server that sends nothing
                         let behind = sender.capacity() == 0;
                         if behind {
                             let _ = on(Event::Behind(true));
                         }
-                        let flushed = batch.flush(sender).await;
+                        let flushed = batch.hand(sender, late).await;
                         if behind {
                             let _ = on(Event::Behind(false));
                         }
@@ -1567,10 +1609,16 @@ impl Net {
                         if flushed.is_err() {
                             break Ok(None);
                         }
+                        heard = tokio::time::Instant::now();
                     }
                     // waiting on this machine, for the rate cap, the writer or an answer to a
                     // question, is no silence from the server
-                    idle = tokio::time::Instant::now() + self.idle;
+                    idle = heard + self.idle;
+                    if late {
+                        settle = None;
+                    } else if settle.replace(heard + SAVE_EVERY).is_none() {
+                        quiet.as_mut().reset((heard + SAVE_EVERY).min(idle));
+                    }
                 }
             }
         }
