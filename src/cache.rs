@@ -719,7 +719,11 @@ impl Cache {
 
     /// [`Cache::stated_md5`], with the S3 version the bytes were.
     pub(crate) fn stated(&self, md5: &Md5, url: &str) -> Option<Stated> {
-        let text = fs::read_to_string(self.stated_path(md5, url)).ok()?;
+        // a record is a line; one someone put there as a link or a pipe is none
+        let mut text = String::new();
+        read_unfollowed(&self.stated_path(md5, url))
+            .and_then(|file| file.take(4096).read_to_string(&mut text))
+            .ok()?;
         let mut words = text.split_whitespace();
         Some(Stated {
             digest: Sha256::from_hex(words.next()?)?,
@@ -2182,6 +2186,24 @@ pub(crate) mod tests {
             assert_eq!(cache.stated(&md5, url), Some(stated));
         }
         assert_eq!(cache.stated_md5(&md5, "https://example.org/other"), None);
+    }
+
+    /// a stated record someone put in a shared cache as a link, as to a pipe that would hold every
+    /// run reading it, is no record: it is never followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_stated_md5_record_that_is_a_link_is_no_record() {
+        let (dir, cache) = cache();
+        let stored = store(&cache, b"abc");
+        let md5 = Md5::from_hex("900150983cd24fb0d6963f7d28e17f72").unwrap();
+        let url = "https://example.org/abc";
+        let theirs = dir.path().join("theirs");
+        fs::write(&theirs, format!("{} 3\n", stored.digest)).unwrap();
+        let path = cache.stated_path(&md5, url);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&theirs, &path).unwrap();
+
+        assert_eq!(cache.stated(&md5, url), None);
     }
 
     #[test]

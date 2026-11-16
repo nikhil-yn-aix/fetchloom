@@ -3,8 +3,7 @@
 //! is the `unpacks_to` data.lock keeps and a record proves itself against the lock.
 
 use std::fmt::Write as _;
-use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -87,7 +86,7 @@ impl Cache {
     /// what `archive` unpacked to on this machine. given a tree hash, only a record of that tree
     /// counts.
     pub(crate) fn unpacked(&self, archive: &Sha256, tree: Option<&Sha256>) -> Option<Vec<Member>> {
-        let bytes = fs::read(self.unpacked_path(archive)).ok()?;
+        let bytes = self.unpacked_bytes(archive)?;
         if tree.is_some_and(|tree| digest::sha256(&bytes) != *tree) {
             return None;
         }
@@ -110,15 +109,26 @@ impl Cache {
 
     /// reads a member record and its hash together, so both describe the same bytes.
     pub(crate) fn unpacked_with_tree(&self, archive: &Sha256) -> Option<(Sha256, Vec<Member>)> {
-        let bytes = fs::read(self.unpacked_path(archive)).ok()?;
+        let bytes = self.unpacked_bytes(archive)?;
         let members = parse(std::str::from_utf8(&bytes).ok()?)?;
         Some((digest::sha256(&bytes), members))
+    }
+
+    /// the bytes of the record of `archive`, from a plain file read without following a link:
+    /// one someone put there as a link, or as a pipe that would hold every run reading it, is no
+    /// record.
+    fn unpacked_bytes(&self, archive: &Sha256) -> Option<Vec<u8>> {
+        let mut bytes = Vec::new();
+        crate::volume::read_unfollowed(&self.unpacked_path(archive))
+            .and_then(|mut file| file.read_to_end(&mut bytes))
+            .ok()?;
+        Some(bytes)
     }
 
     /// every archive with a record.
     #[cfg(test)]
     pub(crate) fn unpacked_archives(&self) -> Vec<Sha256> {
-        fs::read_dir(self.root.join("unpacked"))
+        std::fs::read_dir(self.root.join("unpacked"))
             .into_iter()
             .flatten()
             .flatten()
@@ -153,6 +163,8 @@ pub(super) fn parse(text: &str) -> Option<Vec<Member>> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::cache::tests::{cache, store};
 
@@ -181,6 +193,23 @@ mod tests {
             tree_hash(&known_tree()).hex(),
             "fbeb559c9ccd9ab662f75914d0c93c7f2c94333ed82b6c4a151d0d342cb1e358"
         );
+    }
+
+    /// a record someone put in the cache as a link, as to a file of their own or to a pipe that
+    /// would hold every run reading it, is no record: it is never followed.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_that_is_a_link_is_no_record() {
+        let (dir, cache) = cache();
+        let archive = digest::sha256(b"an archive");
+        let theirs = dir.path().join("theirs");
+        fs::write(&theirs, tree(&known_tree())).unwrap();
+        let path = cache.unpacked_path(&archive);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&theirs, &path).unwrap();
+
+        assert_eq!(cache.unpacked(&archive, None), None);
+        assert!(cache.unpacked_with_tree(&archive).is_none());
     }
 
     #[test]
