@@ -4401,6 +4401,15 @@ fn a_clone_missing_a_fetched_list_never_asks_its_source() -> Result {
         json(&audited)?["errors"][0]["message"],
         format!("data.lock names {part}, the file list of iris, which is not there")
     );
+    // a ci check of every dataset fails at the list it could not audit, after auditing the rest
+    let checked = listing_in(&sandbox, &clone, &["--json", "audit", "--check"])?;
+    let document = json(&checked)?;
+    assert_eq!(checked.status.code(), Some(50), "{document}");
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!("data.lock names {part}, the file list of iris, which is not there")
+    );
+    assert_eq!(document["result"]["files"], 1, "{document}");
     checked_missing(&sandbox, &clone, "iris", &part)
 }
 

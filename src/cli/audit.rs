@@ -47,6 +47,9 @@ pub(super) struct Report {
     /// for a project with no data.lock, what pins its files' bytes.
     #[serde(skip)]
     pins_lockless: String,
+    /// the datasets audited that wait for their file lists, whose files no one could ask about.
+    #[serde(skip)]
+    waiting: Vec<Waiting>,
 }
 
 /// one dataset: where its files are served, and what its source says of it now.
@@ -288,6 +291,7 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
         .cloned()
         .collect();
     super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
+    report.waiting = waiting;
     // a sync carries a pin over to the name data.toml gives it now, as status reads it
     let (lock, _) = super::sync::rename::forecast(&manifest, lock);
     let (pinned, asks) = pinned(&manifest, &lock, &wanted, &mut report);
@@ -785,8 +789,9 @@ fn upgrade(moved: &[&str]) -> String {
 
 /// fails for `--check`: with `data.not_ready` naming each file no mirror or source serves and each
 /// dataset its source no longer lists, else with `lock.outdated` naming each newer version and
-/// change, else, when some could not be checked, with the error a download would meet, a refusal's
-/// before no answer's, since asking again later does not end a refusal.
+/// change, else with the missing list of a dataset that waits for one, else, when some could not
+/// be checked, with the error a download would meet, a refusal's before no answer's, since asking
+/// again later does not end a refusal.
 pub(super) fn ready(report: &Report) -> Result<(), Error> {
     if report.lockless {
         return Err(Error::new(
@@ -829,6 +834,10 @@ pub(super) fn ready(report: &Report) -> Result<(), Error> {
         )
         .details_up_to(&behind, NAMED)
         .help(upgrade(&moved)));
+    }
+    // its pin stands, but none of its files was asked about, as `lock --check` fails for it
+    if let Some(waiting) = report.waiting.first() {
+        return Err(waiting.error());
     }
     let files: Vec<(String, Kind, Option<&str>)> = report
         .unchecked()
