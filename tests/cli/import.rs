@@ -1021,3 +1021,26 @@ fn a_dry_run_of_a_switched_import_names_the_archive_it_would_unpack() -> Result 
     assert!(sandbox.work().join("data/shards/part.zip").is_file());
     Ok(())
 }
+
+/// status in a clone whose cache lacks an import's files lists them missing, but never says a
+/// sync places them, since no link fetches them: it says how to bring them from where they are.
+#[test]
+fn status_says_how_to_bring_an_import_no_sync_can_get() -> Result {
+    let sandbox = Sandbox::new()?;
+    flowers(&sandbox)?;
+    assert_eq!(sandbox.run(&["add", "../flowers"])?.status.code(), Some(0));
+    let clone = clone_of(&sandbox)?;
+    let elsewhere = sandbox.folder("another-cache")?;
+    let status = sandbox
+        .command_in(&clone, &["status"])
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    let (stdout, stderr) = (text(&status.stdout)?, text(&status.stderr)?);
+    assert!(stdout.contains("Missing"), "{stdout}");
+    assert!(!stderr.contains("`fetchloom sync` places"), "{stderr}");
+    assert!(
+        stderr.contains("flowers was imported from files, which no sync fetches: `fetchloom add <folder> --as flowers` brings them from where they are"),
+        "{stderr}"
+    );
+    Ok(())
+}

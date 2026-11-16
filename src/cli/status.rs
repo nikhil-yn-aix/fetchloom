@@ -16,7 +16,7 @@ use crate::error::Error;
 use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::{Lock, LockedFile, Waiting};
-use crate::project::manifest::Manifest;
+use crate::project::manifest::{self, Manifest};
 use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::threads::Threads;
@@ -61,6 +61,10 @@ pub(super) struct Status {
     unneeded: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
+    /// the imports with a file of `missing` whose bytes this machine's cache lacks, with those
+    /// files: no link fetches them, so no sync places them.
+    #[serde(skip)]
+    imported_elsewhere: BTreeMap<String, Vec<String>>,
     /// datasets `fetchloom drop` freed on this machine, which a plain sync leaves out.
     dropped: Vec<String>,
     /// those of `dropped` no source gives back: imports.
@@ -165,6 +169,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
             };
             output.hint(&format!("`{}` {does}", super::project::command("sync")));
         }
+        tell_imported_elsewhere(output, &status.imported_elsewhere);
         if !status.hashed_only.is_empty() {
             output.hint(&format!(
                 "`{}` checks every file the same way and puts back those whose bytes changed",
@@ -194,6 +199,24 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         ready::ready(&ready::of_status(&status)).map_err(|error| error.with_report(&status))?;
     }
     Ok(status)
+}
+
+/// how to bring the missing files of each import of `lacking`, which no sync fetches.
+fn tell_imported_elsewhere(output: &Output, lacking: &BTreeMap<String, Vec<String>>) {
+    let names: Vec<&str> = lacking.keys().map(String::as_str).collect();
+    let text = match names.as_slice() {
+        [] => return,
+        [one] => format!(
+            "{one} was imported from files, which no sync fetches: `{}` brings them from where they are",
+            super::project::command(&format!("add <folder> --as {one}"))
+        ),
+        many => format!(
+            "{} were imported from files, which no sync fetches: `{}` brings each one's from where they are",
+            units::listed(many, "and"),
+            super::project::command("add <folder> --as <name>")
+        ),
+    };
+    output.hint(&text);
 }
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
@@ -482,6 +505,7 @@ fn check(
         }
     }
     status.downloads = downloads(&status, &planned, &cache);
+    status.imported_elsewhere = imported_elsewhere(&status.missing, &manifest, &planned, &cache);
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
@@ -543,6 +567,33 @@ fn downloads(
         .filter(|file| lacks(&file.sha256, file.size))
         .filter_map(|file| Some((url::Url::parse(&file.url).ok()?, Some(file.size))))
         .collect()
+}
+
+/// the imports of `planned` with a file of `missing` whose bytes `cache` lacks, each with those
+/// files.
+fn imported_elsewhere(
+    missing: &[String],
+    manifest: &Manifest,
+    planned: &plan::Plan<'_>,
+    cache: &Cache,
+) -> BTreeMap<String, Vec<String>> {
+    let missing: HashSet<&str> = missing.iter().map(String::as_str).collect();
+    let mut lacking: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for target in &planned.targets {
+        if missing.contains(target.path.as_str())
+            && manifest
+                .datasets
+                .get(target.dataset)
+                .is_some_and(manifest::Entry::is_import)
+            && cache.find(&target.sha256, Some(target.size)).is_none()
+        {
+            lacking
+                .entry(target.dataset.to_owned())
+                .or_default()
+                .push(target.path.clone());
+        }
+    }
+    lacking
 }
 
 /// the files of `missing` in a folder that holds no file now, as one deleted whole, each with
@@ -851,7 +902,12 @@ impl Status {
                 .unlocked
                 .iter()
                 .any(|name| !self.waiting.contains_key(name))
-            || !self.missing.is_empty()
+            || self.missing.iter().any(|path| {
+                !self
+                    .imported_elsewhere
+                    .values()
+                    .any(|paths| paths.contains(path))
+            })
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
             || !self.untracked.is_empty()
