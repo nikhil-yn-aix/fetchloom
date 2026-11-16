@@ -4636,3 +4636,36 @@ fn a_partial_sync_never_counts_a_waiting_dataset_as_placed() -> Result {
     assert!(!clone.join("data/big").exists());
     Ok(())
 }
+
+/// `list big` while big waits for its list says so, as status does, and never that data.lock has
+/// no pin of it or that a sync would lock it; `--json` names the part it waits for.
+#[test]
+fn list_of_a_waiting_dataset_says_it_waits() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (clone, part) = clone_without_big(&sandbox)?;
+    let listed = listing_in(&sandbox, &clone, &["list", "big"])?;
+    let shown = format!("{}{}", text(&listed.stdout)?, text(&listed.stderr)?);
+    assert_eq!(listed.status.code(), Some(0), "{shown}");
+    assert!(
+        shown.contains(&format!("Waiting big · its file list {part} is not there")),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains("Unlocked") && !shown.contains("to lock it"),
+        "{shown}"
+    );
+    let listed = listing_in(&sandbox, &clone, &["--json", "list", "big"])?;
+    let document = json(&listed)?;
+    assert_eq!(
+        document["result"]["datasets"][0]["waiting"],
+        part.as_str(),
+        "{document}"
+    );
+    let listed = listing_in(&sandbox, &clone, &["--json", "list", "small"])?;
+    let document = json(&listed)?;
+    assert!(
+        document["result"]["datasets"][0].get("waiting").is_none(),
+        "{document}"
+    );
+    Ok(())
+}

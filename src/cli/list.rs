@@ -38,8 +38,9 @@ struct Listed {
     /// a dropped dataset says so.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     dropped: bool,
-    /// the part of its file list that data.lock names and that is not beside it, so it waits.
-    #[serde(skip)]
+    /// the part of its file list that data.lock names and that is not beside it, so it waits;
+    /// only a waiting dataset says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
     waiting: Option<String>,
     /// whether `folder` is the usual `data/<name>`, which a narrow table leaves to the name.
     #[serde(skip)]
@@ -125,6 +126,14 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
 /// one dataset's files on stdout, a path and a size per line. the heading is an aside for a
 /// person, since data.lock and `--json` keep what it says.
 fn one(output: &crate::output::Output, dataset: &Listed) {
+    if let Some(part) = &dataset.waiting {
+        // the warning above says how to bring the list back
+        output.mark(
+            "Waiting",
+            &format!("{} · its file list {part} is not there", dataset.name),
+        );
+        return;
+    }
     let Some(files) = &dataset.held else {
         // a state not reached yet is a difference, as status shows it, never an `Ok`
         {
