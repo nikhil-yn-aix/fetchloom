@@ -255,10 +255,9 @@ fn shown_on(text: &str, columns: usize) -> Vec<String> {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_stop_leaves_no_bar_behind() -> Result {
-    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
     for columns in [100, 40] {
         let sandbox = Sandbox::new()?;
-        let server = Server::held_file("/files/big.bin", body.clone())?;
+        let server = Server::held_file("/files/big.bin")?;
         let get = sandbox.command(&["get", &server.url]);
         let size = format!("rows 30 cols {columns}");
         let Some((code, screen)) =

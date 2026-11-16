@@ -595,6 +595,15 @@ pub(crate) fn edit(path: &Path, bytes: &[u8]) -> Result {
     Ok(())
 }
 
+/// the 2 MiB [`Server::held_file`] serves. a download puts bytes on disk once more than the 1 MiB
+/// its writer gathers arrived, its reader keeping back up to 256 KiB, or at its once-a-second
+/// save, which comes only as more bytes arrive: all of a 1 MiB body can arrive in the first
+/// second of a writer that opened late, and stay in memory until the stop.
+#[cfg(unix)]
+pub(crate) fn held_body() -> Vec<u8> {
+    (0..2u32 << 20).map(|n| (n % 251) as u8).collect()
+}
+
 /// the files of the unfinished downloads in `cache`, in the folders inside `partial/` that spread
 /// the downloads.
 pub(crate) fn partial_files(cache: &Path) -> Vec<PathBuf> {
@@ -814,14 +823,12 @@ impl Server {
         Server::file_twice(path, body, false)
     }
 
-    /// [`Server::slow_file`], except that the first connection holds back its last 64 KiB until
-    /// its client hangs up, so a stop lands inside the body however busy the machine is. bytes
-    /// reach the disk once more than the 1 MiB a download's writer gathers arrived, or at its
-    /// once-a-second save, which comes only as more bytes arrive: of a 1 MiB body, a writer that
-    /// opened a tenth of a second late keeps every byte in memory until the stop.
+    /// [`Server::slow_file`] of [`held_body`], except that the first connection holds back its
+    /// last 64 KiB until its client hangs up, so a stop lands inside the body however busy the
+    /// machine is.
     #[cfg(unix)]
-    pub(crate) fn held_file(path: &str, body: Vec<u8>) -> Result<Server> {
-        Server::file_twice(path, body, true)
+    pub(crate) fn held_file(path: &str) -> Result<Server> {
+        Server::file_twice(path, held_body(), true)
     }
 
     /// [`Server::slow_file`], or with `hold` [`Server::held_file`].

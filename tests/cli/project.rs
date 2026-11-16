@@ -2874,8 +2874,7 @@ pub(crate) fn told_a_stop_kept_or_not<'s>(
 #[test]
 fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
     let sandbox = Sandbox::new()?;
-    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
-    let slow = Server::held_file("/files/cows.csv", body)?;
+    let slow = Server::held_file("/files/cows.csv")?;
     sandbox.allow(&slow.url);
     fs::write(
         sandbox.work().join("data.toml"),
@@ -2905,8 +2904,7 @@ fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
 fn a_sigterm_stops_a_sync_as_a_first_ctrl_c_does() -> Result {
     for args in [&["sync"][..], &["--json", "sync"]] {
         let sandbox = Sandbox::new()?;
-        let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
-        let slow = Server::held_file("/files/cows.csv", body)?;
+        let slow = Server::held_file("/files/cows.csv")?;
         sandbox.allow(&slow.url);
         fs::write(
             sandbox.work().join("data.toml"),
@@ -2949,10 +2947,9 @@ fn a_sigterm_stops_a_sync_as_a_first_ctrl_c_does() -> Result {
 #[test]
 fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
     let sandbox = Sandbox::new()?;
-    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
-    let cows = Server::held_file("/files/cows.csv", body.clone())?;
+    let cows = Server::held_file("/files/cows.csv")?;
     sandbox.allow(&cows.url);
-    let pigs = Server::held_file("/files/pigs.csv", body)?;
+    let pigs = Server::held_file("/files/pigs.csv")?;
     sandbox.allow(&pigs.url);
     fs::write(
         sandbox.work().join("data.toml"),
@@ -3010,8 +3007,7 @@ fn a_cancel_at_a_question_stops_the_other_downloads() -> Result {
     let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
     let large = Server::start("/huge.bin", vec![huge(), huge()])?;
     sandbox.allow(&large.url);
-    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
-    let slow = Server::held_file("/files/slow.csv", body)?;
+    let slow = Server::held_file("/files/slow.csv")?;
     sandbox.allow(&slow.url);
     fs::write(
         sandbox.work().join("data.toml"),
@@ -3035,11 +3031,12 @@ fn a_cancel_at_a_question_stops_the_other_downloads() -> Result {
     };
     assert_eq!(exit, Some(130), "{screen}");
     assert!(!screen.contains("error:"), "{screen}");
+    let held = u64::try_from(crate::support::held_body().len())?;
     let mut folders = vec![sandbox.cache().join("objects")];
     while let Some(folder) = folders.pop() {
         for entry in fs::read_dir(&folder).into_iter().flatten().flatten() {
             let found = entry.metadata()?;
-            assert!(found.is_dir() || found.len() != 1 << 20, "{screen}");
+            assert!(found.is_dir() || found.len() != held, "{screen}");
             if found.is_dir() {
                 folders.push(entry.path());
             }

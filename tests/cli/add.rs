@@ -734,8 +734,7 @@ fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Re
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let work = sandbox.work();
-    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
-    let slow = Server::held_file("/files/cows.csv", body)?;
+    let slow = Server::held_file("/files/cows.csv")?;
     let running = Running::start(&mut sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
     wait_until(
         "bytes to arrive",
@@ -768,8 +767,7 @@ fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result
         fs::read(work.join("data.toml"))?,
         fs::read(work.join("data.lock"))?,
     );
-    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
-    let slow = Server::held_file("/files/cows.csv", body.clone())?;
+    let slow = Server::held_file("/files/cows.csv")?;
     let running = Running::start(&mut sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
     wait_until(
         "bytes to arrive",
@@ -792,7 +790,10 @@ fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result
     );
     let rerun = sandbox.run(&["add", &slow.url, "--as", "cows"])?;
     assert_eq!(rerun.status.code(), Some(0), "{}", text(&rerun.stderr)?);
-    assert_eq!(fs::read(work.join("data/cows/cows.csv"))?, body);
+    assert_eq!(
+        fs::read(work.join("data/cows/cows.csv"))?,
+        crate::support::held_body()
+    );
     let requests = slow.requests();
     assert!(
         requests.len() == 2 && requests[1].contains("range: bytes="),

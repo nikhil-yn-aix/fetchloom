@@ -1064,11 +1064,8 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
 #[cfg(unix)]
 #[test]
 fn a_stopped_get_says_so_in_a_plain_line() -> Result {
-    // more than the writer gathers before it writes: its once-a-second save needs bytes still
-    // arriving, and on a busy machine they can all arrive within its first second, then stop
-    let body: Vec<u8> = (0..2u32 << 20).map(|n| (n % 251) as u8).collect();
     let sandbox = Sandbox::new()?;
-    let server = Server::held_file("/big.bin", body)?;
+    let server = Server::held_file("/big.bin")?;
     let mut child = sandbox
         .command(&["get", &server.url])
         .stdin(Stdio::null())
