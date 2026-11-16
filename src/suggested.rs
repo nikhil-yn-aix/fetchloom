@@ -918,23 +918,9 @@ pub(crate) mod tests {
             ("src/cli/project.rs", "git commit -a"),
             ("src/cli/status.rs", "git rm"),
             ("src/project/lock/lists.rs", "git add {FOLDER}"),
-            ("src/project/lock/lists.rs", "git checkout -- {FOLDER}"),
             ("src/project/lock/lists.rs", "git commit -a"),
             ("src/project/lock/merge.rs", "git add"),
             ("src/project/lock/merge.rs", "git add"),
-            ("src/project/lock/merge.rs", "git checkout HEAD -- {part}"),
-            (
-                "src/project/lock/merge.rs",
-                "git checkout MERGE_HEAD -- {part}",
-            ),
-            (
-                "src/project/lock/merge.rs",
-                "git checkout REBASE_HEAD -- {part}",
-            ),
-            (
-                "src/project/lock/merge.rs",
-                "git config merge.conflictStyle zdiff3",
-            ),
         ];
         assert_eq!(
             literal("git"),

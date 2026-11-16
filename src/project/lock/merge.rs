@@ -323,7 +323,7 @@ pub(crate) fn merge(
             summary.sides.insert(name.clone(), held);
         }
         let shown = manifest.shows_base || lock.is_some_and(|lock| lock.shows_base);
-        return Err(undecided(&decided.conflicts, &summary, shown));
+        return Err(undecided(&decided.conflicts, &summary, shown, root));
     }
     let repinned = match (&locks, &records) {
         (Some(locks), Some(records)) => repinned(&locks.ours, records),
@@ -879,7 +879,7 @@ fn kept(
         // neither this folder nor the side's commit holds the list, as in a clone of a commit that
         // left data.lock.d out: the pin waits for it, written back as read
         let record = match super::missing_part(&record, root).filter(|_| found.is_none()) {
-            Some(part) => match super::Waiting::of(record, part) {
+            Some(part) => match super::Waiting::of(record, part, root) {
                 Ok(waiting) => {
                     super::check_resolved(waiting.pin())?;
                     lock.waiting.push(waiting);
@@ -930,7 +930,7 @@ fn from_commit(
     super::lists::folder(root)?;
     let Some(committed) = committed else {
         let gone = parts.iter().find(|part| !below(root, part).is_file());
-        return Err(list_gone(name, side, gone.map_or("", String::as_str)));
+        return Err(list_gone(name, side, gone.map_or("", String::as_str), root));
     };
     let found = tempfile::tempdir().map_err(|err| {
         Error::io(
@@ -974,15 +974,20 @@ fn below(folder: &Path, part: &str) -> std::path::PathBuf {
     folder.join(part.replace('/', std::path::MAIN_SEPARATOR_STR))
 }
 
-/// the error for `part` of `name`'s list on `side`, which is not in data.lock.d, without git to read
-/// it from: the command that brings it back from that side's commit.
-fn list_gone(name: &str, side: Side, part: &str) -> Error {
+/// the error for `part` of `name`'s list on `side`, which is not in data.lock.d below `root`,
+/// without git to read it from: the command that brings it back from that side's commit.
+fn list_gone(name: &str, side: Side, part: &str, root: &Path) -> Error {
+    let checkout =
+        |commit: &str| crate::suggested::git(root, &format!("checkout {commit} -- {part}"));
     let help = match side {
         Side::Ours => format!(
-            "bring it back from our side's commit with `git checkout HEAD -- {part}`, then run the same command again"
+            "bring it back from our side's commit with `{}`, then run the same command again",
+            checkout("HEAD")
         ),
         Side::Theirs => format!(
-            "bring it back from their side's commit with `git checkout MERGE_HEAD -- {part}`, or `git checkout REBASE_HEAD -- {part}` in a rebase, then run the same command again"
+            "bring it back from their side's commit with `{}`, or `{}` in a rebase, then run the same command again",
+            checkout("MERGE_HEAD"),
+            checkout("REBASE_HEAD")
         ),
     };
     Error::new(
@@ -1328,9 +1333,15 @@ pub(crate) fn reads(file: &str, text: &str) -> bool {
     }
 }
 
-/// the error naming each dataset in `conflicts` and why, with the merge so far. `shown` says the
-/// conflict lines showed a base, so the help names no conflict style: one is in use already.
-fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary, shown: bool) -> Error {
+/// the error naming each dataset in `conflicts` and why, with the merge so far, in the project at
+/// `root`. `shown` says the conflict lines showed a base, so the help names no conflict style: one
+/// is in use already.
+fn undecided(
+    conflicts: &BTreeMap<String, Why>,
+    summary: &Summary,
+    shown: bool,
+    root: &Path,
+) -> Error {
     let message = match conflicts.keys().collect::<Vec<_>>().as_slice() {
         [one] => format!("the merge needs a choice for {one}"),
         many => format!(
@@ -1368,9 +1379,12 @@ fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary, shown: bool) 
         .any(|why| matches!(why, Why::NoBase | Why::OneSided(_)))
     {
         error = error.detail(if shown {
-            "no merge base fetchloom can read was found: git on PATH, before `git add` marks the files resolved, lets fetchloom see what each side changed"
+            "no merge base fetchloom can read was found: git on PATH, before `git add` marks the files resolved, lets fetchloom see what each side changed".to_owned()
         } else {
-            "no merge base was found: git on PATH, before `git add` marks the files resolved, or `git config merge.conflictStyle zdiff3` before merging or rebasing, lets fetchloom see what each side changed"
+            format!(
+                "no merge base was found: git on PATH, before `git add` marks the files resolved, or `{}` before merging or rebasing, lets fetchloom see what each side changed",
+                crate::suggested::git(root, "config merge.conflictStyle zdiff3")
+            )
         });
     }
     let error = error.help(format!(

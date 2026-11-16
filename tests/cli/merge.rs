@@ -237,6 +237,19 @@ fn lock_reads_the_merge_base_from_git_or_asks_for_choices() -> Result {
             .is_some_and(|detail| detail.starts_with("no merge base was found")),
         "{error}"
     );
+    // given -C, the git command it names runs in this repository from any folder
+    let work = sandbox.work().display().to_string();
+    let output = without_git(&["--json", "-C", &work, "lock"])?;
+    let error = &json(&output)?["errors"][0];
+    assert!(
+        error["details"]
+            .as_array()
+            .and_then(|details| details.last())
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|detail| detail.contains("`git -C ")
+                && detail.contains(" config merge.conflictStyle zdiff3`")),
+        "{error}"
+    );
     assert_eq!(metadata(&sandbox)?, conflicted, "nothing is written");
     succeeded(&without_git(&[
         "lock", "--ours", "alpha", "--theirs", "beta",

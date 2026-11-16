@@ -4540,6 +4540,28 @@ fn clone_without_big(sandbox: &Sandbox) -> Result<(std::path::PathBuf, String)> 
     clone_without(sandbox, "big")
 }
 
+/// the git command that brings back a list deleted in this clone, told to a run given -C from
+/// another folder, names the clone, as every command a help names does after -C.
+#[test]
+fn a_missing_list_names_the_clone_in_its_git_command() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (clone, _) = clone_without_big(&sandbox)?;
+    let clone_folder = clone.display().to_string();
+    let checked = listing_in(
+        &sandbox,
+        &sandbox.work(),
+        &["--json", "-C", &clone_folder, "lock", "--check"],
+    )?;
+    let document = json(&checked)?;
+    assert_eq!(checked.status.code(), Some(50), "{document}");
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(
+        help.contains("`git -C ") && help.ends_with(" checkout -- data.lock.d`"),
+        "{help}"
+    );
+    Ok(())
+}
+
 /// a sync while big waits leaves the project unsettled, so once big's list is back with data.lock
 /// as it was, as pulling the commit that adds data.lock.d brings it, status finds big missing and
 /// the next sync places it.

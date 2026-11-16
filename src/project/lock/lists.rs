@@ -359,16 +359,16 @@ pub(crate) fn read(
                 // a clone can hold a link to a fifo or a device, which would hang or fill memory
                 Box::new(
                     crate::volume::read_unfollowed(&path)
-                        .map_err(|err| unreadable(name, part, &err))?,
+                        .map_err(|err| unreadable(name, part, &err, Some(root)))?,
                 )
             }
             Parts::Given(given) => Box::new(std::io::Cursor::new(given(part)?)),
         };
-        let mut decoder =
-            zstd::stream::read::Decoder::new(file).map_err(|err| unreadable(name, part, &err))?;
+        let mut decoder = zstd::stream::read::Decoder::new(file)
+            .map_err(|err| unreadable(name, part, &err, None))?;
         decoder
             .window_log_max(WINDOW_LOG)
-            .map_err(|err| unreadable(name, part, &err))?;
+            .map_err(|err| unreadable(name, part, &err, None))?;
         let mut reader = BufReader::new(decoder);
         let mut line = Vec::new();
         let mut number = 0;
@@ -485,10 +485,11 @@ fn broken(message: String) -> Error {
     Error::new(Kind::ProjectInvalid, message).help(recovery())
 }
 
-/// the error for `part` of `name`'s list, which did not read as `err` says.
-fn unreadable(name: &str, part: &str, err: &std::io::Error) -> Error {
+/// the error for `part` of `name`'s list, which did not read as `err` says, below `root` where
+/// the parts are a project's.
+fn unreadable(name: &str, part: &str, err: &std::io::Error, root: Option<&Path>) -> Error {
     if err.kind() == std::io::ErrorKind::NotFound {
-        return not_there(name, part);
+        return not_there(name, part, root);
     }
     broken(format!("could not read {part}: {err}"))
 }
@@ -503,9 +504,14 @@ fn unread_line(part: &str, line: usize, err: &std::io::Error) -> Error {
     damaged(part, line)
 }
 
-/// the error for `part` of `name`'s list, which is not beside data.lock. the usual cause is a
-/// commit of data.lock without the new list.
-pub(crate) fn not_there(name: &str, part: &str) -> Error {
+/// the error for `part` of `name`'s list, which is not beside data.lock in the project at `root`,
+/// where known. the usual cause is a commit of data.lock without the new list.
+pub(crate) fn not_there(name: &str, part: &str, root: Option<&Path>) -> Error {
+    let checkout = format!("checkout -- {FOLDER}");
+    let back = root.map_or_else(
+        || format!("git {checkout}"),
+        |root| crate::suggested::git(root, &checkout),
+    );
     Error::new(
         Kind::ProjectInvalid,
         format!("data.lock names {part}, the file list of {name}, which is not there"),
@@ -514,7 +520,7 @@ pub(crate) fn not_there(name: &str, part: &str) -> Error {
         "{FOLDER} was probably not committed with data.lock: `git commit -a` leaves new files out"
     ))
     .help(format!(
-        "where {name} was pinned, run `git add {FOLDER}` and commit, then pull that commit here. a part deleted here comes back with `git checkout -- {FOLDER}`"
+        "where {name} was pinned, run `git add {FOLDER}` and commit, then pull that commit here. a part deleted here comes back with `{back}`"
     ))
 }
 

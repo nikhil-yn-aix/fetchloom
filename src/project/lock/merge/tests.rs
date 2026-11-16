@@ -220,7 +220,7 @@ fn a_thousand_choices_are_counted_with_their_thousands_apart() {
     let conflicts = (0..1_200)
         .map(|index| (format!("set{index}"), Why::BothChanged))
         .collect();
-    let error = undecided(&conflicts, &Summary::default(), false);
+    let error = undecided(&conflicts, &Summary::default(), false, Path::new("."));
     assert_eq!(error.message, "the merge needs a choice for 1,200 datasets");
 }
 

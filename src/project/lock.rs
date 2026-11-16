@@ -9,7 +9,7 @@ pub(crate) mod merge;
 mod model_tests;
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::de::Error as _;
@@ -250,6 +250,8 @@ pub(crate) struct Waiting {
     pub(crate) name: String,
     /// the first part of its list that is not there, by its path below the project.
     pub(crate) part: String,
+    /// the project data.lock is in, where a part deleted comes back from git.
+    root: PathBuf,
     /// its pin as data.lock gives it, without its files.
     pin: Locked,
     /// the list that holds its files.
@@ -259,7 +261,7 @@ pub(crate) struct Waiting {
 impl Waiting {
     /// what a command that needs it says: the part that is not there, and how to bring it back.
     pub(crate) fn error(&self) -> Error {
-        lists::not_there(&self.name, &self.part)
+        lists::not_there(&self.name, &self.part, Some(&self.root))
     }
 
     /// its pin, as data.lock gives it, without its files.
@@ -279,13 +281,14 @@ impl Waiting {
         entry.is_some_and(|entry| self.pin.drift(entry).is_none())
     }
 
-    /// `entry` waiting for `part` of its list, which is not there; `entry` back when it keeps no
-    /// list beside data.lock.
-    fn of(entry: Parsed, part: String) -> Result<Waiting, Box<Parsed>> {
+    /// `entry` waiting for `part` of its list, which is not there below `root`; `entry` back when
+    /// it keeps no list beside data.lock.
+    fn of(entry: Parsed, part: String, root: &Path) -> Result<Waiting, Box<Parsed>> {
         match entry {
             Parsed::Source(pin, Some(listed)) => Ok(Waiting {
                 name: pin.name.clone(),
                 part,
+                root: root.to_path_buf(),
                 pin,
                 listed,
             }),
@@ -318,7 +321,7 @@ pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<Waiting> {
         .into_iter()
         .filter_map(|parsed| {
             let part = missing_part(&parsed, root)?;
-            Waiting::of(parsed, part).ok()
+            Waiting::of(parsed, part, root).ok()
         })
         .collect()
 }
@@ -821,7 +824,7 @@ impl Lock {
                 listed.push(entry);
                 continue;
             };
-            match Waiting::of(entry, part) {
+            match Waiting::of(entry, part, root) {
                 // written back as read, so its link is held to what any read allows
                 Ok(waits) => {
                     check_resolved(&waits.pin)?;
