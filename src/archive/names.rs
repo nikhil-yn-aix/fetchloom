@@ -94,6 +94,13 @@ impl Names {
             ));
         }
         if let Some(reason) = name::escapes(&nfc) {
+            // a / left first once the leading ./ is cut, as .//x leaves one, follows the archive's
+            // top: an empty folder name, not the root of the disk
+            let reason = if nfc.starts_with('/') && !raw.starts_with('/') {
+                "it has an empty folder name"
+            } else {
+                reason
+            };
             return Err(refused_member(raw, reason));
         }
         if nfc.split('/').any(name::made_by_system) {
@@ -261,6 +268,25 @@ mod tests {
         assert_eq!(
             add_all(&["./", "./a.csv", "././b/c.csv"]),
             Ok(vec![Named::Folder, file("a.csv"), file("b/c.csv")])
+        );
+    }
+
+    /// a leading `./` only names the archive's top, so a name that goes on with a `/` after it, as
+    /// `.//x.txt`, has an empty folder name; it does not start at the root of the disk.
+    #[test]
+    fn a_slash_after_a_leading_dot_slash_is_an_empty_folder_name() {
+        for bad in [".//./x.txt", ".//x.txt", "././/x.txt"] {
+            assert_eq!(
+                add_all(&[bad]).unwrap_err(),
+                format!(
+                    "the archive holds \"{bad}\", which fetchloom refuses because it has an empty folder name"
+                )
+            );
+        }
+        let rooted = add_all(&["/etc/passwd"]).unwrap_err();
+        assert!(
+            rooted.ends_with("because it starts at the root of the disk"),
+            "{rooted}"
         );
     }
 
