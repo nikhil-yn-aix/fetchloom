@@ -200,14 +200,25 @@ pub(in crate::cli) fn page_refused(job: &Job, named: bool) -> Error {
         )
         .help(format!("open it in a browser: a page that asks you to sign in needs `{sign_in}`, else look for a download or raw link. if the page itself is the data, {asked}"));
     }
-    if job.fetch.url.path().ends_with('/') {
-        return source::folder::no_listing(&job.fetch.url, &asked);
+    let url = &job.fetch.url;
+    if url.path().ends_with('/') {
+        return source::folder::no_listing(url, &asked);
     }
+    let mut folder = url.clone();
+    folder.set_path(&format!("{}/", url.path()));
+    let listing = if url.query().is_none() && url.fragment().is_none() {
+        format!(
+            "if it is a folder listing, use its link with a / at the end, {}, which fetchloom reads as one dataset. otherwise ",
+            crate::shown::Shown(&folder)
+        )
+    } else {
+        String::new()
+    };
     Error::new(
         Kind::SourceInvalid,
         format!("{link} answered with a web page, such as a folder listing, not a file"),
     )
-    .help(format!("open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}"))
+    .help(format!("{listing}open it in a browser, copy the link of each file you want, and give fetchloom those links. if the page itself is the data, {asked}"))
 }
 
 /// the batch facts retained while a validated job waits for an admission slot.
@@ -3425,29 +3436,40 @@ mod tests {
 
     /// a page that names no file, at a link that names none either, is a folder listing or a
     /// site's page, refused before its bytes, one at a folder's link as no listing fetchloom
-    /// reads; a link that names a page, a file the server names, pinned bytes, and a link named
-    /// as data, whose first bytes decide, are not.
+    /// reads, and the folder's own link, ending in /, is offered where the link has none; a link
+    /// that names a page, a file the server names, pinned bytes, and a link named as data, whose
+    /// first bytes decide, are not.
     #[test]
     fn a_web_page_that_names_no_file_is_refused_before_its_bytes() {
         let pinned = Some(crate::digest::sha256(b"a pinned listing"));
+        let folder = "if it is a folder listing, use its link with a / at the end, http://lab.example/shards/, which fetchloom reads as one dataset. otherwise open it in a browser";
         let refused = [
             (
                 "http://lab.example/shards",
                 "shards",
                 "answered with a web page, such as a folder listing, not a file",
+                true,
+            ),
+            (
+                "http://lab.example/shards?page=2",
+                "shards",
+                "answered with a web page, such as a folder listing, not a file",
+                false,
             ),
             (
                 "http://lab.example/shards/",
                 "shards",
                 "answered with a web page, not a file or a folder listing fetchloom reads",
+                false,
             ),
             (
                 "http://lab.example/",
                 "download",
                 "answered with a web page, not a file or a folder listing fetchloom reads",
+                false,
             ),
         ];
-        for (link, label, said) in refused {
+        for (link, label, said, offered) in refused {
             let error = on_page(link, label, None, None).unwrap_err();
             assert_eq!(error.kind, Kind::SourceInvalid);
             assert_eq!(error.message, format!("{link} {said}"));
@@ -3456,6 +3478,7 @@ mod tests {
                 advice.ends_with("if the page itself is the data, add --web-page"),
                 "{advice}"
             );
+            assert_eq!(advice.starts_with(folder), offered, "{advice}");
         }
         for (link, label, name, sha256) in [
             (

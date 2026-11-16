@@ -300,15 +300,26 @@ fn lock_upgrade_pins_a_file_the_folder_gained() -> Result {
 }
 
 /// a dry run of an add tells the files the add then pins and places, and fails where the add
-/// fails, as at a page that is no listing.
+/// fails, in its words: at a page that is no listing, and at a folder's link without its `/`,
+/// which the server sends on to the folder, where the help offers the link with its `/`.
 #[test]
 fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
     let sandbox = Sandbox::new()?;
     let server = served(python)?;
-    server.change(vec![(
-        "/lab/".to_owned(),
-        page("<!DOCTYPE html><html><head><title>Our lab</title></head><body></body></html>"),
-    )]);
+    server.change(vec![
+        (
+            "/lab/".to_owned(),
+            page("<!DOCTYPE html><html><head><title>Our lab</title></head><body></body></html>"),
+        ),
+        (
+            "/data".to_owned(),
+            reply(
+                "301 Moved Permanently",
+                &[("Location", "/data/"), ("Content-Length", "0")],
+                b"",
+            ),
+        ),
+    ]);
     let folder = format!("{}/data/", server.url);
     let dry = sandbox.run(&["--json", "add", &folder, "--dry-run"])?;
     assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stdout)?);
@@ -323,16 +334,23 @@ fn a_dry_run_of_a_folder_tells_what_the_add_does() -> Result {
         let path = path.as_str().unwrap_or_default();
         assert!(sandbox.work().join(path).is_file(), "{path}");
     }
-    for link in [format!("{}/lab/", server.url)] {
+    let offered = format!(
+        "if it is a folder listing, use its link with a / at the end, {folder}, which fetchloom reads as one dataset."
+    );
+    for (link, offers) in [
+        (format!("{}/lab/", server.url), false),
+        (format!("{}/data", server.url), true),
+    ] {
         let dry = sandbox.run(&["--json", "add", &link, "--as", "page", "--dry-run"])?;
         let run = sandbox.run(&["--json", "add", &link, "--as", "page"])?;
         assert_eq!(run.status.code(), Some(10), "{}", text(&run.stdout)?);
         assert_eq!(dry.status.code(), run.status.code(), "{link}");
-        assert_eq!(
-            json(&dry)?["errors"][0]["message"],
-            json(&run)?["errors"][0]["message"],
-            "{link}"
-        );
+        let (dry, run) = (json(&dry)?, json(&run)?);
+        let (dry, run) = (&dry["errors"][0], &run["errors"][0]);
+        assert_eq!(dry["message"], run["message"], "{link}");
+        assert_eq!(dry["help"], run["help"], "{link}");
+        let help = run["help"].as_str().unwrap_or_default();
+        assert_eq!(help.starts_with(&offered), offers, "{help}");
     }
     Ok(())
 }
