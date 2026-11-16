@@ -1209,3 +1209,61 @@ fn a_settled_merge_says_how_to_finish_it() -> Result {
     );
     Ok(())
 }
+
+/// a merge whose result names no list, while git's merge brought one in, sweeps that part and
+/// folder, and the `git add` it says to run still names data.lock.d, so following it stages the
+/// deletion and the merge commit keeps no part nothing names.
+#[test]
+fn a_merge_that_sweeps_the_last_list_names_it_in_git_add() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (folder, bytes) in [("cats", "cat"), ("wolves", "wolf")] {
+        fs::write(sandbox.folder(folder)?.join("l.txt"), bytes)?;
+    }
+    // every list in data.lock.d, as a dataset past 50,000 files keeps it
+    let listed = |args: &[&str]| -> Result {
+        let mut command = sandbox.command(args);
+        for name in git_variables() {
+            command.env_remove(name);
+        }
+        succeeded(&command.env("FETCHLOOM_TEST_INLINE", "0").output()?)
+    };
+    listed(&["add", "../cats", "--as", "labels"])?;
+    if git(&sandbox, &sandbox.work(), &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    ok(&sandbox, &["add", "."])?;
+    ok(&sandbox, &["commit", "-qm", "base"])?;
+    ok(&sandbox, &["checkout", "-qb", "removed"])?;
+    listed(&["remove", "labels", "--yes"])?;
+    ok(
+        &sandbox,
+        &["add", "-A", "data.toml", "data.lock", "data.lock.d"],
+    )?;
+    ok(&sandbox, &["commit", "-qm", "remove it"])?;
+    ok(&sandbox, &["checkout", "-qb", "kept", "main"])?;
+    listed(&["remove", "labels", "--yes"])?;
+    listed(&["add", "../wolves", "--as", "labels"])?;
+    ok(
+        &sandbox,
+        &["add", "-A", "data.toml", "data.lock", "data.lock.d"],
+    )?;
+    ok(&sandbox, &["commit", "-qm", "pin other files for it"])?;
+    ok(&sandbox, &["checkout", "-q", "removed"])?;
+    stopped(&sandbox, &["merge", "-q", "kept"])?;
+    let mut command = sandbox.command(&["lock", "--ours", "labels"]);
+    for name in git_variables() {
+        command.env_remove(name);
+    }
+    let chosen = command.env("FETCHLOOM_TEST_INLINE", "0").output()?;
+    succeeded(&chosen)?;
+    assert!(!sandbox.work().join("data.lock.d").exists());
+    let told = text(&chosen.stderr)?;
+    let add = "`git add data.toml data.lock data.lock.d`";
+    assert!(told.contains(add), "{told}");
+    ok(&sandbox, &["add", "data.toml", "data.lock", "data.lock.d"])?;
+    ok(&sandbox, &["commit", "-qm", "merge"])?;
+    let parts =
+        git(&sandbox, &sandbox.work(), &["ls-files", "data.lock.d"])?.ok_or("git went away")?;
+    assert_eq!(text(&parts.stdout)?, "", "the merge commit keeps a part");
+    Ok(())
+}

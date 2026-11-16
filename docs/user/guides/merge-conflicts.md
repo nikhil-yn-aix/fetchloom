@@ -57,7 +57,7 @@ error: the merge needs a choice for udata
             17 ms in all
 ```
 
-run `fetchloom sync` next, then commit `data.toml` and `data.lock` to finish the merge.
+run `fetchloom sync` next, then commit `data.toml` and `data.lock` to finish the merge, with `data.lock.d` too when the project keeps lists there or the merge removed the last of them, as the `git add` the merge prints names it.
 
 with `--json`, `result.merge` has the arrays `from_ours`, `from_theirs`, `same`, `removed` and `unpinned`, by dataset name, and `result.datasets` names the pins that changed from our side's. an `unconfirmed` error keeps `result.merge` with `conflicts`, the datasets that need a choice. its `fix` is null, since only a person picks a side.
 

@@ -198,8 +198,7 @@ pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -
 /// and in a git repository the .gitignore that keeps the data folder out.
 pub(super) fn committed(project: &Project) -> &'static str {
     let repository = Project::repository(&project.root).is_some();
-    let lists = project.root.join(lock::lists::FOLDER).is_dir()
-        || (repository && lists_gone(&project.root));
+    let lists = names_lists(project);
     let ignore = repository && project.root.join(".gitignore").is_file();
     match (lists, ignore) {
         (true, true) => "data.toml, data.lock, data.lock.d and .gitignore",
@@ -207,6 +206,13 @@ pub(super) fn committed(project: &Project) -> &'static str {
         (false, true) => "data.toml, data.lock and .gitignore",
         (false, false) => "data.toml and data.lock",
     }
+}
+
+/// whether what to commit names data.lock.d: it is there, or git has lists in it that a run
+/// swept with the folder, whose deletion is committed too.
+pub(super) fn names_lists(project: &Project) -> bool {
+    project.root.join(lock::lists::FOLDER).is_dir()
+        || (Project::repository(&project.root).is_some() && lists_gone(&project.root))
 }
 
 /// whether git has lists in data.lock.d, which is gone from the project at `root`.

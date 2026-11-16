@@ -380,7 +380,8 @@ fn tell(
     if merged.lock.is_some() {
         files.push(lock::FILE);
     }
-    if project.root.join(lock::lists::FOLDER).is_dir() {
+    // a part git's merge brought in that the merge then swept is a deletion to add too
+    if super::names_lists(project) {
         files.push(lock::lists::FOLDER);
     }
     let add = format!("`git add {}`", files.join(" "));
