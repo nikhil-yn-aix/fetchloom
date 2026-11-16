@@ -714,8 +714,9 @@ fn closing(
     Closing { verb, text, next }
 }
 
-/// the datasets a sync of every dataset places that wait for their file lists, which have nothing
-/// in place, as their warning says; none for a sync of named datasets.
+/// the datasets a sync of every dataset places that wait for their file lists, whose files, any
+/// placed before included, it leaves as they are, as their warning says; none for a sync of named
+/// datasets.
 fn waiting_named(waiting: &[lock::Waiting], manifest: &Manifest, scope: &Scope) -> Vec<String> {
     if *scope != Scope::All {
         return Vec::new();
@@ -728,7 +729,7 @@ fn waiting_named(waiting: &[lock::Waiting], manifest: &Manifest, scope: &Scope) 
 }
 
 /// the last line of a sync of `scope` that changed something, as its verb and text. the datasets
-/// `waiting` for their file lists placed nothing, so they are named apart.
+/// `waiting` for their file lists were left as they were, so they are named apart.
 fn synced(
     manifest: &Manifest,
     scope: &Scope,
