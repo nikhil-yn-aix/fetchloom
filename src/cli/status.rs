@@ -78,6 +78,9 @@ pub(super) struct Status {
     /// is a result, which a build makes again.
     #[serde(skip)]
     dropped_owned: HashMap<String, bool>,
+    /// those of `dropped` whose drop was cut short before it freed what the cache holds of them.
+    #[serde(skip)]
+    dropped_unfreed: HashSet<String>,
     /// entries in the way of files data.lock places, by path, at a file's path or where a folder on
     /// its way belongs; `sync --force` replaces them, except a folder that holds anything.
     #[serde(serialize_with = "blocker_paths")]
@@ -712,6 +715,12 @@ fn dropped_here(status: &mut Status, manifest: &Manifest, survey: &Survey) -> Ma
             (result || entry.is_import()).then(|| (name.clone(), result))
         })
         .collect();
+    status.dropped_unfreed = status
+        .dropped
+        .iter()
+        .filter(|name| survey.state.freeing.contains(*name))
+        .cloned()
+        .collect();
     super::drop::placed_by(manifest, &Scope::All, &survey.state.dropped).into_owned()
 }
 
@@ -1244,6 +1253,16 @@ fn tell_dropped(output: &Output, status: &Status) {
                 "Dropped",
                 &format!(
                     "{name} · a drop cut short left {left} in {folder}; `{}` finishes it",
+                    super::project::command(&format!("drop {name}"))
+                ),
+            );
+            continue;
+        }
+        if status.dropped_unfreed.contains(name) {
+            output.faint_step(
+                "Dropped",
+                &format!(
+                    "{name} · a drop cut short before it freed the cache; `{}` frees what the cache still holds of it",
                     super::project::command(&format!("drop {name}"))
                 ),
             );

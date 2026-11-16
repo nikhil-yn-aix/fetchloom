@@ -53,6 +53,10 @@ pub(crate) struct State {
     /// command that names one brings it back.
     #[serde(default)]
     pub(crate) dropped: BTreeSet<String>,
+    /// those of `dropped` a drop marked before any file went and has not freed from the cache yet:
+    /// one cut short, which the same drop finishes.
+    #[serde(default)]
+    pub(crate) freeing: BTreeSet<String>,
     /// the project folder the state was written for, which a clone or a copy is not.
     #[serde(default)]
     pub(crate) folder: Option<Folder>,
@@ -309,7 +313,11 @@ impl State {
     /// drops the kept rebuild of each recipe `manifest` no longer has, as relocking drops the
     /// recipe's pin, and the mark of each dataset it no longer has, and says whether any went.
     pub(crate) fn forget_removed(&mut self, manifest: &Manifest) -> bool {
-        let before = (self.candidates.len(), self.dropped.len());
+        let before = (
+            self.candidates.len(),
+            self.dropped.len(),
+            self.freeing.len(),
+        );
         self.candidates.retain(|name, _| {
             manifest
                 .datasets
@@ -319,7 +327,12 @@ impl State {
         // a dataset added again under a dropped one's name starts out placed
         self.dropped
             .retain(|name| manifest.datasets.contains_key(name));
-        (self.candidates.len(), self.dropped.len()) != before
+        self.freeing.retain(|name| self.dropped.contains(name));
+        (
+            self.candidates.len(),
+            self.dropped.len(),
+            self.freeing.len(),
+        ) != before
     }
 
     /// [`State::render_for`] the folder the state records, for tests.
@@ -385,6 +398,10 @@ impl State {
             out.extend_from_slice(br#","dropped":"#);
             serde_json::to_writer(&mut *out, &self.dropped)?;
         }
+        if !self.freeing.is_empty() {
+            out.extend_from_slice(br#","freeing":"#);
+            serde_json::to_writer(&mut *out, &self.freeing)?;
+        }
         if let Some(folder) = folder {
             out.extend_from_slice(br#","folder":"#);
             serde_json::to_writer(&mut *out, folder)?;
@@ -427,7 +444,8 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         use serde::de::Error;
         let mut state = State::default();
         let (mut version, mut files, mut synced, mut candidates) = (None, false, false, false);
-        let (mut dropped, mut folder, mut aside, mut replacing) = (false, false, false, false);
+        let (mut dropped, mut freeing, mut folder, mut aside, mut replacing) =
+            (false, false, false, false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -446,6 +464,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "dropped" => {
                     state.dropped = map.next_value()?;
                     std::mem::replace(&mut dropped, true)
+                }
+                "freeing" => {
+                    state.freeing = map.next_value()?;
+                    std::mem::replace(&mut freeing, true)
                 }
                 "folder" => {
                     state.folder = map.next_value()?;
@@ -542,8 +564,9 @@ impl serde::de::Visitor<'_> for Kept<'_> {
 /// a block of records: the path of its first record, and where its bytes start and end.
 type Block = (String, u64, u64);
 
-/// what follows the records: the settled sync, the kept rebuilds, the dropped datasets, the
-/// folder, the files kept aside, those being replaced and the blocks.
+/// what follows the records: the settled sync, the kept rebuilds, the dropped datasets and those
+/// whose drop has not freed the cache yet, the folder, the files kept aside, those being replaced
+/// and the blocks.
 #[derive(Deserialize)]
 struct Tail {
     #[serde(default)]
@@ -552,6 +575,8 @@ struct Tail {
     candidates: BTreeMap<String, Candidate>,
     #[serde(default)]
     dropped: BTreeSet<String>,
+    #[serde(default)]
+    freeing: BTreeSet<String>,
     #[serde(default)]
     folder: Option<Folder>,
     #[serde(default)]
@@ -600,6 +625,7 @@ fn indexed(
         synced,
         candidates,
         dropped,
+        freeing,
         folder,
         aside,
         replacing,
@@ -622,6 +648,7 @@ fn indexed(
         synced,
         candidates,
         dropped,
+        freeing,
         folder,
         aside,
         replacing,
@@ -635,6 +662,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         synced,
         candidates,
         dropped,
+        freeing,
         folder,
         aside,
         replacing,
@@ -660,6 +688,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         synced,
         candidates,
         dropped,
+        freeing,
         folder,
         aside,
         replacing,
@@ -1183,9 +1212,13 @@ mod tests {
         state.candidates.insert("clean".to_owned(), kept);
         assert_eq!(State::parse(&state.render()).candidates, state.candidates);
         state.dropped.insert("pets".to_owned());
-        assert_eq!(State::parse(&state.render()).dropped, state.dropped);
+        state.freeing.insert("pets".to_owned());
+        let read = State::parse(&state.render());
+        assert_eq!(read.dropped, state.dropped);
+        assert_eq!(read.freeing, state.freeing);
         state.candidates.clear();
         state.dropped.clear();
+        state.freeing.clear();
         state.synced = None;
         assert!(State::parse(b"not json").files.is_empty());
         assert!(
@@ -1326,6 +1359,7 @@ mod tests {
             complete: true,
         });
         state.dropped.insert("pets".to_owned());
+        state.freeing.insert("pets".to_owned());
         state.aside.insert(
             "data/b/.fetchloom-0123456789abcdef.old".to_owned(),
             "data/b/c".to_owned(),
@@ -1353,6 +1387,7 @@ mod tests {
         assert_eq!(read.synced, whole.synced, "{case}");
         assert_eq!(read.candidates, whole.candidates, "{case}");
         assert_eq!(read.dropped, whole.dropped, "{case}");
+        assert_eq!(read.freeing, whole.freeing, "{case}");
         assert_eq!(read.aside, whole.aside, "{case}");
         assert_eq!(read.replacing, whole.replacing, "{case}");
         assert_eq!(read.version, whole.version, "{case}");

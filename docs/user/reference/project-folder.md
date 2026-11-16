@@ -53,6 +53,8 @@ the record lets windows and WSL, which cannot see each other's locks, keep out o
 | `files[path].checked` | start of the scan used to place, adopt or vouch for the file, in nanoseconds since 1970; marks written during that run still put the file in doubt |
 | `files[path].adopted` | `true` when the file was already at its place with the pinned bytes before sync took it as placed, so a removal says so; absent otherwise |
 | `synced` | absent until a `sync` records it. `manifest` and `lock` hold the SHA-256 of `data.toml` and `data.lock` as that sync left them, in hex, and `complete` is `true` when every file they ask for ended up in place; [the settled-sync shortcut](../../dev/architecture/sync-loop.md#settled-sync-shortcut) uses it to skip planning |
+| `dropped` | the datasets [`drop`](../commands/drop.md) left out on this machine, which a plain sync leaves out |
+| `freeing` | those of `dropped` whose drop was cut short before it freed what the cache holds of them, which the same drop finishes |
 | `blocks` | `files` cut into blocks of about 64 KiB, each as its first path and its byte range, start and end, in the file. a `path` or `sync` that names datasets reads only the blocks their folders need |
 
 missing, unreadable or malformed state counts as empty, and files already holding the pinned bytes are then adopted again. a state whose `at` or `blocks` do not match its records is read whole. a file changed too soon after the state was written to tell by its time is hashed before its look is trusted.

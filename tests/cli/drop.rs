@@ -8,7 +8,9 @@ use serde_json::json;
 use crate::build::{build, with};
 use crate::mirrors::{IRIS, mirror_of, web_mirror_of};
 use crate::recipes::{WRITE, object};
-use crate::support::{Result, Routes, Sandbox, Server, edit, file, json, ok, reply, text, zip_of};
+use crate::support::{
+    Result, Routes, Running, Sandbox, Server, edit, file, json, ok, reply, text, wait_until, zip_of,
+};
 
 /// a project in the sandbox's work folder whose dataset iris is iris.csv from the source it
 /// returns, synced, so the data folder and the cache hold it.
@@ -158,6 +160,37 @@ fn a_drop_refused_for_a_cache_record_changes_nothing() -> Result {
     assert_eq!(fs::read(&placed)?, IRIS);
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(status["result"]["dropped"], json!([]), "{status}");
+    Ok(())
+}
+
+/// a drop killed once its files left the data folder, before it freed the cache, is told as cut
+/// short until a drop finishes it, never as freed, since the cache still holds its files.
+#[test]
+fn a_drop_cut_short_before_it_frees_the_cache_is_never_told_freed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = iris(&sandbox)?;
+    let release = sandbox.folder("hold")?.join("release");
+    let mut command = sandbox.command(&["--yes", "drop", "iris"]);
+    command.env("FETCHLOOM_TEST_HOLD_DROP", &release);
+    let mut running = Running::start(&mut command)?;
+    let mut held = release.as_os_str().to_owned();
+    held.push(".held");
+    wait_until("the drop to hold before it frees the cache", || {
+        Ok(std::path::Path::new(&held).exists())
+    })?;
+    running.kill()?;
+    running.wait()?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let cut = "Dropped iris · a drop cut short before it freed the cache; `fetchloom drop iris` frees what the cache still holds of it";
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(told.contains(cut), "{told}");
+    ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        told.contains("Dropped iris · freed on this machine"),
+        "{told}"
+    );
+    assert!(!told.contains(cut), "{told}");
     Ok(())
 }
 

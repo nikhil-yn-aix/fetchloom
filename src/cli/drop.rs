@@ -713,6 +713,7 @@ pub(super) fn brought_back(survey: &mut Survey, named: &BTreeSet<String>) {
         return;
     }
     survey.state.dropped.retain(|name| !back.contains(name));
+    survey.state.freeing.retain(|name| !back.contains(name));
     let disk = &survey.disk;
     forget_gone(
         &mut survey.state.files,
@@ -891,10 +892,25 @@ fn tell_kept(output: &crate::output::Output, placement: &Placement, verb: &str) 
     }
 }
 
-/// notes `freeing` as dropped here in the state.
+/// notes `freeing` as dropped here in the state, and as not freed from the cache yet.
 fn mark(project: &crate::project::Project, freeing: &BTreeSet<String>) -> Result<(), Error> {
     let (mut state, _) = project.state();
     state.dropped.extend(freeing.iter().cloned());
+    state.freeing.extend(freeing.iter().cloned());
+    project.write_state(&state)
+}
+
+/// notes that the drop of `freeing` freed what the cache held of them, so none is told cut short.
+fn done_freeing(
+    project: &crate::project::Project,
+    freeing: &BTreeSet<String>,
+) -> Result<(), Error> {
+    let (mut state, _) = project.state();
+    let before = state.freeing.len();
+    state.freeing.retain(|name| !freeing.contains(name));
+    if state.freeing.len() == before {
+        return Ok(());
+    }
     project.write_state(&state)
 }
 
@@ -953,6 +969,8 @@ fn free(
         .filter(|(path, _)| !native(&project.root, path).exists())
         .map(|(_, size)| size)
         .sum();
+    #[cfg(debug_assertions)]
+    crate::stop::hold("FETCHLOOM_TEST_HOLD_DROP");
     let mut digests: Vec<(&Sha256, &u64)> = objects.sizes.iter().collect();
     digests.sort();
     let (mut freed, mut bytes) = (0, 0);
@@ -974,6 +992,12 @@ fn free(
             freed += 1;
             bytes += size;
         }
+    }
+    // a file the cache could not let go of keeps the drop unfinished, which the same drop ends
+    if report.not_removed.is_empty()
+        && let Err(error) = done_freeing(project, freeing)
+    {
+        tracing::debug!(error = %error, "could not note that the drop freed the cache");
     }
     report.files = placement.removed;
     report.objects = freed;
