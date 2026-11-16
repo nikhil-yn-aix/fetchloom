@@ -87,7 +87,7 @@ an entry in a file's way is listed once as blocked, rather than each file behind
     Blocked data/iris · a file is where a folder belongs
 ```
 
-a plain `fetchloom sync` leaves it and warns, and `fetchloom sync --force` removes it, a link itself and never what it points to; a folder that holds anything stays even then.
+a plain `fetchloom sync` leaves it and warns, and `fetchloom sync --force` removes it, a link itself and never what it points to; a folder that holds anything stays even then, but files a system writes by itself, as `.DS_Store` or `Thumbs.db`, do not count: a folder of only those is an empty folder, and goes with them.
 
 a pipe or a file gets every file on a row of its own, so `fetchloom status | grep part04` finds each one. at a terminal, a folder whose files are all gone is one row:
 

@@ -2847,6 +2847,50 @@ fn a_folder_holding_only_system_files_frees_the_path_it_held() -> Result {
     Ok(())
 }
 
+/// a folder where data.lock places a file that holds nothing but what finder or explorer made is
+/// an empty folder to a person: status calls it one, and `sync --force` replaces it, those files
+/// with it, as it replaces an empty folder. one holding a file of the person's stays.
+#[test]
+fn a_folder_of_system_files_alone_in_a_files_way_is_empty() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flowers = sandbox.folder("flowers")?;
+    fs::write(flowers.join("petals.csv"), b"length\n1.4\n")?;
+    let added = sandbox.run(&["add", "../flowers"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let placed = sandbox
+        .work()
+        .join("data")
+        .join("flowers")
+        .join("petals.csv");
+    delete(&placed)?;
+    fs::create_dir(&placed)?;
+    fs::write(placed.join(".DS_Store"), b"finder")?;
+    fs::write(placed.join("Thumbs.db"), b"explorer")?;
+    let output = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&output.stdout)?,
+        "    Blocked data/flowers/petals.csv · an empty folder is where a file belongs\n"
+    );
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("help: `fetchloom sync --force` replaces it"),
+        "{stderr}"
+    );
+    let output = sandbox.run(&["sync", "--force"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(&placed)?, b"length\n1.4\n");
+    // a file of the person's beside them keeps the folder, even with --force
+    delete(&placed)?;
+    fs::create_dir(&placed)?;
+    fs::write(placed.join(".DS_Store"), b"finder")?;
+    fs::write(placed.join("notes.txt"), b"mine")?;
+    let output = sandbox.run(&["sync", "--force"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(placed.join("notes.txt"))?, b"mine");
+    Ok(())
+}
+
 #[test]
 fn status_names_a_file_in_a_folders_way_once() -> Result {
     let sandbox = Sandbox::new()?;

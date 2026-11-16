@@ -2006,6 +2006,16 @@ fn clear(
         return Ok(true);
     }
     let removed = if blocker.found == Entry::Folder {
+        // what a system made there goes with the folder, as it would with its last other file;
+        // one that changed or will not go keeps the folder, which then stays
+        for made in survey.made_by_system_in(&blocker.path) {
+            let file = native(&project.root, made);
+            if now(&file).is_some_and(|look| survey.disk.get(made) == Some(&look))
+                && let Err(err) = placer.remove(&file, false, None)
+            {
+                tracing::debug!(%made, %err, "could not delete a file the system made");
+            }
+        }
         placer.delete_folder(&path)
     } else {
         // windows removes a link to a folder as a folder

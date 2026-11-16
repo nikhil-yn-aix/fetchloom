@@ -703,16 +703,32 @@ impl Survey {
         }
     }
 
-    /// whether the folder at `path` was empty when the survey listed it.
+    /// whether the folder at `path` held nothing but files a system made when the survey listed
+    /// it, as a person sees an empty folder.
     fn holds_nothing_under(&self, path: &str) -> bool {
         let holding = self.holding.get_or_init(|| {
             let mut holding = HashSet::new();
-            for inner in self.disk.keys().chain(self.entries.keys()) {
+            let kept = self.disk.keys().filter(|inner| !self.made_by_system(inner));
+            for inner in kept.chain(self.entries.keys()) {
                 gather_folders(&mut holding, inner);
             }
             holding.into_iter().map(str::to_owned).collect()
         });
         !holding.contains(path)
+    }
+
+    /// the files a system made that the survey listed right inside the folder at `path`.
+    pub(crate) fn made_by_system_in<'s>(
+        &'s self,
+        path: &'s str,
+    ) -> impl Iterator<Item = &'s String> {
+        self.disk.keys().filter(move |inner| {
+            inner
+                .strip_prefix(path)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|name| !name.contains('/'))
+                && self.made_by_system(inner)
+        })
     }
 
     /// the files an interrupted placement left under the hidden names it stages files in, which
