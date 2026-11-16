@@ -1305,7 +1305,7 @@ fn site_named(scheme: &str) -> Option<&'static str> {
 fn unknown(text: &str) -> Error {
     let text = crate::shown::mask_query(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
-        .help("use a name to search for, the link of the dataset's page, a DOI, or an id such as kaggle:uciml/iris, as in `fetchloom add https://huggingface.co/datasets/scikit-learn/iris`")
+        .help("use a name to search for, the link of the dataset's page, such as https://huggingface.co/datasets/scikit-learn/iris, a DOI, or an id such as kaggle:uciml/iris")
 }
 
 /// the error for a malformed id after a known prefix, such as `zenodo:abc`.

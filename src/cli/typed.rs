@@ -260,6 +260,15 @@ pub(in crate::cli) fn scheme_meant(
         return error;
     }
     let inner = unwrapped(typed.trim());
+    // a server's address typed without its scheme, as `localhost:8000/data.csv`
+    if let Some(link) = super::search::as_link(inner.unwrap_or(typed).trim()) {
+        let line = meant(
+            &[typed],
+            &[&link],
+            format!("fetchloom {command} {}", shell_word(&link)),
+        );
+        return error.help(super::search::link_meant(&line, &link));
+    }
     let fixed = match inner {
         Some(inner) if crate::source::Reference::parse(inner).is_ok() => inner.to_owned(),
         _ => {

@@ -884,10 +884,6 @@ pub(crate) mod tests {
             ("src/net/failure.rs", "fetchloom add"),
             (
                 "src/source.rs",
-                "fetchloom add https://huggingface.co/datasets/scikit-learn/iris",
-            ),
-            (
-                "src/source.rs",
                 "fetchloom add https://zenodo.org/records/3608990",
             ),
             ("src/source/drive/folder.rs", "fetchloom add"),

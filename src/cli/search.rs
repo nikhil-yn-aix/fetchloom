@@ -170,9 +170,7 @@ fn no_such_path(word: &str, here: &std::path::Path, pins: bool) -> Error {
             format!("fetchloom get {}", super::shell_word(&link))
         };
         let line = super::meant(&[word], &[&link], alone);
-        return Error::new(Kind::Usage, missing).help(format!(
-            "did you mean `{line}`? a link starts with https://"
-        ));
+        return Error::new(Kind::Usage, missing).help(link_meant(&line, &link));
     }
     let search = format!(
         "run `fetchloom search {}` to search for these words",
@@ -197,11 +195,19 @@ fn no_such_path(word: &str, here: &std::path::Path, pins: bool) -> Error {
     Error::new(Kind::Usage, missing).help(help)
 }
 
-/// `word` as an https link when it reads as one without its scheme, as `zenodo.org/records/1`
-/// does: a host name of two or more parts, the last of letters alone, then a path.
-fn as_link(word: &str) -> Option<String> {
+/// `word` as a link when it reads as one without its scheme, a host and a port if any, then a
+/// path: http for this machine's name or an address, as a server a person runs answers, as
+/// `localhost:8000/data.csv` does, and https for a host name of two or more parts, the last of
+/// letters alone, as `zenodo.org/records/1`.
+pub(super) fn as_link(word: &str) -> Option<String> {
     let (host, _) = word.split_once('/')?;
-    let name = host.split_once(':').map_or(host, |(name, _)| name);
+    let name = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']').map(|(inside, _)| inside)?,
+        None => host.split_once(':').map_or(host, |(name, _)| name),
+    };
+    let addressed = name.eq_ignore_ascii_case("localhost")
+        || name.parse::<std::net::Ipv4Addr>().is_ok()
+        || (host.starts_with('[') && name.parse::<std::net::Ipv6Addr>().is_ok());
     let labels: Vec<&str> = name.split('.').collect();
     let named = labels.len() > 1
         && labels.iter().all(|label| {
@@ -210,8 +216,19 @@ fn as_link(word: &str) -> Option<String> {
         && labels
             .last()
             .is_some_and(|last| last.len() > 1 && last.chars().all(|c| c.is_ascii_alphabetic()));
-    let link = format!("https://{word}");
-    (named && url::Url::parse(&link).is_ok()).then_some(link)
+    let link = match (addressed, named) {
+        (true, _) => format!("http://{word}"),
+        (false, true) => format!("https://{word}"),
+        (false, false) => return None,
+    };
+    url::Url::parse(&link).is_ok().then_some(link)
+}
+
+/// the help offering `command`, a command line with `link` in place of what was typed without its
+/// scheme.
+pub(super) fn link_meant(command: &str, link: &str) -> String {
+    let scheme = link.split_once("://").map_or("https", |(scheme, _)| scheme);
+    format!("did you mean `{command}`? a link starts with {scheme}://")
 }
 
 pub(super) async fn pick(

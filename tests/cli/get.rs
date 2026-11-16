@@ -3002,3 +3002,67 @@ fn a_file_its_server_names_as_repository_metadata_gets_a_safe_name() -> Result {
     }
     Ok(())
 }
+
+/// a server's address typed without its scheme, as people type a local server's, gets the link it
+/// likely means: http for this machine's name or an address, https for a name, and the guess for
+/// a running server fetches its file. a reference no guess reads gets help that names no command
+/// but the one typed.
+#[test]
+fn an_address_without_its_scheme_gets_the_link_it_means() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    let bare = server
+        .url
+        .strip_prefix("http://")
+        .ok_or("a server's link starts with http://")?
+        .to_owned();
+    for (typed, meant) in [
+        (bare.as_str(), format!("http://{bare}")),
+        (
+            "localhost:8000/data.csv",
+            "http://localhost:8000/data.csv".to_owned(),
+        ),
+        (
+            "127.0.0.1/files/iris.csv",
+            "http://127.0.0.1/files/iris.csv".to_owned(),
+        ),
+        ("localhost/data.csv", "http://localhost/data.csv".to_owned()),
+        (
+            "example.org:8443/x.csv",
+            "https://example.org:8443/x.csv".to_owned(),
+        ),
+        ("example.org/x.csv", "https://example.org/x.csv".to_owned()),
+    ] {
+        let output = sandbox.run(&["--json", "get", typed])?;
+        assert_ne!(output.status.code(), Some(0), "{typed}");
+        let scheme = meant.split("://").next().unwrap_or_default();
+        assert_eq!(
+            json(&output)?["errors"][0]["help"],
+            format!("did you mean `fetchloom --json get {meant}`? a link starts with {scheme}://"),
+            "{typed}"
+        );
+    }
+    // brackets are quoted for the shell, as each one's quotes go
+    let output = sandbox.run(&["--json", "get", "[::1]:8000/data.csv"])?;
+    let help = json(&output)?["errors"][0]["help"].clone();
+    assert!(
+        help.as_str()
+            .is_some_and(|help| help.contains("http://[::1]:8000/data.csv")
+                && help.ends_with("a link starts with http://")),
+        "{help}"
+    );
+    let output = sandbox.run(&["get", &format!("http://{bare}")])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    let output = sandbox.run(&["--json", "get", "lab:iris"])?;
+    let help = json(&output)?["errors"][0]["help"].clone();
+    assert!(
+        help.as_str()
+            .is_some_and(|help| !help.contains("fetchloom add")),
+        "{help}"
+    );
+    Ok(())
+}
