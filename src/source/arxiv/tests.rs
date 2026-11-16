@@ -573,6 +573,29 @@ fn a_category_month_that_lists_nothing_or_stops_early_is_refused() {
     );
 }
 
+/// a version arXiv's API names is checked against the versions the mirror holds of that paper,
+/// so a huge number costs no scan of every number below it.
+#[test]
+fn a_huge_version_the_mirror_lacks_is_checked_at_once() {
+    let page = [(
+        "2401.00001v4294967295".to_owned(),
+        "2024-01-10T10:00:00Z".to_owned(),
+    )];
+    let recorded = Recorded::default()
+        .on(&category_page(0), 200, feed(1, &page))
+        .on(
+            &mirror("arxiv/arxiv/pdf/2401/"),
+            200,
+            held(&[("arxiv/arxiv/pdf/2401/2401.00002v1.pdf", 5)]),
+        );
+    let listing = resolve(&recorded, "arxiv:cs.LG/2401").unwrap();
+    let links: Vec<&str> = listing.files.iter().map(|file| file.url.as_str()).collect();
+    assert_eq!(
+        links,
+        ["https://export.arxiv.org/pdf/2401.00001v4294967295"]
+    );
+}
+
 /// a search finds titles first, then fills up from papers that hold the words anywhere.
 #[test]
 fn a_search_asks_titles_first_then_everywhere() {

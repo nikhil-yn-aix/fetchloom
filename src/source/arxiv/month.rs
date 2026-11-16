@@ -298,13 +298,23 @@ async fn pdfs(api: &impl Api, papers: Vec<(Id, u32)>) -> Result<Found, Error> {
             .into_iter()
             .map(|remote| (remote.path.clone(), remote))
             .collect();
+        // the versions the mirror holds of each paper, so a version arXiv names, however large,
+        // is checked against those alone
+        let mut versions: HashMap<String, Vec<u32>> = HashMap::new();
+        for path in held.keys() {
+            if let Some((number, version)) = Id::version_mirrored(path) {
+                versions.entry(number.to_owned()).or_default().push(version);
+            }
+        }
         for (id, version) in papers {
             if let Some(mut remote) = held.remove(&id.mirrored(version)) {
                 remote.path = id.file(version);
                 found.files.push(remote);
                 continue;
             }
-            let earlier = (1..version).any(|older| held.contains_key(&id.mirrored(older)));
+            let earlier = versions
+                .get(id.number())
+                .is_some_and(|kept| kept.iter().any(|&older| (1..version).contains(&older)));
             if earlier && feed::record(api, &id).await?.withdraws(version) {
                 found.withdrawn.push(format!("arxiv:{id}@v{version}"));
                 continue;

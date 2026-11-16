@@ -176,8 +176,19 @@ impl Id {
     /// the name the mirror gives a version's pdf in [`Id::folder`]: `1706.03762v7.pdf`, or
     /// `9901001v1.pdf` for `hep-th/9901001`.
     fn mirrored(&self, version: u32) -> String {
-        let number = self.0.rsplit('/').next().unwrap_or(&self.0);
-        format!("{number}v{version}.pdf")
+        format!("{}v{version}.pdf", self.number())
+    }
+
+    /// the id as the mirror's names hold it, without an old id's archive.
+    fn number(&self) -> &str {
+        self.0.rsplit('/').next().unwrap_or(&self.0)
+    }
+
+    /// the paper's number and the version a name in [`Id::folder`] holds, as [`Id::mirrored`]
+    /// writes them: `("1706.03762", 7)` for `1706.03762v7.pdf`.
+    fn version_mirrored(name: &str) -> Option<(&str, u32)> {
+        let (number, version) = name.strip_suffix(".pdf")?.rsplit_once('v')?;
+        Some((number, version.parse().ok()?))
     }
 
     /// the name a version's pdf takes in a dataset: `1706.03762v7.pdf`, as arXiv names it, and
