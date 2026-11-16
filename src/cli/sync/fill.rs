@@ -1,15 +1,18 @@
 //! datasets `add --no-sync` pinned by what their sources state, as relocking meets them. a sync
 //! downloads each one it covers, checks every stated digest and size, and pins it whole as if its
-//! source listed it again; every other run carries it as it is. one data.toml changed or no longer
-//! has, or an upgrade asks for, goes the way of any changed pin.
+//! source listed it again; every other run carries it as it is, as an offline sync carries one
+//! whose files this machine lacks. one data.toml changed or no longer has, or an upgrade asks for,
+//! goes the way of any changed pin.
 
 use std::collections::HashSet;
+use std::sync::PoisonError;
 
 use url::Url;
 
 use super::draft::{self, Unit};
-use super::{Given, Loop, Upgrade};
-use crate::cli::fetch::{Again, Job};
+use super::{Given, Loop, Upgrade, in_cache};
+use crate::cli::fetch::data_folder::DataFolder;
+use crate::cli::fetch::{self, Again, Job};
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch};
 use crate::project::lock::{Lock, Locked, Stated, Waiting};
@@ -50,8 +53,9 @@ impl Carried {
 impl Loop<'_> {
     /// readies `old` for relocking. a dataset its source's digests pin that this run fills becomes
     /// a listing in `given`, its files first downloaded and checked when `download`, else as its
-    /// source states them, for a dry run. one data.toml changed or no longer has, or an upgrade
-    /// asks for, is relocked as any changed pin is. the rest are carried as they are.
+    /// source states them, for a dry run; offline, only one whose files this machine has. one
+    /// data.toml changed or no longer has, or an upgrade asks for, is relocked as any changed pin
+    /// is. the rest are carried as they are.
     pub(super) async fn stated(
         &self,
         manifest: &Manifest,
@@ -83,7 +87,7 @@ impl Loop<'_> {
                 Given::Locked(locked) => locked.name.clone(),
             })
             .collect();
-        let mut filling = Vec::new();
+        let (mut relocked, mut filling) = (Vec::new(), Vec::new());
         for stated in std::mem::take(&mut old.stated) {
             let name = stated.name().to_owned();
             if !self.scope.includes(&name) {
@@ -97,25 +101,31 @@ impl Loop<'_> {
             let changed = current.is_none() || upgrade.includes(&name) || named.contains(&name);
             if !changed && !self.fills {
                 carried.stated.push(stated);
-                continue;
-            }
-            // a pin with no files and a spec no entry has, so relocking replaces or drops it
-            // whole and tells its change as of any pin
-            old.datasets.push(Locked {
-                spec: String::new(),
-                ..stated.pin.clone()
-            });
-            if !changed {
+            } else if changed {
+                relocked.push(stated);
+            } else {
                 filling.push(stated);
             }
         }
+        let mut listings = filling
+            .iter()
+            .map(listing)
+            .collect::<Result<Vec<_>, Error>>()?;
+        if download && self.net.offline().enabled() && !filling.is_empty() {
+            (filling, listings) = self
+                .held_offline(manifest, filling, listings, &mut carried)
+                .await?;
+        }
+        // a pin with no files and a spec no entry has, so relocking replaces or drops it whole and
+        // tells its change as of any pin
+        old.datasets
+            .extend(relocked.iter().chain(&filling).map(|stated| Locked {
+                spec: String::new(),
+                ..stated.pin.clone()
+            }));
         old.datasets.sort_by(|a, b| a.name.cmp(&b.name));
         old.stated.clone_from(&carried.stated);
         if !filling.is_empty() {
-            let mut listings = filling
-                .iter()
-                .map(listing)
-                .collect::<Result<Vec<_>, Error>>()?;
             if download {
                 self.fill(manifest, &filling, &mut listings).await?;
             }
@@ -138,11 +148,7 @@ impl Loop<'_> {
     ) -> Result<(), Error> {
         let mut jobs = Vec::new();
         for (stated, listing) in filling.iter().zip(listings.iter()) {
-            let extract = manifest
-                .datasets
-                .get(stated.name())
-                .is_some_and(|entry| entry.source.extract);
-            jobs.extend(self::jobs(stated, listing, extract));
+            jobs.extend(self::jobs(stated, listing, extracts(manifest, stated)));
         }
         let fetched = self.download(jobs).await?;
         let files = listings.iter_mut().flat_map(|listing| &mut listing.files);
@@ -151,6 +157,73 @@ impl Loop<'_> {
         }
         Ok(())
     }
+
+    /// the pins of `filling`, with their `listings`, whose every file an offline run has, in the
+    /// cache or from a mirror it may read. each other pin goes to `carried` as it is, and the files
+    /// it lacks wait for the refusal that names every file the run lacks, with placing's own.
+    async fn held_offline(
+        &self,
+        manifest: &Manifest,
+        filling: Vec<Stated>,
+        listings: Vec<Listing>,
+        carried: &mut Carried,
+    ) -> Result<(Vec<Stated>, Vec<Listing>), Error> {
+        let mut jobs = Vec::new();
+        let mut ends = Vec::with_capacity(filling.len());
+        for (stated, listing) in filling.iter().zip(&listings) {
+            jobs.extend(self::jobs(stated, listing, extracts(manifest, stated)));
+            ends.push(jobs.len());
+        }
+        fetch::mirrors::fill(
+            self.context,
+            &self.net,
+            &self.cache,
+            &DataFolder::default(),
+            || fetch::mirrors::pinned(&jobs, &self.cache),
+        )
+        .await
+        .map_err(|error| self.as_left(error))?;
+        let (mut held, mut lacked) = ((Vec::new(), Vec::new()), Vec::new());
+        let mut start = 0;
+        for ((stated, listing), end) in filling.into_iter().zip(listings).zip(ends) {
+            let lacking: Vec<Unfilled> = jobs[start..end]
+                .iter()
+                .filter(|job| !in_cache(&self.cache, &job.fetch))
+                .map(|job| Unfilled {
+                    dataset: stated.name().to_owned(),
+                    label: job.label.clone(),
+                    unlearned: job.fetch.expect.sha256.is_none(),
+                })
+                .collect();
+            start = end;
+            if lacking.is_empty() {
+                held.0.push(stated);
+                held.1.push(listing);
+            } else {
+                lacked.extend(lacking);
+                carried.stated.push(stated);
+            }
+        }
+        *self.unfilled.lock().unwrap_or_else(PoisonError::into_inner) = lacked;
+        Ok(held)
+    }
+}
+
+/// a file of a pin by what its source states that an offline run lacks, so the pin stays as it is.
+pub(super) struct Unfilled {
+    pub(super) dataset: String,
+    /// the file as messages name it, `<dataset>/<path>`.
+    pub(super) label: String,
+    /// whether its source states no SHA-256, which only a download learns.
+    pub(super) unlearned: bool,
+}
+
+/// whether data.toml asks to unpack the archives of the dataset `stated` pins.
+fn extracts(manifest: &Manifest, stated: &Stated) -> bool {
+    manifest
+        .datasets
+        .get(stated.name())
+        .is_some_and(|entry| entry.source.extract)
 }
 
 /// what the source of `stated` listed, as data.lock keeps it: the version, its facts and each

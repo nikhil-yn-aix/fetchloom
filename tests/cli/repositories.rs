@@ -2156,6 +2156,96 @@ fn an_offline_sync_of_a_stated_pin_says_to_run_it_online() -> Result {
     Ok(())
 }
 
+/// offline, one refusal names every file a sync lacks: those pinned by what their source states,
+/// which one download must learn the SHA-256 of, and those data.lock names that the cache lacks.
+/// the dry run names them the same way, and nothing asks either server.
+#[test]
+fn an_offline_sync_names_every_file_it_lacks_in_one_refusal() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    added_unsynced(&sandbox, &routes)?;
+    let files = Routes::start(vec![("/files/notes.txt".to_owned(), file(NOTES, "\"n1\""))])?;
+    sandbox.allow(&files.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/notes.txt", files.url)])?)?;
+    let asked = (routes.requests().len(), files.requests().len());
+    for args in [
+        &["--json", "--offline", "sync"][..],
+        &["--json", "--offline", "sync", "--dry-run"],
+    ] {
+        let (_, synced) = teammate_sync(&sandbox, &routes, args)?;
+        assert_eq!(synced.status.code(), Some(20), "{}", text(&synced.stderr)?);
+        let document = json(&synced)?;
+        let errors = document["errors"].as_array().cloned().unwrap_or_default();
+        let [error] = errors.as_slice() else {
+            return Err(format!("{args:?}: one error, not {document}").into());
+        };
+        assert_eq!(error["kind"], "offline.missing", "{args:?}: {error}");
+        assert_eq!(
+            error["message"],
+            "offline, and 2 files are not in the cache: 1 data.lock names, and 1 pinned by what its source states, which must be downloaded once to learn its SHA-256",
+            "{args:?}: {error}"
+        );
+        assert_eq!(
+            error["details"],
+            serde_json::json!(["archiving/rows.csv", "notes/notes.txt"]),
+            "{args:?}"
+        );
+        assert_eq!(
+            error["help"],
+            "run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them",
+            "{args:?}"
+        );
+    }
+    assert_eq!(
+        (routes.requests().len(), files.requests().len()),
+        asked,
+        "offline asks nothing"
+    );
+    Ok(())
+}
+
+/// offline, a pin by its source's MD5 that this machine cannot fill waits, as a dataset missing
+/// files does: the sync still places the datasets it has whole, and says which pin waits.
+#[test]
+fn an_offline_sync_places_what_it_has_while_a_stated_pin_waits() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = dryad(&[("rows.csv", ROWS, &md5_hex(ROWS))])?;
+    let unsynced = added_unsynced(&sandbox, &routes)?;
+    let files = Routes::start(vec![("/files/notes.txt".to_owned(), file(NOTES, "\"n1\""))])?;
+    sandbox.allow(&files.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/notes.txt", files.url)])?)?;
+    // a clone on this machine, whose cache holds notes but never downloaded archiving
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let synced = sandbox
+        .command_in(&clone, &["--json", "--offline", "sync"])
+        .output()?;
+    assert_eq!(synced.status.code(), Some(20), "{}", text(&synced.stderr)?);
+    let error = &json(&synced)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "offline, and a file pinned by what its source states, not by a SHA-256, must be downloaded once to learn it",
+        "{error}"
+    );
+    assert_eq!(
+        error["details"],
+        serde_json::json!([
+            "archiving/rows.csv",
+            "placed notes, whose files are all on this machine",
+            "archiving waits for files this run could not get"
+        ]),
+        "{error}"
+    );
+    assert_eq!(fs::read(clone.join("data/notes/notes.txt"))?, NOTES);
+    assert!(!clone.join("data/archiving").exists());
+    let lock = fs::read_to_string(clone.join("data.lock"))?;
+    let pin = &unsynced[unsynced.find("[[dataset]]").unwrap_or_default()..];
+    assert!(lock.contains(pin), "the pin stays as it is:\n{lock}");
+    Ok(())
+}
+
 /// `--locked` refuses a pin a sync would complete, since data.lock would change, saying which
 /// sync completes it; the check without it counts the pin as locked.
 #[test]

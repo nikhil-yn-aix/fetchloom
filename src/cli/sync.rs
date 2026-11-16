@@ -126,6 +126,9 @@ pub(super) struct Loop<'a> {
     verifies: bool,
     /// what relocking told ahead and fetched, which placing's downloads finish telling.
     ahead: Mutex<Option<Ahead>>,
+    /// the files of pins by what their sources state that relocking offline could not fill, which
+    /// the run's refusal names with every other file it lacks.
+    unfilled: Mutex<Vec<fill::Unfilled>>,
 }
 
 /// downloads a run told before its first batch: the hashes placing downloads later, and what
@@ -169,6 +172,7 @@ impl<'a> Loop<'a> {
             fills: false,
             verifies: false,
             ahead: Mutex::default(),
+            unfilled: Mutex::default(),
         }
     }
 
@@ -312,12 +316,16 @@ impl<'a> Loop<'a> {
         survey.elsewhere.extend(elsewhere);
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let placing = Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
-        // a dataset whose bytes a download that failed was to bring waits with it
+        // a dataset whose bytes a download that failed was to bring waits with it, as one whose
+        // pin by what its source states this run could not fill does
+        let unfilled = self.unfilled.lock().unwrap_or_else(PoisonError::into_inner);
         let waiting: BTreeSet<String> = placing
             .short(|digest, size| self.cache.find(digest, Some(size)).is_some())
             .into_iter()
             .chain(placing.unknown().into_iter().map(|(dataset, _)| dataset))
+            .chain(unfilled.iter().map(|file| file.dataset.clone()))
             .collect();
+        drop(unfilled);
         // one waiting for its file list has nothing to place either, which the run warns of
         let whole: BTreeSet<String> = manifest
             .datasets
@@ -1876,40 +1884,33 @@ impl<'a> Loop<'a> {
         if !self.net.offline().enabled() {
             return Ok(());
         }
-        let missing: Vec<&str> = jobs
-            .iter()
-            .filter(|job| !available(job))
-            .map(|job| job.label.as_str())
-            .collect();
-        if missing.is_empty() {
+        let lacking: Vec<&Job> = jobs.iter().filter(|job| !available(job)).collect();
+        if lacking.is_empty() {
             return Ok(());
         }
-        // a new link has no fingerprint yet, so the cache cannot be asked for it
-        let unlearned: Vec<&Job> = jobs
-            .iter()
-            .filter(|job| job.fetch.expect.sha256.is_none() && !available(job))
-            .collect();
-        if !unlearned.is_empty() {
-            let offline = self.net.offline();
-            // a pin data.lock keeps by what its source states, an md5 or a size, is no new link
-            let stated = unlearned
+        let unfilled = self.unfilled.lock().unwrap_or_else(PoisonError::into_inner);
+        // a new link has no fingerprint yet, so the cache cannot be asked for it. a pin data.lock
+        // keeps by what its source states, an md5 or a size, is no new link
+        let new = |expect: &Expect| {
+            expect.sha256.is_none() && expect.md5.is_none() && expect.size.is_none()
+        };
+        if lacking.iter().any(|job| new(&job.fetch.expect)) {
+            let missing: Vec<&str> = lacking
                 .iter()
-                .all(|job| job.fetch.expect.md5.is_some() || job.fetch.expect.size.is_some());
-            let (said, help) = if stated {
-                (
-                    "offline, and a file pinned by what its source states, not by a SHA-256, must be downloaded once to learn it",
-                    format!("{} to download it", offline.retry()),
-                )
-            } else {
-                (
-                    "offline, and a new link must be downloaded once to learn its SHA-256",
-                    offline.unlearned_help(),
-                )
-            };
+                .map(|job| job.label.as_str())
+                .chain(unfilled.iter().map(|file| file.label.as_str()))
+                .collect();
+            let said = "offline, and a new link must be downloaded once to learn its SHA-256";
             let error = Error::new(Kind::OfflineMissing, said).details_up_to(&missing, NAMED);
-            return Err(error.help(help));
+            return Err(error.help(self.net.offline().unlearned_help()));
         }
-        Err(self.offline_missing(&missing))
+        let (unlearned, missing) = split_lacking(
+            &unfilled,
+            lacking
+                .iter()
+                .map(|job| (job.label.as_str(), job.fetch.expect.sha256.is_none())),
+        );
+        Err(self.offline_missing(&unlearned, &missing))
     }
 
     /// refuses, before any link is read, what `lacking` still lacks after the data folder and
@@ -1939,7 +1940,8 @@ impl<'a> Loop<'a> {
             })
             .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
             .collect();
-        if self.net.offline().enabled() && !named.is_empty() {
+        let unfilled = self.unfilled.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.net.offline().enabled() && !(named.is_empty() && unfilled.is_empty()) {
             if let Some(import) = lacking
                 .iter()
                 .filter(|(_, file)| file.url.is_empty())
@@ -1948,8 +1950,9 @@ impl<'a> Loop<'a> {
             {
                 return Err(self.offline_imported(manifest, import, lacking));
             }
-            let labels: Vec<&str> = named.iter().map(|(label, _)| label.as_str()).collect();
-            return Err(self.offline_missing(&labels));
+            let labels = named.iter().map(|(label, _)| (label.as_str(), false));
+            let (unlearned, missing) = split_lacking(&unfilled, labels);
+            return Err(self.offline_missing(&unlearned, &missing));
         }
         fetch::mirrors::sources_allowed(self.context, &named)
     }
@@ -1995,22 +1998,51 @@ impl<'a> Loop<'a> {
         )
     }
 
-    /// the error for files an offline run lacks, with ways that need no network. offline asks no
-    /// web mirror, so the help says so rather than leave the mirror looking empty.
-    fn offline_missing(&self, missing: &[&str]) -> Error {
-        let mut error = Error::new(
-            Kind::OfflineMissing,
-            format!(
+    /// the error for files an offline run lacks, `unlearned` first: those pinned by what their
+    /// sources state with no SHA-256, which only a download learns, then `missing`, which
+    /// data.lock names by theirs, with ways that need no network. offline asks no web mirror, so
+    /// the help says so rather than leave the mirror looking empty.
+    fn offline_missing(&self, unlearned: &[&str], missing: &[&str]) -> Error {
+        let offline = self.net.offline();
+        if missing.is_empty() {
+            return Error::new(
+                Kind::OfflineMissing,
+                "offline, and a file pinned by what its source states, not by a SHA-256, must be downloaded once to learn it",
+            )
+            .details_up_to(unlearned, NAMED)
+            .help(format!("{} to download it", offline.retry()));
+        }
+        let message = match unlearned.len() {
+            0 => format!(
                 "offline, and {} data.lock names {} not in the cache",
                 units::count(missing.len() as u64, "file", "files"),
                 if missing.len() == 1 { "is" } else { "are" }
             ),
-        );
-        error = error.details_up_to(missing, NAMED);
-        let help = format!(
-            "{}, or name a folder mirror that holds them with `--mirror <folder>`",
-            self.net.offline().missing_help("them")
-        );
+            stated => {
+                let (whose, their) = if stated == 1 {
+                    ("its source states", "its")
+                } else {
+                    ("their sources state", "their")
+                };
+                format!(
+                    "offline, and {} files are not in the cache: {} data.lock names, and {} pinned by what {whose}, which must be downloaded once to learn {their} SHA-256",
+                    units::grouped((missing.len() + stated) as u64),
+                    units::grouped(missing.len() as u64),
+                    units::grouped(stated as u64)
+                )
+            }
+        };
+        let lacking: Vec<&str> = unlearned.iter().chain(missing).copied().collect();
+        let error = Error::new(Kind::OfflineMissing, message).details_up_to(&lacking, NAMED);
+        // a folder mirror is read by SHA-256, which an unlearned file has none of yet
+        let help = if unlearned.is_empty() {
+            format!(
+                "{}, or name a folder mirror that holds them with `--mirror <folder>`",
+                offline.missing_help("them")
+            )
+        } else {
+            offline.missing_help("them")
+        };
         let remote: Vec<&crate::mirror::Location> = self
             .context
             .mirrors
@@ -2567,6 +2599,26 @@ struct Partial {
     placed: Vec<String>,
     waiting: Vec<String>,
     placement: Placement,
+}
+
+/// the labels of the files an offline run lacks, `unfilled`'s, then `others` with whether only a
+/// download learns each one's SHA-256: those it must learn, and those data.lock names by theirs.
+fn split_lacking<'l>(
+    unfilled: &'l [fill::Unfilled],
+    others: impl Iterator<Item = (&'l str, bool)>,
+) -> (Vec<&'l str>, Vec<&'l str>) {
+    let mut split = (Vec::new(), Vec::new());
+    let unfilled = unfilled
+        .iter()
+        .map(|file| (file.label.as_str(), file.unlearned));
+    for (label, unlearned) in unfilled.chain(others) {
+        if unlearned {
+            split.0.push(label);
+        } else {
+            split.1.push(label);
+        }
+    }
+    split
 }
 
 /// whether `error` stopped a run from getting files, which a later run may get: a source or the
@@ -3147,6 +3199,36 @@ mod tests {
         assert_eq!(fetched[0].origin, Origin::Cache);
         assert_eq!(fetched[0].digest, digest::sha256(b"data"));
         assert_eq!(context.work.counts().requests, 0);
+    }
+
+    /// an offline refusal of files of both kinds counts each kind, and names first those whose
+    /// SHA-256 only a download learns, so they show though many others are missing too.
+    #[test]
+    fn an_offline_refusal_counts_each_kind_and_names_the_unlearned_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let missing = ["a/1.csv", "a/2.csv", "a/3.csv", "a/4.csv"];
+        let error = runner.offline_missing(&["z/1.csv", "z/2.csv"], &missing);
+        assert_eq!(
+            error.message,
+            "offline, and 6 files are not in the cache: 4 data.lock names, and 2 pinned by what their sources state, which must be downloaded once to learn their SHA-256"
+        );
+        assert_eq!(
+            error.details,
+            [
+                "z/1.csv",
+                "z/2.csv",
+                "a/1.csv",
+                "a/2.csv",
+                "a/3.csv",
+                "and 1 more"
+            ]
+        );
     }
 
     #[test]
