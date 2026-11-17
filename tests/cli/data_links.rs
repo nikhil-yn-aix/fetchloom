@@ -527,3 +527,48 @@ fn a_recorded_link_pointed_at_a_populated_folder_is_refused() -> Result {
     assert_eq!(back.status.code(), Some(0), "{}", text(&back.stderr)?);
     Ok(())
 }
+
+/// git sees a data folder link itself, so a commit takes it and each clone then refuses it, and a
+/// line ending in /, as cookiecutter's /data/, hides folders alone. a person at a terminal is told
+/// once of the line that hides the link, /data; with that line there, nothing.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_followed_link_git_sees_is_told_once() -> Result {
+    let told_line = "add the line /data to the project's .gitignore";
+    for (rules, told) in [("/data/\n", true), ("/data\n", false)] {
+        let sandbox = Sandbox::new()?;
+        if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+            return Ok(());
+        }
+        fs::write(sandbox.work().join(".gitignore"), rules)?;
+        let scratch = sandbox.folder("scratch")?;
+        let target = scratch.join("project-data");
+        fs::create_dir(&target)?;
+        link_folder(&target, &sandbox.work().join("data"))?;
+        ok(&sandbox.run(&[
+            "settings",
+            "set",
+            "data_links",
+            &scratch.display().to_string(),
+        ])?)?;
+        let routes = Routes::start(vec![
+            ("/iris.csv".to_owned(), file(IRIS, "\"1\"")),
+            ("/wine.csv".to_owned(), file(b"wine\n", "\"2\"")),
+        ])?;
+        sandbox.allow(&routes.url);
+        let link = |name: &str| format!("{}/{name}.csv", routes.url);
+        let Some(screen) = sandbox.on_a_terminal(&["add", &link("iris"), "--as", "iris"])? else {
+            return Ok(());
+        };
+        assert!(screen.contains("Added iris"), "{rules}: {screen}");
+        assert_eq!(screen.contains(told_line), told, "{rules}: {screen}");
+        // git never looks behind a link, so no line of .gitignore hides the files there
+        assert!(!screen.contains("keeps all of data/"), "{rules}: {screen}");
+        let again = sandbox
+            .on_a_terminal(&["add", &link("wine"), "--as", "wine"])?
+            .unwrap_or_default();
+        assert!(again.contains("Added wine"), "{rules}: {again}");
+        assert!(!again.contains(told_line), "{rules}, said once: {again}");
+    }
+    Ok(())
+}

@@ -104,6 +104,8 @@ pub(crate) enum Once {
     /// an output whose folder changed since it was pinned, which sync leaves whole: the output
     /// and what changed in its folder, so a new change is told of again.
     Output,
+    /// a data folder link git sees, with the .gitignore line that hides it: the line.
+    Link,
 }
 
 impl Once {
@@ -117,6 +119,7 @@ impl Once {
             Once::Unnamed => "unnamed",
             Once::RPackage => "r_package",
             Once::Output => "output",
+            Once::Link => "link",
         }
     }
 }

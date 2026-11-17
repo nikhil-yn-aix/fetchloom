@@ -752,6 +752,46 @@ pub(super) fn tell_hiding_line(
     true
 }
 
+/// says once to a person at a terminal of the .gitignore line that keeps the data folder link at
+/// `link`, its path in the project, out of git, when no line of the project's .gitignore hides the
+/// link itself: git keeps a link as a file, which a line ending in `/`, as cookiecutter's `/data/`,
+/// never hides, so a commit takes it and each clone then refuses it. fetchloom never edits
+/// .gitignore. says whether the state changed.
+pub(super) fn tell_link_line(output: &Output, root: &Path, link: &str, state: &mut State) -> bool {
+    if !output.watched_story() || output.json() {
+        return false;
+    }
+    let rule = format!("/{}", gitignore_escaped(link));
+    if link_hidden(root, link) || !state.told.note(Once::Link, &rule) {
+        return false;
+    }
+    output.warn_with(
+        Warning::GitDataLinkUnignored,
+        &format!(
+            "git sees {link}, the link fetchloom follows to the data folder, so a commit takes it and each clone of this project then refuses it"
+        ),
+        &format!(
+            "add the line {rule} to the project's .gitignore: a line ending in /, as {rule}/, hides folders alone, never a link. fetchloom never edits .gitignore"
+        ),
+    );
+    true
+}
+
+/// whether a line of the project's .gitignore at `root` hides the link at `link` itself: its own
+/// path, with or without a leading `/`, or a folder holding it, as [`hiding_line`] finds one.
+fn link_hidden(root: &Path, link: &str) -> bool {
+    let Ok(text) = crate::project::read_gitignore(&root.join(".gitignore")) else {
+        return false;
+    };
+    let literal = gitignore_escaped(link);
+    let own = [format!("/{literal}"), literal];
+    text.lines()
+        .any(|line| own.iter().any(|form| form == line.trim_end()))
+        || link
+            .rsplit_once('/')
+            .is_some_and(|(folder, _)| hiding_line(root, folder, false).is_some())
+}
+
 /// warns of the dataset folders `placement` leaves with no marker of fetchloom's, whose files git
 /// sees.
 pub(super) fn warn_unmarked(output: &Output, manifest: &Manifest, placement: &Placement) {

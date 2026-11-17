@@ -1468,8 +1468,24 @@ impl<'a> Placing<'a> {
         );
         placement.marked = marked;
         placement.in_git = Project::repository(&project.root).is_some();
+        // git keeps a link as a file and never looks behind it, so no line hides what lies there
+        let through_link = survey.followed.iter().any(|link| {
+            manifest.data_dir == link.path
+                || manifest
+                    .data_dir
+                    .strip_prefix(&link.path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        });
         let told_rule = !placement.marked.is_empty()
+            && !through_link
             && mark::tell_hiding_line(output, &project.root, &manifest.data_dir, &mut survey.state);
+        let mut told_link = false;
+        if placement.in_git {
+            for link in &survey.followed {
+                told_link |=
+                    mark::tell_link_line(output, &project.root, &link.path, &mut survey.state);
+            }
+        }
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
         let threads = survey.threads;
@@ -1538,7 +1554,7 @@ impl<'a> Placing<'a> {
             || linked
             || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
-        let marks = unmarked || marking || rewritten || told_rule || taken_back;
+        let marks = unmarked || marking || rewritten || told_rule || told_link || taken_back;
         // what a run that ends in an error never tells stays untold
         let telling = !stopped && failure.is_none();
         placement.copied = tallies

@@ -67,6 +67,9 @@ pub(crate) enum Warning {
     /// a dataset places a .gitignore of its own at the top of its folder, where fetchloom would keep
     /// the one that hides the folder from git, and no line of the project's .gitignore hides it.
     GitDatasetUnignored,
+    /// git sees a data folder link fetchloom follows, which no line of the project's .gitignore
+    /// hides, so a commit takes it and each clone then refuses it.
+    GitDataLinkUnignored,
     /// files an import read are in the git work tree, where a commit takes or keeps them.
     GitImportInTree,
     /// git does not have lists in data.lock.d that data.lock names.
@@ -191,6 +194,7 @@ impl Warning {
             Warning::ExportLeftOut => "export.left_out",
             Warning::GitDataFolderIgnored => "git.data_folder_ignored",
             Warning::GitDatasetUnignored => "git.dataset_unignored",
+            Warning::GitDataLinkUnignored => "git.data_link_unignored",
             Warning::GitImportInTree => "git.import_in_tree",
             Warning::GitLockPartUntracked => "git.lock_part_untracked",
             Warning::ImportSkipped => "import.skipped",
@@ -284,6 +288,7 @@ mod tests {
             ExportLeftOut,
             GitDataFolderIgnored,
             GitDatasetUnignored,
+            GitDataLinkUnignored,
             GitImportInTree,
             GitLockPartUntracked,
             ImportSkipped,
