@@ -1780,6 +1780,7 @@ pub(crate) fn untouched(
                     && survey.writable.contains(path))
         })
         || !mark::settled(manifest, survey, scope)
+        || output_gained(manifest, survey)
     {
         return Ok(None);
     }
@@ -1798,6 +1799,26 @@ pub(crate) fn untouched(
         unchanged: unchanged as u64,
         ..Placement::default()
     }))
+}
+
+/// whether the folder of an output holds a file no record names that the output would take in, as
+/// a person's new figure: the output changed though every recorded file looks as recorded.
+fn output_gained(manifest: &Manifest, survey: &Survey) -> bool {
+    let outputs: Vec<&str> = manifest
+        .datasets
+        .values()
+        .filter(|entry| entry.place)
+        .filter_map(|entry| entry.at.as_deref())
+        .collect();
+    !outputs.is_empty()
+        && survey.disk.keys().any(|path| {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            !survey.state.files.contains_key(path)
+                && outputs.iter().any(|at| super::disk::is_inside(path, at))
+                && !survey.made_by_system(path)
+                && !place::is_copy_temporary(name)
+                && !passed_over(manifest, path)
+        })
 }
 
 /// a file sync may link to the cache's copy of its bytes once placing is done.

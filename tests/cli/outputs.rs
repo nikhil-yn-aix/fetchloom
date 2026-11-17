@@ -354,6 +354,49 @@ fn a_changed_output_is_never_partly_healed() -> Result {
     Ok(())
 }
 
+/// a file a person adds to an output's folder, and nothing else, changes the output for sync as for
+/// status: sync warns and leaves it, `--strict` fails as `status --check` does, and `--force`
+/// deletes the file, as its dry run says, though a sync before found nothing else to do.
+#[test]
+fn a_file_added_to_an_outputs_folder_changes_it_for_sync_too() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let notes = work.join("data/processed/NOTES.md");
+    fs::write(&notes, b"# notes\n")?;
+    let checked = sandbox.run(&["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(1), "{}", text(&checked.stderr)?);
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: data/processed changed since processed was pinned: 1 file added, so sync leaves it as it is"),
+        "{stderr}"
+    );
+    let strict = sandbox.run(&["--json", "sync", "--strict"])?;
+    let document = json(&strict)?;
+    assert_eq!(strict.status.code(), Some(1), "{document}");
+    assert_eq!(
+        document["errors"][0]["kind"], "data.not_ready",
+        "{document}"
+    );
+    let previewed = sandbox.run(&["sync", "--force", "processed", "--dry-run"])?;
+    let stderr = text(&previewed.stderr)?;
+    assert!(
+        stderr.contains(
+            "Would remove data/processed/NOTES.md · a file processed's pin does not hold\n"
+        ),
+        "{stderr}"
+    );
+    assert!(notes.exists(), "a dry run deletes nothing");
+    ok(&sandbox.run(&["sync", "--force", "processed"])?)?;
+    assert!(!notes.exists());
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
 /// a sync that leaves a changed output whole says so in its closing line, as it says it kept an
 /// edit, and so does a dry run: neither says every pinned file is in place while an output
 /// differs from its pin.
