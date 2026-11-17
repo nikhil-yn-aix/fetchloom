@@ -1038,3 +1038,33 @@ fn a_zip_whose_files_are_gone_says_nothing_of_another_zips_files() -> Result {
     assert_eq!(fs::read(gone.join("x.csv"))?, b"x\n");
     Ok(())
 }
+
+/// what a system or a tool leaves beside a copy's zip files, never an archive's file here, as
+/// finder's `.DS_Store` or an editor's backup, keeps no folder from proving the list data.lock
+/// pins: offline, `fetchloom path` answers and a sync takes the files as placed.
+#[test]
+fn a_copied_zip_folder_beside_what_a_system_or_tool_leaves_is_checked_in_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 1)?;
+    let folder = two.join("data").join("dataset");
+    fs::write(folder.join(".DS_Store"), b"\0\0\0\x01Bud1")?;
+    fs::write(folder.join("README.md~"), b"an editor's backup\n")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let path = run(&["--offline", "path", "dataset"])?;
+    assert_eq!(path.status.code(), Some(0), "{}", text(&path.stderr)?);
+    assert_eq!(text(&path.stdout)?, format!("{}\n", folder.display()));
+    let synced = run(&["--json", "--offline", "sync"])?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
+    assert_eq!(
+        fs::read(folder.join("README.md~"))?,
+        b"an editor's backup\n"
+    );
+    Ok(())
+}

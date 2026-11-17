@@ -326,7 +326,8 @@ impl Layout {
 
     /// each file of `files`, paths in the project as the disk lists them, below the folder the
     /// archive's files land below and pinned by none of the dataset's whole files, with its path
-    /// there in NFC, as an archive's members are kept, in order.
+    /// there in NFC, as an archive's members are kept, in order. a file a system writes by itself,
+    /// which unpacking never keeps, is left out, unless it is the file one decompresses to.
     fn below<'f>(&self, files: impl Iterator<Item = &'f str>) -> Vec<(&'f str, String)> {
         let prefix = format!("{}/", self.base);
         let mut below: Vec<(&str, String)> = files
@@ -338,6 +339,10 @@ impl Layout {
                     .any(|other| placed.starts_with(other.as_str()))
             })
             .filter_map(|placed| Some((placed, name::composed(placed.strip_prefix(&prefix)?))))
+            .filter(|(_, inside)| {
+                self.decompressed.as_ref() == Some(inside)
+                    || !inside.split('/').any(name::made_by_system)
+            })
             .collect();
         below.sort_unstable();
         below
@@ -345,9 +350,35 @@ impl Layout {
 }
 
 /// the ways `below`, the files below an archive's folder with their paths there, may be the
-/// archive's own as placing put them, the likeliest first. a dataset that is one archive loses the
-/// top folder its files share, which only the archive's or the dataset's name can give back.
+/// archive's own as placing put them, the likeliest first: without what a person's tools leave
+/// beside them, then with it, as an archive may hold such files too.
 fn guesses(layout: &Layout, below: &[(&str, &str)]) -> Vec<Guess> {
+    if let Some(to) = &layout.decompressed {
+        return below
+            .iter()
+            .find(|(_, inside)| inside == to)
+            .map(|(placed, _)| vec![((*placed).to_owned(), to.clone())])
+            .into_iter()
+            .collect();
+    }
+    let untooled: Vec<(&str, &str)> = below
+        .iter()
+        .copied()
+        .filter(|(_, inside)| !inside.split('/').any(name::made_by_tool))
+        .collect();
+    let mut guesses = placings(layout, &untooled);
+    if untooled.len() != below.len() {
+        guesses.extend(placings(layout, below));
+    }
+    // a folder with no files proves nothing, though an archive of none hashes to the empty tree
+    guesses.retain(|guess| !guess.is_empty());
+    guesses
+}
+
+/// the ways `below` may be an archive's files as placing put them. a dataset that is one archive
+/// loses the top folder its files share, which only the archive's or the dataset's name can give
+/// back.
+fn placings(layout: &Layout, below: &[(&str, &str)]) -> Vec<Guess> {
     let as_placed = |files: &[(&str, &str)], top: Option<&str>| -> Guess {
         files
             .iter()
@@ -359,12 +390,6 @@ fn guesses(layout: &Layout, below: &[(&str, &str)]) -> Vec<Guess> {
             .collect()
     };
     let mut guesses = Vec::new();
-    if let Some(to) = &layout.decompressed {
-        if let Some((placed, _)) = below.iter().find(|(_, inside)| inside == to) {
-            guesses.push(vec![((*placed).to_owned(), to.clone())]);
-        }
-        return guesses;
-    }
     // a .gitignore in the dataset's folder is a person's, as the survey leaves out the one
     // fetchloom keeps it out of git with, unless the archive holds it
     let ignore_file = format!("{}/.gitignore", layout.folder);
@@ -412,8 +437,6 @@ fn guesses(layout: &Layout, below: &[(&str, &str)]) -> Vec<Guess> {
             guesses.push(vec![((*placed).to_owned(), (*rest).to_owned())]);
         }
     }
-    // a folder with no files proves nothing, though an archive of none hashes to the empty tree
-    guesses.retain(|guess| !guess.is_empty());
     guesses
 }
 
@@ -492,6 +515,43 @@ mod tests {
         );
     }
 
+    /// unpacking never keeps a file a system writes by itself, so none is guessed; what a tool
+    /// leaves may be an archive's own or a person's, so its files are guessed without it first.
+    #[test]
+    fn guesses_leave_out_what_a_system_writes_and_try_without_what_a_tool_leaves() {
+        let placed = [
+            "data/scans/.DS_Store",
+            "data/scans/.ipynb_checkpoints/a-checkpoint.txt",
+            "data/scans/__MACOSX/a.txt",
+            "data/scans/a.txt",
+            "data/scans/a.txt~",
+            "data/scans/b/._c.txt",
+            "data/scans/b/c.txt",
+            "data/scans/notes.txt",
+        ];
+        assert_eq!(
+            guessed(&layout("scans", "scans.zip", true), &placed),
+            [
+                vec!["a.txt", "b/c.txt", "notes.txt"],
+                vec!["scans/a.txt", "scans/b/c.txt", "scans/notes.txt"],
+                vec![
+                    ".ipynb_checkpoints/a-checkpoint.txt",
+                    "a.txt",
+                    "a.txt~",
+                    "b/c.txt",
+                    "notes.txt"
+                ],
+                vec![
+                    "scans/.ipynb_checkpoints/a-checkpoint.txt",
+                    "scans/a.txt",
+                    "scans/a.txt~",
+                    "scans/b/c.txt",
+                    "scans/notes.txt"
+                ],
+            ]
+        );
+    }
+
     #[test]
     fn a_dataset_in_the_data_folder_itself_leaves_out_the_other_datasets_files() {
         let mut layout = layout("all", "all.zip", true);
@@ -527,6 +587,11 @@ mod tests {
         assert_eq!(
             guessed(&layout, &["data/reads/notes.txt"]),
             Vec::<Vec<String>>::new()
+        );
+        layout.decompressed = Some("Thumbs.db".to_owned());
+        assert_eq!(
+            guessed(&layout, &["data/reads/Thumbs.db"]),
+            [vec!["Thumbs.db"]]
         );
     }
 
