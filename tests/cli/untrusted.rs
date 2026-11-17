@@ -249,7 +249,8 @@ fn clone_with_shell_words(sandbox: &Sandbox, routes: &Routes) -> Result<Option<S
 
 /// every command, run in a cloned project that plants a bait of every tool where a careless
 /// lookup would find it, with a repository config that names baits for git to run, a link,
-/// a destination, a project folder and a cache folder that hold shell words. none of them runs.
+/// a destination, a project folder and a cache folder that hold shell words. none of them runs,
+/// the sync that moves a dataset's .gitignore into a folder named with shell words included.
 #[test]
 fn no_command_runs_a_program_the_project_holds() -> Result {
     let sandbox = Sandbox::new()?;
@@ -279,6 +280,10 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
         fs::read(work.join("data/raw/$(reboot);&'x/a;b&c'd!e.csv"))?,
         b"words\n"
     );
+    for folder in ["data/iris", "data/raw/$(reboot);&'x"] {
+        assert_eq!(fs::read(work.join(folder).join(".gitignore"))?, b"*\n");
+    }
+    assert!(!work.join("data/weird").exists());
     planted.ok(
         &sandbox,
         &["add", &format!("{}/late.zip", routes.url), "--as", "late"],
@@ -292,6 +297,8 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
         &["lock", "--check"],
         &["status"],
         &["--json", "status"],
+        &["sync"],
+        &["sync", "--dry-run"],
         &["audit"],
         &["diff"],
         &["diff", "HEAD~1", "HEAD"],
