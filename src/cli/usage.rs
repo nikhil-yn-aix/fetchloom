@@ -595,6 +595,15 @@ fn bare(arg: &str) -> &str {
 
 fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
     let long = argument.strip_prefix("--")?.split('=').next()?;
+    // `add --check` reads as a check of a pin, which for an output is a status check, and a dry
+    // run of the same add shows what pinning it again changes
+    if parent == Some("add") && long == "check" {
+        return Some(format!(
+            "add has no --check: `{}` checks every pinned file, each output's folder whole, and `{}` shows what pinning an output again would change",
+            crate::suggested::command("status --verify --check"),
+            crate::suggested::command("add <folder> --as <name> --dry-run")
+        ));
+    }
     let command = args::Args::command();
     let nested = command.get_subcommands().flat_map(|outer| {
         std::iter::once((outer, outer.get_name().to_owned())).chain(
@@ -792,6 +801,18 @@ mod tests {
                 "--select",
                 vec!["fetchloom", "status", "--select", "*.csv"],
                 "status has no --select; it is an option of add and get, as in fetchloom add <link> --select \"*.csv\"",
+            ),
+            (
+                "--check",
+                vec![
+                    "fetchloom",
+                    "add",
+                    "data/processed",
+                    "--as",
+                    "processed",
+                    "--check",
+                ],
+                "add has no --check: `fetchloom status --verify --check` checks every pinned file, each output's folder whole, and `fetchloom add <folder> --as <name> --dry-run` shows what pinning an output again would change",
             ),
         ] {
             let error = problem(&arguments)?;
