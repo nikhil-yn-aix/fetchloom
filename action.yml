@@ -21,6 +21,10 @@ inputs:
     description: mirrors to try before each source, as FETCHLOOM_MIRRORS takes them
     required: false
     default: ''
+  cache:
+    description: whether github's cache keeps fetchloom's cache between runs, where anyone who can open a pull request can read it. auto keeps it in a private repository, or when every dataset's source says anyone may read it, no key brought its files and no other project uses the cache; always keeps it whatever the data; never keeps none
+    required: false
+    default: auto
 
 outputs:
   cache-hit:
@@ -105,6 +109,8 @@ runs:
         else
           digest() { shasum -a 256 | cut -c 1-64; }
         fi
+        # each project folder keeps a cache of its own, so one never restores another's
+        folder=$(printf '%s' "$PROJECT" | digest | cut -c 1-16)
         # data.lock.d holds the file lists of large datasets, which data.lock names
         lock=$(cd "$PROJECT" && {
           cat data.lock 2> /dev/null || true
@@ -129,12 +135,55 @@ runs:
         esac
         {
           echo "cache=$cache"
-          echo "prefix=fetchloom-$RUNNER_OS-$RUNNER_ARCH-"
-          echo "key=fetchloom-$RUNNER_OS-$RUNNER_ARCH-$lock"
+          echo "prefix=fetchloom-$RUNNER_OS-$RUNNER_ARCH-$folder-"
+          echo "key=fetchloom-$RUNNER_OS-$RUNNER_ARCH-$folder-$lock"
         } >> "$GITHUB_OUTPUT"
+    # every pull request's run, a fork's too, can read what github's cache keeps for the default
+    # branch, so auto keeps the cache only where that gives nothing away: in a private repository,
+    # or when push would hand every dataset on without asking, its source saying anyone may read
+    # it and no key of this runner going with its files. what it does not save, it never restores
+    - name: decide whether github's cache keeps the cache
+      id: keep
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+        PROJECT: ${{ inputs.project }}
+        VISIBILITY: ${{ github.event.repository.visibility }}
+      run: |
+        set -eu
+        case $CACHE in
+          auto | always | never) ;;
+          *)
+            echo "::error::the cache input takes auto, always or never, not $CACHE"
+            exit 1
+            ;;
+        esac
+        keep=true
+        if [ "$CACHE" = never ]; then
+          keep=false
+        elif [ "$CACHE" = auto ] && [ "$VISIBILITY" != private ]; then
+          # a dry run writes nothing, not even the folder it names, which must be in one that is there
+          mkdir -p "$RUNNER_TEMP/fetchloom-action"
+          if said=$(fetchloom -C="$PROJECT" --offline --json push --to "$RUNNER_TEMP/fetchloom-action/unwritten" --dry-run); then
+            case $said in
+              *'"asks":[]'*) ;;
+              *)
+                keep=false
+                names=$(printf '%s' "$said" | sed -n 's/.*"asks":\[\([^]]*\)\].*/\1/p' |
+                  sed 's/{"dataset":"\([^"]*\)","access":"[^"]*"}/\1/g; s/,/, /g' | tr -cd 'a-z0-9_, -')
+                echo "::notice title=fetchloom cache::the cache is not kept: anyone who opens a pull request on this public repository could read it, and these datasets may be private, since their source does not say anyone may read them or a key of this runner goes with their files: $names. set the action's cache input to always to keep it anyway, or to never to keep none without this note"
+                ;;
+            esac
+          else
+            keep=false
+            echo "::notice title=fetchloom cache::the cache is not kept: fetchloom could not say who may read this project's data, so nothing is shared with this public repository's pull requests. set the action's cache input to always to keep it anyway, or to never to keep none without this note"
+          fi
+        fi
+        echo "keep=$keep" >> "$GITHUB_OUTPUT"
     # after a change to data.lock, the last cache comes back, so only the files that changed download
     - name: restore the cache
       id: restore
+      if: steps.keep.outputs.keep == 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.key.outputs.cache }}
@@ -153,13 +202,46 @@ runs:
         fetchloom -C="$PROJECT" sync --locked --yes
     # gc drops what the new data.lock no longer needs, so the saved cache does not grow with every change
     - name: keep only what this data.lock needs
-      if: steps.restore.outputs.cache-hit != 'true'
+      if: steps.keep.outputs.keep == 'true' && steps.restore.outputs.cache-hit != 'true'
       shell: bash
       env:
         PROJECT: ${{ inputs.project }}
       run: fetchloom -C="$PROJECT" cache gc --now --yes
+    # the sync may have brought files with a key, and the cache folder may serve other projects of
+    # this runner, whose files auto never hands on
+    - name: decide whether to save the cache
+      id: share
+      if: steps.keep.outputs.keep == 'true' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+        PROJECT: ${{ inputs.project }}
+        VISIBILITY: ${{ github.event.repository.visibility }}
+      run: |
+        set -eu
+        save=true
+        if [ "$CACHE" = auto ]; then
+          if ! report=$(fetchloom -C="$PROJECT" --offline --json cache) ||
+            ! printf '%s' "$report" | grep -Eq '"projects":\[("([^"\\]|\\.)*")?\]'; then
+            save=false
+            echo "::notice title=fetchloom cache::the cache is not saved: other projects on this runner use it too, and their files are not this project's to share. give each project a job of its own, or set the action's cache input to always to save it anyway, or to never to keep none without this note"
+          elif [ "$VISIBILITY" != private ]; then
+            mkdir -p "$RUNNER_TEMP/fetchloom-action"
+            said=$(fetchloom -C="$PROJECT" --offline --json push --to "$RUNNER_TEMP/fetchloom-action/unwritten" --dry-run) || said=
+            case $said in
+              *'"asks":[]'*) ;;
+              *)
+                save=false
+                names=$(printf '%s' "$said" | sed -n 's/.*"asks":\[\([^]]*\)\].*/\1/p' |
+                  sed 's/{"dataset":"\([^"]*\)","access":"[^"]*"}/\1/g; s/,/, /g' | tr -cd 'a-z0-9_, -')
+                echo "::notice title=fetchloom cache::the cache is not saved: anyone who opens a pull request on this public repository could read it, and these datasets may be private, since their source does not say anyone may read them or a key of this runner went with their files: $names. set the action's cache input to always to save it anyway, or to never to keep none without this note"
+                ;;
+            esac
+          fi
+        fi
+        echo "save=$save" >> "$GITHUB_OUTPUT"
     - name: save the cache
-      if: steps.restore.outputs.cache-hit != 'true'
+      if: steps.share.outputs.save == 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.key.outputs.cache }}
