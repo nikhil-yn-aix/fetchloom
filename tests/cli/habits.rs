@@ -7,7 +7,9 @@ use std::fs;
 
 use crate::boundary::{iris_server, synced, with_iris};
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Routes, Sandbox, delete, delete_folder, file, json, text, zip_of};
+use crate::support::{
+    Result, Routes, Sandbox, add_ok, delete, delete_folder, file, json, text, zip_of,
+};
 
 /// a fix made in place, as `sed -i` makes it, writing a new file under the old name: the sync
 /// after it says once that the edit stays, naming first the ways that keep it, and last the
@@ -97,10 +99,7 @@ fn a_compressed_file_unpacked_by_hand_points_to_decompress() -> Result {
         "/files/visits.csv.gz".to_owned(),
         file(&packed, "\"g1\""),
     )])?;
-    let link = format!("{}/files/visits.csv.gz", server.url);
-    sandbox.allow(&link);
-    let added = sandbox.run(&["add", &link])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    add_ok(&sandbox, &format!("{}/files/visits.csv.gz", server.url))?;
     let folder = sandbox.work().join("data/visits");
     delete(&folder.join("visits.csv.gz"))?;
     fs::write(folder.join("visits.csv"), csv)?;
@@ -161,10 +160,7 @@ fn renamed_files_are_put_back_without_naming_data_dir() -> Result {
     let sandbox = Sandbox::new()?;
     let zip = zip_of(&[("wave1.csv", &b"a\n1\n"[..]), ("wave2.csv", b"a\n2\n")])?;
     let server = Routes::start(vec![("/files/survey.zip".to_owned(), file(&zip, "\"s1\""))])?;
-    let link = format!("{}/files/survey.zip", server.url);
-    sandbox.allow(&link);
-    let added = sandbox.run(&["add", &link])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    add_ok(&sandbox, &format!("{}/files/survey.zip", server.url))?;
     let folder = sandbox.work().join("data/survey");
     for (from, to) in [
         ("wave1.csv", "2026_survey_w1.csv"),
