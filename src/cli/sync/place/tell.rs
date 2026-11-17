@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use super::put::Tally;
 use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope};
 use crate::output::{Output, Warning};
-use crate::place::{Because, Method, Unlinked};
+use crate::place::Method;
 use crate::plan;
 use crate::project::manifest::Manifest;
 use crate::units;
@@ -85,7 +85,7 @@ pub(super) fn tell(
     tell_removed(output, manifest, ["Retired", "Removed"], placement);
     warn_adopted_removed(output, &placement.removed_adopted, "removed");
     if let Some((why, _)) = placement.copied {
-        let because = copy_warning(why, &manifest.data_dir);
+        let because = why.copied_because(&manifest.data_dir, "files were");
         match &because.help {
             Some(help) => output.warn_with(Warning::PlaceCopied, &because.said, help),
             None => output.warn(Warning::PlaceCopied, &because.said),
@@ -469,17 +469,6 @@ fn warn_adopted_removed(output: &Output, paths: &[String], verb: &str) {
             "{verb} {} files that were already there when fetchloom adopted them, such as {first}",
             paths.len()
         )),
-    }
-}
-
-/// why a sync copied files it would rather have linked. a data folder stays inside its project,
-/// so when the cache is on another drive, it is the project that moves.
-pub(super) fn copy_warning(why: Unlinked, data_dir: &str) -> Because {
-    match why {
-        Unlinked::OtherDrive => why.copied_because("the project", "files were"),
-        Unlinked::Synced(_) | Unlinked::NoLinks | Unlinked::ReadOnlyCache => {
-            why.copied_because(data_dir, "files were")
-        }
     }
 }
 

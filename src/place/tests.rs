@@ -61,22 +61,15 @@ fn copy_advice_on_drives_without_links_names_the_place() {
     );
 }
 
-/// on a cluster the cache stays on scratch while a project may stay in home, so the advice
-/// names first the cache on the project's drive, then the other way to one drive, and the page
-/// that helps choose.
+/// the advice moves the cache to the files' drive and never the files: a project's code stays
+/// where it is backed up, and its data folder may be a link to scratch.
 #[test]
-fn a_cache_on_another_drive_explains_the_copy_and_both_ways_to_links() {
-    assert_eq!(
-        Unlinked::OtherDrive
-            .copied_because("the project", "files were")
-            .to_string(),
-        "the cache is on another drive than the project, so files were copied. to link files instead, set FETCHLOOM_CACHE to a folder on the drive of the project, or move the project to the cache's drive. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
-    );
+fn a_cache_on_another_drive_explains_the_copy_and_the_way_to_links() {
     assert_eq!(
         Unlinked::OtherDrive
             .copied_because("iris", "the file was")
             .to_string(),
-        "the cache is on another drive than iris, so the file was copied. to link files instead, set FETCHLOOM_CACHE to a folder on the drive of iris, or move iris to the cache's drive. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
+        "the cache is on another drive than iris, so the file was copied. to link files instead, set FETCHLOOM_CACHE to a folder on the drive of iris. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
     );
 }
 

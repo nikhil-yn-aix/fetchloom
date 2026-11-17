@@ -3545,22 +3545,6 @@ mod tests {
         }
     }
 
-    /// a data folder cannot leave its project, so it is the project that moves.
-    #[test]
-    fn a_copy_warning_names_the_project_when_the_cache_is_on_another_drive() {
-        assert!(
-            tell::copy_warning(crate::place::Unlinked::OtherDrive, "data")
-                .to_string()
-                .starts_with(
-                    "the cache is on another drive than the project, so files were copied. "
-                )
-        );
-        assert_eq!(
-            tell::copy_warning(crate::place::Unlinked::NoLinks, "data").to_string(),
-            "the drive holding data cannot link files, so files were copied"
-        );
-    }
-
     #[test]
     fn a_changed_copy_skips_names_locked_files_take() {
         let taken = HashSet::from(["data/a.csv.changed", "data/a.csv.changed.2"]);

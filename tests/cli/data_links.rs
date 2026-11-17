@@ -584,3 +584,44 @@ fn a_followed_link_git_sees_is_told_once() -> Result {
     }
     Ok(())
 }
+
+/// a data folder linked onto a disk apart from the cache, as clusters keep the code and the cache
+/// in home and the data on scratch, gets copies. the warning names the cache and the data folder,
+/// and its help moves the cache onto the data folder's disk, never the project, whose code
+/// stays where it is backed up.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_data_folder_on_another_disk_than_the_cache_moves_the_cache() -> Result {
+    use std::os::unix::fs::MetadataExt;
+    let sandbox = Sandbox::new()?;
+    let shared = Path::new("/dev/shm");
+    let apart = fs::metadata(shared)
+        .ok()
+        .zip(fs::metadata(sandbox.work()).ok())
+        .is_some_and(|(shared, work)| shared.dev() != work.dev());
+    if !apart {
+        return crate::support::skipped("two-disks", "/dev/shm is on the sandbox's own disk");
+    }
+    let scratch = tempfile::tempdir_in(shared)?;
+    let target = scratch.path().join("project-data");
+    fs::create_dir(&target)?;
+    link_folder(&target, &sandbox.work().join("data"))?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.path().display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let added = sandbox.run(&["add", &format!("{}/iris.csv", routes.url)])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: the cache is on another drive than data, so files were copied\n  help: to link files instead, set FETCHLOOM_CACHE to a folder on the drive of data. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("move the project"), "{stderr}");
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
+    Ok(())
+}
