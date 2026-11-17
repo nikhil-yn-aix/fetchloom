@@ -87,6 +87,44 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
     ))
 }
 
+/// the error for `outputs`, each a name with its folder as a command run here names it, whose
+/// files neither this machine's cache nor a mirror it reaches holds, as a clone's: git carries
+/// data.lock, never the bytes, which only the machine that made them has.
+pub(crate) fn made_elsewhere(outputs: &[(&str, &str)]) -> Error {
+    let (message, add) = match outputs {
+        [(name, at)] => (
+            format!(
+                "{name} was made on another machine, and its files are in no mirror this machine reaches"
+            ),
+            format!(
+                "`{}`",
+                crate::suggested::command(&format!(
+                    "add {} --as {name}",
+                    crate::suggested::shell_word(at)
+                ))
+            ),
+        ),
+        many => {
+            let names: Vec<&str> = many.iter().map(|(name, _)| *name).collect();
+            (
+                format!(
+                    "{} were made on another machine, and their files are in no mirror this machine reaches",
+                    crate::units::listed(&names, "and")
+                ),
+                format!(
+                    "`{}` for each",
+                    crate::suggested::command("add <folder> --as <name>")
+                ),
+            )
+        }
+    };
+    Error::new(Kind::ReferenceUnresolved, message).help(format!(
+        "push them from the machine that made them with `{}` and add that mirror here with `{}`, or run your pipeline here, then {add}",
+        crate::suggested::command("push --to <mirror>"),
+        crate::suggested::command("settings set mirrors <mirror>")
+    ))
+}
+
 /// [`imported_elsewhere`] for several imports, `names`, whose files this machine lacks, in one
 /// error, so a teammate supplies them all in one round rather than learn of one a run.
 pub(crate) fn several_imported_elsewhere(names: &[&str], mirrored: bool) -> Error {

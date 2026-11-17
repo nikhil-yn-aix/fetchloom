@@ -209,7 +209,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
                 super::project::command("sync")
             ));
         }
-        tell_imported_elsewhere(output, &status.imported_elsewhere);
+        tell_imported_elsewhere(output, (&project, &manifest), &status.imported_elsewhere);
         tell_repairs(output, &status);
     }
     if status.unfinished > 0 {
@@ -287,9 +287,46 @@ fn tell_imports(output: &Output, imports: &BTreeMap<String, bool>) {
     }
 }
 
-/// how to bring the missing files of each import of `lacking`, which no sync fetches.
-fn tell_imported_elsewhere(output: &Output, lacking: &BTreeMap<String, Vec<String>>) {
-    let names: Vec<&str> = lacking.keys().map(String::as_str).collect();
+/// how to bring the missing files of each import of `lacking`, which no sync fetches. an output,
+/// made on another machine, comes from a mirror, or from running its pipeline here.
+fn tell_imported_elsewhere(
+    output: &Output,
+    (project, manifest): (&Project, &Manifest),
+    lacking: &BTreeMap<String, Vec<String>>,
+) {
+    let (outputs, names): (Vec<&str>, Vec<&str>) =
+        lacking.keys().map(String::as_str).partition(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(manifest::Entry::is_output)
+        });
+    let made = match outputs.as_slice() {
+        [] => None,
+        [one] => {
+            let here = std::env::current_dir().unwrap_or_else(|_| project.root.clone());
+            let at = format!(
+                "{}{}",
+                super::up_to(&project.root, &here),
+                plan::folder(manifest, one)
+            );
+            Some(format!(
+                "{one} was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `{}`",
+                super::project::command(&format!(
+                    "add {} --as {one}",
+                    crate::suggested::shell_word(&at)
+                ))
+            ))
+        }
+        many => Some(format!(
+            "{} were made on another machine, so only a mirror that holds their files brings them here, or your pipeline run here, then `{}` for each",
+            units::listed(many, "and"),
+            super::project::command("add <folder> --as <name>")
+        )),
+    };
+    if let Some(made) = made {
+        output.hint(&made);
+    }
     let text = match names.as_slice() {
         [] => return,
         [one] => format!(

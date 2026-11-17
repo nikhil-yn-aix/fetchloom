@@ -131,6 +131,9 @@ pub(super) struct Loop<'a> {
     /// the files of pins by what their sources state that relocking offline could not fill, which
     /// the run's refusal names with every other file it lacks.
     unfilled: Mutex<Vec<fill::Unfilled>>,
+    /// the outputs the run's refusal names as made on another machine, which its line of the
+    /// datasets that wait leaves out.
+    made_elsewhere: Mutex<BTreeSet<String>>,
 }
 
 /// downloads a run told before its first batch: the hashes placing downloads later, and what
@@ -175,6 +178,7 @@ impl<'a> Loop<'a> {
             verifies: false,
             ahead: Mutex::default(),
             unfilled: Mutex::default(),
+            made_elsewhere: Mutex::default(),
         }
     }
 
@@ -274,16 +278,33 @@ impl<'a> Loop<'a> {
             waiting,
             placement,
         } = partial;
-        let error = error
-            .detail(format!(
-                "placed {}, whose files are all on this machine",
-                placed.join(", ")
-            ))
-            .detail(format!(
+        let error = error.detail(format!(
+            "placed {}, whose files are all on this machine",
+            placed.join(", ")
+        ));
+        let explained = self
+            .made_elsewhere
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let unexplained: Vec<&str> = waiting
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !explained.contains(*name))
+            .collect();
+        drop(explained);
+        let error = if unexplained.is_empty() {
+            error
+        } else {
+            error.detail(format!(
                 "{} {} for files this run could not get",
-                waiting.join(", "),
-                if waiting.len() == 1 { "waits" } else { "wait" }
-            ));
+                unexplained.join(", "),
+                if unexplained.len() == 1 {
+                    "waits"
+                } else {
+                    "wait"
+                }
+            ))
+        };
         error.with_result(serde_json::json!({
             "project": self.project.root,
             "selected": self.scope,
@@ -683,6 +704,10 @@ impl<'a> Loop<'a> {
             .chain(imported)
             .find(|(_, file)| file.url.is_empty())
         {
+            if manifest.datasets.get(dataset).is_some_and(Entry::is_output) {
+                let outputs = BTreeSet::from([dataset.as_str()]);
+                return Err(self.made_elsewhere(manifest, &outputs, &BTreeSet::new()));
+            }
             let folder = plan::folder(manifest, dataset);
             let mirrored = !self.context.mirrors.mirrors.list.is_empty();
             return Err(
@@ -1825,8 +1850,6 @@ impl<'a> Loop<'a> {
             .map(|((dataset, file), _)| (dataset.as_str(), *file))
             .collect();
         self.refuse_unreachable(manifest, &lacking)?;
-        // an import no link fetches waits with its own error until the other files are in
-        let unimported = self.unimported(manifest, &lacking).map(Box::new);
         let (fetchable, held): (Vec<(String, &LockedFile)>, Vec<bool>) = files
             .iter()
             .zip(available)
@@ -1885,7 +1908,8 @@ impl<'a> Loop<'a> {
             Some(told) => self.tell_downloaded(told.fetched.iter().chain(&fetched), told.started),
             None => self.tell_downloaded(&fetched, started),
         }
-        unimported.map_or(Ok(fetched), |error| Err(*error))
+        // an import no link fetches waits with its own error until the other files are in
+        self.unimported(manifest, &lacking).map_or(Ok(fetched), Err)
     }
 
     fn tell_downloaded<'f>(
@@ -2014,13 +2038,22 @@ impl<'a> Loop<'a> {
     }
 
     /// the error for the imports among `lacking`, whose files no link fetches, naming each one's
-    /// files, or none when it holds no import.
+    /// files, or none when it holds no import. outputs among them are named first, each once, as
+    /// made on another machine.
     fn unimported(&self, manifest: &Manifest, lacking: &[(&str, &LockedFile)]) -> Option<Error> {
-        let imports: BTreeSet<&str> = lacking
+        let (outputs, imports): (BTreeSet<&str>, BTreeSet<&str>) = lacking
             .iter()
             .filter(|(_, file)| file.url.is_empty())
             .map(|(dataset, _)| *dataset)
-            .collect();
+            .partition(|dataset| {
+                manifest
+                    .datasets
+                    .get(*dataset)
+                    .is_some_and(Entry::is_output)
+            });
+        if !outputs.is_empty() {
+            return Some(self.made_elsewhere(manifest, &outputs, &imports));
+        }
         let named: Vec<(String, Option<Sha256>)> = lacking
             .iter()
             .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
@@ -2052,6 +2085,38 @@ impl<'a> Loop<'a> {
                 .into_iter()
                 .fold(error, Error::detail),
         )
+    }
+
+    /// the error for `outputs` whose files this machine lacks, which [`Loop::partly`] then names
+    /// no more, with the message of each of `imports` lacking files too.
+    fn made_elsewhere(
+        &self,
+        manifest: &Manifest,
+        outputs: &BTreeSet<&str>,
+        imports: &BTreeSet<&str>,
+    ) -> Error {
+        let root = &self.project.root;
+        let here = std::env::current_dir().unwrap_or_else(|_| root.clone());
+        let up = super::up_to(root, &here);
+        let shown: Vec<(&str, String)> = outputs
+            .iter()
+            .map(|name| (*name, format!("{up}{}", plan::folder(manifest, name))))
+            .collect();
+        let named: Vec<(&str, &str)> = shown
+            .iter()
+            .map(|(name, at)| (*name, at.as_str()))
+            .collect();
+        self.made_elsewhere
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(outputs.iter().map(|name| (*name).to_owned()));
+        let mirrored = !self.context.mirrors.mirrors.list.is_empty();
+        imports
+            .iter()
+            .fold(local::made_elsewhere(&named), |error, import| {
+                let folder = plan::folder(manifest, import);
+                error.detail(local::imported_elsewhere(import, &folder, mirrored).message)
+            })
     }
 
     /// the error for files an offline run lacks, `unlearned` first: those pinned by what their
@@ -2128,13 +2193,20 @@ impl<'a> Loop<'a> {
     }
 
     /// the error for the files of `import` an offline run lacks: no link fetches an import, so its
-    /// help offers only the folder it came from or a folder mirror.
+    /// help offers only the folder it came from or a folder mirror, or, for an output, the machine
+    /// that made it.
     fn offline_imported(
         &self,
         manifest: &Manifest,
         import: &str,
         lacking: &[(&str, &LockedFile)],
     ) -> Error {
+        if manifest.datasets.get(import).is_some_and(Entry::is_output) {
+            let outputs = BTreeSet::from([import]);
+            let mut error = self.made_elsewhere(manifest, &outputs, &BTreeSet::new());
+            error.kind = Kind::OfflineMissing;
+            return error;
+        }
         let folder = plan::folder(manifest, import);
         let mirrored = !self.context.mirrors.mirrors.list.is_empty();
         let message = local::imported_elsewhere(import, &folder, mirrored).message;
