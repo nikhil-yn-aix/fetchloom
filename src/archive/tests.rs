@@ -1030,7 +1030,13 @@ fn a_tar_cut_short_is_told_in_plain_words() {
     }
     let disk = std::io::Error::from_raw_os_error(5);
     assert_eq!(
-        super::damaged(None, &disk, Limits::default().memory).kind,
+        super::damaged(
+            super::Unpacking::Archive,
+            None,
+            &disk,
+            Limits::default().memory
+        )
+        .kind,
         Kind::LocalIo
     );
 }

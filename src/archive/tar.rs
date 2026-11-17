@@ -12,7 +12,7 @@ use liblzma::stream::{CONCATENATED, Stream};
 use super::guard::{Guard, Meter};
 use super::input::Input;
 use super::names::Named;
-use super::{Format, Keep, Unpacking, damaged_for, refused, refused_member};
+use super::{Format, Keep, Unpacking, damaged, refused, refused_member};
 use crate::error::Error;
 use crate::units;
 
@@ -72,17 +72,9 @@ pub(super) fn needs_too_large_window(err: &(dyn std::error::Error + 'static)) ->
         .is_some_and(|inner| inner.to_string() == window_too_large)
 }
 
-/// the error for a stream that would not decompress: too large a zstd window, else damage.
+/// the error for a stream of what `unpacking` says unpacks that would not decompress: too large a
+/// zstd window, else damage.
 pub(super) fn unreadable_stream(
-    at: Option<&str>,
-    err: &(dyn std::error::Error + 'static),
-    memory: u64,
-) -> Error {
-    unreadable_stream_for(Unpacking::Archive, at, err, memory)
-}
-
-/// [`unreadable_stream`], for what `unpacking` says unpacks.
-pub(super) fn unreadable_stream_for(
     unpacking: Unpacking,
     at: Option<&str>,
     err: &(dyn std::error::Error + 'static),
@@ -91,7 +83,7 @@ pub(super) fn unreadable_stream_for(
     if needs_too_large_window(err) {
         let window = 1 << zstd_window_log(memory);
         let noun = unpacking.noun();
-        return super::past_for(
+        return super::past(
             unpacking,
             format!(
                 "the {noun}'s zstd stream needs a window larger than {} to {}",
@@ -102,7 +94,7 @@ pub(super) fn unreadable_stream_for(
             "memory",
         );
     }
-    damaged_for(unpacking, at, err, memory)
+    damaged(unpacking, at, err, memory)
 }
 
 /// `input`'s bytes as `meter` counts them while a decompressor reads them.
@@ -125,7 +117,7 @@ pub(super) fn unpack(
     };
     let memory = guard.limits().memory;
     let decoded = decompressed(format, counted, memory)
-        .map_err(|err| unreadable_stream(None, &err, memory))?;
+        .map_err(|err| unreadable_stream(Unpacking::Archive, None, &err, memory))?;
     let headers = Headers::default();
     let mut tar = Archive::new(Capped {
         inner: decoded,
@@ -133,12 +125,12 @@ pub(super) fn unpack(
     });
     let entries = tar
         .entries()
-        .map_err(|err| unreadable_stream(None, &err, memory))?;
+        .map_err(|err| unreadable_stream(Unpacking::Archive, None, &err, memory))?;
     for entry in entries {
         let mut entry = entry.map_err(|err| {
             headers
                 .refusal()
-                .unwrap_or_else(|| unreadable_stream(None, &err, memory))
+                .unwrap_or_else(|| unreadable_stream(Unpacking::Archive, None, &err, memory))
         })?;
         guard.skip(headers.read.replace(0))?;
         guard.entry()?;
@@ -190,7 +182,7 @@ pub(super) fn unpack(
     if !matches!(format, Format::Tar) {
         let mut rest = tar.into_inner().inner.take(HEADERS_CAP + 1);
         let trailing = io::copy(&mut rest, &mut io::sink())
-            .map_err(|err| unreadable_stream(None, &err, memory))?;
+            .map_err(|err| unreadable_stream(Unpacking::Archive, None, &err, memory))?;
         if trailing > HEADERS_CAP {
             return Err(refused(format!(
                 "the archive holds more than {} after its end",

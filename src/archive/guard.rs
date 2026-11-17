@@ -6,8 +6,8 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 use super::names::{Named, Names};
-use super::tar::unreadable_stream_for;
-use super::{Limits, Skipped, Unpacking, not_written, past_for};
+use super::tar::unreadable_stream;
+use super::{Limits, Skipped, Unpacking, not_written, past};
 use crate::cache::Share;
 use crate::error::{Error, Kind};
 use crate::space::Filesystem;
@@ -159,7 +159,7 @@ impl<'a> Guard<'a> {
 
     pub(super) fn check_entries(&self, entries: u64) -> Result<(), Error> {
         if entries > self.limits.members {
-            return Err(past_for(
+            return Err(past(
                 self.unpacking,
                 format!(
                     "the archive holds more than {}, the most fetchloom unpacks from one archive",
@@ -255,7 +255,7 @@ impl<'a> Guard<'a> {
 
     /// the error for the stream that stopped decompressing at `path`.
     fn unreadable(&self, path: &str, err: &io::Error) -> Error {
-        unreadable_stream_for(self.unpacking, Some(path), err, self.limits.memory)
+        unreadable_stream(self.unpacking, Some(path), err, self.limits.memory)
     }
 
     pub(super) fn check_stopped(&self) -> Result<(), Error> {
@@ -279,7 +279,7 @@ impl<'a> Guard<'a> {
                     "\"{path}\" decompresses to more than {most}, the most fetchloom unpacks from one file"
                 ),
             };
-            return Err(past_for(
+            return Err(past(
                 self.unpacking,
                 message,
                 "FETCHLOOM_ARCHIVE_SIZE",
@@ -346,7 +346,7 @@ impl<'a> Guard<'a> {
                     )
                 }
             };
-            return Err(past_for(
+            return Err(past(
                 self.unpacking,
                 message,
                 "FETCHLOOM_ARCHIVE_RATIO",

@@ -125,9 +125,8 @@ fn decompress(
             Named::Folder => return Err(refused(format!("\"{name}\" names a folder"))),
         };
         let counted = tar::counted(input, guard.meter())?;
-        let mut decoded = tar::decompressed(format, counted, limits.memory).map_err(|err| {
-            tar::unreadable_stream_for(Unpacking::File, None, &err, limits.memory)
-        })?;
+        let mut decoded = tar::decompressed(format, counted, limits.memory)
+            .map_err(|err| tar::unreadable_stream(Unpacking::File, None, &err, limits.memory))?;
         let mut buffer = vec![0; BUFFER];
         // the size is unknown until the stream ends, so the file streams to a writer
         writers.keep(&mut guard, path, u64::MAX, &mut decoded, &mut buffer)?;

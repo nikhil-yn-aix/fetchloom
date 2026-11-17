@@ -9,7 +9,7 @@ use sevenz_rust2::{ArchiveEntry, ArchiveReader, EncoderMethod, Password};
 use super::guard::Guard;
 use super::input::{Input, Source};
 use super::names::Named;
-use super::{Keep, damaged, past, refused, refused_member, unreadable};
+use super::{Keep, Unpacking, damaged, past, refused, refused_member, unreadable};
 use crate::error::Error;
 use crate::units;
 
@@ -129,6 +129,7 @@ fn failed(err: sevenz_rust2::Error, memory: u64) -> Error {
         Seven::MaxMemLimited { max_kb, actaul_kb } => {
             let kib = |count: usize| units::size((count as u64).saturating_mul(1024));
             past(
+                Unpacking::Archive,
                 format!(
                     "the archive needs {} of memory to unpack, more than the {} one archive may take",
                     kib(actaul_kb),
@@ -138,8 +139,10 @@ fn failed(err: sevenz_rust2::Error, memory: u64) -> Error {
                 "memory",
             )
         }
-        Seven::Io(error, _) | Seven::FileOpen(error, _) => damaged(None, &error, memory),
-        other => damaged(None, &other, memory),
+        Seven::Io(error, _) | Seven::FileOpen(error, _) => {
+            damaged(Unpacking::Archive, None, &error, memory)
+        }
+        other => damaged(Unpacking::Archive, None, &other, memory),
     }
 }
 

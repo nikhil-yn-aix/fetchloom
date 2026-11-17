@@ -5,7 +5,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use crate::archive::guard::Guard;
 use crate::archive::names::LONGEST_PATH;
 use crate::archive::tar::unreadable_stream;
-use crate::archive::{cut_short, refused};
+use crate::archive::{Unpacking, cut_short, refused};
 use crate::error::Error;
 
 const METADATA: u64 = 256 << 20;
@@ -283,7 +283,7 @@ fn qword(bytes: &[u8], at: usize) -> u64 {
 }
 
 fn read_error(error: &io::Error, memory: u64) -> Error {
-    unreadable_stream(None, error, memory)
+    unreadable_stream(Unpacking::Archive, None, error, memory)
 }
 
 #[cfg(test)]

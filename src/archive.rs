@@ -479,16 +479,12 @@ impl Unpacking {
 }
 
 fn refused(message: impl Into<String>) -> Error {
-    Error::new(Kind::SourceInvalid, message).help(REFUSED_HELP)
+    Error::new(Kind::SourceInvalid, message).help(Unpacking::Archive.packed_help())
 }
 
-/// an archive past a limit that `variable` or the settings file's `key` raises.
-fn past(message: impl Into<String>, variable: &str, key: &str) -> Error {
-    past_for(Unpacking::Archive, message, variable, key)
-}
-
-/// [`past`], for what `unpacking` says unpacks.
-fn past_for(unpacking: Unpacking, message: impl Into<String>, variable: &str, key: &str) -> Error {
+/// what `unpacking` says unpacks, past a limit that `variable` or the settings file's `key`
+/// raises.
+fn past(unpacking: Unpacking, message: impl Into<String>, variable: &str, key: &str) -> Error {
     Error::new(Kind::SourceInvalid, message).help(format!(
         "if you trust the {}, raise {variable}, or {key} in the settings file. otherwise {}",
         unpacking.noun(),
@@ -503,14 +499,9 @@ fn refused_member(path: &str, reason: &str) -> Error {
     ))
 }
 
-/// the error for an archive not read to its end, unpacked within `memory`; a disk's own failure
-/// stays `local.io`.
-fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static), memory: u64) -> Error {
-    damaged_for(Unpacking::Archive, at, err, memory)
-}
-
-/// [`damaged`], for what `unpacking` says unpacks.
-fn damaged_for(
+/// the error for what `unpacking` says unpacks, not read to its end within `memory`; a disk's own
+/// failure stays `local.io`.
+fn damaged(
     unpacking: Unpacking,
     at: Option<&str>,
     err: &(dyn std::error::Error + 'static),
@@ -525,7 +516,7 @@ fn damaged_for(
         return Error::io(doing, error);
     }
     if tar::needs_too_much_memory(err) {
-        return past_for(
+        return past(
             unpacking,
             format!(
                 "the {noun}'s xz stream needs more than {} of memory to {}",

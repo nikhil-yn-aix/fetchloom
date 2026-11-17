@@ -12,7 +12,7 @@ use ::zip::{SUPPORTED_COMPRESSION_METHODS, System, ZipArchive};
 use super::guard::{Guard, Meter};
 use super::input::{Input, Joined, Source};
 use super::names::Named;
-use super::{Keep, damaged, refused, refused_member, unreadable};
+use super::{Keep, Unpacking, damaged, refused, refused_member, unreadable};
 use crate::error::Error;
 
 /// the file type bits of a unix mode, as zip entries made on unix carry them.
@@ -29,7 +29,8 @@ pub(super) fn unpack(
     directory::check(&mut file, guard)?;
     let source = Source::new(file, guard.meter()).map_err(|err| unreadable(input.first(), &err))?;
     let memory = guard.limits().memory;
-    let mut zip = ZipArchive::new(source).map_err(|err| damaged(None, &err, memory))?;
+    let mut zip =
+        ZipArchive::new(source).map_err(|err| damaged(Unpacking::Archive, None, &err, memory))?;
     if zip.has_duplicate_names() {
         let name = repeated_name(input, zip.central_directory_start())
             .unwrap_or_else(|| "a name".to_owned());
@@ -38,7 +39,7 @@ pub(super) fn unpack(
     for (index, path) in checked(&zip, guard)? {
         let mut file = zip
             .by_index(index)
-            .map_err(|err| damaged(Some(&path), &err, memory))?;
+            .map_err(|err| damaged(Unpacking::Archive, Some(&path), &err, memory))?;
         guard.fits(&path, file.size())?;
         keep(guard, path, file.size(), &mut file)?;
     }
@@ -56,8 +57,8 @@ fn checked(
         guard.entry()?;
         let entry = zip
             .by_index_data(index)
-            .map_err(|err| damaged(None, &err, memory))?;
-        let raw = name(&entry).map_err(|err| damaged(None, &err, memory))?;
+            .map_err(|err| damaged(Unpacking::Archive, None, &err, memory))?;
+        let raw = name(&entry).map_err(|err| damaged(Unpacking::Archive, None, &err, memory))?;
         let is_folder = is_folder(&entry);
         if let Some(reason) = refusal(&entry, is_folder) {
             return Err(refused_member(&raw, &reason));
