@@ -1071,6 +1071,39 @@ pub(crate) fn with_dataset(
     Ok(document.to_string())
 }
 
+/// data.toml's text with the output `name` added: files of the project pinned where they are at
+/// `at`, with the patterns that choose them.
+pub(crate) fn with_output(
+    text: &str,
+    name: &str,
+    at: &str,
+    select: &[String],
+    exclude: &[String],
+) -> Result<String, Error> {
+    let added = NewDataset {
+        name,
+        reference: crate::source::local::IMPORTED,
+        select,
+        exclude,
+        extract: true,
+        decompress: false,
+        web_page: false,
+    };
+    let mut table = Table::new();
+    table.insert("ref", toml_edit::value(added.reference));
+    table.insert("at", toml_edit::value(at));
+    for (key, patterns) in [("select", select), ("exclude", exclude)] {
+        if !patterns.is_empty() {
+            table.insert(key, toml_edit::value(patterns.iter().collect::<Array>()));
+        }
+    }
+    let mut document = editable(text)?;
+    if !put(&mut document, name, table) {
+        return Err(added.refused_inline());
+    }
+    Ok(document.to_string())
+}
+
 /// data.toml's text with `key = true` on the dataset `name`, as `add --web-page` and `add
 /// --decompress` write it once the dataset is in.
 pub(crate) fn with_set(text: &str, name: &str, key: &str) -> Result<String, Error> {

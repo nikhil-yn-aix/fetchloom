@@ -462,7 +462,7 @@ fn helps_after_a_run_with_c_reach_the_project_from_where_it_ran() -> Result {
     let inside = told(&["-C", &typed, "add", "data/visits"])?;
     assert!(
         inside.contains(&format!(
-            "`mv {typed}/data/visits {typed}/visits`, then run `fetchloom -C {typed} add ./visits`"
+            "run `fetchloom -C {typed} add ./data/visits` to pin it"
         )),
         "{inside}"
     );
@@ -525,14 +525,14 @@ fn git_commands_after_a_run_with_c_reach_the_project() -> Result {
     crate::merge::ok(&sandbox, &["commit", "-qm", "stale"])?;
     paste(&run(&["status"])?, &format!("git -C {typed} rm {stale}"))?;
     assert!(!work.join(stale).exists(), "git rm deletes it");
-    fs::create_dir_all(work.join("tracked"))?;
-    fs::write(work.join("tracked/petals.csv"), b"length\n1.4\n")?;
-    crate::merge::ok(&sandbox, &["add", "tracked"])?;
+    fs::write(work.join("tracked.csv"), b"length\n1.4\n")?;
+    crate::merge::ok(&sandbox, &["add", "tracked.csv"])?;
     paste(
-        &run(&["add", "./tracked"])?,
-        &format!("git -C {typed} rm -r --cached {typed}/tracked"),
+        &run(&["add", "./tracked.csv"])?,
+        &format!("git -C {typed} rm -r --cached {typed}/tracked.csv"),
     )?;
-    let listed = crate::merge::git(&sandbox, &work, &["ls-files", "tracked"])?.ok_or("no git")?;
+    let listed =
+        crate::merge::git(&sandbox, &work, &["ls-files", "tracked.csv"])?.ok_or("no git")?;
     assert_eq!(text(&listed.stdout)?, "", "git no longer tracks it");
     Ok(())
 }

@@ -2655,6 +2655,7 @@ mod tests {
                 writable: true,
                 checked: 43,
                 adopted: false,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
@@ -2696,6 +2697,7 @@ mod tests {
                 writable: false,
                 checked: 43,
                 adopted: false,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             };

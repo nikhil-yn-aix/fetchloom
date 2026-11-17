@@ -216,6 +216,8 @@ const EXIT_CODES: &str = "fetchloom exit codes
    30  integrity.mismatch: the bytes are not the ones data.lock pins
    40  auth.required: sign in, or accept the source's terms
    50  local.*, project.*: disk, permissions, a broken or changed project file
+   60  output.differs: add <folder> --as <name> --check found the folder
+       holding other files than the output pins
   130  interrupted
 
 with --json, errors[0].kind names the exact cause and errors[0].fix, when
@@ -251,6 +253,7 @@ errors[0].kind, and the exit code it gives:
    30  integrity.mismatch
    40  auth.required
    50  local.io, local.not_empty, project.invalid, project.changed
+   60  output.differs
   130  interrupted
 `fetchloom help exit-codes` says what to do about each.
 

@@ -217,6 +217,10 @@ pub(crate) struct Synced {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a yes or no a record keeps, written only when set"
+)]
 pub(crate) struct Placed {
     pub(crate) dataset: String,
     pub(crate) sha256: Sha256,
@@ -231,6 +235,11 @@ pub(crate) struct Placed {
     /// as placed, so a removal of it can say so.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) adopted: bool,
+    /// whether the file is an output's: the author's own, pinned where their pipeline wrote it, or
+    /// a writable copy a sync placed there. once no output places it, the record goes and the
+    /// file stays; no command but `sync --force` deletes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) output: bool,
     /// whether a sync found this file, a copy of its own, cannot be linked to the cache's copy:
     /// reading it found other bytes than the pinned ones, or the disk refused the link. no later
     /// sync reads it or tries again while its record stays.
@@ -1132,6 +1141,7 @@ mod tests {
             writable: false,
             checked: 43,
             adopted: false,
+            output: false,
             unlinkable: false,
             racy_intact: OnceLock::new(),
         }
@@ -1223,6 +1233,7 @@ mod tests {
                 writable: true,
                 checked: 43,
                 adopted: false,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
@@ -1281,6 +1292,7 @@ mod tests {
                     writable: false,
                     checked: 43,
                     adopted: size == 2,
+                    output: false,
                     unlinkable: false,
                     racy_intact: std::sync::OnceLock::new(),
                 },
@@ -1329,6 +1341,7 @@ mod tests {
                 writable: false,
                 checked: 43,
                 adopted: false,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },

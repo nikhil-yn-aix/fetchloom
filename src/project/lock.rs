@@ -2948,7 +2948,10 @@ mod tests {
                 && text.contains("\"\nat = \"data/processed\"\nextract = false\n"),
             "{text}"
         );
-        assert_eq!(Lock::parse(&text).unwrap().datasets, [locked.clone()]);
+        assert_eq!(
+            Lock::parse(&text).unwrap().datasets,
+            std::slice::from_ref(&locked)
+        );
         assert_eq!(locked.drift(&output), None);
         assert_eq!(locked.drift(&entry("at = \"results\"\n")), Some(Drift::At));
         let fetched = Locked {

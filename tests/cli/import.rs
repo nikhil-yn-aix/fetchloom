@@ -512,8 +512,10 @@ fn an_imported_archive_unpacks_and_its_extract_switch_asks_no_source() -> Result
     Ok(())
 }
 
+/// a folder that holds the project, or another dataset's files, is no folder to add: neither an
+/// import nor an output's.
 #[test]
-fn a_folder_that_holds_the_project_or_sits_in_its_data_folder_is_refused() -> Result {
+fn a_folder_that_holds_the_project_or_a_datasets_files_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
     flowers(&sandbox)?;
     assert_eq!(sandbox.run(&["add", "../flowers"])?.status.code(), Some(0));
@@ -523,11 +525,14 @@ fn a_folder_that_holds_the_project_or_sits_in_its_data_folder_is_refused() -> Re
         fs::read(work.join("data.lock"))?,
     ];
     for (path, message) in [
-        (".", ". holds this project"),
+        (
+            ".",
+            ". holds the whole project, so it cannot be an output's folder",
+        ),
         ("..", ".. holds this project"),
         (
             "./data/flowers",
-            "./data/flowers is in the data folder, where fetchloom places what data.lock pins",
+            "./data/flowers holds data/flowers/petals/red.csv, a file of flowers, so it cannot be an output's folder",
         ),
     ] {
         let output = sandbox.run(&["--json", "add", path, "--as", "copy"])?;
@@ -549,41 +554,43 @@ fn a_folder_that_holds_the_project_or_sits_in_its_data_folder_is_refused() -> Re
     Ok(())
 }
 
-/// data a project keeps in data/ already, as cookiecutter's data/raw, is moved out first: both
-/// ways of naming it get the same commands, and those commands put its files back in data/raw.
+/// data a project keeps in data/ already, as cookiecutter's data/raw, is pinned where it is, as
+/// an output: its files stay, writable, and a teammate gets them at data/raw. its bare name may
+/// be search words too, so without --as it is refused with the line that adds it.
 #[test]
-fn data_already_in_the_data_folder_is_moved_out_first() -> Result {
+fn data_already_in_the_data_folder_is_pinned_where_it_is() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     fs::create_dir_all(work.join("data/raw"))?;
     fs::write(work.join("data/raw/visits.csv"), b"id\n1\n")?;
-    for typed in ["data/raw", "./data/raw"] {
-        let output = sandbox.run(&["--json", "add", typed])?;
-        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
-        let error = &json(&output)?["errors"][0];
-        assert_eq!(
-            error["message"],
-            format!("{typed} is in the data folder, where fetchloom places what data.lock pins")
-        );
-        assert_eq!(
-            error["help"],
-            format!(
-                "move it out first, with `mv {typed} raw`, then run `fetchloom add ./raw` to place its files in data/raw, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder"
-            )
-        );
-        assert_eq!(error["fix"], serde_json::Value::Null, "{typed}");
-    }
+    let output = sandbox.run(&["--json", "add", "data/raw"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "\"data/raw\" is a folder here, so fetchloom did not search for it"
+    );
+    assert_eq!(
+        error["help"],
+        "run `fetchloom add ./data/raw` to pin it, or `fetchloom search data/raw` to search"
+    );
     assert!(!work.join("data.toml").exists());
-    fs::rename(work.join("data/raw"), work.join("raw"))?;
-    let added = sandbox.run(&["add", "./raw"])?;
+    let added = sandbox.run(&["add", "./data/raw"])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert_eq!(
+        fs::read_to_string(work.join("data.toml"))?,
+        "[datasets.raw]\nref = \"local\"\nat = \"data/raw\"\n"
+    );
     assert_eq!(fs::read(work.join("data/raw/visits.csv"))?, b"id\n1\n");
+    assert!(
+        !work.join("data/raw/raw").exists(),
+        "never nested in itself"
+    );
     Ok(())
 }
 
 /// a path in the data folder that a dataset holds already is that dataset's, so nothing is added
-/// twice; a folder named from inside it is moved from its parent, since `mv .` cannot move it,
-/// and a name data.toml has already is never promised.
+/// twice, nor made an output's folder, and a name data.toml has already is never promised.
 #[test]
 fn a_path_a_dataset_holds_already_is_not_added_again() -> Result {
     let sandbox = Sandbox::new()?;
@@ -603,30 +610,28 @@ fn a_path_a_dataset_holds_already_is_not_added_again() -> Result {
         );
         Ok(json(&output)?["errors"][0]["help"].clone())
     };
-    for typed in ["./sepals.csv", "petals/red.csv", "."] {
+    for typed in ["./sepals.csv", "petals/red.csv"] {
         assert_eq!(
             refused(&inside, typed)?,
             "it is part of flowers already, so there is nothing to add; `fetchloom path flowers` prints where flowers is",
             "{typed}"
         );
     }
+    assert_eq!(
+        refused(&inside, ".")?,
+        "pin a folder that holds only what your pipeline writes, such as data/processed"
+    );
     fs::write(inside.join("flowers.csv"), b"mine\n")?;
     assert_eq!(
         refused(&inside, "./flowers.csv")?,
         "move it out first, with `mv ./flowers.csv ../../flowers.csv`, then run `fetchloom add ../../flowers.csv --as flowers-2` to place its files in ../../data/flowers-2, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder"
     );
-    let raw = work.join("data").join("raw");
-    fs::create_dir_all(&raw)?;
-    fs::write(raw.join("visits.csv"), b"id\n1\n")?;
-    assert_eq!(
-        refused(&raw, ".")?,
-        "move it out first, with `mv ../raw ../../raw`, then run `fetchloom add ../../raw` to place its files in ../../data/raw, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder"
-    );
     Ok(())
 }
 
-/// raw data imported from inside the git work tree, where `git add .` takes it, gets a warning with
-/// the commands that keep it out, and none once .gitignore leaves it out.
+/// raw data imported from a file inside the git work tree, where `git add .` takes it, gets a
+/// warning with the commands that keep it out, and none once .gitignore leaves it out. a folder
+/// there is pinned where it is, so it has no copy for git to keep twice.
 #[test]
 fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -634,11 +639,11 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
         return Ok(());
     }
     let work = sandbox.work();
+    fs::write(work.join("sepals.csv"), b"length\n5.1\n")?;
+    fs::write(work.join("petals.csv"), b"length\n1.4\n")?;
+    crate::merge::ok(&sandbox, &["add", "petals.csv"])?;
     fs::create_dir_all(work.join("flowers"))?;
-    fs::write(work.join("flowers/sepals.csv"), b"length\n5.1\n")?;
-    fs::create_dir_all(work.join("tracked"))?;
-    fs::write(work.join("tracked/petals.csv"), b"length\n1.4\n")?;
-    crate::merge::ok(&sandbox, &["add", "tracked"])?;
+    fs::write(work.join("flowers/red.csv"), b"length\n1.6\n")?;
     let run = |args: &[&str]| -> Result<serde_json::Value> {
         let mut command = sandbox.command(args);
         for name in crate::merge::git_variables() {
@@ -648,7 +653,7 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
         json(&output)
     };
-    let untracked = run(&["--json", "add", "./flowers"])?;
+    let untracked = run(&["--json", "add", "./sepals.csv"])?;
     assert_eq!(
         crate::support::kinds(&untracked),
         ["git.import_in_tree"],
@@ -657,18 +662,20 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
     assert_eq!(
         warned(&untracked),
         [
-            "./flowers is still in the project, and git will take it; delete it, or add /flowers/ to .gitignore"
+            "./sepals.csv is still in the project, and git will take it; delete it, or add /sepals.csv to .gitignore"
         ]
     );
-    let tracked = run(&["--json", "add", "./tracked"])?;
+    let tracked = run(&["--json", "add", "./petals.csv"])?;
     assert_eq!(
         warned(&tracked),
         [
-            "git tracks ./tracked, so a commit keeps its files in the repository; run `git rm -r --cached ./tracked`, then delete it or add /tracked/ to .gitignore"
+            "git tracks ./petals.csv, so a commit keeps its files in the repository; run `git rm -r --cached ./petals.csv`, then delete it or add /petals.csv to .gitignore"
         ]
     );
-    fs::write(work.join(".gitignore"), "/flowers/\n")?;
-    let ignored = run(&["--json", "add", "./flowers"])?;
+    let output = run(&["--json", "add", "./flowers"])?;
+    assert_eq!(warned(&output), Vec::<String>::new(), "{output}");
+    fs::write(work.join(".gitignore"), "/sepals.csv\n")?;
+    let ignored = run(&["--json", "add", "./sepals.csv"])?;
     assert_eq!(warned(&ignored), Vec::<String>::new());
     Ok(())
 }

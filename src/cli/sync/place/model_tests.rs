@@ -145,11 +145,8 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
     );
     let destination = project.root.join(PATH);
     let alias = project.root.join("alias");
-    if alias.exists() {
-        fs::remove_file(&alias).unwrap();
-    }
-    if destination.exists() {
-        fs::remove_file(&destination).unwrap();
+    for stale in [&alias, &destination].iter().filter(|path| path.exists()) {
+        fs::remove_file(stale).unwrap();
     }
     let ownership = match scenario {
         0..=2 => Ownership::Untracked,
@@ -198,6 +195,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
                 writable,
                 checked: 1,
                 adopted: false,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
@@ -281,6 +279,7 @@ fn a_damaged_file_is_replaced_without_force() {
                 writable: true,
                 checked: 1,
                 adopted: false,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
@@ -326,6 +325,7 @@ fn only_a_writable_copy_fetchloom_made_goes_once_copies_are_not_asked_for() {
                 writable: true,
                 checked: 1,
                 adopted,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
@@ -379,6 +379,7 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
                     writable: true,
                     checked: 123,
                     adopted: false,
+                    output: false,
                     unlinkable: false,
                     racy_intact: std::sync::OnceLock::new(),
                 },
@@ -404,9 +405,7 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
                 Vec::new()
             };
             let waiting = if waiting { vec!["set"] } else { Vec::new() };
-            let actual = unwanted(&survey, &wanted, (&unknown, &waiting), &scope, |_, _, _| {
-                holds
-            });
+            let actual = unwanted_here(&survey, &wanted, (&unknown, &waiting), &scope, holds);
             let protected =
                 !wanted.is_empty() || !unknown.is_empty() || !waiting.is_empty() || !selected;
             if protected {
@@ -427,4 +426,21 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
             }
         }
     }
+}
+
+/// [`unwanted`] in a project with no output, each file holding its pinned bytes as `holds` says.
+fn unwanted_here(
+    survey: &Survey,
+    wanted: &HashSet<&str>,
+    unsure: Unsure<'_>,
+    scope: &Scope,
+    holds: bool,
+) -> Vec<(String, Unwanted)> {
+    unwanted(
+        survey,
+        wanted,
+        unsure,
+        (scope, &Outputs::default()),
+        |_, _, _| holds,
+    )
 }

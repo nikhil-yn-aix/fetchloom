@@ -930,12 +930,13 @@ pub(crate) struct DryRun {
 )]
 pub(crate) struct Add {
     /// search words, a link, a DOI, an id such as zenodo:3608990, or a path to files on this
-    /// machine, such as ./flowers, which are copied into the cache. several links add a dataset
+    /// machine, such as ./flowers, which are copied into the cache. a folder of the project, such
+    /// as data/processed with --as, stays where it is, as an output. several links add a dataset
     /// each
     #[arg(value_name = "link", help_heading = "arguments")]
     pub(crate) links: Vec<String>,
 
-    /// the dataset's name in data.toml and its folder's name
+    /// the dataset's name in data.toml, and its folder's name in the data folder
     #[arg(long = "as", value_name = "name", help_heading = "options")]
     pub(crate) name: Option<String>,
 
@@ -967,6 +968,12 @@ pub(crate) struct Add {
     /// source states neither for some file, and for files on this machine
     #[arg(long, conflicts_with = "input_file", help_heading = "options")]
     pub(crate) no_sync: bool,
+
+    /// compare a folder of the project with the output data.lock records for it, changing
+    /// nothing: exit 0 when it holds the same files, else exit 60 with each file changed, added
+    /// or removed
+    #[arg(long, conflicts_with_all = ["input_file", "no_sync"], help_heading = "options")]
+    pub(crate) check: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

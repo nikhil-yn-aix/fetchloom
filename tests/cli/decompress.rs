@@ -274,13 +274,13 @@ fn a_compressed_tar_stays_extracts_job() -> Result {
 #[test]
 fn a_folder_decompresses_and_leaves_what_is_no_single_compressed_file() -> Result {
     let sandbox = Sandbox::new()?;
-    let flowers = sandbox.work().join("flowers");
+    let flowers = sandbox.folder("flowers")?;
     fs::create_dir_all(flowers.join("sub"))?;
     fs::write(flowers.join("sub").join("iris.csv.gz"), gz(CSV)?)?;
     let inner = gz(&tar_of(&[("iris.csv", CSV)])?)?;
     fs::write(flowers.join("inner.gz"), &inner)?;
     fs::write(flowers.join("notes.gz"), b"plain notes\n")?;
-    let output = sandbox.run(&["--json", "add", "./flowers", "--decompress"])?;
+    let output = sandbox.run(&["--json", "add", "../flowers", "--decompress"])?;
     ok(&output)?;
     let document = json(&output)?;
     let warned = |kind: &str, message: &str| {

@@ -649,7 +649,7 @@ fn check(
     }
     if place::untouched(project, &manifest, &survey, &seen, false, &Scope::All)?.is_some() {
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
-        status.extra = extra(&survey, &recorded);
+        status.extra = extra(&survey, &recorded, &manifest);
         status.kept_copies = kept_copies(&status.extra, &recorded);
         status.set_aside = set_aside(&status.extra, &survey);
         sort_extra(&mut status, &plan::Owned::of(&manifest));
@@ -817,7 +817,7 @@ fn compare(
                 survey,
                 targets,
                 (&planned.unknown, &planned.waiting),
-                &project.root,
+                (&place::Outputs::of(manifest), &project.root),
             )
         })
     };
@@ -901,7 +901,7 @@ fn compare(
     let mut unsure = place::unsure((&planned.unknown, &planned.waiting));
     unsure.extend(status.unlocked.iter().map(String::as_str));
     let unrecorded = unrecorded_folders(manifest, survey, &planned.unknown);
-    (status.unneeded, status.extra) = extra(survey, &wanted)
+    (status.unneeded, status.extra) = extra(survey, &wanted, manifest)
         .into_iter()
         .filter(|path| match survey.state.files.get(path) {
             Some(placed) => !unsure.contains(placed.dataset.as_str()),
@@ -1030,14 +1030,16 @@ fn kept_copies(extra: &[String], wanted: &HashSet<&str>) -> HashMap<String, Stri
 }
 
 /// the files in the data folder that no dataset places, sorted, but for the staging leftovers of an
-/// interrupted placement, which the next sync deletes, and the files an operating system made.
-fn extra(survey: &Survey, wanted: &HashSet<&str>) -> Vec<String> {
+/// interrupted placement, which the next sync deletes, the files an operating system made, and the
+/// files an output's patterns leave out of its folder.
+fn extra(survey: &Survey, wanted: &HashSet<&str>, manifest: &Manifest) -> Vec<String> {
     let leftovers: HashSet<&String> = survey.leftovers().collect();
     let mut extra: Vec<String> = survey
         .disk
         .keys()
         .filter(|path| !wanted.contains(path.as_str()) && !leftovers.contains(path))
         .filter(|path| !survey.made_by_system(path))
+        .filter(|path| !place::passed_over(manifest, path))
         .cloned()
         .collect();
     extra.sort();
@@ -1660,7 +1662,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            extra(&survey, &HashSet::new()),
+            extra(&survey, &HashSet::new(), &Manifest::parse("").unwrap()),
             [
                 "data/weather/.fetchloom-notes.copy",
                 "data/weather/table.csv"

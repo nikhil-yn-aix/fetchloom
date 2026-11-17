@@ -26,7 +26,7 @@ use crate::output::{Output, Warning};
 use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
 use crate::project::lock::{Lock, LockedFile};
-use crate::project::manifest::Manifest;
+use crate::project::manifest::{self, Manifest};
 use crate::project::state::{Look, Once, Placed, State, Synced, Uncached};
 use crate::project::{Project, native};
 use crate::stop::Stop;
@@ -136,6 +136,81 @@ pub(crate) struct Placement {
     /// of the project's .gitignore hides.
     #[serde(skip)]
     pub(crate) unmarkable: BTreeSet<String>,
+    /// the outputs whose folders changed since they were pinned, each left whole.
+    #[serde(skip)]
+    pub(crate) changed_outputs: Vec<ChangedOutput>,
+    /// files no pin places that `--force` removed from outputs' folders, each with its output.
+    #[serde(skip)]
+    pub(crate) cleared_outputs: Vec<(String, String)>,
+}
+
+/// an output whose folder changed since it was pinned: files of other bytes, files no pin places
+/// there, and files it recorded that are gone. a sync leaves the whole folder as it is, since
+/// healing part of it would mix the author's work in progress with the pin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChangedOutput {
+    pub(crate) name: String,
+    pub(crate) at: String,
+    /// `at` from the folder the run works in, as a command names it.
+    pub(crate) shown: String,
+    pub(crate) changed: u64,
+    pub(crate) added: u64,
+    pub(crate) removed: u64,
+}
+
+impl ChangedOutput {
+    /// `1 file changed, 2 added, 1 removed`, leaving out what is none.
+    pub(crate) fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for (count, done) in [
+            (self.changed, "changed"),
+            (self.added, "added"),
+            (self.removed, "removed"),
+        ] {
+            if count == 0 {
+                continue;
+            }
+            parts.push(if parts.is_empty() {
+                format!("{} {done}", crate::units::count(count, "file", "files"))
+            } else {
+                format!("{} {done}", crate::units::grouped(count))
+            });
+        }
+        parts.join(", ")
+    }
+
+    fn is_changed(&self) -> bool {
+        self.changed + self.added + self.removed > 0
+    }
+}
+
+/// the outputs of a placing: where each lives, and those left whole for a change.
+#[derive(Debug, Default)]
+pub(crate) struct Outputs {
+    /// each output's folder, by name.
+    at: HashMap<String, String>,
+    /// the outputs a sync leaves whole, by name.
+    left: HashSet<String>,
+}
+
+impl Outputs {
+    pub(crate) fn of(manifest: &Manifest) -> Outputs {
+        Outputs {
+            at: manifest
+                .datasets
+                .iter()
+                .filter_map(|(name, entry)| Some((name.clone(), entry.at.clone()?)))
+                .collect(),
+            left: HashSet::new(),
+        }
+    }
+
+    /// whether `path`, recorded for `dataset`, is in that output's folder now.
+    fn holds(&self, dataset: &str, path: &str) -> bool {
+        self.at
+            .get(dataset)
+            .is_some_and(|at| super::disk::is_inside(path, at))
+    }
 }
 
 impl Placement {
@@ -524,6 +599,8 @@ enum Unwanted {
     /// someone changed it, so it stays.
     Keep,
     Gone,
+    /// an output's file no output places now: its record goes, and the file stays.
+    Untrack,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -584,6 +661,13 @@ pub(crate) struct Placing<'a> {
     /// were settled before the run, as [`Placing::vouch_rest`] says. only then does placing every
     /// file settle the project.
     vouched: bool,
+    /// the outputs, and those this run leaves whole.
+    outputs: Outputs,
+    /// the outputs in scope whose folders changed since they were pinned.
+    changed: Vec<ChangedOutput>,
+    /// files in a changed output's folder that no pin places, which `--force` removes, each
+    /// with its output.
+    extras: Vec<(String, String)>,
 }
 
 impl<'a> Placing<'a> {
@@ -630,6 +714,7 @@ impl<'a> Placing<'a> {
             .into_iter()
             .filter(|(dataset, _)| scope.includes(dataset))
             .collect();
+        let mut outputs = Outputs::of(manifest);
         if actions
             .iter()
             .any(|action| matches!(action, Action::Blocked(_) | Action::Unblock(_)))
@@ -643,7 +728,7 @@ impl<'a> Placing<'a> {
                 &survey,
                 &wanted,
                 (&unknown, &plan.waiting),
-                scope,
+                (scope, &outputs),
                 &project.root,
             );
             let freeing = survey.freeing(&going);
@@ -652,6 +737,24 @@ impl<'a> Placing<'a> {
                 .map(|action| clearing(action, &survey, &freeing, scope))
                 .collect();
         }
+        let (changed, extras) = changed_outputs(
+            (&project.root, manifest),
+            &plan.targets,
+            &actions,
+            &survey,
+            scope,
+        );
+        if force {
+            outputs.left.clear();
+        } else {
+            outputs.left = changed.iter().map(|output| output.name.clone()).collect();
+            for (target, action) in plan.targets.iter().zip(&mut actions) {
+                if outputs.left.contains(target.dataset) {
+                    *action = Action::Unselected;
+                }
+            }
+        }
+        let extras = if force { extras } else { Vec::new() };
         Ok(Placing {
             project,
             manifest,
@@ -663,6 +766,9 @@ impl<'a> Placing<'a> {
             scope: scope.clone(),
             unlisted: plan::Unlisted::new(),
             vouched: *scope == Scope::All,
+            outputs,
+            changed: if force { Vec::new() } else { changed },
+            extras,
         })
     }
 
@@ -1099,10 +1205,14 @@ impl<'a> Placing<'a> {
             &self.survey,
             &wanted,
             (&self.unknown, &self.waiting),
-            &self.scope,
+            (&self.scope, &self.outputs),
             holds,
         );
-        let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
+        let going: HashSet<&str> = unwanted
+            .iter()
+            .filter(|(_, fate)| !matches!(fate, Unwanted::Untrack))
+            .map(|(path, _)| path.as_str())
+            .collect();
         preview.placement.retired = self.survey.retired(&wanted, &going);
         preview.placement.left_behind =
             self.survey.left_behind(&self.project.root, &wanted, &going);
@@ -1127,7 +1237,7 @@ impl<'a> Placing<'a> {
                     .placement
                     .kept
                     .push(Kept::new(path, Reason::Unneeded)),
-                Unwanted::Gone => {}
+                Unwanted::Gone | Unwanted::Untrack => {}
             }
         }
     }
@@ -1210,9 +1320,15 @@ impl<'a> Placing<'a> {
             scope,
             unlisted,
             vouched,
+            outputs,
+            changed,
+            extras,
         } = self;
         let root = placing_root(project, manifest)?;
-        let mut placement = Placement::default();
+        let mut placement = Placement {
+            changed_outputs: changed,
+            ..Placement::default()
+        };
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&root)
             .with_threads(survey.threads)
@@ -1225,9 +1341,10 @@ impl<'a> Placing<'a> {
             &mut survey,
             &wanted,
             (&unknown, &waiting),
-            &scope,
+            (&scope, &outputs),
             &mut placement,
         )?;
+        let cleared = clear_extras(project, &mut placer, &survey, &extras, &mut placement)?;
         // told at once, since the state no longer records those files once this run writes it
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
         // after the files went, so the folders they leave go with the markers
@@ -1337,9 +1454,21 @@ impl<'a> Placing<'a> {
         // sync looks at all; one that leaves a dataset waiting for its list never settles, since
         // the list can come back with data.toml and data.lock as they are
         let whole = vouched && unknown.is_empty() && waiting.is_empty();
-        let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
+        let complete = whole
+            && !stopped
+            && failure.is_none()
+            && placement.kept.is_empty()
+            && placement.changed_outputs.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
-        let recorded = removed || adopted || undone || kept_aside || linked || !tallies.is_empty();
+        let marked = mark_outputs(manifest, &targets, state);
+        let recorded = removed
+            || cleared
+            || marked
+            || adopted
+            || undone
+            || kept_aside
+            || linked
+            || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
         let marks = unmarked || marking || rewritten || told_rule || taken_back;
         // what a run that ends in an error never tells stays untold
@@ -1396,6 +1525,7 @@ impl<'a> Placing<'a> {
             unknown,
             waiting,
             scope,
+            outputs,
             ..
         } = self;
         let root = placing_root(project, manifest)?;
@@ -1409,7 +1539,7 @@ impl<'a> Placing<'a> {
             &mut survey,
             &wanted,
             (&unknown, &waiting),
-            &scope,
+            (&scope, &outputs),
             &mut placement,
         )?;
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
@@ -2640,13 +2770,17 @@ fn remove_unwanted(
     survey: &mut Survey,
     wanted: &HashSet<&str>,
     unsure: Unsure<'_>,
-    scope: &Scope,
+    owned: (&Scope, &Outputs),
     placement: &mut Placement,
 ) -> Result<bool, Error> {
     let holds = still_placed(survey, &project.root);
-    let unwanted = unwanted(survey, wanted, unsure, scope, holds);
+    let unwanted = unwanted(survey, wanted, unsure, owned, holds);
     let changed = !unwanted.is_empty();
-    let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
+    let going: HashSet<&str> = unwanted
+        .iter()
+        .filter(|(_, fate)| !matches!(fate, Unwanted::Untrack))
+        .map(|(path, _)| path.as_str())
+        .collect();
     placement.retired = survey.retired(wanted, &going);
     placement.left_behind = survey.left_behind(&project.root, wanted, &going);
     for (path, fate) in unwanted {
@@ -2655,7 +2789,7 @@ fn remove_unwanted(
             continue;
         };
         match fate {
-            Unwanted::Gone => {}
+            Unwanted::Gone | Unwanted::Untrack => {}
             Unwanted::Remove(look) => {
                 let listed = survey.listed.get(&path).unwrap_or(&path);
                 let file = native(&project.root, listed);
@@ -2683,6 +2817,156 @@ fn remove_unwanted(
     }
     clear_system_made(project, placer, &placement.retired, &placement.kept);
     Ok(changed)
+}
+
+/// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
+/// output: its patterns leave it out, or a repository keeps it there, as a capture leaves both out.
+pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
+    manifest.datasets.values().any(|entry| {
+        let Some(inside) = entry
+            .at
+            .as_deref()
+            .and_then(|at| path.strip_prefix(at)?.strip_prefix('/'))
+        else {
+            return false;
+        };
+        let source = &entry.source;
+        crate::name::metadata(inside).is_some()
+            || !(source.select.is_empty() || source.select.iter().any(|glob| glob.matches(inside)))
+            || source.exclude.iter().any(|glob| glob.matches(inside))
+    })
+}
+
+/// the outputs in `scope` whose folders changed since they were pinned, as `survey` saw them and
+/// `actions` decided their files: a file of other bytes or something in a file's way, a file a
+/// record placed there that is gone, or a file there no pin places that the output's patterns
+/// keep, with those last files. links, special files and what a system or a repository makes
+/// there are never an output's, as a capture never takes them.
+fn changed_outputs(
+    (root, manifest): (&Path, &Manifest),
+    targets: &[Target],
+    actions: &[Action],
+    survey: &Survey,
+    scope: &Scope,
+) -> (Vec<ChangedOutput>, Vec<(String, String)>) {
+    let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
+    let up = crate::cli::up_to(root, &here);
+    let mut found: BTreeMap<&str, (ChangedOutput, &manifest::Entry)> = manifest
+        .datasets
+        .iter()
+        .filter(|(name, entry)| entry.place && scope.includes(name))
+        .filter_map(|(name, entry)| {
+            let at = entry.at.clone()?;
+            let output = ChangedOutput {
+                name: name.clone(),
+                shown: format!("{up}{at}"),
+                at,
+                changed: 0,
+                added: 0,
+                removed: 0,
+            };
+            Some((name.as_str(), (output, entry)))
+        })
+        .collect();
+    if found.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    for (target, action) in targets.iter().zip(actions) {
+        let Some((output, _)) = found.get_mut(target.dataset) else {
+            continue;
+        };
+        match action {
+            Action::Leave(Reason::Changed | Reason::Foreign | Reason::Shared)
+            | Action::Overwrite(_)
+            | Action::Blocked(_)
+            | Action::Unblock(_) => output.changed += 1,
+            Action::Place if survey.state.files.contains_key(&target.path) => output.removed += 1,
+            _ => {}
+        }
+    }
+    let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
+    let mut extras = Vec::new();
+    for (path, look) in &survey.disk {
+        if wanted.contains(path.as_str()) || survey.made_by_system(path) {
+            continue;
+        }
+        let Some((output, _)) = found
+            .values_mut()
+            .find(|(output, _)| super::disk::is_inside(path, &output.at))
+        else {
+            continue;
+        };
+        let inside = &path[output.at.len() + 1..];
+        let name = inside.rsplit('/').next().unwrap_or(inside);
+        if place::is_copy_temporary(name) || passed_over(manifest, path) {
+            continue;
+        }
+        match survey.state.files.get(path) {
+            // placed for an older pin and unchanged, which removal takes
+            Some(placed) if placed.dataset == output.name && placed.look == *look => {}
+            Some(placed) if placed.dataset == output.name => output.changed += 1,
+            _ => {
+                output.added += 1;
+                extras.push((path.clone(), output.name.clone()));
+            }
+        }
+    }
+    extras.sort_unstable();
+    let changed: Vec<ChangedOutput> = found
+        .into_values()
+        .map(|(output, _)| output)
+        .filter(ChangedOutput::is_changed)
+        .collect();
+    let left: HashSet<&str> = changed.iter().map(|output| output.name.as_str()).collect();
+    extras.retain(|(_, name)| left.contains(name.as_str()));
+    (changed, extras)
+}
+
+/// removes, for `sync --force`, the files no pin places in the folders of changed outputs, so
+/// each holds its pinned tree whole again, unless one changed since the survey. says whether any
+/// went.
+fn clear_extras(
+    project: &Project,
+    placer: &mut Placer,
+    survey: &Survey,
+    extras: &[(String, String)],
+    placement: &mut Placement,
+) -> Result<bool, Error> {
+    for (path, name) in extras {
+        placer.stop().check()?;
+        let file = native(&project.root, path);
+        if now(&file).is_none_or(|look| survey.disk.get(path) != Some(&look)) {
+            continue;
+        }
+        placer
+            .remove(&file, false, None)
+            .map_err(|err| Error::io(format_args!("could not remove {}", file.display()), &err))?;
+        placement.removed += 1;
+        placement.cleared_outputs.push((path.clone(), name.clone()));
+    }
+    Ok(!placement.cleared_outputs.is_empty())
+}
+
+/// marks the records of the files `targets` place for outputs as an output's, so they are never
+/// deleted once no output places them. says whether one was not marked yet.
+fn mark_outputs(manifest: &Manifest, targets: &[Target], state: &mut State) -> bool {
+    let mut marked = false;
+    for target in targets {
+        if !manifest
+            .datasets
+            .get(target.dataset)
+            .is_some_and(manifest::Entry::is_output)
+        {
+            continue;
+        }
+        if let Some(placed) = state.files.get_mut(&target.path)
+            && !placed.output
+        {
+            placed.output = true;
+            marked = true;
+        }
+    }
+    marked
 }
 
 /// deletes the files an operating system made in each folder of `retired` that holds nothing else
@@ -2766,10 +3050,10 @@ pub(crate) fn going(
     survey: &Survey,
     targets: &[Target],
     unsure: Unsure<'_>,
-    root: &Path,
+    (outputs, root): (&Outputs, &Path),
 ) -> HashSet<String> {
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-    removable(survey, &wanted, unsure, &Scope::All, root)
+    removable(survey, &wanted, unsure, (&Scope::All, outputs), root)
 }
 
 /// the files [`going`] names, for the datasets in `scope` alone.
@@ -2777,10 +3061,10 @@ fn removable(
     survey: &Survey,
     wanted: &HashSet<&str>,
     unsure: Unsure<'_>,
-    scope: &Scope,
+    owned: (&Scope, &Outputs),
     root: &Path,
 ) -> HashSet<String> {
-    unwanted(survey, wanted, unsure, scope, still_placed(survey, root))
+    unwanted(survey, wanted, unsure, owned, still_placed(survey, root))
         .into_iter()
         .filter_map(|(path, fate)| matches!(fate, Unwanted::Remove(_)).then_some(path))
         .collect()
@@ -2840,7 +3124,7 @@ fn unwanted(
     survey: &Survey,
     wanted: &HashSet<&str>,
     unsure: Unsure<'_>,
-    scope: &Scope,
+    (scope, outputs): (&Scope, &Outputs),
     holds: impl Fn(&str, &Placed, &Look) -> bool,
 ) -> Vec<(String, Unwanted)> {
     let unsure = self::unsure(unsure);
@@ -2852,9 +3136,11 @@ fn unwanted(
             !wanted.contains(path.as_str())
                 && !unsure.contains(placed.dataset.as_str())
                 && scope.includes(&placed.dataset)
+                && !outputs.left.contains(&placed.dataset)
         })
         .map(|(path, placed)| {
             let fate = match survey.disk.get(path) {
+                _ if placed.output && !outputs.holds(&placed.dataset, path) => Unwanted::Untrack,
                 None => Unwanted::Gone,
                 Some(_) if survey.edited.contains(path) => Unwanted::Keep,
                 Some(look) if *look == placed.look || holds(path, placed, look) => {
@@ -2907,6 +3193,7 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: 
         writable,
         checked,
         adopted: false,
+        output: false,
         unlinkable: false,
         racy_intact: std::sync::OnceLock::new(),
     }
@@ -3109,6 +3396,7 @@ mod tests {
             writable,
             checked: 0,
             adopted: false,
+            output: false,
             unlinkable,
             racy_intact: std::sync::OnceLock::new(),
         };
@@ -3222,6 +3510,7 @@ mod tests {
             writable: false,
             checked: 0,
             adopted: false,
+            output: false,
             unlinkable: false,
             racy_intact: std::sync::OnceLock::new(),
         };
@@ -3248,6 +3537,7 @@ mod tests {
             writable: false,
             checked,
             adopted: false,
+            output: false,
             unlinkable: false,
             racy_intact: std::sync::OnceLock::new(),
         };
@@ -3387,6 +3677,7 @@ mod tests {
                 writable: true,
                 checked: 0,
                 adopted: false,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
@@ -3407,6 +3698,9 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
+            outputs: Outputs::default(),
+            changed: Vec::new(),
+            extras: Vec::new(),
         };
 
         placing
@@ -3447,6 +3741,7 @@ mod tests {
                 writable: true,
                 checked: 0,
                 adopted: false,
+                output: false,
                 unlinkable: false,
                 racy_intact: std::sync::OnceLock::new(),
             },
@@ -3568,6 +3863,7 @@ mod tests {
                         writable: false,
                         checked: 0,
                         adopted: false,
+                        output: false,
                         unlinkable: false,
                         racy_intact: std::sync::OnceLock::new(),
                     },
@@ -3598,6 +3894,9 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
+            outputs: Outputs::default(),
+            changed: Vec::new(),
+            extras: Vec::new(),
         };
         placing
             .apply(
@@ -3665,6 +3964,9 @@ mod tests {
                 scope: Scope::All,
                 unlisted: plan::Unlisted::new(),
                 vouched: true,
+                outputs: Outputs::default(),
+                changed: Vec::new(),
+                extras: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -3737,6 +4039,9 @@ mod tests {
                 scope: Scope::All,
                 unlisted: plan::Unlisted::new(),
                 vouched: true,
+                outputs: Outputs::default(),
+                changed: Vec::new(),
+                extras: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -3813,6 +4118,9 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
+            outputs: Outputs::default(),
+            changed: Vec::new(),
+            extras: Vec::new(),
         };
 
         placing
@@ -3969,6 +4277,9 @@ mod tests {
             scope: Scope::All,
             unlisted: plan::Unlisted::new(),
             vouched: true,
+            outputs: Outputs::default(),
+            changed: Vec::new(),
+            extras: Vec::new(),
         };
         let holding: Vec<String> = placing
             .holding()

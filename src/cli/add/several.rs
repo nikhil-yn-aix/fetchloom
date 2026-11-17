@@ -468,6 +468,7 @@ mod tests {
             old: None,
             lock_text: None,
             unrestored: AtomicBool::new(false),
+            seeded: std::sync::Mutex::default(),
         };
         let context = offline_context();
         let args = Add {
@@ -482,6 +483,7 @@ mod tests {
             decompress: false,
             web_page: false,
             no_sync: false,
+            check: false,
             dry: crate::cli::args::DryRun { dry_run: false },
         };
         let reads = |count| {

@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::Instrument as _;
 
 use super::args::Add;
-use super::import::import_held;
+use super::import::path_held;
 use super::links;
 use super::project::{Outcome, Report, committed, dry_run_done, hold, preview_all, register};
 use super::sync::disk::{self, Folders, Survey};
@@ -47,9 +47,20 @@ pub(super) struct AddProject {
     /// a failed add could not put back what it changed in data.toml or data.lock, so its error
     /// holds the steps that do.
     unrestored: AtomicBool,
+    /// the records of an output's files the add read where they are, which the state takes as
+    /// placed once the add's survey is read.
+    seeded: std::sync::Mutex<Vec<(String, crate::project::state::Placed)>>,
 }
 
 impl AddProject {
+    /// gives the add's survey `records`: an output's files, read where they are, as placed.
+    pub(super) fn seed(&self, records: Vec<(String, crate::project::state::Placed)>) {
+        self.seeded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(records);
+    }
+
     /// reads data.toml and data.lock as the add finds them once it holds the project.
     fn read(&mut self) -> Result<(), Error> {
         if self.project.manifest_path().is_file() {
@@ -243,6 +254,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         old: None,
         lock_text: None,
         unrestored: AtomicBool::new(false),
+        seeded: std::sync::Mutex::default(),
     };
     let read = adding.read();
     // another add may have started the project while this one waited to hold it, and then this
@@ -264,7 +276,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
             add_several_held(context, &mut adding, &args, several, &here, starting).await
         }
         (Ok(()), Request::Path(typed)) => {
-            import_held(context, &mut adding, &args, &typed, &here, starting).await
+            path_held(context, &mut adding, &args, &typed, &here, starting).await
         }
         (Ok(()), Request::ListFile(_)) => unreachable!("a list file is named by its link first"),
         (Err(error), _) => Err(error),
@@ -316,8 +328,29 @@ fn request(args: &mut Add) -> Result<Request, Error> {
         }
         return Ok(Request::Path(link));
     }
+    // with --as, a folder of the project is pinned where it is, as `add data/processed --as
+    // processed` reads; without it, the word may be search words too
+    if args.name.is_some() && names_project_folder(&link) {
+        return Ok(Request::Path(link));
+    }
     super::search::refuse_local(&link, true)?;
     Ok(Request::Link(link))
+}
+
+/// whether `word`, which is no path as typed, names a folder inside the project the add runs in,
+/// or below the folder it runs in when there is none yet.
+fn names_project_folder(word: &str) -> bool {
+    let Ok(here) = std::env::current_dir() else {
+        return false;
+    };
+    let root = Project::find(&here).map_or_else(|| here.clone(), |project| project.root);
+    match (
+        std::fs::canonicalize(here.join(word.trim())),
+        std::fs::canonicalize(&root),
+    ) {
+        (Ok(folder), Ok(root)) => folder.is_dir() && folder.starts_with(&root) && folder != root,
+        _ => false,
+    }
 }
 
 /// the reference data.toml gives the list at `path`, typed in `here`: `list:` and its path in the
@@ -1234,6 +1267,17 @@ pub(super) async fn sync_add(
     let mut pinning = imported.then(|| pinning_line(work, names)).flatten();
     let stop = &work.context.stop;
     let mut survey = Survey::read(project, &Folders::of(manifest), work.context.threads, stop)?;
+    let seeded = std::mem::take(
+        &mut *adding
+            .seeded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    for (path, mut placed) in seeded {
+        placed.checked = survey.started;
+        survey.state.files.insert(path, placed);
+        survey.needs_writing = true;
+    }
     let restored = place::restore_aside(project, &manifest.data_dir, &mut survey, false);
     place::restored_aside(&work.context.output, &restored, false);
     survey.check_doubted(&project.root, &work.cache)?;
@@ -2435,6 +2479,7 @@ mod tests {
             old: None,
             lock_text: None,
             unrestored: AtomicBool::new(false),
+            seeded: std::sync::Mutex::default(),
         };
         adding.read().unwrap();
         let updated = format!("{text}\n[datasets.b]\nref = \"https://example.org/b\"\n");

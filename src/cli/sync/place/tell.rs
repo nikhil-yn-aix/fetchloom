@@ -25,6 +25,32 @@ pub(super) fn tell(
             &format!("{path} · {} that was in the way", entry_name(*found)),
         );
     }
+    for (path, name) in &placement.cleared_outputs {
+        output.step_in(
+            "Removed",
+            &format!("{path} · a file {name}'s pin does not hold"),
+            crate::output::Tone::Warn,
+        );
+    }
+    for changed in &placement.changed_outputs {
+        let name = &changed.name;
+        output.warn_with(
+            Warning::OutputChanged,
+            &format!(
+                "{} changed since {name} was pinned: {}, so sync leaves it as it is",
+                changed.at,
+                changed.summary()
+            ),
+            &format!(
+                "run `{}` to put back the files {name} pins, or `{}` to pin what it holds now",
+                crate::suggested::command(&format!("sync --force {name}")),
+                crate::suggested::command(&format!(
+                    "add {} --as {name}",
+                    crate::suggested::shell_word(&changed.shown)
+                ))
+            ),
+        );
+    }
     // what is discarded was the person's, so the line asks for attention, not a finished step
     for overwritten in &placement.overwritten {
         output.step_in(

@@ -37,6 +37,7 @@ mod lists;
 mod merge;
 mod mirrors;
 mod moved;
+mod outputs;
 mod papers;
 mod path;
 mod placing;

@@ -94,6 +94,9 @@ pub(crate) enum Warning {
     NetworkPrivateOrigin,
     /// a request failed and is tried again.
     NetworkRetry,
+    /// an output's folder changed since it was pinned: a file changed, added or removed, so sync
+    /// left it whole and push sends the pinned files.
+    OutputChanged,
     /// a path starts with a folder named `~`, which is not the home folder there.
     PathTilde,
     /// a removal deletes files that were already there when fetchloom adopted them.
@@ -201,6 +204,7 @@ impl Warning {
             Warning::NameTaken => "name.taken",
             Warning::NetworkPrivateOrigin => "network.private_origin",
             Warning::NetworkRetry => "network.retry",
+            Warning::OutputChanged => "output.changed",
             Warning::PathTilde => "path.tilde",
             Warning::PlaceAdoptedRemoved => "place.adopted_removed",
             Warning::PlaceBlocked => "place.blocked",
@@ -293,6 +297,7 @@ mod tests {
             NameTaken,
             NetworkPrivateOrigin,
             NetworkRetry,
+            OutputChanged,
             PathTilde,
             PlaceAdoptedRemoved,
             PlaceBlocked,

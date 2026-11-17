@@ -42,6 +42,13 @@ pub(in crate::cli) enum Unready {
     NotDownloaded { name: String, by: &'static str },
     /// a dataset whose file list, which data.lock names, is not beside it.
     Waiting(Box<Waiting>),
+    /// an output whose folder changed since it was pinned, which sync leaves whole: its name,
+    /// its folder as a command names it, and what changed.
+    Output {
+        name: String,
+        shown: String,
+        changes: String,
+    },
 }
 
 impl Unready {
@@ -124,6 +131,18 @@ impl Unready {
                 "{} waits for its file list {}, which is not there: commit data.lock.d where it was pinned",
                 waiting.name, waiting.part
             ),
+            Unready::Output {
+                name,
+                shown,
+                changes,
+            } => format!(
+                "{shown} changed since {name} was pinned, {changes}: `{}` puts back its files, or `{}` pins what it holds now",
+                command(&format!("sync --force {name}")),
+                command(&format!(
+                    "add {} --as {name}",
+                    crate::suggested::shell_word(shown)
+                ))
+            ),
         }
     }
 
@@ -196,6 +215,16 @@ pub(in crate::cli) fn after_sync(
             Reason::Unneeded => None,
         })
         .collect();
+    unready.extend(
+        placement
+            .changed_outputs
+            .iter()
+            .map(|changed| Unready::Output {
+                name: changed.name.clone(),
+                shown: changed.shown.clone(),
+                changes: changed.summary(),
+            }),
+    );
     unready.extend(
         waiting
             .iter()

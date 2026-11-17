@@ -370,7 +370,7 @@ async fn sync_plain(
     let old = lock.map(|(lock, _)| lock);
     let waiting = old.as_ref().map(waiting_in).unwrap_or_default();
     let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?).filling();
-    let mut survey = surveyed(&work, &Folders::of(&plain), false)?;
+    let mut survey = surveyed(&work, &Folders::of(plain), false)?;
     let dropped = survey.state.dropped.clone();
     super::drop::tell_left_out(&context.output, plain, &Scope::All, &dropped);
     let plain = &*super::drop::placed_by(plain, &Scope::All, &dropped);

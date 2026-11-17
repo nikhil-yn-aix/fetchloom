@@ -3294,10 +3294,11 @@ fn an_sftp_link_says_fetchloom_does_not_speak_sftp() -> Result {
             "copy the file or folder with sftp or rclone, then add the copy with `fetchloom add <path>`"
         );
     }
-    fs::create_dir(sandbox.work().join("copied"))?;
-    fs::write(sandbox.work().join("copied").join("iris.csv"), IRIS)?;
+    // the copy beside the project, as sftp or rclone leave it; one inside it is pinned there
+    let copied = sandbox.folder("copied")?;
+    fs::write(copied.join("iris.csv"), IRIS)?;
     let line = help.split('`').nth(1).unwrap_or_default();
-    let line = line.replace("<path>", "./copied");
+    let line = line.replace("<path>", "../copied");
     let words: Vec<&str> = line.split(' ').skip(1).collect();
     let added = sandbox.run(&words)?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
@@ -3334,10 +3335,10 @@ fn an_sftp_entry_is_told_to_make_way_for_its_copy() -> Result {
         help,
         "copy the file or folder with sftp or rclone, then put the copy in place of this entry: `fetchloom remove iris`, then `fetchloom add <path> --as iris`"
     );
-    fs::create_dir(sandbox.work().join("copied"))?;
-    fs::write(sandbox.work().join("copied").join("iris.csv"), IRIS)?;
+    let copied = sandbox.folder("copied")?;
+    fs::write(copied.join("iris.csv"), IRIS)?;
     for line in help.split('`').skip(1).step_by(2) {
-        let line = line.replace("<path>", "./copied");
+        let line = line.replace("<path>", "../copied");
         let words: Vec<&str> = line.split(' ').skip(1).collect();
         let ran = sandbox.run(&words)?;
         assert_eq!(ran.status.code(), Some(0), "{line}: {}", text(&ran.stderr)?);

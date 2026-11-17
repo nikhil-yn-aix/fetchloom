@@ -29,9 +29,11 @@ use crate::stop::Stop;
 use crate::volume::is_plain;
 use crate::{name, place, units};
 
-/// `add <path>`: a folder's files, or one file, read and pinned by their bytes. with `--as` naming
-/// an import data.toml has, they must be the files data.lock pins, and only fill the data folder.
-pub(super) async fn import_held(
+mod in_place;
+
+/// `add <path>`: a folder of the project pinned where it is, as an output, or else a folder's
+/// files, or one file, imported.
+pub(super) async fn path_held(
     context: &Context,
     adding: &mut AddProject,
     args: &Add,
@@ -39,13 +41,39 @@ pub(super) async fn import_held(
     here: &Path,
     starting: bool,
 ) -> Result<Report, Error> {
-    let dry_run = args.dry.dry_run;
     let shown = typed.trim();
+    let start = located(shown, here, std::env::home_dir().as_deref())?;
+    if let Some(at) = in_place::at_of(&adding.project.root, &start) {
+        let typed = (start.as_path(), shown, at.as_str());
+        return in_place::pin_held(context, adding, args, typed, here, starting).await;
+    }
+    if args.check {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("{shown} is no folder of the project, so there is no output to check it against"),
+        )
+        .help("--check compares a folder of the project, such as data/processed, with the output data.lock records for it"));
+    }
+    import_held(context, adding, args, (&start, shown), here, starting).await
+}
+
+/// `add <path>`: a folder's files, or one file, at `start`, `shown` as typed, read and pinned by
+/// their bytes. with `--as` naming an import data.toml has, they must be the files data.lock
+/// pins, and only fill the data folder.
+async fn import_held(
+    context: &Context,
+    adding: &mut AddProject,
+    args: &Add,
+    (start, shown): (&Path, &str),
+    here: &Path,
+    starting: bool,
+) -> Result<Report, Error> {
+    let dry_run = args.dry.dry_run;
+    let start = start.to_path_buf();
     let old = adding.old.take();
     let adding = &*adding;
     let project = &adding.project;
     let manifest = &adding.manifest;
-    let start = located(shown, here, std::env::home_dir().as_deref())?;
     if !dry_run {
         project.check_writable()?;
     }
@@ -97,7 +125,7 @@ pub(super) async fn import_held(
         return Ok(preview_import(&work, manifest, found, &name, here));
     }
     room(context, &cache, &walked, shown)?;
-    let copied = into_cache(context, &cache, &walked)?;
+    let copied = into_cache(context, &cache, &walked, &|| Ok(()))?;
     let how = if copied.cloned { "cloned" } else { "copied" };
     let told = format!(
         "{} · {}, {how} into the cache; {shown} is unchanged",
@@ -857,14 +885,17 @@ fn refuse_overlap(
     }
 }
 
-/// the refusal of `typed`, a word naming something in the folder `here`, when that is in the data
-/// folder of the project there, or of the one an add would start there.
+/// the refusal of `typed`, a word naming a file in the folder `here`, when that is in the data
+/// folder of the project there, or of the one an add would start there. a folder there is pinned
+/// where it is, as an output, so its word is refused as any folder's is.
 pub(super) fn word_in_data_folder(typed: &str, here: &Path) -> Option<Error> {
     let project = Project::find(here).unwrap_or_else(|| Project::at(here.to_path_buf()));
     let data_dir = project
         .manifest()
         .map_or_else(|_| manifest::DATA_DIR.to_owned(), |(_, read)| read.data_dir);
-    let start = std::fs::canonicalize(here.join(typed)).ok()?;
+    let start = std::fs::canonicalize(here.join(typed))
+        .ok()
+        .filter(|start| start.is_file())?;
     let data = std::fs::canonicalize(project.root.join(&data_dir)).ok()?;
     start
         .starts_with(data)
@@ -1006,6 +1037,35 @@ pub(super) struct Found {
     /// the file on this machine.
     source: PathBuf,
     pub(super) size: u64,
+    /// how it looked when found.
+    seen: Seen,
+}
+
+/// how a file looked when a walk found it, which a later look must match for the file to be the
+/// one read: its size and time, and on unix its inode and the time its metadata last changed,
+/// which a rewrite keeping both still moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Seen {
+    look: crate::project::state::Look,
+    node: (u64, i64, i64),
+    writable: bool,
+}
+
+impl Seen {
+    fn of(metadata: &std::fs::Metadata) -> Seen {
+        #[cfg(unix)]
+        let node = {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.ino(), metadata.ctime(), metadata.ctime_nsec())
+        };
+        #[cfg(not(unix))]
+        let node = (0, 0, 0);
+        Seen {
+            look: crate::project::state::Look::of(metadata),
+            node,
+            writable: !metadata.permissions().readonly(),
+        }
+    }
 }
 
 /// the files a walk found to import, sorted by path, and the links and special files it left
@@ -1093,6 +1153,7 @@ pub(super) fn walk(
                             path: crate::name::composed(&relative),
                             source: listed.path(),
                             size: metadata.len(),
+                            seen: Seen::of(&metadata),
                         });
                     } else {
                         walked.skipped.push(relative);
@@ -1117,6 +1178,7 @@ pub(super) fn walk(
             path: crate::name::composed(file_name),
             source: start.to_path_buf(),
             size: found.len(),
+            seen: Seen::of(&found),
         });
         walked.root = start.parent().unwrap_or(start).to_path_buf();
     } else {
@@ -1277,8 +1339,14 @@ pub(super) struct Copied {
 }
 
 /// copies every file `walked` found into the cache and pins each. none is in the cache under its
-/// hash until every one is on disk, so a failure or a stop leaves none of them there.
-fn into_cache(context: &Context, cache: &Cache, walked: &Walked) -> Result<Copied, Error> {
+/// hash until every one is on disk and `unchanged` passes, so a failure, a stop or a change seen
+/// meanwhile leaves none of them there.
+fn into_cache(
+    context: &Context,
+    cache: &Cache,
+    walked: &Walked,
+    unchanged: &dyn Fn() -> Result<(), Error>,
+) -> Result<Copied, Error> {
     let found = &walked.files;
     // many objects flush together, since one flush each costs far more than writing a small file
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1295,6 +1363,7 @@ fn into_cache(context: &Context, cache: &Cache, walked: &Walked) -> Result<Copie
     let flush_each = true;
     let Sealing { sealed, cloned } = sealed(context, cache, walked, flush_each)?;
     context.stop.check()?;
+    unchanged()?;
     // every file is copied, and the disk still has to keep them before they are in the cache
     let finishing = context.output.wait(
         "Finishing",
@@ -1945,7 +2014,7 @@ mod tests {
             &context.stop,
         )
         .unwrap();
-        let copied = into_cache(&context, &cache, &walked).unwrap();
+        let copied = into_cache(&context, &cache, &walked, &|| Ok(())).unwrap();
         let pins: Vec<(&str, u64, crate::digest::Sha256, &str)> = copied
             .files
             .iter()
@@ -2003,10 +2072,19 @@ mod tests {
         if crate::test_links::link_folder(&outside, &root.join("sub")).is_err() {
             return crate::test_skips::skip("junctions", "this disk makes no junctions");
         }
-        let copied = into_cache(&context, &cache, &walked);
+        let copied = into_cache(&context, &cache, &walked, &|| Ok(()));
         assert!(copied.is_err(), "the junction was read through");
         let theirs = crate::digest::sha256(b"someone's own bytes");
         assert!(cache.find(&theirs, None).is_none());
+    }
+
+    /// how a file of `size` bytes no walk read looks.
+    fn unseen(size: u64) -> Seen {
+        Seen {
+            look: crate::project::state::Look { size, modified: 0 },
+            node: (0, 0, 0),
+            writable: true,
+        }
     }
 
     #[test]
@@ -2018,6 +2096,7 @@ mod tests {
                     path: (*path).to_owned(),
                     source: PathBuf::new(),
                     size: 0,
+                    seen: unseen(0),
                 })
                 .collect()
         };
@@ -2073,6 +2152,7 @@ mod tests {
             path: path.to_owned(),
             source: PathBuf::new(),
             size,
+            seen: unseen(size),
         };
         let pinned = [pin("a.csv", 1, 1), pin("b.csv", 2, 2)];
         assert_eq!(
