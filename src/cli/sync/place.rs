@@ -1889,8 +1889,8 @@ fn write_ahead(
         };
         if !placement.aside_names.contains_key(moved) {
             let hidden = match moved.rsplit_once('/') {
-                Some((folder, _)) => format!("{folder}/{}", place::aside_name()),
-                None => place::aside_name(),
+                Some((folder, _)) => format!("{folder}/{}", crate::volume::aside_name()),
+                None => crate::volume::aside_name(),
             };
             placement.aside_names.insert(moved.clone(), hidden);
         }

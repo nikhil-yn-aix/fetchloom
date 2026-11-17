@@ -9,6 +9,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
+/// a new name for a file moved out of the way in its own folder, `.fetchloom-<16 hex>.old`.
+pub(crate) fn aside_name() -> String {
+    format!(".fetchloom-{:016x}.old", fastrand::u64(..))
+}
+
 /// how a volume links, renames and removes files, and whether it can hardlink at all, learned
 /// the first time a removal needs to know.
 #[derive(Debug)]
@@ -185,9 +190,7 @@ impl Volume {
                 let _ = file.set_permissions(before.clone());
             }
         };
-        let aside = self
-            .scratch
-            .join(format!(".fetchloom-{:016x}.old", fastrand::u64(..)));
+        let aside = self.scratch.join(aside_name());
         if let Err(err) = self.rename(to, &aside) {
             reseal();
             return Err(err);

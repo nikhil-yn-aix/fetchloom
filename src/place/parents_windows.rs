@@ -217,7 +217,7 @@ impl Location {
             .parent()
             .ok_or_else(|| invalid("a placement has no parent"))?;
         loop {
-            let path = parent.join(format!(".fetchloom-{:016x}.copy", fastrand::u64(..)));
+            let path = parent.join(super::copy_temporary_name());
             match create(&path) {
                 Ok(file) => {
                     return Ok((

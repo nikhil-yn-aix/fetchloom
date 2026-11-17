@@ -26,7 +26,7 @@ use crate::stop::Stop;
 use crate::threads::Threads;
 #[cfg(windows)]
 use crate::volume::Volume;
-use crate::volume::{crosses_volumes, is_plain, read_unfollowed, refuses_links};
+use crate::volume::{aside_name, crosses_volumes, is_plain, read_unfollowed, refuses_links};
 
 /// the most threads that place files or look up objects at once, since each call waits on the
 /// disk and, on windows, the antivirus scanner: placing 10,000 files on windows took 7.5 s on
@@ -1856,11 +1856,6 @@ pub(crate) fn is_copy_temporary(name: &str) -> bool {
 /// written before it takes its own, which a later sync sweeps away if it never does.
 pub(crate) fn copy_temporary_name() -> String {
     format!(".fetchloom-{:016x}.copy", fastrand::u64(..))
-}
-
-/// a new name for a file moved out of the way in its own folder, `.fetchloom-<16 hex>.old`.
-pub(crate) fn aside_name() -> String {
-    format!(".fetchloom-{:016x}.old", fastrand::u64(..))
 }
 
 /// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so

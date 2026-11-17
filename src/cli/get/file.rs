@@ -988,8 +988,7 @@ fn publish(
     let mut placer = Placer::in_named_folder(folder)
         .with_threads(threads)
         .with_stop(Arc::clone(stop));
-    let temporary =
-        replace.then(|| folder.join(format!(".fetchloom-{:016x}.copy", fastrand::u64(..))));
+    let temporary = replace.then(|| folder.join(crate::place::copy_temporary_name()));
     let destination = temporary.as_deref().unwrap_or(path);
     let size = fs::metadata(object)?.len();
     let outcome = placer.place_all(

@@ -273,7 +273,7 @@ impl Location {
     pub(super) fn stage_link(&self, object: &Path) -> io::Result<Staged> {
         let identity = self.parent.identity()?;
         loop {
-            let hidden = format!(".fetchloom-{:016x}.copy", fastrand::u64(..));
+            let hidden = super::copy_temporary_name();
             match native::linkat(
                 native::CWD,
                 object,
@@ -305,7 +305,7 @@ impl Location {
     pub(super) fn stage_clone(&self, object: &File) -> io::Result<Staged> {
         let identity = self.parent.identity()?;
         loop {
-            let hidden = format!(".fetchloom-{:016x}.copy", fastrand::u64(..));
+            let hidden = super::copy_temporary_name();
             match native::fclonefileat(
                 object,
                 &self.parent.file,
@@ -341,7 +341,7 @@ impl Location {
         #[cfg(target_os = "macos")]
         let mode = u16::try_from(mode).map_err(|_| invalid("a placement mode is out of range"))?;
         loop {
-            let hidden = format!(".fetchloom-{:016x}.copy", fastrand::u64(..));
+            let hidden = super::copy_temporary_name();
             match native::openat(
                 &self.parent.file,
                 hidden.as_str(),
