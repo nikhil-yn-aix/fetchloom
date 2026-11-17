@@ -205,6 +205,11 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
         Access::Unknown
     };
     let timestamp = lines.value("locked")?;
+    let tree = if lines.sets("tree") {
+        Some(prefixed(&lines.value("tree")?)?)
+    } else {
+        None
+    };
     let from = if lines.sets("from") {
         inputs(lines)?
     } else {
@@ -223,6 +228,7 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
         doi,
         access,
         timestamp,
+        tree,
         from,
         files: Vec::new(),
     };
@@ -513,6 +519,7 @@ mod tests {
                 Access::Unknown
             },
             timestamp: "2026-10-27T17:30:00Z".to_owned(),
+            tree: extra.then(|| digest::sha256(b"its tree")),
             from: if extra {
                 vec![
                     Recorded {

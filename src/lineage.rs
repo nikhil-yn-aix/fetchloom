@@ -9,14 +9,16 @@
 //! made from itself, directly or by way of others.
 //!
 //! status, `lock --check` and sync judge each input data.toml names for a pinned dataset, by what
-//! data.toml, data.lock and this machine have of it now, against its record:
+//! data.toml, data.lock and this machine have of it now, against its record. its files now are
+//! the tree data.lock gives its pin, so a clone with no cache judges from data.lock alone; only
+//! when data.lock gives none does this machine work it out, from the files it holds:
 //!
-//! | data.toml has it | data.lock pins it as asked | its files here | the record | state | said |
+//! | data.toml has it | data.lock pins it as asked | its files now | the record | state | said |
 //! |---|---|---|---|---|---|
 //! | no | | | known, and one other dataset's files are those | renamed | unchecked |
 //! | no | | | any other | missing | unchecked |
 //! | yes | no, or not downloaded or listed yet | | | unlocked | unchecked |
-//! | yes | yes | unknown: an archive never unpacked here | | unresolved | unchecked |
+//! | yes | yes | unknown: no tree, and an archive never unpacked here | | unresolved | unchecked |
 //! | yes | yes | known | none, and no record of another name has those files | unresolved | unchecked |
 //! | yes | yes | known | none, but a record of another name has those files | current | nothing |
 //! | yes | yes | known | unknown | unresolved | unchecked |
@@ -27,9 +29,11 @@
 //! until its own files change. a stale dataset is told once per run, naming each input that
 //! changed; status and `lock --check` also tell each input they cannot check, which sync leaves
 //! to them. either way the exit code stays as it was, but for `lock --check --fail-on-stale`,
-//! which a stale dataset fails with `derived.stale`.
+//! which a stale dataset fails with `derived.stale`. `lock --check` also fails with
+//! `lock.outdated` when the tree data.lock gives an input is not that of its files, where this
+//! machine knows them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
@@ -42,9 +46,9 @@ use crate::project::manifest::{Entry, Manifest};
 use crate::tree;
 use crate::units;
 
-/// the identity of `name`'s files as data.toml and `lock` have them now, or none when this machine
-/// cannot tell: data.toml has no such dataset, `lock` does not pin it as data.toml asks, or one of
-/// its archives was never unpacked here.
+/// the identity of `name`'s files as data.toml and `lock` have them now: the tree data.lock gives
+/// them, else what this machine finds; none when data.toml has no such dataset, `lock` does not pin
+/// it as data.toml asks, or it has no tree and one of its archives was never unpacked here.
 pub(crate) fn current(
     manifest: &Manifest,
     lock: &Lock,
@@ -55,7 +59,9 @@ pub(crate) fn current(
     let locked = lock
         .get(name)
         .filter(|locked| locked.drift(entry).is_none())?;
-    tree::effective(entry, locked, cache)
+    locked
+        .tree
+        .or_else(|| tree::effective(entry, locked, cache))
 }
 
 /// records, in `lock`, each of `names` as made from the datasets data.toml's `from` gives it, with
@@ -89,6 +95,38 @@ pub(crate) fn record(
         }
     }
     changed
+}
+
+/// the refusal of a `lock` whose tree for a dataset a `from` names is not the one of the files it
+/// pins, as far as this machine can tell; none when each one it can tell is right.
+pub(crate) fn wrong_trees(manifest: &Manifest, lock: &Lock, cache: &Cache) -> Option<Error> {
+    let named: BTreeSet<&str> = manifest
+        .datasets
+        .values()
+        .flat_map(|entry| entry.from.iter().map(String::as_str))
+        .collect();
+    let wrong: Vec<String> = named
+        .into_iter()
+        .filter_map(|name| {
+            let entry = manifest.datasets.get(name)?;
+            let locked = lock.get(name)?;
+            let written = locked.tree?;
+            let found = tree::effective(entry, locked, cache)?;
+            (found != written)
+                .then(|| format!("{name}'s files are not the tree data.lock gives them"))
+        })
+        .collect();
+    if wrong.is_empty() {
+        return None;
+    }
+    let error = Error::new(
+        Kind::Outdated,
+        "data.lock is out of date with the files it pins",
+    );
+    Some(wrong.into_iter().fold(error, Error::detail).help(format!(
+        "run `{}` and commit data.lock",
+        crate::suggested::command("lock")
+    )))
 }
 
 /// what an add says of `name` once it recorded `inputs`: what it was made from, and whether status
@@ -493,6 +531,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: "2026-11-17T00:00:00Z".to_owned(),
+            tree: None,
             from,
             files: vec![LockedFile {
                 path: format!("{name}.csv"),

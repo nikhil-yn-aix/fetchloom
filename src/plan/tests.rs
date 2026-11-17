@@ -23,6 +23,7 @@ fn lock(datasets: &[(&str, &[&str])]) -> Lock {
                 doi: None,
                 access: crate::source::Access::Unknown,
                 timestamp: String::new(),
+                tree: None,
                 from: Vec::new(),
                 files: paths
                     .iter()

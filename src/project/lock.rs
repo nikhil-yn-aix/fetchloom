@@ -418,6 +418,9 @@ pub(crate) struct Locked {
     pub(crate) access: Access,
     /// when the pinned data last changed, in UTC.
     pub(crate) timestamp: String,
+    /// the identity of the files a pipeline sees in it ([`crate::tree::identity`]), when the
+    /// machine that wrote it knew them: always for plain files, for archives once unpacked there.
+    pub(crate) tree: Option<Sha256>,
     /// the datasets this one was made from, as an add recorded them, by name. only an add
     /// writes them; every other change of the pin keeps them as they were.
     pub(crate) from: Vec<Recorded>,
@@ -550,6 +553,7 @@ struct StoredDataset {
     access: Option<Access>,
     #[serde(rename = "locked")]
     timestamp: String,
+    tree: Option<String>,
     from: Option<Vec<StoredRecord>>,
     downloaded: Option<bool>,
     files: Option<Vec<StoredFile>>,
@@ -586,6 +590,14 @@ impl StoredDataset {
         let listed = self.listed()?;
         let name = self.name;
         let from = recorded(&name, self.from.unwrap_or_default())?;
+        let tree = match self.tree {
+            None => None,
+            Some(text) => Some(prefixed(&text).ok_or_else(|| {
+                broken(format!(
+                    "data.lock gives {name} a tree that is not sha256: and 64 hex digits"
+                ))
+            })?),
+        };
         let (Some(reference), Some(spec), Some(resolved)) =
             (self.reference, self.spec, self.resolved)
         else {
@@ -622,6 +634,7 @@ impl StoredDataset {
             doi: self.doi,
             access: self.access.unwrap_or_default(),
             timestamp: self.timestamp,
+            tree,
             from,
             files: Vec::new(),
         };
@@ -1056,6 +1069,9 @@ fn write_head(out: &mut String, dataset: &Locked) {
         let _ = writeln!(out, "access = \"{}\"", dataset.access.word());
     }
     let _ = writeln!(out, "locked = {}", quoted(&dataset.timestamp));
+    if let Some(tree) = dataset.tree {
+        let _ = writeln!(out, "tree = \"sha256:{tree}\"");
+    }
     if !dataset.from.is_empty() {
         let mut inputs: Vec<&Recorded> = dataset.from.iter().collect();
         inputs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1842,6 +1858,7 @@ mod tests {
                     doi: None,
                     access: Access::Unknown,
                     timestamp: "2026-10-27T17:30:00Z".to_owned(),
+                    tree: None,
                     from: Vec::new(),
                     files: vec![file("z.csv", b"z")],
                 },
@@ -1858,6 +1875,7 @@ mod tests {
                     doi: Some("10.5281/zenodo.3608990".to_owned()),
                     access: Access::Public,
                     timestamp: "2026-10-27T17:30:00Z".to_owned(),
+                    tree: None,
                     from: Vec::new(),
                     files: vec![
                         LockedFile {
@@ -1905,6 +1923,7 @@ mod tests {
             doi: None,
             access: Access::Public,
             timestamp: "2026-11-15T07:00:00Z".to_owned(),
+            tree: None,
             from: Vec::new(),
             files: Vec::new(),
         };
@@ -3068,6 +3087,7 @@ mod tests {
     fn from_reads_back_as_written_and_refuses_what_fetchloom_never_writes() {
         let mut lock = sample_sorted();
         let tree = digest::sha256(b"tree");
+        lock.datasets[1].tree = Some(digest::sha256(b"zeta's tree"));
         lock.datasets[0].from = vec![
             Recorded {
                 name: "raw".to_owned(),
@@ -3083,7 +3103,20 @@ mod tests {
             "locked = \"2026-10-27T17:30:00Z\"\nfrom = [\n  {{ name = \"raw\", tree = \"sha256:{tree}\" }},\n  {{ name = \"zeta\", tree = \"unknown\" }},\n]\nfiles = ["
         );
         assert!(text.contains(&written), "{text}");
+        let own = format!(
+            "locked = \"2026-10-27T17:30:00Z\"\ntree = \"sha256:{}\"\nfiles = [",
+            digest::sha256(b"zeta's tree")
+        );
+        assert!(text.contains(&own), "{text}");
         assert_eq!(Lock::parse(&text).unwrap(), lock);
+        let unreadable = text.replace(
+            &own,
+            "locked = \"2026-10-27T17:30:00Z\"\ntree = \"sha256:12\"\nfiles = [",
+        );
+        assert_eq!(
+            Lock::parse(&unreadable).unwrap_err().message,
+            "data.lock gives zeta a tree that is not sha256: and 64 hex digits"
+        );
         let swapped = text.replace(
             &written,
             &format!(

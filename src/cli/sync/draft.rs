@@ -649,6 +649,7 @@ impl Draft {
             doi: None,
             access: self.access,
             timestamp: String::new(),
+            tree: None,
             from: Vec::new(),
             files,
         }
@@ -798,6 +799,7 @@ impl Draft {
             doi: self.doi,
             access: self.access,
             timestamp: now.to_owned(),
+            tree: None,
             from: Vec::new(),
             files,
         })
@@ -1557,6 +1559,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            tree: None,
             from: Vec::new(),
             files: vec![LockedFile {
                 path: "set.zip".to_owned(),
@@ -2000,6 +2003,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            tree: None,
             from: Vec::new(),
             files: vec![
                 file("notes.txt", digest::sha256(b"notes"), 5),
@@ -2090,6 +2094,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            tree: None,
             from: Vec::new(),
             files: vec![LockedFile {
                 path: "weights.npz".to_owned(),
@@ -2140,6 +2145,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            tree: None,
             from: Vec::new(),
             files: vec![file("900150983cd24fb0d6963f7d28e17f72")],
         };
@@ -2181,6 +2187,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            tree: None,
             from: Vec::new(),
             files: vec![LockedFile {
                 path: "data.csv".to_owned(),

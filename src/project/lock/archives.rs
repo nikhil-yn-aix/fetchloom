@@ -260,6 +260,7 @@ mod tests {
                 doi: None,
                 access: crate::source::Access::Unknown,
                 timestamp: String::new(),
+                tree: None,
                 from: Vec::new(),
                 files: vec![
                     file("a.zip.001", true),

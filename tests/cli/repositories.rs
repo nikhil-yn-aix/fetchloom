@@ -1400,10 +1400,19 @@ fn a_zenodo_record_pins_as_it_always_has() -> Result {
         .lines()
         .filter(|line| !line.starts_with("locked = "))
         .fold(String::new(), |lock, line| lock + line + "\n");
+    // the tree is version 1's: the SHA-256 of its first line and a line for each file
+    let tree = sha256_hex(
+        format!(
+            "fetchloom tree 1\nrows.csv\t{}\t{}\n",
+            ROWS.len(),
+            sha256_hex(ROWS)
+        )
+        .as_bytes(),
+    );
     assert_eq!(
         lock,
         format!(
-            "version = 1\n\n[[dataset]]\nname = \"dao\"\nref = \"zenodo:18149369\"\nspec = \"sha256:711472e85f75f358a75c8c40edeb8f54232359c3d09fe95c26c31d7cf620f8bc\"\nresolved = \"zenodo:18149369\"\ntitle = \"DAO Analyzer dataset\"\nlicense = \"cc-zero\"\ndoi = \"10.5281/zenodo.18149369\"\naccess = \"public\"\nfiles = [\n  {{ path = \"rows.csv\", size = {}, sha256 = \"{}\", md5 = \"{}\", url = \"https://zenodo.org/api/records/18149369/files/rows.csv/content\" }},\n]\n",
+            "version = 1\n\n[[dataset]]\nname = \"dao\"\nref = \"zenodo:18149369\"\nspec = \"sha256:711472e85f75f358a75c8c40edeb8f54232359c3d09fe95c26c31d7cf620f8bc\"\nresolved = \"zenodo:18149369\"\ntitle = \"DAO Analyzer dataset\"\nlicense = \"cc-zero\"\ndoi = \"10.5281/zenodo.18149369\"\naccess = \"public\"\ntree = \"sha256:{tree}\"\nfiles = [\n  {{ path = \"rows.csv\", size = {}, sha256 = \"{}\", md5 = \"{}\", url = \"https://zenodo.org/api/records/18149369/files/rows.csv/content\" }},\n]\n",
             ROWS.len(),
             sha256_hex(ROWS),
             md5_hex(ROWS)

@@ -553,6 +553,7 @@ mod tests {
                 doi: None,
                 access: crate::source::Access::Public,
                 timestamp: "2026-11-11T00:00:00Z".to_owned(),
+                tree: None,
                 from: Vec::new(),
                 files,
             }],

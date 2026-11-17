@@ -696,12 +696,24 @@ fn pick_records(
             _ => decided.settle(name, verdict, choice),
         };
         if let Some(take) = take {
-            kept.extend(pick(take, ours, theirs).cloned());
+            let chosen = pick(take, ours, theirs).cloned();
+            kept.extend(chosen.map(|chosen| match take {
+                Take::Same => with_known_tree(chosen, theirs),
+                Take::Side(_) => chosen,
+            }));
             decided.records.insert(name.clone(), take);
         }
     }
     kept.sort_by(|a, b| a.name().cmp(b.name()));
     kept
+}
+
+/// `chosen`, the pin both sides share, with the tree `other`'s side knew when its own lacks one.
+fn with_known_tree(mut chosen: Parsed, other: Option<&Parsed>) -> Parsed {
+    if let (Parsed::Source(locked, _), Some(Parsed::Source(known, _))) = (&mut chosen, other) {
+        locked.tree = locked.tree.or(known.tree);
+    }
+    chosen
 }
 
 /// decides each dataset a side of data.lock pins that the merged data.toml lacks. its pin goes
@@ -1287,8 +1299,9 @@ fn alike(a: &Parsed, b: &Parsed) -> bool {
     }
 }
 
-/// a fetched dataset's entry without when it was pinned. naming every field makes a new one
-/// count here too.
+/// a fetched dataset's entry without when it was pinned, or the tree a machine that knew its files
+/// wrote, which two sides of the same pin may differ in. naming every field makes a new one count
+/// here too.
 fn untimed(locked: &Locked) -> impl PartialEq + '_ {
     let Locked {
         name,
@@ -1303,6 +1316,7 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
         doi,
         access,
         timestamp: _,
+        tree: _,
         from,
         files,
     } = locked;

@@ -101,6 +101,7 @@ fn generated(bytes: &[u8]) -> Lock {
             doi,
             access,
             timestamp: input.text(),
+            tree: None,
             from: Vec::new(),
             files,
         });

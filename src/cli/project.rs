@@ -316,7 +316,8 @@ async fn sync_held(
     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
         .within(scope)
         .filling()
-        .verifying(args.verify);
+        .verifying(args.verify)
+        .keeping_trees(args.locked);
     let run = Run {
         upgrade: Upgrade::Nothing,
         force: args.force,
@@ -844,7 +845,11 @@ fn check_lock(
         .values()
         .any(|entry| !entry.from.is_empty());
     if let Some(old) = old.filter(|_| made) {
-        let judged = crate::lineage::judge(manifest, old, &peek_cache()?);
+        let cache = peek_cache()?;
+        if let Some(wrong) = crate::lineage::wrong_trees(manifest, old, &cache) {
+            return Err(wrong);
+        }
+        let judged = crate::lineage::judge(manifest, old, &cache);
         super::lineage::tell_unchecked(&context.output, &judged);
         match crate::lineage::stale_error(&judged).filter(|_| fail_on_stale) {
             Some(stale) => return Err(stale),
@@ -2060,6 +2065,7 @@ pub(crate) mod tests {
             doi: None,
             access: crate::source::Access::Unknown,
             timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            tree: None,
             from: Vec::new(),
             files,
         }

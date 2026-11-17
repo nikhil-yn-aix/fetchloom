@@ -526,7 +526,8 @@ fn an_input_without_a_record_is_unresolved() -> Result {
 fn an_input_whose_files_were_not_known_is_unresolved() -> Result {
     let unknown = |sandbox: &Sandbox, _: &Routes| {
         let then = tree(&[("iris.csv", IRIS)]);
-        let lock = read(sandbox, "data.lock")?.replace(&then, "unknown");
+        let lock = read(sandbox, "data.lock")?
+            .replace(&recorded("iris", &then), &recorded("iris", "unknown"));
         fs::write(sandbox.work().join("data.lock"), lock)?;
         Ok(())
     };
@@ -563,6 +564,14 @@ fn a_members_table_that_keeps_other_files_changes_what_a_pipeline_saw() -> Resul
         read(&sandbox, "data.toml")?
     );
     fs::write(sandbox.work().join("data.toml"), toml)?;
+    // the tree data.lock gives iris is the whole archive's until data.lock is written again
+    let output = sandbox.run(&["--json", "lock", "--check"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["details"],
+        serde_json::json!(["iris's files are not the tree data.lock gives them"])
+    );
+    ok(&sandbox.run(&["lock"])?)?;
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     let stale = warning(&document, "derived.stale");
     assert_eq!(stale["recorded"], both.as_str());
@@ -574,6 +583,9 @@ fn a_members_table_that_keeps_other_files_changes_what_a_pipeline_saw() -> Resul
 fn an_archive_never_unpacked_on_this_machine_leaves_its_input_unresolved() -> Result {
     let sandbox = Sandbox::new()?;
     let _routes = made_from_a_zip(&sandbox)?;
+    // as a machine that never unpacked iris leaves its pin
+    let lock = with_tree(&read(&sandbox, "data.lock")?, "iris", None)?;
+    fs::write(sandbox.work().join("data.lock"), lock)?;
     let output = sandbox
         .command(&["--json", "status"])
         .env("FETCHLOOM_CACHE", sandbox.folder("other-cache")?)
@@ -732,5 +744,231 @@ fn an_input_no_one_can_check_never_fails_the_check() -> Result {
     let output = sandbox.run(&["--json", "lock", "--check", "--fail-on-stale"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     assert_eq!(kinds(&json(&output)?), ["derived.unchecked"]);
+    Ok(())
+}
+
+/// copies of data.toml and data.lock in a folder of their own, as a ci runner's clone, with the
+/// path of a cache folder that does not exist yet.
+fn clone_without_cache(sandbox: &Sandbox) -> Result<(PathBuf, PathBuf)> {
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    Ok((clone, sandbox.folder("runner")?.join("cache")))
+}
+
+/// `lock` with `dataset`'s `tree` line set to `tree`, in place of the one it has, or after its
+/// `locked` line; with no `tree`, the line taken out.
+fn with_tree(lock: &str, dataset: &str, tree: Option<&str>) -> Result<String> {
+    let start = lock
+        .find(&format!("name = \"{dataset}\""))
+        .ok_or("no such dataset")?;
+    let end = lock[start..]
+        .find("\n[[dataset]]")
+        .map_or(lock.len(), |end| start + end);
+    let mut lines: Vec<String> = lock[start..end].lines().map(str::to_owned).collect();
+    lines.retain(|line| !line.starts_with("tree = "));
+    if let Some(tree) = tree {
+        let at = lines
+            .iter()
+            .position(|line| line.starts_with("locked = "))
+            .ok_or("no locked line")?;
+        lines.insert(at + 1, format!("tree = \"{tree}\""));
+    }
+    Ok(format!(
+        "{}{}\n{}",
+        &lock[..start],
+        lines.join("\n"),
+        &lock[end..]
+    ))
+}
+
+/// the kinds of the lineage warnings of a `--json` document.
+fn derived(document: &serde_json::Value) -> Vec<&str> {
+    kinds(document)
+        .into_iter()
+        .filter(|kind| kind.starts_with("derived."))
+        .collect()
+}
+
+#[test]
+fn a_clone_without_a_cache_tells_a_changed_archive_input_from_data_lock_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_a_zip(&sandbox)?;
+    let newer = zip_of(&[("iris/a.csv", b"A\n"), ("iris/b.csv", b"b\n")])?;
+    routes.change(vec![("/files/iris.zip".to_owned(), file(&newer, "\"z2\""))]);
+    ok(&sandbox.run(&["lock", "--upgrade", "iris"])?)?;
+    let asked = routes.requests().len();
+    let (clone, cache) = clone_without_cache(&sandbox)?;
+    let output = sandbox
+        .command_in(&clone, &["--json", "lock", "--check", "--fail-on-stale"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "derived.stale");
+    assert_eq!(
+        error["message"],
+        "processed may be stale: iris's files changed since processed was pinned from them"
+    );
+    assert_eq!(routes.requests().len(), asked, "a check asks no source");
+    assert!(!cache.exists(), "a check makes no cache");
+    Ok(())
+}
+
+#[test]
+fn a_repin_to_the_same_files_raises_nothing_even_without_a_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_a_zip(&sandbox)?;
+    // the same files packed again in another order: other archive bytes, the same files
+    let repacked = zip_of(&[("iris/b.csv", b"b\n"), ("iris/a.csv", b"a\n")])?;
+    let before = read(&sandbox, "data.lock")?;
+    routes.change(vec![(
+        "/files/iris.zip".to_owned(),
+        file(&repacked, "\"z2\""),
+    )]);
+    ok(&sandbox.run(&["lock", "--upgrade", "iris"])?)?;
+    assert_ne!(
+        read(&sandbox, "data.lock")?,
+        before,
+        "the archive's pin changed"
+    );
+    for args in [
+        &["--json", "status"][..],
+        &["--json", "lock", "--check"],
+        &["--json", "sync"],
+    ] {
+        let document = json(&sandbox.run(args)?)?;
+        assert_eq!(
+            derived(&document),
+            Vec::<&str>::new(),
+            "{args:?}: {document}"
+        );
+    }
+    let (clone, cache) = clone_without_cache(&sandbox)?;
+    for args in [
+        &["--json", "lock", "--check", "--fail-on-stale"][..],
+        &["--json", "status"],
+    ] {
+        let output = sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stdout)?
+        );
+        let document = json(&output)?;
+        assert_eq!(
+            derived(&document),
+            Vec::<&str>::new(),
+            "{args:?}: {document}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_wrong_tree_in_data_lock_fails_lock_check_where_its_files_are_known() -> Result {
+    let sandbox = Sandbox::new()?;
+    made_from_iris(&sandbox)?;
+    let right = tree(&[("iris.csv", IRIS)]);
+    let wrong = tree(&[("iris.csv", NEWER)]);
+    let lock = with_tree(&read(&sandbox, "data.lock")?, "iris", Some(&wrong))?;
+    fs::write(sandbox.work().join("data.lock"), lock)?;
+    let output = sandbox.run(&["--json", "lock", "--check"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "lock.outdated");
+    assert_eq!(
+        error["message"],
+        "data.lock is out of date with the files it pins"
+    );
+    assert_eq!(
+        error["details"],
+        serde_json::json!(["iris's files are not the tree data.lock gives them"])
+    );
+    assert_eq!(error["help"], "run `fetchloom lock` and commit data.lock");
+    ok(&sandbox.run(&["lock"])?)?;
+    let lock = read(&sandbox, "data.lock")?;
+    assert!(lock.contains(&format!("tree = \"{right}\"")), "{lock}");
+    assert!(!lock.contains(&wrong), "{lock}");
+    ok(&sandbox.run(&["lock", "--check", "--fail-on-stale"])?)
+}
+
+#[test]
+fn an_input_with_no_tree_line_nor_cache_stays_unresolved_and_never_fails() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_a_zip(&sandbox)?;
+    let newer = zip_of(&[("iris/a.csv", b"A\n"), ("iris/b.csv", b"b\n")])?;
+    routes.change(vec![("/files/iris.zip".to_owned(), file(&newer, "\"z2\""))]);
+    ok(&sandbox.run(&["lock", "--upgrade", "iris"])?)?;
+    // as a machine that never unpacked iris leaves its pin
+    let lock = with_tree(&read(&sandbox, "data.lock")?, "iris", None)?;
+    fs::write(sandbox.work().join("data.lock"), lock)?;
+    let (clone, cache) = clone_without_cache(&sandbox)?;
+    let output = sandbox
+        .command_in(&clone, &["--json", "lock", "--check", "--fail-on-stale"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(derived(&document), ["derived.unchecked"]);
+    let unchecked = warning(&document, "derived.unchecked");
+    assert_eq!(unchecked["reason"], "unresolved");
+    assert_eq!(unchecked["current"], "unknown");
+    Ok(())
+}
+
+#[test]
+fn data_lock_gives_each_pin_the_tree_of_the_files_a_pipeline_sees() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = zip_of(&[("iris/a.csv", b"a\n"), ("iris/b.csv", b"b\n")])?;
+    let reads = crate::decompress::gz(b"read\n")?;
+    let routes = Routes::start(vec![
+        ("/files/iris.zip".to_owned(), file(&zip, "\"z1\"")),
+        ("/files/reads.fastq.gz".to_owned(), file(&reads, "\"g1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/iris.zip", routes.url)])?)?;
+    let gzipped = format!("{}/files/reads.fastq.gz", routes.url);
+    ok(&sandbox.run(&["add", &gzipped, "--as", "reads", "--decompress"])?)?;
+    let lines = |sandbox: &Sandbox, name: &str| -> Result<String> {
+        let lock = read(sandbox, "data.lock")?;
+        let at = lock
+            .find(&format!("name = \"{name}\""))
+            .ok_or("no dataset")?;
+        let line = lock[at..]
+            .lines()
+            .find(|line| line.starts_with("tree = ") || line.starts_with("files"))
+            .unwrap_or_default();
+        Ok(line.to_owned())
+    };
+    let both = tree(&[("a.csv", b"a\n"), ("b.csv", b"b\n")]);
+    assert_eq!(lines(&sandbox, "iris")?, format!("tree = \"{both}\""));
+    let unpacked = tree(&[("reads.fastq", b"read\n")]);
+    assert_eq!(lines(&sandbox, "reads")?, format!("tree = \"{unpacked}\""));
+    // a members table needs no new pin, so sync --locked leaves data.lock; lock writes the tree
+    let plain = read(&sandbox, "data.toml")?;
+    let chosen =
+        format!("{plain}\n[datasets.iris.members.\"iris.zip\"]\nselect = [\"iris/a.csv\"]\n");
+    fs::write(sandbox.work().join("data.toml"), &chosen)?;
+    let before = read(&sandbox, "data.lock")?;
+    ok(&sandbox.run(&["sync", "--locked"])?)?;
+    assert_eq!(read(&sandbox, "data.lock")?, before);
+    ok(&sandbox.run(&["lock"])?)?;
+    let only_a = tree(&[("a.csv", b"a\n")]);
+    assert_eq!(lines(&sandbox, "iris")?, format!("tree = \"{only_a}\""));
+    fs::write(sandbox.work().join("data.toml"), &plain)?;
+    ok(&sandbox.run(&["lock"])?)?;
+    assert_eq!(lines(&sandbox, "iris")?, format!("tree = \"{both}\""));
+    // packed, the archive is the file a pipeline sees
+    let packed = plain.replace("[datasets.iris]\n", "[datasets.iris]\nextract = false\n");
+    fs::write(sandbox.work().join("data.toml"), packed)?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let whole = tree(&[("iris.zip", &zip)]);
+    assert_eq!(lines(&sandbox, "iris")?, format!("tree = \"{whole}\""));
     Ok(())
 }

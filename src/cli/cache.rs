@@ -1476,6 +1476,7 @@ mod tests {
                 doi: None,
                 access: crate::source::Access::Unknown,
                 timestamp: String::new(),
+                tree: None,
                 from: Vec::new(),
                 files: vec![LockedFile {
                     path: "set.zip".to_owned(),
@@ -1689,6 +1690,7 @@ mod tests {
                     doi: None,
                     access: crate::source::Access::Unknown,
                     timestamp: String::new(),
+                    tree: None,
                     from: Vec::new(),
                     files: Vec::new(),
                 },

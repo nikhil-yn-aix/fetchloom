@@ -27,6 +27,7 @@ fn fetched(name: &str, version: u8, files: Vec<LockedFile>) -> Locked {
         doi: None,
         access: Access::Public,
         timestamp: "2026-11-10T00:00:00Z".to_owned(),
+        tree: None,
         from: Vec::new(),
         files,
     }

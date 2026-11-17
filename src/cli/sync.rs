@@ -124,6 +124,8 @@ pub(super) struct Loop<'a> {
     fills: bool,
     /// whether placing hashes every cached file it takes first, as `sync --verify` asks.
     verifies: bool,
+    /// whether relocking may write a kept pin's tree anew, which `sync --locked` leaves be.
+    refreshes: bool,
     /// what relocking told ahead and fetched, which placing's downloads finish telling.
     ahead: Mutex<Option<Ahead>>,
     /// the files of pins by what their sources state that relocking offline could not fill, which
@@ -171,9 +173,17 @@ impl<'a> Loop<'a> {
             places: AtomicBool::new(false),
             fills: false,
             verifies: false,
+            refreshes: true,
             ahead: Mutex::default(),
             unfilled: Mutex::default(),
         }
+    }
+
+    /// relocking keeps each kept pin's tree as data.lock has it, as `sync --locked` asks, whose
+    /// data.lock changes only as data.toml asks.
+    pub(super) fn keeping_trees(mut self, keep: bool) -> Self {
+        self.refreshes = !keep;
+        self
     }
 
     /// relocking downloads each dataset in scope only its source's digests pin, and pins it whole.
@@ -841,7 +851,42 @@ impl<'a> Loop<'a> {
         }));
         let (mut lock, kept) = settled(&others, kept, drafted);
         let gone = carried.back(&mut lock);
-        Ok((lock, Before::new(existed, others, gone, kept, renamed)))
+        let mut before = Before::new(existed, others, gone, kept, renamed);
+        self.trees(manifest, &mut lock, &mut before);
+        Ok((lock, before))
+    }
+
+    /// writes in `lock` each dataset's tree as this machine knows it. a pin made again gets its
+    /// own, or keeps its old one while its files are the same. a kept pin keeps its line, but for
+    /// one a `from` names and one of archives with a line, whose members tables may have changed:
+    /// those are checked, unless the run keeps trees. a kept pin whose line changes is written and
+    /// told.
+    fn trees(&self, manifest: &Manifest, lock: &mut Lock, before: &mut Before) {
+        let named: BTreeSet<&str> = manifest
+            .datasets
+            .values()
+            .flat_map(|entry| entry.from.iter().map(String::as_str))
+            .collect();
+        let found = |locked: &Locked| {
+            let entry = manifest.datasets.get(&locked.name)?;
+            crate::tree::effective(entry, locked, &self.cache).or(locked.tree)
+        };
+        for (index, kept) in before.kept.clone().into_iter().enumerate() {
+            let locked = &lock.datasets[index];
+            let archives = locked.files.iter().any(|file| file.unpacks_to.is_some());
+            let checked =
+                named.contains(locked.name.as_str()) || (archives && locked.tree.is_some());
+            if kept && !(checked && self.refreshes) {
+                continue;
+            }
+            let tree = found(locked);
+            if tree != locked.tree {
+                if kept {
+                    before.unkeep(index, locked.clone());
+                }
+                lock.datasets[index].tree = tree;
+            }
+        }
     }
 
     /// tells each draft what the download of its file in `slots` fetched, then records the blobs
@@ -2174,6 +2219,12 @@ fn settled(others: &Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec
             if before.resolved == locked.resolved && before.files == locked.files {
                 locked.timestamp.clone_from(&before.timestamp);
             }
+            if before.files == locked.files
+                && before.extract == locked.extract
+                && before.decompress == locked.decompress
+            {
+                locked.tree = locked.tree.or(before.tree);
+            }
             if locked.from.is_empty() {
                 locked.from.clone_from(&before.from);
             }
@@ -2245,6 +2296,19 @@ impl Before {
         {
             Ok(index) if self.kept.get(index) == Some(&true) => lock.datasets.get(index),
             _ => self.others.get(name),
+        }
+    }
+
+    /// counts the entry at `index` of the new lock as changed from `old`, its version before, so
+    /// the change is written and told.
+    fn unkeep(&mut self, index: usize, old: Locked) {
+        if self.kept.get(index) == Some(&true) {
+            self.kept[index] = false;
+            let at = self
+                .others
+                .datasets
+                .partition_point(|other| other.name < old.name);
+            self.others.datasets.insert(at, old);
         }
     }
 
@@ -2980,6 +3044,7 @@ mod tests {
             doi: None,
             access: source::Access::Unknown,
             timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            tree: None,
             from: Vec::new(),
             files: vec![LockedFile {
                 path: "data.csv".to_owned(),
@@ -3718,6 +3783,35 @@ mod tests {
             ..unchanged
         };
         assert!(!absent.holds(&same), "a missing data.lock is written");
+    }
+
+    /// a machine that cannot unpack an archive finds no tree for it, so a pin made again there
+    /// keeps the one data.lock gives while nothing a pipeline sees changed.
+    #[test]
+    fn a_pin_made_again_keeps_its_tree_while_its_files_are_the_same() {
+        let known = Locked {
+            tree: Some(digest::sha256(b"its tree")),
+            ..locked("b")
+        };
+        let others = Lock {
+            datasets: vec![known.clone()],
+            ..Lock::default()
+        };
+        let again = |change: fn(&mut Locked)| {
+            let mut drafted = Locked {
+                resolved: "zenodo:3".to_owned(),
+                ..locked("b")
+            };
+            change(&mut drafted);
+            settled(&others, Vec::new(), vec![drafted]).0.datasets[0].tree
+        };
+        assert_eq!(again(|_| {}), known.tree);
+        assert_eq!(
+            again(|drafted| drafted.files[0].sha256 = digest::sha256(b"other")),
+            None
+        );
+        assert_eq!(again(|drafted| drafted.extract = false), None);
+        assert_eq!(again(|drafted| drafted.decompress = true), None);
     }
 
     #[test]

@@ -33,6 +33,7 @@ fn pin(name: &str, reference: &str, bytes: &[u8]) -> Locked {
         doi: None,
         access: Access::Unknown,
         timestamp: "2026-11-10T00:00:00Z".to_owned(),
+        tree: None,
         from: Vec::new(),
         files: vec![LockedFile {
             path: format!("{name}.csv"),
@@ -1105,4 +1106,27 @@ fn a_pin_not_downloaded_yet_merges_as_any_pin() {
     );
     let kept = merged(&manifest, &unchanged, &[]).unwrap().lock.unwrap();
     assert_eq!(kept.stated, [core]);
+}
+
+/// two sides pin a dataset alike, but the machine on one side knew its tree and wrote it.
+#[test]
+fn a_pin_alike_on_both_sides_keeps_the_tree_either_side_knew() {
+    let manifest = sides(
+        toml(&[("core", "zenodo:3")]),
+        toml(&[("core", "zenodo:3")]),
+        None,
+    );
+    let known = Locked {
+        tree: Some(digest::sha256(b"its tree")),
+        ..pin("core", "zenodo:3", b"core")
+    };
+    for (ours, theirs) in [
+        (pin("core", "zenodo:3", b"core"), known.clone()),
+        (known.clone(), pin("core", "zenodo:3", b"core")),
+    ] {
+        let locks = sides(lock(vec![ours]), lock(vec![theirs]), None);
+        let merged = merged(&manifest, &locks, &[]).unwrap();
+        assert_eq!(merged.summary.same, ["core"]);
+        assert_eq!(merged.lock.unwrap().datasets, std::slice::from_ref(&known));
+    }
 }

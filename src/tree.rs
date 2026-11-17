@@ -8,7 +8,7 @@
 //! a later version starts with its own line, so identities of two versions never meet. no path
 //! in a pin holds a tab or a line break, so the text reads back one way only.
 
-use std::fmt::Write as _;
+use std::io::Write as _;
 
 use crate::cache::{Cache, Member};
 use crate::digest::{Hasher, Sha256};
@@ -23,15 +23,21 @@ const VERSION: &str = "fetchloom tree 1\n";
 /// the identity of the files `files` gives by their paths in the dataset, sizes and SHA-256, in
 /// any order: the SHA-256 of version 1's text, which data.lock writes as `sha256:` and its hex.
 pub(crate) fn identity<'a>(files: impl IntoIterator<Item = (&'a str, u64, Sha256)>) -> Sha256 {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut files: Vec<(&str, u64, Sha256)> = files.into_iter().collect();
     files.sort_unstable_by(|a, b| a.0.cmp(b.0));
     let mut hasher = Hasher::default();
     hasher.update(VERSION.as_bytes());
-    let mut line = String::new();
+    let mut line = Vec::new();
     for (path, size, sha256) in files {
         line.clear();
-        let _ = writeln!(line, "{path}\t{size}\t{sha256}");
-        hasher.update(line.as_bytes());
+        let _ = write!(line, "{path}\t{size}\t");
+        for byte in sha256.bytes() {
+            line.push(DIGITS[usize::from(byte >> 4)]);
+            line.push(DIGITS[usize::from(byte & 0x0f)]);
+        }
+        line.push(b'\n');
+        hasher.update(&line);
     }
     hasher.finish().0
 }
@@ -48,6 +54,15 @@ fn effective_with(
     locked: &Locked,
     members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
 ) -> Option<Sha256> {
+    // without an archive each file is where data.lock lists it, which no members table moves
+    if locked.files.iter().all(|file| file.unpacks_to.is_none()) {
+        return Some(identity(
+            locked
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.size, file.sha256)),
+        ));
+    }
     let mut plan = Plan::default();
     plan::expand(
         &mut plan,
@@ -107,6 +122,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: "2025-11-17T00:00:00Z".to_owned(),
+            tree: None,
             from: Vec::new(),
             files,
         }

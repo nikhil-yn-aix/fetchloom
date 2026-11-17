@@ -11,6 +11,7 @@ ref = "http://127.0.0.1:[port]/files/iris.csv"
 spec = "[spec]"
 resolved = "http://127.0.0.1:[port]/files/iris.csv"
 locked = "[time]"
+tree = "sha256:a35ba5984f2ff54d1245b71925441005ca20a08ee37b1d5f1d6612ad57467df3"
 files = [
   { path = "iris.csv", size = 32, sha256 = "8b1ffd452ff4bb8e22402d04ac3f2eab66202dd50aee35e61d420bdd99b285eb", url = "http://127.0.0.1:[port]/files/iris.csv" },
 ]
