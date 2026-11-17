@@ -124,6 +124,8 @@ pub(super) struct Loop<'a> {
     fills: bool,
     /// whether placing hashes every cached file it takes first, as `sync --verify` asks.
     verifies: bool,
+    /// whether the run ends telling the datasets that may be stale, as a sync does.
+    pub(super) judges: bool,
     /// whether relocking may write a kept pin's tree anew, which `sync --locked` leaves be.
     refreshes: bool,
     /// what relocking told ahead and fetched, which placing's downloads finish telling.
@@ -173,10 +175,17 @@ impl<'a> Loop<'a> {
             places: AtomicBool::new(false),
             fills: false,
             verifies: false,
+            judges: false,
             refreshes: true,
             ahead: Mutex::default(),
             unfilled: Mutex::default(),
         }
+    }
+
+    /// the run ends telling, from the lock it leaves, the datasets that may be stale.
+    pub(super) fn judging(mut self) -> Self {
+        self.judges = true;
+        self
     }
 
     /// relocking keeps each kept pin's tree as data.lock has it, as `sync --locked` asks, whose

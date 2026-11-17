@@ -165,11 +165,7 @@ fn lists_gone(root: &Path) -> bool {
 /// `sync`, failing with `--strict` when the data asked for is not ready once it is done.
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let strict = args.strict.then(|| args.names.clone());
-    let dry_run = args.dry.dry_run;
     let (report, closing) = sync_as_asked(context, args).await?;
-    if !dry_run {
-        stale_after_sync(context, &report.project);
-    }
     tell_waiting(
         &context.output,
         &report.waiting,
@@ -192,42 +188,6 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     }
     ready.map_err(|error| error.with_report(&report))?;
     Ok(report)
-}
-
-/// says, once a sync is done, which datasets of the project at `root` may be stale, as their
-/// inputs' files changed since they were pinned from them; a data.toml that names no `from` costs
-/// one read. what a sync cannot check is left to status and `lock --check`.
-fn stale_after_sync(context: &Context, root: &Path) {
-    let project = Project {
-        root: root.to_path_buf(),
-    };
-    let Ok(text) = project.manifest_text() else {
-        return;
-    };
-    if !text.contains("from") {
-        return;
-    }
-    // the sync is done and stands, so a project changed meanwhile only goes unjudged
-    let Ok(manifest) = Project::parse_manifest(&text) else {
-        return;
-    };
-    let made: BTreeSet<&str> = manifest
-        .datasets
-        .iter()
-        .filter(|(_, entry)| !entry.from.is_empty())
-        .flat_map(|(name, entry)| entry.from.iter().chain([name]))
-        .map(String::as_str)
-        .collect();
-    if made.is_empty() {
-        return;
-    }
-    let (Ok(Some((lock, _))), Ok(cache)) =
-        (project.lock_only(&|name| made.contains(name)), peek_cache())
-    else {
-        return;
-    };
-    let judged = crate::lineage::judge(&manifest, &lock, &cache);
-    super::lineage::tell_stale(&context.output, &judged);
 }
 
 /// the sync `args` asks for, and its last lines, which a dry run tells itself.
@@ -317,7 +277,8 @@ async fn sync_held(
         .within(scope)
         .filling()
         .verifying(args.verify)
-        .keeping_trees(args.locked);
+        .keeping_trees(args.locked)
+        .judging();
     let run = Run {
         upgrade: Upgrade::Nothing,
         force: args.force,
@@ -486,7 +447,11 @@ fn settled_named(
     let Scope::Only(names) = scope else {
         return Ok(None);
     };
-    let Some((lock, lock_text)) = project.lock_only(&|name| names.contains(name))? else {
+    // what may be stale is told from the records of each dataset with a `from` and its inputs
+    let related = crate::lineage::involved(manifest);
+    let Some((lock, lock_text)) =
+        project.lock_only(&|name| names.contains(name) || related.contains(name))?
+    else {
         return Ok(None);
     };
     let seen = Seen {
@@ -495,8 +460,9 @@ fn settled_named(
     };
     // a large lock's text would otherwise stay in memory through the survey
     drop(lock_text);
-    let work =
-        Loop::new(context, project, Arc::new(context.net()), open_cache()?).within(scope.clone());
+    let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?)
+        .within(scope.clone())
+        .judging();
     refuse_named_waiting(Some(&lock), scope)?;
     let folders: Vec<String> = names
         .iter()
@@ -528,6 +494,7 @@ fn settled_named(
         .map_err(|error| work.before_placing(error))?;
     context.stop.finish();
     register(&work);
+    judged(&work, manifest, &lock);
     let waiting = waiting_in(&lock);
     let closing = closing(project, manifest, scope, false, &placement, false, &waiting);
     let report = Report {
@@ -590,6 +557,8 @@ fn settled_unheld(
     if held && let Err(err) = cache.register(&project.root) {
         tracing::debug!(%err, "could not list a read-only project in the cache");
     }
+    let judged = crate::lineage::judge(&manifest, &lock, &cache);
+    super::lineage::tell_stale(&context.output, &judged);
     // a settled sync follows a complete one, which no dataset waiting for its list allows
     let closing = closing(
         project,
@@ -1437,6 +1406,9 @@ async fn sync_surveyed(
     let seen = match read {
         Read::Settled(seen) => {
             if let Some(outcome) = settle(work, manifest, &mut survey, seen)? {
+                if let Some(old) = &old {
+                    judged(work, manifest, old);
+                }
                 return Ok(outcome);
             }
             seen
@@ -1481,11 +1453,20 @@ async fn sync_surveyed(
     work.context.stop.finish();
     work.drop_unpacked(&lock);
     register(work);
+    judged(work, manifest, &lock);
     Ok(Outcome {
         lock_changed: changed,
         pins,
         placed: placement,
     })
+}
+
+/// tells, for a run that judges, the datasets of `lock` that may be stale, from what it holds.
+fn judged(work: &Loop<'_>, manifest: &Manifest, lock: &Lock) {
+    if work.judges {
+        let judged = crate::lineage::judge(manifest, lock, &work.cache);
+        super::lineage::tell_stale(&work.context.output, &judged);
+    }
 }
 
 /// error lines naming files of `scope` linked to a changed cache copy, why a sync that stops

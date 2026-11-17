@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::support::{
-    Result, Routes, Sandbox, file, json, kinds, ok, sha256_hex, text, warning, zip_of,
+    Result, Routes, Sandbox, delete, file, json, kinds, ok, sha256_hex, text, warning, zip_of,
 };
 
 const PATH: &str = "/files/iris.csv";
@@ -35,12 +35,19 @@ fn output(sandbox: &Sandbox) -> Result<PathBuf> {
 
 /// a project whose iris comes from a server, with `processed` added from a folder as made from it.
 fn made_from_iris(sandbox: &Sandbox) -> Result<Routes> {
+    made(sandbox, &["--from", "iris"])
+}
+
+/// a project whose iris comes from a server, with `processed` added from a folder, `from` the
+/// last words of its add.
+fn made(sandbox: &Sandbox, from: &[&str]) -> Result<Routes> {
     let routes = Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])?;
     sandbox.allow(&routes.url);
     ok(&sandbox.run(&["add", &format!("{}{PATH}", routes.url)])?)?;
     output(sandbox)?;
-    let added = sandbox.run(&["add", "../processed", "--as", "processed", "--from", "iris"])?;
-    ok(&added)?;
+    let mut add = vec!["add", "../processed", "--as", "processed"];
+    add.extend(from);
+    ok(&sandbox.run(&add)?)?;
     Ok(routes)
 }
 
@@ -340,6 +347,78 @@ fn status_lock_check_and_sync_each_say_once_that_an_output_may_be_stale() -> Res
             "reason": "changed",
         })
     );
+    Ok(())
+}
+
+/// what each way of syncing says, once iris changed since `processed` was pinned from it in a
+/// project [`made`] with `from`, with how many times it read data.toml and data.lock.
+fn synced_each_way(sandbox: &Sandbox, from: &[&str]) -> Result<Vec<(String, [usize; 2])>> {
+    let routes = made(sandbox, from)?;
+    iris_changed(sandbox, &routes)?;
+    let placed = sandbox
+        .work()
+        .join("data")
+        .join("processed")
+        .join("counts.csv");
+    let traces = sandbox.folder("traces")?;
+    let mut said = Vec::new();
+    for (run, args) in [
+        &["sync"][..],
+        &["sync"],
+        &["sync", "processed"],
+        &["sync", "iris"],
+        &["sync", "--locked"],
+        &["sync", "processed"],
+        &["sync"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // the last two find a file to place again
+        if run == 5 {
+            delete(&placed)?;
+        }
+        let trace = traces.join(format!("{run}.json"));
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_TRACE", &trace)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        let events: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&trace)?)?;
+        let reads = ["read_manifest", "read_lock"].map(|name| {
+            events
+                .iter()
+                .filter(|event| event["ph"] == "B" && event["name"] == name)
+                .count()
+        });
+        said.push((format!("{args:?}: {stderr}"), reads));
+    }
+    Ok(said)
+}
+
+#[test]
+fn each_way_of_syncing_says_once_that_an_output_may_be_stale() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (said, _) in synced_each_way(&sandbox, &["--from", "iris"])? {
+        assert_eq!(said.matches(STALE).count(), 1, "{said}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_from_costs_a_sync_no_second_read_of_data_toml_or_data_lock() -> Result {
+    let made_from = Sandbox::new()?;
+    let without = Sandbox::new()?;
+    let made_from = synced_each_way(&made_from, &["--from", "iris"])?;
+    let without = synced_each_way(&without, &[])?;
+    let reads = |said: &[(String, [usize; 2])], which: usize| -> Vec<usize> {
+        said.iter().map(|(_, reads)| reads[which]).collect()
+    };
+    // a data.toml with a `from` is always parsed, where a settled sync may read a plain one
+    // without its parser
+    assert_eq!(reads(&made_from, 0), [1; 7]);
+    assert_eq!(reads(&made_from, 1), reads(&without, 1));
     Ok(())
 }
 

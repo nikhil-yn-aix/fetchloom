@@ -97,6 +97,18 @@ pub(crate) fn record(
     changed
 }
 
+/// the datasets whose records a judgment of `manifest` reads: each one with a `from`, and each
+/// input it names.
+pub(crate) fn involved(manifest: &Manifest) -> BTreeSet<&str> {
+    manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| !entry.from.is_empty())
+        .flat_map(|(name, entry)| entry.from.iter().chain([name]))
+        .map(String::as_str)
+        .collect()
+}
+
 /// the refusal of a `lock` whose tree for a dataset a `from` names is not the one of the files it
 /// pins, as far as this machine can tell; none when each one it can tell is right.
 pub(crate) fn wrong_trees(manifest: &Manifest, lock: &Lock, cache: &Cache) -> Option<Error> {
