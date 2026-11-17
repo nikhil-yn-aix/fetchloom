@@ -125,6 +125,9 @@ pub(crate) enum Warning {
     ProjectNotRestored,
     /// `.fetchloom/owner` held no record fetchloom writes, so taking the project removed it.
     ProjectOwnerRemoved,
+    /// the add that starts a project found an R package, whose data/ R CMD check keeps for R's own
+    /// datasets.
+    ProjectRPackage,
     /// a push of every dataset leaves out one only its source's digests pin, until a sync
     /// downloads it.
     PushLeftOut,
@@ -213,6 +216,7 @@ impl Warning {
             Warning::PlaceUnportable => "place.unportable",
             Warning::ProjectNotRestored => "project.not_restored",
             Warning::ProjectOwnerRemoved => "project.owner_removed",
+            Warning::ProjectRPackage => "project.r_package",
             Warning::PushLeftOut => "push.left_out",
             Warning::SearchPartial => "search.partial",
             Warning::SettingsBroken => "settings.broken",
@@ -304,6 +308,7 @@ mod tests {
             PlaceUnportable,
             ProjectNotRestored,
             ProjectOwnerRemoved,
+            ProjectRPackage,
             PushLeftOut,
             SearchPartial,
             SettingsBroken,

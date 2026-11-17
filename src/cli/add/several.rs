@@ -126,7 +126,7 @@ pub(super) async fn add_several_held(
     let outcome = sync_add(&work, adding, &manifest, updated, old, (&placing, given))
         .await
         .map_err(|error| on_lines(error, &lines))?;
-    tell_started(&work, starting);
+    tell_started(&work, &manifest, starting);
     tell_marked(&work.context.output, &outcome.placed);
     let private = private_origins(
         &work,

@@ -6,7 +6,9 @@
 use std::fs;
 
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Routes, Sandbox, delete, delete_folder, file, json, text, without_copy_warning, zip_of};
+use crate::support::{
+    Result, Routes, Sandbox, delete, delete_folder, file, json, text, without_copy_warning, zip_of,
+};
 
 /// a server answering iris at [`PATH`], as often as asked.
 fn iris_server() -> Result<Routes> {
@@ -197,5 +199,39 @@ fn renamed_files_are_put_back_without_naming_data_dir() -> Result {
         "{renamed}"
     );
     assert!(!renamed.contains("data_dir"), "{renamed}");
+    Ok(())
+}
+
+/// an R package keeps R's own datasets in data/, where R CMD check refuses other files, so the add
+/// that starts a project at its root says once where raw files go instead.
+#[test]
+fn an_r_package_hears_once_where_raw_files_go() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(
+        sandbox.work().join("DESCRIPTION"),
+        "Package: irisdata\nVersion: 0.1.0\nTitle: Iris Data\n",
+    )?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["--json", "add", &format!("{}{PATH}", server.url)])?;
+    let document = json(&added)?;
+    assert_eq!(
+        crate::support::warned(&document),
+        [
+            "this folder is an R package, whose data/ holds the datasets R loads, and R CMD check refuses other files there; set data_dir = \"data-raw\" under [project] in data.toml, then run `fetchloom sync` to place the files there"
+        ],
+        "{document}"
+    );
+    assert_eq!(crate::support::kinds(&document), ["project.r_package"]);
+    let again = sandbox.run(&["--json", "add", &format!("{}/files/wine.csv", server.url)])?;
+    let document = json(&again)?;
+    assert_eq!(
+        crate::support::kinds(&document),
+        Vec::<&str>::new(),
+        "{document}"
+    );
     Ok(())
 }
