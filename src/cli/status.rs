@@ -297,7 +297,27 @@ fn tell_repairs(output: &Output, status: &Status) {
             super::project::command("sync --verify")
         ));
     }
-    if !status.edited.is_empty() || !status.untracked.is_empty() || !status.blocked.is_empty() {
+    // an output's rerun is pinned as it is, which comes first; --force discards it
+    for changed in &status.changed_outputs {
+        let name = &changed.name;
+        output.hint(&format!(
+            "{} changed since {name} was pinned: `{}` pins it as it is now, or `{}` discards the changes",
+            changed.shown,
+            super::project::command(&format!(
+                "add {} --as {name}",
+                crate::suggested::shell_word(&changed.shown)
+            )),
+            super::project::command(&format!("sync --force {name}"))
+        ));
+    }
+    let blocked = status.blocked.iter().map(|blocker| &blocker.path);
+    if status
+        .edited
+        .iter()
+        .chain(&status.untracked)
+        .chain(blocked)
+        .any(|path| !status.left_whole(path))
+    {
         output.hint(&format!(
             "{first}save any changes you need, then use `{}` to replace edited or conflicting files at paths in data.lock",
             super::project::command("sync --force")
@@ -1238,7 +1258,17 @@ impl Status {
     /// whether a file of `missing` is one a sync can bring, as no import this cache lacks is.
     fn fetchable_missing(&self) -> bool {
         let elsewhere: HashSet<&String> = self.imported_elsewhere.values().flatten().collect();
-        self.missing.iter().any(|path| !elsewhere.contains(path))
+        self.missing
+            .iter()
+            .any(|path| !elsewhere.contains(path) && !self.left_whole(path))
+    }
+
+    /// whether `path` is in the folder of an output a sync leaves whole, as it changed since it
+    /// was pinned.
+    fn left_whole(&self, path: &str) -> bool {
+        self.changed_outputs
+            .iter()
+            .any(|changed| disk::is_inside(path, &changed.at))
     }
 
     /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.
@@ -1251,12 +1281,15 @@ impl Status {
                 .any(|name| !self.waiting.contains_key(name) && !self.imports.contains_key(name))
             || self.fetchable_missing()
             || !self.not_unpacked.is_empty()
-            || !self.outdated.is_empty()
-            || !self.untracked.is_empty()
+            || self
+                .outdated
+                .iter()
+                .chain(&self.untracked)
+                .any(|path| !self.left_whole(path))
             || self
                 .damaged
                 .iter()
-                .any(|path| !self.hashed_only.contains(path))
+                .any(|path| !self.hashed_only.contains(path) && !self.left_whole(path))
     }
 }
 

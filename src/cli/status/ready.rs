@@ -147,12 +147,12 @@ impl Unready {
                 shown,
                 changes,
             } => format!(
-                "{shown} changed since {name} was pinned, {changes}: `{}` makes it hold just the files {name} pins, or `{}` pins what it holds now",
-                command(&format!("sync --force {name}")),
+                "{shown} changed since {name} was pinned, {changes}: `{}` pins it as it is now, or `{}` discards the changes",
                 command(&format!(
                     "add {} --as {name}",
                     crate::suggested::shell_word(shown)
-                ))
+                )),
+                command(&format!("sync --force {name}"))
             ),
             Unready::Elsewhere { name, shown } => made_elsewhere(name, shown),
         }

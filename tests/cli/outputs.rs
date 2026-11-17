@@ -584,6 +584,31 @@ fn a_sync_leaving_a_changed_output_never_says_all_is_in_place() -> Result {
     Ok(())
 }
 
+/// after the pipeline reruns, status names the add that pins the rerun first and `--force` as
+/// what discards it, never a plain sync, which leaves a changed output whole.
+#[test]
+fn status_after_a_rerun_names_the_pin_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    rerun(&work)?;
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    let hints: Vec<&str> = stderr
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("hint: "))
+        .collect();
+    assert_eq!(
+        hints,
+        [
+            "data/processed changed since processed was pinned: `fetchloom add data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
+        ],
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a changed output is told of once per change, as a kept edit is: a later sync finding the same
 /// change, or its dry run, only counts it in the last line, in json too, also after runs that left
 /// the output out, and a new change is told of again, as is a change after the output was pinned
@@ -823,7 +848,7 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     assert_eq!(
         synced["errors"][0]["details"],
         serde_json::json!([
-            "data/processed changed since processed was pinned, 1 file changed: `fetchloom sync --force processed` makes it hold just the files processed pins, or `fetchloom add data/processed --as processed` pins what it holds now"
+            "data/processed changed since processed was pinned, 1 file changed: `fetchloom add data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
         ]),
         "{synced}"
     );
@@ -842,7 +867,7 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     assert_eq!(
         error["details"],
         serde_json::json!([
-            "data/processed changed since processed was pinned, 1 file changed, 1 added, 1 removed: `fetchloom sync --force processed` makes it hold just the files processed pins, or `fetchloom add data/processed --as processed` pins what it holds now"
+            "data/processed changed since processed was pinned, 1 file changed, 1 added, 1 removed: `fetchloom add data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
         ]),
         "{document}"
     );
