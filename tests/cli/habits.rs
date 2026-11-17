@@ -269,3 +269,42 @@ fn a_lost_gitignore_of_the_project_folder_comes_back() -> Result {
     assert_eq!(fs::read(&ignore)?, b"state\n");
     Ok(())
 }
+
+/// a run that fails while it places tells nothing it says once, so it records none of it either:
+/// the next run that ends well tells it. here a file to put back cannot go into a folder the
+/// person made read-only, beside an edit kept in another dataset.
+#[cfg(unix)]
+#[test]
+fn a_failed_sync_records_nothing_it_never_told() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let zip = zip_of(&[("red.csv", &b"r\n1\n"[..]), ("white.csv", b"w\n2\n")])?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.zip".to_owned(), file(&zip, "\"w1\"")),
+    ])?;
+    add_ok(&sandbox, &format!("{}{PATH}", server.url))?;
+    add_ok(&sandbox, &format!("{}/files/wine.zip", server.url))?;
+    let edited = sandbox.work().join("data/iris/iris.csv");
+    delete(&edited)?;
+    fs::write(&edited, "mine\n")?;
+    let wine = sandbox.work().join("data/wine");
+    delete(&wine.join("red.csv"))?;
+    let before = fs::metadata(&wine)?.permissions();
+    fs::set_permissions(&wine, fs::Permissions::from_mode(0o555))?;
+    let failed = sandbox.run(&["sync"]);
+    fs::set_permissions(&wine, before)?;
+    let failed = failed?;
+    let stderr = text(&failed.stderr)?;
+    assert_eq!(failed.status.code(), Some(50), "{stderr}");
+    assert!(!stderr.contains("has changed"), "{stderr}");
+    let next = synced(&sandbox)?;
+    assert!(
+        next.contains("warning: data/iris/iris.csv has changed, so it stays\n"),
+        "{next}"
+    );
+    Ok(())
+}
