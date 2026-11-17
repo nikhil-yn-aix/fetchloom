@@ -3010,8 +3010,8 @@ pub(crate) fn authored(state: &State) -> HashSet<&str> {
 }
 
 /// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
-/// output: its patterns leave it out, or a repository or a tool keeps it there, as a capture leaves
-/// them out, or the output is dropped here, its files the author's still.
+/// output: its patterns leave it out, or a repository, git's placeholder or a tool keeps it there,
+/// as a capture leaves them out, or the output is dropped here, its files the author's still.
 pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
     manifest.datasets.values().any(|entry| {
         let Some(inside) = entry
@@ -3025,6 +3025,10 @@ pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
         !entry.place
             || crate::name::metadata(inside).is_some()
             || inside.split('/').any(crate::name::made_by_tool)
+            || inside
+                .rsplit('/')
+                .next()
+                .is_some_and(crate::name::git_placeholder)
             || !(source.select.is_empty() || source.select.iter().any(|glob| glob.matches(inside)))
             || source.exclude.iter().any(|glob| glob.matches(inside))
     })

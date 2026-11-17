@@ -748,6 +748,12 @@ pub(crate) fn made_by_tool(name: &str) -> bool {
         || name == "__pycache__"
 }
 
+/// whether `name`, a file's own, is git's placeholder that keeps an empty folder in a
+/// repository, as a project template leaves in each data folder: never part of an output.
+pub(crate) fn git_placeholder(name: &str) -> bool {
+    name == ".gitkeep"
+}
+
 /// whether `name`, a file's own, is one of the files of [`made_by_system`] a system writes beside
 /// a person's and that hold nothing of theirs, unlike what its folders hold, as a disk's trash
 /// holds what they may still restore.

@@ -302,11 +302,12 @@ fn markers_in(state: &State, at: &str) -> HashSet<String> {
         .collect()
 }
 
-/// takes the files at `markers` out of `walked`.
+/// takes the files at `markers` out of `walked`, and git's placeholders, never part of an output.
 fn leave_out(walked: &mut Walked, markers: &HashSet<String>) {
-    if !markers.is_empty() {
-        walked.files.retain(|file| !markers.contains(&file.path));
-    }
+    walked.files.retain(|file| {
+        let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+        !markers.contains(&file.path) && !name::git_placeholder(name)
+    });
 }
 
 /// a dry run: the folder `walk` found at `start` compared with `pin`, read and hashed where it is,

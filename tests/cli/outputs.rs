@@ -6,8 +6,8 @@ use std::path::Path;
 
 use crate::project::{IRIS, PATH};
 use crate::support::{
-    Result, Routes, Running, Sandbox, file, json, link_folder, look, ok, skipped, text, wait_until,
-    warned, warning,
+    Result, Routes, Running, Sandbox, delete_folder, file, json, link_folder, look, ok, skipped,
+    text, wait_until, warned, warning,
 };
 
 const CLEAN: &[u8] = b"sepal,petal\n5.1,1.4\n";
@@ -1392,6 +1392,36 @@ fn a_dropping_coming_or_going_is_no_change_to_an_output() -> Result {
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(work.join("data.lock"))?, lock);
+    Ok(())
+}
+
+/// a template's .gitkeep, git's placeholder for an empty folder, is never part of an output: the
+/// pipeline's first run, writing the folder anew without it, changes nothing, nor does one coming
+/// back.
+#[test]
+fn a_gitkeep_is_no_part_of_an_output() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let folder = work.join("data/processed");
+    fs::create_dir_all(&folder)?;
+    fs::write(folder.join(".gitkeep"), b"")?;
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(!lock.contains(".gitkeep"), "{lock}");
+    delete_folder(&folder)?;
+    processed(&work)?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    for kind in ["missing", "edited", "extra"] {
+        assert_eq!(
+            listed(&document, kind),
+            Vec::<String>::new(),
+            "{kind}: {document}"
+        );
+    }
+    fs::write(folder.join(".gitkeep"), b"")?;
+    let checked = sandbox.run(&["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
     Ok(())
 }
 
