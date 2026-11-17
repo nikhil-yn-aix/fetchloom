@@ -283,10 +283,20 @@ fn raise_open_files() -> Option<u64> {
 /// the program `file` in the first absolute folder of `path`, a PATH value, that holds it as a file
 /// this user may run. a relative folder would be wherever fetchloom runs, so it is passed over.
 pub(crate) fn installed(path: &OsStr, file: &str) -> Option<PathBuf> {
+    installed_where(path, file, |_| true)
+}
+
+/// [`installed`], passing over each program `kept` refuses, such as one a project holds, for the
+/// next folder's.
+pub(crate) fn installed_where(
+    path: &OsStr,
+    file: &str,
+    kept: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
     std::env::split_paths(path)
         .filter(|folder| folder.is_absolute())
         .map(|folder| folder.join(file))
-        .find(|program| runnable(program))
+        .find(|program| runnable(program) && kept(program))
 }
 
 /// whether `program` is a file this user may run: on unix, one with an execute bit set.

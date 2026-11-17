@@ -35,12 +35,12 @@ const REPOSITORY_VARIABLES: [&str; 15] = [
     "GIT_COMMON_DIR",
 ];
 
-/// git, as the first absolute folder on `path` that holds it, unless that git is inside
-/// `project`, which a cloned repository could have put there.
+/// git, as the first absolute folder on `path` that holds it outside `project`: a cloned
+/// repository could have put one inside, in a folder PATH names.
 pub(crate) fn find(path: Option<&OsStr>, project: &Path) -> Option<PathBuf> {
     let name = if cfg!(windows) { "git.exe" } else { "git" };
     let project = project.canonicalize().ok()?;
-    crate::machine::installed(path?, name).filter(|program| {
+    crate::machine::installed_where(path?, name, |program| {
         program
             .canonicalize()
             .is_ok_and(|real| !real.starts_with(&project))
@@ -512,8 +512,16 @@ mod tests {
         assert_eq!(find(Some(bin.as_os_str()), project.path()), None);
         assert_eq!(
             find(Some(bin.as_os_str()), outside.path()),
-            Some(planted),
+            Some(planted.clone()),
             "the same git outside the project is found"
+        );
+        let installed = outside.path().join("git");
+        std::fs::copy(&planted, &installed).unwrap();
+        let path = std::env::join_paths([&bin, &outside.path().to_path_buf()]).unwrap();
+        assert_eq!(
+            find(Some(&path), project.path()),
+            Some(installed),
+            "the project's git hides none later on PATH"
         );
     }
 
