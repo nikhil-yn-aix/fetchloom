@@ -389,24 +389,36 @@ fn a_cloned_link_into_another_projects_data_folder_is_refused() -> Result {
             b"my own table\n"
         );
     }
-    // a data folder inside another project's folder is that project's, though it is empty yet
+    // a folder inside another project's folder is that project's, though it is empty yet and lies
+    // deeper there than the project's own data folder
     let notes = root.join("notes");
-    fs::create_dir_all(notes.join("data"))?;
-    fs::write(notes.join("data.toml"), b"")?;
-    unlink(&data)?;
-    link_folder(&notes.join("data"), &data)?;
-    let output = sandbox.run(&["sync"])?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(50), "{stderr}");
-    assert!(
-        stderr.contains(&format!(
-            " is a link to {}, which lies in the project at {}, so fetchloom places nothing through it\n",
-            real(&notes.join("data"))?,
-            real(&notes)?
-        )),
-        "{stderr}"
-    );
-    assert_eq!(listing(&notes.join("data"))?, Vec::<PathBuf>::new());
+    let owner = root.join("thesis");
+    for (project, inside) in [
+        (notes.clone(), notes.join("data")),
+        (owner.clone(), owner.join("results").join("data")),
+    ] {
+        fs::create_dir_all(&inside)?;
+        fs::write(project.join("data.toml"), b"")?;
+        unlink(&data)?;
+        link_folder(&inside, &data)?;
+        let output = sandbox.run(&["sync"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(
+            output.status.code(),
+            Some(50),
+            "{}: {stderr}",
+            inside.display()
+        );
+        assert!(
+            stderr.contains(&format!(
+                " is a link to {}, which lies in the project at {}, so fetchloom places nothing through it\n",
+                real(&inside)?,
+                real(&project)?
+            )),
+            "{stderr}"
+        );
+        assert_eq!(listing(&inside)?, Vec::<PathBuf>::new());
+    }
     Ok(())
 }
 
