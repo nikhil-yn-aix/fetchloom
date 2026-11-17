@@ -5,7 +5,9 @@
 use std::fs;
 
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Routes, Sandbox, add_ok, file, json, text, without_copy_warning};
+use crate::support::{
+    Result, Routes, Sandbox, add_ok, file, json, text, without_copy_warning, zip_of,
+};
 
 /// a server answering iris at [`PATH`], as often as asked.
 fn iris_server() -> Result<Routes> {
@@ -504,7 +506,7 @@ fn a_dataset_with_its_own_gitignore_gets_the_line_to_add() -> Result {
     if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
         return Ok(());
     }
-    let bytes = crate::support::zip_of(&[(".gitignore", &b"*.tmp\n"[..]), ("a.csv", b"1\n")])?;
+    let bytes = zip_of(&[(".gitignore", &b"*.tmp\n"[..]), ("a.csv", b"1\n")])?;
     let server = Routes::start(vec![("/files/pack.zip".to_owned(), file(&bytes, "\"p1\""))])?;
     let link = format!("{}/files/pack.zip", server.url);
     sandbox.allow(&link);
@@ -570,5 +572,171 @@ fn the_marker_is_readable_as_a_persons_own_files_are() -> Result {
         format!("{:o}", mode(&marker)?),
         format!("{:o}", mode(&theirs)?)
     );
+    Ok(())
+}
+
+/// a dataset placed in the data folder itself shares it with the person's own files, so its
+/// .gitignore names the dataset's own entries, anchored, rather than everything: git still sees
+/// what the person writes there. the list follows the datasets' entries as they change, and a
+/// folder that holds another dataset's folder is listed the same way, while a folder only a
+/// dataset fills keeps `*`.
+#[test]
+fn a_marker_in_a_folder_shared_with_the_person_names_the_datasets_entries() -> Result {
+    let sandbox = Sandbox::new()?;
+    let in_git = crate::merge::ok(&sandbox, &["init", "-q"])?.is_some();
+    let zip = zip_of(&[
+        ("images/a.png", &b"png-a"[..]),
+        ("images/b.png", b"png-b"),
+        ("labels.csv", b"name,label\na,1\n"),
+    ])?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/pack.zip".to_owned(), file(&zip, "\"p1\"")),
+        ("/files/inner.csv".to_owned(), file(b"x\n1\n", "\"n1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.iris]\nref = \"{0}{PATH}\"\npath = \".\"\n\n[datasets.pack]\nref = \"{0}/files/pack.zip\"\npath = \".\"\n\n[datasets.inner]\nref = \"{0}/files/inner.csv\"\npath = \"nested/inner\"\n\n[datasets.nested]\nref = \"{0}/files/inner.csv\"\npath = \"nested\"\n",
+            server.url
+        ),
+    )?;
+    write_all(&sandbox, &[("data/my_labels.csv", "mine\n")])?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    let header = "# fetchloom keeps the dataset files placed here out of git, and rewrites this list as they change\n";
+    let data = sandbox.work().join("data");
+    assert_eq!(
+        fs::read_to_string(data.join(".gitignore"))?,
+        format!("{header}/.gitignore\n/images/\n/iris.csv\n/labels.csv\n")
+    );
+    assert_eq!(
+        fs::read_to_string(data.join("nested/.gitignore"))?,
+        format!("{header}/.gitignore\n/inner.csv\n")
+    );
+    assert_eq!(fs::read(data.join("nested/inner/.gitignore"))?, b"*\n");
+    if in_git {
+        write_all(&sandbox, &[("data/scores.csv", "0.9\n")])?;
+        assert_eq!(
+            untracked(&sandbox)?.ok_or("git went away")?,
+            [
+                "data.lock",
+                "data.toml",
+                "data/my_labels.csv",
+                "data/scores.csv"
+            ]
+        );
+        assert_eq!(
+            ignored_by(&sandbox, "data/images/a.png")?,
+            "data/.gitignore:3:/images/\tdata/images/a.png\n"
+        );
+    }
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(text(&status.stdout)?, "");
+
+    let removed = sandbox.run(&["remove", "pack"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert_eq!(
+        fs::read_to_string(data.join(".gitignore"))?,
+        format!("{header}/.gitignore\n/iris.csv\n")
+    );
+    let removed = sandbox.run(&["remove", "inner"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert_eq!(fs::read(data.join("nested/.gitignore"))?, b"*\n");
+    Ok(())
+}
+
+/// a listed .gitignore is fetchloom's while it holds what fetchloom last wrote: once the person
+/// adds a rule of their own, it is theirs, never rewritten or deleted.
+#[test]
+fn a_listed_marker_the_person_changed_is_theirs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.iris]\nref = \"{0}{PATH}\"\npath = \".\"\n\n[datasets.wine]\nref = \"{0}/files/wine.csv\"\npath = \".\"\n",
+            server.url
+        ),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let marker = sandbox.work().join("data/.gitignore");
+    let mut theirs = fs::read_to_string(&marker)?;
+    assert!(theirs.ends_with("/iris.csv\n/wine.csv\n"), "{theirs}");
+    theirs.push_str("/scratch/\n");
+    fs::write(&marker, &theirs)?;
+    for args in [&["remove", "wine"][..], &["remove", "iris"]] {
+        let removed = sandbox.run(args)?;
+        assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+        assert_eq!(fs::read_to_string(&marker)?, theirs, "{args:?}");
+    }
+    Ok(())
+}
+
+/// a listed .gitignore keeps naming the files of a dataset whose list this machine no longer
+/// knows, as with another cache, since those files stay where they are.
+#[test]
+fn a_listed_marker_keeps_the_files_of_a_dataset_not_known_here() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = zip_of(&[("images/a.png", &b"png-a"[..]), ("labels.csv", b"a,1\n")])?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
+        ("/files/pack.zip".to_owned(), file(&zip, "\"p1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.iris]\nref = \"{0}{PATH}\"\npath = \".\"\n\n[datasets.wine]\nref = \"{0}/files/wine.csv\"\npath = \".\"\n\n[datasets.pack]\nref = \"{0}/files/pack.zip\"\npath = \".\"\n",
+            server.url
+        ),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let cold = sandbox.folder("cold")?;
+    let removed = sandbox
+        .command(&["remove", "wine"])
+        .env("FETCHLOOM_CACHE", &cold)
+        .output()?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    let marker = fs::read_to_string(sandbox.work().join("data/.gitignore"))?;
+    assert!(
+        marker.ends_with("/.gitignore\n/images/\n/iris.csv\n/labels.csv\n"),
+        "{marker}"
+    );
+    Ok(())
+}
+
+/// past a thousand entries in a folder the person shares, the .gitignore holds `*` rather than a
+/// line for each, since git matches every line against every path it looks at.
+#[test]
+fn a_shared_folder_with_too_many_entries_to_name_is_ignored_whole() -> Result {
+    let sandbox = Sandbox::new()?;
+    let names: Vec<String> = (0..1001).map(|at| format!("f{at:04}.csv")).collect();
+    let members: Vec<(&str, &[u8])> = names
+        .iter()
+        .map(|name| (name.as_str(), &b"1\n"[..]))
+        .collect();
+    let zip = zip_of(&members)?;
+    let server = Routes::start(vec![("/files/many.zip".to_owned(), file(&zip, "\"m1\""))])?;
+    sandbox.allow(&server.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.many]\nref = \"{}/files/many.zip\"\npath = \".\"\n",
+            server.url
+        ),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(sandbox.work().join("data/.gitignore"))?, b"*\n");
     Ok(())
 }

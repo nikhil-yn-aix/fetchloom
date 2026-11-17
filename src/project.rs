@@ -510,6 +510,7 @@ impl Project {
         // a forged record can at most hide a .gitignore in the data folder, or delete one of `*`
         let mut kept = State::default();
         kept.marked = state.marked;
+        kept.listed = state.listed;
         (kept, 0)
     }
 

@@ -102,9 +102,9 @@ pub(crate) struct Placement {
     #[serde(skip)]
     pub(crate) left_behind: Option<LeftBehind>,
     /// dataset folders given a .gitignore that keeps them out of git, or that a dry run would give
-    /// one.
+    /// one, each with whether it names the datasets' entries rather than holding `*`.
     #[serde(skip)]
-    pub(crate) marked: Vec<String>,
+    pub(crate) marked: Vec<(String, bool)>,
     /// whether the project is in a git repository, where the lines for `marked` matter.
     #[serde(skip)]
     pub(crate) in_git: bool,
@@ -907,7 +907,12 @@ impl<'a> Placing<'a> {
     /// .gitignore it would place.
     fn preview_marks(&self, placement: &mut Placement) {
         let wanted = mark::wanted(self.manifest, &self.targets, &self.actions);
-        placement.marked = mark::planned(&self.survey, &wanted).0;
+        let contents = mark::contents(
+            self.manifest,
+            &self.targets,
+            (&self.survey.state, (&self.unknown, &self.waiting)),
+        );
+        placement.marked = mark::would_make(&self.survey, &wanted, &contents);
         placement.in_git = Project::repository(&self.project.root).is_some();
         placement.unmarkable = mark::unmarkable(
             &self.project.root,
@@ -1083,8 +1088,12 @@ impl<'a> Placing<'a> {
         );
         // the state written ahead must not vouch for the size and time an edit kept
         survey.smudge_edited();
-        let (to_mark, marking) =
-            mark::to_make(&mut survey, &mark::wanted(manifest, &targets, &actions));
+        let contents = mark::contents(manifest, &targets, (&survey.state, (&unknown, &waiting)));
+        let (to_mark, marking) = mark::to_make(
+            &mut survey,
+            &mark::wanted(manifest, &targets, &actions),
+            &contents,
+        );
         placement.unmarkable = mark::unmarkable(&project.root, manifest, &targets, &actions);
         write_ahead(
             project,
@@ -1108,7 +1117,21 @@ impl<'a> Placing<'a> {
         };
         survey.smudge_edited();
         // before the files land, so git never sees a dataset's folder while it fills
-        placement.marked = mark::make(&project.root, &mut placer, &mut survey.state, to_mark);
+        placement.marked = mark::make(
+            &project.root,
+            &mut placer,
+            &mut survey.state,
+            to_mark.make,
+            &contents,
+        );
+        let (rewritten, turned) = mark::rewrite(
+            &project.root,
+            &mut placer,
+            &mut survey.state,
+            &to_mark.rewrite,
+            &contents,
+        );
+        placement.marked.extend(turned);
         placement.in_git = Project::repository(&project.root).is_some();
         let told_rule = !placement.marked.is_empty()
             && mark::tell_hiding_line(output, &project.root, &manifest.data_dir, &mut survey.state);
@@ -1169,7 +1192,7 @@ impl<'a> Placing<'a> {
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let recorded = removed || adopted || undone || kept_aside || linked || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
-        let marks = unmarked || marking || told_rule || taken_back;
+        let marks = unmarked || marking || rewritten || told_rule || taken_back;
         record(
             project,
             state,
@@ -1235,11 +1258,22 @@ impl<'a> Placing<'a> {
             &mut survey,
             (&targets, (&unknown, &waiting)),
         );
+        let contents = mark::contents(manifest, &targets, (&survey.state, (&unknown, &waiting)));
+        let to_rewrite = mark::planned(&survey, &BTreeSet::new(), &contents).rewrite;
+        let (rewritten, turned) = mark::rewrite(
+            &project.root,
+            &mut placer,
+            &mut survey.state,
+            &to_rewrite,
+            &contents,
+        );
+        placement.marked.extend(turned);
+        placement.in_git = Project::repository(&project.root).is_some();
         survey.smudge_edited();
         let (_, moved_away) = track_aside(&project.root, &mut survey.state, Vec::new());
         let forgot = survey.state.synced.take().is_some();
         let dropped = survey.state.forget_removed(manifest) || moved_away;
-        if removed || forgot || dropped || unmarked || survey.needs_writing {
+        if removed || forgot || dropped || unmarked || rewritten || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
         // a person's file kept aside may be what keeps a folder, so it is named as sync names it
