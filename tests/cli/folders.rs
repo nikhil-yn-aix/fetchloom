@@ -704,6 +704,37 @@ fn a_listing_that_rounds_sizes_sizes_the_folder_about() -> Result {
     Ok(())
 }
 
+/// a rounded size plans the run as it plans the dry run, and binds none of the bytes that come:
+/// psl's apache rounds each file to ` 1K`, and the add pins each at the bytes its server sends.
+#[test]
+fn a_rounded_size_plans_the_run_as_its_dry_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(psl)?;
+    let folder = format!("{}/data/", server.url);
+    let dry = sandbox.run(&["add", &folder, "--dry-run"])?;
+    let planned = text(&dry.stderr)?;
+    assert!(
+        planned.contains("Would download 2 files · about 2.0 KiB\n"),
+        "{planned}"
+    );
+    let added = sandbox.run(&["add", &folder])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Downloading 2 files · about 2.0 KiB\n"),
+        "{stderr}"
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(
+        pinned(&lock, "data"),
+        [
+            pin("iris.csv", IRIS, &format!("{folder}iris.csv")),
+            pin("sub/tips.csv", TIPS, &format!("{folder}sub/tips.csv")),
+        ]
+    );
+    Ok(())
+}
+
 /// a `rate` cap holds a run's downloads together under it, so the dry run's time heeds it: 600 MiB
 /// from a host known to send 100 MiB/s take under 10 s, and at 1 MiB/s about 10 min, or at least
 /// that once the host's speed is not known.
