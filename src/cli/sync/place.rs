@@ -583,6 +583,7 @@ impl Preview {
         let placement = &self.placement;
         placement.placed + placement.replaced + placement.removed == 0
             && placement.kept.is_empty()
+            && placement.changed_outputs.is_empty()
             && self.changes.download.is_empty()
             && self.changes.unpack.is_empty()
             && self
@@ -1102,14 +1103,7 @@ impl<'a> Placing<'a> {
     pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         self.preview_unwanted(&mut preview);
-        for (path, name) in &self.extras {
-            preview.placement.removed += 1;
-            preview
-                .placement
-                .cleared_outputs
-                .push((path.clone(), name.clone()));
-            preview.changes.remove.push(path.clone());
-        }
+        self.preview_outputs(&mut preview);
         preview.placement.notice(
             self.manifest,
             &self.targets,
@@ -1200,6 +1194,20 @@ impl<'a> Placing<'a> {
         }
         self.preview_marks(&mut preview.placement);
         preview
+    }
+
+    /// what a sync would do of outputs: leave each changed one whole, or with `--force` delete the
+    /// files in its folder that its pin does not hold.
+    fn preview_outputs(&self, preview: &mut Preview) {
+        preview.placement.changed_outputs.clone_from(&self.changed);
+        for (path, name) in &self.extras {
+            preview.placement.removed += 1;
+            preview
+                .placement
+                .cleared_outputs
+                .push((path.clone(), name.clone()));
+            preview.changes.remove.push(path.clone());
+        }
     }
 
     /// notes in `placement` the dataset folders a run would keep out of git, and those whose own

@@ -610,6 +610,7 @@ fn closing(
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
+        && placement.changed_outputs.is_empty()
         && placement.adopted.is_empty()
         && placement.relinked.is_empty()
     {
@@ -625,8 +626,15 @@ fn closing(
             next: None,
         };
     }
-    let warned = placement.kept.iter().any(|kept| !kept.told);
-    let (verb, text) = synced(manifest, scope, (placement.kept.len(), warned), &waiting);
+    let warned =
+        placement.kept.iter().any(|kept| !kept.told) || !placement.changed_outputs.is_empty();
+    let left: Vec<&str> = placement
+        .changed_outputs
+        .iter()
+        .map(|changed| changed.name.as_str())
+        .collect();
+    let kept = (placement.kept.len(), left.as_slice(), warned);
+    let (verb, text) = synced(manifest, scope, kept, &waiting);
     // `path` answers only a dataset placed in the data folder, and the line names one this
     // sync just placed
     let first = placement.filled.iter().find(|name| {
@@ -667,25 +675,34 @@ fn waiting_named(waiting: &[lock::Waiting], manifest: &Manifest, scope: &Scope) 
 }
 
 /// the last line of a sync of `scope` that changed something, as its verb and text, with the
-/// files it `kept` and whether a warning above tells of any. the datasets `waiting` for their file
-/// lists were left as they were, so they are named apart.
+/// files it `kept`, the outputs it `left` whole as they changed since they were pinned, and
+/// whether a warning above tells of any. the datasets `waiting` for their file lists were left as
+/// they were, so they are named apart.
 fn synced(
     manifest: &Manifest,
     scope: &Scope,
-    (kept, warned): (usize, bool),
+    (kept, left, warned): (usize, &[&str], bool),
     waiting: &[String],
 ) -> (&'static str, String) {
+    let mut unchanged = Vec::new();
+    if kept > 0 {
+        let files = ("file left unchanged", "files left unchanged");
+        unchanged.push(units::count(kept as u64, files.0, files.1));
+    }
+    match left {
+        [] => {}
+        [one] => unchanged.push(format!("{one} left as it is")),
+        many => unchanged.push(format!("{} left as they are", units::listed(many, "and"))),
+    }
     let see = if warned {
         "; see the warnings above"
     } else {
         ""
     };
-    let kept = match kept {
-        0 => String::new(),
-        kept => format!(
-            ", {}{see}",
-            units::count(kept as u64, "file left unchanged", "files left unchanged")
-        ),
+    let kept = if unchanged.is_empty() {
+        String::new()
+    } else {
+        format!(", {}{see}", unchanged.join(", "))
     };
     let waits = match waiting {
         [] => String::new(),
@@ -2382,7 +2399,7 @@ pub(crate) mod tests {
         ] {
             let mut manifest = Manifest::parse(&tables.join("\n")).unwrap();
             super::super::drop::left_out(&mut manifest, &BTreeSet::from(["raw".to_owned()]));
-            let (verb, text) = synced(&manifest, &Scope::All, (kept, kept > 0), &[]);
+            let (verb, text) = synced(&manifest, &Scope::All, (kept, &[], kept > 0), &[]);
             assert_eq!((verb, text.as_str()), said, "{tables:?}");
         }
     }

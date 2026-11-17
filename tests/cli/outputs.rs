@@ -354,6 +354,34 @@ fn a_changed_output_is_never_partly_healed() -> Result {
     Ok(())
 }
 
+/// a sync that leaves a changed output whole says so in its closing line, as it says it kept an
+/// edit, and so does a dry run: neither says every pinned file is in place while an output
+/// differs from its pin.
+#[test]
+fn a_sync_leaving_a_changed_output_never_says_all_is_in_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    fs::write(
+        work.join("data/processed/iris_clean.csv"),
+        b"sepal,petal\n5.1,1.5\n",
+    )?;
+    let warning = "warning: data/processed changed since processed was pinned";
+    for args in [&["sync", "--dry-run"][..], &["sync"]] {
+        let synced = sandbox.run(args)?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(0), "{stderr}");
+        assert!(stderr.contains(warning), "{args:?}: {stderr}");
+        assert!(!stderr.contains("in place"), "{args:?}: {stderr}");
+        if args.len() == 1 {
+            let closing = ", processed left as it is; see the warnings above\n";
+            assert!(stderr.contains(closing), "{stderr}");
+        }
+    }
+    Ok(())
+}
+
 /// after a rerun, the same add shows what changed and pins it in one step with --yes, keeping
 /// the table's comments and settings; without a terminal or --yes it changes nothing.
 #[test]

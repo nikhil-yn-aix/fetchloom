@@ -26,25 +26,7 @@ pub(super) fn tell(
         );
     }
     tell_cleared(output, "Removed", &placement.cleared_outputs);
-    for changed in &placement.changed_outputs {
-        let name = &changed.name;
-        output.warn_with(
-            Warning::OutputChanged,
-            &format!(
-                "{} changed since {name} was pinned: {}, so sync leaves it as it is",
-                changed.at,
-                changed.summary()
-            ),
-            &format!(
-                "run `{}` to make it hold just the files {name} pins, or `{}` to pin what it holds now",
-                crate::suggested::command(&format!("sync --force {name}")),
-                crate::suggested::command(&format!(
-                    "add {} --as {name}",
-                    crate::suggested::shell_word(&changed.shown)
-                ))
-            ),
-        );
-    }
+    warn_changed_outputs(output, placement);
     // what is discarded was the person's, so the line asks for attention, not a finished step
     for overwritten in &placement.overwritten {
         output.step_in(
@@ -565,6 +547,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     tell_would_remove(output, manifest, preview);
     warn_adopted_removed(output, &placement.removed_adopted, "would remove");
     left_behind(output, manifest, placement.left_behind.as_ref());
+    warn_changed_outputs(output, placement);
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
     warn_put_back(output, placement, "a sync would put back");
@@ -1013,6 +996,30 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
             ),
         };
         output.warn_with(Warning::PlaceKept, &message, &help);
+    }
+}
+
+/// a warning for each output `placement` leaves whole, as its folder changed since it was pinned,
+/// with the two ways on.
+fn warn_changed_outputs(output: &Output, placement: &Placement) {
+    for changed in &placement.changed_outputs {
+        let name = &changed.name;
+        output.warn_with(
+            Warning::OutputChanged,
+            &format!(
+                "{} changed since {name} was pinned: {}, so sync leaves it as it is",
+                changed.at,
+                changed.summary()
+            ),
+            &format!(
+                "run `{}` to make it hold just the files {name} pins, or `{}` to pin what it holds now",
+                crate::suggested::command(&format!("sync --force {name}")),
+                crate::suggested::command(&format!(
+                    "add {} --as {name}",
+                    crate::suggested::shell_word(&changed.shown)
+                ))
+            ),
+        );
     }
 }
 
