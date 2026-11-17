@@ -647,23 +647,12 @@ impl Changes {
 
     /// `1 file changed, 2 added, 1 removed`, leaving out what is none.
     pub(super) fn summary(&self) -> String {
-        let mut parts: Vec<String> = Vec::new();
-        for (count, done) in [
-            (self.changed.len(), "changed"),
-            (self.added.len(), "added"),
-            (self.removed.len(), "removed"),
-        ] {
-            if count == 0 {
-                continue;
-            }
-            let count = count as u64;
-            parts.push(if parts.is_empty() {
-                format!("{} {done}", units::count(count, "file", "files"))
-            } else {
-                format!("{} {done}", units::grouped(count))
-            });
-        }
-        parts.join(", ")
+        let count = |files: usize| files as u64;
+        super::super::sync::place::changes_said(
+            count(self.changed.len()),
+            count(self.added.len()),
+            count(self.removed.len()),
+        )
     }
 
     /// a line for each file, as an error's details and a question list them.

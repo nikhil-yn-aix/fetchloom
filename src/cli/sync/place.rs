@@ -161,27 +161,28 @@ pub(crate) struct ChangedOutput {
 impl ChangedOutput {
     /// `1 file changed, 2 added, 1 removed`, leaving out what is none.
     pub(crate) fn summary(&self) -> String {
-        let mut parts: Vec<String> = Vec::new();
-        for (count, done) in [
-            (self.changed, "changed"),
-            (self.added, "added"),
-            (self.removed, "removed"),
-        ] {
-            if count == 0 {
-                continue;
-            }
-            parts.push(if parts.is_empty() {
-                format!("{} {done}", crate::units::count(count, "file", "files"))
-            } else {
-                format!("{} {done}", crate::units::grouped(count))
-            });
-        }
-        parts.join(", ")
+        changes_said(self.changed, self.added, self.removed)
     }
 
     fn is_changed(&self) -> bool {
         self.changed + self.added + self.removed > 0
     }
+}
+
+/// `1 file changed, 2 added, 1 removed` for these counts of files, leaving out what is none.
+pub(crate) fn changes_said(changed: u64, added: u64, removed: u64) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for (count, done) in [(changed, "changed"), (added, "added"), (removed, "removed")] {
+        if count == 0 {
+            continue;
+        }
+        parts.push(if parts.is_empty() {
+            format!("{} {done}", crate::units::count(count, "file", "files"))
+        } else {
+            format!("{} {done}", crate::units::grouped(count))
+        });
+    }
+    parts.join(", ")
 }
 
 /// the outputs of a placing: where each lives, and those left whole for a change.
