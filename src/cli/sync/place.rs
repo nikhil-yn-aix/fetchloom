@@ -599,7 +599,8 @@ enum Unwanted {
     /// someone changed it, so it stays.
     Keep,
     Gone,
-    /// an output's file no output places now: its record goes, and the file stays.
+    /// an output's file the author made, or one no output places now: its record goes, and the
+    /// file stays.
     Untrack,
 }
 
@@ -788,6 +789,12 @@ impl<'a> Placing<'a> {
     /// the data folder as the run found it.
     pub(crate) fn survey(&self) -> &Survey {
         &self.survey
+    }
+
+    /// the outputs in scope whose folders changed since they were pinned, which this placing
+    /// leaves whole.
+    pub(crate) fn changed_outputs(&self) -> &[ChangedOutput] {
+        &self.changed
     }
 
     /// what the data folder held when this placing was decided, to decide again from.
@@ -2820,7 +2827,8 @@ fn remove_unwanted(
 }
 
 /// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
-/// output: its patterns leave it out, or a repository keeps it there, as a capture leaves both out.
+/// output: its patterns leave it out, or a repository keeps it there, as a capture leaves both out,
+/// or the output is dropped here, its files the author's still.
 pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
     manifest.datasets.values().any(|entry| {
         let Some(inside) = entry
@@ -2831,7 +2839,8 @@ pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
             return false;
         };
         let source = &entry.source;
-        crate::name::metadata(inside).is_some()
+        !entry.place
+            || crate::name::metadata(inside).is_some()
             || !(source.select.is_empty() || source.select.iter().any(|glob| glob.matches(inside)))
             || source.exclude.iter().any(|glob| glob.matches(inside))
     })
@@ -3140,7 +3149,10 @@ fn unwanted(
         })
         .map(|(path, placed)| {
             let fate = match survey.disk.get(path) {
-                _ if placed.output && !outputs.holds(&placed.dataset, path) => Unwanted::Untrack,
+                // the author's own files, and those no output places now, stay
+                _ if placed.output && (placed.adopted || !outputs.holds(&placed.dataset, path)) => {
+                    Unwanted::Untrack
+                }
                 None => Unwanted::Gone,
                 Some(_) if survey.edited.contains(path) => Unwanted::Keep,
                 Some(look) if *look == placed.look || holds(path, placed, look) => {

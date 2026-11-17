@@ -300,6 +300,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     } else {
         super::open_cache()?
     };
+    tell_changed_outputs(context, &project, (&manifest, &lock), &cache, &datasets);
     let selected = (!args.names.is_empty()).then(|| selected(&manifest, &args.names));
     let mut planned = plan(
         context, &manifest, &lock, &cache, target, selected, datasets,
@@ -367,6 +368,67 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     let report = report(&planned, Outcome::Written(started, &puts));
     tell(context, &planned, &report);
     Ok(report)
+}
+
+/// warns of each output of `datasets` whose folder changed since it was pinned, as sync finds it:
+/// push sends the files data.lock pins, never what the folder holds now. a folder that cannot be
+/// read is told by the command that places it, so it warns of nothing.
+fn tell_changed_outputs(
+    context: &Context,
+    project: &Project,
+    (manifest, lock): (&Manifest, &Lock),
+    cache: &Cache,
+    datasets: &[String],
+) {
+    let outputs: Vec<&String> = datasets
+        .iter()
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(crate::project::manifest::Entry::is_output)
+        })
+        .collect();
+    let folders: Vec<String> = outputs
+        .iter()
+        .filter_map(|name| manifest.datasets[*name].at.clone())
+        .collect();
+    if folders.is_empty() {
+        return;
+    }
+    let within = super::sync::disk::Folders::of(manifest);
+    let survey = super::sync::disk::Survey::read_within(
+        project,
+        &within,
+        &folders,
+        context.threads,
+        &context.stop,
+    );
+    let scope = Scope::Only(outputs.into_iter().cloned().collect());
+    let placing = survey.and_then(|survey| {
+        place::Placing::new(project, manifest, lock, cache, false, &scope, survey)
+    });
+    let Ok(placing) = placing else {
+        return;
+    };
+    for changed in placing.changed_outputs() {
+        let name = &changed.name;
+        context.output.warn_with(
+            Warning::OutputChanged,
+            &format!(
+                "{} changed since {name} was pinned: {}, so push sends the files {name} pins, not these",
+                changed.at,
+                changed.summary()
+            ),
+            &format!(
+                "run `{}` first to pin what it holds now",
+                super::project::command(&format!(
+                    "add {} --as {name}",
+                    super::shell_word(&changed.shown)
+                ))
+            ),
+        );
+    }
 }
 
 /// the folder or S3 bucket to push to, as `--to` names it, else the `push_to` setting; `usage`

@@ -490,3 +490,91 @@ fn audit_and_diff_say_what_an_output_is() -> Result {
     );
     Ok(())
 }
+
+/// push sends the files an output pins, never what its folder holds since, and says so when the
+/// folder changed.
+#[test]
+fn push_sends_an_outputs_pinned_files_and_says_when_its_folder_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    fs::write(work.join("data/processed/plot.png"), b"png")?;
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_string_lossy().into_owned();
+    let pushed = sandbox.run(&["--json", "push", "--to", &mirror, "--yes"])?;
+    let document = json(&pushed)?;
+    assert_eq!(pushed.status.code(), Some(0), "{document}");
+    assert_eq!(
+        crate::support::warning(&document, "output.changed")["message"],
+        "data/processed changed since processed was pinned: 1 file added, so push sends the files processed pins, not these",
+        "{document}"
+    );
+    assert_eq!(
+        document["result"]["objects"], 2,
+        "the pinned files alone: {document}"
+    );
+    Ok(())
+}
+
+/// exclude takes a path in an output's folder, wherever it is: the pin leaves the file out, and
+/// the author's file stays, no difference since its pattern leaves it out.
+#[test]
+fn exclude_leaves_an_outputs_file_out_and_keeps_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/r.csv"), b"r\n")?;
+    fs::write(work.join("results/run.log"), b"log\n")?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    let excluded = sandbox.run(&["exclude", "results/run.log"])?;
+    assert_eq!(
+        excluded.status.code(),
+        Some(0),
+        "{}",
+        text(&excluded.stderr)?
+    );
+    assert_eq!(
+        fs::read_to_string(work.join("data.toml"))?,
+        "[datasets.results]\nref = \"local\"\nat = \"results\"\nexclude = [\"run.log\"]\n"
+    );
+    assert!(!fs::read_to_string(work.join("data.lock"))?.contains("run.log"));
+    assert_eq!(fs::read(work.join("results/run.log"))?, b"log\n");
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    for kind in ["missing", "edited", "extra", "unneeded"] {
+        assert_eq!(
+            listed(&document, kind),
+            Vec::<String>::new(),
+            "{kind}: {document}"
+        );
+    }
+    Ok(())
+}
+
+/// drop frees an output's bytes from the cache once a mirror keeps them, and leaves its folder,
+/// the author's, as it is; status counts none of its files.
+#[test]
+fn dropping_an_output_keeps_its_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_string_lossy().into_owned();
+    ok(&sandbox.run(&["push", "--to", &mirror, "--yes"])?)?;
+    let dropped = sandbox.run(&["drop", "processed", "--mirror", &mirror])?;
+    assert_eq!(dropped.status.code(), Some(0), "{}", text(&dropped.stderr)?);
+    assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
+    assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    for kind in ["missing", "edited", "extra", "unneeded"] {
+        assert_eq!(
+            listed(&document, kind),
+            Vec::<String>::new(),
+            "{kind}: {document}"
+        );
+    }
+    ok(&sandbox.run(&["sync"])?)?;
+    assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
+    Ok(())
+}

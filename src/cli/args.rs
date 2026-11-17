@@ -146,7 +146,7 @@ on disk: `cache` reports usage, against the cache_budget setting when one is set
   fetchloom cache gc --now
   fetchloom cache gc --now --dry-run
 
-on disk: deletes cached files no project needs once they are a day old, or at once with --now. data/ stays as it is. --dry-run deletes nothing";
+on disk: deletes cached files no project needs once they are a day old, or at once with --now. a project needs the files its data.lock records, so what an output records it was made from keeps nothing. data/ stays as it is. --dry-run deletes nothing";
 
     pub(super) const VERIFY: &str = "examples:
   fetchloom cache verify

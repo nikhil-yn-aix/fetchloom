@@ -295,8 +295,8 @@ fn planning(paths: &[String]) -> String {
     }
 }
 
-/// each of `paths`, typed in `here`, as a path in the data folder of the project at `root`; a
-/// dataset's name among them is answered with `remove`.
+/// each of `paths`, typed in `here`, as a path in the data folder of the project at `root`, or in
+/// an output's folder; a dataset's name among them is answered with `remove`.
 fn data_paths(
     manifest: &Manifest,
     (root, here): (&Path, &Path),
@@ -305,6 +305,15 @@ fn data_paths(
     paths
         .iter()
         .map(|path| {
+            // an output's files are its folder's, wherever it is in the project
+            let found = manifest
+                .datasets
+                .values()
+                .filter_map(|entry| entry.at.as_deref())
+                .find_map(|at| in_data_folder(root, here, at, path).ok());
+            if let Some(found) = found {
+                return Ok(found);
+            }
             in_data_folder(root, here, &manifest.data_dir, path).map_err(|error| {
                 match removal(manifest, path).or_else(|| meant(manifest, (root, here), path)) {
                     Some(help) => error.help(help),
