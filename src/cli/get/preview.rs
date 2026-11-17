@@ -8,15 +8,16 @@ use std::sync::Arc;
 use super::file::{self, Foreseen};
 use super::folder::{self, check};
 use super::{
-    Asked, Dry, Expected, Item, Report, Resolved, Taken, folder_for, foresee, held, known,
-    one_file, resolve_all, shown, tell_failed, unclaimed, unwrapped,
+    Asked, Dry, Expected, Item, Report, Resolved, Taken, beside, decompressed, folder_for, foresee,
+    held, known, one_file, resolve_all, shown, tell_failed, unclaimed, unwrapped,
 };
-use crate::cache::Cache;
+use crate::cache::{Cache, decompressed_key};
 use crate::cli::args::Get;
 use crate::cli::fetch::{self, Job};
 use crate::cli::project::dry_run_done;
 use crate::cli::sync::place::{Changes, Download};
 use crate::cli::{Context, search};
+use crate::digest::Sha256;
 use crate::error::Error;
 use crate::net::{self, Net};
 use crate::source::search::is_search;
@@ -35,6 +36,8 @@ struct Planned {
     check: Vec<String>,
     /// archives never unpacked here, whose files only unpacking tells.
     unpack: Vec<String>,
+    /// each file that would decompress, and the file it would decompress to.
+    decompress: Vec<(String, String)>,
     /// the paths its files would take in the folder, once every one is known.
     paths: Option<Vec<String>>,
     /// with `-o`, what writing the file would do.
@@ -125,28 +128,32 @@ fn plan(
     if let Some(path) = &args.output {
         let remote = file::only(files, &parsed, &listing)?;
         let written = file::foreseen(context, cache, args, &remote, path)?;
+        let came = args.decompress.then(|| file::coming_name(cache, &remote));
+        let to = came
+            .as_deref()
+            .and_then(|came| decompressed(true, came)?.ok());
         let mut planned = Planned {
             place: path.clone(),
             download: Vec::new(),
             hosts: Vec::new(),
             check: Vec::new(),
             unpack: Vec::new(),
+            decompress: Vec::new(),
             paths: None,
             written: Some(written),
         };
         if written != Foreseen::Keep {
-            fetching(
-                context,
-                cache,
-                &fetch::listed_job(&remote, &remote.path, false),
-                None,
-                &mut planned,
-            )?;
+            let mut job = fetch::listed_job(&remote, &remote.path, false);
+            job.fetch.decompressed.clone_from(&to);
+            fetching(context, cache, &job, None, &mut planned)?;
+            if let (Some(came), Some(_)) = (came, &to) {
+                planned.decompress.push((came, path.display().to_string()));
+            }
         }
         return Ok(planned);
     }
-    let extract = !args.no_extract;
-    let (names, paths) = foresee(cache, &files, extract);
+    let (extract, decompress) = (!args.no_extract, args.decompress);
+    let (names, paths) = foresee(cache, &files, (extract, decompress));
     let (chosen, parent) = if lone {
         (args.dir.as_deref(), None)
     } else {
@@ -170,24 +177,35 @@ fn plan(
         hosts: Vec::new(),
         check: Vec::new(),
         unpack: Vec::new(),
+        decompress: Vec::new(),
         paths,
         written: None,
     };
     for (remote, name) in files.iter().zip(&names) {
         let mut job = fetch::listed_job(remote, name, extract);
         job.fetch.listed = listing.listed(remote);
-        let unpacks = job.fetch.unpack
-            && known(
+        job.fetch.decompressed = decompressed(decompress, name).and_then(Result::ok);
+        // an archive or a file never unpacked here, whose files only unpacking makes; the bytes are
+        // looked up only for those
+        let bytes = || {
+            known(
                 cache,
                 remote,
                 cache.url_record(remote.url.as_str()).as_ref(),
             )
-            .and_then(|(digest, _)| cache.unpacked(&digest, None))
-            .is_none();
-        let at = (!job.fetch.unpack).then(|| folder::within(&planned.place, name));
+        };
+        let unpacked = |key: Sha256| cache.unpacked(&key, None).is_some();
+        let unpacks = job.fetch.unpack && !bytes().is_some_and(|(digest, _)| unpacked(digest));
+        let decompresses = job.fetch.decompressed.as_deref().filter(|to| {
+            !bytes().is_some_and(|(digest, _)| unpacked(decompressed_key(&digest, to)))
+        });
+        let at = (!job.fetch.unpacks()).then(|| folder::within(&planned.place, name));
         fetching(context, cache, &job, at.as_deref(), &mut planned)?;
         if unpacks {
             planned.unpack.push(name.clone());
+        }
+        if let Some(to) = decompresses {
+            planned.decompress.push((name.clone(), beside(name, to)));
         }
     }
     Ok(planned)
@@ -242,6 +260,9 @@ fn tell(context: &Context, plans: &[Planned], total: &crate::net::estimate::Tota
     }
     for archive in plans.iter().flat_map(|planned| &planned.unpack) {
         output.step("Would open", archive);
+    }
+    for (file, to) in plans.iter().flat_map(|planned| &planned.decompress) {
+        output.step("Would decompress", &format!("{file} to {to}"));
     }
     if plans.iter().any(|planned| !planned.unpack.is_empty()) {
         output.hint("an archive's files are known once it is unpacked, so they are not counted");

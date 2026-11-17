@@ -673,3 +673,566 @@ fn a_stopped_decompression_leaves_nothing_and_the_next_run_finishes() -> Result 
     );
     Ok(())
 }
+
+/// the names in the work folder, sorted.
+fn work_names(sandbox: &Sandbox) -> Result<Vec<String>> {
+    let mut names = fs::read_dir(sandbox.work())?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<String>>>()?;
+    names.sort();
+    Ok(names)
+}
+
+/// `get --decompress` puts what a single compressed file holds in the folder, under its name
+/// without the ending; the hint to pin it keeps `--decompress`, and a second run only asks whether
+/// the file changed.
+#[test]
+fn get_decompresses_into_its_folder_and_a_rerun_moves_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let routes = Routes::start(vec![(
+        "/files/iris.csv.gz".to_owned(),
+        file(&packed, "\"g1\""),
+    )])?;
+    routes.unchanged("/files/iris.csv.gz", "\"g1\"");
+    let link = format!("{}/files/iris.csv.gz", routes.url);
+    ok(&sandbox.run(&["get", &link, "--decompress"])?)?;
+    let folder = sandbox.work().join("iris");
+    assert_eq!(fs::read(folder.join("iris.csv"))?, CSV);
+    assert!(!folder.join("iris.csv.gz").exists());
+    let again = sandbox.run(&["--json", "get", &link, "--decompress"])?;
+    ok(&again)?;
+    let document = json(&again)?;
+    assert_eq!(document["work"]["bytes_down"], 0, "{document}");
+    let got = &document["result"]["files"][0];
+    assert_eq!(got["path"], "iris.csv");
+    assert_eq!(got["sha256"], sha256_hex(CSV));
+    assert_eq!(got["unpacked_from"], "iris.csv.gz");
+    let asked = routes.requests();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked[1].contains("if-none-match: \"g1\""), "{}", asked[1]);
+    assert_eq!(fs::read(folder.join("iris.csv"))?, CSV);
+    #[cfg(target_os = "linux")]
+    if let Some(said) = sandbox.on_a_terminal(&["get", &link, "--decompress"])? {
+        assert!(
+            said.contains(&format!(
+                "next: to pin this dataset in a project, run `fetchloom add {link} --decompress` there"
+            )),
+            "{said}"
+        );
+    }
+    Ok(())
+}
+
+/// several links get a folder each, each file decompressed by the decoder its bytes name.
+#[test]
+fn get_decompresses_every_single_file_compression() -> Result {
+    let sandbox = Sandbox::new()?;
+    let made = [
+        ("a.csv.gz", gz(CSV)?),
+        ("b.csv.bz2", bz2(CSV)?),
+        ("c.csv.xz", xz(CSV)?),
+        ("d.csv.zst", zst(CSV)?),
+    ];
+    let routes = Routes::start(
+        made.iter()
+            .map(|(name, bytes)| (format!("/files/{name}"), file(bytes, "\"c1\"")))
+            .collect(),
+    )?;
+    let links: Vec<String> = made
+        .iter()
+        .map(|(name, _)| format!("{}/files/{name}", routes.url))
+        .collect();
+    let mut args = vec!["get", "--decompress", "--dir", "out"];
+    args.extend(links.iter().map(String::as_str));
+    ok(&sandbox.run(&args)?)?;
+    for (name, _) in &made {
+        let stem = &name[..1];
+        let folder = sandbox.work().join("out").join(stem);
+        assert_eq!(fs::read(folder.join(format!("{stem}.csv")))?, CSV, "{name}");
+        assert!(!folder.join(name).exists(), "{name}");
+    }
+    Ok(())
+}
+
+/// with `-o`, the file the link decompresses to is written at exactly that path, and nothing of
+/// the run stays in the cache.
+#[test]
+fn get_output_with_decompress_writes_the_decompressed_file_there() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let server = Server::start("/files/iris.csv.gz", vec![file(&packed, "\"o1\"")])?;
+    let output = sandbox.run(&[
+        "--json",
+        "get",
+        &server.url,
+        "--decompress",
+        "-o",
+        "flowers.csv",
+    ])?;
+    ok(&output)?;
+    let written = sandbox.work().join("flowers.csv");
+    assert_eq!(fs::read(&written)?, CSV);
+    let document = json(&output)?;
+    assert_eq!(
+        document["result"]["file"],
+        written.display().to_string(),
+        "{document}"
+    );
+    let got = &document["result"]["files"][0];
+    assert_eq!(got["path"], "flowers.csv");
+    assert_eq!(got["size"], CSV.len());
+    assert_eq!(got["sha256"], sha256_hex(CSV));
+    assert_eq!(got["unpacked_from"], "iris.csv.gz");
+    assert_eq!(
+        object_bytes(&sandbox.cache())?,
+        0,
+        "nothing of this run stays in the cache"
+    );
+    assert_eq!(work_names(&sandbox)?, ["flowers.csv"]);
+    Ok(())
+}
+
+/// `--sha256` checks the bytes as they were downloaded, before they decompress, as pooch's
+/// `known_hash` does: the packed file's hash passes, the decompressed file's is refused, and the
+/// help says so.
+#[test]
+fn sha256_checks_the_downloaded_bytes_before_they_decompress() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let server = Server::start(
+        "/files/iris.csv.gz",
+        (0..4).map(|_| file(&packed, "\"s1\"")).collect(),
+    )?;
+    let decompressed = sha256_hex(CSV);
+    let wrong = sandbox.run(&[
+        "--json",
+        "get",
+        &server.url,
+        "--decompress",
+        "-o",
+        "iris.csv",
+        "--sha256",
+        &decompressed,
+    ])?;
+    assert_eq!(wrong.status.code(), Some(30), "{}", text(&wrong.stderr)?);
+    let error = &json(&wrong)?["errors"][0];
+    assert_eq!(error["message"], "iris.csv.gz does not match --sha256");
+    assert_eq!(
+        error["details"],
+        serde_json::json!([format!(
+            "expected sha256 {decompressed}, got {}",
+            sha256_hex(&packed)
+        )])
+    );
+    assert!(!sandbox.work().join("iris.csv").exists());
+    let right = sandbox.run(&[
+        "get",
+        &server.url,
+        "--decompress",
+        "-o",
+        "iris.csv",
+        "--sha256",
+        &sha256_hex(&packed),
+    ])?;
+    ok(&right)?;
+    assert_eq!(fs::read(sandbox.work().join("iris.csv"))?, CSV);
+    let into = |sha256: &str| {
+        let args = ["--json", "get", &server.url, "--decompress", "--dir", "got"];
+        sandbox.run(&[&args[..], &["--sha256", sha256]].concat())
+    };
+    let wrong = into(&decompressed)?;
+    assert_eq!(wrong.status.code(), Some(30), "{}", text(&wrong.stderr)?);
+    assert_eq!(json(&wrong)?["errors"][0]["kind"], "integrity.mismatch");
+    assert!(!sandbox.work().join("got").exists());
+    ok(&into(&sha256_hex(&packed))?)?;
+    assert_eq!(fs::read(sandbox.work().join("got").join("iris.csv"))?, CSV);
+    let help = sandbox.run(&["get", "--help"])?;
+    let help = text(&help.stdout)?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        help.contains(
+            "check that the downloaded file, still compressed with --decompress, has this SHA-256"
+        ),
+        "{help}"
+    );
+    Ok(())
+}
+
+/// an archive's ending stays extract's: get unpacks a `.tar.gz` into its files with
+/// `--decompress` as without it, keeps it packed with `--no-extract`, and `-o` writes it as it
+/// came.
+#[test]
+fn get_leaves_an_archive_to_extract() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(&tar_of(&[("iris.csv", CSV)])?)?;
+    let server = Server::start(
+        "/files/flowers.tar.gz",
+        (0..3).map(|_| file(&packed, "\"t1\"")).collect(),
+    )?;
+    ok(&sandbox.run(&["get", &server.url, "--decompress", "--dir", "unpacked"])?)?;
+    let unpacked = sandbox.work().join("unpacked");
+    assert_eq!(fs::read(unpacked.join("iris.csv"))?, CSV);
+    assert!(!unpacked.join("flowers.tar").exists());
+    ok(&sandbox.run(&[
+        "get",
+        &server.url,
+        "--decompress",
+        "--no-extract",
+        "--dir",
+        "packed",
+    ])?)?;
+    assert_eq!(
+        fs::read(sandbox.work().join("packed").join("flowers.tar.gz"))?,
+        packed
+    );
+    assert!(!sandbox.work().join("packed").join("flowers.tar").exists());
+    ok(&sandbox.run(&["get", &server.url, "--decompress", "-o", "kept.tar.gz"])?)?;
+    assert_eq!(fs::read(sandbox.work().join("kept.tar.gz"))?, packed);
+    Ok(())
+}
+
+/// decompressing is get's to ask for: without `--decompress` a single compressed file arrives as it
+/// came, into a folder or at `-o`.
+#[test]
+fn get_leaves_a_compressed_file_packed_unless_asked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let routes = Routes::start(vec![(
+        "/files/iris.csv.gz".to_owned(),
+        file(&packed, "\"p1\""),
+    )])?;
+    let link = format!("{}/files/iris.csv.gz", routes.url);
+    ok(&sandbox.run(&["get", &link, "--dir", "packed"])?)?;
+    let folder = sandbox.work().join("packed");
+    assert_eq!(fs::read(folder.join("iris.csv.gz"))?, packed);
+    assert!(!folder.join("iris.csv").exists());
+    ok(&sandbox.run(&["get", &link, "-o", "kept.csv.gz"])?)?;
+    assert_eq!(fs::read(sandbox.work().join("kept.csv.gz"))?, packed);
+    Ok(())
+}
+
+/// a dry run says what each file would decompress to, into a folder or at `-o`, and writes
+/// nothing.
+#[test]
+fn a_dry_run_of_get_says_what_it_would_decompress_to() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let routes = Routes::start(vec![(
+        "/files/iris.csv.gz".to_owned(),
+        file(&packed, "\"d1\""),
+    )])?;
+    let link = format!("{}/files/iris.csv.gz", routes.url);
+    let folder = sandbox.run(&["get", &link, "--decompress", "--dry-run"])?;
+    ok(&folder)?;
+    let said = text(&folder.stderr)?;
+    assert!(
+        said.contains("Would decompress iris.csv.gz to iris.csv"),
+        "{said}"
+    );
+    assert!(said.contains("Would put 1 file in iris"), "{said}");
+    let dry = [
+        "get",
+        &link,
+        "--decompress",
+        "--dry-run",
+        "-o",
+        "flowers.csv",
+    ];
+    let output = sandbox.run(&dry)?;
+    ok(&output)?;
+    let said = text(&output.stderr)?;
+    assert!(
+        said.contains("Would decompress iris.csv.gz to flowers.csv"),
+        "{said}"
+    );
+    let output = sandbox.run(&[&["--json"][..], &dry].concat())?;
+    ok(&output)?;
+    assert_eq!(
+        json(&output)?["result"]["changes"]["place"],
+        serde_json::json!(["flowers.csv"])
+    );
+    assert_eq!(work_names(&sandbox)?, Vec::<String>::new());
+    Ok(())
+}
+
+/// a file at `-o` that holds what the link decompresses to stays as it is: with `--sha256` naming
+/// the downloaded bytes, with no request; without it, after a 304 that moves nothing. one holding
+/// other bytes is refused unless `--force`.
+#[test]
+fn a_file_at_output_holding_the_decompressed_bytes_is_kept() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let routes = Routes::start(vec![(
+        "/files/iris.csv.gz".to_owned(),
+        file(&packed, "\"h1\""),
+    )])?;
+    routes.unchanged("/files/iris.csv.gz", "\"h1\"");
+    let link = format!("{}/files/iris.csv.gz", routes.url);
+    let get = |extra: &[&str]| {
+        let mut args = vec!["get", link.as_str(), "--decompress", "-o", "iris.csv"];
+        args.extend_from_slice(extra);
+        sandbox.run(&args)
+    };
+    ok(&get(&[])?)?;
+    let again = get(&["--json"])?;
+    ok(&again)?;
+    assert_eq!(json(&again)?["work"]["bytes_down"], 0);
+    let asked = routes.requests();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked[1].contains("if-none-match: \"h1\""), "{}", asked[1]);
+    let told = get(&[])?;
+    ok(&told)?;
+    let said = text(&told.stderr)?;
+    assert!(
+        said.contains("Ok iris.csv already holds what the link serves now, decompressed"),
+        "{said}"
+    );
+    assert_eq!(routes.requests().len(), 3);
+    let named = get(&["--sha256", &sha256_hex(&packed)])?;
+    ok(&named)?;
+    let said = text(&named.stderr)?;
+    assert!(
+        said.contains("Ok iris.csv already holds what --sha256 names, decompressed"),
+        "{said}"
+    );
+    assert_eq!(routes.requests().len(), 3, "no request");
+    let offline = get(&["--offline"])?;
+    ok(&offline)?;
+    let said = text(&offline.stderr)?;
+    assert!(
+        said.contains("Ok iris.csv already holds what the link served last time, decompressed"),
+        "{said}"
+    );
+    assert_eq!(routes.requests().len(), 3, "no request offline");
+    let placed = sandbox.work().join("iris.csv");
+    fs::write(&placed, b"other\n")?;
+    let refused = get(&["--json"])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(50),
+        "{}",
+        text(&refused.stderr)?
+    );
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "local.not_empty");
+    assert_eq!(
+        error["message"],
+        "iris.csv already exists and holds other bytes than the link serves now, decompressed"
+    );
+    assert_eq!(fs::read(&placed)?, b"other\n");
+    ok(&get(&["--force"])?)?;
+    assert_eq!(fs::read(&placed)?, CSV);
+    Ok(())
+}
+
+/// a get of a link only its source can list, as a zenodo record, remembers the bytes the link
+/// served, still compressed, so an offline get finds what they decompressed to at `-o` and keeps
+/// it without asking anyone.
+#[cfg(debug_assertions)]
+#[test]
+fn an_offline_get_of_a_listed_link_keeps_the_file_it_decompressed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let record = serde_json::json!({
+        "id": 101,
+        "conceptrecid": "100",
+        "doi": "10.5281/zenodo.101",
+        "metadata": {
+            "title": "Iris",
+            "license": { "id": "cc-by-4.0" },
+            "access_right": "open",
+        },
+        "files": [{
+            "key": "iris.csv.gz",
+            "size": packed.len(),
+            "checksum": format!("md5:{}", crate::support::md5_hex(&packed)),
+        }],
+    });
+    let routes = Routes::start(vec![
+        (
+            "/zenodo.org/api/records/101".to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                &serde_json::to_vec(&record)?,
+            ),
+        ),
+        (
+            "/zenodo.org/api/records/101/files/iris.csv.gz/content".to_owned(),
+            file(&packed, "\"z1\""),
+        ),
+    ])?;
+    let get = |first: &[&str]| {
+        let args = ["get", "zenodo:101", "--decompress", "-o", "iris.csv"];
+        sandbox
+            .command(&[first, &args[..]].concat())
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()
+    };
+    ok(&get(&[])?)?;
+    assert_eq!(fs::read(sandbox.work().join("iris.csv"))?, CSV);
+    let asked = routes.requests().len();
+    let offline = get(&["--offline"])?;
+    ok(&offline)?;
+    let said = text(&offline.stderr)?;
+    assert!(
+        said.contains("Ok iris.csv already holds what the link served last time, decompressed"),
+        "{said}"
+    );
+    assert_eq!(routes.requests().len(), asked, "no request offline");
+    Ok(())
+}
+
+/// get decompresses through the same guard, with the limits of this machine: a bomb stops at
+/// the ratio into a folder or at `-o` and leaves no file, with help in get's words, and
+/// `FETCHLOOM_ARCHIVE_SIZE` lowers the most a file may decompress to.
+#[test]
+fn get_refuses_a_bomb_and_files_past_the_local_limits() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![
+        ("/files/zeros.csv.bz2".to_owned(), file(&bomb()?, "\"b1\"")),
+        (
+            "/files/big.csv.gz".to_owned(),
+            file(&gz(&vec![b'x'; 4096])?, "\"b2\""),
+        ),
+    ])?;
+    let zeros = format!("{}/files/zeros.csv.bz2", routes.url);
+    for args in [&["--decompress"][..], &["--decompress", "-o", "zeros.csv"]] {
+        let output = sandbox.run(&[&["--json", "get", zeros.as_str()][..], args].concat())?;
+        assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(
+            error["message"],
+            "\"zeros.csv\" grew past 1000 times its compressed size as it decompressed, which is how compression bombs fill disks",
+            "{args:?}"
+        );
+        assert_eq!(
+            error["help"],
+            "if you trust the file, raise FETCHLOOM_ARCHIVE_RATIO, or archive_ratio in the settings file. otherwise leave out --decompress to keep the file packed",
+            "{args:?}"
+        );
+        assert!(object_bytes(&sandbox.cache())? < 1 << 20, "{args:?}");
+    }
+    assert_eq!(work_names(&sandbox)?, Vec::<String>::new());
+    let big = sandbox
+        .command(&[
+            "--json",
+            "get",
+            &format!("{}/files/big.csv.gz", routes.url),
+            "--decompress",
+            "-o",
+            "big.csv",
+        ])
+        .env("FETCHLOOM_ARCHIVE_SIZE", "1K")
+        .output()?;
+    assert_eq!(big.status.code(), Some(10), "{}", text(&big.stderr)?);
+    assert_eq!(
+        json(&big)?["errors"][0]["message"],
+        "\"big.csv\" decompresses to more than 1.0 KiB, the most fetchloom unpacks from one file"
+    );
+    assert!(!sandbox.work().join("big.csv").exists());
+    Ok(())
+}
+
+/// a damaged file get would decompress is refused with get's own way out, leaving out
+/// `--decompress`, in place of a project's.
+#[test]
+fn a_damaged_file_get_would_decompress_names_get_s_way_out() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let cut = &packed[..packed.len() - 8];
+    let routes = Routes::start(vec![("/files/cut.csv.gz".to_owned(), file(cut, "\"c1\""))])?;
+    let link = format!("{}/files/cut.csv.gz", routes.url);
+    let output = sandbox.run(&["--json", "get", &link, "--decompress", "-o", "cut.csv"])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "the file is damaged: it ends before its stream does"
+    );
+    assert_eq!(
+        error["help"],
+        "ask the file's owner for a fixed copy, or leave out --decompress to keep the file packed"
+    );
+    assert_eq!(work_names(&sandbox)?, Vec::<String>::new());
+    Ok(())
+}
+
+/// a get stopped while it decompresses writes nothing, and the next get finishes from the bytes
+/// the first downloaded, asking only whether they changed.
+#[cfg(debug_assertions)]
+#[test]
+fn a_stopped_get_decompression_writes_nothing_and_the_next_get_finishes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let large: Vec<u8> = (0..(1 << 20)).map(|at: u32| (at % 251) as u8).collect();
+    let routes = Routes::start(vec![(
+        "/files/long.bin.gz".to_owned(),
+        file(&gz(&large)?, "\"l1\""),
+    )])?;
+    routes.unchanged("/files/long.bin.gz", "\"l1\"");
+    let link = format!("{}/files/long.bin.gz", routes.url);
+    let stopped = sandbox
+        .command(&["get", &link, "--decompress", "-o", "long.bin"])
+        .env("FETCHLOOM_TEST_STOP_UNPACKING", "1")
+        .output()?;
+    assert_eq!(
+        stopped.status.code(),
+        Some(130),
+        "{}",
+        text(&stopped.stderr)?
+    );
+    assert!(!sandbox.work().join("long.bin").exists());
+    assert_eq!(fs::read_dir(sandbox.cache().join("tmp"))?.count(), 0);
+    ok(&sandbox.run(&["get", &link, "--decompress", "-o", "long.bin"])?)?;
+    assert_eq!(fs::read(sandbox.work().join("long.bin"))?, large);
+    let asked = routes.requests();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked[1].contains("if-none-match: \"l1\""), "{}", asked[1]);
+    Ok(())
+}
+
+/// a name that would decompress to no file's name is refused: before any download where a
+/// listing names the file, and once the file came where only its server names it.
+#[test]
+fn get_refuses_a_name_no_file_may_take() -> Result {
+    let sandbox = Sandbox::new()?;
+    let html = "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for /data/</title>\n</head>\n<body>\n<h1>Directory listing for /data/</h1>\n<hr>\n<ul>\n<li><a href=\"a..gz\">a..gz</a></li>\n<li><a href=\"iris.csv\">iris.csv</a></li>\n</ul>\n<hr>\n</body>\n</html>\n";
+    let length = html.len().to_string();
+    let listing = reply(
+        "200 OK",
+        &[
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Content-Length", &length),
+        ],
+        html.as_bytes(),
+    );
+    let routes = Routes::start(vec![
+        ("/data/".to_owned(), listing),
+        ("/data/a..gz".to_owned(), file(&gz(CSV)?, "\"n1\"")),
+        ("/data/iris.csv".to_owned(), file(CSV, "\"n2\"")),
+    ])?;
+    let why = "\"a..gz\" would decompress to a name not every system can store: \"a.\" ends with a dot or a space, which windows drops";
+    let folder = format!("{}/data/", routes.url);
+    let listed = sandbox.run(&["--json", "get", &folder, "--decompress"])?;
+    assert_eq!(listed.status.code(), Some(10), "{}", text(&listed.stderr)?);
+    let error = &json(&listed)?["errors"][0];
+    assert_eq!(error["message"], why);
+    assert_eq!(
+        error["help"],
+        "leave it out with --exclude, or leave out --decompress to keep it packed"
+    );
+    let asked = routes.requests();
+    assert_eq!(asked.len(), 1, "the listing alone: {asked:?}");
+    let link = format!("{folder}a..gz");
+    let plain = sandbox.run(&["--json", "get", &link, "--decompress"])?;
+    assert_eq!(plain.status.code(), Some(10), "{}", text(&plain.stderr)?);
+    let error = &json(&plain)?["errors"][0];
+    assert_eq!(error["message"], why);
+    assert_eq!(error["help"], "leave out --decompress to keep it packed");
+    assert_eq!(routes.requests().len(), 2);
+    assert_eq!(work_names(&sandbox)?, Vec::<String>::new());
+    Ok(())
+}

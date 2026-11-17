@@ -589,6 +589,7 @@ impl Net {
             was: None,
             unpacked_was: None,
             unpack: fetch.unpack,
+            decompressed: fetch.decompressed.clone(),
             mirror: fetch.mirror,
             page: fetch.page,
             named: fetch.named,

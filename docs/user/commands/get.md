@@ -29,6 +29,7 @@ fetchloom get [options] <link>...
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed; webdataset loaders read `.tar` shards packed |
+| `--decompress` | decompress each single `.gz`, `.bz2`, `.xz` or `.zst` file to its name without the ending, or with `-o` to that file; `--sha256` checks the bytes as they downloaded, still compressed. a compressed tar, as `.tar.gz`, stays an archive |
 | `--web-page` | keep the web page a link answers with as the file; without it such a page is refused, see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) |
 | `-n`, `--dry-run` | tell what would be fetched and where it would land without downloading a file's bytes or writing anything; see [dry run](#dry-run) |
 

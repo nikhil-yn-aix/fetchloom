@@ -18,8 +18,9 @@ arguments:
              alone, in quotes
 
 options:
-  -o, --output <file>      write the downloaded file to <file> as it came, never
-                           unpacked. needs one link to one file
+  -o, --output <file>      write the downloaded file to <file> as it came, or
+                           decompressed with --decompress, never unpacked. needs
+                           one link to one file
       --force              replace a file already at <file> that holds other
                            bytes. it stays whole until the new file takes its
                            name
@@ -30,8 +31,9 @@ options:
                            for -. an MD5 or SHA-256 after a link checks its one
                            file. blank lines and lines starting with # are
                            skipped
-      --sha256 <hex>       check that the file has this SHA-256 before it takes
-                           its name or goes in the folder. needs one link to one
+      --sha256 <hex>       check that the downloaded file, still compressed with
+                           --decompress, has this SHA-256 before it takes its
+                           name or goes in the folder. needs one link to one
                            file
       --select <glob>      keep only files matching this pattern, such as
                            "**/*.csv". repeat it for more
@@ -39,6 +41,9 @@ options:
                            more
       --no-extract         keep zip, 7z and tar archives packed instead of
                            unpacking them
+      --decompress         decompress each single .gz, .bz2, .xz or .zst file to
+                           its name without the ending, or to -o's file. never a
+                           compressed tar, as .tar.gz, which stays an archive
       --web-page           keep the web page a link answers with as the file.
                            without it, a page where a file was expected is
                            refused

@@ -18,6 +18,7 @@ use super::unkeyed::{First, Turn};
 use super::{Net, Splitting, host};
 use crate::cache::{
     Cache, Claim, Partial, PartialWriter, SAVE_EVERY, Stored, UrlRecord, Validators,
+    decompressed_key,
 };
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -121,6 +122,10 @@ pub(crate) struct Fetch {
     /// the bytes are an archive the caller unpacks, so the files it unpacked to stand for it in
     /// the cache once its own object is gone.
     pub(crate) unpack: bool,
+    /// the name the bytes decompress to, a single compressed file the caller decompresses, so the
+    /// file it decompressed to stands for it in the cache once its own object is gone, as an
+    /// archive's files do.
+    pub(crate) decompressed: Option<String>,
     /// the bytes are a mirror's copy, which mirror-only mode lets the request ask for.
     pub(crate) mirror: bool,
     /// the person asked for the web page itself, so one is the file rather than a mistake.
@@ -182,6 +187,7 @@ impl Fetch {
             was: None,
             unpacked_was: None,
             unpack: false,
+            decompressed: None,
             mirror: false,
             page: false,
             named: false,
@@ -196,6 +202,12 @@ impl Fetch {
         let record = cache.vouched_url_record(self.url.as_str(), self.was.as_ref())?;
         (self.held == Some(record.sha256) || holds(cache, self, &record.sha256, Some(record.size)))
             .then_some(record)
+    }
+
+    /// whether the caller unpacks the bytes, an archive or a single compressed file it
+    /// decompresses, whose files then take room on the cache's disk beside them.
+    pub(crate) fn unpacks(&self) -> bool {
+        self.unpack || self.decompressed.is_some()
     }
 
     /// what the bytes must match: the expectations, less a size a folder listing states.
@@ -2120,6 +2132,7 @@ fn as_it_is_now(fetch: &Fetch, current: Url) -> Fetch {
         was: None,
         unpacked_was: None,
         unpack: fetch.unpack,
+        decompressed: fetch.decompressed.clone(),
         mirror: fetch.mirror,
         page: fetch.page,
         named: fetch.named,
@@ -2144,11 +2157,16 @@ fn unread(error: Error, refused: Error, version: &str) -> Error {
     }
 }
 
-/// whether the cache holds these bytes: as an object, or, for an archive the caller unpacks, as
-/// every file it unpacked to.
+/// whether the cache holds these bytes: as an object, or, for an archive the caller unpacks or a
+/// file it decompresses, as every file it unpacked to.
 fn holds(cache: &Cache, fetch: &Fetch, digest: &Sha256, size: Option<u64>) -> bool {
+    let unpacked = |key: &Sha256| cache.holds_unpacked_as(key, fetch.unpacked_was.as_ref());
     cache.find(digest, size).is_some()
-        || fetch.unpack && cache.holds_unpacked_as(digest, fetch.unpacked_was.as_ref())
+        || fetch.unpack && unpacked(digest)
+        || fetch
+            .decompressed
+            .as_deref()
+            .is_some_and(|name| unpacked(&decompressed_key(digest, name)))
 }
 
 /// whether a credential of this machine went with `response`'s request or a hop before it, as

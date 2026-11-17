@@ -1,6 +1,7 @@
 //! `get -o <file>`: the one file a link resolves to, at exactly that path, writable and never
-//! unpacked. it takes its name only once its bytes are checked, never over another file unless
-//! `--force`, and bytes this run downloaded leave the cache unless a project needs them.
+//! unpacked from an archive, or with `--decompress` the file a single compressed file holds. it
+//! takes its name only once its bytes are checked, never over another file unless `--force`, and
+//! bytes this run downloaded or decompressed leave the cache unless a project needs them.
 
 use std::fs;
 use std::io;
@@ -11,11 +12,12 @@ use std::time::Instant;
 use super::super::Context;
 use super::super::args::Get;
 use super::super::fetch;
+use super::super::sync::unpack::{Unpack, unpack_all};
 use super::{
     Done, Expected, Got, Written, approve, folder_for, matches_sha256, one_file, tell_fetched, vet,
 };
 use crate::archive::{self, Packed};
-use crate::cache::{Cache, Claim, Partial, UrlRecord};
+use crate::cache::{Cache, Claim, Partial, UrlRecord, decompressed_key};
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
 use crate::net::{Fetched, Net, Origin};
@@ -158,6 +160,15 @@ impl Wanted {
             Wanted::Recorded => "the link served last time",
         }
     }
+
+    /// what [`Wanted::said`] says, of the file those bytes decompress to when `decompressed`.
+    fn of(self, decompressed: bool) -> String {
+        if decompressed {
+            format!("{}, decompressed", self.said())
+        } else {
+            self.said().to_owned()
+        }
+    }
 }
 
 /// what to do about the path `-o` names, given the bytes the link serves.
@@ -213,6 +224,88 @@ fn existing(destination: &Destination) -> Result<Existing, Error> {
 struct Destination {
     shown: String,
     path: PathBuf,
+    /// with `--decompress`, the name the link's file comes by and the name it decompresses to, as
+    /// known before it downloads: the file at the path then holds what it decompresses to.
+    decompressing: Option<(String, String)>,
+}
+
+impl Destination {
+    /// the path `-o` names, for `args`, with what the link's file `remote` decompresses to as the
+    /// cache knows its name before it downloads.
+    fn new(cache: &Cache, args: &Get, remote: &Remote, path: &Path) -> Result<Destination, Error> {
+        let shown = path.display().to_string();
+        let decompressing = match args.decompress.then(|| coming_name(cache, remote)) {
+            None => None,
+            Some(came) => match decompressing(args, &came) {
+                Ok(to) => to.map(|to| (came, to)),
+                // a name its server may still change is judged once the file came
+                Err(_) if remote.named_by_server => None,
+                Err(error) => return Err(error),
+            },
+        };
+        Ok(Destination {
+            path: std::path::absolute(path)
+                .map_err(|err| Error::io(format_args!("could not find where {shown} is"), &err))?,
+            shown,
+            decompressing,
+        })
+    }
+
+    /// the name the link's file decompresses to, with `--decompress`.
+    fn to(&self) -> Option<&str> {
+        self.decompressing.as_ref().map(|(_, to)| to.as_str())
+    }
+
+    /// the bytes the file at the path should hold for the link's bytes `digest`: those bytes, or
+    /// with `--decompress` what the cache's record says they decompressed to here before, none
+    /// when no record says.
+    fn holding(&self, cache: &Cache, digest: Sha256) -> Option<Sha256> {
+        match self.to() {
+            None => Some(digest),
+            Some(to) => decompressed_of(cache, &digest, to).map(|(digest, _)| digest),
+        }
+    }
+}
+
+/// the name the link's file comes by before it downloads: the name its server gave last time, for
+/// a file its server names, else its listed path.
+pub(super) fn coming_name(cache: &Cache, remote: &Remote) -> String {
+    remote
+        .named_by_server
+        .then(|| cache.url_record(remote.url.as_str()))
+        .flatten()
+        .and_then(|record| record.name)
+        .and_then(|name| crate::name::sanitize(&name))
+        .unwrap_or_else(|| remote.path.clone())
+}
+
+/// the name the link's file decompresses to when `--decompress` asks for it, judged by `name`, the
+/// name it comes by; a name no file may take is refused.
+fn decompressing(args: &Get, name: &str) -> Result<Option<String>, Error> {
+    match super::decompressed(args.decompress, name) {
+        Some(Ok(to)) => Ok(Some(to)),
+        Some(Err(why)) => Err(super::refused_name(why, true)),
+        None => Ok(None),
+    }
+}
+
+/// what the bytes `packed` decompressed to here before as `to`, by the cache's record: the
+/// SHA-256 and size of the one file.
+fn decompressed_of(cache: &Cache, packed: &Sha256, to: &str) -> Option<(Sha256, u64)> {
+    match cache
+        .unpacked(&decompressed_key(packed, to), None)?
+        .as_slice()
+    {
+        [only] => Some((only.sha256, only.size)),
+        _ => None,
+    }
+}
+
+/// the bytes the file at the path takes: the link's as they arrived, or those they decompressed
+/// to, from the file the link's file came by.
+struct Arrived {
+    fetched: Fetched,
+    from: Option<String>,
 }
 
 /// fetches the one file of `files` and writes it at `path`, unless a file there holds its bytes
@@ -290,12 +383,7 @@ async fn put(
     if let Some(expected) = &expected {
         one_file(std::slice::from_ref(remote), expected, parsed)?;
     }
-    let shown = path.display().to_string();
-    let destination = Destination {
-        path: std::path::absolute(path)
-            .map_err(|err| Error::io(format_args!("could not find where {shown} is"), &err))?,
-        shown,
-    };
+    let destination = Destination::new(cache, args, remote, path)?;
     let mut early = decided_early(context, cache, remote, args, &destination, last)?;
     if matches!(early, Early::Download(_)) && !context.offline.enabled() {
         // once another run's download of the link is over, the run decides again, as a rerun
@@ -305,13 +393,21 @@ async fn put(
             early = decided_early(context, cache, remote, args, &destination, last)?;
         }
     }
+    let mut packed = None;
     let done = match early {
         Early::Kept(kept) => kept,
         Early::Download(mut known) => {
             let mut again = false;
             loop {
-                let fetched =
-                    download(context, net, cache, remote, (known.held, args.web_page)).await?;
+                let fetched = download(
+                    context,
+                    net,
+                    cache,
+                    remote,
+                    (known.held, args.web_page),
+                    destination.to(),
+                )
+                .await?;
                 // bytes this run wrote may leave the cache for the file, so it holds the link
                 // until they are there, for a run waiting for the link to find them in one or the
                 // other
@@ -326,15 +422,28 @@ async fn put(
                     matches_sha256(&remote.path, &fetched.digest, &sha256, expected)?;
                 }
                 refuse_zipped(cache, remote, &fetched.digest)?;
-                if let Some(done) = settle(
-                    context,
-                    cache,
-                    remote,
-                    &fetched,
-                    args.force,
-                    &destination,
-                    &known,
-                )? {
+                packed = Some((fetched.digest, fetched.size));
+                let arrived = arrived(context, cache, args, remote, fetched, &destination).await?;
+                let settled = match &arrived {
+                    Some(arrived) => settle(
+                        context,
+                        cache,
+                        remote,
+                        arrived,
+                        args.force,
+                        &destination,
+                        &known,
+                    )?,
+                    None => None,
+                };
+                if let Some(done) = settled {
+                    // the bytes it decompressed from leave the cache, as a one-off's do
+                    if let (Some(arrived), Some((digest, _))) = (&arrived, packed)
+                        && arrived.from.is_some()
+                        && one_off(context, cache, &digest)
+                    {
+                        forget(cache, &digest);
+                    }
                     break done;
                 }
                 // another run took the bytes out of the cache meanwhile, as a one-off `-o` of
@@ -354,10 +463,111 @@ async fn put(
             }
         }
     };
-    if let (Some(key), [got]) = (key, done.1.files.as_slice()) {
-        super::remembered::keep(cache, key, &remote.path, got.sha256, got.size);
+    // what the link kept is its own bytes, which a decompressed file is not
+    let kept = match (packed, done.1.files.as_slice()) {
+        (Some(packed), _) => Some(packed),
+        (None, [got]) if got.unpacked_from.is_none() => Some((got.sha256, got.size)),
+        _ => None,
+    };
+    if let (Some(key), Some((sha256, size))) = (key, kept) {
+        super::remembered::keep(cache, key, &remote.path, sha256, size);
     }
     Ok(done)
+}
+
+/// the bytes the file at the path takes from `fetched`, the link's file as it arrived: decompressed
+/// when `--decompress` asks it of the name it came by, which its server may give.
+async fn arrived(
+    context: &Context,
+    cache: &Cache,
+    args: &Get,
+    remote: &Remote,
+    fetched: Fetched,
+    destination: &Destination,
+) -> Result<Option<Arrived>, Error> {
+    if !args.decompress {
+        return Ok(Some(Arrived {
+            fetched,
+            from: None,
+        }));
+    }
+    let came = fetched
+        .name
+        .as_deref()
+        .and_then(crate::name::sanitize)
+        .filter(|_| remote.named_by_server)
+        .unwrap_or_else(|| remote.path.clone());
+    match decompressing(args, &came)? {
+        Some(to) => decompressed(context, cache, came, fetched, &to, destination).await,
+        None => Ok(Some(Arrived {
+            fetched,
+            from: None,
+        })),
+    }
+}
+
+/// the bytes the file at the path takes once the link's file, which came by the name `came`,
+/// decompressed as `to`: those the cache's record says they decompress to, when the cache or the
+/// file there already holds them, else decompressed now through the archive guard; the bytes as
+/// they came when they are no compressed stream to decompress. none when they left the cache
+/// before they decompressed.
+async fn decompressed(
+    context: &Context,
+    cache: &Cache,
+    came: String,
+    fetched: Fetched,
+    to: &str,
+    destination: &Destination,
+) -> Result<Option<Arrived>, Error> {
+    if let Some((digest, size)) = decompressed_of(cache, &fetched.digest, to) {
+        let there =
+            || matches!(existing(destination), Ok(Existing::Holds(found)) if found == digest);
+        if cache.find(&digest, Some(size)).is_some() || there() {
+            return Ok(Some(Arrived {
+                fetched: Fetched {
+                    digest,
+                    size,
+                    ..fetched
+                },
+                from: Some(came),
+            }));
+        }
+    }
+    if cache.find(&fetched.digest, Some(fetched.size)).is_none() {
+        return Ok(None);
+    }
+    let unpack = Unpack::decompressed(
+        fetched.digest,
+        fetched.size,
+        to.to_owned(),
+        came.clone(),
+        None,
+    );
+    let unpacked = unpack_all(context, cache, vec![unpack])
+        .await?
+        .into_iter()
+        .next()
+        .flatten();
+    Ok(Some(
+        match unpacked
+            .as_ref()
+            .and_then(|unpacked| unpacked.members.first())
+        {
+            Some(member) => Arrived {
+                fetched: Fetched {
+                    digest: member.sha256,
+                    size: member.size,
+                    ..fetched
+                },
+                from: Some(came),
+            },
+            // no compressed stream, as unpacking told: the file takes the bytes as they came
+            None => Arrived {
+                fetched,
+                from: None,
+            },
+        },
+    ))
 }
 
 /// what a run decided before downloading: the file there kept, or what it learned.
@@ -402,7 +612,17 @@ fn decided_early(
             (record.sha256, Wanted::Recorded)
         }
     };
+    // with --decompress, the file holds what those bytes decompress to, which only a record of an
+    // earlier decompressing here tells before they download
+    let Some(digest) = destination.holding(cache, digest) else {
+        unhashed(context, remote, args.force, destination)?;
+        return Ok(Early::Download(Known::default()));
+    };
     let found = existing(destination)?;
+    let from = destination
+        .decompressing
+        .as_ref()
+        .map(|(came, _)| came.as_str());
     match decide(&found, &digest, args.force) {
         Step::Keep => {
             let size = fs::metadata(&destination.path)
@@ -410,10 +630,23 @@ fn decided_early(
                     Error::io(format_args!("could not read {}", destination.shown), &err)
                 })?
                 .len();
-            let got = got(destination, remote, digest, size, Origin::Cache, None);
+            let got = got(
+                destination,
+                remote,
+                digest,
+                size,
+                Origin::Cache,
+                (None, from),
+            );
             Ok(Early::Kept(kept(context, wanted, destination, got)))
         }
-        Step::Refuse => Err(refused(&destination.shown, &found, wanted, &digest)),
+        Step::Refuse => Err(refused(
+            &destination.shown,
+            &found,
+            wanted,
+            &digest,
+            from.is_some(),
+        )),
         Step::Write | Step::Replace => Ok(Early::Download(Known {
             found: Some(found),
             held: None,
@@ -455,12 +688,7 @@ pub(super) fn foreseen(
     remote: &Remote,
     path: &Path,
 ) -> Result<Foreseen, Error> {
-    let shown = path.display().to_string();
-    let destination = Destination {
-        path: std::path::absolute(path)
-            .map_err(|err| Error::io(format_args!("could not find where {shown} is"), &err))?,
-        shown,
-    };
+    let destination = Destination::new(cache, args, remote, path)?;
     let known = match (args.sha256, stated(cache, remote)) {
         (Some(named), _) => Some((named, Wanted::Named)),
         (None, Some(stated)) => Some((stated, Wanted::Stated)),
@@ -468,6 +696,12 @@ pub(super) fn foreseen(
             .filter(|_| context.offline.enabled())
             .map(|record| (record.sha256, Wanted::Recorded)),
     };
+    // with --decompress, only a record of an earlier decompressing says what the file holds
+    let known = known.and_then(|(digest, wanted)| {
+        destination
+            .holding(cache, digest)
+            .map(|digest| (digest, wanted))
+    });
     let found = existing(&destination)?;
     let Some((digest, wanted)) = known else {
         return Ok(match found {
@@ -479,11 +713,18 @@ pub(super) fn foreseen(
             }
         });
     };
+    let decompressed = destination.decompressing.is_some();
     match decide(&found, &digest, args.force) {
         Step::Write => Ok(Foreseen::Write),
         Step::Keep => Ok(Foreseen::Keep),
         Step::Replace => Ok(Foreseen::Replace),
-        Step::Refuse => Err(refused(&destination.shown, &found, wanted, &digest)),
+        Step::Refuse => Err(refused(
+            &destination.shown,
+            &found,
+            wanted,
+            &digest,
+            decompressed,
+        )),
     }
 }
 
@@ -501,15 +742,19 @@ pub(super) enum Foreseen {
 }
 
 /// whether a file no hash speaks for is at the path, which only the download can compare, refusing
-/// one of another size than stated. `--force` replaces whatever is there.
+/// one of another size than stated, which a file decompressed from it may well have. `--force`
+/// replaces whatever is there.
 fn there_unhashed(remote: &Remote, force: bool, destination: &Destination) -> Result<bool, Error> {
     let size = match fs::metadata(&destination.path) {
         Ok(metadata) if metadata.is_file() && !force => metadata.len(),
         _ => return Ok(false),
     };
-    if let Some(stated) = remote.size.filter(|stated| *stated != size) {
+    if let Some(stated) = remote
+        .size
+        .filter(|stated| *stated != size && destination.decompressing.is_none())
+    {
         return Err(
-            other_bytes(&destination.shown, Wanted::Served).detail(format!(
+            other_bytes(&destination.shown, Wanted::Served, false).detail(format!(
                 "{} is {}, and the link's file {}",
                 destination.shown,
                 crate::units::size(size),
@@ -531,7 +776,8 @@ fn recorded(cache: &Cache, remote: &Remote) -> Option<UrlRecord> {
 }
 
 /// what the run learned of the bytes the link served last time, `record`, which the server is
-/// asked about while the cache or the file at the path still holds them.
+/// asked about while the cache or the file at the path still holds them, or with `--decompress`
+/// what they decompressed to.
 fn held(cache: &Cache, record: &UrlRecord, destination: &Destination) -> Result<Known, Error> {
     if cache.find(&record.sha256, Some(record.size)).is_some() {
         return Ok(Known {
@@ -540,8 +786,10 @@ fn held(cache: &Cache, record: &UrlRecord, destination: &Destination) -> Result<
         });
     }
     let found = existing(destination)?;
-    let held = matches!(found, Existing::Holds(digest) if digest == record.sha256)
-        .then_some(record.sha256);
+    let holding = destination.holding(cache, record.sha256);
+    let held =
+        matches!((&found, holding), (Existing::Holds(digest), Some(holding)) if *digest == holding)
+            .then_some(record.sha256);
     Ok(Known {
         found: Some(found),
         held,
@@ -591,22 +839,25 @@ async fn claimed(
     }
 }
 
-/// downloads the one file into the cache, or finds it there, and says so.
+/// downloads the one file into the cache, or finds it there, and says so. `to` is the name it
+/// decompresses to with `--decompress`, whose file the cache may hold in its place.
 async fn download(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
     remote: &Remote,
     (held, page): (Option<Sha256>, bool),
+    to: Option<&str>,
 ) -> Result<Fetched, Error> {
     let mut job = fetch::listed_job(remote, &remote.path, false);
     job.fetch.held = held;
     job.fetch.page = page;
+    job.fetch.decompressed = to.map(str::to_owned);
     vet(
         cache,
         std::slice::from_ref(remote),
         std::slice::from_ref(&remote.path),
-        false,
+        (false, to.is_some()),
     )?;
     approve(context, cache, std::slice::from_ref(&job))?;
     let started = Instant::now();
@@ -635,11 +886,13 @@ fn settle(
     context: &Context,
     cache: &Cache,
     remote: &Remote,
-    fetched: &Fetched,
+    arrived: &Arrived,
     force: bool,
     destination: &Destination,
     known: &Known,
 ) -> Result<Option<(PathBuf, Done)>, Error> {
+    let fetched = &arrived.fetched;
+    let decompressed = arrived.from.is_some();
     let found = match &known.found {
         Some(found) if fetched.origin != Origin::Network => found.clone(),
         _ => existing(destination)?,
@@ -652,11 +905,11 @@ fn settle(
             fetched.digest,
             fetched.size,
             fetched.origin,
-            method,
+            (method, arrived.from.as_deref()),
         )
     };
     if step == Step::Refuse {
-        if matches!(found, Existing::Holds(digest) if Some(digest) == known.held) {
+        if !decompressed && matches!(found, Existing::Holds(digest) if Some(digest) == known.held) {
             return Err(Error::new(
                 Kind::LocalNotEmpty,
                 format!(
@@ -671,6 +924,7 @@ fn settle(
             &found,
             Wanted::Served,
             &fetched.digest,
+            decompressed,
         ));
     }
     if step == Step::Keep {
@@ -862,13 +1116,14 @@ pub(super) fn only(
     )))
 }
 
+/// the report of the file at the path, holding `sha256`, and the file it decompressed `from`.
 fn got(
     destination: &Destination,
     remote: &Remote,
     sha256: Sha256,
     size: u64,
     origin: Origin,
-    method: Option<Written>,
+    (method, from): (Option<Written>, Option<&str>),
 ) -> Got {
     Got {
         path: destination
@@ -882,7 +1137,7 @@ fn got(
         url: crate::shown::Shown(&remote.url).to_string(),
         origin,
         method,
-        unpacked_from: None,
+        unpacked_from: from.map(str::to_owned),
     }
 }
 
@@ -903,17 +1158,24 @@ fn written(destination: &Destination, got: Got) -> (PathBuf, Done) {
 
 /// says that the file holds the bytes already, and leaves it as it is.
 fn kept(context: &Context, wanted: Wanted, destination: &Destination, got: Got) -> (PathBuf, Done) {
+    let what = wanted.of(got.unpacked_from.is_some());
     context.output.done(
         "Ok",
-        &format!("{} already holds what {}", destination.shown, wanted.said()),
+        &format!("{} already holds what {what}", destination.shown),
     );
     written(destination, got)
 }
 
-/// refuses the file at the path, which holds other bytes than `wanted` says, `digest`, or no
-/// file fetchloom can read.
-fn refused(shown: &str, existing: &Existing, wanted: Wanted, digest: &Sha256) -> Error {
-    if let (Wanted::Named, Existing::Holds(found)) = (wanted, existing) {
+/// refuses the file at the path, which holds other bytes than `wanted` says, `digest`, or what
+/// they decompress to when `decompressed`, or no file fetchloom can read.
+fn refused(
+    shown: &str,
+    existing: &Existing,
+    wanted: Wanted,
+    digest: &Sha256,
+    decompressed: bool,
+) -> Error {
+    if let (Wanted::Named, Existing::Holds(found), false) = (wanted, existing, decompressed) {
         // a person typed the hash, so it is as likely to be wrong as the file
         return Error::new(
             Kind::LocalNotEmpty,
@@ -934,7 +1196,7 @@ fn refused(shown: &str, existing: &Existing, wanted: Wanted, digest: &Sha256) ->
             "the link",
         ),
         Existing::Other => ("is a special file, such as a pipe".to_owned(), "it"),
-        Existing::Missing | Existing::Holds(_) => return other_bytes(shown, wanted),
+        Existing::Missing | Existing::Holds(_) => return other_bytes(shown, wanted, decompressed),
     };
     Error::new(
         Kind::LocalNotEmpty,
@@ -945,13 +1207,14 @@ fn refused(shown: &str, existing: &Existing, wanted: Wanted, digest: &Sha256) ->
     ))
 }
 
-/// refuses the file at the path, which holds other bytes than `wanted` says.
-fn other_bytes(shown: &str, wanted: Wanted) -> Error {
+/// refuses the file at the path, which holds other bytes than `wanted` says, or what they
+/// decompress to when `decompressed`.
+fn other_bytes(shown: &str, wanted: Wanted, decompressed: bool) -> Error {
     Error::new(
         Kind::LocalNotEmpty,
         format!(
             "{shown} already exists and holds other bytes than {}",
-            wanted.said()
+            wanted.of(decompressed)
         ),
     )
     .help("add --force to replace it, or choose another name with -o")
@@ -1231,6 +1494,7 @@ mod tests {
         let destination = Destination {
             shown: "data.csv".to_owned(),
             path,
+            decompressing: None,
         };
         let context = crate::cli::project::tests::offline_context();
         let mut remote = crate::cli::project::tests::stated(
@@ -1564,17 +1828,21 @@ mod tests {
             etag: None,
             blob: None,
         };
-        let fetched = Fetched {
-            digest: crate::digest::sha256(served),
-            size: served.len() as u64,
-            moved: 0,
-            name: None,
-            origin: Origin::Cache,
-            version: None,
-            began: None,
-            arrived: None,
-            asked: std::time::Duration::ZERO,
+        let arrived = Arrived {
+            fetched: Fetched {
+                digest: crate::digest::sha256(served),
+                size: served.len() as u64,
+                moved: 0,
+                name: None,
+                origin: Origin::Cache,
+                version: None,
+                began: None,
+                arrived: None,
+                asked: std::time::Duration::ZERO,
+            },
+            from: None,
         };
+        let digest = arrived.fetched.digest;
         // the path was free when the run looked, before it waited for the other run
         let known = Known {
             found: Some(Existing::Missing),
@@ -1591,8 +1859,8 @@ mod tests {
         {
             if cached {
                 crate::cache::tests::store(&cache, served);
-            } else if cache.find(&fetched.digest, None).is_some() {
-                cache.drop_object(&fetched.digest).unwrap();
+            } else if cache.find(&digest, None).is_some() {
+                cache.drop_object(&digest).unwrap();
             }
             let path = dir.path().join(index.to_string()).join("data.csv");
             fs::create_dir(path.parent().unwrap()).unwrap();
@@ -1600,12 +1868,13 @@ mod tests {
             let destination = Destination {
                 shown: path.display().to_string(),
                 path: path.clone(),
+                decompressing: None,
             };
             let settled = settle(
                 &context,
                 &cache,
                 &remote,
-                &fetched,
+                &arrived,
                 false,
                 &destination,
                 &known,

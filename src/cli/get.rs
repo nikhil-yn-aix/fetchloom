@@ -23,7 +23,7 @@ use super::sync::place::doubtful;
 use super::sync::unpack::{self as unpacking, Unpack};
 use super::{Context, links, open_cache};
 use crate::archive::{self, Packed, System};
-use crate::cache::{Cache, UrlRecord};
+use crate::cache::{Cache, UrlRecord, decompressed_key};
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, FileFailure, Kind};
 use crate::name;
@@ -158,6 +158,7 @@ struct Wanted {
     /// the folder `--dir` names for several links, each in a folder of its own inside it.
     parent: Option<PathBuf>,
     extract: bool,
+    decompress: bool,
     /// the hash `--sha256` or the link's line asks the one file to have.
     expected: Option<Expected>,
     /// what the link is remembered by, when only its source can list it.
@@ -235,6 +236,12 @@ fn unprojected(offline: net::Offline, mut error: Error) -> Error {
                 offline.retry(),
                 super::project::command("get <link> --offline")
             ))
+        } else if help.contains(archive::FILE_PACKED_HELP) {
+            Some(help.replace(archive::FILE_PACKED_HELP, KEEP_PACKED))
+        } else if help == archive::FILE_DAMAGED_HELP {
+            Some(format!(
+                "ask the file's owner for a fixed copy, or {KEEP_PACKED}"
+            ))
         } else {
             None
         }
@@ -248,6 +255,35 @@ fn unprojected(offline: net::Offline, mut error: Error) -> Error {
         }
     }
     error
+}
+
+/// how a get keeps a single compressed file packed, in place of a project's words for it.
+const KEEP_PACKED: &str = "leave out --decompress to keep the file packed";
+
+/// the refusal of a file get would decompress, for `why` its name without the ending is no name a
+/// file may take; `one` when the file is the one a link names, which no `--exclude` leaves out.
+fn refused_name(why: String, one: bool) -> Error {
+    let help = if one {
+        "leave out --decompress to keep it packed"
+    } else {
+        "leave it out with --exclude, or leave out --decompress to keep it packed"
+    };
+    Error::new(Kind::SourceInvalid, why).help(help)
+}
+
+/// what `remote`, kept by `name`, decompresses to when `decompress` asks for it: none for a file no
+/// single compression names, or an archive's, which extract unpacks.
+fn decompressed(decompress: bool, name: &str) -> Option<Result<String, String>> {
+    decompress
+        .then(|| archive::decompressed_name(name))
+        .flatten()
+}
+
+/// whether downloading `remote` may still change the name it is kept by, as its server naming it
+/// or its source wrapping it in a zip does.
+fn renamed_by_download(remote: &Remote) -> bool {
+    remote.named_by_server
+        || (crate::source::may_wrap(&remote.url) && archive::by_name(&remote.path).is_none())
 }
 
 /// a link to fetch, and the SHA-256 its one file must have when one was given.
@@ -715,8 +751,17 @@ fn prepare(
     if let Some(expected) = &expected {
         one_file(&files, expected, &parsed)?;
     }
-    let extract = !args.no_extract;
-    let (names, foreseen) = foresee(cache, &files, extract);
+    let (extract, decompress) = (!args.no_extract, args.decompress);
+    // before any byte moves; a name a download may still change is refused once the file came
+    for remote in files
+        .iter()
+        .filter(|remote| decompress && !renamed_by_download(remote))
+    {
+        if let Some(Err(why)) = decompressed(decompress, &remote.path) {
+            return Err(refused_name(why, files.len() == 1));
+        }
+    }
+    let (names, foreseen) = foresee(cache, &files, (extract, decompress));
     // a batch's final folder can gain a suffix or a server-provided name after downloading
     let lone = (args.input_file.is_none() && args.links.len() == 1).then(|| {
         folder_for(
@@ -737,6 +782,7 @@ fn prepare(
             let mut job = fetch::listed_job(remote, name, extract);
             job.fetch.listed = listing.listed(remote);
             job.fetch.page = args.web_page;
+            job.fetch.decompressed = decompressed(decompress, name).and_then(Result::ok);
             // a line's MD5 is checked as the bytes arrive, as a source's is
             if let Some(Expected {
                 checksum: Checksum::Md5(md5),
@@ -748,13 +794,13 @@ fn prepare(
             }
             let placed = lone
                 .as_deref()
-                .filter(|_| !job.fetch.unpack)
+                .filter(|_| !job.fetch.unpacks())
                 .map(|lone| folder::within(lone, name));
             job.fetch.held = held(cache, &job, placed.as_deref());
             job
         })
         .collect();
-    vet(cache, &files, &names, extract)?;
+    vet(cache, &files, &names, (extract, decompress))?;
     Ok(Wanted {
         key: remembered::key(args, &parsed),
         parsed,
@@ -764,6 +810,7 @@ fn prepare(
         chosen: chosen.map(Path::to_path_buf),
         parent: parent.map(Path::to_path_buf),
         extract,
+        decompress,
         expected,
     })
 }
@@ -883,6 +930,7 @@ async fn finish(
         chosen,
         parent,
         extract,
+        decompress,
         expected,
         key,
         ..
@@ -929,7 +977,7 @@ async fn finish(
             unpacks_to: None,
         })
         .collect();
-    let unpacked = unpack(context, cache, &mut locked, &folder, extract).await?;
+    let unpacked = unpack(context, cache, &mut locked, &folder, (extract, decompress)).await?;
     let planned = planned(cache, &locked, unpacked.trees)?;
     let placed: Vec<String> = planned
         .targets
@@ -1228,7 +1276,7 @@ fn needs(missing: &[&Job]) -> (u64, u64) {
     let sized = || {
         missing
             .iter()
-            .filter_map(|job| Some((job.fetch.expect.size?, job.fetch.unpack)))
+            .filter_map(|job| Some((job.fetch.expect.size?, job.fetch.unpacks())))
     };
     let moved = sized().map(|(size, _)| size).fold(0, u64::saturating_add);
     let unpacked = sized()
@@ -1239,9 +1287,14 @@ fn needs(missing: &[&Job]) -> (u64, u64) {
 }
 
 /// the names the files will have, and their paths in the folder when the cache knows them: a file
-/// the server names keeps last time's name, and an archive unpacked here before stands for its
-/// files. no paths while an archive among them was never unpacked here.
-fn foresee(cache: &Cache, files: &[Remote], extract: bool) -> (Vec<String>, Option<Vec<String>>) {
+/// the server names keeps last time's name, an archive unpacked here before stands for its files,
+/// and a file that decompresses for the one it decompresses to. no paths while an archive among
+/// them was never unpacked here.
+fn foresee(
+    cache: &Cache,
+    files: &[Remote],
+    (extract, decompress): (bool, bool),
+) -> (Vec<String>, Option<Vec<String>>) {
     let alone = files.len() == 1;
     let mut names = Vec::with_capacity(files.len());
     let mut paths = Some(Vec::with_capacity(files.len()));
@@ -1271,11 +1324,22 @@ fn foresee(cache: &Cache, files: &[Remote], extract: bool) -> (Vec<String>, Opti
                 _ => paths = None,
             }
         } else if let Some(paths) = paths.as_mut() {
-            paths.push(name.clone());
+            paths.push(match decompressed(decompress, &name) {
+                Some(Ok(to)) => beside(&name, &to),
+                _ => name.clone(),
+            });
         }
         names.push(name);
     }
     (names, paths)
+}
+
+/// the path of the file `name` decompresses to, `to`, beside it in the same folder.
+fn beside(name: &str, to: &str) -> String {
+    match name.rsplit_once('/') {
+        Some((folder, _)) => format!("{folder}/{to}"),
+        None => to.to_owned(),
+    }
 }
 
 /// the bytes a listed file is known to have before it downloads: by a checksum its source states,
@@ -1298,8 +1362,14 @@ fn known(
 }
 
 /// hashes the cached objects in doubt that this run would take for `files`, and those an archive
-/// among them unpacked to, before anything downloads, so changed bytes are marked for replacement.
-fn vet(cache: &Cache, files: &[Remote], names: &[String], extract: bool) -> Result<(), Error> {
+/// among them unpacked or a file decompressed to, before anything downloads, so changed bytes are
+/// marked for replacement.
+fn vet(
+    cache: &Cache,
+    files: &[Remote],
+    names: &[String],
+    (extract, decompress): (bool, bool),
+) -> Result<(), Error> {
     let marks = cache.doubts()?;
     for (remote, name) in files.iter().zip(names) {
         let record = cache.url_record(remote.url.as_str());
@@ -1309,10 +1379,11 @@ fn vet(cache: &Cache, files: &[Remote], names: &[String], extract: bool) -> Resu
         cache
             .trusted(&digest, size, &marks)
             .map_err(|doubt| doubtful(&doubt))?;
-        if extract
-            && archive::by_name(name) == Some(Packed::Archive)
-            && let Some(members) = cache.unpacked(&digest, None)
-        {
+        let key = match decompressed(decompress, name) {
+            Some(Ok(to)) => Some(decompressed_key(&digest, &to)),
+            _ => (extract && archive::by_name(name) == Some(Packed::Archive)).then_some(digest),
+        };
+        if let Some(members) = key.and_then(|key| cache.unpacked(&key, None)) {
             for member in &members {
                 cache
                     .trusted(&member.sha256, Some(member.size), &marks)
@@ -1331,16 +1402,18 @@ struct UnpackedFiles {
     trees: Trees,
 }
 
-/// unpacks each fetched archive not unpacked here before, returning every archive whose files are
-/// in the cache, so its own bytes can go. one left packed is told how to unpack it in `folder`.
+/// unpacks each fetched archive, and decompresses each single compressed file, not unpacked here
+/// before, returning every one whose files are in the cache, so its own bytes can go. an archive
+/// left packed is told how to unpack it in `folder`.
 async fn unpack(
     context: &Context,
     cache: &Cache,
     files: &mut [LockedFile],
     folder: &Path,
-    extract: bool,
+    (extract, decompress): (bool, bool),
 ) -> Result<UnpackedFiles, Error> {
     let mut done = UnpackedFiles::default();
+    let one = files.len() == 1;
     let mut slots = Vec::new();
     let mut todo = Vec::new();
     let tell_packed = |path: &str, said: String| {
@@ -1352,8 +1425,8 @@ async fn unpack(
         );
     };
     for (index, file) in files.iter_mut().enumerate() {
-        match archive::by_name(&file.path) {
-            Some(Packed::Archive) if extract => {}
+        let to = match archive::by_name(&file.path) {
+            Some(Packed::Archive) if extract => None,
             Some(Packed::Unsupported(format)) if extract => {
                 let said = format!(
                     "{} stays packed, since fetchloom does not unpack {format}",
@@ -1362,9 +1435,16 @@ async fn unpack(
                 tell_packed(&file.path, said);
                 continue;
             }
-            _ => continue,
-        }
-        if let Some((tree, members)) = cache.unpacked_with_tree(&file.sha256, None)
+            _ => match decompressed(decompress, &file.path) {
+                Some(Ok(to)) => Some(to),
+                Some(Err(why)) => return Err(refused_name(why, one)),
+                None => continue,
+            },
+        };
+        let key = to
+            .as_deref()
+            .map_or(file.sha256, |to| decompressed_key(&file.sha256, to));
+        if let Some((tree, members)) = cache.unpacked_with_tree(&key, None)
             && members
                 .iter()
                 .all(|member| cache.find(&member.sha256, Some(member.size)).is_some())
@@ -1376,12 +1456,11 @@ async fn unpack(
             continue;
         }
         slots.push(index);
-        todo.push(Unpack::whole(
-            file.sha256,
-            file.size,
-            file.path.clone(),
-            None,
-        ));
+        let label = file.path.clone();
+        todo.push(match to {
+            Some(to) => Unpack::decompressed(file.sha256, file.size, to, label, None),
+            None => Unpack::whole(file.sha256, file.size, label, None),
+        });
     }
     let results = unpacking::unpack_all(context, cache, todo).await?;
     for (index, result) in slots.into_iter().zip(results) {
@@ -1417,7 +1496,7 @@ fn planned<'a>(cache: &Cache, files: &'a [LockedFile], trees: Trees) -> Result<P
         trees
             .borrow_mut()
             .remove(&(file.path.clone(), file.sha256, tree))
-            .or_else(|| cache.unpacked(&file.sha256, Some(&tree)))
+            .or_else(|| archive.recorded(cache))
     };
     plan::expand(
         &mut planned,
@@ -1475,6 +1554,9 @@ fn pin_command(args: &Get, link: &str) -> Option<String> {
     }
     if args.no_extract {
         parts.push("--no-extract".to_owned());
+    }
+    if args.decompress {
+        parts.push("--decompress".to_owned());
     }
     if args.web_page {
         parts.push("--web-page".to_owned());
@@ -2033,6 +2115,7 @@ mod tests {
                 exclude: Vec::new(),
             },
             no_extract: false,
+            decompress: false,
             web_page: false,
             dry: crate::cli::args::DryRun { dry_run: false },
         };
@@ -2087,6 +2170,7 @@ mod tests {
                 exclude: vec!["old/*".to_owned()],
             },
             no_extract: true,
+            decompress: false,
             web_page: false,
             dry: crate::cli::args::DryRun { dry_run: false },
         };
@@ -2140,7 +2224,7 @@ mod tests {
             &cache,
             &mut files,
             Path::new("files"),
-            true,
+            (true, false),
         ))
         .unwrap();
         assert_eq!(files[0].unpacks_to, Some(tree));

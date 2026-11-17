@@ -1276,6 +1276,10 @@ pub(crate) struct Path {
 
 /// fetch something once, without a project
 #[derive(Clone, Debug, clap::Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a yes or no on the command line"
+)]
 pub(crate) struct Get {
     /// what to download: a link, a DOI, an id such as zenodo:3608990, or search words. several
     /// links download together, but search words go alone, in quotes
@@ -1286,8 +1290,8 @@ pub(crate) struct Get {
     )]
     pub(crate) links: Vec<String>,
 
-    /// write the downloaded file to <file> as it came, never unpacked. needs one link to one
-    /// file
+    /// write the downloaded file to <file> as it came, or decompressed with --decompress, never
+    /// unpacked. needs one link to one file
     #[arg(
         short,
         long,
@@ -1317,8 +1321,8 @@ pub(crate) struct Get {
     #[arg(short, long, value_name = "file", help_heading = "options")]
     pub(crate) input_file: Option<PathBuf>,
 
-    /// check that the file has this SHA-256 before it takes its name or goes in the folder.
-    /// needs one link to one file
+    /// check that the downloaded file, still compressed with --decompress, has this SHA-256
+    /// before it takes its name or goes in the folder. needs one link to one file
     #[arg(long, value_name = "hex", value_parser = super::links::sha256, help_heading = "options")]
     pub(crate) sha256: Option<Sha256>,
 
@@ -1328,6 +1332,11 @@ pub(crate) struct Get {
     /// keep zip, 7z and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+
+    /// decompress each single .gz, .bz2, .xz or .zst file to its name without the ending, or to
+    /// -o's file. never a compressed tar, as .tar.gz, which stays an archive
+    #[arg(long, help_heading = "options")]
+    pub(crate) decompress: bool,
 
     /// keep the web page a link answers with as the file. without it, a page where a file
     /// was expected is refused

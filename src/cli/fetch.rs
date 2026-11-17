@@ -1032,13 +1032,13 @@ impl<'a> Watch<'a> {
         let together = match total.filter(|_| unknown) {
             Some(total) => self.together(
                 if asked { 0 } else { left },
-                room_needed(Some(total), 0, self.job.fetch.unpack),
+                room_needed(Some(total), 0, self.job.fetch.unpacks()),
             ),
             None => (left, 0),
         };
         // a download that may have found its bytes unchanged was not asked about before
         if unknown || self.job.fetch.held.is_some() {
-            let needed = room_needed(total, resumed, unknown && self.job.fetch.unpack);
+            let needed = room_needed(total, resumed, unknown && self.job.fetch.unpacks());
             // a disk without room asks instead, and its question names the size too
             if let (Some(cache), Some(free)) = (self.approval.cache.as_deref(), free)
                 && !self.yes
@@ -1127,7 +1127,7 @@ impl<'a> Watch<'a> {
         together: u64,
     ) -> Option<(cache_budget::Past, String)> {
         let (held, budget) = self.approval.budget?;
-        let adding = room_needed(Some(total?), 0, self.job.fetch.unpack);
+        let adding = room_needed(Some(total?), 0, self.job.fetch.unpacks());
         if let Some(past) = cache_budget::weigh(Some(budget), adding, || Some(held)) {
             return Some((past, self.label()));
         }

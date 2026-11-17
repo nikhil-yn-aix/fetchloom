@@ -593,7 +593,7 @@ fn ends_early(err: &(dyn std::error::Error + 'static)) -> bool {
 
 const DAMAGED_HELP: &str = "ask the dataset's authors for a fixed copy, or keep it packed with extract = false in data.toml or --no-extract";
 
-const FILE_DAMAGED_HELP: &str = "ask the dataset's authors for a fixed copy, or keep it packed with decompress = false in data.toml or without --decompress";
+pub(crate) const FILE_DAMAGED_HELP: &str = "ask the dataset's authors for a fixed copy, or keep it packed with decompress = false in data.toml or without --decompress";
 
 fn cut_short() -> Error {
     Error::new(
