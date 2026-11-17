@@ -5,8 +5,8 @@ pub(in crate::cli) mod cache_budget;
 pub(super) mod disk;
 mod draft;
 mod fill;
-pub(super) mod in_place;
 pub(super) mod place;
+pub(super) mod placed_archives;
 pub(super) mod rename;
 pub(super) mod unpack;
 
@@ -20,8 +20,8 @@ use url::Url;
 
 use self::disk::Survey;
 use self::draft::Draft;
-use self::in_place::InPlace;
 use self::place::{Download, Placement, Placing, Preview};
+use self::placed_archives::PlacedArchives;
 use self::rename::Rename;
 use super::Context;
 use super::fetch::data_folder::DataFolder;
@@ -371,7 +371,7 @@ impl<'a> Loop<'a> {
         placing.listed(self.unlisted());
         // an archive whose files the data folder holds in place needs neither a list from a
         // mirror nor its own bytes
-        let found = self.in_place(manifest, lock, &placing)?;
+        let found = self.placed_archives(manifest, lock, &placing)?;
         found.tell_unproven(&self.context.output, self.net.offline().enabled());
         if !found.is_empty() {
             found.record(&self.cache, &self.context.output)?;
@@ -446,17 +446,17 @@ impl<'a> Loop<'a> {
 
     /// the lists of files of the archives `placing` knows none of, as found where placing puts
     /// their files and checked against the trees data.lock pins.
-    fn in_place(
+    fn placed_archives(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         placing: &Placing<'_>,
-    ) -> Result<InPlace, Error> {
+    ) -> Result<PlacedArchives, Error> {
         let unknown = archives::of(lock, placing.unknown());
         if unknown.is_empty() {
-            return Ok(InPlace::default());
+            return Ok(PlacedArchives::default());
         }
-        InPlace::find(
+        PlacedArchives::find(
             &self.project.root,
             (manifest, lock),
             placing.survey(),
@@ -1184,16 +1184,11 @@ impl<'a> Loop<'a> {
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
         // the archives whose files sit in place are known as the sync would know them, unrecorded
-        let found = self.in_place(manifest, lock, &placing)?;
+        let found = self.placed_archives(manifest, lock, &placing)?;
         found.tell_unproven(&self.context.output, self.net.offline().enabled());
         if !found.is_empty() {
             let survey = placing.into_survey();
-            let members = |archive: &Archive<'_>| {
-                archive
-                    .recorded(&self.cache)
-                    .or_else(|| found.members(archive))
-            };
-            let plan = plan::plan(manifest, lock, &members)?;
+            let plan = found.plan(manifest, lock, &self.cache)?;
             placing = Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
             placing.listed(self.unlisted());
         }

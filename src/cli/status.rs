@@ -9,14 +9,14 @@ use serde::Serialize;
 
 use super::Context;
 use super::sync::disk::{Blocker, Entry, Survey};
-use super::sync::in_place::InPlace;
+use super::sync::placed_archives::PlacedArchives;
 use super::sync::{Scope, place};
 use crate::cache::Cache;
 use crate::digest::{self, Sha256};
 use crate::error::Error;
 use crate::output::{Output, Warning};
 use crate::plan;
-use crate::project::lock::archives::{self, Archive};
+use crate::project::lock::archives;
 use crate::project::lock::{Lock, LockedFile, Waiting};
 use crate::project::manifest::{self, Manifest};
 use crate::project::{Project, native};
@@ -539,7 +539,7 @@ fn planned<'l>(
             .map(|(dataset, file)| ((*dataset).to_owned(), *file))
             .collect();
         let unknown = archives::of(lock, unknown);
-        let found = InPlace::find(
+        let found = PlacedArchives::find(
             &project.root,
             (manifest, lock),
             survey,
@@ -548,9 +548,7 @@ fn planned<'l>(
         )?;
         status.unproven = found.unproven();
         if !found.is_empty() {
-            let members =
-                |archive: &Archive<'_>| archive.recorded(cache).or_else(|| found.members(archive));
-            planned = plan::plan(manifest, lock, &members)?;
+            planned = found.plan(manifest, lock, cache)?;
         }
     }
     status.not_unpacked = planned

@@ -27,7 +27,7 @@ use crate::{name, plan, units};
 /// the lists of files found in place, by the tree each hashes to, and the archives whose files
 /// sit in place but prove no list.
 #[derive(Default)]
-pub(crate) struct InPlace {
+pub(crate) struct PlacedArchives {
     trees: HashMap<Sha256, Found>,
     unproven: Vec<Unproven>,
 }
@@ -73,7 +73,7 @@ struct Found {
 /// path in the project with its path in the archive.
 type Guess = Vec<(String, String)>;
 
-impl InPlace {
+impl PlacedArchives {
     /// the lists of files of the archives of `unknown` whose files `survey` finds where placing
     /// puts them, each checked by hashing those files against the tree data.lock pins.
     pub(crate) fn find(
@@ -82,8 +82,8 @@ impl InPlace {
         survey: &Survey,
         unknown: &[(String, Archive<'_>)],
         (threads, stop): (Threads, &Stop),
-    ) -> Result<InPlace, Error> {
-        let mut found = InPlace::default();
+    ) -> Result<PlacedArchives, Error> {
+        let mut found = PlacedArchives::default();
         let mut claimed: HashSet<String> = HashSet::new();
         let mut hashed: HashMap<String, Option<Sha256>> = HashMap::new();
         let temporary: HashSet<&String> = survey.leftovers().collect();
@@ -204,10 +204,19 @@ impl InPlace {
         self.trees.is_empty()
     }
 
-    /// the files `archive` unpacks to, as found in place for the tree data.lock pins it to.
-    pub(crate) fn members(&self, archive: &Archive<'_>) -> Option<Vec<Member>> {
-        let tree = archive.file.unpacks_to.as_ref()?;
-        self.trees.get(tree).map(|found| found.members.clone())
+    /// the plan for `lock` with each archive's files as `cache` records them, or as found here.
+    pub(crate) fn plan<'l>(
+        &self,
+        manifest: &Manifest,
+        lock: &'l Lock,
+        cache: &Cache,
+    ) -> Result<plan::Plan<'l>, Error> {
+        plan::plan(manifest, lock, &|archive| {
+            archive.recorded(cache).or_else(|| {
+                let tree = archive.file.unpacks_to.as_ref()?;
+                self.trees.get(tree).map(|found| found.members.clone())
+            })
+        })
     }
 
     /// records each list in `cache` by its tree's key, and says which archives need no download.
@@ -523,7 +532,7 @@ mod tests {
         }];
         let tree = tree_hash(&members);
         let archive = crate::digest::sha256(b"the archive's bytes");
-        let found = InPlace {
+        let found = PlacedArchives {
             unproven: Vec::new(),
             trees: HashMap::from([(
                 tree,
