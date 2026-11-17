@@ -7,6 +7,11 @@
 //! the files of a data folder anyone could have filled prove only that tree, never what an
 //! archive's bytes unpack to, so a list found here is recorded by the tree's own key
 //! ([`tree_key`]), which only a lookup that pins the tree finds.
+//!
+//! when the files as they lie prove no list, as when the person's own sit beside them, the files
+//! a copy's state records as placed for the archive's dataset are tried alone. anyone could have
+//! written that state too, so it only says which files to try: each is still hashed, and the
+//! list must still hash to the tree.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -19,7 +24,7 @@ use crate::output::{Output, Warning};
 use crate::project::lock::Lock;
 use crate::project::lock::archives::{self, Archive, Pinned};
 use crate::project::manifest::Manifest;
-use crate::project::native;
+use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::{name, plan, units};
@@ -73,11 +78,15 @@ struct Found {
 /// path in the project with its path in the archive.
 type Guess = Vec<(String, String)>;
 
+/// a guess whose files hash to the tree: the paths of its files in the project, with the members
+/// they make.
+type Proven = (Vec<String>, Vec<Member>);
+
 impl PlacedArchives {
     /// the lists of files of the archives of `unknown` whose files `survey` finds where placing
     /// puts them, each checked by hashing those files against the tree data.lock pins.
     pub(crate) fn find(
-        root: &Path,
+        project: &Project,
         (manifest, lock): (&Manifest, &Lock),
         survey: &Survey,
         unknown: &[(String, Archive<'_>)],
@@ -86,6 +95,7 @@ impl PlacedArchives {
         let mut found = PlacedArchives::default();
         let mut claimed: HashSet<String> = HashSet::new();
         let mut hashed: HashMap<String, Option<Sha256>> = HashMap::new();
+        let mut recorded: Option<HashMap<String, HashSet<String>>> = None;
         let temporary: HashSet<&String> = survey.leftovers().collect();
         for (dataset, archive) in unknown {
             let Some(tree) = archive.file.unpacks_to else {
@@ -124,38 +134,32 @@ impl PlacedArchives {
                 found.unproven.push(unproven(true));
                 continue;
             }
-            let guesses = guesses(&layout, &below);
-            let fresh: Vec<&str> = guesses
-                .iter()
-                .flatten()
-                .map(|(placed, _)| placed.as_str())
-                .filter(|placed| !hashed.contains_key(*placed))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            let digests = crate::place::run_all(&fresh, threads, |placed| {
-                let size = survey.disk.get(*placed)?.size;
-                stop.check_io().ok()?;
-                hash_plain(&native(root, placed), Block::sized(size.saturating_add(1))).ok()
-            });
-            stop.check()?;
-            hashed.extend(fresh.into_iter().map(str::to_owned).zip(digests));
-            let member = |(placed, path): &(String, String)| {
-                Some(Member {
-                    path: path.clone(),
-                    size: survey.disk.get(placed)?.size,
-                    sha256: (*hashed.get(placed)?)?,
-                })
-            };
-            let proven = guesses.iter().find_map(|guess| {
-                let members: Vec<Member> = guess.iter().map(member).collect::<Option<_>>()?;
-                (tree_hash(&members) == tree).then_some((guess, members))
-            });
-            let Some((guess, members)) = proven else {
+            let disk = (project.root.as_path(), survey);
+            let mut proven = first_proven(
+                &guesses(&layout, &below),
+                &tree,
+                &mut hashed,
+                disk,
+                (threads, stop),
+            )?;
+            if proven.is_none() && layout.decompressed.is_none() {
+                let recorded = recorded.get_or_insert_with(|| copied(project, manifest, unknown));
+                let named = recorded.get(dataset.as_str());
+                if let Some(hinted) = named.and_then(|named| hinted(&below, &layout.base, named)) {
+                    tracing::debug!(
+                        archive = archive.file.path,
+                        files = hinted.len(),
+                        "trying the files a copy's state names"
+                    );
+                    let guesses = placings(&layout, &hinted);
+                    proven = first_proven(&guesses, &tree, &mut hashed, disk, (threads, stop))?;
+                }
+            }
+            let Some((taken, members)) = proven else {
                 found.unproven.push(unproven(false));
                 continue;
             };
-            claimed.extend(guess.iter().map(|(placed, _)| placed.clone()));
+            claimed.extend(taken);
             let label = format!("{dataset}/{}", archive.file.path);
             found.trees.insert(
                 tree,
@@ -254,6 +258,90 @@ impl PlacedArchives {
         }
         Ok(())
     }
+}
+
+/// the first of `guesses` whose files hash to `tree`, each of its files `hashed` lacks hashed
+/// first, a few at once.
+fn first_proven(
+    guesses: &[Guess],
+    tree: &Sha256,
+    hashed: &mut HashMap<String, Option<Sha256>>,
+    (root, survey): (&Path, &Survey),
+    (threads, stop): (Threads, &Stop),
+) -> Result<Option<Proven>, Error> {
+    let fresh: Vec<&str> = guesses
+        .iter()
+        .flatten()
+        .map(|(placed, _)| placed.as_str())
+        .filter(|placed| !hashed.contains_key(*placed))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let digests = crate::place::run_all(&fresh, threads, |placed| {
+        let size = survey.disk.get(*placed)?.size;
+        stop.check_io().ok()?;
+        hash_plain(&native(root, placed), Block::sized(size.saturating_add(1))).ok()
+    });
+    stop.check()?;
+    hashed.extend(fresh.into_iter().map(str::to_owned).zip(digests));
+    let member = |(placed, path): &(String, String)| {
+        Some(Member {
+            path: path.clone(),
+            size: survey.disk.get(placed)?.size,
+            sha256: (*hashed.get(placed)?)?,
+        })
+    };
+    Ok(guesses.iter().find_map(|guess| {
+        let members: Vec<Member> = guess.iter().map(member).collect::<Option<_>>()?;
+        (tree_hash(&members) == *tree).then(|| {
+            (
+                guess.iter().map(|(placed, _)| placed.clone()).collect(),
+                members,
+            )
+        })
+    }))
+}
+
+/// the files a copy's state records as placed in the folders of the datasets of `unknown`, by
+/// path in the project, in sets by dataset.
+fn copied(
+    project: &Project,
+    manifest: &Manifest,
+    unknown: &[(String, Archive<'_>)],
+) -> HashMap<String, HashSet<String>> {
+    let folders: Vec<String> = unknown
+        .iter()
+        .map(|(dataset, _)| plan::folder(manifest, dataset))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let keep = |path: &str| {
+        folders.iter().any(|folder| {
+            path.strip_prefix(folder.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+    };
+    let mut by_dataset: HashMap<String, HashSet<String>> = HashMap::new();
+    for (path, dataset) in project.copied_records(&folders, &keep) {
+        by_dataset.entry(dataset).or_default().insert(path);
+    }
+    by_dataset
+}
+
+/// the files of `below`, the files below the folder `base` with their paths there, that `named`
+/// names by path in the project, when they leave out some file: those alone may be the archive's,
+/// and the rest the person's own.
+fn hinted<'b>(
+    below: &[(&'b str, &'b str)],
+    base: &str,
+    named: &HashSet<String>,
+) -> Option<Vec<(&'b str, &'b str)>> {
+    let hinted: Vec<(&str, &str)> = below
+        .iter()
+        .copied()
+        .filter(|(_, inside)| named.contains(&name::joined(base, inside)))
+        .collect();
+    (!hinted.is_empty() && hinted.len() < below.len()).then_some(hinted)
 }
 
 /// where placing put the files of an archive, as data.toml and data.lock lay its dataset out.
@@ -550,6 +638,52 @@ mod tests {
                 ],
             ]
         );
+    }
+
+    /// the files a copy's state names are tried apart from the person's beside them, matched by
+    /// their composed names as the state keeps them; a path it names that the folder lacks adds
+    /// nothing, and a state that leaves out no file of the folder, or names none, adds no guess.
+    #[test]
+    fn the_files_a_copied_state_names_are_tried_without_the_persons() {
+        let layout = layout("scans", "scans.zip", true);
+        let placed = [
+            "data/scans/a.bin",
+            "data/scans/a.bin.bai",
+            "data/scans/cafe\u{301}.bin",
+            "data/scans/notes.txt",
+        ];
+        let listed = layout.below(placed.iter().copied());
+        let below: Vec<(&str, &str)> = listed
+            .iter()
+            .map(|(placed, inside)| (*placed, inside.as_str()))
+            .collect();
+        let tried = |named: &[&str]| {
+            let named: HashSet<String> = named.iter().map(|path| (*path).to_owned()).collect();
+            hinted(&below, &layout.base, &named).map(|hinted| {
+                hinted
+                    .into_iter()
+                    .map(|(placed, _)| placed)
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(
+            tried(&[
+                "data/scans/a.bin",
+                "data/scans/caf\u{e9}.bin",
+                "data/scans/gone.bin"
+            ]),
+            Some(vec!["data/scans/a.bin", "data/scans/cafe\u{301}.bin"])
+        );
+        assert_eq!(
+            tried(&[
+                "data/scans/a.bin",
+                "data/scans/a.bin.bai",
+                "data/scans/caf\u{e9}.bin",
+                "data/scans/notes.txt"
+            ]),
+            None
+        );
+        assert_eq!(tried(&["data/other/a.bin"]), None);
     }
 
     #[test]

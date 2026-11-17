@@ -533,7 +533,7 @@ impl<'a> Loop<'a> {
             return Ok(PlacedArchives::default());
         }
         PlacedArchives::find(
-            &self.project.root,
+            self.project,
             (manifest, lock),
             placing.survey(),
             &unknown,

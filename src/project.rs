@@ -506,12 +506,7 @@ impl Project {
     ) -> (State, u64) {
         static TOLD: std::sync::Once = std::sync::Once::new();
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
-        let here = Folder::of(&self.root);
-        let is_ours = |recorded: Option<&Folder>| {
-            recorded
-                .zip(here.as_ref())
-                .is_some_and(|(recorded, here)| recorded.matches(here))
-        };
+        let is_ours = self.is_ours();
         let (state, written) = opened
             .and_then(|(mut file, found)| {
                 let (state, bytes) = read(&mut file, found.size, &is_ours)?;
@@ -531,6 +526,31 @@ impl Project {
         let mut kept = State::default();
         kept.markers = state.markers;
         (kept, 0)
+    }
+
+    /// whether the folder a state names, `recorded`, is this project's folder as it is now.
+    fn is_ours(&self) -> impl Fn(Option<&Folder>) -> bool {
+        let here = Folder::of(&self.root);
+        move |recorded: Option<&Folder>| {
+            recorded
+                .zip(here.as_ref())
+                .is_some_and(|(recorded, here)| recorded.matches(here))
+        }
+    }
+
+    /// [`State::copied`] of the state: the files it records as placed, of the paths at or below
+    /// `folders` that `keep` accepts, each with its dataset, when it was written for another
+    /// folder, as a copy of the project brings it. they only say which files to try. none from
+    /// this folder's own state, or from a missing or unreadable one.
+    pub(crate) fn copied_records(
+        &self,
+        folders: &[String],
+        keep: &dyn Fn(&str) -> bool,
+    ) -> Vec<(String, String)> {
+        let is_ours = self.is_ours();
+        self.open_state()
+            .and_then(|(mut file, _)| State::copied(&mut file, folders, keep, &is_ours))
+            .unwrap_or_default()
     }
 
     /// fetchloom's own folder in the project, which holds no data a person works with.

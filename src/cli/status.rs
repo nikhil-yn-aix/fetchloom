@@ -632,13 +632,8 @@ fn planned<'l>(
             .map(|(dataset, file)| ((*dataset).to_owned(), *file))
             .collect();
         let unknown = archives::of(lock, unknown);
-        let found = PlacedArchives::find(
-            &project.root,
-            (manifest, lock),
-            survey,
-            &unknown,
-            (threads, stop),
-        )?;
+        let found =
+            PlacedArchives::find(project, (manifest, lock), survey, &unknown, (threads, stop))?;
         status.unproven = found.unproven();
         if !found.is_empty() {
             planned = found.plan(manifest, lock, cache)?;

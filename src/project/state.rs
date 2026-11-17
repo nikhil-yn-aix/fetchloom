@@ -362,6 +362,29 @@ impl State {
         reading.streamed(&|_| true, ours)
     }
 
+    /// each file the state in `file` records as placed, of the paths at or below `folders` that
+    /// `keep` accepts, read as [`State::read_within`] reads them, with the dataset it was placed
+    /// for, when the state was written for a folder `ours` refuses, as a copy of the project brings
+    /// it. anyone could have written such a state, so these only say which files to try, never
+    /// what one holds. none from a state of this folder, or one that is no state of this version.
+    /// fails when `file` cannot be read.
+    pub(crate) fn copied(
+        file: &mut (impl Read + Seek),
+        folders: &[String],
+        keep: &dyn Fn(&str) -> bool,
+        ours: &dyn Fn(Option<&Folder>) -> bool,
+    ) -> io::Result<Vec<(String, String)>> {
+        let (state, _) = State::read_within(file, folders, keep, &|_| true)?;
+        if !state.was_read() || ours(state.folder.as_ref()) {
+            return Ok(Vec::new());
+        }
+        Ok(state
+            .files
+            .into_iter()
+            .map(|(path, placed)| (path, placed.dataset))
+            .collect())
+    }
+
     /// drops the mark of each dataset `manifest` no longer has, and says whether any went.
     pub(crate) fn forget_removed(&mut self, manifest: &Manifest) -> bool {
         let before = (self.dropped.len(), self.freeing.len());
@@ -1443,6 +1466,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// a state written for another folder names its files, each with its dataset, of the paths
+    /// a read keeps, and nothing else of them; this folder's own state names none that way, and
+    /// a file that is no state names none.
+    #[test]
+    fn a_state_written_for_another_folder_names_its_files_with_their_datasets_alone() {
+        let mut state = State::default();
+        state
+            .files
+            .insert("data/a/x.csv".to_owned(), placed("a", 1));
+        state
+            .files
+            .insert("data/a/y.csv".to_owned(), placed("b", 2));
+        state
+            .files
+            .insert("data/c/z.csv".to_owned(), placed("c", 3));
+        let there = Folder {
+            inode: Some(7),
+            created: None,
+        };
+        let bytes = state.render_for(Some(&there));
+        let folders = ["data/a".to_owned()];
+        let keep = |path: &str| path.starts_with("data/a/");
+        let named = |bytes: &[u8], inode: u64| {
+            let here = Folder {
+                inode: Some(inode),
+                created: None,
+            };
+            let ours = |recorded: Option<&Folder>| {
+                recorded.is_some_and(|recorded| recorded.matches(&here))
+            };
+            State::copied(&mut io::Cursor::new(bytes), &folders, &keep, &ours).unwrap()
+        };
+        let pair = |path: &str, dataset: &str| (path.to_owned(), dataset.to_owned());
+        assert_eq!(
+            named(&bytes, 8),
+            [pair("data/a/x.csv", "a"), pair("data/a/y.csv", "b")]
+        );
+        assert_eq!(named(&bytes, 7), []);
+        assert_eq!(named(&[0; 64], 8), []);
     }
 
     /// a state that is no state at all, as a file of zeros a clone can hold, is found so at its

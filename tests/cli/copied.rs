@@ -359,8 +359,8 @@ fn a_copy_keeps_the_marker_of_a_folder_it_cannot_list() -> Result {
 /// with no list of the zip's files, status calls neither the zip missing nor its files extra, and
 /// writes nothing; a file of the person's own beside them is theirs, kept, and keeps them from
 /// proving the list data.lock pins, which status says a sync downloads. the list is missing for a
-/// second person sharing the folder, whose cache never held the zip. a copy would not do: its
-/// state names the folder it came from, so it is not used, and no file has a record.
+/// second person sharing the folder, whose cache never held the zip. a copy would not do: the
+/// files its state names would prove the list, the person's file aside.
 #[test]
 fn status_of_a_zip_the_cache_never_held_says_why_its_files_cannot_stand_for_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -407,19 +407,18 @@ fn status_of_a_zip_the_cache_never_held_says_why_its_files_cannot_stand_for_it()
     Ok(())
 }
 
-/// in a copy no file has a record, so a file of the person's own beside the zip's keeps its
-/// folder from proving the list data.lock pins, and nothing tells the zip's files from others
-/// there: status calls none of them the person's, and says a sync downloads the zip. a file
-/// outside every dataset's folder is none of status's business.
+/// in a copy no file has a record, so a file of the zip's whose bytes changed keeps its folder
+/// from proving the list data.lock pins, and with no list nothing tells the zip's files from the
+/// person's own beside them: status calls none of them the person's, and says a sync downloads
+/// the zip. a file outside every dataset's folder is none of status's business.
 #[test]
 fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra() -> Result {
     let sandbox = Sandbox::new()?;
     let (_server, two, cache) = copied_zip(&sandbox, 1)?;
     fs::write(two.join("data").join("notes.txt"), b"mine\n")?;
-    fs::write(
-        two.join("data").join("dataset").join("notes.txt"),
-        b"mine\n",
-    )?;
+    let folder = two.join("data").join("dataset");
+    fs::write(folder.join("notes.txt"), b"mine\n")?;
+    edit(&folder.join("data").join("train.csv"), b"a,b\n9,9\n")?;
     let status = |args: &[&str]| {
         sandbox
             .command_in(&two, args)
@@ -1066,5 +1065,98 @@ fn a_copied_zip_folder_beside_what_a_system_or_tool_leaves_is_checked_in_place()
         fs::read(folder.join("README.md~"))?,
         b"an editor's backup\n"
     );
+    Ok(())
+}
+
+/// a copy's state names the files placing put in its zip's folder, so the person's own file
+/// beside them, as notes or an index, keeps the folder from proving nothing: the files the state
+/// names are tried alone, and hashed. status calls the person's file theirs, a sync downloads
+/// nothing and leaves that file as it is, and offline, `fetchloom path` answers.
+#[test]
+fn a_copied_zip_folder_beside_a_persons_file_is_checked_by_the_files_its_state_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 1)?;
+    let (three, other) = copied(&sandbox, "three")?;
+    let notes = |project: &Path| project.join("data").join("dataset").join("notes.txt");
+    for project in [&two, &three] {
+        fs::write(notes(project), b"my notes\n")?;
+    }
+    let status = sandbox
+        .command_in(&two, &["--json", "status"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&status)?;
+    assert_eq!(
+        (
+            &document["result"]["not_unpacked"],
+            &document["result"]["yours"]
+        ),
+        (
+            &serde_json::json!([]),
+            &serde_json::json!(["data/dataset/notes.txt"])
+        ),
+        "{document}"
+    );
+    let synced = sandbox
+        .command_in(&two, &["--json", "sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    assert_eq!(document["work"]["bytes_down"], 0, "{document}");
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
+    assert_eq!(fs::read(notes(&two))?, b"my notes\n");
+    let path = sandbox
+        .command_in(&three, &["--offline", "path", "dataset"])
+        .env("FETCHLOOM_CACHE", &other)
+        .output()?;
+    assert_eq!(path.status.code(), Some(0), "{}", text(&path.stderr)?);
+    assert_eq!(
+        text(&path.stdout)?,
+        format!("{}\n", three.join("data").join("dataset").display())
+    );
+    Ok(())
+}
+
+/// what a copy's state names only says which files to try, never what they hold: a state that
+/// names a file whose bytes changed, or names the person's file where it named one of the zip's,
+/// proves nothing. the zip is downloaded, said once, and the person's file stays.
+#[test]
+fn a_copied_state_that_names_other_files_proves_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 3)?;
+    let (three, other) = copied(&sandbox, "three")?;
+    let notes = |project: &Path| project.join("data").join("dataset").join("notes.txt");
+    for project in [&two, &three] {
+        fs::write(notes(project), b"my notes\n")?;
+    }
+    let changed = two
+        .join("data")
+        .join("dataset")
+        .join("data")
+        .join("train.csv");
+    edit(&changed, b"a,b\n9,9\n")?;
+    let state = three.join(".fetchloom").join("state");
+    let mut forged: serde_json::Value = serde_json::from_slice(&fs::read(&state)?)?;
+    let files = forged["files"]
+        .as_object_mut()
+        .ok_or("the state has no files")?;
+    let readme = files
+        .remove("data/dataset/README.md")
+        .ok_or("the state names no README.md")?;
+    files.insert("data/dataset/notes.txt".to_owned(), readme);
+    fs::write(&state, serde_json::to_vec(&forged)?)?;
+    let told = "warning: dataset/dataset.zip will be downloaded: the files in data/dataset do not match the list of files data.lock pins for it\n";
+    for (project, cache) in [(&two, &cache), (&three, &other)] {
+        let synced = sandbox
+            .command_in(project, &["sync"])
+            .env("FETCHLOOM_CACHE", cache)
+            .output()?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(0), "{stderr}");
+        assert_eq!(stderr.matches(told).count(), 1, "{stderr}");
+        assert_eq!(fs::read(notes(project))?, b"my notes\n");
+    }
+    assert_eq!(server.requests().len(), 3, "the zip again for each copy");
     Ok(())
 }
