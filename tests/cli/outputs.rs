@@ -88,6 +88,8 @@ fn an_output_is_pinned_where_its_pipeline_wrote_it() -> Result {
         stderr.contains("Added processed, its files are in data/processed"),
         "{stderr}"
     );
+    // read once while pinning, so placing has nothing to read or adopt
+    assert!(!stderr.contains("Adopted"), "{stderr}");
     assert_eq!(before, [look(&files[0])?, look(&files[1])?]);
     fs::OpenOptions::new().append(true).open(&files[0])?;
     let status = sandbox.run(&["--json", "status"])?;
@@ -656,6 +658,39 @@ fn a_rewrite_with_the_same_bytes_is_no_change_and_is_hashed_once() -> Result {
         look["modified"].as_u64().map(u128::from),
         Some(modified),
         "{state}"
+    );
+    Ok(())
+}
+
+/// at a terminal the same add shows what changed and asks: a no changes nothing, a yes pins it.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_same_add_asks_at_a_terminal_before_it_pins_a_rerun() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let pinned = fs::read_to_string(work.join("data.lock"))?;
+    rerun(&work)?;
+    let asked = "pin what data/processed holds now as processed?";
+    let add = sandbox.command(&["add", "data/processed", "--as", "processed"]);
+    let Some((code, screen)) = crate::support::typed(&work, &add, "", asked, "n\r")? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("Changed processed · 1 file changed, 1 added, 1 removed"),
+        "{screen}"
+    );
+    assert!(screen.contains(&format!("{asked} [y/N]")), "{screen}");
+    assert_eq!(code, Some(1), "{screen}");
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned);
+    let Some((code, screen)) = crate::support::typed(&work, &add, "", asked, "y\r")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(
+        fs::read_to_string(work.join("data.lock"))?.contains("plot.png"),
+        "{screen}"
     );
     Ok(())
 }
