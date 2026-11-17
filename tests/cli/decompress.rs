@@ -584,8 +584,9 @@ fn decompressing_past_the_room_the_disk_had_free_stops_before_filling_it() -> Re
 }
 
 /// a clone learns what its files decompress to only once it decompressed them, so the copies the
-/// data folder takes of them are counted then, before any is placed: the plain file's download and
-/// copy fit the disk, but not with a copy of the decompressed file beside them.
+/// data folder takes of them are counted then, before any is placed: on exFAT, where every file
+/// placed is a copy, the plain file's download and copy fit the disk, but not with a copy of the
+/// decompressed file beside them.
 #[cfg(debug_assertions)]
 #[test]
 fn a_clone_counts_the_copies_of_what_it_decompressed_before_placing_them() -> Result {
@@ -606,12 +607,11 @@ fn a_clone_counts_the_copies_of_what_it_decompressed_before_placing_them() -> Re
     for name in ["data.toml", "data.lock", "links.txt"] {
         fs::copy(sandbox.work().join(name), clone.join(name))?;
     }
-    let manifest = fs::read_to_string(clone.join("data.toml"))?;
-    fs::write(clone.join("data.toml"), format!("{manifest}copy = true\n"))?;
     let cold = sandbox.folder("cold")?;
     let output = sandbox
         .command_in(&clone, &["--json", "sync"])
         .env("FETCHLOOM_CACHE", &cold)
+        .env("FETCHLOOM_TEST_FILESYSTEM", "exfat")
         .env("FETCHLOOM_TEST_FREE", (64 << 10).to_string())
         .output()?;
     let document = json(&output)?;

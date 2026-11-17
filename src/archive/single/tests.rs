@@ -164,10 +164,13 @@ fn the_size_limit_counts_every_joined_stream() {
 /// a bzip2 of 785 bytes that holds 1 GiB stops once it grows past the ratio, a few MiB in.
 #[test]
 fn a_bomb_stops_at_the_ratio() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/archives/zeros-1gib.bz2"
-    );
+    // nextest names the package's folder when it runs tests from an archive elsewhere
+    let path = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(
+            || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            std::path::PathBuf::from,
+        )
+        .join("tests/fixtures/archives/zeros-1gib.bz2");
     let packed = fs::read(path).unwrap();
     let scratch = Scratch::new();
     let err =
