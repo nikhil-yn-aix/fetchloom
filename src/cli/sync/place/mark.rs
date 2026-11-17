@@ -55,62 +55,107 @@ pub(super) fn contents(
     targets: &[Target],
     (state, unsure): (&State, Unsure<'_>),
 ) -> BTreeMap<String, Content> {
-    let mut folder_of: HashMap<&str, String> = HashMap::new();
     let unsure = super::unsure(unsure);
-    for dataset in targets
-        .iter()
-        .map(|target| target.dataset)
-        .chain(unsure.iter().copied())
-    {
-        if !folder_of.contains_key(dataset) {
-            folder_of.insert(dataset, plan::folder(manifest, dataset));
-        }
-    }
-    let placing: BTreeSet<&str> = targets
-        .iter()
-        .map(|target| folder_of[target.dataset].as_str())
+    // the plan lists each dataset's targets together, so each run of them is looked at once
+    let runs: Vec<&[Target]> = targets
+        .chunk_by(|one, next| one.dataset == next.dataset)
         .collect();
-    let mut named: BTreeMap<&str, BTreeSet<(&str, bool)>> = placing
+    let folder_of: HashMap<&str, String> = runs
+        .iter()
+        .map(|run| run[0].dataset)
+        .chain(unsure.iter().copied())
+        .map(|dataset| (dataset, plan::folder(manifest, dataset)))
+        .collect();
+    let placing: BTreeSet<&str> = runs
+        .iter()
+        .map(|run| folder_of[run[0].dataset].as_str())
+        .collect();
+    let mut named: HashMap<&str, Entries> = placing
         .iter()
         .filter(|folder| shared(manifest, folder))
-        .map(|folder| (*folder, BTreeSet::new()))
+        .map(|folder| (*folder, Entries::default()))
         .collect();
-    let staying = state
-        .files
-        .iter()
-        .filter(|(_, placed)| unsure.contains(placed.dataset.as_str()))
-        .map(|(path, placed)| (placed.dataset.as_str(), path.as_str()));
-    let paths = targets
-        .iter()
-        .map(|target| (target.dataset, target.path.as_str()))
-        .chain(staying);
-    for (dataset, path) in paths {
-        let folder = folder_of[dataset].as_str();
-        let Some(entries) = named.get_mut(folder) else {
-            continue;
-        };
-        let Some(inside) = path
-            .strip_prefix(folder)
-            .and_then(|rest| rest.strip_prefix('/'))
-        else {
-            continue;
-        };
-        entries.insert(match inside.split_once('/') {
-            Some((top, _)) => (top, true),
-            None => (inside, false),
-        });
+    if !named.is_empty() {
+        for run in &runs {
+            let folder = folder_of[run[0].dataset].as_str();
+            if let Some(entries) = named.get_mut(folder) {
+                for target in *run {
+                    entries.add(folder, &target.path);
+                }
+            }
+        }
+        // a dataset whose files are not all known keeps those placed, which targets may name too
+        let staying = state
+            .files
+            .iter()
+            .filter(|(_, placed)| unsure.contains(placed.dataset.as_str()));
+        if !unsure.is_empty() {
+            for (path, placed) in staying {
+                let folder = folder_of[placed.dataset.as_str()].as_str();
+                if let Some(entries) = named.get_mut(folder) {
+                    entries.add(folder, path);
+                    entries.again = true;
+                }
+            }
+        }
     }
     placing
         .into_iter()
         .map(|folder| {
-            let content = match named.get(folder) {
+            let content = match named.remove(folder) {
                 None => Content::Text(TEXT.to_vec()),
-                Some(entries) if entries.len() <= MOST_NAMED => Content::Text(names(entries)),
-                Some(entries) => Content::Unnamed(entries.len()),
+                Some(entries) => entries.content(),
             };
             (folder.to_owned(), content)
         })
         .collect()
+}
+
+/// the names at the top of a folder the person shares that its datasets place: files, which
+/// targets name once each, and folders, which many files share.
+#[derive(Default)]
+struct Entries<'a> {
+    files: Vec<&'a str>,
+    folders: HashSet<&'a str>,
+    /// whether a name may have come twice, as from both a target and a record.
+    again: bool,
+}
+
+impl<'a> Entries<'a> {
+    /// notes the top name of `path`, a path in `folder`.
+    fn add(&mut self, folder: &str, path: &'a str) {
+        let Some(inside) = path
+            .strip_prefix(folder)
+            .and_then(|rest| rest.strip_prefix('/'))
+        else {
+            return;
+        };
+        match inside.split_once('/') {
+            Some((top, _)) => {
+                self.folders.insert(top);
+            }
+            None => self.files.push(inside),
+        }
+    }
+
+    /// the marker naming each entry, or none past [`MOST_NAMED`] of them.
+    fn content(mut self) -> Content {
+        if self.again {
+            self.files.sort_unstable();
+            self.files.dedup();
+        }
+        let count = self.files.len() + self.folders.len();
+        if count > MOST_NAMED {
+            return Content::Unnamed(count);
+        }
+        let entries: BTreeSet<(&str, bool)> = self
+            .files
+            .iter()
+            .map(|file| (*file, false))
+            .chain(self.folders.iter().map(|folder| (*folder, true)))
+            .collect();
+        Content::Text(names(&entries))
+    }
 }
 
 /// the folders of `wanted` that `contents` gives no marker, as too full to name, each with how

@@ -197,6 +197,10 @@ impl Placement {
             .iter()
             .filter(|target| back.contains(target.path.as_str()))
         {
+            if let Some(beside) = unpacked_beside(manifest, survey, target) {
+                let dataset = target.dataset.to_owned();
+                self.unpacked.insert(target.path.clone(), (beside, dataset));
+            }
             let floor = plan::folder(manifest, target.dataset);
             let Some(folder) = tell::emptied(&holding, &target.path, &floor) else {
                 continue;
@@ -207,31 +211,6 @@ impl Placement {
             }
             self.emptied.insert(target.path.clone(), folder.to_owned());
         }
-        self.unpacked = targets
-            .iter()
-            .filter(|target| back.contains(target.path.as_str()))
-            .filter(|target| {
-                manifest
-                    .datasets
-                    .get(target.dataset)
-                    .is_some_and(|entry| !entry.source.decompress)
-            })
-            .filter_map(|target| {
-                let Some(Ok(name)) = crate::archive::decompressed_name(&target.path) else {
-                    return None;
-                };
-                let beside = match target.path.rsplit_once('/') {
-                    Some((folder, _)) => format!("{folder}/{name}"),
-                    None => name,
-                };
-                let theirs =
-                    survey.disk.contains_key(&beside) && !survey.state.files.contains_key(&beside);
-                theirs.then(|| {
-                    let dataset = target.dataset.to_owned();
-                    (target.path.clone(), (beside, dataset))
-                })
-            })
-            .collect();
         let told = &survey.state.told;
         if survey.data_gone {
             self.moved = !self.refilled.is_empty() && !told.has(Once::Moved, &manifest.data_dir);
@@ -257,6 +236,27 @@ impl Placement {
             .filter(|found| scope.includes(&found.dataset))
             .collect();
     }
+}
+
+/// the file a person unpacked from `target`, a single compressed file of a dataset that keeps
+/// such files packed, beside it, as `gunzip` leaves it: one the state records no placing of.
+fn unpacked_beside(manifest: &Manifest, survey: &Survey, target: &Target) -> Option<String> {
+    let packed = manifest
+        .datasets
+        .get(target.dataset)
+        .is_some_and(|entry| !entry.source.decompress);
+    let Some(Ok(name)) = packed
+        .then(|| crate::archive::decompressed_name(&target.path))
+        .flatten()
+    else {
+        return None;
+    };
+    let beside = match target.path.rsplit_once('/') {
+        Some((folder, _)) => format!("{folder}/{name}"),
+        None => name,
+    };
+    (survey.disk.contains_key(&beside) && !survey.state.files.contains_key(&beside))
+        .then_some(beside)
 }
 
 /// how a copy of its own was linked to the cache's copy of its bytes.
