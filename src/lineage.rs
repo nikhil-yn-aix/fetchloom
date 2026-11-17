@@ -28,8 +28,8 @@
 //! staleness is direct only: an input that is itself made from a changed dataset raises nothing
 //! until its own files change. a stale dataset is told once per run, naming each input that
 //! changed; status and `lock --check` also tell each input they cannot check, which sync leaves
-//! to them. either way the exit code stays as it was, but for `lock --check --fail-on-stale`,
-//! which a stale dataset fails with `derived.stale`. `lock --check` also fails with
+//! to them. either way the exit code stays as it was, but for `lock --check --strict`, which a
+//! stale dataset fails with `derived.stale`. `lock --check` also fails with
 //! `lock.outdated` when the tree data.lock gives an input is not that of its files, where this
 //! machine knows them.
 
@@ -372,7 +372,7 @@ pub(crate) fn stale(judged: &[Judged]) -> Vec<Said> {
 }
 
 /// the failure of a check told to fail while a dataset of `judged` may be stale, as
-/// `--fail-on-stale` asks, or none.
+/// `--strict` asks, or none.
 pub(crate) fn stale_error(judged: &[Judged]) -> Option<Error> {
     let changed = changed(judged);
     let error = match changed.len() {

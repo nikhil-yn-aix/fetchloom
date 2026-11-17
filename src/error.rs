@@ -44,7 +44,7 @@ pub(crate) enum Kind {
     /// --check` found a file data.lock pins that no mirror or source serves, or a dataset its
     /// source no longer lists.
     NotReady,
-    /// `lock --check --fail-on-stale` found a dataset whose inputs' files changed since it was
+    /// a strict check found a dataset that may be stale: its inputs' files changed since it was
     /// pinned from them.
     DerivedStale,
     Interrupted,
@@ -80,7 +80,7 @@ impl Kind {
 
     pub(crate) fn exit_code(self) -> u8 {
         match self {
-            Kind::Unconfirmed | Kind::Outdated | Kind::NotReady => 1,
+            Kind::Unconfirmed | Kind::Outdated | Kind::NotReady | Kind::DerivedStale => 1,
             Kind::Usage => 2,
             // a refusal is fetchloom's own rule, which no later try changes
             Kind::ReferenceInvalid
@@ -95,7 +95,6 @@ impl Kind {
             Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,
             Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid | Kind::ProjectChanged => 50,
-            Kind::DerivedStale => 60,
             Kind::Interrupted => 130,
         }
     }

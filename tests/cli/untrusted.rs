@@ -314,7 +314,7 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
     for args in [
         &["lock"][..],
         &["lock", "--check"],
-        &["lock", "--check", "--fail-on-stale"],
+        &["lock", "--check", "--strict"],
         &["status"],
         &["--json", "status"],
         &["sync"],

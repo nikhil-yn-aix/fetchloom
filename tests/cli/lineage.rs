@@ -765,15 +765,15 @@ fn inputs_that_changed_together_make_one_line_and_a_warning_each() -> Result {
 }
 
 #[test]
-fn fail_on_stale_makes_lock_check_fail_with_a_code_of_its_own() -> Result {
+fn strict_makes_lock_check_fail_on_a_dataset_that_may_be_stale() -> Result {
     let sandbox = Sandbox::new()?;
     let routes = made_from_iris(&sandbox)?;
-    ok(&sandbox.run(&["lock", "--check", "--fail-on-stale"])?)?;
+    ok(&sandbox.run(&["lock", "--check", "--strict"])?)?;
     iris_changed(&sandbox, &routes)?;
     ok(&sandbox.run(&["lock", "--check"])?)?;
-    let output = sandbox.run(&["lock", "--check", "--fail-on-stale"])?;
+    let output = sandbox.run(&["lock", "--check", "--strict"])?;
     let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(60), "{stderr}");
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains("error: processed may be stale: iris's files changed since processed was pinned from them\n"),
         "{stderr}"
@@ -782,8 +782,8 @@ fn fail_on_stale_makes_lock_check_fail_with_a_code_of_its_own() -> Result {
         !stderr.contains("warning:"),
         "the error says it once: {stderr}"
     );
-    let output = sandbox.run(&["--json", "lock", "--check", "--fail-on-stale"])?;
-    assert_eq!(output.status.code(), Some(60));
+    let output = sandbox.run(&["--json", "lock", "--check", "--strict"])?;
+    assert_eq!(output.status.code(), Some(1));
     let document = json(&output)?;
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "derived.stale");
@@ -803,16 +803,14 @@ fn fail_on_stale_makes_lock_check_fail_with_a_code_of_its_own() -> Result {
         routes.url
     );
     fs::write(sandbox.work().join("data.toml"), toml)?;
-    let output = sandbox.run(&["--json", "lock", "--check", "--fail-on-stale"])?;
+    let output = sandbox.run(&["--json", "lock", "--check", "--strict"])?;
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(json(&output)?["errors"][0]["kind"], "lock.outdated");
-    let output = sandbox.run(&["--json", "lock", "--fail-on-stale"])?;
+    let output = sandbox.run(&["lock", "--strict"])?;
     assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
-    let error = &json(&output)?["errors"][0];
-    assert_eq!(error["message"], "--fail-on-stale only goes with --check");
     assert_eq!(
-        error["help"],
-        "run `fetchloom lock --check --fail-on-stale`"
+        text(&output.stderr)?,
+        "error: --strict needs --check\n  usage: fetchloom lock [options]\n  help: add --check, or leave out --strict\n"
     );
     Ok(())
 }
@@ -822,7 +820,7 @@ fn an_input_no_one_can_check_never_fails_the_check() -> Result {
     let sandbox = Sandbox::new()?;
     made_from_iris(&sandbox)?;
     ok(&sandbox.run(&["remove", "iris"])?)?;
-    let output = sandbox.run(&["--json", "lock", "--check", "--fail-on-stale"])?;
+    let output = sandbox.run(&["--json", "lock", "--check", "--strict"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     assert_eq!(kinds(&json(&output)?), ["derived.unchecked"]);
     Ok(())
@@ -882,10 +880,10 @@ fn a_clone_without_a_cache_tells_a_changed_archive_input_from_data_lock_alone() 
     let asked = routes.requests().len();
     let (clone, cache) = clone_without_cache(&sandbox)?;
     let output = sandbox
-        .command_in(&clone, &["--json", "lock", "--check", "--fail-on-stale"])
+        .command_in(&clone, &["--json", "lock", "--check", "--strict"])
         .env("FETCHLOOM_CACHE", &cache)
         .output()?;
-    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
     let error = &json(&output)?["errors"][0];
     assert_eq!(error["kind"], "derived.stale");
     assert_eq!(
@@ -928,7 +926,7 @@ fn a_repin_to_the_same_files_raises_nothing_even_without_a_cache() -> Result {
     }
     let (clone, cache) = clone_without_cache(&sandbox)?;
     for args in [
-        &["--json", "lock", "--check", "--fail-on-stale"][..],
+        &["--json", "lock", "--check", "--strict"][..],
         &["--json", "status"],
     ] {
         let output = sandbox
@@ -976,7 +974,7 @@ fn a_wrong_tree_in_data_lock_fails_lock_check_where_its_files_are_known() -> Res
     let lock = read(&sandbox, "data.lock")?;
     assert!(lock.contains(&format!("tree = \"{right}\"")), "{lock}");
     assert!(!lock.contains(&wrong), "{lock}");
-    ok(&sandbox.run(&["lock", "--check", "--fail-on-stale"])?)
+    ok(&sandbox.run(&["lock", "--check", "--strict"])?)
 }
 
 #[test]
@@ -991,7 +989,7 @@ fn an_input_with_no_tree_line_nor_cache_stays_unresolved_and_never_fails() -> Re
     fs::write(sandbox.work().join("data.lock"), lock)?;
     let (clone, cache) = clone_without_cache(&sandbox)?;
     let output = sandbox
-        .command_in(&clone, &["--json", "lock", "--check", "--fail-on-stale"])
+        .command_in(&clone, &["--json", "lock", "--check", "--strict"])
         .env("FETCHLOOM_CACHE", &cache)
         .output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);

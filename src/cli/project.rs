@@ -799,14 +799,14 @@ async fn preview_sync(
     })
 }
 
-/// `lock --check`: fails while data.lock is out of date with data.toml, then, as `fail_on_stale`
-/// asks, while a dataset may be stale, and tells each input it cannot check.
+/// `lock --check`: fails while data.lock is out of date with data.toml, then, as `strict` asks,
+/// while a dataset may be stale, and tells each input it cannot check.
 fn check_lock(
     context: &Context,
     project: &Project,
     manifest: &Manifest,
     old: Option<&Lock>,
-    fail_on_stale: bool,
+    strict: bool,
 ) -> Result<Report, Error> {
     let report = check(project, manifest, old, &Scope::All)?;
     let made = manifest
@@ -820,7 +820,7 @@ fn check_lock(
         }
         let judged = crate::lineage::judge(manifest, old, &cache);
         super::lineage::tell_unchecked(&context.output, &judged);
-        match crate::lineage::stale_error(&judged).filter(|_| fail_on_stale) {
+        match crate::lineage::stale_error(&judged).filter(|_| strict) {
             Some(stale) => return Err(stale),
             None => super::lineage::tell_stale(&context.output, &judged),
         }
@@ -829,19 +829,7 @@ fn check_lock(
     Ok(report)
 }
 
-/// refuses `--fail-on-stale` without `--check`, the one run it changes.
-fn stale_alone(args: &args::Lock) -> Result<(), Error> {
-    if args.fail_on_stale && !args.check {
-        return Err(
-            Error::new(Kind::Usage, "--fail-on-stale only goes with --check")
-                .help(format!("run `{}`", command("lock --check --fail-on-stale"))),
-        );
-    }
-    Ok(())
-}
-
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
-    stale_alone(&args)?;
     let project = find(&context.output)?;
     // a check or a dry run changes nothing, so it needs no hold. anything else reads what it
     // changes only once no other fetchloom can change it
@@ -860,13 +848,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let (_, manifest) = project.manifest()?;
     let old = project.lock()?;
     if args.check {
-        return check_lock(
-            context,
-            &project,
-            &manifest,
-            old.as_ref(),
-            args.fail_on_stale,
-        );
+        return check_lock(context, &project, &manifest, old.as_ref(), args.strict);
     }
     let upgrade = match args.upgrade {
         None => Upgrade::Nothing,

@@ -206,7 +206,9 @@ const EXIT_CODES: &str = "fetchloom exit codes
     1  unconfirmed or lock.outdated: say yes with --yes, or run fetchloom lock;
        from audit --check, a source lists a newer version or changed.
        data.not_ready: sync --strict or status --check found data not ready,
-       or audit --check found a pinned file served nowhere
+       or audit --check found a pinned file served nowhere.
+       derived.stale: lock --check --strict found a dataset whose inputs'
+       files changed since it was pinned from them
     2  usage: a mistake on the command line
    10  reference.*, source.invalid: the link or id is wrong, or names nothing.
        network.refused: the link leads where fetchloom will not go
@@ -214,8 +216,6 @@ const EXIT_CODES: &str = "fetchloom exit codes
    30  integrity.mismatch: the bytes are not the ones data.lock pins
    40  auth.required: sign in, or accept the source's terms
    50  local.*, project.*: disk, permissions, a broken or changed project file
-   60  derived.stale: lock --check --fail-on-stale found a dataset whose
-       inputs' files changed since it was pinned from them
   130  interrupted
 
 with --json, errors[0].kind names the exact cause and errors[0].fix, when
@@ -242,7 +242,7 @@ has the usual tasks.
 `fetchloom help --json` describes every command and its options.
 
 errors[0].kind, and the exit code it gives:
-    1  unconfirmed, lock.outdated, data.not_ready
+    1  unconfirmed, lock.outdated, data.not_ready, derived.stale
     2  usage
    10  reference.invalid, reference.unresolved, reference.ambiguous,
        source.invalid, network.refused
@@ -251,7 +251,6 @@ errors[0].kind, and the exit code it gives:
    30  integrity.mismatch
    40  auth.required
    50  local.io, local.not_empty, project.invalid, project.changed
-   60  derived.stale
   130  interrupted
 `fetchloom help exit-codes` says what to do about each.
 
