@@ -586,16 +586,20 @@ fn escaped(folder: &str) -> String {
         .collect()
 }
 
-/// once markers keep dataset folders out of git, says once of a line of the project's .gitignore
-/// that still hides the whole data folder, the person's own files there too, which fetchloom
-/// never edits: the line to delete, when the person wants git to see them. says whether the state
-/// changed.
+/// once markers keep dataset folders out of git, says once to a person at a terminal of a line of
+/// the project's .gitignore that still hides the whole data folder, the person's own files there
+/// too, which fetchloom never edits: theirs to keep, or to take out for git to see those files.
+/// says whether the state changed.
 pub(super) fn tell_hiding_line(
     output: &Output,
     root: &Path,
     data_dir: &str,
     state: &mut State,
 ) -> bool {
+    // a choice for a person at a terminal: a script, or a fresh clone in CI, has none to make
+    if !output.watched_story() || output.json() {
+        return false;
+    }
     let Some((number, rule)) = hiding_line(root, data_dir, true) else {
         return false;
     };
@@ -608,7 +612,7 @@ pub(super) fn tell_hiding_line(
             "line {number} of .gitignore, {rule}, keeps all of {data_dir}/ out of git, your own files there too"
         ),
         &format!(
-            "each dataset's folder keeps itself out of git now, so delete that line for git to see the rest of {data_dir}/. fetchloom never edits .gitignore"
+            "each dataset's folder keeps itself out of git, so the line now only hides your own files in {data_dir}/: keep it if that is what you want, or take it out for git to see them. fetchloom never edits .gitignore"
         ),
     );
     state.rule_told = Some(rule);

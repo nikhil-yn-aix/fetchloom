@@ -196,10 +196,10 @@ fn a_clean_root_leaves_git_all_but_the_dataset_folders() -> Result {
     Ok(())
 }
 
-/// a1 in a cookiecutter root, whose .gitignore hides all of data/: the first add says once which
-/// line hides the person's own files too and leaves the file as it was. status never counts the
-/// template's .gitkeep files, and once the person deletes the line git sees them, never the
-/// dataset's files.
+/// a1 in a cookiecutter root, whose .gitignore hides all of data/: an add at a terminal says once
+/// which line hides the person's own files too, as theirs to keep or take out, and leaves the file
+/// as it was. a run with no terminal, as in CI, never says it. status never counts the template's
+/// .gitkeep files, and once the person takes the line out git sees them, never the dataset's files.
 #[test]
 fn a_root_rule_hiding_the_data_folder_is_explained_once() -> Result {
     let sandbox = Sandbox::new()?;
@@ -217,24 +217,42 @@ fn a_root_rule_hiding_the_data_folder_is_explained_once() -> Result {
             ("data/raw/.gitkeep", ""),
         ],
     )?;
-    let server = Routes::start(vec![
-        (PATH.to_owned(), file(IRIS, "\"v1\"")),
-        ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
-    ])?;
+    let routes = ["iris", "wine", "beer", "milk"].into_iter().map(|name| {
+        (
+            format!("/files/{name}.csv"),
+            file(format!("{name}\n1\n").as_bytes(), "\"v1\""),
+        )
+    });
+    let server = Routes::start(routes.collect())?;
     sandbox.allow(&server.url);
-    let explained = "warning: line 2 of .gitignore, /data/, keeps all of data/ out of git, your own files there too\n  help: each dataset's folder keeps itself out of git now, so delete that line for git to see the rest of data/. fetchloom never edits .gitignore\n";
-    let added = sandbox.run(&["add", &format!("{}{PATH}", server.url)])?;
+    let link = |name: &str| format!("{}/files/{name}.csv", server.url);
+    let added = sandbox.run(&["add", &link("iris")])?;
     let stderr = text(&added.stderr)?;
     assert_eq!(added.status.code(), Some(0), "{stderr}");
-    assert!(stderr.contains(explained), "{stderr}");
     assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
-    let again = sandbox.run(&["--json", "add", &format!("{}/files/wine.csv", server.url)])?;
-    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    assert!(!stderr.contains("keeps all of data/"), "{stderr}");
+    let scripted = sandbox.run(&["--json", "add", &link("wine")])?;
     assert_eq!(
-        crate::support::kinds(&json(&again)?),
-        Vec::<&str>::new(),
-        "said once"
+        scripted.status.code(),
+        Some(0),
+        "{}",
+        text(&scripted.stderr)?
     );
+    let kinds = json(&scripted)?;
+    let kinds = crate::support::kinds(&kinds);
+    assert!(!kinds.contains(&"git.data_folder_ignored"), "{kinds:?}");
+    #[cfg(target_os = "linux")]
+    {
+        let explained = "warning: line 2 of .gitignore, /data/, keeps all of data/ out of git, your own files there too\n  help: each dataset's folder keeps itself out of git, so the line now only hides your own files in data/: keep it if that is what you want, or take it out for git to see them. fetchloom never edits .gitignore\n";
+        if let Some(screen) = sandbox.on_a_terminal(&["add", &link("beer")])? {
+            assert!(screen.contains(explained), "{screen}");
+            let again = sandbox
+                .on_a_terminal(&["add", &link("milk")])?
+                .unwrap_or_default();
+            assert!(again.contains("Added milk"), "{again}");
+            assert!(!again.contains("keeps all of data/"), "said once: {again}");
+        }
+    }
     assert_eq!(
         fs::read_to_string(sandbox.work().join(".gitignore"))?,
         rules
@@ -262,8 +280,8 @@ fn a_root_rule_hiding_the_data_folder_is_explained_once() -> Result {
 }
 
 /// a1 in a project an older fetchloom set up: `/data/` in .gitignore, the files placed, no
-/// dataset folder kept out of git by a file of its own. the next sync makes each one and says
-/// once which line hides the person's files too; the sync after says nothing of either.
+/// dataset folder kept out of git by a file of its own. the next sync makes each one, and with no
+/// terminal, as a script runs it, says nothing of the line; the sync after says nothing at all.
 #[test]
 fn an_upgraded_project_gets_its_folders_marked_and_the_line_explained() -> Result {
     let sandbox = Sandbox::new()?;
@@ -281,10 +299,7 @@ fn an_upgraded_project_gets_its_folders_marked_and_the_line_explained() -> Resul
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
-    assert!(
-        stderr.contains("warning: line 1 of .gitignore, /data/, keeps all of data/ out of git"),
-        "{stderr}"
-    );
+    assert!(!stderr.contains("keeps all of data/"), "{stderr}");
     assert_eq!(
         fs::read(sandbox.work().join("data/iris/.gitignore"))?,
         b"*\n"
