@@ -31,6 +31,7 @@ mod import;
 mod inputs;
 mod keyring;
 mod layout;
+mod lineage;
 mod lists;
 mod merge;
 mod mirrors;

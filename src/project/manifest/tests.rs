@@ -966,7 +966,7 @@ fn unknown_keys_are_rejected_at_each_table_level() {
         (
             "[datasets.x]\nref = 'zenodo:1'\nunknown_setting = true\n",
             "data.toml:3   unknown_setting = true",
-            "the keys here are ref, select, exclude, extract, decompress, members, web_page, copy, path",
+            "the keys here are ref, select, exclude, extract, decompress, members, web_page, copy, path, from",
         ),
         (
             "[datasets.x]\nref = 'zenodo:1'\n[datasets.x.members.'x.zip']\nexculde = ['a/b.csv']\n",
@@ -1705,4 +1705,122 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
     .unwrap();
     let plain = read_plain(&added).unwrap_or_else(|| panic!("{added:?} is not read plain"));
     assert_eq!(plain.datasets.keys().collect::<Vec<_>>(), ["iris", "paper"]);
+}
+
+/// data.toml with a dataset for each `(name, from)`, `from` written as given.
+fn made_from(datasets: &[(&str, &str)]) -> String {
+    let mut text = String::new();
+    for (name, from) in datasets {
+        let _ = write!(
+            text,
+            "[datasets.{name}]\nref = \"https://example.org/{name}.csv\"\nfrom = {from}\n"
+        );
+    }
+    text
+}
+
+#[test]
+fn from_names_what_a_dataset_was_made_from_without_changing_its_spec() {
+    let manifest = parse(&made_from(&[
+        ("processed", "[\"iris\", \"gone\"]"),
+        ("iris", "[]"),
+    ]));
+    assert_eq!(manifest.datasets["processed"].from, ["iris", "gone"]);
+    assert_eq!(manifest.datasets["iris"].from, Vec::<String>::new());
+    assert_eq!(
+        manifest.datasets["processed"].lines["from"],
+        "data.toml:3   from = [\"iris\", \"gone\"]"
+    );
+    let bare = parse("[datasets.processed]\nref = \"https://example.org/processed.csv\"\n");
+    assert_eq!(
+        crate::project::lock::spec(&manifest.datasets["processed"].source),
+        crate::project::lock::spec(&bare.datasets["processed"].source),
+        "a record of inputs downloads nothing, so it never makes a pin stale"
+    );
+}
+
+#[test]
+fn a_from_that_cannot_hold_is_refused_at_its_line() {
+    for (text, message, help) in [
+        (
+            made_from(&[("a", "\"b\"")]),
+            "from in datasets.a must be a list of dataset names, as from = [\"iris\"]",
+            None,
+        ),
+        (
+            made_from(&[("a", "[1]")]),
+            "every name in from in datasets.a must be a string in quotes",
+            None,
+        ),
+        (
+            made_from(&[("a", "[\"Iris Data\"]")]),
+            "from in datasets.a names \"Iris Data\", which is no dataset's name",
+            Some("name each dataset as its [datasets.<name>] table does"),
+        ),
+        (
+            made_from(&[("a", "[\"a\"]")]),
+            "data.toml says a was made from itself",
+            Some("take a out of its own from"),
+        ),
+        (
+            made_from(&[("a", "[\"b\", \"b\"]"), ("b", "[]")]),
+            "from in datasets.a names b twice",
+            Some("name each dataset once"),
+        ),
+    ] {
+        let error = fails(&text);
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(error.message, message);
+        assert_eq!(error.help.as_deref(), help, "{message}");
+        assert!(
+            error
+                .details
+                .iter()
+                .any(|line| line.starts_with("data.toml:3   from = ")),
+            "{:?}",
+            error.details
+        );
+    }
+}
+
+#[test]
+fn from_lists_that_go_round_in_a_circle_are_refused() {
+    let error = fails(&made_from(&[
+        ("a", "[\"b\"]"),
+        ("b", "[\"c\", \"z\"]"),
+        ("c", "[\"a\"]"),
+    ]));
+    assert_eq!(error.kind, Kind::ProjectInvalid);
+    assert_eq!(
+        error.message,
+        "data.toml says a was made from b, b from c and c from a"
+    );
+    assert_eq!(
+        error.details,
+        [
+            "data.toml:3   from = [\"b\"]",
+            "data.toml:6   from = [\"c\", \"z\"]",
+            "data.toml:9   from = [\"a\"]",
+        ]
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "take one of them out of the from that names it: a dataset cannot be made from itself, even by way of others"
+        )
+    );
+    let two = fails(&made_from(&[
+        ("raw", "[\"clean\"]"),
+        ("clean", "[\"raw\"]"),
+    ]));
+    assert_eq!(
+        two.message,
+        "data.toml says clean was made from raw and raw from clean"
+    );
+    // a dataset two others were made from, by two paths, is no circle
+    parse(&made_from(&[
+        ("a", "[\"b\", \"c\"]"),
+        ("b", "[\"c\"]"),
+        ("c", "[]"),
+    ]));
 }

@@ -28,7 +28,7 @@ const GIT_FILES: [&str; 3] = [".gitignore", ".gitattributes", ".gitmodules"];
 const TOOL_FOLDERS: [&str; 5] = [".devcontainer", ".github", ".githooks", ".husky", ".vscode"];
 const TOP_KEYS: [&str; 3] = [required::KEY, "project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
-const DATASET_KEYS: [&str; 9] = [
+const DATASET_KEYS: [&str; 10] = [
     "ref",
     "select",
     "exclude",
@@ -38,6 +38,7 @@ const DATASET_KEYS: [&str; 9] = [
     "web_page",
     "copy",
     "path",
+    "from",
 ];
 /// the keys of the table that chooses the files of one archive.
 const MEMBER_KEYS: [&str; 2] = ["select", "exclude"];
@@ -59,6 +60,9 @@ pub(crate) struct Entry {
     /// whether a run places its files in the data folder: false only for a dataset `fetchloom
     /// drop` freed here, which a run that does not name it leaves out.
     pub(crate) place: bool,
+    /// the datasets this one was made from, as its `from` names them: a record a person keeps,
+    /// which nothing runs or checks. each name is a dataset's, once, and never its own.
+    pub(crate) from: Vec<String>,
     /// each key's line in data.toml, as `data.toml:7   select = ["*.edf"]`, for messages.
     pub(crate) lines: BTreeMap<&'static str, String>,
 }
@@ -269,6 +273,13 @@ impl Manifest {
                 datasets.insert(name.to_owned(), entry);
             }
         }
+        let inputs: BTreeMap<&str, &[String]> = datasets
+            .iter()
+            .map(|(name, entry)| (name.as_str(), entry.from.as_slice()))
+            .collect();
+        if let Some(circle) = circle(&inputs) {
+            return Err(made_from_itself(&datasets, &circle));
+        }
         Ok(Manifest { data_dir, datasets })
     }
 
@@ -388,10 +399,87 @@ fn put_plain(
             copy: false,
             path: None,
             place: true,
+            from: Vec::new(),
             lines: BTreeMap::new(),
         },
     );
     Some(())
+}
+
+/// the first circle the `from` lists in `datasets` make, which maps each name to the names it was
+/// made from: the names along it, the first again at its end, as `[a, b, a]`, or none. a name no
+/// dataset has ends its path.
+pub(crate) fn circle(datasets: &BTreeMap<&str, &[String]>) -> Option<Vec<String>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Seen {
+        Never,
+        Along,
+        Done,
+    }
+    let mut seen: BTreeMap<&str, Seen> = datasets.keys().map(|name| (*name, Seen::Never)).collect();
+    for &start in datasets.keys() {
+        if seen[start] != Seen::Never {
+            continue;
+        }
+        // the names walked from `start`, each with how many of its inputs were taken
+        let mut path: Vec<(&str, usize)> = vec![(start, 0)];
+        seen.insert(start, Seen::Along);
+        while let Some((name, next)) = path.last_mut() {
+            let name = *name;
+            let Some(input) = datasets[name].get(*next) else {
+                seen.insert(name, Seen::Done);
+                path.pop();
+                continue;
+            };
+            *next += 1;
+            let Some((&input, _)) = datasets.get_key_value(input.as_str()) else {
+                continue;
+            };
+            match seen[input] {
+                Seen::Never => {
+                    seen.insert(input, Seen::Along);
+                    path.push((input, 0));
+                }
+                Seen::Along => {
+                    let from = path.iter().position(|(along, _)| *along == input)?;
+                    let mut circle: Vec<String> = path[from..]
+                        .iter()
+                        .map(|(name, _)| (*name).to_owned())
+                        .collect();
+                    circle.push(input.to_owned());
+                    return Some(circle);
+                }
+                Seen::Done => {}
+            }
+        }
+    }
+    None
+}
+
+/// `circle` told as a sentence: `a was made from b and b from a`.
+pub(crate) fn told_circle(circle: &[String]) -> String {
+    let steps: Vec<String> = circle
+        .windows(2)
+        .enumerate()
+        .map(|(at, pair)| match at {
+            0 => format!("{} was made from {}", pair[0], pair[1]),
+            _ => format!("{} from {}", pair[0], pair[1]),
+        })
+        .collect();
+    crate::units::listed(&steps, "and")
+}
+
+/// the refusal of a data.toml whose `from` lists go round `circle`, as [`circle`] gives it.
+fn made_from_itself(datasets: &BTreeMap<String, Entry>, circle: &[String]) -> Error {
+    let error = Error::new(
+        Kind::ProjectInvalid,
+        format!("data.toml says {}", told_circle(circle)),
+    );
+    circle[..circle.len() - 1]
+        .iter()
+        .filter_map(|name| datasets[name].lines.get("from").cloned())
+        .fold(error, Error::detail)
+        .help("take one of them out of the from that names it: a dataset cannot be made from itself, even by way of others")
 }
 
 /// where data.toml may hold a secret, sorted and merged: each ref, whose query can carry a key.
@@ -463,8 +551,62 @@ impl Reader<'_> {
                 .map(|item| self.relative(item, "path"))
                 .transpose()?,
             place: true,
+            from: self.inputs(table.get("from"), name)?,
             lines,
         })
+    }
+
+    /// the names a dataset's `from` gives: a list of dataset names, each once, none its own.
+    fn inputs(&self, item: Option<&Item>, name: &str) -> Result<Vec<String>, Error> {
+        let Some(item) = item else {
+            return Ok(Vec::new());
+        };
+        let array = item.as_array().ok_or_else(|| {
+            self.error(
+                item.span(),
+                format!(
+                    "from in datasets.{name} must be a list of dataset names, as from = [\"iris\"]"
+                ),
+            )
+        })?;
+        let mut inputs: Vec<String> = Vec::with_capacity(array.len());
+        for value in array {
+            let Some(input) = value.as_str() else {
+                return Err(self.error(
+                    value.span(),
+                    format!("every name in from in datasets.{name} must be a string in quotes"),
+                ));
+            };
+            if let Some(problem) = name::dataset_name_problem(input) {
+                return Err(self
+                    .error(
+                        value.span(),
+                        format!(
+                            "from in datasets.{name} names \"{input}\", which is no dataset's name"
+                        ),
+                    )
+                    .detail(problem)
+                    .help("name each dataset as its [datasets.<name>] table does"));
+            }
+            if input == name {
+                return Err(self
+                    .error(
+                        value.span(),
+                        format!("data.toml says {name} was made from itself"),
+                    )
+                    .help(format!("take {name} out of its own from")));
+            }
+            if inputs.iter().any(|named| named == input) {
+                return Err(self
+                    .error(
+                        value.span(),
+                        format!("from in datasets.{name} names {input} twice"),
+                    )
+                    .help("name each dataset once"));
+            }
+            inputs.push(input.to_owned());
+        }
+        Ok(inputs)
     }
 
     /// the refusal of `name`, a dataset with members tables alone, as when only its own table was
