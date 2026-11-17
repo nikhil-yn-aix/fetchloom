@@ -1162,9 +1162,31 @@ fn an_add_never_pins_the_cache_as_an_output() -> Result {
     Ok(())
 }
 
-/// removing an output untracks it: the author's files stay as they are, and of its folder's
-/// marker, in the data folder or outside it, only one holding what fetchloom wrote goes, so git
-/// sees the folder again. a .gitignore of the author's own, pinned with the output, stays too.
+/// the help of add, remove and drop tells the files fetchloom manages, placed in the data folder
+/// for a dataset it fetched, from an output's, which stay the author's.
+#[test]
+fn help_tells_managed_files_from_an_outputs() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (command, said) in [
+        (
+            "add",
+            "a folder of the project is kept where it is instead, as an output, whose files stay yours",
+        ),
+        ("remove", "an output's folder keeps its files"),
+        ("drop", "an output's folder keeps its files"),
+    ] {
+        let help = sandbox.run(&[command, "--help"])?;
+        let stdout = text(&help.stdout)?;
+        let words = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(words.contains(said), "{command}: {stdout}");
+    }
+    Ok(())
+}
+
+/// removing an output untracks it, with no question, as nothing is lost: the author's files stay
+/// as they are, and of its folder's marker, in the data folder or outside it, only one holding
+/// what fetchloom wrote goes, so git sees the folder again. a .gitignore of the author's own,
+/// pinned with the output, stays too.
 #[test]
 fn removing_an_output_keeps_the_authors_files() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1187,9 +1209,10 @@ fn removing_an_output_keeps_the_authors_files() -> Result {
     fs::write(&changed, b"*\n!summary.txt\n")?;
     let file = work.join("data/processed/iris_clean.csv");
     let before = look(&file)?;
-    let removed = sandbox.run(&["remove", "processed", "results", "figures", "--yes"])?;
+    let removed = sandbox.run(&["remove", "processed", "results", "figures"])?;
     let stderr = text(&removed.stderr)?;
     assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("imported from files"), "{stderr}");
     assert_eq!(look(&file)?, before, "{stderr}");
     assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
     assert_eq!(fs::read(work.join("results/summary.txt"))?, SUMMARY);
@@ -1198,6 +1221,30 @@ fn removing_an_output_keeps_the_authors_files() -> Result {
     assert_eq!(fs::read(work.join("figures/.gitignore"))?, b"*.tmp\n");
     assert_eq!(fs::read(work.join("figures/plot.png"))?, b"png");
     assert_eq!(fs::read_to_string(work.join("data.toml"))?, "");
+    Ok(())
+}
+
+/// at a terminal, a removal says what other clones do: an output's folder keeps its files there
+/// too, as fetchloom never placed them for a sync to take back.
+#[cfg(target_os = "linux")]
+#[test]
+fn removing_an_output_says_its_folder_keeps_its_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let Some(screen) = sandbox.on_a_terminal(&["remove", "processed"])? else {
+        return Ok(());
+    };
+    let words = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        words.contains(
+            "next: commit data.toml and data.lock; data/processed keeps its files, here and in other clones"
+        ),
+        "{screen}"
+    );
+    assert!(!words.contains("remove unchanged files"), "{screen}");
+    assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
     Ok(())
 }
 

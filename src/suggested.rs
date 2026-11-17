@@ -878,7 +878,6 @@ pub(crate) mod tests {
                 "fetchloom push --verify --to {}",
             ),
             ("src/cli/remove.rs", "fetchloom remove --help"),
-            ("src/cli/remove.rs", "fetchloom sync"),
             ("src/cli/search.rs", "fetchloom sync --offline"),
             ("src/cli/settings.rs", "fetchloom push --to {}"),
             ("src/net/failure.rs", "fetchloom add"),

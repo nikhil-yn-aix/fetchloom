@@ -13,7 +13,7 @@ use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock;
-use crate::project::manifest::{self, Entry, Manifest};
+use crate::project::manifest::{self, Manifest};
 use crate::stop::Stop;
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {
@@ -97,10 +97,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     })?;
     tell_unrecorded(&context.output, &unrecorded, false);
     context.output.done("Removed", &listed);
-    context.output.next(&format!(
-        "commit {}; after pulling, other clones remove unchanged files with `fetchloom sync`",
-        committed(&project)
-    ));
+    context.output.next(&next(&project, &gone, &names));
     Ok(Report {
         project: project.root,
         datasets: names,
@@ -108,6 +105,38 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         placement: Some(placement),
         ..Report::default()
     })
+}
+
+/// what to do after removing `names`, the datasets of `gone`: commit, and what other clones do with
+/// their files. a fetched dataset's unchanged files go there with a sync, and an output's folder
+/// keeps its files everywhere.
+fn next(project: &crate::project::Project, gone: &Manifest, names: &[String]) -> String {
+    let commit = format!("commit {}", committed(project));
+    let (outputs, fetched): (Vec<&String>, Vec<&String>) = names
+        .iter()
+        .partition(|name| gone.datasets[name.as_str()].is_output());
+    let folders: Vec<String> = outputs
+        .iter()
+        .map(|name| super::folder_from_here(&project.root, &plan::folder(gone, name)))
+        .collect();
+    let keep = match folders.as_slice() {
+        [] => String::new(),
+        [one] => format!("{one} keeps its files, here and in other clones"),
+        many => format!(
+            "{} keep their files, here and in other clones",
+            crate::units::listed(many, "and")
+        ),
+    };
+    let sync = super::project::command("sync");
+    match (fetched.is_empty(), keep.is_empty()) {
+        (false, true) => {
+            format!("{commit}; after pulling, other clones remove unchanged files with `{sync}`")
+        }
+        (true, _) => format!("{commit}; {keep}"),
+        (false, false) => format!(
+            "{commit}; after pulling, other clones remove unchanged files with `{sync}`, and {keep}"
+        ),
+    }
 }
 
 /// the folders of the outputs of `gone` that none of `folders`, those the removal lists, holds.
@@ -294,7 +323,8 @@ fn stop_for_tests(stop: &Stop, at: usize) {
 fn stop_for_tests(_: &Stop, _: usize) {}
 
 /// asks before removing the imports among `names`, whose files no source can give back once gc
-/// frees them from the cache; with nobody to ask it refuses, unless `--yes`.
+/// frees them from the cache; with nobody to ask it refuses, unless `--yes`. an output's files
+/// stay in its folder, so removing one asks nothing.
 fn ask_import(context: &Context, manifest: &Manifest, names: &[String]) -> Result<(), Error> {
     if context.yes {
         return Ok(());
@@ -305,7 +335,7 @@ fn ask_import(context: &Context, manifest: &Manifest, names: &[String]) -> Resul
             manifest
                 .datasets
                 .get(name.as_str())
-                .is_some_and(Entry::is_import)
+                .is_some_and(|entry| entry.is_import() && !entry.is_output())
         })
         .map(String::as_str)
         .collect();
