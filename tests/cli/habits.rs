@@ -6,7 +6,7 @@
 use std::fs;
 
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Routes, Sandbox, delete, file, text, without_copy_warning};
+use crate::support::{Result, Routes, Sandbox, delete, delete_folder, file, text, without_copy_warning};
 
 /// a server answering iris at [`PATH`], as often as asked.
 fn iris_server() -> Result<Routes> {
@@ -61,5 +61,45 @@ fn a_kept_edit_is_told_once_with_the_ways_that_keep_it() -> Result {
     let changed = synced(&sandbox)?;
     assert!(changed.contains(told), "{changed}");
     assert_eq!(fs::read(&placed)?, b"sl,sw,pl,pw,kind\n");
+    Ok(())
+}
+
+/// a dataset's folder deleted whole, to free room, comes back with the next sync, which says once
+/// how to keep it off this machine.
+#[test]
+fn a_deleted_dataset_folder_names_drop_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = iris_server()?;
+    with_iris(&sandbox, &server)?;
+    let folder = sandbox.work().join("data/iris");
+    let hint = "  hint: to keep iris off this machine, run `fetchloom drop iris`\n";
+    delete_folder(&folder)?;
+    let first = synced(&sandbox)?;
+    assert!(first.contains(hint), "{first}");
+    assert_eq!(fs::read(folder.join("iris.csv"))?, IRIS);
+    delete_folder(&folder)?;
+    let again = synced(&sandbox)?;
+    assert!(!again.contains("hint:"), "{again}");
+    Ok(())
+}
+
+/// the data folder moved away whole, as to give it another name, comes back with the next sync,
+/// which says once where its place is set, and names no dataset to drop.
+#[test]
+fn a_moved_data_folder_names_data_dir_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = iris_server()?;
+    with_iris(&sandbox, &server)?;
+    let data = sandbox.work().join("data");
+    let hint =
+        "  hint: to keep the data folder somewhere else than data/, set data_dir in data.toml\n";
+    fs::rename(&data, sandbox.work().join("inputs"))?;
+    let first = synced(&sandbox)?;
+    assert!(first.contains(hint), "{first}");
+    assert!(!first.contains("drop"), "{first}");
+    assert_eq!(fs::read(data.join("iris/iris.csv"))?, IRIS);
+    delete_folder(&data)?;
+    let again = synced(&sandbox)?;
+    assert!(!again.contains("hint:"), "{again}");
     Ok(())
 }

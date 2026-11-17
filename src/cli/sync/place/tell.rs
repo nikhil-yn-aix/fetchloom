@@ -63,6 +63,7 @@ pub(super) fn tell(
         sum.copied += tally.copied;
     }
     tell_placed(output, placement, &folders, datasets);
+    tell_refilled(output, manifest, placement);
     // an add tells it among its own lines, where it told the rule it added before
     if !adding {
         super::tell_marked(output, placement);
@@ -532,6 +533,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
         tell_adoptions(output, &folder, &files);
     }
     let placement = &preview.placement;
+    tell_refilled(output, manifest, placement);
     super::mark::tell_made(output, &placement.marked, placement.in_git, "Would ignore");
     for overwritten in &placement.overwritten {
         output.warn(
@@ -625,6 +627,32 @@ fn tell_placed(output: &Output, placement: &Placement, folders: &[(String, Tally
             ),
         );
     }
+}
+
+/// how to keep away what `placement` filled again once whole folders went: the data folder, or
+/// the datasets of each folder no run told of yet.
+fn tell_refilled(output: &Output, manifest: &Manifest, placement: &Placement) {
+    if placement.moved {
+        output.hint(&format!(
+            "to keep the data folder somewhere else than {}/, set data_dir in data.toml",
+            manifest.data_dir
+        ));
+        return;
+    }
+    let datasets: Vec<&str> = placement
+        .filled
+        .iter()
+        .filter(|name| placement.to_drop.contains(&plan::folder(manifest, name)))
+        .map(String::as_str)
+        .collect();
+    if datasets.is_empty() {
+        return;
+    }
+    output.hint(&format!(
+        "to keep {} off this machine, run `{}`",
+        units::listed(&datasets, "and"),
+        crate::cli::project::command(&format!("drop {}", datasets.join(" ")))
+    ));
 }
 
 /// how many files `tally` placed, and how: `3 files linked to the cache`, `1 file cloned from the

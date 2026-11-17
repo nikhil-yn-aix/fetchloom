@@ -92,11 +92,19 @@ pub(crate) struct Told {
     /// when told, so an edit is told of again once it changes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) edits: BTreeMap<String, Look>,
+    /// the dataset folders a sync placed again after they went whole, once told how to keep their
+    /// datasets off this machine.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) refilled: BTreeSet<String>,
+    /// that a sync placed the data folder again after it went whole, as when it was moved, once
+    /// told how to keep it elsewhere.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) moved: bool,
 }
 
 impl Told {
     pub(crate) fn is_empty(&self) -> bool {
-        self.edits.is_empty()
+        self.edits.is_empty() && self.refilled.is_empty() && !self.moved
     }
 }
 
@@ -1464,6 +1472,8 @@ mod tests {
                 modified: 9,
             },
         );
+        state.told.refilled.insert("data/a".to_owned());
+        state.told.moved = true;
         state
     }
 

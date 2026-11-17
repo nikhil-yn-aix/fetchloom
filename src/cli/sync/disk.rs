@@ -82,6 +82,8 @@ pub(crate) struct Survey {
     /// how the listing found the .gitignore of each folder the state says fetchloom marked, by
     /// the folder, for those it listed. none of them is in `disk`, so no file counts them.
     pub(crate) marks: HashMap<String, Mark>,
+    /// whether the data folder was not there when the listing began, as after it was moved away.
+    pub(crate) data_gone: bool,
 }
 
 /// what stands where fetchloom made a folder's .gitignore, by the state's record.
@@ -264,6 +266,7 @@ impl Survey {
             project.refuse_cache_overlap(data_dir, &cache)?;
         }
         let started = nanos(SystemTime::now());
+        let data_gone = fs::symlink_metadata(native(&project.root, data_dir)).is_err();
         let within = within.map(|folders| outermost(data_dir, folders));
         let walk = || scan(&project.root, data_dir, within.as_deref(), threads, stop);
         let ((state, written), scanned) = if let Some(folders) = &within {
@@ -319,6 +322,7 @@ impl Survey {
             data_dir: data_dir.to_owned(),
             outside: Vec::new(),
             marks,
+            data_gone,
         };
         let other_device = !survey.state.files.is_empty()
             && apart(&native(&project.root, data_dir), &project.own_folder());

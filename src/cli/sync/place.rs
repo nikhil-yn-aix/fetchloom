@@ -60,6 +60,13 @@ pub(crate) struct Placement {
     /// dataset folders deleted for a fresh start, which a sync fills again without a warning.
     #[serde(skip)]
     pub(crate) refilled: BTreeSet<String>,
+    /// those of `refilled` no run told yet how to keep their datasets off this machine.
+    #[serde(skip)]
+    pub(crate) to_drop: BTreeSet<String>,
+    /// whether the data folder went whole, as when it was moved, and no run told yet how to keep
+    /// it elsewhere. its folders are named apart then.
+    #[serde(skip)]
+    pub(crate) moved: bool,
     /// the datasets the run places or replaces files of.
     #[serde(skip)]
     pub(crate) filled: BTreeSet<String>,
@@ -183,6 +190,17 @@ impl Placement {
             }
             self.emptied.insert(target.path.clone(), folder.to_owned());
         }
+        let told = &survey.state.told;
+        if survey.data_gone {
+            self.moved = !self.refilled.is_empty() && !told.moved;
+        } else {
+            self.to_drop = self
+                .refilled
+                .iter()
+                .filter(|folder| !told.refilled.contains(*folder))
+                .cloned()
+                .collect();
+        }
         self.unexcludable = targets
             .iter()
             .filter(|target| back.contains(target.path.as_str()))
@@ -298,6 +316,22 @@ impl Kept {
             ..Kept::new(target.path.clone(), reason)
         }
     }
+}
+
+/// records in `state` the folders `placement` told how to keep away, and forgets those no dataset
+/// places files in now. says whether the state changed.
+fn note_told_refills(state: &mut State, manifest: &Manifest, placement: &Placement) -> bool {
+    let told = &mut state.told;
+    let before = told.clone();
+    told.moved |= placement.moved;
+    told.refilled.extend(placement.to_drop.iter().cloned());
+    let folders: BTreeSet<String> = manifest
+        .datasets
+        .keys()
+        .map(|name| plan::folder(manifest, name))
+        .collect();
+    told.refilled.retain(|folder| folders.contains(folder));
+    *told != before
 }
 
 /// records in `state` each edit of `kept` told of, with how its file looks on `disk`, so later
@@ -1236,13 +1270,16 @@ impl<'a> Placing<'a> {
         let recorded = removed || adopted || undone || kept_aside || linked || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
         let marks = unmarked || marking || rewritten || told_rule || taken_back;
-        let told_edits = note_told_edits(state, &placement.kept, &survey.disk, &scope);
+        // what a run that ends in an error never tells stays untold
+        let telling = !stopped && failure.is_none();
+        let told_edits = telling && note_told_edits(state, &placement.kept, &survey.disk, &scope);
+        let told_refills = telling && note_told_refills(state, manifest, &placement);
         record(
             project,
             state,
             synced,
             recorded,
-            needs_writing || dropped || marks || told_edits,
+            needs_writing || dropped || marks || told_edits || told_refills,
         )
         .map_err(ended)?;
         if stopped {
