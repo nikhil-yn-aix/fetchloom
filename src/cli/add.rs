@@ -331,19 +331,16 @@ fn request(args: &mut Add) -> Result<Request, Error> {
             )),
         );
     };
-    if local::is_path(&link) {
+    // with --as, a folder of the project is pinned where it is, as `add data/processed --as
+    // processed` reads; without it, the word may be search words too
+    if local::is_path(&link) || (args.name.is_some() && names_project_folder(&link)) {
         if args.no_sync {
             // a mistyped path is told first, as an add without --no-sync tells it
             let here = std::env::current_dir()
                 .map_err(|err| Error::io("cannot read the current folder", &err))?;
             super::import::located(&link, &here, std::env::home_dir().as_deref())?;
-            return Err(stated::refused_path(&link));
+            return Err(stated::refused_path(&link, args.name.as_deref()));
         }
-        return Ok(Request::Path(link));
-    }
-    // with --as, a folder of the project is pinned where it is, as `add data/processed --as
-    // processed` reads; without it, the word may be search words too
-    if args.name.is_some() && names_project_folder(&link) {
         return Ok(Request::Path(link));
     }
     super::search::refuse_local(&link, true)?;

@@ -16,15 +16,18 @@ use crate::units;
 /// the most files an error names; it counts the rest.
 const NAMED: usize = 5;
 
-/// the error for `--no-sync` with files on this machine, which no source states anything of.
-pub(super) fn refused_path(typed: &str) -> Error {
+/// the error for `--no-sync` with files on this machine, typed as `typed` with the `name` given
+/// with `--as`, which no source states anything of.
+pub(super) fn refused_path(typed: &str, name: Option<&str>) -> Error {
+    let named = name.map_or_else(String::new, |name| format!(" --as {name}"));
+    let add = format!("add {}{named}", crate::suggested::shell_word(typed));
     Error::new(
         Kind::Usage,
         "--no-sync pins what a source states, and files on this machine have no source",
     )
     .help(format!(
         "run `{}` without --no-sync, which copies them into the cache",
-        super::super::project::command(&format!("add {}", crate::suggested::shell_word(typed)))
+        super::super::project::command(&add)
     ))
 }
 

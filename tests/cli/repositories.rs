@@ -2486,12 +2486,39 @@ fn no_sync_refuses_files_no_source_hash_pins() -> Result {
         json(&sandbox.run(&["--json", "add", "./flowres"])?)?["errors"][0]["message"]
     );
     fs::create_dir(sandbox.work().join("flowers"))?;
-    let output = sandbox.run(&["--json", "add", "./flowers", "--no-sync"])?;
-    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
-    assert_eq!(
-        json(&output)?["errors"][0]["message"],
-        "--no-sync pins what a source states, and files on this machine have no source"
-    );
+    fs::write(sandbox.work().join("flowers/sepals.csv"), b"5.1\n")?;
+    // with --as, a bare word naming a folder of the project is that folder, refused alike
+    for args in [
+        "add ./flowers --no-sync",
+        "add ./flowers --as flowers --no-sync",
+        "add flowers --as flowers --no-sync",
+        "add flowers --as flowers --no-sync --dry-run",
+    ] {
+        let args: Vec<&str> = std::iter::once("--json").chain(args.split(' ')).collect();
+        let output = sandbox.run(&args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(
+            error["message"],
+            "--no-sync pins what a source states, and files on this machine have no source",
+            "{args:?}"
+        );
+        let again: Vec<&str> = args[1..]
+            .iter()
+            .copied()
+            .filter(|arg| !arg.starts_with("--no-sync") && *arg != "--dry-run")
+            .collect();
+        let again = format!(
+            "run `fetchloom {}` without --no-sync, which copies them into the cache",
+            again.join(" ")
+        );
+        assert_eq!(error["help"], again, "{args:?}");
+    }
     assert!(!sandbox.work().join("data.toml").exists());
     assert!(!sandbox.work().join("data.lock").exists());
     Ok(())
