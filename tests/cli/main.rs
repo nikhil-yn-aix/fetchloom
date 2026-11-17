@@ -52,4 +52,5 @@ mod split;
 mod status;
 mod support;
 mod unattended;
+mod untrusted;
 mod web_archives;

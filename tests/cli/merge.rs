@@ -85,7 +85,7 @@ fn succeeded(output: &Output) -> Result {
 
 /// a repository whose main branch added alpha and whose branch theirs added beta, both beside
 /// core, merged in `style` until git stopped at the conflicts. none without git.
-fn two_additions(sandbox: &Sandbox, routes: &Routes, style: &str) -> Result<Option<()>> {
+pub(crate) fn two_additions(sandbox: &Sandbox, routes: &Routes, style: &str) -> Result<Option<()>> {
     let add = |name: &str| -> Result {
         succeeded(&run(
             sandbox,
@@ -127,7 +127,7 @@ fn two_additions(sandbox: &Sandbox, routes: &Routes, style: &str) -> Result<Opti
     Ok(Some(()))
 }
 
-fn three_files() -> Result<Routes> {
+pub(crate) fn three_files() -> Result<Routes> {
     Routes::start(
         ["alpha", "beta", "core"]
             .map(|name| (format!("/{name}.csv"), file(name.as_bytes(), "\"1\"")))
