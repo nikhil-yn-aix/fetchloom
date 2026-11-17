@@ -4,6 +4,7 @@
 pub(crate) mod git;
 pub(crate) mod lock;
 pub(crate) mod manifest;
+pub(crate) mod overlap;
 pub(crate) mod state;
 
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -998,6 +999,32 @@ impl Project {
             }
         }
         Ok(())
+    }
+
+    /// refuses a data folder `data_dir` that is the cache folder at `cache`, lies in it or holds
+    /// it, before anything is read or written there: a dataset's files would pass for the cache's
+    /// own records, as an unpacked archive's, or land among them.
+    pub(crate) fn refuse_cache_overlap(&self, data_dir: &str, cache: &Path) -> Result<(), Error> {
+        let folder = data_dir
+            .split('/')
+            .fold(self.root.clone(), |folder, part| folder.join(part));
+        let shown = cache.display();
+        let (said, help) = match overlap::overlap(&folder, cache) {
+            None => return Ok(()),
+            Some(overlap::Overlap::Inside) => (
+                format!(
+                    "the data folder {data_dir} is inside the cache folder {shown}, where a dataset's files would pass for the cache's own"
+                ),
+                "set data_dir in [project] in data.toml to a folder outside the cache, such as data, or keep the cache elsewhere with FETCHLOOM_CACHE",
+            ),
+            Some(overlap::Overlap::Holds) => (
+                format!(
+                    "the cache folder {shown} is inside the data folder {data_dir}, where datasets' files are placed"
+                ),
+                "keep the cache outside the data folder: set FETCHLOOM_CACHE, or the cache setting with `fetchloom settings set cache <folder>`, to a folder elsewhere",
+            ),
+        };
+        Err(Error::new(Kind::ProjectInvalid, said).help(help))
     }
 
     fn data_folder(&self, manifest: &Manifest, create: bool) -> Result<PathBuf, Error> {

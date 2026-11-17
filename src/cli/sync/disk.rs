@@ -241,6 +241,9 @@ impl Survey {
         level: Level,
     ) -> Result<Survey, Error> {
         project.refuse_linked_data_dir(data_dir)?;
+        if let Some(cache) = crate::cli::cache_folder() {
+            project.refuse_cache_overlap(data_dir, &cache)?;
+        }
         let started = nanos(SystemTime::now());
         let within = within.map(|folders| outermost(data_dir, folders));
         let walk = || scan(&project.root, data_dir, within.as_deref(), threads, stop);

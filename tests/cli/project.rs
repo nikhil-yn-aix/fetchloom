@@ -3,7 +3,7 @@
 use std::fs;
 
 use crate::support::{
-    Result, Sandbox, Server, delete, edit, file, json, reply, sha256_hex, text, zip_of,
+    Result, Routes, Sandbox, Server, delete, edit, file, json, reply, sha256_hex, text, zip_of,
 };
 #[cfg(unix)]
 use crate::support::{Running, wait_until};
@@ -5101,5 +5101,138 @@ fn the_cache_report_names_a_waiting_dataset_it_cannot_count() -> Result {
     assert_eq!(waiting[0]["dataset"], "iris", "{document}");
     let projects = result["projects"].as_array().ok_or("no projects")?;
     assert!(projects.contains(&waiting[0]["project"]), "{document}");
+    Ok(())
+}
+
+/// a server that sends iris.csv at [`PATH`] as often as it is asked, added to `sandbox`'s project.
+fn served(sandbox: &Sandbox) -> Result<Routes> {
+    let server = Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])?;
+    sandbox.allow(&server.url);
+    let link = format!("{}{PATH}", server.url);
+    let output = sandbox.run(&["add", &link])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(server)
+}
+
+/// a clone of `sandbox`'s project in `name` whose data.toml sets `data_dir`, kept as written.
+fn clone_with_data_dir(
+    sandbox: &Sandbox,
+    name: &str,
+    data_dir: &str,
+) -> Result<std::path::PathBuf> {
+    let folder = clone(sandbox, name)?;
+    let toml = fs::read_to_string(folder.join("data.toml"))?;
+    fs::write(
+        folder.join("data.toml"),
+        format!("[project]\ndata_dir = \"{data_dir}\"\n\n{toml}"),
+    )?;
+    Ok(folder)
+}
+
+/// runs `args` in `folder` with the cache at `cache`, refused as an overlap of the data folder
+/// and the cache before anything is placed: the json error, and no file of iris in `placed`.
+fn refused_for_the_cache(
+    sandbox: &Sandbox,
+    folder: &std::path::Path,
+    cache: &std::path::Path,
+    args: &[&str],
+    placed: &std::path::Path,
+) -> Result<serde_json::Value> {
+    let output = sandbox
+        .command_in(folder, &[&["--json"][..], args].concat())
+        .env("FETCHLOOM_CACHE", cache)
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(50), "{args:?}: {document}");
+    assert_eq!(
+        document["errors"][0]["kind"], "project.invalid",
+        "{document}"
+    );
+    assert!(
+        document["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("cache folder")),
+        "{document}"
+    );
+    assert!(
+        !placed.join("iris").exists(),
+        "{args:?} placed {}",
+        placed.display()
+    );
+    Ok(document)
+}
+
+/// a clone's data.toml whose `data_dir` lies in the cache kept in the project, as the ci guide
+/// keeps it, is refused by sync, status and add before any of them writes: a dataset's files there would
+/// pass for the cache's own records, as an unpacked archive's. the names are compared as a disk
+/// that ignores case compares them.
+#[test]
+fn a_data_folder_inside_the_cache_is_refused_before_anything_is_written() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(&sandbox)?;
+    for (name, data_dir) in [
+        ("unpacked", ".fetchloom-cache/unpacked"),
+        ("itself", ".fetchloom-cache"),
+        ("folded", ".FETCHLOOM-CACHE/unpacked"),
+    ] {
+        let folder = clone_with_data_dir(&sandbox, name, data_dir)?;
+        let cache = folder.join(".fetchloom-cache");
+        let toml = fs::read_to_string(folder.join("data.toml"))?;
+        let placed = folder.join(data_dir);
+        let link = format!("{}{PATH}", server.url);
+        for args in [&["sync"][..], &["status"], &["add", &link, "--as", "other"]] {
+            refused_for_the_cache(&sandbox, &folder, &cache, args, &placed)?;
+        }
+        assert_eq!(
+            fs::read_to_string(folder.join("data.toml"))?,
+            toml,
+            "{name}"
+        );
+    }
+    Ok(())
+}
+
+/// a cache kept in the data folder is refused too, so no dataset's folder can land in it or take
+/// its place, as a dataset whose path names the cache's folder would.
+#[test]
+fn a_cache_inside_the_data_folder_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _server = served(&sandbox)?;
+    let folder = clone(&sandbox, "held")?;
+    let data = folder.join("data");
+    let document = refused_for_the_cache(&sandbox, &folder, &data.join("cache"), &["sync"], &data)?;
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(help.contains("FETCHLOOM_CACHE"), "{help}");
+    let toml = fs::read_to_string(folder.join("data.toml"))?;
+    fs::write(
+        folder.join("data.toml"),
+        toml.replace(
+            "[datasets.iris]\n",
+            "[datasets.iris]\npath = \"cache/unpacked\"\n",
+        ),
+    )?;
+    refused_for_the_cache(&sandbox, &folder, &data.join("cache"), &["sync"], &data)?;
+    Ok(())
+}
+
+/// the cache named through a link in a folder above it is the same cache: a data folder inside
+/// the folder the link leads to is refused as one named without the link.
+#[cfg(unix)]
+#[test]
+fn a_cache_named_through_a_linked_folder_is_the_same_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _server = served(&sandbox)?;
+    let folder = clone_with_data_dir(&sandbox, "linked", ".fetchloom-cache/unpacked")?;
+    fs::create_dir(folder.join(".fetchloom-cache"))?;
+    let via = sandbox.folder("elsewhere")?.join("via");
+    std::os::unix::fs::symlink(&folder, &via)?;
+    let placed = folder.join(".fetchloom-cache").join("unpacked");
+    refused_for_the_cache(
+        &sandbox,
+        &folder,
+        &via.join(".fetchloom-cache"),
+        &["sync"],
+        &placed,
+    )?;
     Ok(())
 }
