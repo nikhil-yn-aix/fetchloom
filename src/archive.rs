@@ -401,20 +401,36 @@ fn unpack_recorded(
         Detected::Unsupported(_) | Detected::Plain => return Ok(None),
     };
     let unpacked = unpack(input, format, limits, cache, watch, writers)?;
-    if tree.is_none_or(|tree| *tree == unpacked.tree) {
-        cache
-            .record_unpacked(key, &unpacked.members)
-            .map_err(|err| {
-                Error::io(
-                    format_args!(
-                        "could not save the archive's list of files in {}",
-                        cache.root().join("unpacked").display()
-                    ),
-                    &err,
-                )
-            })?;
-    }
+    record(cache, key, &unpacked, tree, Unpacking::Archive)?;
     Ok(Some(unpacked))
+}
+
+/// records what `unpacked`, of what `unpacking` says unpacks, holds under `key` when its tree is
+/// `tree` or none is known, so changed bytes never replace data.lock's pin.
+fn record(
+    cache: &Cache,
+    key: &Sha256,
+    unpacked: &Unpacked,
+    tree: Option<&Sha256>,
+    unpacking: Unpacking,
+) -> Result<(), Error> {
+    if tree.is_some_and(|tree| *tree != unpacked.tree) {
+        return Ok(());
+    }
+    let listed = match unpacking {
+        Unpacking::Archive => "the archive's list of files",
+        Unpacking::File => "what the file decompressed to",
+    };
+    let at = cache.root().join("unpacked");
+    cache
+        .record_unpacked(key, &unpacked.members)
+        .map(drop)
+        .map_err(|err| {
+            Error::io(
+                format_args!("could not save {listed} in {}", at.display()),
+                &err,
+            )
+        })
 }
 
 fn lost() -> Error {

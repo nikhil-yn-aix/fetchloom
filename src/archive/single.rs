@@ -6,7 +6,9 @@ use super::detect::{self, Single};
 use super::guard::{Guard, Meter};
 use super::input::Input;
 use super::names::Named;
-use super::{BUFFER, Limits, Skipped, Unpacked, Unpacking, by_name, refused, store, tar, unopened};
+use super::{
+    BUFFER, Limits, Skipped, Unpacked, Unpacking, by_name, record, refused, store, tar, unopened,
+};
 use crate::cache::{Cache, decompressed_key, tree_hash};
 use crate::digest::Sha256;
 use crate::error::Error;
@@ -83,19 +85,8 @@ pub(crate) fn decompress_cached(
         Single::Other => return Ok(Decompressed::Left(Left::Plain)),
     };
     let unpacked = decompress(&input, format, name, limits, cache, watch, writers)?;
-    if tree.is_none_or(|tree| *tree == unpacked.tree) {
-        cache
-            .record_unpacked(&decompressed_key(packed, name), &unpacked.members)
-            .map_err(|err| {
-                Error::io(
-                    format_args!(
-                        "could not save what the file decompressed to in {}",
-                        cache.root().join("unpacked").display()
-                    ),
-                    &err,
-                )
-            })?;
-    }
+    let key = decompressed_key(packed, name);
+    record(cache, &key, &unpacked, tree, Unpacking::File)?;
     Ok(Decompressed::Unpacked(unpacked))
 }
 
