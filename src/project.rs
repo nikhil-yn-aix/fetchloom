@@ -46,6 +46,8 @@ struct Pending {
 
 pub(crate) struct Project {
     pub(crate) root: PathBuf,
+    /// the folders its data folder may be a link into on this machine.
+    pub(crate) data_links: DataLinks,
 }
 
 /// the project lock, held while a command changes the project. dropping it lets others in.
@@ -280,12 +282,18 @@ impl Project {
     /// the nearest folder at or above `start` holding a data.toml, inside `start`'s git repository,
     /// since a data.toml above it belongs to another history. any entry named data.toml marks the
     /// project, so one that is no file is told as such when read rather than passed over.
+    /// the project at `root`, whose data folder may be a link into no folder.
+    pub(crate) fn at(root: PathBuf) -> Project {
+        Project {
+            root,
+            data_links: DataLinks::default(),
+        }
+    }
+
     pub(crate) fn find(start: &Path) -> Option<Project> {
         for folder in start.ancestors() {
             if fs::symlink_metadata(folder.join(manifest::FILE)).is_ok() {
-                return Some(Project {
-                    root: folder.to_path_buf(),
-                });
+                return Some(Project::at(folder.to_path_buf()));
             }
             if is_repository(folder) {
                 return None;
@@ -977,15 +985,20 @@ impl Project {
         self.data_folder(manifest, false)
     }
 
-    /// refuses a data folder `data_dir` that a link leads to, before anything reads in it.
+    /// refuses a data folder `data_dir` that a link leads to, unless [`follow`] follows it, before
+    /// anything reads in it.
     pub(crate) fn refuse_linked_data_dir(&self, data_dir: &str) -> Result<(), Error> {
         let mut folder = self.root.clone();
+        let mut link = None;
         for part in data_dir.split('/') {
             folder.push(part);
             if fs::symlink_metadata(&folder).is_ok_and(|metadata| metadata.file_type().is_symlink())
             {
-                return Err(linked_data_dir(&folder));
+                follow(&folder, &mut link, &self.data_links)?;
             }
+        }
+        if link.is_some() && folder.is_dir() {
+            remember(&folder)?;
         }
         Ok(())
     }
@@ -1016,11 +1029,12 @@ impl Project {
 
     fn data_folder(&self, manifest: &Manifest, create: bool) -> Result<PathBuf, Error> {
         let mut folder = self.root.clone();
+        let mut link = None;
         for part in manifest.data_dir.split('/') {
             folder.push(part);
             match fs::symlink_metadata(&folder) {
                 Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(linked_data_dir(&folder));
+                    follow(&folder, &mut link, &self.data_links)?;
                 }
                 Ok(metadata) if !metadata.is_dir() => {
                     return Err(Error::new(
@@ -1048,6 +1062,9 @@ impl Project {
                     ));
                 }
             }
+        }
+        if link.is_some() {
+            remember(&folder)?;
         }
         Ok(folder)
     }
@@ -1402,17 +1419,126 @@ fn fill(mut file: File, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-/// the error for a data folder the link at `folder` leads to: `data_dir` must stay inside the
-/// project, so it cannot take the data elsewhere.
-fn linked_data_dir(folder: &Path) -> Error {
-    Error::new(
+/// the folders a data folder may be a link into, as the `data_links` setting lists them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DataLinks {
+    pub(crate) folders: Vec<PathBuf>,
+    /// whether `FETCHLOOM_DATA_LINKS` gave them, not the settings file, so a refusal names it.
+    pub(crate) from_variable: bool,
+}
+
+/// notes the data folder at `folder`, reached through a link [`follow`] followed, so a placer
+/// opens the folder found there now, whatever the link says by then.
+fn remember(folder: &Path) -> Result<(), Error> {
+    let found = fs::canonicalize(folder)
+        .map_err(|err| Error::io(format_args!("could not read {}", folder.display()), &err))?;
+    crate::place::open_at(folder, found)
+        .map_err(|err| Error::io(format_args!("could not read {}", folder.display()), &err))
+}
+
+/// follows the link at `folder` on the way to the data folder, as a person on a cluster links
+/// `data` to scratch: the first link there, when the folder it leads to exists and lies in a
+/// folder `data_links` lists. a link a cloned project brings could aim placement anywhere, so any
+/// other is refused, a second one included, and the folder a link leads to is never made: one
+/// that is gone may be on a disk not mounted now.
+fn follow(folder: &Path, link: &mut Option<PathBuf>, listed: &DataLinks) -> Result<(), Error> {
+    if let Some(first) = link {
+        return Err(Error::new(
+            Kind::ProjectInvalid,
+            format!(
+                "{} is a second link on the way to the data folder, and fetchloom follows only the one at {}",
+                folder.display(),
+                first.display()
+            ),
+        )
+        .help("replace the second link with a real folder"));
+    }
+    let found = match fs::canonicalize(folder) {
+        Ok(found) => found,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            let leads = fs::read_link(folder).map_or_else(
+                |_| folder.to_path_buf(),
+                |to| {
+                    folder
+                        .parent()
+                        .map_or_else(|| to.clone(), |parent| parent.join(&to))
+                },
+            );
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "{} is a link to {}, which does not exist: its disk may be unmounted",
+                    folder.display(),
+                    crate::machine::plain(&leads).display()
+                ),
+            )
+            .help("mount the disk that holds it, or point the link at a folder that exists, since fetchloom never makes the folder a link leads to"));
+        }
+        Err(err) => {
+            return Err(Error::io(
+                format_args!("could not follow the link {}", folder.display()),
+                &err,
+            ));
+        }
+    };
+    let shown = crate::machine::plain(&found);
+    if !found.is_dir() {
+        return Err(Error::new(
+            Kind::ProjectInvalid,
+            format!(
+                "{} is a link to {}, a file where the data folder should be",
+                folder.display(),
+                shown.display()
+            ),
+        )
+        .help("point the link at a folder"));
+    }
+    let inside = listed
+        .folders
+        .iter()
+        .filter_map(|entry| fs::canonicalize(entry).ok())
+        .any(|entry| found.starts_with(entry));
+    if !inside {
+        return Err(unlisted(folder, &shown, listed));
+    }
+    *link = Some(folder.to_path_buf());
+    Ok(())
+}
+
+/// the refusal of the link at `folder` to `found`, which no folder `listed` holds, with how to
+/// list the folder where the list came from.
+fn unlisted(folder: &Path, found: &Path, listed: &DataLinks) -> Error {
+    let error = Error::new(
         Kind::ProjectInvalid,
         format!(
-            "{} is a link, and fetchloom only places files in real folders",
-            folder.display()
+            "{} is a link to {}, which no folder in data_links holds, so fetchloom places nothing through it",
+            folder.display(),
+            found.display()
         ),
-    )
-    .help("replace the link with a real folder; to keep the data on another disk, move the whole project folder to that disk")
+    );
+    let entries = listed.folders.as_slice();
+    let check = "check where it leads, since a cloned project's link can aim anywhere; if you made it to keep data on another disk";
+    if listed.from_variable {
+        let value: Vec<String> = entries
+            .iter()
+            .chain([&found.to_path_buf()])
+            .map(|entry| entry.display().to_string())
+            .collect();
+        return error.help(format!(
+            "{check}, list that folder in FETCHLOOM_DATA_LINKS too, as `{}`",
+            value.join(",")
+        ));
+    }
+    let words: Vec<String> = entries
+        .iter()
+        .map(PathBuf::as_path)
+        .chain([found])
+        .map(crate::suggested::shell_folder_path)
+        .collect();
+    error.help(format!(
+        "{check}, list that folder with `fetchloom settings set data_links {}`",
+        words.join(" ")
+    ))
 }
 
 #[cfg(test)]
@@ -1471,9 +1597,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, text).unwrap();
         }
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         (dir, project)
     }
 
@@ -1559,7 +1683,7 @@ mod tests {
             root.push("d".repeat(200));
         }
         fs::create_dir_all(&root).unwrap();
-        let project = Project { root };
+        let project = Project::at(root);
         let error = project.inner().unwrap_err();
         assert!(error.message.contains("file name too long"), "{error:?}");
         assert!(!project.own_folder().exists());
@@ -1920,9 +2044,7 @@ mod tests {
                 return crate::test_skips::skip("symlinks", "no symbolic link can be made here");
             }
             let (answer, answered) = std::sync::mpsc::channel();
-            let holder = Project {
-                root: project.root.clone(),
-            };
+            let holder = Project::at(project.root.clone());
             std::thread::spawn(move || {
                 let refused = holder
                     .hold("sync")
@@ -2255,7 +2377,7 @@ mod tests {
             root.push("a_long_project_folder_name");
         }
         fs::create_dir_all(&root).unwrap();
-        let project = Project { root };
+        let project = Project::at(root);
         let Hold::Held(_held) = project.hold("sync").unwrap() else {
             panic!("free")
         };
@@ -2790,9 +2912,7 @@ mod tests {
     #[test]
     fn a_write_never_drops_or_moves_the_pin_of_a_dataset_that_waits() {
         let root = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: root.path().to_path_buf(),
-        };
+        let project = Project::at(root.path().to_path_buf());
         let pinned = |name: &str, list: char| {
             format!(
                 "version = 1\n\n[[dataset]]\nname = \"{name}\"\nref = \"zenodo:3608990\"\nspec = \"sha256:11\"\nresolved = \"zenodo:3608990\"\nlocked = \"2026-10-27T17:30:00Z\"\nfiles_in = [\"data.lock.d/{name}.{}.tsv.zst\"]\nfile_count = 2\nfile_bytes = 9\nfiles_sha256 = \"sha256:{}\"\n",

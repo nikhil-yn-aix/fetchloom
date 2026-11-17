@@ -31,7 +31,7 @@ pub(super) struct Report {
 }
 
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, Error> {
-    let project = find(&context.output)?;
+    let project = find(context)?;
     let before = state_stamp(&project);
     let (_, manifest) = project.manifest()?;
     let target = placed(&project, &manifest, &args.target).unwrap_or(args.target);

@@ -1099,9 +1099,7 @@ mod tests {
     #[test]
     fn intact_archives_with_a_different_pinned_tree_require_an_explicit_upgrade() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let stored = store(&cache, &tar(b"actual member"));
         let lock = lock_for(LockedFile {
@@ -1224,9 +1222,7 @@ mod tests {
     #[test]
     fn intact_damaged_archives_preserve_the_source_error() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let stored = store(&cache, b"PK\x03\x04broken");
         let lock = lock_for(LockedFile {

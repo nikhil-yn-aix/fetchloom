@@ -195,7 +195,7 @@ async fn sync_as_asked(
     context: &Context,
     args: args::Sync,
 ) -> Result<(Report, Option<Closing>), Error> {
-    let project = find(&context.output)?;
+    let project = find(context)?;
     let dry_run = args.dry.dry_run;
     // a dry run changes nothing, so like `lock --check` it needs no hold
     let _held = if dry_run {
@@ -790,7 +790,7 @@ async fn preview_sync(
 }
 
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
-    let project = find(&context.output)?;
+    let project = find(context)?;
     // a check or a dry run changes nothing, so it needs no hold. anything else reads what it
     // changes only once no other fetchloom can change it
     let _held = if args.check || args.dry.dry_run {
@@ -1568,11 +1568,21 @@ pub(super) fn register(work: &Loop<'_>) {
     }
 }
 
+/// the folders a project's data folder may be a link into, as the run's settings list them.
+pub(super) fn data_links(context: &Context) -> crate::project::DataLinks {
+    let listed = &context.settings.data_links;
+    crate::project::DataLinks {
+        folders: listed.value.clone(),
+        from_variable: listed.origin == crate::settings::Origin::Environment,
+    }
+}
+
 /// the project around the current folder.
-pub(super) fn find(output: &Output) -> Result<Project, Error> {
+pub(super) fn find(context: &Context) -> Result<Project, Error> {
+    let output = &context.output;
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    let project = Project::find(&here).ok_or_else(|| match Project::repository(&here) {
+    let mut project = Project::find(&here).ok_or_else(|| match Project::repository(&here) {
         Some(repository) => {
             let error = Error::new(
                 Kind::ProjectInvalid,
@@ -1617,6 +1627,7 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
             units::path(&project.root)
         ));
     }
+    project.data_links = data_links(context);
     Ok(project)
 }
 
@@ -1838,9 +1849,7 @@ pub(crate) mod tests {
 
     pub(crate) fn waiting_project() -> (tempfile::TempDir, Project, Context) {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         std::fs::create_dir(project.own_folder()).unwrap();
         let os = if cfg!(windows) { "linux" } else { "windows" };
         let owner = serde_json::json!({
@@ -2004,9 +2013,7 @@ pub(crate) mod tests {
     #[test]
     fn a_lock_that_cannot_be_placed_is_not_written() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let context = offline_context();
         let cache = crate::cache::Cache::open(dir.path().join("cache")).unwrap();
         let manifest = Manifest::parse(
@@ -2056,9 +2063,7 @@ pub(crate) mod tests {
     /// error a sync meets first, with every download failing, and whether data.lock stayed.
     fn sync_beside_a_readme(remote: crate::source::Remote) -> (Error, bool) {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let context = offline_context();
         let cache = crate::cache::Cache::open(dir.path().join("cache")).unwrap();
         let manifest = Manifest::parse(
@@ -2129,9 +2134,7 @@ pub(crate) mod tests {
     #[test]
     fn two_files_on_one_path_are_refused_before_data_lock_is_written() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let context = offline_context();
         let cache = crate::cache::Cache::open(dir.path().join("cache")).unwrap();
         let manifest = Manifest::parse(
@@ -2207,9 +2210,7 @@ pub(crate) mod tests {
     #[test]
     fn a_stop_once_a_settled_sync_found_nothing_to_do_leaves_it_done() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         std::fs::create_dir(&project.root).unwrap();
         project.write(manifest::FILE, b"").unwrap();
         let manifest = Manifest::parse("").unwrap();
@@ -2274,7 +2275,7 @@ pub(crate) mod tests {
     fn a_settled_sync_of_a_plain_data_toml_parses_none() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("project");
-        let project = Project { root: root.clone() };
+        let project = Project::at(root.clone());
         std::fs::create_dir(&root).unwrap();
         let text = "[datasets.iris]\nref = \"https://example.org/iris\"\n";
         project.write(manifest::FILE, text.as_bytes()).unwrap();
@@ -2320,7 +2321,7 @@ pub(crate) mod tests {
         let sync = || {
             let context = offline_context();
             let before = manifest::tests::reads();
-            let project = Project { root: root.clone() };
+            let project = Project::at(root.clone());
             let synced = sync_held(&context, project, args.clone());
             let (report, _) = super::super::block_on(&context, synced).unwrap();
             let placement = report.placement.unwrap();

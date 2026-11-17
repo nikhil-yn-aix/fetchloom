@@ -240,6 +240,14 @@ fn tell_changed(
                 ),
                 "check its name, or mount the disk that holds it",
             );
+        } else if key == "data_links" {
+            output.warn_with(
+                Warning::SettingsMissingFolder,
+                &format!(
+                    "the folder {shown} does not exist, so no data folder links into it until it does"
+                ),
+                "check its name, or mount the disk that holds it",
+            );
         } else {
             output.warn_with(
                 Warning::SettingsMissingFolder,
@@ -593,15 +601,12 @@ fn rows(context: &Context) -> Vec<Shown> {
     shown.push(mirrors(&context.mirrors.mirrors, settings.mirrors.origin));
     shown.push(switch("mirrors_only", settings.mirrors_only));
     shown.push(switch("web_archives", settings.web_archives));
-    shown.push(list(
-        "reuse",
-        settings
-            .reuse
-            .value
-            .iter()
-            .map(|folder| folder.path.display().to_string()),
-        vec![settings.reuse.origin],
-    ));
+    let reuse = settings.reuse.value.iter();
+    let reuse = reuse.map(|folder| folder.path.display().to_string());
+    shown.push(list("reuse", reuse, vec![settings.reuse.origin]));
+    let links = settings.data_links.value.iter();
+    let links = links.map(|folder| folder.display().to_string());
+    shown.push(list("data_links", links, vec![settings.data_links.origin]));
     let push_to = settings.push_to.value.as_ref();
     shown.push(Shown {
         name: "push_to",

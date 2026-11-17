@@ -109,6 +109,8 @@ const ENVIRONMENT: &str = "fetchloom environment
                        lacks, before any mirror, separated by commas; unset,
                        hugging face's and kagglehub's caches by their own
                        layout alone; empty for none
+  FETCHLOOM_DATA_LINKS folders a project's data folder may be a link into, as
+                       a link from data to scratch, separated by commas
   FETCHLOOM_WEB_ARCHIVES
                        false asks software heritage and the wayback machine
                        nothing for a pinned file whose source is gone
@@ -143,8 +145,8 @@ const ENVIRONMENT: &str = "fetchloom environment
 a settings file keeps cache, resources, jobs, host_jobs, retries, timeout,
 ask_above, memory, most_files, the archive_ settings, allowed_origins,
 s3_buckets, gcs_buckets, azure_containers, drive_folders, mirrors,
-mirrors_only, reuse, web_archives, push_to, cache_budget and rate for every
-run, one per line, as jobs = 16. a variable wins over the file.
+mirrors_only, reuse, data_links, web_archives, push_to, cache_budget and rate
+for every run, one per line, as jobs = 16. a variable wins over the file.
 fetchloom settings shows each value and where it came from, and
 fetchloom settings set jobs 16 saves one.
 

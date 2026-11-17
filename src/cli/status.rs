@@ -158,7 +158,7 @@ pub(super) struct Status {
 /// `status`, hashing every placed file for `verify`, as `--verify` asks, and failing with
 /// `data.not_ready` for `strict`, as `--check` asks, when the data is not ready to use.
 pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Status, Error> {
-    let project = super::project::find(&context.output)?;
+    let project = super::project::find(context)?;
     let (mut status, manifest, lock) = check(
         &project,
         context.threads,
@@ -1591,9 +1591,7 @@ mod tests {
             "[datasets.iris]\nref = \"zenodo:1\"\n",
         )
         .unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let context = crate::cli::project::tests::offline_context();
         let before = crate::project::manifest::tests::reads();
         brief(&context, &project).unwrap();
@@ -1603,9 +1601,7 @@ mod tests {
     #[test]
     fn a_copy_an_interrupted_sync_left_behind_is_not_extra() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let folder = project.root.join("data").join("weather");
         std::fs::create_dir_all(&folder).unwrap();
         for name in [

@@ -212,7 +212,8 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let mut request = request(&mut args)?;
     let found = Project::find(&here);
     let starting = found.is_none();
-    let project = found.unwrap_or_else(|| Project { root: here.clone() });
+    let mut project = found.unwrap_or_else(|| Project::at(here.clone()));
+    project.data_links = super::project::data_links(context);
     if let Request::ListFile(path) = &request {
         request = Request::Link(list_in_project(path, &project.root, &here)?);
     }
@@ -249,9 +250,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let starting = starting && adding.text.is_none();
     let fresh = fresh.filter(|_| starting);
     if let Some(fresh) = fresh.filter(|fresh| fresh.own && adding.held.is_some()) {
-        let project = Project {
-            root: adding.project.root.clone(),
-        };
+        let project = Project::at(adding.project.root.clone());
         let data = fresh.data.then(|| project.root.join(manifest::DATA_DIR));
         context
             .stop
@@ -2205,9 +2204,7 @@ mod tests {
     #[test]
     fn a_rollback_restores_only_what_the_add_changed() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let manifest_path = project.root.join(manifest::FILE);
         std::fs::write(&manifest_path, "[datasets]\n").unwrap();
         let failure = || Error::new(Kind::LocalIo, "could not write data.toml");
@@ -2244,9 +2241,7 @@ mod tests {
     #[test]
     fn a_rollback_keeps_a_change_made_after_the_add_wrote_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let manifest_path = project.root.join(manifest::FILE);
         std::fs::write(&manifest_path, "[datasets]\n").unwrap();
         let mut saved = BeforeAdd::save(&project, (Some("[datasets]\n"), None)).unwrap();
@@ -2292,9 +2287,7 @@ mod tests {
             return crate::test_skips::skip("unprivileged", "root ignores file permissions");
         }
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let manifest_path = project.root.join(manifest::FILE);
         let before = "# https://example.org/?token=EM_CANARY\n[datasets]\n";
         std::fs::write(&manifest_path, before).unwrap();
@@ -2416,9 +2409,7 @@ mod tests {
     /// a project whose data.toml and data.lock pin dataset a, as an add of dataset b holds and
     /// reads it, with both files in the cache. returns data.toml with b added, and b's listing.
     fn adding_b(dir: &Path) -> (AddProject, Cache, String, Listing) {
-        let project = Project {
-            root: dir.join("project"),
-        };
+        let project = Project::at(dir.join("project"));
         std::fs::create_dir(&project.root).unwrap();
         let text = "[datasets.a]\nref = \"https://example.org/a\"\n";
         let manifest = Manifest::parse(text).unwrap();

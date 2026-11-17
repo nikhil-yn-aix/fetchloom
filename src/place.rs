@@ -51,11 +51,40 @@ pub(crate) enum Method {
     Copy,
 }
 
+/// each folder a placer roots at that is opened elsewhere: a data folder this run reached through
+/// a link it followed, with the folder found there then.
+static OPENED_AT: std::sync::Mutex<Vec<(PathBuf, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+
+/// opens every placer rooted at `folder` at `found`, the folder a link on its way led to when the
+/// project checked it, whatever the link says by then.
+pub(crate) fn open_at(folder: &Path, found: PathBuf) -> io::Result<()> {
+    let folder = std::path::absolute(folder)?;
+    let mut opened = OPENED_AT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    opened.retain(|(root, _)| *root != folder);
+    opened.push((folder, found));
+    Ok(())
+}
+
+/// where a placer rooted at `root`, absolute, opens it, as [`open_at`] noted.
+fn opened_at(root: &Path) -> Option<PathBuf> {
+    OPENED_AT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(folder, _)| folder == root)
+        .map(|(_, found)| found.clone())
+}
+
 /// puts objects into one folder tree, and remembers which methods its filesystem refuses.
 pub(crate) struct Placer {
     threads: Threads,
     stop: Arc<Stop>,
     root: PathBuf,
+    /// where the root is opened, when it is a data folder this run reached through a link it
+    /// followed: the folder found there then, whatever the link says by now.
+    opened_at: Option<PathBuf>,
     /// whether the root itself must be a real folder, as a project's data folder must. a folder
     /// someone named for `get` may be a link to one.
     checks_root: bool,
@@ -268,11 +297,19 @@ impl Placer {
     /// sits inside a folder a sync client owns. capability probes use the opened root too.
     pub(crate) fn new(root: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
-        let synced = synced::client(&root, &|name| std::env::var_os(name), &synced::mounts);
+        let opened_at = opened_at(&root);
+        let real = opened_at.as_deref().unwrap_or(&root);
+        let synced = synced::client(real, &|name| std::env::var_os(name), &synced::mounts);
         if let Some(client) = synced {
-            tracing::debug!(root = %root.display(), client, "inside a synced folder, so no hardlinks");
+            tracing::debug!(root = %real.display(), client, "inside a synced folder, so no hardlinks");
         }
-        Placer::starting_at(root, Method::Reflink, synced)
+        let mut placer = Placer::starting_at(root, Method::Reflink, synced);
+        #[cfg(windows)]
+        if let Some(real) = &opened_at {
+            placer.volume = Volume::new(real.clone());
+        }
+        placer.opened_at = opened_at;
+        placer
     }
 
     /// prepares placement under a folder someone named, which may itself be a link, though the
@@ -302,6 +339,7 @@ impl Placer {
             threads: Threads::default(),
             stop: Arc::default(),
             root,
+            opened_at: None,
             checks_root: true,
             folders: HashSet::new(),
             synced,
@@ -1141,8 +1179,8 @@ impl Placer {
 
     fn location(&self, destination: &Path, make: bool) -> io::Result<Location> {
         let below = self.below_root(destination)?;
-        self.parents
-            .locate(&self.root, &below, self.checks_root, make)
+        let root = self.opened_at.as_deref().unwrap_or(&self.root);
+        self.parents.locate(root, &below, self.checks_root, make)
     }
 
     fn can_hardlink(&self) -> Option<bool> {

@@ -242,9 +242,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
 #[test]
 fn every_observed_file_gets_the_decision_the_ownership_model_predicts() {
     let run = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: run.path().join("project"),
-    };
+    let project = Project::at(run.path().join("project"));
     fs::create_dir_all(&project.root).unwrap();
     for scenario in 0..12 {
         for flags in 0..16 {
@@ -261,9 +259,7 @@ fn every_observed_file_gets_the_decision_the_ownership_model_predicts() {
 #[test]
 fn a_damaged_file_is_replaced_without_force() {
     let run = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: run.path().join("project"),
-    };
+    let project = Project::at(run.path().join("project"));
     let destination = project.root.join(PATH);
     write_file(&destination, 0, true, 1_000_000_000);
     let file = locked(0);
@@ -308,9 +304,7 @@ fn a_damaged_file_is_replaced_without_force() {
 #[test]
 fn only_a_writable_copy_fetchloom_made_goes_once_copies_are_not_asked_for() {
     let run = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: run.path().join("project"),
-    };
+    let project = Project::at(run.path().join("project"));
     let destination = project.root.join(PATH);
     write_file(&destination, 0, true, 1_000_000_000);
     let file = locked(0);
@@ -353,9 +347,7 @@ fn only_a_writable_copy_fetchloom_made_goes_once_copies_are_not_asked_for() {
 #[test]
 fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
     let run = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: run.path().join("project"),
-    };
+    let project = Project::at(run.path().join("project"));
     let file = locked(0);
     let named = |name: &str| Scope::Only(std::collections::BTreeSet::from([name.to_owned()]));
     for (scope, selected) in [

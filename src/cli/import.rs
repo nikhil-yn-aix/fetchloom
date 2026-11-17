@@ -869,9 +869,7 @@ fn refuse_overlap(
 /// the refusal of `typed`, a word naming something in the folder `here`, when that is in the data
 /// folder of the project there, or of the one an add would start there.
 pub(super) fn word_in_data_folder(typed: &str, here: &Path) -> Option<Error> {
-    let project = Project::find(here).unwrap_or_else(|| Project {
-        root: here.to_path_buf(),
-    });
+    let project = Project::find(here).unwrap_or_else(|| Project::at(here.to_path_buf()));
     let data_dir = project
         .manifest()
         .map_or_else(|_| manifest::DATA_DIR.to_owned(), |(_, read)| read.data_dir);
@@ -901,7 +899,7 @@ fn in_data_folder(
     // counting the folders between them needs the one inside the other
     let real = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let (root, here) = (real(root), real(here));
-    let manifest = Project { root: root.clone() }
+    let manifest = Project::at(root.clone())
         .manifest()
         .ok()
         .map(|(_, manifest)| manifest);
@@ -977,12 +975,7 @@ fn in_data_folder(
 /// the dataset of `manifest` whose folder `start` is, or whose file there data.lock pins: an
 /// add of `start` would bring in what that dataset holds already.
 fn owner(start: &Path, root: &Path, manifest: &Manifest) -> Option<String> {
-    let lock = Project {
-        root: root.to_path_buf(),
-    }
-    .lock()
-    .ok()
-    .flatten();
+    let lock = Project::at(root.to_path_buf()).lock().ok().flatten();
     manifest
         .datasets
         .keys()

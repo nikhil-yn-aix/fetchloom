@@ -104,7 +104,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
         return Err(Error::new(Kind::Usage, "-o names a file, not - for stdout")
             .help("leave -o out to print on stdout"));
     }
-    let project = super::project::find(&context.output)?;
+    let project = super::project::find(context)?;
     let (_, manifest) = project.manifest()?;
     for name in &args.names {
         super::project::known(&manifest, name, "export")?;

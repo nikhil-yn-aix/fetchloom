@@ -461,9 +461,7 @@ mod tests {
     fn several_links_read_data_toml_as_often_however_many_they_are() {
         let dir = tempfile::tempdir().unwrap();
         let adding = AddProject {
-            project: Project {
-                root: dir.path().to_path_buf(),
-            },
+            project: Project::at(dir.path().to_path_buf()),
             held: None,
             text: None,
             manifest: Manifest::parse("").unwrap(),

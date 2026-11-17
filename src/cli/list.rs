@@ -76,7 +76,7 @@ struct ListedFile {
 }
 
 pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error> {
-    let project = super::project::find(&context.output)?;
+    let project = super::project::find(context)?;
     let (_, manifest) = project.manifest()?;
     if let Some(name) = name {
         super::project::known(&manifest, name, "list")?;

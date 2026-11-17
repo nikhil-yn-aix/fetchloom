@@ -121,7 +121,7 @@ impl<'p> Pace<'p> {
 }
 
 pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Error> {
-    let project = find(&context.output)?;
+    let project = find(context)?;
     let dry_run = args.dry.dry_run;
     let _held = if dry_run {
         None

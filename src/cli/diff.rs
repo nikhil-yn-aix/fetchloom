@@ -133,7 +133,7 @@ pub(super) fn run(context: &Arc<Context>, args: args::Diff) -> Result<Report, Er
 
 /// what changed in data.lock between the sides `args` names, told on stdout.
 fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
-    let project = super::project::find(&context.output)?;
+    let project = super::project::find(context)?;
     let root = &project.root;
     let git = std::env::var_os("PATH")
         .and_then(|path| git::find(Some(&path), root))

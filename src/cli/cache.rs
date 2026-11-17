@@ -1038,7 +1038,7 @@ fn needed_focused(
     let mut waiting = Vec::new();
     for root in cache.registered_projects(stop)? {
         stop.check()?;
-        let project = Project { root };
+        let project = Project::at(root);
         let text = match manifest_of(cache, &project) {
             Ok(Some(text)) => text,
             Ok(None) => {

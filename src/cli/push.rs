@@ -270,7 +270,7 @@ impl Planned {
 pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error> {
     let dry_run = args.dry.dry_run;
     let target = target(context, args)?;
-    let project = find(&context.output)?;
+    let project = find(context)?;
     let (_, manifest) = project.manifest()?;
     for name in &args.names {
         known(&manifest, name, "push")?;

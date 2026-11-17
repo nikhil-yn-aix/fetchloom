@@ -3182,9 +3182,7 @@ mod tests {
     #[test]
     fn offline_download_errors_list_missing_files_without_network_requests() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let context = context();
         let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
@@ -3243,9 +3241,7 @@ mod tests {
     #[test]
     fn an_offline_refusal_counts_each_kind_and_names_the_unlearned_first() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let context = context();
         let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
@@ -3271,9 +3267,7 @@ mod tests {
     #[test]
     fn resolving_reports_manifest_locations_without_echoing_secrets() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let mut context = context();
         context.offline = Offline::No;
@@ -3306,9 +3300,7 @@ mod tests {
     fn relock_in_scope_keeps_other_records() {
         use crate::cli::project::tests::{listed, pinned, pinned_file, stated};
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let context = context();
         let manifest = Manifest::parse(
             "[datasets.a]\nref = \"https://example.org/a\"\n\n[datasets.b]\nref = \"https://example.org/b2\"\n\n[datasets.d]\nref = \"https://example.org/d\"\n",
@@ -3357,9 +3349,7 @@ mod tests {
     #[test]
     fn unchanged_locks_are_not_rewritten_and_removed_datasets_leave_the_lock() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().to_path_buf(),
-        };
+        let project = Project::at(dir.path().to_path_buf());
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let context = context();
         let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);

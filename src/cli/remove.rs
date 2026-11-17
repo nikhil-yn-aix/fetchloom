@@ -21,7 +21,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         return Err(unnamed(context));
     }
     let names = distinct(args.names);
-    let project = find(&context.output)?;
+    let project = find(context)?;
     let dry_run = args.dry.dry_run;
     if !dry_run && let Ok((_, manifest)) = project.manifest() {
         // the names first, so no yes is asked for a removal a typo then stops; asked before the
@@ -342,7 +342,7 @@ fn ask_import(context: &Context, manifest: &Manifest, names: &[String]) -> Resul
 fn unnamed(context: &Context) -> Error {
     const NAMED: usize = 10;
     let error = Error::new(Kind::Usage, "remove needs <name>");
-    let Some((_, manifest)) = find(&context.output)
+    let Some((_, manifest)) = find(context)
         .ok()
         .and_then(|project| project.manifest().ok())
     else {

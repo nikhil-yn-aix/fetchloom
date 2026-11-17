@@ -298,7 +298,7 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
         )
         .help(context.offline.retry()));
     }
-    let project = super::project::find(&context.output)?;
+    let project = super::project::find(context)?;
     let (_, manifest) = project.manifest()?;
     for name in &args.names {
         super::project::known(&manifest, name, "audit")?;

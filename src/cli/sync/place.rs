@@ -3167,9 +3167,7 @@ mod tests {
             copy: false,
             file: &locked,
         };
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         let placed = project.root.join(&target.path);
         fs::create_dir_all(placed.parent().unwrap()).unwrap();
         fs::write(&placed, bytes).unwrap();
@@ -3227,9 +3225,7 @@ mod tests {
     fn a_named_sync_never_clears_another_datasets_file_from_the_way() {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         let data = project.root.join("data");
         fs::create_dir_all(&data).unwrap();
         // a dataset gone from data.toml placed a file where the named one now needs a folder
@@ -3350,9 +3346,7 @@ mod tests {
                 file: &locked,
             })
             .collect();
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         fs::create_dir_all(project.root.join("data/weather")).unwrap();
         let mut state = State::default();
         for (index, target) in targets.iter().enumerate().skip(1) {
@@ -3447,9 +3441,7 @@ mod tests {
                 copy: false,
                 file: &locked,
             };
-            let project = Project {
-                root: dir.path().join("project"),
-            };
+            let project = Project::at(dir.path().join("project"));
             let edited = project.root.join(&target.path);
             let folder = project.root.join("data/weather");
             fs::create_dir_all(&folder).unwrap();
@@ -3520,9 +3512,7 @@ mod tests {
                 copy: false,
                 file: &locked,
             };
-            let project = Project {
-                root: dir.path().join("project"),
-            };
+            let project = Project::at(dir.path().join("project"));
             let data = project.root.join("data");
             fs::create_dir_all(&data).unwrap();
             fs::write(data.join("weather"), b"my notes\n").unwrap();
@@ -3588,9 +3578,7 @@ mod tests {
     /// a project whose weather folder holds a copy an interrupted sync left behind, and a file
     /// of someone's own named much like it.
     fn interrupted(dir: &Path) -> (Project, Manifest, std::path::PathBuf, std::path::PathBuf) {
-        let project = Project {
-            root: dir.join("project"),
-        };
+        let project = Project::at(dir.join("project"));
         let folder = project.root.join("data").join("weather");
         fs::create_dir_all(&folder).unwrap();
         let leftover = folder.join(".fetchloom-0123456789abcdef.copy");
@@ -3730,9 +3718,7 @@ mod tests {
     #[test]
     fn only_files_holding_their_pins_lend_bytes_to_files_that_need_them() {
         let dir = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         let manifest =
             Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather\"\n").unwrap();
         let file = |bytes: &[u8]| LockedFile {

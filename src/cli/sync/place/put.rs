@@ -238,9 +238,7 @@ mod tests {
     fn a_full_disk_the_cache_shares_names_what_unfinished_downloads_hold() {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         fs::create_dir(&project.root).unwrap();
         let full = || io::Error::from_raw_os_error(if cfg!(windows) { 112 } else { 28 });
         let error = || Error::io("could not place it", &full());
@@ -314,9 +312,7 @@ mod tests {
             })
             .collect();
         let todo: Vec<&Target> = targets.iter().collect();
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         let mut placer = Placer::new(&project.root.join("data"));
         let mut state = State::default();
         let (_, failure) = put_all(&project, &mut placer, &cache, &todo, &mut state, 0, &work);
@@ -351,9 +347,7 @@ mod tests {
             })
             .collect();
         let todo: Vec<&Target> = targets.iter().collect();
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         let mut state = State::default();
         let work = Work::default();
         let first = project.root.join(&targets[0].path);
@@ -426,9 +420,7 @@ mod tests {
             copy: false,
             file: &locked,
         };
-        let project = Project {
-            root: dir.path().join("project"),
-        };
+        let project = Project::at(dir.path().join("project"));
         let data = project.root.join("data");
         fs::create_dir_all(&data).unwrap();
         // a file where the dataset's folder belongs

@@ -2236,7 +2236,8 @@ fn path_and_status_refuse_case_collisions_before_reporting_locations() -> Result
     Ok(())
 }
 
-/// `data_dir` cannot lead out of the project, so the help never suggests setting it.
+/// `data_dir` cannot lead out of the project, so the help never suggests setting it: a link
+/// to a folder no `data_links` entry holds gets the command that lists the folder.
 #[cfg(unix)]
 #[test]
 fn a_linked_data_folder_is_refused_with_advice_that_works() -> Result {
@@ -2249,7 +2250,13 @@ fn a_linked_data_folder_is_refused_with_advice_that_works() -> Result {
     let document = json(&output)?;
     let help = document["errors"][0]["help"].as_str().unwrap_or_default();
     assert!(!help.contains("set data_dir"), "{help}");
-    assert!(help.contains("move the whole project folder"), "{help}");
+    assert!(
+        help.ends_with(&format!(
+            "list that folder with `fetchloom settings set data_links {}`",
+            elsewhere.display()
+        )),
+        "{help}"
+    );
     assert_eq!(fs::read_dir(&elsewhere)?.count(), 0);
     Ok(())
 }

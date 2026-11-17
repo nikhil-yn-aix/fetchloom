@@ -125,10 +125,7 @@ impl Usage {
         threads: Threads,
         stop: &Stop,
     ) -> Result<(), Error> {
-        let (state, _) = Project {
-            root: root.to_path_buf(),
-        }
-        .state();
+        let (state, _) = Project::at(root.to_path_buf()).state();
         // a file whose object the cache no longer holds is the only copy of its bytes
         let files: Vec<(&String, &Placed)> = state
             .files
@@ -292,7 +289,7 @@ mod tests {
             );
         }
         fs::create_dir_all(root.join(".fetchloom")).unwrap();
-        Project { root: root.clone() }.write_state(&state).unwrap();
+        Project::at(root.clone()).write_state(&state).unwrap();
         let usage = Usage::measure(
             &cache
                 .scan_objects(Threads::default(), &Stop::default())

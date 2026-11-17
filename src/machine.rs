@@ -436,19 +436,23 @@ fn resolved(path: &Path) -> PathBuf {
         .unwrap_or(absolute)
 }
 
+/// `path` as a person writes it: without the `\\?\` windows starts a resolved path with, and a
+/// share's `\\?\UNC\` written `\\`.
+pub(crate) fn plain(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{share}"));
+    }
+    text.strip_prefix(r"\\?\")
+        .map_or_else(|| path.to_path_buf(), PathBuf::from)
+}
+
 /// whether `path` is `profile` or inside it, as windows names files: part by part, so
 /// C:\Users\bob-shared is not inside C:\Users\bob, in any case, and with or without the `\\?\` a
 /// resolved path starts with.
 pub(crate) fn within(path: &Path, profile: &Path) -> bool {
-    let plain = |path: &Path| {
-        let text = path.to_string_lossy().to_lowercase();
-        let text = match text.strip_prefix(r"\\?\unc\") {
-            Some(share) => format!(r"\\{share}"),
-            None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
-        };
-        PathBuf::from(text)
-    };
-    plain(path).starts_with(plain(profile))
+    let folded = |path: &Path| PathBuf::from(plain(path).to_string_lossy().to_lowercase());
+    folded(path).starts_with(folded(profile))
 }
 
 /// whether the on/off variable `name` is on, as [`switched`] reads it: a value it cannot read is

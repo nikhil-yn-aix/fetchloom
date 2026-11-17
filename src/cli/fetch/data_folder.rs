@@ -374,9 +374,7 @@ mod tests {
     /// a project whose data folder is `inputs`, with a cache beside it.
     fn project() -> (tempfile::TempDir, Project, Manifest, Cache) {
         let folder = tempfile::tempdir().unwrap();
-        let project = Project {
-            root: folder.path().join("project"),
-        };
+        let project = Project::at(folder.path().join("project"));
         fs::create_dir_all(project.root.join("inputs").join("weather")).unwrap();
         let manifest = Manifest::parse("[project]\ndata_dir = \"inputs\"\n").unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();

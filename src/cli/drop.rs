@@ -127,7 +127,7 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
             given.push(name);
         }
     }
-    let project = find(&context.output)?;
+    let project = find(context)?;
     let dry_run = args.dry.dry_run;
     let _held = if dry_run {
         None

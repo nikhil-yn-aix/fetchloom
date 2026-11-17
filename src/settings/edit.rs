@@ -326,7 +326,7 @@ fn given(key: &str, values: &[String], places: Places<'_>) -> Result<Value, Erro
 /// runs skip until it is, or the push folder, which the first push makes. a run makes the cache
 /// folder itself.
 fn missing(key: &str, value: &Value) -> Vec<PathBuf> {
-    if !matches!(key, "mirrors" | "push_to" | "reuse") {
+    if !matches!(key, "mirrors" | "push_to" | "reuse" | "data_links") {
         return Vec::new();
     }
     let items = match value {
@@ -357,7 +357,7 @@ struct Places<'a> {
 /// apart as a mirror is.
 fn from(key: &str, text: String, places: Places<'_>) -> Result<String, Error> {
     let names_folder = match key {
-        "cache" | "reuse" => true,
+        "cache" | "reuse" | "data_links" => true,
         "push_to" | "mirrors" => matches!(
             crate::mirror::Location::parse(&text, None),
             Ok(crate::mirror::Location::Folder(_))

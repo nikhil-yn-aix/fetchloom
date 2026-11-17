@@ -122,9 +122,7 @@ fn two_spellings_both_listed_are_two_files() {
 
 /// a project of four recorded files and one new one, its state written.
 fn recorded_project(dir: &Path) -> Project {
-    let project = Project {
-        root: dir.to_path_buf(),
-    };
+    let project = Project::at(dir.to_path_buf());
     let root = &project.root;
     let mut state = State::default();
     for path in ["data/a/x", "data/a/y", "data/b/z", "data/c"] {
@@ -318,9 +316,7 @@ fn selected_folders_keep_separator_boundaries_and_shared_paths() {
 #[test]
 fn a_survey_ends_at_a_stop_asked_before_it() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir_all(project.root.join("data/a")).unwrap();
     fs::write(project.root.join("data/a/x"), b"x").unwrap();
     let stop = Stop::default();
@@ -336,9 +332,7 @@ fn a_survey_ends_at_a_stop_asked_before_it() {
 #[test]
 fn a_survey_within_folders_lists_and_keeps_only_them() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     let root = &project.root;
     for path in [
         "data/a/x",
@@ -422,9 +416,7 @@ fn a_survey_within_folders_lists_and_keeps_only_them() {
 #[test]
 fn racy_edits_are_hashed_and_smudged_without_distrusting_unchanged_files() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     for path in ["data/changed", "data/intact"] {
         fs::write(project.root.join(path), b"original").unwrap();
@@ -463,9 +455,7 @@ fn racy_edits_are_hashed_and_smudged_without_distrusting_unchanged_files() {
 #[test]
 fn verifying_finds_changes_that_kept_their_size_and_time() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     let placed = [
         ("copy", Method::Copy),
@@ -530,9 +520,7 @@ fn verifying_finds_changes_that_kept_their_size_and_time() {
 #[test]
 fn verification_reuses_intact_racy_hashes_without_hiding_unchecked_files() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     let old = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
     let recent = old + std::time::Duration::from_secs(4);
@@ -595,9 +583,7 @@ fn verification_reuses_intact_racy_hashes_without_hiding_unchecked_files() {
 #[test]
 fn a_data_folder_on_another_device_allows_for_a_coarser_clock() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     let path = project.root.join("data/table.csv");
     let stamp = |bytes: &[u8], time: SystemTime| {
@@ -647,9 +633,7 @@ fn change_marks_hash_old_links_and_refresh_their_listing_metadata() {
     if !hardlinks(dir.path()) {
         return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
     let good = store(&cache, b"intact");
@@ -710,9 +694,7 @@ fn change_marks_hash_old_links_and_refresh_their_listing_metadata() {
 #[test]
 fn a_changed_file_that_is_no_longer_a_link_is_damaged_not_changed_elsewhere() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/file"), b"other").unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
@@ -731,9 +713,7 @@ fn a_changed_file_that_is_no_longer_a_link_is_damaged_not_changed_elsewhere() {
 #[test]
 fn a_changed_shared_link_the_cache_lost_is_marked_for_the_other_projects() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     let file = project.root.join("data/file");
     fs::write(&file, b"other").unwrap();
@@ -756,9 +736,7 @@ fn a_changed_shared_link_the_cache_lost_is_marked_for_the_other_projects() {
 #[test]
 fn an_unreadable_doubted_link_is_not_silently_vouched_for() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/file"), b"bytes").unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
@@ -779,9 +757,7 @@ fn an_unreadable_doubted_link_is_not_silently_vouched_for() {
 #[test]
 fn a_mark_whose_time_a_coarse_clock_cut_down_still_doubts_a_link() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/file"), b"bytes").unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
@@ -822,9 +798,7 @@ fn a_changed_link_that_is_the_cached_copy_is_doubted_and_found_damaged() {
     if !hardlinks(dir.path()) {
         return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
     let stored = store(&cache, b"good");
@@ -893,9 +867,7 @@ fn a_repair_doubts_links_to_the_old_copy_alone() {
     if !hardlinks(dir.path()) {
         return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
     let stored = store(&cache, b"good");
@@ -973,9 +945,7 @@ fn alias_retargeting_carries_edits_and_the_original_listed_spelling() {
     use crate::project::lock::LockedFile;
 
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/A.txt"), b"a").unwrap();
     if !project.root.join("data/a.txt").is_file() {
@@ -1051,9 +1021,7 @@ fn locked(path: &str, bytes: &[u8]) -> crate::project::lock::LockedFile {
 #[test]
 fn a_name_listed_in_another_composition_is_the_targets_own_file() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/cafe\u{301}.txt"), b"a").unwrap();
     if !project.root.join("data/caf\u{e9}.txt").is_file() {
@@ -1079,9 +1047,7 @@ fn a_name_listed_in_another_composition_is_the_targets_own_file() {
 #[test]
 fn a_writable_file_listed_in_another_composition_stays_writable_under_the_targets_name() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/cafe\u{301}.txt"), b"a").unwrap();
     if !project.root.join("data/caf\u{e9}.txt").is_file() {
@@ -1105,9 +1071,7 @@ fn a_writable_file_listed_in_another_composition_stays_writable_under_the_target
 #[test]
 fn a_name_listed_in_another_case_stays_apart_until_a_record_joins_them() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/A.txt"), b"a").unwrap();
     if !project.root.join("data/a.txt").is_file() {
@@ -1126,9 +1090,7 @@ fn whatever_stands_in_a_files_way_is_found_from_the_scan_alone() {
     use std::os::unix::fs::symlink;
 
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     let data = project.root.join("data");
     for folder in ["real", "empty.csv", "full.csv/inner"] {
         fs::create_dir_all(data.join(folder)).unwrap();
@@ -1173,9 +1135,7 @@ fn whatever_stands_in_a_files_way_is_found_from_the_scan_alone() {
 #[test]
 fn a_folder_in_the_way_is_freed_only_when_removing_files_empties_it() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     let data = project.root.join("data");
     for folder in ["alone", "mixed", "nested/inner", "beside/empty", "empty"] {
         fs::create_dir_all(data.join(folder)).unwrap();
@@ -1288,9 +1248,7 @@ fn scanning_skips_links_even_when_their_targets_are_files_or_folders() {
 #[test]
 fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     let placed = [
         "data/pets/pets.csv",
         "data/pets-extra/keep.csv",
@@ -1415,9 +1373,7 @@ fn only_real_files_outside_the_data_folder_are_left_behind() {
 fn a_folder_left_behind_names_what_fetchloom_did_not_place() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let project = Project {
-        root: root.to_path_buf(),
-    };
+    let project = Project::at(root.to_path_buf());
     for path in [
         "data/iris/iris.csv",
         "data/iris/notes.txt",
@@ -1457,9 +1413,7 @@ fn a_folder_left_behind_names_what_fetchloom_did_not_place() {
 #[test]
 fn the_folder_left_behind_never_holds_the_data_folder() {
     let dir = tempfile::tempdir().unwrap();
-    let project = Project {
-        root: dir.path().to_path_buf(),
-    };
+    let project = Project::at(dir.path().to_path_buf());
     let left = |data_dir: &str, outside: &[&str], wanted: &[&str]| {
         let mut survey =
             Survey::read(&project, data_dir, Threads::default(), &Stop::default()).unwrap();

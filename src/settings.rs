@@ -36,7 +36,7 @@ const FILE: &str = "settings.toml";
 /// the most a settings file may hold: its few lines need far less, and a run reads it whole.
 const MOST_BYTES: u64 = 1 << 20;
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 24] = [
+const KEYS: [(&str, &str); 25] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("resources", "FETCHLOOM_RESOURCES"),
     ("jobs", "FETCHLOOM_JOBS"),
@@ -57,6 +57,7 @@ const KEYS: [(&str, &str); 24] = [
     ("mirrors", "FETCHLOOM_MIRRORS"),
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
     ("reuse", "FETCHLOOM_REUSE"),
+    ("data_links", "FETCHLOOM_DATA_LINKS"),
     ("web_archives", "FETCHLOOM_WEB_ARCHIVES"),
     ("push_to", "FETCHLOOM_PUSH_TO"),
     ("cache_budget", "FETCHLOOM_CACHE_BUDGET"),
@@ -64,7 +65,7 @@ const KEYS: [(&str, &str); 24] = [
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
-const LISTS: [&str; 7] = [
+const LISTS: [&str; 8] = [
     "allowed_origins",
     "s3_buckets",
     "gcs_buckets",
@@ -72,13 +73,14 @@ const LISTS: [&str; 7] = [
     "drive_folders",
     "mirrors",
     "reuse",
+    "data_links",
 ];
 /// the keys that hold true or false.
 const BOOLEANS: [&str; 2] = ["mirrors_only", "web_archives"];
 /// the keys an empty variable clears rather than leaving to the settings file, so blanking where
-/// requests go, what keys sign, where push writes or which folders are read cannot leave the
-/// file's choice in force.
-const CLEARED: [&str; 9] = [
+/// requests go, what keys sign, where push writes, which folders are read or which a data folder
+/// may link into cannot leave the file's choice in force.
+const CLEARED: [&str; 10] = [
     "allowed_origins",
     "s3_buckets",
     "gcs_buckets",
@@ -87,6 +89,7 @@ const CLEARED: [&str; 9] = [
     "mirrors",
     "mirrors_only",
     "reuse",
+    "data_links",
     "push_to",
 ];
 /// the variables fetchloom reads besides those of the settings file's keys.
@@ -506,6 +509,9 @@ pub(crate) struct Settings {
     /// the folders read for a pinned file the cache lacks before any mirror or source is asked,
     /// such as hugging face's cache: only read, never written.
     pub(crate) reuse: Set<Vec<crate::reuse::Folder>>,
+    /// the folders a project's data folder may be a link into, as a person on a cluster links
+    /// `data` to scratch: one into any other folder stays refused.
+    pub(crate) data_links: Set<Vec<PathBuf>>,
     /// whether a pinned file no source gives any more is asked of software heritage and the
     /// wayback machine.
     pub(crate) web_archives: Set<bool>,
@@ -543,6 +549,7 @@ impl Settings {
             mirrors: Set::default(Vec::new()),
             mirrors_only: Set::default(false),
             reuse: Set::default(Vec::new()),
+            data_links: Set::default(Vec::new()),
             web_archives: Set::default(true),
             push_to: Set::default(None),
             cache_budget: Set::default(None),
@@ -638,6 +645,7 @@ impl Settings {
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
             reuse: reuse(&given)?,
+            data_links: data_links(&given)?,
             web_archives: boolean(&given, "web_archives", true)?,
             push_to: push_target(&given, "push_to")?,
             cache_budget: optional_size(&given, "cache_budget", "for no budget")?,
@@ -1233,16 +1241,50 @@ fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
 
 /// the folders `reuse` lists, in order, each known as hugging face's or kagglehub's cache when it is
 /// where that tool keeps one; unset, the caches of those two that are on this machine, and empty,
-/// none. a relative folder is taken as [`mirrors`] takes one.
+/// none.
 fn reuse(given: &Given<'_>) -> Result<Set<Vec<crate::reuse::Folder>>, Error> {
-    let Some((entries, origin, named)) = given.list("reuse") else {
+    let instead = "/mnt/usb/datasets, put a web server in `mirrors` instead";
+    let Some(listed) = folders(given, "reuse", "reads folders on this machine", instead)? else {
         return Ok(Set::default(crate::reuse::defaults(given.var)));
+    };
+    let located = crate::reuse::located(given.var);
+    Ok(Set {
+        value: listed
+            .value
+            .into_iter()
+            .map(|path| crate::reuse::named(path, &located))
+            .collect(),
+        origin: listed.origin,
+    })
+}
+
+/// the folders `data_links` lists, which a project's data folder may be a link into.
+fn data_links(given: &Given<'_>) -> Result<Set<Vec<PathBuf>>, Error> {
+    let listed = folders(
+        given,
+        "data_links",
+        "lists folders on this machine",
+        "/scratch/you",
+    )?;
+    Ok(listed.unwrap_or_else(|| Set::default(Vec::new())))
+}
+
+/// the folders `key` lists, in order and each once, when anything names it: a relative one taken
+/// as [`mirrors`] takes one, and a web address refused, as `does` says what the folders are for
+/// and `instead` names one.
+fn folders(
+    given: &Given<'_>,
+    key: &str,
+    does: &str,
+    instead: &str,
+) -> Result<Option<Set<Vec<PathBuf>>>, Error> {
+    let Some((entries, origin, named)) = given.list(key) else {
+        return Ok(None);
     };
     let base = match origin {
         Origin::File | Origin::Flag => given.file_path().parent(),
         _ => None,
     };
-    let located = crate::reuse::located(given.var);
     let mut folders = Vec::new();
     for entry in entries
         .iter()
@@ -1253,25 +1295,24 @@ fn reuse(given: &Given<'_>) -> Result<Set<Vec<crate::reuse::Folder>>, Error> {
             return Err(Error::new(
                 Kind::Usage,
                 format!(
-                    "{named} holds \"{}\", which is a web address, and reuse reads folders on this machine",
+                    "{named} holds \"{}\", which is a web address, and {key} {does}",
                     crate::shown::mask_typed(entry)
                 ),
             )
             .help(format!(
-                "name a folder, such as /mnt/usb/datasets, put a web server in `mirrors` instead, or {}",
-                undo(origin, "reuse")
+                "name a folder, such as {instead}, or {}",
+                undo(origin, key)
             )));
         }
         let path = base.map_or_else(|| PathBuf::from(entry), |base| base.join(entry));
-        let folder = crate::reuse::named(path, &located);
-        if !folders.contains(&folder) {
-            folders.push(folder);
+        if !folders.contains(&path) {
+            folders.push(path);
         }
     }
-    Ok(Set {
+    Ok(Some(Set {
         value: folders,
         origin,
-    })
+    }))
 }
 
 /// the folder or S3 bucket `key` names for `fetchloom push`, which writes no web server, so a web
