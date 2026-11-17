@@ -174,7 +174,8 @@ fn plan(
         written: None,
     };
     for (remote, name) in files.iter().zip(&names) {
-        let job = fetch::listed_job(remote, name, extract);
+        let mut job = fetch::listed_job(remote, name, extract);
+        job.fetch.listed = listing.listed(remote);
         let unpacks = job.fetch.unpack
             && known(
                 cache,

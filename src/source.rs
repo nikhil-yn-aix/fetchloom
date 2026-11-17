@@ -358,6 +358,15 @@ impl Listing {
             .map(|file| file.path.as_str())
             .chain(self.unavailable.iter().map(|entry| entry.path.as_str()))
     }
+
+    /// what the listing says of `remote`'s size that binds no download: a web server's folder
+    /// listing states a size as the file was when it listed it.
+    pub(crate) fn listed(&self, remote: &Remote) -> crate::net::Listed {
+        match (&self.resolved, remote.size) {
+            (Reference::Folder(_), Some(_)) => crate::net::Listed::Bytes,
+            _ => crate::net::Listed::No,
+        }
+    }
 }
 
 /// what a source said about who may read a dataset: a hint for sharing it, never a check of a

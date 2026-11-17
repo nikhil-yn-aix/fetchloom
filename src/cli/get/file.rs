@@ -830,15 +830,19 @@ fn refuse_zipped(cache: &Cache, remote: &Remote, digest: &Sha256) -> Result<(), 
     .help(unpack_instead(&remote.path)))
 }
 
-/// the one file a link keeps for `-o`, or why `--dir` fits it instead.
+/// the one file a link keeps for `-o`, or why `--dir` fits it instead. a size a folder listing
+/// states is left out: the file may have grown since, and `-o` judges a file by its bytes.
 pub(super) fn only(
     mut files: Vec<Remote>,
     parsed: &Parsed,
     listing: &Listing,
 ) -> Result<Remote, Error> {
     if files.len() == 1
-        && let Some(remote) = files.pop()
+        && let Some(mut remote) = files.pop()
     {
+        if listing.listed(&remote) != crate::net::Listed::No {
+            remote.size = None;
+        }
         return Ok(remote);
     }
     let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();

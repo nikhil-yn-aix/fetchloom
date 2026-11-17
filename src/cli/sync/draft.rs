@@ -14,7 +14,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
-use crate::net::{Expect, Fetch, Fetched};
+use crate::net::{Expect, Fetch, Fetched, Listed};
 use crate::plan::Patterns;
 use crate::project::lock::{self, Locked, LockedFile};
 use crate::project::manifest::{Entry, Source};
@@ -57,6 +57,8 @@ struct DraftFile {
     was: Option<LockedFile>,
     /// whether a members table of the dataset chooses files inside it.
     tabled: bool,
+    /// what a folder listing says of the file's size, which plans its download alone.
+    listed: Listed,
 }
 
 impl Draft {
@@ -143,6 +145,7 @@ impl Draft {
                 };
                 let tabled = source.members.get(&path).is_some();
                 DraftFile {
+                    listed: listing.listed(&remote),
                     remote,
                     path,
                     version,
@@ -385,6 +388,7 @@ impl Draft {
                     unpacks_to: None,
                     was: None,
                     tabled: source.members.get(&file.path).is_some(),
+                    listed: Listed::No,
                 })
             })
             .collect::<Result<_, Error>>()?;
@@ -464,6 +468,7 @@ impl Draft {
 
             let fetch = Fetch {
                 expect,
+                listed: if learn { file.listed } else { Listed::No },
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
                 record: vouched_by_server(&self.resolved, remote.url.as_str()),
                 held: held[index],

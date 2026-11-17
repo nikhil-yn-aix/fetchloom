@@ -582,6 +582,7 @@ impl Net {
             divert: None,
             expired: None,
             expect: fetch.expect,
+            listed: fetch.listed,
             revalidate: false,
             record: fetch.record,
             held: None,

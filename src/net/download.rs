@@ -71,6 +71,18 @@ impl Expect {
     }
 }
 
+/// what a web server's folder listing says of a file's size: a hint that plans the download and
+/// binds none of its bytes, since a live folder's file may change between its listing and its
+/// download.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Listed {
+    /// nothing: an expected size is one the bytes must have.
+    #[default]
+    No,
+    /// the expected size is the one the listing states in bytes, as nginx's `621`.
+    Bytes,
+}
+
 #[derive(Clone)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -84,6 +96,8 @@ pub(crate) struct Fetch {
     pub(crate) divert: Option<Divert>,
     pub(crate) expired: Option<Expired>,
     pub(crate) expect: Expect,
+    /// what a folder listing says of the file's size, which binds nothing.
+    pub(crate) listed: Listed,
     /// ask the server whether the file changed since the last download, instead of trusting the
     /// cache. for links fetched outside a project, where nothing pins the bytes.
     pub(crate) revalidate: bool,
@@ -152,6 +166,7 @@ impl Fetch {
             divert: None,
             expired: None,
             expect: Expect::default(),
+            listed: Listed::No,
             revalidate: false,
             record: false,
             held: None,
@@ -169,6 +184,14 @@ impl Fetch {
         let record = cache.url_record(self.url.as_str())?;
         (self.held == Some(record.sha256) || holds(cache, self, &record.sha256, Some(record.size)))
             .then_some(record)
+    }
+
+    /// what the bytes must match: the expectations, less a size a folder listing states.
+    fn binding(&self) -> Expect {
+        Expect {
+            size: self.expect.size.filter(|_| self.listed == Listed::No),
+            ..self.expect
+        }
     }
 }
 
@@ -721,6 +744,7 @@ impl Net {
             divert: fetch.divert,
             expired: fetch.expired,
             expect: fetch.expect,
+            listed: fetch.listed,
             revalidate: false,
             record: fetch.record,
             held: None,
@@ -914,7 +938,7 @@ impl Net {
                     validators,
                     told,
                     resumed,
-                }) => match verify(&fetch.url, &fetch.expect, &stored) {
+                }) => match verify(&fetch.url, &fetch.binding(), &stored) {
                     Ok(()) => {
                         let moved = reach.moved.load(Ordering::Relaxed);
                         let mut fetched =
@@ -2011,7 +2035,7 @@ fn lfs_pointer(url: &Url, help: Option<String>) -> Error {
 
 /// a pinned size bounds the download, so an answer stating another length is refused unread.
 fn refuse_other_length(fetch: &Fetch, total: Option<u64>) -> Result<(), Failure> {
-    match (fetch.expect.size, total) {
+    match (fetch.binding().size, total) {
         (Some(size), Some(total)) if size != total => {
             Err(Failure::Final(wrong_size(&fetch.url, size, Some(total))))
         }
@@ -2027,8 +2051,9 @@ fn bounded<'a>(
     on: Listener<'a>,
 ) -> impl Fn(Event) -> Result<(), Error> + Sync + 'a {
     let taken = AtomicU64::new(offset);
+    let pinned = fetch.binding().size;
     move |event| {
-        if let (Event::Bytes(bytes), Some(size)) = (&event, fetch.expect.size)
+        if let (Event::Bytes(bytes), Some(size)) = (&event, pinned)
             && taken.fetch_add(*bytes, Ordering::Relaxed) + bytes > size
         {
             return Err(wrong_size(&fetch.url, size, None));

@@ -735,6 +735,7 @@ fn prepare(
         .zip(&names)
         .map(|(remote, name)| {
             let mut job = fetch::listed_job(remote, name, extract);
+            job.fetch.listed = listing.listed(remote);
             job.fetch.page = args.web_page;
             // a line's MD5 is checked as the bytes arrive, as a source's is
             if let Some(Expected {

@@ -564,6 +564,55 @@ fn a_listing_that_states_sizes_sizes_the_folder_before_it_downloads() -> Result 
     Ok(())
 }
 
+/// a listing states each file's size as it was when the listing was made, and a live folder's
+/// file may grow before its download, as dwd's `now/` rewrites its files every few minutes. the
+/// dry run plans with the listing's sizes, and the add and the get take the bytes that come.
+#[test]
+fn a_file_that_grew_since_its_listing_is_taken_as_it_comes() -> Result {
+    let grown = [IRIS, b"4.9,1.5\n".as_slice()].concat();
+    let server = Routes::start(vec![
+        (
+            "/data/".to_owned(),
+            nginx_sized("/data/", &["iris.csv", "sub/"]),
+        ),
+        (
+            "/data/sub/".to_owned(),
+            nginx_sized("/data/sub/", &["tips.csv"]),
+        ),
+        ("/data/iris.csv".to_owned(), file(&grown, "\"i2\"")),
+        ("/data/sub/tips.csv".to_owned(), file(TIPS, "\"t1\"")),
+    ])?;
+    let folder = format!("{}/data/", server.url);
+    let sandbox = Sandbox::new()?;
+    let dry = sandbox.run(&["--json", "add", &folder, "--dry-run"])?;
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stdout)?);
+    let changes = &json(&dry)?["result"]["changes"];
+    assert_eq!(changes["to_download"]["bytes"], IRIS.len() + TIPS.len());
+
+    let added = sandbox.run(&["add", &folder])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(
+        pinned(&lock, "data"),
+        [
+            pin("iris.csv", &grown, &format!("{folder}iris.csv")),
+            pin("sub/tips.csv", TIPS, &format!("{folder}sub/tips.csv")),
+        ]
+    );
+
+    let elsewhere = Sandbox::new()?;
+    let got = elsewhere.run(&["get", &folder])?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    assert_eq!(
+        fs::read(elsewhere.work().join("data").join("iris.csv"))?,
+        grown
+    );
+    let one = elsewhere.run(&["get", &folder, "--select", "iris.csv", "-o", "one.csv"])?;
+    assert_eq!(one.status.code(), Some(0), "{}", text(&one.stderr)?);
+    assert_eq!(fs::read(elsewhere.work().join("one.csv"))?, grown);
+    Ok(())
+}
+
 /// files whose sizes only their server states, as a listing that gives none leaves them, count
 /// together against `ask_above` and `cache_budget`, as a sync from data.lock counts the sizes it
 /// knows: three files of 1 MiB at 2 MiB stop an add no one can answer, naming them all.
