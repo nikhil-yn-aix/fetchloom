@@ -914,7 +914,7 @@ pub(crate) fn folder(written: &str, key: &str) -> Result<String, (String, String
             &format!(
                 "fetchloom does not expand ~ or $NAME, and the folder is always inside {inside}"
             ),
-            "to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/clusters/#keep-the-project-and-the-cache-on-one-drive",
+            "to keep data on a scratch disk, make the data folder a link to a folder there and run `fetchloom settings set data_links <that folder>`, then set FETCHLOOM_CACHE to a folder on the same disk, so files are linked rather than copied. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/clusters/#keep-the-project-and-the-cache-on-one-drive",
         );
     }
     if text == DATA_FOLDER_ITSELF {
