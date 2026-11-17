@@ -378,7 +378,7 @@ fn a_cloned_link_into_another_projects_data_folder_is_refused() -> Result {
         assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
         assert!(
             stderr.contains(&format!(
-                " is a link to {}, which holds files this project did not place, such as iris/iris.csv, so fetchloom places nothing through it\n",
+                " is a link to {}, where iris/iris.csv holds other bytes than data.lock pins, which `sync --force` would replace, so fetchloom places nothing through it\n",
                 real(&thesis)?
             )),
             "{args:?}: {stderr}"
@@ -528,7 +528,7 @@ fn a_recorded_link_pointed_at_a_populated_folder_is_refused() -> Result {
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
         assert!(
-            stderr.contains("which holds files this project did not place, such as iris/iris.csv"),
+            stderr.contains("where iris/iris.csv holds other bytes than data.lock pins, which `sync --force` would replace"),
             "{args:?}: {stderr}"
         );
         assert_eq!(listing(&other)?, before, "{args:?}");
@@ -665,5 +665,282 @@ fn a_committed_data_link_is_told_how_to_leave_git() -> Result {
         ),
         "{screen}"
     );
+    Ok(())
+}
+
+/// a person who moves a data folder holding their own processed/ and interim/ beside the datasets
+/// onto scratch, and links it back, keeps working: a first follow takes what this project does
+/// not place there as the person's, as the data folder keeps a person's files everywhere.
+#[test]
+fn a_moved_data_folder_with_the_persons_own_folders_is_followed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let probe = sandbox.work().join("probe");
+    if link_folder(&scratch, &probe).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    unlink(&probe)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    let data = sandbox.work().join("data");
+    for (folder, name) in [("processed", "clean.csv"), ("interim", "step1.csv")] {
+        fs::create_dir_all(data.join(folder))?;
+        fs::write(data.join(folder).join(name), b"mine\n")?;
+    }
+    let moved = scratch.join("project-data");
+    fs::rename(&data, &moved)?;
+    link_folder(&moved, &data)?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    for args in [&["--offline", "status"][..], &["--offline", "sync"]] {
+        let output = sandbox.run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    assert_eq!(
+        fs::read(moved.join("processed").join("clean.csv"))?,
+        b"mine\n"
+    );
+    assert_eq!(
+        fs::read(moved.join("interim").join("step1.csv"))?,
+        b"mine\n"
+    );
+    assert_eq!(fs::read(moved.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&moved)?));
+    Ok(())
+}
+
+/// a pipeline may write into a freshly linked data folder before fetchloom ever runs there: its
+/// files are the person's, so the first follow takes the folder and leaves them be.
+#[test]
+fn a_pipelines_files_written_before_the_first_follow_stay() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir_all(target.join("results"))?;
+    let data = sandbox.work().join("data");
+    if link_folder(&target, &data).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    fs::write(data.join("results").join("out.csv"), b"ran\n")?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let added = sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert_eq!(fs::read(target.join("results").join("out.csv"))?, b"ran\n");
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
+    Ok(())
+}
+
+/// a file downloaded by hand to the path data.lock pins, before the link's first follow, is taken
+/// as placed when it holds the pinned bytes, as a copied project's files are; one holding other
+/// bytes is what `sync --force` would replace, so the first follow refuses the folder.
+#[test]
+fn a_file_downloaded_by_hand_is_adopted_only_with_the_pinned_bytes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let data = sandbox.work().join("data");
+    let probe = sandbox.work().join("probe");
+    if link_folder(&scratch, &probe).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    unlink(&probe)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    cloned(&sandbox, &format!("{}/iris.csv", routes.url))?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    for (bytes, adopted) in [(IRIS, true), (b"mine\n".as_slice(), false)] {
+        let target = scratch.join(if adopted { "pinned" } else { "other" });
+        fs::create_dir_all(target.join("iris"))?;
+        fs::write(target.join("iris").join("iris.csv"), bytes)?;
+        if data.exists() {
+            unlink(&data)?;
+        }
+        link_folder(&target, &data)?;
+        let output = sandbox.run(&["--offline", "sync"])?;
+        let stderr = text(&output.stderr)?;
+        if adopted {
+            assert_eq!(output.status.code(), Some(0), "{stderr}");
+            let status = sandbox.run(&["--offline", "status"])?;
+            let said = text(&status.stderr)?;
+            assert!(said.contains("Ok everything matches data.lock"), "{said}");
+            assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
+        } else {
+            assert_eq!(output.status.code(), Some(50), "{stderr}");
+            assert!(
+                stderr.contains(&format!(
+                    " is a link to {}, where iris/iris.csv holds other bytes than data.lock pins, which `sync --force` would replace, so fetchloom places nothing through it\n",
+                    real(&target)?
+                )),
+                "{stderr}"
+            );
+        }
+        assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, bytes);
+    }
+    Ok(())
+}
+
+/// cookiecutter's data science layout keeps a .gitkeep in each of data's folders, and a person
+/// keeps notes there too: moved onto scratch with nothing pinned in those folders, they are the
+/// person's, so the link's first follow takes the folder as it is.
+#[test]
+fn a_cookiecutter_data_folder_on_scratch_is_followed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    let layout = ["external", "interim", "processed", "raw"];
+    for folder in layout {
+        fs::create_dir_all(target.join(folder))?;
+        fs::write(target.join(folder).join(".gitkeep"), b"")?;
+    }
+    fs::write(
+        target.join("raw").join("README.md"),
+        b"where the raw files came from\n",
+    )?;
+    if link_folder(&target, &sandbox.work().join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let added = sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
+    for folder in layout {
+        assert!(target.join(folder).join(".gitkeep").is_file(), "{folder}");
+    }
+    assert_eq!(
+        fs::read(target.join("raw").join("README.md"))?,
+        b"where the raw files came from\n"
+    );
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
+    Ok(())
+}
+
+/// a file in the folder of an output this project declares that no pin of the output places is
+/// what `sync --force` deletes, as the output's snapshot lacks it, so a link's first follow refuses
+/// the folder holding it; git's placeholder there is no file of the output. pinning that folder
+/// again claims the file, and the link is followed then.
+#[test]
+fn a_stray_file_in_an_outputs_folder_refuses_the_first_follow() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    let processed = target.join("processed");
+    fs::create_dir_all(&processed)?;
+    if link_folder(&target, &sandbox.work().join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    let origin = sandbox.folder("origin")?;
+    fs::create_dir_all(origin.join("data").join("processed"))?;
+    fs::write(
+        origin.join("data").join("processed").join("clean.csv"),
+        b"clean\n",
+    )?;
+    let pinned = sandbox
+        .command_in(&origin, &["add", "data/processed", "--as", "processed"])
+        .output()?;
+    assert_eq!(pinned.status.code(), Some(0), "{}", text(&pinned.stderr)?);
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(origin.join(name), sandbox.work().join(name))?;
+    }
+    fs::write(processed.join("clean.csv"), b"clean\n")?;
+    fs::write(processed.join(".gitkeep"), b"")?;
+    fs::write(processed.join("stray.csv"), b"mine\n")?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let before = listing(&target)?;
+    for args in [
+        &["--offline", "sync"][..],
+        &["--offline", "sync", "--force", "processed"],
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                " is a link to {}, where processed/stray.csv is in an output's folder though no pin places it, which `sync --force` would delete, so fetchloom places nothing through it\n",
+                real(&target)?
+            )),
+            "{args:?}: {stderr}"
+        );
+        assert!(
+            stderr.contains("help: point the link at a folder of this project's own, or keep that file by moving it out of the output's folder or by pinning the folder again with `fetchloom add data/processed --as processed`\n"),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(listing(&target)?, before, "{args:?}");
+    }
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?)?;
+    let synced = sandbox.run(&["--offline", "sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(processed.join("stray.csv"))?, b"mine\n");
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
+    Ok(())
+}
+
+/// a .gitignore in fetchloom's own marker form that this project's state does not record marks a
+/// dataset folder of another fetchloom project, so a first follow refuses the folder holding it,
+/// whatever else lies beside it.
+#[test]
+fn a_folder_another_projects_marker_holds_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("shared");
+    fs::create_dir_all(target.join("results"))?;
+    fs::write(target.join("results").join(".gitignore"), b"*\n")?;
+    fs::write(target.join("results").join("table.csv"), b"theirs\n")?;
+    let data = sandbox.work().join("data");
+    if link_folder(&target, &data).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let before = listing(&target)?;
+    let output = sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            " is a link to {}, where results/.gitignore marks a dataset folder of another fetchloom project, so fetchloom places nothing through it\n",
+            real(&target)?
+        )),
+        "{stderr}"
+    );
+    assert_eq!(listing(&target)?, before);
     Ok(())
 }

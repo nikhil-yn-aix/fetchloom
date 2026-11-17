@@ -1,6 +1,7 @@
 //! making the data folder match the lock: place what is missing, replace what fetchloom placed for
 //! an older pin, remove what no dataset needs, and leave alone every file someone changed or added.
 
+mod follow;
 mod mark;
 pub(crate) use mark::is_marker_form;
 #[cfg(test)]
@@ -873,6 +874,9 @@ impl<'a> Placing<'a> {
                 .into_iter()
                 .map(|action| clearing(action, &survey, &freeing, scope))
                 .collect();
+        }
+        for link in survey.followed.iter().filter(|link| link.first) {
+            follow::refuse_harm(project, manifest, (&plan.targets, &actions), &survey, link)?;
         }
         let (changed, extras) = changed_outputs(
             (&project.root, manifest),
@@ -1895,7 +1899,8 @@ fn needs_bytes(action: &Action) -> bool {
 }
 
 /// what a sync with nothing to do placed, or none unless data.toml and data.lock are as the last
-/// complete sync left them, every file looks as recorded and the survey raised no doubt; the caller
+/// complete sync left them, every file looks as recorded and the survey raised no doubt and
+/// followed no data folder link for the first time, which a placing checks; the caller
 /// writes the state again for racy files found intact. `make` false, for a dry run, makes no data
 /// folder, and the count covers `scope` alone, though the whole project must be settled.
 pub(crate) fn untouched(
@@ -1930,6 +1935,7 @@ pub(crate) fn untouched(
         })
         || !mark::settled(manifest, survey, scope)
         || output_gained(manifest, survey)
+        || survey.followed.iter().any(|link| link.first)
     {
         return Ok(None);
     }
