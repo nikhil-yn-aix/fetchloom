@@ -1175,7 +1175,7 @@ pub(crate) fn hash_plain(path: &Path, block: Block) -> std::io::Result<Sha256> {
 }
 
 /// the coarsest clock step a data folder may keep: fat cuts a file's time down to two seconds.
-const COARSE: u64 = 2_000_000_000;
+pub(crate) const COARSE: u64 = 2_000_000_000;
 
 /// the time before which a state written at `written` vouches for files that look as recorded.
 /// a data folder on an `other_device` may keep a coarser clock, so there it is `COARSE` earlier.

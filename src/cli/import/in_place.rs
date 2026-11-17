@@ -591,10 +591,11 @@ fn reread(
     .help("fetchloom pins a folder only as it stood the whole time it read it, and pinned nothing"))
 }
 
-/// whether a file of `walked` that a coarse clock leaves in doubt holds other bytes `now` than were
-/// `read`, in the files' order. a file written no two seconds before the walk `started` is in
-/// doubt, as fat's clock keeps the size and time of a file rewritten in the tick it was written,
-/// so no second walk tells; an older one's size and time vouch for it, and it is not read again.
+/// whether a file of `walked` that its clock leaves in doubt holds other bytes `now` than were
+/// `read`, in the files' order. a file written within its clock's [`time_step`] before the walk
+/// `started` is in doubt, as such a clock keeps the size and time of a file rewritten in the step
+/// it was written, so no second walk tells; an older one's size and time vouch for it, and it is
+/// not read again.
 fn rewritten_unseen(
     walked: &Walked,
     read: &[Sha256],
@@ -602,16 +603,29 @@ fn rewritten_unseen(
     threads: crate::threads::Threads,
     now: &(dyn Fn(&Found) -> Option<Sha256> + Sync),
 ) -> bool {
-    let vouched = disk::vouched_before(started, true);
     let doubted: Vec<(&Found, &Sha256)> = walked
         .files
         .iter()
         .zip(read)
-        .filter(|(file, _)| file.seen.look.modified >= vouched)
+        .filter(|(file, _)| {
+            let modified = file.seen.look.modified;
+            modified.saturating_add(time_step(modified)) >= started
+        })
         .collect();
     place::run_all(&doubted, threads, |(file, read)| now(file) != Some(**read))
         .into_iter()
         .any(|changed| changed)
+}
+
+/// the step of the clock that kept `modified`, in nanoseconds, as the time shows it: one on a whole
+/// hundredth of a second, as fat, exfat and hfs+ keep times, may stand for any time in two
+/// seconds; any other was kept within a system clock's tick, no longer than twenty milliseconds.
+fn time_step(modified: u64) -> u64 {
+    if modified.is_multiple_of(10_000_000) {
+        disk::COARSE
+    } else {
+        20_000_000
+    }
 }
 
 /// whether two walks of one folder found the same files, each as it was.
@@ -919,9 +933,11 @@ mod tests {
         }
     }
 
-    /// a file written in the two seconds before the walk is read again, as a coarse clock keeps
-    /// its size and time through a rewrite in that tick: other bytes than were read are a change.
-    /// an older file's size and time vouch for it, so it is never read again.
+    /// a file written in its clock's last step before the walk is read again, as such a clock
+    /// keeps its size and time through a rewrite in that step: other bytes than were read are a
+    /// change. a time on a whole hundredth, as fat, exfat and hfs+ keep, may stand for any time in
+    /// two seconds; any other was kept within a clock's tick. an older file's size and time vouch
+    /// for it, so it is never read again.
     #[test]
     fn a_file_written_in_the_clocks_last_tick_is_read_again() {
         let second = 1_000_000_000;
@@ -930,9 +946,12 @@ mod tests {
             ("old.csv", 3, started - 3 * second, 1),
             ("edge.csv", 3, started - 2 * second, 2),
             ("new.csv", 3, started - second, 3),
+            ("fine.csv", 3, started - second + 7, 4),
+            ("tick.csv", 3, started - 15_000_007, 5),
         ]);
-        let read = [b"old", b"edg", b"new"].map(|bytes| crate::digest::sha256(bytes));
-        let reads = |now: [&[u8]; 3]| {
+        let read =
+            [b"old", b"edg", b"new", b"fin", b"tic"].map(|bytes| crate::digest::sha256(bytes));
+        let reads = |now: [&[u8]; 5]| {
             let asked = std::sync::Mutex::new(Vec::new());
             let threads = crate::threads::Threads::default();
             let changed = rewritten_unseen(&first, &read, started, threads, &|file: &Found| {
@@ -947,10 +966,21 @@ mod tests {
             asked.sort();
             (changed, asked)
         };
-        let doubted = vec!["edge.csv".to_owned(), "new.csv".to_owned()];
-        assert_eq!(reads([b"OLD", b"edg", b"new"]), (false, doubted.clone()));
-        assert_eq!(reads([b"old", b"edg", b"NEW"]), (true, doubted.clone()));
-        assert_eq!(reads([b"old", b"EDG", b"new"]), (true, doubted));
+        let doubted = ["edge.csv", "new.csv", "tick.csv"]
+            .map(str::to_owned)
+            .to_vec();
+        let same = [b"old", b"edg", b"new", b"fin", b"tic"].map(|bytes| &bytes[..]);
+        assert_eq!(reads(same), (false, doubted.clone()));
+        for (at, other) in [(0, &b"OLD"[..]), (3, b"FIN")] {
+            let mut now = same;
+            now[at] = other;
+            assert_eq!(reads(now), (false, doubted.clone()), "{at}");
+        }
+        for (at, other) in [(1, &b"EDG"[..]), (2, b"NEW"), (4, b"TIC")] {
+            let mut now = same;
+            now[at] = other;
+            assert_eq!(reads(now), (true, doubted.clone()), "{at}");
+        }
     }
 
     /// the second walk reads a file of the clock's last tick again: bytes other than the copy's
@@ -969,7 +999,7 @@ mod tests {
         let most = crate::net::MOST_FILES;
         let walked =
             super::super::walk(&folder, "processed", &source, most, &context.stop).unwrap();
-        let started = walked.files[0].seen.look.modified + 1_000_000_000;
+        let started = walked.files[0].seen.look.modified + 1_000_000;
         let walk = Walk {
             walked,
             markers: HashSet::new(),
