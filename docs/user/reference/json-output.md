@@ -143,6 +143,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `network.private_origin` | a later run downloads from a private address only once `allowed_origins` lists it; `details` names each origin |
 | `network.retry` | a request failed and is tried again |
 | `output.changed` | an output's folder holds other files than it pins, a file changed, added or removed since it was pinned: `sync` leaves the whole folder as it is and `push` sends the pinned files; `help` names `fetchloom sync --force <name>`, which puts back the pinned files, and `fetchloom add <folder> --as <name>`, which pins what the folder holds |
+| `output.elsewhere` | an output's files are in no cache or mirror this machine reaches, as in a clone of the project that made it: `sync` places every other dataset and leaves the output's folder as it is; `help` names `fetchloom push --to <mirror>` on the machine that made it, and running the pipeline here, then `fetchloom add <folder> --as <name>` |
 | `path.tilde` | a path starts with a folder named `~`, which is not your home folder there |
 | `place.adopted_removed` | a removal deletes files that were already there when fetchloom adopted them |
 | `place.blocked` | something in the way keeps files out of the data folder |

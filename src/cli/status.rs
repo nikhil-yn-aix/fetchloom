@@ -225,7 +225,8 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
     }
     if strict {
         let outputs = &status.changed_outputs;
-        ready::ready_by(&ready::of_status(&status, outputs), &|line| {
+        let made = made_elsewhere(&status, (&project, &manifest));
+        ready::ready_by(&ready::of_status(&status, outputs, &made), &|line| {
             status.only_sync_of(line)
         })
         .map_err(|error| error.with_report(&status))?;
@@ -276,6 +277,36 @@ fn changed_outputs(
                     .filter(|path| ours || state.files.contains_key(*path)),
             );
             (output.changed + output.added + output.removed > 0).then_some(output)
+        })
+        .collect()
+}
+
+/// the outputs whose files this machine lacks, as `status` found them, but those a sync leaves
+/// whole as changed, each with its folder as a command run here names it.
+fn made_elsewhere(
+    status: &Status,
+    (project, manifest): (&Project, &Manifest),
+) -> Vec<(String, String)> {
+    let here = std::env::current_dir().unwrap_or_else(|_| project.root.clone());
+    let up = super::up_to(&project.root, &here);
+    status
+        .imported_elsewhere
+        .keys()
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(manifest::Entry::is_output)
+                && !status
+                    .changed_outputs
+                    .iter()
+                    .any(|changed| changed.name == **name)
+        })
+        .map(|name| {
+            (
+                name.clone(),
+                format!("{up}{}", plan::folder(manifest, name)),
+            )
         })
         .collect()
 }
@@ -356,13 +387,7 @@ fn tell_imported_elsewhere(
                 super::up_to(&project.root, &here),
                 plan::folder(manifest, one)
             );
-            Some(format!(
-                "{one} was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `{}`",
-                super::project::command(&format!(
-                    "add {} --as {one}",
-                    crate::suggested::shell_word(&at)
-                ))
-            ))
+            Some(ready::made_elsewhere(one, &at))
         }
         many => Some(format!(
             "{} were made on another machine, so only a mirror that holds their files brings them here, or your pipeline run here, then `{}` for each",

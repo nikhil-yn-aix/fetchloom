@@ -50,6 +50,9 @@ pub(in crate::cli) enum Unready {
         shown: String,
         changes: String,
     },
+    /// an output whose files this machine lacks, as a clone of the project that made it does,
+    /// which sync leaves out: its name, and its folder as a command names it.
+    Elsewhere { name: String, shown: String },
 }
 
 impl Unready {
@@ -144,6 +147,7 @@ impl Unready {
                     crate::suggested::shell_word(shown)
                 ))
             ),
+            Unready::Elsewhere { name, shown } => made_elsewhere(name, shown),
         }
     }
 
@@ -158,6 +162,18 @@ impl Unready {
                 | Unready::NotDownloaded { .. }
         )
     }
+}
+
+/// how the files of the output `name`, made on another machine, come here, `shown` being its
+/// folder as a command names it: from a mirror that holds them, or from its pipeline run here.
+pub(super) fn made_elsewhere(name: &str, shown: &str) -> String {
+    format!(
+        "{name} was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `{}`",
+        command(&format!(
+            "add {} --as {name}",
+            crate::suggested::shell_word(shown)
+        ))
+    )
 }
 
 /// fails with `data.not_ready` naming each of `unready` with what to do; only when a plain sync
@@ -226,6 +242,7 @@ pub(in crate::cli) fn after_sync(
                 changes: changed.summary(),
             }),
     );
+    unready.extend(elsewhere(&placement.elsewhere));
     unready.extend(
         waiting
             .iter()
@@ -235,10 +252,24 @@ pub(in crate::cli) fn after_sync(
     unready
 }
 
+/// a line for each output of `outputs`, whose files this machine lacks, with its folder as a
+/// command names it.
+fn elsewhere(outputs: &[(String, String)]) -> impl Iterator<Item = Unready> + '_ {
+    outputs.iter().map(|(name, shown)| Unready::Elsewhere {
+        name: name.clone(),
+        shown: shown.clone(),
+    })
+}
+
 /// what keeps the data of every dataset from being ready, as `status` found the data folder: each
 /// of `outputs`, an output whose folder holds other files than it pins, is one line for all its
-/// files, as sync leaves such a folder whole.
-pub(super) fn of_status(status: &Status, outputs: &[ChangedOutput]) -> Vec<Unready> {
+/// files, as sync leaves such a folder whole, and so is each output `made` elsewhere, whose files
+/// this machine lacks, with its folder as a command names it.
+pub(super) fn of_status(
+    status: &Status,
+    outputs: &[ChangedOutput],
+    made: &[(String, String)],
+) -> Vec<Unready> {
     let mut unready = Vec::new();
     if status.lockless {
         unready.push(Unready::Lockless(status.pins_lockless.clone()));
@@ -272,7 +303,14 @@ pub(super) fn of_status(status: &Status, outputs: &[ChangedOutput]) -> Vec<Unrea
                 by: status.pinned_by.get(name).copied().unwrap_or("digests"),
             }),
     );
-    let alone = |path: &&String| !outputs.iter().any(|output| is_inside(path, &output.at));
+    let lacking: std::collections::HashSet<&String> = made
+        .iter()
+        .filter_map(|(name, _)| status.imported_elsewhere.get(name))
+        .flatten()
+        .collect();
+    let alone = |path: &&String| {
+        !lacking.contains(*path) && !outputs.iter().any(|output| is_inside(path, &output.at))
+    };
     let each = |paths: &[String], make: fn(String) -> Unready| {
         paths
             .iter()
@@ -327,6 +365,7 @@ pub(super) fn of_status(status: &Status, outputs: &[ChangedOutput]) -> Vec<Unrea
         shown: changed.shown.clone(),
         changes: changed.summary(),
     }));
+    unready.extend(elsewhere(made));
     unready
 }
 

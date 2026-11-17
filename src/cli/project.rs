@@ -607,6 +607,11 @@ fn closing(
     waiting: &[lock::Waiting],
 ) -> Closing {
     let waiting = waiting_named(waiting, manifest, scope);
+    let elsewhere: Vec<String> = placement
+        .elsewhere
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
@@ -614,7 +619,8 @@ fn closing(
         && placement.adopted.is_empty()
         && placement.relinked.is_empty()
     {
-        let found = in_place(manifest, scope, verified, &waiting);
+        let absent: Vec<String> = waiting.iter().chain(&elsewhere).cloned().collect();
+        let found = in_place(manifest, scope, verified, &absent);
         let text = if verified {
             format!("{found}; nothing to do")
         } else {
@@ -637,7 +643,7 @@ fn closing(
         .map(|changed| changed.name.as_str())
         .collect();
     let kept = (placement.kept.len(), left.as_slice(), warned);
-    let (verb, text) = synced(manifest, scope, kept, &waiting);
+    let (verb, text) = synced(manifest, scope, kept, (&waiting, &elsewhere));
     // `path` answers only a dataset placed in the data folder, and the line names one this
     // sync just placed
     let first = placement.filled.iter().find(|name| {
@@ -680,12 +686,13 @@ fn waiting_named(waiting: &[lock::Waiting], manifest: &Manifest, scope: &Scope) 
 /// the last line of a sync of `scope` that changed something, as its verb and text, with the
 /// files it `kept`, the outputs it `left` whole as they changed since they were pinned, and
 /// whether a warning above tells of any. the datasets `waiting` for their file lists were left as
-/// they were, so they are named apart.
+/// they were, and so were the outputs made `elsewhere`, whose files this machine lacks, so they
+/// are named apart.
 fn synced(
     manifest: &Manifest,
     scope: &Scope,
     (kept, left, warned): (usize, &[&str], bool),
-    waiting: &[String],
+    (waiting, elsewhere): (&[String], &[String]),
 ) -> (&'static str, String) {
     let mut unchanged = Vec::new();
     if kept > 0 {
@@ -707,7 +714,7 @@ fn synced(
     } else {
         format!(", {}{see}", unchanged.join(", "))
     };
-    let waits = match waiting {
+    let mut waits = match waiting {
         [] => String::new(),
         [one] => format!(" · {one} waits for its file list"),
         many => format!(
@@ -715,12 +722,17 @@ fn synced(
             units::listed(many, "and")
         ),
     };
+    if !elsewhere.is_empty() {
+        waits = format!("{waits} · {}", waiting_for_files(elsewhere));
+    }
     let (datasets, others) = match scope {
         Scope::All => {
             let placed = manifest
                 .datasets
                 .iter()
-                .filter(|(name, entry)| entry.place && !waiting.contains(*name))
+                .filter(|(name, entry)| {
+                    entry.place && !waiting.contains(*name) && !elsewhere.contains(*name)
+                })
                 .count();
             if placed == 0 {
                 let data = &manifest.data_dir;
@@ -728,14 +740,24 @@ fn synced(
             }
             (units::count(placed as u64, "dataset", "datasets"), 0)
         }
-        Scope::Only(names) => (
-            named(names),
-            manifest
-                .datasets
-                .keys()
-                .filter(|name| !names.contains(*name))
-                .count(),
-        ),
+        Scope::Only(names) => {
+            let present: BTreeSet<String> = names
+                .iter()
+                .filter(|name| !elsewhere.contains(*name))
+                .cloned()
+                .collect();
+            if present.is_empty() {
+                return ("Ok", format!("{}{kept}", waiting_for_files(elsewhere)));
+            }
+            (
+                named(&present),
+                manifest
+                    .datasets
+                    .keys()
+                    .filter(|name| !names.contains(*name))
+                    .count(),
+            )
+        }
     };
     let mut said = format!("{datasets} into {}", manifest.data_dir);
     if others > 0 {
@@ -750,14 +772,15 @@ fn synced(
 }
 
 /// what a sync of `scope` with nothing to do found in place, leaving out the files of the datasets
-/// `waiting` for their file lists, which are not.
-fn in_place(manifest: &Manifest, scope: &Scope, verified: bool, waiting: &[String]) -> String {
+/// `absent`, which are not: those waiting for their file lists, and outputs whose files this
+/// machine lacks.
+fn in_place(manifest: &Manifest, scope: &Scope, verified: bool, absent: &[String]) -> String {
     let placed = |name: &String| manifest.datasets.get(name).is_some_and(|entry| entry.place);
     let files = match scope {
         Scope::All if !manifest.datasets.keys().any(placed) => {
             return format!("nothing to place in {}", manifest.data_dir);
         }
-        Scope::All => match waiting {
+        Scope::All => match absent {
             [] => "all pinned files".to_owned(),
             [one] => format!("all pinned files but {one}'s"),
             many => format!(
@@ -765,12 +788,30 @@ fn in_place(manifest: &Manifest, scope: &Scope, verified: bool, waiting: &[Strin
                 units::listed(many, "and")
             ),
         },
-        Scope::Only(names) => format!("the pinned files of {}", named(names)),
+        Scope::Only(names) => {
+            let present: BTreeSet<String> = names
+                .iter()
+                .filter(|name| !absent.contains(*name))
+                .cloned()
+                .collect();
+            if present.is_empty() {
+                return waiting_for_files(absent);
+            }
+            format!("the pinned files of {}", named(&present))
+        }
     };
     if verified {
         format!("{files} are in place, checked byte for byte")
     } else {
         format!("{files} are in place by size and time")
+    }
+}
+
+/// `processed waits for its files`, for outputs whose files this machine lacks.
+fn waiting_for_files(outputs: &[String]) -> String {
+    match outputs {
+        [one] => format!("{one} waits for its files"),
+        many => format!("{} wait for their files", units::listed(many, "and")),
     }
 }
 
@@ -807,11 +848,13 @@ async fn preview_sync(
     )
     .await?;
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
-    let waiting = waiting_named(&waits, manifest, &work.scope);
+    let mut absent = waiting_named(&waits, manifest, &work.scope);
+    let elsewhere = &outcome.placed.placement.elsewhere;
+    absent.extend(elsewhere.iter().map(|(name, _)| name.clone()));
     dry_run_done(
         &context.output,
         nothing
-            .then(|| in_place(manifest, &work.scope, args.verify, &waiting))
+            .then(|| in_place(manifest, &work.scope, args.verify, &absent))
             .as_deref(),
     );
     let pins = outcome.pins.clone();
@@ -2402,7 +2445,7 @@ pub(crate) mod tests {
         ] {
             let mut manifest = Manifest::parse(&tables.join("\n")).unwrap();
             super::super::drop::left_out(&mut manifest, &BTreeSet::from(["raw".to_owned()]));
-            let (verb, text) = synced(&manifest, &Scope::All, (kept, &[], kept > 0), &[]);
+            let (verb, text) = synced(&manifest, &Scope::All, (kept, &[], kept > 0), (&[], &[]));
             assert_eq!((verb, text.as_str()), said, "{tables:?}");
         }
     }

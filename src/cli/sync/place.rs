@@ -146,6 +146,10 @@ pub(crate) struct Placement {
     /// files no pin places that `--force` removed from outputs' folders, each with its output.
     #[serde(skip)]
     pub(crate) cleared_outputs: Vec<(String, String)>,
+    /// the outputs whose files no cache or mirror this machine reaches holds, which the run
+    /// leaves out, each with its folder as a command run here names it.
+    #[serde(skip)]
+    pub(crate) elsewhere: Vec<(String, String)>,
 }
 
 /// an output whose folder changed since it was pinned: files of other bytes, files no pin places
@@ -725,6 +729,9 @@ pub(crate) struct Placing<'a> {
     /// the folders of outputs a drop frees here, whose markers stay, as data.lock still pins what
     /// they hold.
     still_marked: Vec<String>,
+    /// the outputs left out, as no cache or mirror this machine reaches holds their files, each
+    /// with its folder as a command names it.
+    elsewhere: Vec<(String, String)>,
 }
 
 impl<'a> Placing<'a> {
@@ -828,7 +835,26 @@ impl<'a> Placing<'a> {
             extras,
             unmarking: Vec::new(),
             still_marked: Vec::new(),
+            elsewhere: Vec::new(),
         })
+    }
+
+    /// leaves out the outputs of `elsewhere`, whose files no cache or mirror this machine reaches
+    /// holds, each with its folder as a command names it: their folders stay as they are, and the
+    /// run settles nothing, since their files are still to come.
+    pub(crate) fn leave_out(&mut self, elsewhere: Vec<(String, String)>) {
+        let names: HashSet<&str> = elsewhere.iter().map(|(name, _)| name.as_str()).collect();
+        for (target, action) in self.targets.iter().zip(&mut self.actions) {
+            if names.contains(target.dataset) {
+                *action = Action::Unselected;
+            }
+        }
+        self.outputs
+            .left
+            .extend(names.iter().map(|name| (*name).to_owned()));
+        self.extras
+            .retain(|(_, name)| !names.contains(name.as_str()));
+        self.elsewhere = elsewhere;
     }
 
     /// says the removal took out the outputs at `folders`, outside every folder the run lists, so
@@ -1150,6 +1176,7 @@ impl<'a> Placing<'a> {
     /// is a stand-in, `guessed` as `<dataset>/<path>`, is one to check: only its download tells.
     pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
+        preview.placement.elsewhere.clone_from(&self.elsewhere);
         self.preview_unwanted(&mut preview);
         self.preview_outputs(&mut preview);
         preview.placement.notice(
@@ -1417,10 +1444,12 @@ impl<'a> Placing<'a> {
             extras,
             unmarking: _,
             still_marked: _,
+            elsewhere,
         } = self;
         let root = placing_root(project, manifest)?;
         let mut placement = Placement {
             changed_outputs: changed,
+            elsewhere,
             ..Placement::default()
         };
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
@@ -1569,7 +1598,8 @@ impl<'a> Placing<'a> {
             && !stopped
             && failure.is_none()
             && placement.kept.is_empty()
-            && placement.changed_outputs.is_empty();
+            && placement.changed_outputs.is_empty()
+            && placement.elsewhere.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let marked = mark_outputs(manifest, &targets, state);
         let recorded = removed
@@ -3879,6 +3909,7 @@ mod tests {
             extras: Vec::new(),
             unmarking: Vec::new(),
             still_marked: Vec::new(),
+            elsewhere: Vec::new(),
         };
 
         placing
@@ -4077,6 +4108,7 @@ mod tests {
             extras: Vec::new(),
             unmarking: Vec::new(),
             still_marked: Vec::new(),
+            elsewhere: Vec::new(),
         };
         placing
             .apply(
@@ -4149,6 +4181,7 @@ mod tests {
                 extras: Vec::new(),
                 unmarking: Vec::new(),
                 still_marked: Vec::new(),
+                elsewhere: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -4226,6 +4259,7 @@ mod tests {
                 extras: Vec::new(),
                 unmarking: Vec::new(),
                 still_marked: Vec::new(),
+                elsewhere: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -4307,6 +4341,7 @@ mod tests {
             extras: Vec::new(),
             unmarking: Vec::new(),
             still_marked: Vec::new(),
+            elsewhere: Vec::new(),
         };
 
         placing
@@ -4468,6 +4503,7 @@ mod tests {
             extras: Vec::new(),
             unmarking: Vec::new(),
             still_marked: Vec::new(),
+            elsewhere: Vec::new(),
         };
         let holding: Vec<String> = placing
             .holding()

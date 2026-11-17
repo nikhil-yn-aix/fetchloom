@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::project::{IRIS, PATH};
 use crate::support::{
-    Result, Routes, Running, Sandbox, file, json, look, ok, text, wait_until, warned,
+    Result, Routes, Running, Sandbox, file, json, look, ok, text, wait_until, warned, warning,
 };
 
 const CLEAN: &[u8] = b"sepal,petal\n5.1,1.4\n";
@@ -217,7 +217,8 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
 
 /// git carries data.lock, never an output's bytes: a teammate whose cache and mirrors lack them
 /// still gets every other dataset, and the run names the output once, as made on another machine,
-/// with both ways on, ending as a sync does for a dataset no link fetches.
+/// with both ways on, and ends well, so a pipeline run after it can make the output. `path` names
+/// its folder, and only a strict sync or a status check calls the data not ready.
 #[test]
 fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Result {
     let sandbox = Sandbox::new()?;
@@ -240,41 +241,75 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
             .output()
     };
     let said = "processed was made on another machine, and its files are in no mirror this machine reaches";
+    let ways = "push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add data/processed --as processed`";
     let synced = sync(&["--json", "sync"])?;
     let document = json(&synced)?;
-    assert_eq!(synced.status.code(), Some(10), "{document}");
-    let error = &document["errors"][0];
-    assert_eq!(error["kind"], "reference.unresolved", "{document}");
-    assert_eq!(error["message"], said, "{document}");
-    assert_eq!(
-        error["help"],
-        "push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add data/processed --as processed`"
-    );
-    assert_eq!(
-        error["details"],
-        serde_json::json!(["placed iris, whose files are all on this machine"])
-    );
-    assert_eq!(document["result"]["datasets"], serde_json::json!(["iris"]));
-    assert_eq!(
-        document["result"]["waiting"],
-        serde_json::json!(["processed"])
-    );
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    let elsewhere = warning(&document, "output.elsewhere");
+    assert_eq!(elsewhere["message"], said, "{document}");
+    assert_eq!(elsewhere["help"], ways, "{document}");
     assert_eq!(fs::read(teammate.join("data/iris/iris.csv"))?, IRIS);
     assert!(!teammate.join("data/processed").exists(), "{document}");
     let synced = sync(&["sync"])?;
     let stderr = text(&synced.stderr)?;
-    assert_eq!(synced.status.code(), Some(10), "{stderr}");
-    assert_eq!(stderr.matches("processed").count(), 3, "{stderr}");
-    assert!(stderr.contains(&format!("error: {said}\n")), "{stderr}");
-    assert!(!stderr.contains("could not get"), "{stderr}");
-    let status = text(&sync(&["status"])?.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(stderr.matches(said).count(), 1, "{stderr}");
     assert!(
-        status.contains("hint: processed was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `fetchloom add data/processed --as processed`"),
-        "{status}"
+        stderr.contains(
+            "Ok all pinned files but processed's are in place by size and time, nothing to do"
+        ),
+        "{stderr}"
     );
-    let offline = json(&sync(&["--json", "--offline", "sync"])?)?;
-    assert_eq!(offline["errors"][0]["kind"], "offline.missing", "{offline}");
-    assert_eq!(offline["errors"][0]["message"], said, "{offline}");
+    let not_ready = "processed was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `fetchloom add data/processed --as processed`";
+    for args in [
+        ["--json", "sync", "--strict"],
+        ["--json", "status", "--check"],
+    ] {
+        let checked = sync(&args)?;
+        let document = json(&checked)?;
+        assert_eq!(checked.status.code(), Some(1), "{args:?}: {document}");
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "data.not_ready", "{args:?}: {document}");
+        assert_eq!(
+            error["details"],
+            serde_json::json!([not_ready]),
+            "{args:?}: {document}"
+        );
+    }
+    let folder = teammate.join("data").join("processed");
+    let path = sync(&["path", "processed"])?;
+    let stderr = text(&path.stderr)?;
+    assert_eq!(path.status.code(), Some(0), "{stderr}");
+    assert_eq!(text(&path.stdout)?, format!("{}\n", folder.display()));
+    assert!(stderr.contains(&format!("warning: {said}\n")), "{stderr}");
+    let document = json(&sync(&["--json", "path", "processed"])?)?;
+    assert_eq!(
+        document["result"],
+        serde_json::json!({ "path": folder }),
+        "{document}"
+    );
+    assert_eq!(
+        warning(&document, "output.elsewhere")["message"],
+        said,
+        "{document}"
+    );
+    let offline = sync(&["--json", "--offline", "sync"])?;
+    let document = json(&offline)?;
+    assert_eq!(offline.status.code(), Some(0), "{document}");
+    assert_eq!(
+        warning(&document, "output.elsewhere")["message"],
+        said,
+        "{document}"
+    );
+    let dry = sync(&["--json", "sync", "--dry-run"])?;
+    let document = json(&dry)?;
+    assert_eq!(dry.status.code(), Some(0), "{document}");
+    assert_eq!(
+        warning(&document, "output.elsewhere")["message"],
+        said,
+        "{document}"
+    );
+    assert!(!teammate.join("data/processed").exists(), "{document}");
     let mirror = sandbox.folder("mirror")?;
     let mirror = mirror.to_string_lossy();
     let pushed = json(&sync(&["--json", "push", "--to", &mirror, "--yes"])?)?;
