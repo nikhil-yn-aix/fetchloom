@@ -235,6 +235,41 @@ fn decompress_in_data_toml_switches_without_a_new_pin() -> Result {
     Ok(())
 }
 
+/// diff names a change of `decompress` as it names every field data.lock records, in words and
+/// in --json, the packed file's pin standing.
+#[test]
+fn diff_names_a_change_of_decompress() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let packed = gz(CSV)?;
+    let server = Server::start(
+        "/files/iris.csv.gz",
+        (0..3).map(|_| file(&packed, "\"g1\"")).collect(),
+    )?;
+    sandbox.allow(&server.url);
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    crate::merge::ok(&sandbox, &["add", "-A"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "packed"])?;
+    let manifest = sandbox.work().join("data.toml");
+    let plain = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, format!("{plain}decompress = true\n"))?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let diff = text(&sandbox.run(&["diff"])?.stdout)?;
+    assert!(
+        diff.contains("iris changed: decompress false \u{2192} true"),
+        "{diff}"
+    );
+    let document = json(&sandbox.run(&["--json", "diff"])?)?;
+    assert_eq!(
+        document["result"]["datasets"][0]["fields"],
+        serde_json::json!([{ "name": "decompress", "before": "false", "after": "true" }]),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// a compressed tar is extract's: with `--decompress` it unpacks to its files, never to a bare
 /// tar, and with `--no-extract` too it stays packed as it came.
 #[test]

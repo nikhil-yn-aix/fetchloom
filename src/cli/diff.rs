@@ -386,6 +386,7 @@ impl<'a> Pin<'a> {
             ("spec", Some(locked.spec.clone())),
             ("at", locked.at.clone()),
             ("extract", Some(locked.extract.to_string())),
+            ("decompress", Some(locked.decompress.to_string())),
             ("web_page", Some(locked.web_page.to_string())),
             ("resolved", Some(masked(&locked.resolved))),
             ("title", locked.title.clone()),
