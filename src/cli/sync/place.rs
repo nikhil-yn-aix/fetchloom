@@ -238,6 +238,15 @@ impl Placement {
     }
 }
 
+/// the disk the data folder at `data_dir` is on, which the copy reason is told once for: the
+/// number the system gives it, or in a debug build `FETCHLOOM_TEST_DISK`, so a test can give a
+/// project another disk.
+fn data_disk(data_dir: &Path) -> String {
+    crate::machine::pretended("FETCHLOOM_TEST_DISK")
+        .or_else(|| crate::space::disk(data_dir))
+        .map_or_else(String::new, |disk| disk.to_string())
+}
+
 /// the file a person unpacked from `target`, a single compressed file of a dataset that keeps
 /// such files packed, beside it, as `gunzip` leaves it: one the state records no placing of.
 fn unpacked_beside(manifest: &Manifest, survey: &Survey, target: &Target) -> Option<String> {
@@ -1341,11 +1350,7 @@ impl<'a> Placing<'a> {
             .any(|tally| tally.unlinked > 0)
             .then(|| placer.unlinked())
             .flatten()
-            .map(|why| {
-                let disk =
-                    crate::space::disk(&data_dir).map_or_else(String::new, |disk| disk.to_string());
-                (why, disk)
-            })
+            .map(|why| (why, data_disk(&data_dir)))
             .filter(|(_, disk)| !state.told.has(Once::Copy, disk));
         placement.r_package = telling
             && told.is_some_and(|names| !names.is_empty())

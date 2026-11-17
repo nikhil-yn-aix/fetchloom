@@ -213,9 +213,10 @@ fn an_r_package_hears_once_where_raw_files_go() -> Result {
 
 /// a project in a folder a sync client keeps, as onedrive, gets copies, since such a client breaks
 /// links. the first run that copies says why, with no advice to move the project, which is the
-/// person's choice, and later runs on that disk say nothing of it.
+/// person's choice, and later runs on that disk say nothing of it. the data folder on another
+/// disk, as after the project moved there, hears it again.
 #[test]
-fn the_copy_reason_is_told_once() -> Result {
+fn the_copy_reason_is_told_once_per_disk() -> Result {
     let sandbox = Sandbox::new()?;
     if sandbox.links()?.reflink {
         return crate::support::skipped("copies", "this disk clones files, so none is copied");
@@ -223,31 +224,31 @@ fn the_copy_reason_is_told_once() -> Result {
     let server = Routes::start(vec![
         (PATH.to_owned(), file(IRIS, "\"v1\"")),
         ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
+        ("/files/beer.csv".to_owned(), file(b"c,d\n3,4\n", "\"b1\"")),
     ])?;
     sandbox.allow(&server.url);
-    let inside = |args: &[&str]| -> Result<String> {
+    let inside = |disk: &str, name: &str| -> Result<String> {
         let output = sandbox
-            .command(args)
+            .command(&["add", &format!("{}/files/{name}.csv", server.url)])
             .env("OneDrive", sandbox.work())
+            .env("FETCHLOOM_TEST_DISK", disk)
             .output()?;
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(0), "{stderr}");
         Ok(stderr)
     };
-    let first = inside(&["add", &format!("{}{PATH}", server.url)])?;
-    assert!(
-        first.contains(
-            "warning: data is inside onedrive, which breaks links, so files were copied\n"
-        ),
-        "{first}"
-    );
+    let told = "warning: data is inside onedrive, which breaks links, so files were copied\n";
+    let first = inside("1", "iris")?;
+    assert!(first.contains(told), "{first}");
     assert!(!first.contains("outside onedrive"), "{first}");
-    let second = inside(&["add", &format!("{}/files/wine.csv", server.url)])?;
+    let second = inside("1", "wine")?;
     assert_eq!(
         fs::read(sandbox.work().join("data/wine/wine.csv"))?,
         b"a,b\n1,2\n"
     );
     assert!(!second.contains("inside onedrive"), "{second}");
+    let moved = inside("2", "beer")?;
+    assert!(moved.contains(told), "{moved}");
     Ok(())
 }
 
