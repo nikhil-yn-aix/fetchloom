@@ -344,10 +344,10 @@ impl Draft {
             })
             .collect();
         for unit in self.archives().unpack {
-            let Unit::Split(set) = unit else {
+            let Unit::Split(set) = &unit else {
                 continue;
             };
-            let key = self.parts(&set).map(parts_key);
+            let key = unit.key(&self.files, |file| file.known);
             let was = earlier
                 .get(self.files[set[0]].path.as_str())
                 .filter(|archive| Some(archive.key()) == key)
@@ -393,19 +393,12 @@ impl Draft {
     /// what this machine recorded the archive `unit` unpacks to, once its bytes are known; in a
     /// cache others may write, only the tree data.lock pinned it unpacking to.
     fn recorded(&self, unit: &Unit, cache: &Cache) -> Option<Sha256> {
-        let first = &self.files[unit.first()];
-        let was = first.was.as_ref().and_then(|was| was.unpacks_to);
-        match unit {
-            Unit::Whole(_) => first
-                .known
-                .and_then(|(sha256, _)| cache.unpacked_tree_as(&sha256, was.as_ref())),
-            Unit::Split(set) => self
-                .parts(set)
-                .and_then(|parts| cache.unpacked_tree_as(&parts_key(parts), was.as_ref())),
-            Unit::Decompressed(_, name) => first.known.and_then(|(sha256, _)| {
-                cache.unpacked_tree_as(&decompressed_key(&sha256, name), was.as_ref())
-            }),
-        }
+        let was = self.files[unit.first()]
+            .was
+            .as_ref()
+            .and_then(|was| was.unpacks_to);
+        let key = unit.key(&self.files, |file| file.known)?;
+        cache.unpacked_tree_as(&key, was.as_ref())
     }
 
     /// a dataset whose entry changed only in `extract`, drafted from the files data.lock pins with
@@ -847,9 +840,10 @@ pub(super) fn stand_in_trees(locked: &mut Locked, cache: &Cache) -> Vec<String> 
         if locked.files[index].unpacks_to.is_some() {
             continue;
         }
-        let key = unit.key(&locked.files, |file| (file.sha256, file.size));
+        let key = unit.key(&locked.files, |file| Some((file.sha256, file.size)));
         let label = format!("{}/{}", locked.name, locked.files[index].path);
-        locked.files[index].unpacks_to = Some(cache.unpacked_tree(&key).unwrap_or_else(|| {
+        let recorded = key.and_then(|key| cache.unpacked_tree(&key));
+        locked.files[index].unpacks_to = Some(recorded.unwrap_or_else(|| {
             let tree = stand_in(&format!("{label} unpacked"));
             unknown.push(label);
             tree
@@ -898,13 +892,21 @@ impl Unit {
     }
 
     /// the key the cache's record of what the archive unpacks to goes by, from each of `files`'
-    /// SHA-256 and size as `known` gives them.
-    pub(super) fn key<T>(&self, files: &[T], known: impl Fn(&T) -> (Sha256, u64)) -> Sha256 {
-        match self {
-            Unit::Whole(index) => known(&files[*index]).0,
-            Unit::Split(set) => parts_key(set.iter().map(|index| known(&files[*index]))),
-            Unit::Decompressed(index, name) => decompressed_key(&known(&files[*index]).0, name),
-        }
+    /// SHA-256 and size as `known` gives them; none while one is not known.
+    pub(super) fn key<T>(
+        &self,
+        files: &[T],
+        known: impl Fn(&T) -> Option<(Sha256, u64)>,
+    ) -> Option<Sha256> {
+        Some(match self {
+            Unit::Whole(index) => known(&files[*index])?.0,
+            Unit::Split(set) => {
+                let parts: Option<Vec<(Sha256, u64)>> =
+                    set.iter().map(|index| known(&files[*index])).collect();
+                parts_key(parts?)
+            }
+            Unit::Decompressed(index, name) => decompressed_key(&known(&files[*index])?.0, name),
+        })
     }
 }
 
@@ -1687,9 +1689,9 @@ mod tests {
             )
         );
         let files = [(digest::sha256(b"a"), 1)];
-        let key = Unit::Decompressed(0, "a.csv".to_owned()).key(&files, |file| *file);
-        assert_eq!(key, decompressed_key(&files[0].0, "a.csv"));
-        assert_ne!(key, Unit::Whole(0).key(&files, |file| *file));
+        let key = Unit::Decompressed(0, "a.csv".to_owned()).key(&files, |file| Some(*file));
+        assert_eq!(key, Some(decompressed_key(&files[0].0, "a.csv")));
+        assert_ne!(key, Unit::Whole(0).key(&files, |file| Some(*file)));
     }
 
     /// a file its server names keeps that name on its way down, so its progress line shows it

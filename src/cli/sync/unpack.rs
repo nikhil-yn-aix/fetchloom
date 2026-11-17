@@ -583,8 +583,8 @@ impl Loop<'_> {
                 if locked.files[at].unpacks_to.is_some() {
                     continue;
                 }
-                let key = unit.key(&locked.files, |file| (file.sha256, file.size));
-                if let Some(tree) = self.cache.unpacked_tree(&key) {
+                let key = unit.key(&locked.files, |file| Some((file.sha256, file.size)));
+                if let Some(tree) = key.and_then(|key| self.cache.unpacked_tree(&key)) {
                     locked.files[at].unpacks_to = Some(tree);
                     continue;
                 }
