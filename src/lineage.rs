@@ -269,9 +269,9 @@ pub(crate) fn judge(manifest: &Manifest, lock: &Lock, cache: &Cache) -> Vec<Judg
             let (current, again) = match &state {
                 State::Renamed { to } => (
                     tree(to).map(shown),
-                    again(dataset, entry, Some((input, to))),
+                    again(dataset, entry, None, Some((input, to))),
                 ),
-                _ => (now, again(dataset, entry, None)),
+                _ => (now, again(dataset, entry, None, None)),
             };
             judged.push(Judged {
                 dataset: dataset.clone(),
@@ -468,13 +468,14 @@ fn anew(one: &Judged) -> String {
     )
 }
 
-/// the add that pins `dataset` again and records its inputs anew, with `--from` naming them all,
-/// `renamed` the one of them that data.toml now has under another name.
-fn again(dataset: &str, entry: &Entry, renamed: Option<(&str, &str)>) -> String {
-    let what = if entry.is_import() {
-        "<folder>"
-    } else {
-        "<link>"
+/// the add that pins `dataset` again and records its inputs anew: from `at`, the folder an output
+/// lives in, else a placeholder for its folder or link; with `--from` naming them all when
+/// `renamed` is the one of them that data.toml now has under another name.
+fn again(dataset: &str, entry: &Entry, at: Option<&str>, renamed: Option<(&str, &str)>) -> String {
+    let what = match at {
+        Some(at) => crate::suggested::shell_folder(at),
+        None if entry.is_import() => "<folder>".into(),
+        None => "<link>".into(),
     };
     let mut command = format!("add {what} --as {dataset}");
     if let Some((old, new)) = renamed {
@@ -588,6 +589,33 @@ mod tests {
             .into_iter()
             .map(|judged| judged.state)
             .collect()
+    }
+
+    #[test]
+    fn the_add_that_pins_an_output_again_names_its_folder() {
+        let made = manifest(&[
+            ("processed", "from = [\"iris\", \"penguins\"]"),
+            ("iris", ""),
+            ("penguins", ""),
+        ]);
+        let entry = &made.datasets["processed"];
+        assert_eq!(
+            again("processed", entry, None, None),
+            "fetchloom add <link> --as processed"
+        );
+        assert_eq!(
+            again("processed", entry, Some("results/processed"), None),
+            "fetchloom add results/processed --as processed"
+        );
+        assert_eq!(
+            again(
+                "processed",
+                entry,
+                Some("results/processed"),
+                Some(("iris", "flowers"))
+            ),
+            "fetchloom add results/processed --as processed --from flowers --from penguins"
+        );
     }
 
     #[test]
