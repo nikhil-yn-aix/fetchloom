@@ -568,6 +568,52 @@ fn decompressing_past_the_room_the_disk_had_free_stops_before_filling_it() -> Re
     Ok(())
 }
 
+/// a clone learns what its files decompress to only once it decompressed them, so the copies the
+/// data folder takes of them are counted then, before any is placed: the plain file's download and
+/// copy fit the disk, but not with a copy of the decompressed file beside them.
+#[cfg(debug_assertions)]
+#[test]
+fn a_clone_counts_the_copies_of_what_it_decompressed_before_placing_them() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = vec![7_u8; 20 << 10];
+    let packed = gz(&vec![b'x'; 50 << 10])?;
+    let routes = Routes::start(vec![
+        ("/files/big.bin".to_owned(), file(&big, "\"b1\"")),
+        ("/files/wide.csv.gz".to_owned(), file(&packed, "\"w1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    fs::write(
+        sandbox.work().join("links.txt"),
+        format!("{0}/files/big.bin\n{0}/files/wide.csv.gz\n", routes.url),
+    )?;
+    ok(&sandbox.run(&["add", "-i", "links.txt", "--decompress", "--as", "d"])?)?;
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock", "links.txt"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let manifest = fs::read_to_string(clone.join("data.toml"))?;
+    fs::write(clone.join("data.toml"), format!("{manifest}copy = true\n"))?;
+    let cold = sandbox.folder("cold")?;
+    let output = sandbox
+        .command_in(&clone, &["--json", "sync"])
+        .env("FETCHLOOM_CACHE", &cold)
+        .env("FETCHLOOM_TEST_FREE", (64 << 10).to_string())
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(1), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed", "{document}");
+    assert_eq!(
+        error["message"],
+        format!(
+            "this sync needs at least 90.0 KiB on the disk holding the data folder at {}, which has 64.0 KiB free",
+            clone.join("data").display()
+        )
+    );
+    assert!(!clone.join("data").join("d").join("wide.csv").exists());
+    Ok(())
+}
+
 /// a run stopped while it decompresses leaves no file half written and no record of what the file
 /// holds; the next run decompresses again from the bytes the first downloaded, as a stream that
 /// stopped cannot go on where it stopped.

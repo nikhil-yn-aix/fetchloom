@@ -399,6 +399,8 @@ impl<'a> Loop<'a> {
             let unpacked = self.unpack_locked(manifest, lock, &unknown).await;
             failed = first_left(failed, unpacked)?;
             placing = self.placed_again(manifest, lock, force, placing)?;
+            // the copies of what the archives unpacked to count only now that their files are known
+            self.ask_room(lock, &placing)?;
         }
         let missing = match missing {
             Some(missing) => missing,
