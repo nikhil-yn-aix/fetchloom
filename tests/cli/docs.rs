@@ -550,7 +550,7 @@ fn the_home_page_shows_what_fetchloom_prints() -> Result {
     run(&mine, "add.txt", &sandbox.cache())?;
     let theirs = sandbox.folder("teammate/iris-study")?;
     crate::merge::git(&sandbox, &theirs, &["init", "-q"])?;
-    for name in ["data.toml", "data.lock", ".gitignore"] {
+    for name in ["data.toml", "data.lock"] {
         fs::copy(mine.join(name), theirs.join(name))?;
     }
     run(&theirs, "sync.txt", &sandbox.folder("teammate-cache")?)?;

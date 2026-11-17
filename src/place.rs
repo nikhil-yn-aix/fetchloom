@@ -1852,6 +1852,12 @@ pub(crate) fn is_copy_temporary(name: &str) -> bool {
         })
 }
 
+/// a new name of the kind [`is_copy_temporary`] knows, `.fetchloom-<16 hex>.copy`, for a file
+/// written before it takes its own, which a later sync sweeps away if it never does.
+pub(crate) fn copy_temporary_name() -> String {
+    format!(".fetchloom-{:016x}.copy", fastrand::u64(..))
+}
+
 /// a new name for a file moved out of the way in its own folder, `.fetchloom-<16 hex>.old`.
 pub(crate) fn aside_name() -> String {
     format!(".fetchloom-{:016x}.old", fastrand::u64(..))

@@ -667,9 +667,7 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
             "git tracks ./tracked, so a commit keeps its files in the repository; run `git rm -r --cached ./tracked`, then delete it or add /tracked/ to .gitignore"
         ]
     );
-    let mut ignore = fs::read_to_string(work.join(".gitignore"))?;
-    ignore.push_str("/flowers/\n");
-    fs::write(work.join(".gitignore"), ignore)?;
+    fs::write(work.join(".gitignore"), "/flowers/\n")?;
     let ignored = run(&["--json", "add", "./flowers"])?;
     assert_eq!(warned(&ignored), Vec::<String>::new());
     Ok(())

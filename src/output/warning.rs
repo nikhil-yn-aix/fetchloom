@@ -55,9 +55,12 @@ pub(crate) enum Warning {
     ExportIncomplete,
     /// a list `export` writes leaves out files no link holds.
     ExportLeftOut,
-    /// fetchloom left the data folder's rule out of .gitignore, which is a link, a special file or
-    /// too large, or git tracks files in the data folder, so the rule is for a person to add.
-    GitIgnoreUnedited,
+    /// a line of the project's .gitignore hides the whole data folder from git, a person's own
+    /// files there too, though each dataset folder keeps itself out of git.
+    GitDataFolderIgnored,
+    /// a dataset places a .gitignore of its own at the top of its folder, where fetchloom would keep
+    /// the one that hides the folder from git, and no line of the project's .gitignore hides it.
+    GitDatasetUnignored,
     /// files an import read are in the git work tree, where a commit takes or keeps them.
     GitImportInTree,
     /// git does not have lists in data.lock.d that data.lock names.
@@ -172,7 +175,8 @@ impl Warning {
             Warning::DownloadWebPage => "download.web_page",
             Warning::ExportIncomplete => "export.incomplete",
             Warning::ExportLeftOut => "export.left_out",
-            Warning::GitIgnoreUnedited => "git.ignore_unedited",
+            Warning::GitDataFolderIgnored => "git.data_folder_ignored",
+            Warning::GitDatasetUnignored => "git.dataset_unignored",
             Warning::GitImportInTree => "git.import_in_tree",
             Warning::GitLockPartUntracked => "git.lock_part_untracked",
             Warning::ImportSkipped => "import.skipped",
@@ -260,7 +264,8 @@ mod tests {
             DownloadWebPage,
             ExportIncomplete,
             ExportLeftOut,
-            GitIgnoreUnedited,
+            GitDataFolderIgnored,
+            GitDatasetUnignored,
             GitImportInTree,
             GitLockPartUntracked,
             ImportSkipped,

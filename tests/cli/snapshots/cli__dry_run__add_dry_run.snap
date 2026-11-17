@@ -5,6 +5,6 @@ expression: stderr
       Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · 32 B
       Would fetch iris/iris.csv · 32 B
       Would place data/iris · 1 file
-      Would add data/ to .gitignore, since its files come from data.lock
+      Would ignore data/iris in git with data/iris/.gitignore, which also hides files you put there
       Would add iris to data.toml, its files in data/iris
          Ok dry run, nothing was changed

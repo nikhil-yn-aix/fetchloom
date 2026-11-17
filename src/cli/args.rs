@@ -18,7 +18,7 @@ mod examples {
   fetchloom add ./flowers    # files on this machine, copied into the cache
   fetchloom add -i links.txt    # a dataset for each link in a list
 
-on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git project's .gitignore. an imported folder is only read. --no-sync writes only data.toml and data.lock. --dry-run writes nothing";
+on disk: writes data.toml, data.lock and data/<name>, with a .gitignore in data/<name> that keeps it out of git. an imported folder is only read. --no-sync writes only data.toml and data.lock. --dry-run writes nothing";
 
     pub(super) const REMOVE: &str = "examples:
   fetchloom remove iris
@@ -46,7 +46,7 @@ on disk: deletes the unchanged files fetchloom placed for the datasets in data/ 
   fetchloom sync --locked --verify    # for ci, checking every file's SHA-256
   fetchloom sync --force iris --dry-run    # what --force would replace in iris
 
-on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked, and adds data/ to a git project's .gitignore. given names, it changes only those datasets' entries and files. reports files it cannot replace without --force. --dry-run writes nothing";
+on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked, and keeps each dataset's folder out of git with a .gitignore in it. given names, it changes only those datasets' entries and files. reports files it cannot replace without --force. --dry-run writes nothing";
 
     pub(super) const LOCK: &str = "examples:
   fetchloom lock    # write data.lock from data.toml, leaving data/ alone

@@ -8,9 +8,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::args;
-use super::project::{
-    Run, Waited, find, hold_until, ignore_data, known_with_rest, locked, sync_all,
-};
+use super::project::{Run, Waited, find, hold_until, known_with_rest, locked, sync_all};
 use super::sync::disk::{Survey, is_inside};
 use super::sync::place::Seen;
 use super::sync::{Loop, Scope};
@@ -113,7 +111,6 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                         Run::planned(&seen),
                     )
                     .await?;
-                    ignore_data(&work, &manifest, false)?;
                     drop(held);
                     let lock = project.lock()?.unwrap_or_default();
                     let planned = plan::from_cache(&manifest, &lock, &work.cache)?;

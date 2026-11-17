@@ -2,4 +2,5 @@ $ fetchloom sync
 Downloading 3 files · 16.6 KiB
  Downloaded 3 files · 16.6 KiB in 83 ms
      Placed data/iris · 3 files linked to the cache
+    Ignored data/iris in git with data/iris/.gitignore, which also hides files you put there
      Synced 1 dataset into data

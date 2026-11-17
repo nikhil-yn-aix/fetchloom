@@ -12,8 +12,9 @@ use icu_normalizer::ComposingNormalizerBorrowed;
 
 use super::add::{AS, AddProject, free_name, from_here, render_add, sync_add, usable};
 use super::args::Add;
-use super::project::{Report, dry_run_done, ignore_data};
+use super::project::{Report, dry_run_done};
 use super::sync::place::Changes;
+use super::sync::place::tell_marked;
 use super::sync::{Given, Loop};
 use super::{Context, open_cache, peek_cache};
 use crate::archive;
@@ -355,7 +356,7 @@ async fn already_imported(
     work.context
         .output
         .step("Imported", &format!("{name} · {told}"));
-    ignore_data(work, manifest, false)?;
+    tell_marked(&work.context.output, &outcome.placed);
     let folder = from_here(work.project, here, &plan::folder(manifest, name));
     work.context.output.done(
         "Ok",
@@ -418,9 +419,9 @@ async fn import_new(
         &manifest,
         (name, has_files),
         here,
-        (starting, adding.begins()),
+        (starting, &outcome.placed),
         (&[], None),
-    )?;
+    );
     Ok(Report {
         project: work.project.root.clone(),
         datasets: names.to_vec(),
@@ -489,7 +490,7 @@ async fn supply(
     let outcome = sync_add(work, adding, manifest, None, old, (&names, given)).await?;
     // said once the files are in place, so a sync that fails never claims them
     output.step("Supplied", &format!("{name} · {told}"));
-    ignore_data(work, manifest, false)?;
+    tell_marked(output, &outcome.placed);
     let folder = from_here(work.project, here, &plan::folder(manifest, name));
     if pins {
         output.done(

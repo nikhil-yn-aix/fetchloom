@@ -14,12 +14,9 @@ use tracing::Instrument as _;
 use super::args::Add;
 use super::import::import_held;
 use super::links;
-use super::project::{
-    Outcome, Report, committed, dry_run_done, hold, ignore_data, preview_all, preview_ignore,
-    register,
-};
+use super::project::{Outcome, Report, committed, dry_run_done, hold, preview_all, register};
 use super::sync::disk::{self, Survey};
-use super::sync::place::{self, Placement};
+use super::sync::place::{self, Placement, tell_marked};
 use super::sync::{self as engine, Given, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
 use crate::digest::{self, Sha256};
@@ -53,12 +50,6 @@ pub(super) struct AddProject {
 }
 
 impl AddProject {
-    /// whether the add begins the project, its first pins: there was no data.lock when it read
-    /// the project, as with a hand-written data.toml or none.
-    pub(super) fn begins(&self) -> bool {
-        self.lock_text.is_none()
-    }
-
     /// reads data.toml and data.lock as the add finds them once it holds the project.
     fn read(&mut self) -> Result<(), Error> {
         if self.project.manifest_path().is_file() {
@@ -732,8 +723,7 @@ async fn add_held(
     if args.no_sync {
         let shown = parsed.reference.shown();
         let pinned = stated::pinned(&name, &addition.entry, &addition.listing, (&shown, link))?;
-        let added = (updated.as_str(), &new_manifest);
-        return stated::write(&work, adding, added, old, pinned, (starting, dry_run));
+        return stated::write(&work, adding, &updated, old, pinned, (starting, dry_run));
     }
     if dry_run {
         let given = vec![Given::Listing(name.clone(), addition.listing)];
@@ -779,9 +769,9 @@ async fn add_held(
         &new_manifest,
         (&name, has_files),
         here,
-        (starting, adding.begins()),
+        (starting, &outcome.placed),
         (&private, list),
-    )?;
+    );
     Ok(Report {
         project: project.root.clone(),
         datasets: vec![name],
@@ -1180,7 +1170,6 @@ async fn preview_add(
 ) -> Result<Report, Error> {
     let outcome = preview_all(work, manifest, old, false, false, given, None).await?;
     let output = &work.context.output;
-    preview_ignore(work, manifest)?;
     for name in &names {
         output.step(
             "Would add",
@@ -1424,20 +1413,19 @@ fn manifest_changed_meanwhile() -> Error {
 }
 
 /// the last lines of an add of the dataset `added`, a name and whether it has files, in a project
-/// it is `starting`, or whose first pins it `begins`, as [`AddProject::begins`] tells. `list` is
-/// the path of the list in the project it was added from, which a clone reads to lock it again.
+/// it is `starting`, after its placement `placed`. `list` is the path of the list in the project
+/// it was added from, which a clone reads to lock it again.
 pub(super) fn render_add(
     work: &Loop<'_>,
     manifest: &Manifest,
     added: (&str, bool),
     here: &Path,
-    (starting, begins): (bool, bool),
+    (starting, placed): (bool, &Placement),
     (private, list): (&[url::Origin], Option<&str>),
-) -> Result<(), Error> {
+) {
     tell_started(work, starting);
-    ignore_data(work, manifest, starting || begins)?;
+    tell_marked(&work.context.output, placed);
     tell_added(work, manifest, added, here, (private, list));
-    Ok(())
 }
 
 fn tell_started(work: &Loop<'_>, starting: bool) {
@@ -1714,7 +1702,6 @@ async fn again(
     let back = work.project.dropped().contains(name);
     if dry_run {
         let outcome = preview_all(work, manifest, old, false, false, Vec::new(), None).await?;
-        preview_ignore(work, manifest)?;
         let back = if back {
             " and would be back on this machine"
         } else {
@@ -1728,8 +1715,7 @@ async fn again(
     }
     let names = [name.to_owned()];
     let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new())).await?;
-    // a project that became a git repository after its first add gets its ignore rule now
-    ignore_data(work, manifest, false)?;
+    tell_marked(&work.context.output, &outcome.placed);
     let contents = if outcome.placed.planned.contains(name) {
         format!(
             "its files are in {}",

@@ -299,6 +299,7 @@ fn a_repository_link_leaves_out_gits_own_files() -> Result {
     assert_eq!(
         placed(&sandbox.work().join("data/survey"))?,
         [
+            ".gitignore",
             "data/.github/notes.yml",
             "data/rows.csv",
             "requirements.txt"
@@ -380,7 +381,7 @@ fn a_github_folder_at_a_branch_pins_every_file_at_its_commit() -> Result {
     }
     assert_eq!(
         placed(&work.join("data/survey"))?,
-        ["2020/field notes.txt", "big.bin", "rows.csv"],
+        [".gitignore", "2020/field notes.txt", "big.bin", "rows.csv"],
         "the folder's files alone, at their paths inside it"
     );
     let asked: Vec<String> = routes
@@ -1448,7 +1449,7 @@ fn a_listings_next_page_on_another_origin_stops_the_add() -> Result {
     ok(&run(&sandbox, &routes, &["add", link, "--as", "survey"])?)?;
     assert_eq!(
         placed(&sandbox.work().join("data/survey"))?,
-        ["2020/notes.txt", "rows.csv"]
+        [".gitignore", "2020/notes.txt", "rows.csv"]
     );
     Ok(())
 }

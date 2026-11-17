@@ -67,6 +67,14 @@ pub(crate) struct State {
     /// files, so a settled sync need not look for them again while nothing it notes has changed.
     #[serde(default)]
     pub(crate) uncached: Option<Uncached>,
+    /// the dataset folders fetchloom put a .gitignore of its own in, by path in the project: each
+    /// written before the file is made, so no such file goes unrecorded, and only these it deletes.
+    #[serde(default)]
+    pub(crate) marked: BTreeSet<String>,
+    /// the line of the project's .gitignore a run said hides the whole data folder from git, so the
+    /// same line is told of once.
+    #[serde(default)]
+    pub(crate) rule_told: Option<String>,
 }
 
 /// what a sync noted when it found a cache holding none of the objects of a project's copies of
@@ -350,6 +358,14 @@ impl State {
             out.extend_from_slice(br#","uncached":"#);
             serde_json::to_writer(&mut *out, uncached)?;
         }
+        if !self.marked.is_empty() {
+            out.extend_from_slice(br#","marked":"#);
+            serde_json::to_writer(&mut *out, &self.marked)?;
+        }
+        if let Some(rule) = &self.rule_told {
+            out.extend_from_slice(br#","rule_told":"#);
+            serde_json::to_writer(&mut *out, rule)?;
+        }
         out.extend_from_slice(br#","blocks":"#);
         serde_json::to_writer(&mut *out, &blocks)?;
         out.push(b'}');
@@ -382,6 +398,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         let (mut version, mut files, mut synced) = (None, false, false);
         let (mut dropped, mut freeing, mut folder, mut aside, mut replacing, mut uncached) =
             (false, false, false, false, false, false);
+        let (mut marked, mut rule_told) = (false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -416,6 +433,14 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "uncached" => {
                     state.uncached = map.next_value()?;
                     std::mem::replace(&mut uncached, true)
+                }
+                "marked" => {
+                    state.marked = map.next_value()?;
+                    std::mem::replace(&mut marked, true)
+                }
+                "rule_told" => {
+                    state.rule_told = map.next_value()?;
+                    std::mem::replace(&mut rule_told, true)
                 }
                 _ => {
                     map.next_value::<serde::de::IgnoredAny>()?;
@@ -502,7 +527,8 @@ type Block = (String, u64, u64);
 
 /// what follows the records: the settled sync, the dropped datasets and those
 /// whose drop has not freed the cache yet, the folder, the files kept aside, those being replaced,
-/// what the cache lacked of the copies and the blocks.
+/// what the cache lacked of the copies, the folders fetchloom marked for git, the root rule told
+/// of and the blocks.
 #[derive(Deserialize)]
 struct Tail {
     #[serde(default)]
@@ -519,6 +545,10 @@ struct Tail {
     replacing: BTreeSet<String>,
     #[serde(default)]
     uncached: Option<Uncached>,
+    #[serde(default)]
+    marked: BTreeSet<String>,
+    #[serde(default)]
+    rule_told: Option<String>,
     blocks: Vec<Block>,
 }
 
@@ -577,7 +607,7 @@ impl<R: Read + Seek> Reading<'_, R> {
             self.parsed(|deserializer| serde::Deserialize::deserialize(deserializer))?;
         let state = match owner {
             Some(owner) if owner.version != Some(VERSION) => State::default(),
-            Some(owner) if !ours(owner.folder.as_ref()) => foreign(owner.folder),
+            Some(owner) if !ours(owner.folder.as_ref()) => foreign(owner.folder, owner.marked),
             Some(_) => self
                 .parsed(|deserializer| {
                     serde::de::DeserializeSeed::deserialize(Only(keep), deserializer)
@@ -628,10 +658,12 @@ fn indexed(
         aside,
         replacing,
         uncached,
+        marked,
+        rule_told,
         blocks,
     } = match index(reading, ours)? {
         Indexed::Tail(tail) => *tail,
-        Indexed::Foreign(folder) => return Ok(foreign(folder)),
+        Indexed::Foreign(folder, marked) => return Ok(foreign(folder, marked)),
     };
     let mut files = BTreeMap::new();
     let mut bytes = Vec::new();
@@ -654,6 +686,8 @@ fn indexed(
         aside,
         replacing,
         uncached,
+        marked,
+        rule_told,
     })
 }
 
@@ -671,10 +705,12 @@ fn by_blocks(
         aside,
         replacing,
         uncached,
+        marked,
+        rule_told,
         blocks,
     } = match index(reading, ours)? {
         Indexed::Tail(tail) => *tail,
-        Indexed::Foreign(folder) => return Ok(foreign(folder)),
+        Indexed::Foreign(folder, marked) => return Ok(foreign(folder, marked)),
     };
     let mut records = Vec::new();
     let mut bytes = Vec::new();
@@ -700,6 +736,8 @@ fn by_blocks(
         aside,
         replacing,
         uncached,
+        marked,
+        rule_told,
     })
 }
 
@@ -716,7 +754,7 @@ fn index(
     // the folder first, so nothing more of another folder's state, as a clone brings it, is read
     let owner: Owner = reading.tail(at)?;
     if !ours(owner.folder.as_ref()) {
-        return Ok(Indexed::Foreign(owner.folder));
+        return Ok(Indexed::Foreign(owner.folder, owner.marked));
     }
     let found: Tail = reading.tail(at)?;
     if !chained(&found.blocks, at) {
@@ -726,27 +764,31 @@ fn index(
 }
 
 /// what [`index`] found after a state's records: the index of one written for this folder, or
-/// the folder another one names.
+/// the folder another one names, with the folders it marked for git.
 enum Indexed {
     Tail(Box<Tail>),
-    Foreign(Option<Folder>),
+    Foreign(Option<Folder>, BTreeSet<String>),
 }
 
-/// the version and the folder a state records, read before anything else of it, every other
-/// field passed over unheld.
+/// the version and the folder a state records, read before anything else of it, and the folders
+/// it marked for git, every other field passed over unheld.
 #[derive(Deserialize)]
 struct Owner {
     #[serde(default)]
     version: Option<u32>,
     #[serde(default)]
     folder: Option<Folder>,
+    #[serde(default)]
+    marked: BTreeSet<String>,
 }
 
-/// a state written for another folder, `folder`, with none of its records: the reader drops it.
-fn foreign(folder: Option<Folder>) -> State {
+/// a state written for another folder, `folder`, with none of its records but the folders it
+/// `marked`: the reader drops the rest.
+fn foreign(folder: Option<Folder>, marked: BTreeSet<String>) -> State {
     State {
         version: VERSION,
         folder,
+        marked,
         ..State::default()
     }
 }
@@ -1352,6 +1394,8 @@ mod tests {
             copies: 7,
             newest: 42,
         });
+        state.marked.insert("data/a".to_owned());
+        state.rule_told = Some("/data/".to_owned());
         state
     }
 
@@ -1377,6 +1421,8 @@ mod tests {
         assert_eq!(read.aside, whole.aside, "{case}");
         assert_eq!(read.replacing, whole.replacing, "{case}");
         assert_eq!(read.uncached, whole.uncached, "{case}");
+        assert_eq!(read.marked, whole.marked, "{case}");
+        assert_eq!(read.rule_told, whole.rule_told, "{case}");
         assert_eq!(read.version, whole.version, "{case}");
     }
 
@@ -1446,6 +1492,8 @@ mod tests {
             assert_eq!(read.aside, state.aside, "blocks of {block}");
             assert_eq!(read.replacing, state.replacing, "blocks of {block}");
             assert_eq!(read.uncached, state.uncached, "blocks of {block}");
+            assert_eq!(read.marked, state.marked, "blocks of {block}");
+            assert_eq!(read.rule_told, state.rule_told, "blocks of {block}");
             for folders in FOLDERS {
                 let folders: Vec<String> = folders.iter().map(|&folder| folder.into()).collect();
                 let case = format!("{folders:?} in blocks of {block}");

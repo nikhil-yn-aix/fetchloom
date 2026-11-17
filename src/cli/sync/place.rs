@@ -1,6 +1,7 @@
 //! making the data folder match the lock: place what is missing, replace what fetchloom placed for
 //! an older pin, remove what no dataset needs, and leave alone every file someone changed or added.
 
+mod mark;
 #[cfg(test)]
 #[cfg(unix)]
 mod model_tests;
@@ -100,6 +101,17 @@ pub(crate) struct Placement {
     /// files fetchloom placed before `data_dir` changed, which stay outside the data folder.
     #[serde(skip)]
     pub(crate) left_behind: Option<LeftBehind>,
+    /// dataset folders given a .gitignore that keeps them out of git, or that a dry run would give
+    /// one.
+    #[serde(skip)]
+    pub(crate) marked: Vec<String>,
+    /// whether the project is in a git repository, where the lines for `marked` matter.
+    #[serde(skip)]
+    pub(crate) in_git: bool,
+    /// dataset folders whose own .gitignore the run places where a marker would go, which no line
+    /// of the project's .gitignore hides.
+    #[serde(skip)]
+    pub(crate) unmarkable: BTreeSet<String>,
 }
 
 impl Placement {
@@ -344,6 +356,7 @@ impl Preview {
                 .by_dataset
                 .values()
                 .all(|planned| planned.adopt.is_empty())
+            && placement.marked.is_empty()
     }
 }
 
@@ -881,7 +894,22 @@ impl<'a> Placing<'a> {
                 }
             }
         }
+        self.preview_marks(&mut preview.placement);
         preview
+    }
+
+    /// notes in `placement` the dataset folders a run would keep out of git, and those whose own
+    /// .gitignore it would place.
+    fn preview_marks(&self, placement: &mut Placement) {
+        let wanted = mark::wanted(self.manifest, &self.targets, &self.actions);
+        placement.marked = mark::planned(&self.survey, &wanted).0;
+        placement.in_git = Project::repository(&self.project.root).is_some();
+        placement.unmarkable = mark::unmarkable(
+            &self.project.root,
+            self.manifest,
+            &self.targets,
+            &self.actions,
+        );
     }
 
     /// what [`Placing::remove_only`] would do, with nothing written.
@@ -1033,6 +1061,14 @@ impl<'a> Placing<'a> {
         )?;
         // told at once, since the state no longer records those files once this run writes it
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
+        // after the files went, so the folders they leave go with the markers
+        let unmarked = mark::retire(
+            &project.root,
+            manifest,
+            &mut placer,
+            &mut survey,
+            (&targets, (&unknown, &waiting)),
+        );
         let folders = swept(&scope, &targets, &actions);
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
         let adding = told.map(|names| added_here(names, &targets, &actions));
@@ -1042,7 +1078,16 @@ impl<'a> Placing<'a> {
         );
         // the state written ahead must not vouch for the size and time an edit kept
         survey.smudge_edited();
-        write_ahead(project, &mut survey, (&targets, &actions), &mut placement)?;
+        let (to_mark, marking) =
+            mark::to_make(&mut survey, &mark::wanted(manifest, &targets, &actions));
+        placement.unmarkable = mark::unmarkable(&project.root, manifest, &targets, &actions);
+        write_ahead(
+            project,
+            &mut survey,
+            (&targets, &actions),
+            &mut placement,
+            marking,
+        )?;
         // a settling that fails ends as a failed placing does, recording the files it removed
         let (todo, adopted, unsettled) = match settle(
             project,
@@ -1057,6 +1102,11 @@ impl<'a> Placing<'a> {
             Err(error) => (Vec::new(), true, Some(error)),
         };
         survey.smudge_edited();
+        // before the files land, so git never sees a dataset's folder while it fills
+        placement.marked = mark::make(&project.root, &mut placer, &mut survey.state, to_mark);
+        placement.in_git = Project::repository(&project.root).is_some();
+        let told_rule = !placement.marked.is_empty()
+            && mark::tell_hiding_line(output, &project.root, &manifest.data_dir, &mut survey.state);
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
         let threads = survey.threads;
@@ -1101,6 +1151,8 @@ impl<'a> Placing<'a> {
         let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding
                 .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
+        let taken_back =
+            undone && mark::take_back(&project.root, &mut placer, state, &placement.marked);
         // a run that ends early tells no placement, so its error says where each changed copy went
         let ended = |error: Error| kept_copies(error, &placement.changed_copies);
         flushed.map_err(ended)?;
@@ -1112,7 +1164,15 @@ impl<'a> Placing<'a> {
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let recorded = removed || adopted || undone || kept_aside || linked || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
-        record(project, state, synced, recorded, needs_writing || dropped).map_err(ended)?;
+        let marks = unmarked || marking || told_rule || taken_back;
+        record(
+            project,
+            state,
+            synced,
+            recorded,
+            needs_writing || dropped || marks,
+        )
+        .map_err(ended)?;
         if stopped {
             return Err(ended(Stop::stopped()));
         }
@@ -1163,11 +1223,18 @@ impl<'a> Placing<'a> {
             &mut placement,
         )?;
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
+        let unmarked = mark::retire(
+            &project.root,
+            manifest,
+            &mut placer,
+            &mut survey,
+            (&targets, (&unknown, &waiting)),
+        );
         survey.smudge_edited();
         let (_, moved_away) = track_aside(&project.root, &mut survey.state, Vec::new());
         let forgot = survey.state.synced.take().is_some();
         let dropped = survey.state.forget_removed(manifest) || moved_away;
-        if removed || forgot || dropped || survey.needs_writing {
+        if removed || forgot || dropped || unmarked || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
         // a person's file kept aside may be what keeps a folder, so it is named as sync names it
@@ -1185,6 +1252,11 @@ impl<'a> Placing<'a> {
         }
         Ok(placement)
     }
+}
+
+/// the line for the dataset folders `placement` kept out of git with a .gitignore of fetchloom's.
+pub(crate) fn tell_marked(output: &Output, placement: &Placement) {
+    mark::tell_made(output, &placement.marked, placement.in_git, "Ignored");
 }
 
 /// `error` with a line for each changed copy of a cache link the run kept beside its file, which a
@@ -1283,6 +1355,7 @@ pub(crate) fn untouched(
                     && !placed.writable
                     && survey.writable.contains(path))
         })
+        || !mark::settled(manifest, survey, scope)
     {
         return Ok(None);
     }
@@ -1793,13 +1866,15 @@ fn planned_aside(
 /// writes to the state, before settling moves or removes anything, the hidden name each file
 /// `--force` moves out of the way takes, and the files fetchloom placed that it removes to place
 /// the pinned ones, so a run cut off at once leaves each moved file findable by the name it had
-/// and no removal of fetchloom's own told as someone's. writes nothing when settling moves and
-/// removes nothing.
+/// and no removal of fetchloom's own told as someone's; and, when `marking`, the folders whose
+/// markers the run makes. writes nothing when settling moves and removes nothing, and no marker
+/// is made.
 fn write_ahead(
     project: &Project,
     survey: &mut Survey,
     (targets, actions): (&[Target], &[Action]),
     placement: &mut Placement,
+    marking: bool,
 ) -> Result<(), Error> {
     let mut replacing = Vec::new();
     for (target, action) in targets.iter().zip(actions) {
@@ -1820,7 +1895,7 @@ fn write_ahead(
             placement.aside_names.insert(moved.clone(), hidden);
         }
     }
-    if placement.aside_names.is_empty() && replacing.is_empty() {
+    if placement.aside_names.is_empty() && replacing.is_empty() && !marking {
         return Ok(());
     }
     let state = &mut survey.state;
@@ -3407,11 +3482,12 @@ mod tests {
             assert_eq!(placed.is_ok(), cached, "{placed:?}");
             let expected: &[u8] = if cached { bytes } else { b"my own edit\n" };
             assert_eq!(fs::read(&edited).unwrap(), expected);
-            let names: Vec<String> = fs::read_dir(&folder)
+            let mut names: Vec<String> = fs::read_dir(&folder)
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
                 .collect();
-            assert_eq!(names, ["weather.csv"]);
+            names.sort();
+            assert_eq!(names, [".gitignore", "weather.csv"]);
         }
     }
 

@@ -26,7 +26,7 @@ use crate::project::lock::merge;
 use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
-use crate::project::{Held, Hold, Ignore, Project, git, native};
+use crate::project::{Held, Hold, Project, git, native};
 use crate::source::{Listing, local};
 pub(crate) use crate::suggested::command;
 use crate::units;
@@ -68,82 +68,6 @@ impl Report {
             merge: None,
             waiting: Vec::new(),
         }
-    }
-}
-
-/// says what [`ignore_data`] would add to .gitignore, or what a person adds by hand. a project
-/// with no data.lock yet, as a dry run leaves it, is told as one the run begins.
-pub(super) fn preview_ignore(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
-    let output = &work.context.output;
-    let begins = std::fs::symlink_metadata(work.project.root.join(lock::FILE)).is_err();
-    match work.project.ignored_in_git(&manifest.data_dir, begins)? {
-        Ignore::Add(_) => output.step(
-            "Would add",
-            &format!(
-                "{}/ to .gitignore, since its files come from data.lock",
-                manifest.data_dir
-            ),
-        ),
-        ignore => by_hand(output, manifest, &ignore),
-    }
-    Ok(())
-}
-
-/// adds the data folder's rule to .gitignore inside git, and outside it for a run that `begins`
-/// the project, its first pins, saying so only when it added the line.
-pub(super) fn ignore_data(work: &Loop<'_>, manifest: &Manifest, begins: bool) -> Result<(), Error> {
-    let output = &work.context.output;
-    match work.project.ignore_in_git(&manifest.data_dir, begins)? {
-        Ignore::Add(_) => output.step(
-            "Ignored",
-            &format!(
-                "{}/ in .gitignore, since its files come from data.lock",
-                manifest.data_dir
-            ),
-        ),
-        ignore => by_hand(output, manifest, &ignore),
-    }
-    Ok(())
-}
-
-/// warns, where `ignore` says fetchloom leaves the data folder's line out of .gitignore, why and
-/// what a person can do: add the line by hand, or give the data a folder of its own.
-fn by_hand(output: &Output, manifest: &Manifest, ignore: &Ignore) {
-    let data_dir = &manifest.data_dir;
-    match ignore {
-        Ignore::ByHand { rule, why } => output.warn_with(
-            Warning::GitIgnoreUnedited,
-            &format!(".gitignore is {why}, which fetchloom never edits"),
-            &format!("to keep {data_dir}/ out of git, add the line {rule} to it by hand"),
-        ),
-        Ignore::Tracked => output.warn_with(
-            Warning::GitIgnoreUnedited,
-            &format!(
-                "git tracks files in {data_dir}/, so fetchloom leaves it out of .gitignore, which would hide new files there from git"
-            ),
-            &tracked_help(manifest),
-        ),
-        Ignore::Done | Ignore::Add(_) => {}
-    }
-}
-
-/// what a person can do about a data folder git tracks files in: give the data a folder of its
-/// own, or ignore each dataset's folder, which holds only data where the data folder does not.
-fn tracked_help(manifest: &Manifest) -> String {
-    let own = "set data_dir in [project] in data.toml to a folder that holds only data";
-    let rules: Vec<String> = manifest
-        .datasets
-        .keys()
-        .filter(|name| plan::subfolder(manifest, name).is_some())
-        .map(|name| crate::project::ignore_rule(&plan::folder(manifest, name)))
-        .collect();
-    match rules.as_slice() {
-        [] => own.to_owned(),
-        [rule] => format!("{own}, or add the line {rule} to .gitignore yourself"),
-        [first, ..] => format!(
-            "{own}, or add a line for each of the {} dataset folders to .gitignore yourself, such as {first}",
-            units::grouped(rules.len() as u64)
-        ),
     }
 }
 
@@ -214,17 +138,12 @@ pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -
 }
 
 /// the project files a person commits: data.lock.d too, if any, since a clone without it cannot
-/// read data.lock, or once a run removed its last list git has, so the commit takes that away too;
-/// and in a git repository the .gitignore that keeps the data folder out.
+/// read data.lock, or once a run removed its last list git has, so the commit takes that away too.
 pub(super) fn committed(project: &Project) -> &'static str {
-    let repository = Project::repository(&project.root).is_some();
-    let lists = names_lists(project);
-    let ignore = repository && project.root.join(".gitignore").is_file();
-    match (lists, ignore) {
-        (true, true) => "data.toml, data.lock, data.lock.d and .gitignore",
-        (true, false) => "data.toml, data.lock and data.lock.d",
-        (false, true) => "data.toml, data.lock and .gitignore",
-        (false, false) => "data.toml and data.lock",
+    if names_lists(project) {
+        "data.toml, data.lock and data.lock.d"
+    } else {
+        "data.toml and data.lock"
     }
 }
 
@@ -353,8 +272,6 @@ async fn sync_held(
             .await
             .map(|report| (Report { waiting, ..report }, None));
     }
-    // no data.lock yet means this sync begins the project, which outside git still wants the rule
-    let begins = read.is_none();
     let old = read.map(|(lock, _)| lock);
     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
         .within(scope)
@@ -376,8 +293,6 @@ async fn sync_held(
         &work.scope,
         sync_all(&work, &manifest, old, None, run).await,
     )?;
-    // a project that became a git repository after its add gets its ignore rule now
-    ignore_data(&work, &manifest, begins)?;
     let closing = closing(
         &project,
         &manifest,
@@ -482,7 +397,6 @@ async fn sync_plain(
         pins,
         placed: placement,
     } = outcome;
-    ignore_data(&work, manifest, false)?;
     let closing = closing(
         project,
         manifest,
@@ -573,7 +487,6 @@ fn settled_named(
         .map_err(|error| work.before_placing(error))?;
     context.stop.finish();
     register(&work);
-    ignore_data(&work, manifest, false)?;
     let waiting = waiting_in(&lock);
     let closing = closing(project, manifest, scope, false, &placement, false, &waiting);
     let report = Report {
@@ -633,10 +546,6 @@ fn settled_unheld(
     else {
         return Ok(None);
     };
-    match project.ignored_in_git(&manifest.data_dir, false)? {
-        Ignore::Add(_) => return Ok(None),
-        ignore => by_hand(&context.output, &manifest, &ignore),
-    }
     if held && let Err(err) = cache.register(&project.root) {
         tracing::debug!(%err, "could not list a read-only project in the cache");
     }
@@ -865,7 +774,6 @@ async fn preview_sync(
         seen,
     )
     .await?;
-    preview_ignore(&work, manifest)?;
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
     let waiting = waiting_named(&waits, manifest, &work.scope);
     dry_run_done(
@@ -1908,37 +1816,6 @@ pub(super) fn known_with_rest(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    /// a data folder git tracks files in names each dataset folder's own line, escaped as git
-    /// reads it, as the data folder's own line is; a dataset placed in the data folder itself has
-    /// no folder of its own to name.
-    #[test]
-    fn a_tracked_data_folder_names_each_datasets_own_line() {
-        let parsed = |datasets: &str| {
-            Manifest::parse(&format!("[project]\ndata_dir = \"src\"\n\n{datasets}")).unwrap()
-        };
-        let own = "set data_dir in [project] in data.toml to a folder that holds only data";
-        assert_eq!(
-            super::tracked_help(&parsed(
-                "[datasets.scans]\nref = \"zenodo:1\"\npath = \"scans[1]\"\n"
-            )),
-            format!("{own}, or add the line /src/scans\\[1\\]/ to .gitignore yourself")
-        );
-        assert_eq!(
-            super::tracked_help(&parsed(
-                "[datasets.iris]\nref = \"zenodo:1\"\n\n[datasets.wine]\nref = \"zenodo:2\"\n"
-            )),
-            format!(
-                "{own}, or add a line for each of the 2 dataset folders to .gitignore yourself, such as /src/iris/"
-            )
-        );
-        assert_eq!(
-            super::tracked_help(&parsed(
-                "[datasets.iris]\nref = \"zenodo:1\"\npath = \".\"\n"
-            )),
-            own
-        );
-    }
-
     /// a folder whose name a shell would need quoted is passed by, so no clone's folder name
     /// steers the help, or the `fix` taken from it.
     #[test]

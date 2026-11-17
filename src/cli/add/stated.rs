@@ -4,7 +4,7 @@
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
-use super::super::project::{Report, committed, dry_run_done, ignore_data, register};
+use super::super::project::{Report, committed, dry_run_done, register};
 use super::super::sync::{self as engine, Loop};
 use super::{AddProject, BeforeAdd, changed_meanwhile, manifest_changed_meanwhile, restore};
 use crate::error::{Error, Kind};
@@ -90,14 +90,7 @@ pub(super) fn again(
         (&parsed.reference.shown(), typed),
     )?;
     let text = adding.text.as_deref().unwrap_or_default();
-    write(
-        work,
-        adding,
-        (text, manifest),
-        old,
-        stated,
-        (false, dry_run),
-    )
+    write(work, adding, text, old, stated, (false, dry_run))
 }
 
 /// whether `lock` pins `name` as `entry` asks: by its bytes, which a changed `extract` leaves
@@ -314,7 +307,7 @@ fn commit(
 pub(super) fn write(
     work: &Loop<'_>,
     adding: &AddProject,
-    (updated, manifest): (&str, &Manifest),
+    updated: &str,
     old: Option<Lock>,
     stated: Stated,
     (starting, dry_run): (bool, bool),
@@ -337,7 +330,6 @@ pub(super) fn write(
         for file in &stated.files {
             output.detail(&format!("{name}/{}", file.path));
         }
-        super::super::project::preview_ignore(work, manifest)?;
         if !again {
             output.step(
                 "Would add",
@@ -370,7 +362,6 @@ pub(super) fn write(
     if let Some(line) = unchecked {
         output.item(line);
     }
-    ignore_data(work, manifest, starting || adding.begins())?;
     if again {
         output.done(
             "Ok",

@@ -26,8 +26,8 @@ const FOLDER: &str = ".fetchloom";
 /// the most an owner record is read for. one is a line of JSON naming a command and a process.
 const OWNER_CAP: u64 = 64 << 10;
 
-/// the most of a .gitignore fetchloom reads to add the data folder's rule to it, many times what
-/// a person writes.
+/// the most of a .gitignore fetchloom reads to look for a line hiding a folder, many times what a
+/// person writes.
 const GITIGNORE_CAP: u64 = 1 << 20;
 /// the most bytes of data.lock a read takes, far past what fetchloom writes: a planted file, or
 /// a link to a huge one, is refused before it fills memory.
@@ -42,21 +42,6 @@ const PENDING: &str = "pending-lock";
 struct Pending {
     manifest: String,
     folder: Option<Folder>,
-}
-
-/// what the .gitignore of the git repository a project is in needs for its data folder.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Ignore {
-    /// nothing: the project is in no git repository, or .gitignore has the rule already.
-    Done,
-    /// .gitignore's text with the rule added.
-    Add(String),
-    /// .gitignore is `why`, as a link a clone holds, which fetchloom never reads or edits: the
-    /// rule a person adds to it by hand.
-    ByHand { rule: String, why: String },
-    /// git tracks files in the data folder, the project's own work, which the rule would hide
-    /// from git as soon as it changed, so a person adds the datasets' own folders instead.
-    Tracked,
 }
 
 pub(crate) struct Project {
@@ -480,8 +465,9 @@ impl Project {
 
     /// the state as `read` makes it from the opened file and its length, and when it was written.
     /// a missing or unreadable state is empty, and so is one written for another folder, as a
-    /// clone or a copy of the project brings it: every file is then checked by its hash. `read`
-    /// gets whether a folder a state names is this one, so it reads no record of another's.
+    /// clone or a copy of the project brings it: every file is then checked by its hash. only the
+    /// dataset folders it marked for git stay, since a copy brings their .gitignore files too.
+    /// `read` gets whether a folder a state names is this one, so it reads no record of another's.
     pub(crate) fn read_opened(
         &self,
         opened: io::Result<(fs::File, Look)>,
@@ -513,7 +499,10 @@ impl Project {
         TOLD.call_once(|| {
             tracing::debug!(folder = %self.root.display(), "the state was written for another folder, so it is not used");
         });
-        (State::default(), 0)
+        // a forged record can only have a .gitignore holding `*` deleted with its dataset's folder
+        let mut kept = State::default();
+        kept.marked = state.marked;
+        (kept, 0)
     }
 
     /// fetchloom's own folder in the project, which holds no data a person works with.
@@ -1065,71 +1054,6 @@ impl Project {
         Ok(folder)
     }
 
-    /// adds the data folder to the .gitignore of the git repository the project is in, unless it is
-    /// there, and says what it found: [`Ignore::Add`] once it wrote the rule. a run that `begins`
-    /// the project, its first pins, gets the rule outside git too, so a later `git init` leaves
-    /// the data out all the same.
-    pub(crate) fn ignore_in_git(&self, data_dir: &str, begins: bool) -> Result<Ignore, Error> {
-        let ignore = self.ignored_in_git(data_dir, begins)?;
-        if let Ignore::Add(updated) = &ignore {
-            self.write(".gitignore", updated.as_bytes())?;
-        }
-        Ok(ignore)
-    }
-
-    /// what [`Project::ignore_in_git`] would do to the .gitignore of the git repository the
-    /// project is in, or of the project a run `begins` outside git.
-    pub(crate) fn ignored_in_git(&self, data_dir: &str, begins: bool) -> Result<Ignore, Error> {
-        if !begins && Project::repository(&self.root).is_none() {
-            return Ok(Ignore::Done);
-        }
-        let entry = ignore_rule(data_dir);
-        let path = self.root.join(".gitignore");
-        let text = match read_gitignore(&path) {
-            Ok(text) => text,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
-            Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
-                return Ok(Ignore::ByHand {
-                    rule: entry,
-                    why: "a link or a special file".to_owned(),
-                });
-            }
-            Err(err) if err.kind() == io::ErrorKind::FileTooLarge => {
-                return Ok(Ignore::ByHand {
-                    rule: entry,
-                    why: format!("larger than {}", crate::units::size(GITIGNORE_CAP)),
-                });
-            }
-            Err(err) => return Err(self.unreadable(".gitignore", &err)),
-        };
-        let present = text.lines().map(str::trim).any(|line| {
-            [
-                entry.as_str(),
-                &entry[1..],
-                &entry[..entry.len() - 1],
-                &entry[1..entry.len() - 1],
-            ]
-            .contains(&line)
-        });
-        if present {
-            return Ok(Ignore::Done);
-        }
-        // files git tracks there are the project's own, which the rule would hide once changed
-        let git = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &self.root));
-        if let Some(git) = git
-            && git::tracked(&git, &self.root, data_dir).is_some_and(|files| !files.is_empty())
-        {
-            return Ok(Ignore::Tracked);
-        }
-        let mut updated = text;
-        if !updated.is_empty() && !updated.ends_with('\n') {
-            updated.push('\n');
-        }
-        updated.push_str(&entry);
-        updated.push('\n');
-        Ok(Ignore::Add(updated))
-    }
-
     /// the .fetchloom folder, which tells git to ignore it the first time it is made. one this call
     /// made and could not finish goes again.
     fn inner(&self) -> Result<PathBuf, Error> {
@@ -1204,24 +1128,10 @@ fn is_repository(folder: &Path) -> bool {
     folder.join(".git").exists()
 }
 
-/// the .gitignore line that ignores `folder`, a path from the project root, and nothing else.
-pub(crate) fn ignore_rule(folder: &str) -> String {
-    // git reads [, *, ? and \ in a rule as a pattern, so a folder named data[1] needs them
-    // escaped to be ignored itself
-    let literal: String = folder
-        .chars()
-        .flat_map(|c| {
-            let escape = matches!(c, '[' | ']' | '*' | '?' | '\\').then_some('\\');
-            escape.into_iter().chain([c])
-        })
-        .collect();
-    format!("/{literal}/")
-}
-
 /// .gitignore's text, read without following a link and only up to [`GITIGNORE_CAP`]: a link a
 /// clone holds would have the file it names copied in, and a pipe or a device never ends.
 /// `InvalidInput` for a link or a special file, `FileTooLarge` past the cap.
-fn read_gitignore(path: &Path) -> io::Result<String> {
+pub(crate) fn read_gitignore(path: &Path) -> io::Result<String> {
     let file = crate::volume::read_unfollowed(path)?;
     let mut bytes = Vec::new();
     file.take(GITIGNORE_CAP + 1).read_to_end(&mut bytes)?;
@@ -2269,49 +2179,6 @@ mod tests {
     }
 
     #[test]
-    fn a_data_folder_named_like_a_pattern_is_ignored_as_itself() {
-        let (dir, project) = project(&[("data.toml", "")]);
-        fs::create_dir(dir.path().join(".git")).unwrap();
-        assert!(matches!(
-            project.ignore_in_git("datasets[1]", false).unwrap(),
-            Ignore::Add(_)
-        ));
-        assert_eq!(
-            project.ignore_in_git("datasets[1]", false).unwrap(),
-            Ignore::Done,
-            "only once"
-        );
-        assert_eq!(
-            fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
-            "/datasets\\[1\\]/\n"
-        );
-    }
-
-    #[test]
-    fn gitignore_gains_the_data_folder_once_inside_git() {
-        let (dir, project) = project(&[("data.toml", ""), (".gitignore", "target")]);
-        assert_eq!(
-            project.ignore_in_git("data", false).unwrap(),
-            Ignore::Done,
-            "outside git nothing changes"
-        );
-        fs::create_dir(dir.path().join(".git")).unwrap();
-        assert!(matches!(
-            project.ignore_in_git("data", false).unwrap(),
-            Ignore::Add(_)
-        ));
-        assert_eq!(
-            project.ignore_in_git("data", false).unwrap(),
-            Ignore::Done,
-            "only once"
-        );
-        assert_eq!(
-            fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
-            "target\n/data/\n"
-        );
-    }
-
-    #[test]
     fn interrupted_metadata_writes_leave_no_staging_file_in_the_root() {
         let (_dir, project) = project(&[("data.lock", "old")]);
         let own = project.inner().unwrap();
@@ -2773,58 +2640,6 @@ mod tests {
         fs::write(path.join("keep"), b"not an owner").unwrap();
         assert!(remove_stale_owner(&path, &bytes, modified).is_err());
         assert_eq!(fs::read(path.join("keep")).unwrap(), b"not an owner");
-    }
-
-    #[test]
-    fn gitignore_recognizes_equivalent_entries_in_nested_projects() {
-        for entry in ["/inputs/raw/", "inputs/raw/", "/inputs/raw", "inputs/raw"] {
-            let (dir, _) = project(&[(".git", "gitdir: elsewhere"), ("child/data.toml", "")]);
-            let project = Project {
-                root: dir.path().join("child"),
-            };
-            let text = format!("# existing\n  {entry}  \n");
-            fs::write(project.root.join(".gitignore"), &text).unwrap();
-            assert_eq!(
-                project.ignore_in_git("inputs/raw", false).unwrap(),
-                Ignore::Done
-            );
-            assert_eq!(
-                fs::read_to_string(project.root.join(".gitignore")).unwrap(),
-                text
-            );
-        }
-        let (dir, _) = project(&[(".git", "gitdir: elsewhere"), ("child/data.toml", "")]);
-        let project = Project {
-            root: dir.path().join("child"),
-        };
-        assert!(matches!(
-            project.ignore_in_git("inputs/raw", false).unwrap(),
-            Ignore::Add(_)
-        ));
-        assert_eq!(
-            fs::read(project.root.join(".gitignore")).unwrap(),
-            b"/inputs/raw/\n"
-        );
-        fs::write(project.root.join(".gitignore"), [0xff]).unwrap();
-        assert_eq!(
-            project.ignore_in_git("inputs/raw", false).unwrap_err().kind,
-            Kind::LocalIo
-        );
-        assert_eq!(fs::read(project.root.join(".gitignore")).unwrap(), [0xff]);
-        // read whole only up to a size no person writes, and else left for a person to edit
-        let large = "#".repeat(usize::try_from(GITIGNORE_CAP).unwrap() + 1);
-        fs::write(project.root.join(".gitignore"), &large).unwrap();
-        assert_eq!(
-            project.ignore_in_git("inputs/raw", false).unwrap(),
-            Ignore::ByHand {
-                rule: "/inputs/raw/".to_owned(),
-                why: "larger than 1.0 MiB".to_owned()
-            }
-        );
-        assert_eq!(
-            fs::read_to_string(project.root.join(".gitignore")).unwrap(),
-            large
-        );
     }
 
     #[cfg(unix)]

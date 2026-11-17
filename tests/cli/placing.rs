@@ -2812,8 +2812,7 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let folder = sandbox.work().join("data").join("iris");
-    delete(&folder.join("iris.csv"))?;
-    fs::remove_dir(&folder)?;
+    crate::support::delete_folder(&folder)?;
     fs::write(&folder, b"notes\n")?;
 
     let status = sandbox.run(&["--json", "status"])?;

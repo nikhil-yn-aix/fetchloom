@@ -977,7 +977,7 @@ fn status_names_lists_git_does_not_have() -> Result {
     };
     let added = listed(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock", ".gitignore"])?;
+    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "iris"])?;
     let [part] = parts(&sandbox)?.try_into().map_err(|_| "one list")?;
 
@@ -1082,7 +1082,7 @@ fn a_removal_that_deletes_a_list_git_has_says_to_commit_data_lock_d() -> Result 
     assert!(!sandbox.work().join("data.lock.d").exists(), "{told}");
     let next = told.lines().last().unwrap_or_default();
     assert!(
-        next.starts_with("  next: commit data.toml, data.lock, data.lock.d and .gitignore;"),
+        next.starts_with("  next: commit data.toml, data.lock and data.lock.d;"),
         "{told}"
     );
     Ok(())
@@ -1250,111 +1250,6 @@ fn upgrading_a_link_whose_bytes_changed_pins_the_new_bytes() -> Result {
     Ok(())
 }
 
-#[test]
-fn inside_git_the_data_folder_is_ignored_once() -> Result {
-    let sandbox = Sandbox::new()?;
-    fs::create_dir(sandbox.work().join(".git"))?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    let output = sandbox.run(&["add", &server.url])?;
-    assert!(
-        text(&output.stderr)?.contains("Ignored data/ in .gitignore"),
-        "{}",
-        text(&output.stderr)?
-    );
-    assert_eq!(
-        fs::read_to_string(sandbox.work().join(".gitignore"))?,
-        "/data/\n"
-    );
-    assert_eq!(
-        fs::read_to_string(sandbox.work().join(".fetchloom").join(".gitignore"))?,
-        "*\n"
-    );
-    Ok(())
-}
-
-/// a data folder that holds files git tracks, the project's own work, never gets the ignore rule,
-/// which would hide new files there from git: the sync warns with the line to add instead.
-#[test]
-fn a_data_folder_git_tracks_files_in_is_not_ignored() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    sandbox.allow(&server.url);
-    let work = sandbox.work();
-    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
-        return Ok(());
-    }
-    fs::create_dir(work.join("src"))?;
-    fs::write(work.join("src").join("main.py"), "print(1)\n")?;
-    crate::merge::ok(&sandbox, &["add", "src/main.py"])?;
-    fs::write(
-        work.join("data.toml"),
-        format!(
-            "[project]\ndata_dir = \"src\"\n\n[datasets.iris]\nref = \"{}\"\n",
-            server.url
-        ),
-    )?;
-    let output = sandbox.run(&["--json", "sync"])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
-    assert!(!work.join(".gitignore").exists());
-    let document = json(&output)?;
-    assert_eq!(
-        crate::support::warned(&document),
-        [
-            "git tracks files in src/, so fetchloom leaves it out of .gitignore, which would hide new files there from git; set data_dir in [project] in data.toml to a folder that holds only data, or add the line /src/iris/ to .gitignore yourself"
-        ],
-        "{document}"
-    );
-    assert_eq!(crate::support::kinds(&document), ["git.ignore_unedited"]);
-    Ok(())
-}
-
-/// a project begun from a hand-written data.toml gets the ignore rule from its first sync or add
-/// outside git, as one an add starts does, so a later `git init` and `git add -A` commit no data
-/// file.
-#[test]
-fn a_hand_written_project_gets_the_ignore_rule_from_its_first_run() -> Result {
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
-    for (command, data_dir) in [("sync", "data"), ("add", "inputs")] {
-        let sandbox = Sandbox::new()?;
-        sandbox.allow(&server.url);
-        let work = sandbox.work();
-        let output = if command == "sync" {
-            fs::write(
-                work.join("data.toml"),
-                format!("[datasets.iris]\nref = \"{}\"\n", server.url),
-            )?;
-            sandbox.run(&["sync"])?
-        } else {
-            fs::write(work.join("data.toml"), "[project]\ndata_dir = \"inputs\"\n")?;
-            sandbox.run(&["add", &server.url])?
-        };
-        let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(0), "{command}: {stderr}");
-        assert!(
-            stderr.contains(&format!(
-                "    Ignored {data_dir}/ in .gitignore, since its files come from data.lock\n"
-            )),
-            "{command}: {stderr}"
-        );
-        assert_eq!(
-            fs::read_to_string(work.join(".gitignore"))?,
-            format!("/{data_dir}/\n"),
-            "{command}"
-        );
-        if crate::merge::ok(&sandbox, &["init", "-q"])?.is_some() {
-            crate::merge::ok(&sandbox, &["add", "-A"])?;
-            let staged = crate::merge::git(&sandbox, &work, &["diff", "--cached", "--name-only"])?
-                .ok_or("git went away")?;
-            let staged = text(&staged.stdout)?;
-            assert!(
-                !staged.contains(&format!("{data_dir}/")),
-                "{command}: {staged}"
-            );
-        }
-    }
-    Ok(())
-}
-
 /// a record in .fetchloom/owner that no fetchloom writes, as a clone can carry, keeps nobody out:
 /// the command removes it, says so once, and goes on.
 #[test]
@@ -1380,63 +1275,51 @@ fn an_owner_record_no_fetchloom_writes_is_removed_with_a_warning() -> Result {
     Ok(())
 }
 
-/// a project started outside git gets its ignore rule at once, so a `git init` and `git add -A`
-/// right after it commit no data file; the line that says so comes only when the rule is added.
+/// a project begun outside git, by an add or by a sync of a hand-written data.toml, keeps each
+/// dataset's folder out of git from its start, so a `git init` and `git add -A` right after it
+/// commit no data file, and no .gitignore beside data.toml is written. the line that says so
+/// waits for `-v` outside git.
 #[test]
 fn a_project_started_outside_git_keeps_its_data_out_of_a_later_commit() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    sandbox.allow(&server.url);
-    let output = sandbox.run(&["add", &server.url])?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_some() {
-        crate::merge::ok(&sandbox, &["add", "-A"])?;
-        let staged = crate::merge::git(
-            &sandbox,
-            &sandbox.work(),
-            &["diff", "--cached", "--name-only"],
-        )?
-        .ok_or("git went away")?;
-        assert_eq!(text(&staged.stdout)?, ".gitignore\ndata.lock\ndata.toml\n");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    for (command, data_dir) in [("add", "data"), ("sync", "inputs")] {
+        let sandbox = Sandbox::new()?;
+        sandbox.allow(&server.url);
+        let work = sandbox.work();
+        let output = if command == "sync" {
+            fs::write(
+                work.join("data.toml"),
+                format!(
+                    "[project]\ndata_dir = \"{data_dir}\"\n\n[datasets.iris]\nref = \"{}\"\n",
+                    server.url
+                ),
+            )?;
+            sandbox.run(&["sync"])?
+        } else {
+            sandbox.run(&["add", &server.url])?
+        };
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{command}: {stderr}");
+        assert!(!stderr.contains("Ignored"), "{command}: {stderr}");
+        assert!(!work.join(".gitignore").exists(), "{command}");
+        assert_eq!(
+            fs::read(work.join(data_dir).join("iris").join(".gitignore"))?,
+            b"*\n",
+            "{command}"
+        );
+        if crate::merge::ok(&sandbox, &["init", "-q"])?.is_some() {
+            crate::merge::ok(&sandbox, &["add", "-A"])?;
+            let staged = crate::merge::git(&sandbox, &work, &["diff", "--cached", "--name-only"])?
+                .ok_or("git went away")?;
+            assert_eq!(text(&staged.stdout)?, "data.lock\ndata.toml\n", "{command}");
+        }
     }
-    assert_eq!(
-        fs::read_to_string(sandbox.work().join(".gitignore"))?,
-        "/data/\n"
-    );
-    assert!(
-        stderr.contains(&format!(
-            "    Started a project in {}\n    Ignored data/ in .gitignore, since its files come from data.lock\n",
-            sandbox.work().display()
-        )),
-        "{stderr}"
-    );
-    Ok(())
-}
-
-/// a .gitignore that leaves the data folder out already, in a way git reads as the same rule, is
-/// left byte for byte as it was when a project starts beside it, and no line says otherwise.
-#[test]
-fn a_gitignore_that_has_the_rule_is_left_as_it_was() -> Result {
-    let sandbox = Sandbox::new()?;
-    let ignore = "# mine\r\n  data/\r\n*.tmp";
-    fs::write(sandbox.work().join(".gitignore"), ignore)?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    sandbox.allow(&server.url);
-    let output = sandbox.run(&["add", &server.url])?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert!(!stderr.contains("Ignored"), "{stderr}");
-    assert_eq!(
-        fs::read(sandbox.work().join(".gitignore"))?,
-        ignore.as_bytes()
-    );
     Ok(())
 }
 
 /// a .gitignore that is a link, as a cloned repository may hold one to a file of keys, is never
-/// read or edited: the link and the file it names stay as they were, and a warning gives the line
-/// to add by hand.
+/// read or edited while fetchloom looks for a line hiding the data folder: the link and the file
+/// it names stay as they were, and nothing is said of either.
 #[cfg(unix)]
 #[test]
 fn a_linked_gitignore_is_never_read_or_edited() -> Result {
@@ -1444,31 +1327,31 @@ fn a_linked_gitignore_is_never_read_or_edited() -> Result {
     let work = sandbox.work();
     fs::create_dir(work.join(".git"))?;
     let secret = sandbox.folder("outside")?.join("tokens");
-    fs::write(&secret, "TOKEN=hunter2\n")?;
+    fs::write(&secret, "/data/\n")?;
     std::os::unix::fs::symlink(&secret, work.join(".gitignore"))?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     sandbox.allow(&server.url);
     let output = sandbox.run(&["--json", "add", &server.url])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
-    assert_eq!(fs::read_to_string(&secret)?, "TOKEN=hunter2\n");
+    assert_eq!(fs::read_to_string(&secret)?, "/data/\n");
     let link = fs::symlink_metadata(work.join(".gitignore"))?;
     assert!(link.is_symlink(), "the link was replaced");
     assert_eq!(fs::read_link(work.join(".gitignore"))?, secret);
     let document = json(&output)?;
     assert_eq!(
-        crate::support::warned(&document),
-        [
-            ".gitignore is a link or a special file, which fetchloom never edits; to keep data/ out of git, add the line /data/ to it by hand"
-        ],
+        crate::support::kinds(&document),
+        Vec::<&str>::new(),
         "{document}"
     );
-    assert_eq!(crate::support::kinds(&document), ["git.ignore_unedited"]);
+    assert_eq!(fs::read(work.join("data/iris/.gitignore"))?, b"*\n");
     Ok(())
 }
 
-/// `path` places the files it answers with first, so it adds the ignore rule too.
+/// each command that places files makes the .gitignore of a dataset folder that lost it, and
+/// says so inside git: `add` of a dataset data.toml has, `sync`, whose dry run says so first, and
+/// `path`, which places the files it answers with first.
 #[test]
-fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
+fn every_command_that_places_files_keeps_the_dataset_folder_out_of_git() -> Result {
     for (command, data_dir) in [("add", "data"), ("sync", "data"), ("path", "inputs/raw")] {
         let sandbox = Sandbox::new()?;
         let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
@@ -1480,57 +1363,40 @@ fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
             )?;
         }
         added(&sandbox, &server)?;
-        // the first add of a project has the rule from its start, outside git too, whether it
-        // started the project or pinned a hand-written data.toml; taking it out stands for a
-        // project that never had it, which each command then gives it inside git
-        assert_eq!(
-            fs::read_to_string(work.join(".gitignore"))?,
-            format!("/{data_dir}/\n"),
-            "{command}"
-        );
-        fs::remove_file(work.join(".gitignore"))?;
+        let folder = data_dir
+            .split('/')
+            .fold(work.clone(), |folder, part| folder.join(part))
+            .join("iris");
+        fs::remove_file(folder.join(".gitignore"))?;
         fs::create_dir(work.join(".git"))?;
+        let line = format!(
+            "Ignored {data_dir}/iris in git with {data_dir}/iris/.gitignore, which also hides files you put there\n"
+        );
         let args = match command {
             "add" => vec!["add", server.url.as_str()],
             "sync" => {
                 let previewed = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
                 assert!(
-                    previewed.contains("Would add data/ to .gitignore"),
+                    previewed.contains(&format!("Would ignore {data_dir}/iris")),
                     "{previewed}"
                 );
-                assert!(!work.join(".gitignore").exists());
+                assert!(!folder.join(".gitignore").exists());
                 vec!["sync"]
             }
             _ => {
-                delete(&work.join(data_dir).join("iris").join("iris.csv"))?;
+                delete(&folder.join("iris.csv"))?;
                 vec!["path", "iris"]
             }
         };
         let output = sandbox.run(&args)?;
         let stderr = text(&output.stderr)?;
         assert!(output.status.success(), "{command}: {stderr}");
-        assert!(
-            stderr.contains(&format!("Ignored {data_dir}/ in .gitignore")),
-            "{command}: {stderr}"
-        );
-        assert_eq!(
-            fs::read_to_string(work.join(".gitignore"))?,
-            format!("/{data_dir}/\n"),
-            "{command}"
-        );
+        assert!(stderr.contains(&line), "{command}: {stderr}");
+        assert_eq!(fs::read(folder.join(".gitignore"))?, b"*\n", "{command}");
+        assert!(!work.join(".gitignore").exists(), "{command}");
         match command {
             "add" => assert!(stderr.contains("iris is already in data.toml"), "{stderr}"),
-            "path" => assert_eq!(
-                text(&output.stdout)?,
-                format!(
-                    "{}\n",
-                    data_dir
-                        .split('/')
-                        .fold(work.clone(), |folder, part| folder.join(part))
-                        .join("iris")
-                        .display()
-                )
-            ),
+            "path" => assert_eq!(text(&output.stdout)?, format!("{}\n", folder.display())),
             _ => {}
         }
     }
@@ -4146,11 +4012,11 @@ fn status_forecasts_a_rename_as_sync_carries_it() -> Result {
     Ok(())
 }
 
-/// committing what the suggestion names leaves nothing untracked. outside git .gitignore is not
-/// named, as `the_next_step_is_told_only_at_a_terminal` shows.
+/// committing what the suggestion names leaves nothing untracked: each dataset's folder keeps
+/// itself out of git, so no .gitignore beside data.toml is named or written.
 #[cfg(target_os = "linux")]
 #[test]
-fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {
+fn the_commit_a_git_project_is_told_leaves_nothing_untracked() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
@@ -4163,17 +4029,14 @@ fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {
     let origin = server.url.trim_end_matches(PATH);
     assert!(
         screen.contains(&format!(
-            "\n  next: commit data.toml, data.lock and .gitignore; anyone who clones runs `fetchloom settings set allowed_origins {origin}`, with any origins they list already, then `fetchloom sync`\n"
+            "\n  next: commit data.toml and data.lock; anyone who clones runs `fetchloom settings set allowed_origins {origin}`, with any origins they list already, then `fetchloom sync`\n"
         )),
         "{screen}"
     );
-    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock", ".gitignore"])?;
+    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock"])?;
     let left = crate::merge::git(&sandbox, &sandbox.work(), &["status", "--porcelain"])?
         .ok_or("no git")?;
-    assert_eq!(
-        text(&left.stdout)?,
-        "A  .gitignore\nA  data.lock\nA  data.toml\n"
-    );
+    assert_eq!(text(&left.stdout)?, "A  data.lock\nA  data.toml\n");
     Ok(())
 }
 

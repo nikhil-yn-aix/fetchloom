@@ -79,6 +79,25 @@ pub(crate) struct Survey {
     /// the files the state records outside the data folder that are still there, in order, as
     /// fetchloom placed them before `data_dir` changed. a sync never deletes them.
     outside: Vec<String>,
+    /// how the listing found the .gitignore of each folder the state says fetchloom marked, by
+    /// the folder, for those it listed. none of them is in `disk`, so no file counts them.
+    pub(crate) marks: HashMap<String, Mark>,
+}
+
+/// what stands where fetchloom made a folder's .gitignore, by the state's record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mark {
+    /// a plain file, as the listing saw it.
+    Made(Look),
+    Gone,
+    /// a link, a folder or a special file, which fetchloom never makes there.
+    Taken,
+}
+
+/// the path of the .gitignore fetchloom keeps in the dataset folder `folder` to tell git to
+/// ignore all of it.
+pub(crate) fn marker(folder: &str) -> String {
+    format!("{folder}/.gitignore")
 }
 
 /// the files fetchloom placed before `data_dir` changed that are still outside the data folder.
@@ -271,12 +290,13 @@ impl Survey {
             }
         };
         let Scanned {
-            found: disk,
+            found: mut disk,
             temporaries,
             entries,
             writable,
             alone,
         } = scanned?;
+        let marks = hide_marks(&state, &mut disk, &entries, data_dir, within.as_deref());
         let mut survey = Survey {
             threads,
             started,
@@ -298,6 +318,7 @@ impl Survey {
             root: project.root.clone(),
             data_dir: data_dir.to_owned(),
             outside: Vec::new(),
+            marks,
         };
         let other_device = !survey.state.files.is_empty()
             && apart(&native(&project.root, data_dir), &project.own_folder());
@@ -375,7 +396,11 @@ impl Survey {
             &mut entries,
             || false,
             |_, path, temporary, _| {
-                if !temporary && !self.state.files.contains_key(&path) && !made_by_system(&path) {
+                if !temporary
+                    && !self.state.files.contains_key(&path)
+                    && !made_by_system(&path)
+                    && !self.is_marker(&path)
+                {
                     others.push(path);
                 }
             },
@@ -792,6 +817,12 @@ impl Survey {
                 .is_some_and(|name| !name.contains('/'))
                 && self.made_by_system(inner)
         })
+    }
+
+    /// whether `path` is the .gitignore of a folder the state says fetchloom marked.
+    pub(crate) fn is_marker(&self, path: &str) -> bool {
+        path.strip_suffix("/.gitignore")
+            .is_some_and(|folder| self.state.marked.contains(folder))
     }
 
     /// the files an interrupted placement left under the hidden names it stages files in, which
@@ -1373,6 +1404,36 @@ fn outermost(data_dir: &str, folders: &[String]) -> Vec<String> {
     sorted.sort_unstable_by(|left, right| folder_order(left, right));
     sorted.dedup_by(|folder, parent| is_inside(folder, parent));
     sorted.into_iter().cloned().collect()
+}
+
+/// takes the .gitignore of each folder `state` says fetchloom marked out of `disk`, the listing of
+/// the data folder at `data_dir`, or of the folders `within` alone, and says how each looks.
+fn hide_marks(
+    state: &State,
+    disk: &mut HashMap<String, Look>,
+    entries: &HashMap<String, Entry>,
+    data_dir: &str,
+    within: Option<&[String]>,
+) -> HashMap<String, Mark> {
+    state
+        .marked
+        .iter()
+        .filter_map(|folder| {
+            let path = marker(folder);
+            let listed = match within {
+                Some(folders) => inside_any(&path, folders),
+                None => is_inside(&path, data_dir),
+            };
+            listed.then(|| {
+                let mark = match disk.remove(&path) {
+                    Some(look) => Mark::Made(look),
+                    None if entries.contains_key(&path) => Mark::Taken,
+                    None => Mark::Gone,
+                };
+                (folder.clone(), mark)
+            })
+        })
+        .collect()
 }
 
 /// whether `path` is in the disjoint, ordered `folders` returned by `outermost`.

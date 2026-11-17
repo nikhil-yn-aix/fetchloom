@@ -113,3 +113,419 @@ fn only_files_in_dataset_folders_are_judged() -> Result {
     }
     Ok(())
 }
+
+/// the files git does not have and does not ignore below the project in `sandbox`, sorted, as
+/// `git status` lists them one by one; none without git.
+fn untracked(sandbox: &Sandbox) -> Result<Option<Vec<String>>> {
+    let Some(status) = git(sandbox, &["status", "--porcelain", "--untracked-files=all"])? else {
+        return Ok(None);
+    };
+    assert!(status.status.success(), "{}", text(&status.stderr)?);
+    let mut paths: Vec<String> = text(&status.stdout)?
+        .lines()
+        .filter_map(|line| line.strip_prefix("?? "))
+        .map(str::to_owned)
+        .collect();
+    paths.sort();
+    Ok(Some(paths))
+}
+
+/// git with `args` in the project of `sandbox`, none without git.
+fn git(sandbox: &Sandbox, args: &[&str]) -> Result<Option<std::process::Output>> {
+    crate::merge::git(sandbox, &sandbox.work(), args)
+}
+
+/// the rule git says ignores `path`, as `git check-ignore -v` prints it.
+fn ignored_by(sandbox: &Sandbox, path: &str) -> Result<String> {
+    let checked = git(sandbox, &["check-ignore", "-v", path])?.ok_or("git went away")?;
+    text(&checked.stdout)
+}
+
+/// the line an add or a sync prints for the one dataset folder it keeps out of git.
+fn ignored_line(folder: &str) -> String {
+    format!(
+        "    Ignored {folder} in git with {folder}/.gitignore, which also hides files you put there\n"
+    )
+}
+
+/// a1 in a clean root: the add keeps data/iris out of git with a .gitignore of its own there and
+/// never writes the root's, so git sees what a pipeline writes beside the datasets, and status
+/// counts none of it.
+#[test]
+fn a_clean_root_leaves_git_all_but_the_dataset_folders() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let server = iris_server()?;
+    let link = format!("{}{PATH}", server.url);
+    sandbox.allow(&link);
+    let added = sandbox.run(&["add", &link])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
+    assert!(!sandbox.work().join(".gitignore").exists());
+    assert_eq!(
+        fs::read(sandbox.work().join("data/iris/.gitignore"))?,
+        b"*\n"
+    );
+    write_all(
+        &sandbox,
+        &[
+            ("data/processed/clean.csv", "a\n"),
+            ("data/interim/step1.txt", "b\n"),
+        ],
+    )?;
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(text(&status.stdout)?, "");
+    assert_eq!(
+        without_copy_warning(&text(&status.stderr)?),
+        "         Ok everything matches data.lock by size and time\n"
+    );
+    assert_eq!(
+        untracked(&sandbox)?.ok_or("git went away")?,
+        [
+            "data.lock",
+            "data.toml",
+            "data/interim/step1.txt",
+            "data/processed/clean.csv"
+        ]
+    );
+    assert_eq!(
+        ignored_by(&sandbox, "data/iris/iris.csv")?,
+        "data/iris/.gitignore:1:*\tdata/iris/iris.csv\n"
+    );
+    Ok(())
+}
+
+/// a1 in a cookiecutter root, whose .gitignore hides all of data/: the first add says once which
+/// line hides the person's own files too and leaves the file as it was. status never counts the
+/// template's .gitkeep files, and once the person deletes the line git sees them, never the
+/// dataset's files.
+#[test]
+fn a_root_rule_hiding_the_data_folder_is_explained_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let rules = "# exclude data from source control by default\n/data/\n";
+    fs::write(sandbox.work().join(".gitignore"), rules)?;
+    write_all(
+        &sandbox,
+        &[
+            ("data/external/.gitkeep", ""),
+            ("data/interim/.gitkeep", ""),
+            ("data/processed/.gitkeep", ""),
+            ("data/raw/.gitkeep", ""),
+        ],
+    )?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let explained = "warning: line 2 of .gitignore, /data/, keeps all of data/ out of git, your own files there too\n  help: each dataset's folder keeps itself out of git now, so delete that line for git to see the rest of data/. fetchloom never edits .gitignore\n";
+    let added = sandbox.run(&["add", &format!("{}{PATH}", server.url)])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(explained), "{stderr}");
+    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
+    let again = sandbox.run(&["--json", "add", &format!("{}/files/wine.csv", server.url)])?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    assert_eq!(
+        crate::support::kinds(&json(&again)?),
+        Vec::<&str>::new(),
+        "said once"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join(".gitignore"))?,
+        rules
+    );
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(text(&status.stdout)?, "");
+    assert!(!text(&status.stderr)?.contains("gitkeep"));
+    fs::write(
+        sandbox.work().join(".gitignore"),
+        "# exclude data from source control by default\n",
+    )?;
+    assert_eq!(
+        untracked(&sandbox)?.ok_or("git went away")?,
+        [
+            ".gitignore",
+            "data.lock",
+            "data.toml",
+            "data/external/.gitkeep",
+            "data/interim/.gitkeep",
+            "data/processed/.gitkeep",
+            "data/raw/.gitkeep"
+        ]
+    );
+    Ok(())
+}
+
+/// a1 in a project an older fetchloom set up: `/data/` in .gitignore, the files placed, no
+/// dataset folder kept out of git by a file of its own. the next sync makes each one and says
+/// once which line hides the person's files too; the sync after says nothing of either.
+#[test]
+fn an_upgraded_project_gets_its_folders_marked_and_the_line_explained() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let server = iris_server()?;
+    // a file of the person's own where the marker goes keeps the add from making one
+    write_all(&sandbox, &[("data/iris/.gitignore", "mine\n")])?;
+    with_iris(&sandbox, &server)?;
+    fs::remove_file(sandbox.work().join("data/iris/.gitignore"))?;
+    fs::write(sandbox.work().join(".gitignore"), "/data/\n")?;
+
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
+    assert!(
+        stderr.contains("warning: line 1 of .gitignore, /data/, keeps all of data/ out of git"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read(sandbox.work().join("data/iris/.gitignore"))?,
+        b"*\n"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join(".gitignore"))?,
+        "/data/\n"
+    );
+    let quiet = sandbox.run(&["sync"])?;
+    assert_eq!(
+        without_copy_warning(&text(&quiet.stderr)?),
+        "         Ok all pinned files are in place by size and time, nothing to do\n"
+    );
+    Ok(())
+}
+
+/// b1: git tracks a file of the person's beside the datasets. the add warns of nothing and keeps
+/// only data/iris out of git, and the line the old warning asked for changes nothing either.
+#[test]
+fn files_git_tracks_beside_the_datasets_raise_no_warning() -> Result {
+    let sandbox = Sandbox::new()?;
+    write_all(&sandbox, &[("data/processed/s.csv", "1\n")])?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    crate::merge::ok(&sandbox, &["add", "-A"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "init"])?;
+    let server = iris_server()?;
+    let link = format!("{}{PATH}", server.url);
+    sandbox.allow(&link);
+    let added = json(&sandbox.run(&["--json", "add", &link])?)?;
+    assert_eq!(added["status"], "ok", "{added}");
+    assert_eq!(crate::support::kinds(&added), Vec::<&str>::new(), "{added}");
+    assert_eq!(
+        untracked(&sandbox)?.ok_or("git went away")?,
+        ["data.lock", "data.toml"]
+    );
+    fs::write(sandbox.work().join(".gitignore"), "/data/iris/\n")?;
+    for args in [&["--json", "sync"][..], &["--json", "sync", "--force"]] {
+        let synced = json(&sandbox.run(args)?)?;
+        assert_eq!(synced["status"], "ok", "{synced}");
+        assert_eq!(
+            crate::support::kinds(&synced),
+            Vec::<&str>::new(),
+            "{synced}"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join(".gitignore"))?,
+        "/data/iris/\n"
+    );
+    Ok(())
+}
+
+/// b6: the person ignores data/ but takes data/processed back, git's way to commit one folder
+/// there. sync leaves those rules as written, so the table stays in `git status`.
+#[test]
+fn a_persons_rules_for_the_data_folder_stay_as_written() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let server = iris_server()?;
+    with_iris(&sandbox, &server)?;
+    let rules = "/data/*\n!/data/processed/\n";
+    fs::write(sandbox.work().join(".gitignore"), rules)?;
+    write_all(&sandbox, &[("data/processed/table.csv", "1\n")])?;
+    let before = untracked(&sandbox)?.ok_or("git went away")?;
+    assert!(
+        before.contains(&"data/processed/table.csv".to_owned()),
+        "{before:?}"
+    );
+    for args in [&["sync"][..], &["sync", "--force"]] {
+        let synced = sandbox.run(args)?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(0), "{stderr}");
+        assert!(!stderr.contains(".gitignore"), "{stderr}");
+    }
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join(".gitignore"))?,
+        rules
+    );
+    assert_eq!(untracked(&sandbox)?.ok_or("git went away")?, before);
+    Ok(())
+}
+
+/// a dataset folder's marker goes with the dataset: `remove` takes it and the folder, and a new
+/// `path` moves it with the files. one a person changed is theirs, kept with their files, and
+/// git sees those once no dataset holds the folder.
+#[test]
+fn a_marker_goes_with_its_dataset() -> Result {
+    let sandbox = Sandbox::new()?;
+    let in_git = crate::merge::ok(&sandbox, &["init", "-q"])?.is_some();
+    let server = iris_server()?;
+    with_iris(&sandbox, &server)?;
+    let data = sandbox.work().join("data");
+    assert_eq!(fs::read(data.join("iris/.gitignore"))?, b"*\n");
+
+    let toml = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        toml.replace(
+            "[datasets.iris]\n",
+            "[datasets.iris]\npath = \"raw/iris\"\n",
+        ),
+    )?;
+    let moved = sandbox.run(&["sync"])?;
+    assert_eq!(moved.status.code(), Some(0), "{}", text(&moved.stderr)?);
+    assert!(!data.join("iris").exists(), "the old folder went whole");
+    assert_eq!(fs::read(data.join("raw/iris/.gitignore"))?, b"*\n");
+
+    let removed = sandbox.run(&["remove", "iris"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert!(
+        !data.join("raw").exists(),
+        "{:?}",
+        fs::read_dir(&data)?.count()
+    );
+
+    with_iris(&sandbox, &server)?;
+    fs::write(data.join("iris/.gitignore"), "*\n!notes.txt\n")?;
+    write_all(&sandbox, &[("data/iris/notes.txt", "mine\n")])?;
+    let removed = sandbox.run(&["remove", "iris"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert_eq!(
+        fs::read_to_string(data.join("iris/.gitignore"))?,
+        "*\n!notes.txt\n"
+    );
+    assert!(!data.join("iris/iris.csv").exists());
+    if in_git {
+        assert_eq!(
+            untracked(&sandbox)?.ok_or("git went away")?,
+            ["data.lock", "data.toml", "data/iris/notes.txt"]
+        );
+    }
+    Ok(())
+}
+
+/// a marker someone deleted comes back with the next sync, which its dry run says first. a
+/// .gitignore of the person's own where a marker would go is never written over, and status
+/// names it as theirs.
+#[test]
+fn a_marker_comes_back_but_never_over_a_persons_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &format!("{}{PATH}", server.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let marker = sandbox.work().join("data/iris/.gitignore");
+    fs::remove_file(&marker)?;
+    let dry = sandbox.run(&["sync", "--dry-run"])?;
+    assert_eq!(
+        without_copy_warning(&text(&dry.stderr)?),
+        "      Would ignore data/iris in git with data/iris/.gitignore, which also hides files you put there\n         Ok dry run, nothing was changed\n"
+    );
+    assert!(!marker.exists());
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
+    assert_eq!(fs::read(&marker)?, b"*\n");
+
+    let theirs = sandbox.work().join("data/wine/.gitignore");
+    write_all(&sandbox, &[("data/wine/.gitignore", "")])?;
+    let added = sandbox.run(&["add", &format!("{}/files/wine.csv", server.url)])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("Ignored"), "{stderr}");
+    for args in [&["sync"][..], &["sync", "--force"]] {
+        let synced = sandbox.run(args)?;
+        assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+        assert!(!text(&synced.stderr)?.contains("Ignored"));
+    }
+    assert_eq!(fs::read(&theirs)?, b"");
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        status["result"]["yours"],
+        serde_json::json!(["data/wine/.gitignore"]),
+        "{status}"
+    );
+    Ok(())
+}
+
+/// a dataset whose files hold a .gitignore at the top of its folder places it, where no marker
+/// goes, and the run says which line keeps the folder out of git; with that line in the
+/// project's .gitignore, it says nothing.
+#[test]
+fn a_dataset_with_its_own_gitignore_gets_the_line_to_add() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let bytes = crate::support::zip_of(&[(".gitignore", &b"*.tmp\n"[..]), ("a.csv", b"1\n")])?;
+    let server = Routes::start(vec![("/files/pack.zip".to_owned(), file(&bytes, "\"p1\""))])?;
+    let link = format!("{}/files/pack.zip", server.url);
+    sandbox.allow(&link);
+    let added = json(&sandbox.run(&["--json", "add", &link])?)?;
+    assert_eq!(added["status"], "ok", "{added}");
+    assert_eq!(
+        crate::support::warned(&added),
+        [
+            "data/pack holds a .gitignore of the dataset's own, so fetchloom cannot keep data/pack out of git; to keep it out, add the line /data/pack/ to .gitignore"
+        ]
+    );
+    assert_eq!(crate::support::kinds(&added), ["git.dataset_unignored"]);
+    let pack = sandbox.work().join("data/pack");
+    assert_eq!(fs::read(pack.join(".gitignore"))?, b"*.tmp\n");
+    fs::write(sandbox.work().join(".gitignore"), "/data/pack/\n")?;
+    crate::support::delete_folder(&pack)?;
+    let synced = json(&sandbox.run(&["--json", "sync"])?)?;
+    assert_eq!(synced["status"], "ok", "{synced}");
+    assert_eq!(
+        crate::support::kinds(&synced),
+        Vec::<&str>::new(),
+        "{synced}"
+    );
+    assert_eq!(fs::read(pack.join(".gitignore"))?, b"*.tmp\n");
+    Ok(())
+}
+
+/// a link where the marker goes is the person's: never followed, read or replaced, and nothing
+/// is made where it points.
+#[cfg(unix)]
+#[test]
+fn a_link_where_the_marker_goes_is_never_followed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = iris_server()?;
+    fs::create_dir_all(sandbox.work().join("data/iris"))?;
+    let aimed = sandbox.work().join("aimed");
+    std::os::unix::fs::symlink(&aimed, sandbox.work().join("data/iris/.gitignore"))?;
+    with_iris(&sandbox, &server)?;
+    let link = fs::symlink_metadata(sandbox.work().join("data/iris/.gitignore"))?;
+    assert!(link.file_type().is_symlink());
+    assert!(!aimed.exists());
+    assert_eq!(fs::read(sandbox.work().join("data/iris/iris.csv"))?, IRIS);
+    Ok(())
+}

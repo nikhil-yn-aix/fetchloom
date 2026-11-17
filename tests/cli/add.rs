@@ -1020,10 +1020,11 @@ fn a_clash_in_an_add_gives_the_exclude_that_ends_it() -> Result {
         let added = sandbox.run(&["add", list, "--exclude", pattern])?;
         assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
         let name = list.trim_start_matches("list:").trim_end_matches(".txt");
-        let placed: Vec<String> = fs::read_dir(sandbox.work().join("data").join(name))?
-            .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
-            .collect::<std::io::Result<_>>()?;
-        assert_eq!(placed, [kept], "{list}");
+        assert_eq!(
+            listed(&sandbox.work().join("data").join(name))?,
+            [".gitignore", kept],
+            "{list}"
+        );
     }
     Ok(())
 }
@@ -2145,7 +2146,7 @@ fn a_hugging_face_gitattributes_is_left_out_until_selected() -> Result {
     };
     let added = run(&["add", "hf:datasets/lab/rows"])?;
     ok(&added)?;
-    assert_eq!(names("data/rows")?, ["README.md", "rows.csv"]);
+    assert_eq!(names("data/rows")?, [".gitignore", "README.md", "rows.csv"]);
     assert!(!fs::read_to_string(sandbox.work().join("data.lock"))?.contains(".gitattributes"));
     // a sync that resolves it again counts the files it keeps, as the add did
     let counted = " \u{b7} 2 of 3 files \u{b7} ";

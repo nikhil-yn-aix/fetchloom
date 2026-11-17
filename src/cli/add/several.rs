@@ -12,7 +12,8 @@ use super::{
     on_lines, preview_add, private_origins, stored_reference, sync_add, tell_started, typed,
 };
 use crate::cli::args::Add;
-use crate::cli::project::{Report, ignore_data};
+use crate::cli::project::Report;
+use crate::cli::sync::place::tell_marked;
 use crate::cli::sync::{self as engine, Given, Loop};
 use crate::cli::{Context, open_cache, peek_cache};
 use crate::error::{Error, Kind};
@@ -124,7 +125,7 @@ pub(super) async fn add_several_held(
         .await
         .map_err(|error| on_lines(error, &lines))?;
     tell_started(&work, starting);
-    ignore_data(&work, &manifest, starting || adding.begins())?;
+    tell_marked(&work.context.output, &outcome.placed);
     let private = private_origins(
         &work,
         several

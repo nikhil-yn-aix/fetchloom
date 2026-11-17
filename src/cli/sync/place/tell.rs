@@ -41,6 +41,7 @@ pub(super) fn tell(
     // datasets that share a folder share its line, where the first of them comes
     let mut folders: Vec<(String, Tally)> = Vec::new();
     let mut at_folder: HashMap<String, usize> = HashMap::new();
+    let adding = told.is_some_and(|names| !names.is_empty());
     let told = told.filter(|_| !output.shows_details());
     let mut datasets: u64 = 0;
     for (dataset, tally) in tallies
@@ -62,6 +63,10 @@ pub(super) fn tell(
         sum.copied += tally.copied;
     }
     tell_placed(output, placement, &folders, datasets);
+    // an add tells it among its own lines, where it told the rule it added before
+    if !adding {
+        super::tell_marked(output, placement);
+    }
     for (folder, paths) in by_folder(manifest, &placement.adopted) {
         let (linked, kept): (Vec<&String>, Vec<&String>) = paths
             .into_iter()
@@ -91,6 +96,7 @@ pub(super) fn tell(
     warn_put_back(output, manifest, placement, "put back");
     warn_unreached(output, &placement.unreached);
     warn_restored(output, placement);
+    super::mark::warn_unmarkable(output, &placement.unmarkable);
 }
 
 /// a warning for each file put back though no edit of this project's showed, saying where its
@@ -525,7 +531,9 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     for (folder, files) in by_folder(manifest, adopting) {
         tell_adoptions(output, &folder, &files);
     }
-    for overwritten in &preview.placement.overwritten {
+    let placement = &preview.placement;
+    super::mark::tell_made(output, &placement.marked, placement.in_git, "Would ignore");
+    for overwritten in &placement.overwritten {
         output.warn(
             Warning::PlaceOverwritten,
             &format!(
@@ -535,7 +543,6 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
             ),
         );
     }
-    let placement = &preview.placement;
     tell_removed(
         output,
         manifest,
@@ -577,6 +584,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
             });
         }
     }
+    super::mark::warn_unmarkable(output, &placement.unmarkable);
 }
 
 /// a line for each folder `folders` placed, or past a few dozen one line for the `datasets` in

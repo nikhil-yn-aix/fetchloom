@@ -32,7 +32,8 @@ fn fixture(name: &str) -> Result<Vec<u8>> {
     Ok(fs::read(path)?)
 }
 
-/// checks the folder holds exactly the archive's files.
+/// checks the folder holds exactly the archive's files, besides the .gitignore that keeps a
+/// project's dataset folder out of git.
 fn holds_the_archive(folder: &Path) -> Result {
     for (path, bytes) in FILES {
         assert_eq!(fs::read(folder.join(path))?, bytes, "{path}");
@@ -44,7 +45,7 @@ fn holds_the_archive(folder: &Path) -> Result {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
                 folders.push(entry.path());
-            } else {
+            } else if entry.path() != folder.join(".gitignore") {
                 found += 1;
             }
         }
@@ -183,7 +184,7 @@ fn a_zip_finder_made_lands_as_one_made_elsewhere() -> Result {
     );
     let folder = sandbox.work().join("data").join("finder");
     assert_eq!(fs::read(folder.join("a.wav"))?, b"RIFF");
-    assert_eq!(fs::read_dir(&folder)?.count(), 1, "only a.wav");
+    assert_eq!(files_in(&folder)?, [".gitignore", "a.wav"]);
     Ok(())
 }
 
@@ -435,7 +436,11 @@ fn a_7z_unpacks_and_no_extract_keeps_it_packed() -> Result {
     ok(&packed.run(&["add", "--no-extract", &server.url])?)?;
     let folder = packed.work().join("data").join("dataset");
     assert_eq!(fs::read(folder.join("dataset.7z"))?, seven);
-    assert_eq!(fs::read_dir(&folder)?.count(), 1, "only the 7z");
+    assert_eq!(
+        files_in(&folder)?,
+        [".gitignore", "dataset.7z"],
+        "only the 7z"
+    );
     Ok(())
 }
 
@@ -1318,6 +1323,7 @@ mod shards {
         ok(&run(&sandbox, &speech(2)?, &["sync"])?)?;
         let data = sandbox.work().join("data/shards");
         let mut kept = vec![
+            ".gitignore",
             "train-000000/00000000.wav",
             "train-000000/00000001.wav",
             "train-000001/00001000.wav",
@@ -1498,7 +1504,7 @@ mod split {
         let data = sandbox.work().join("data/scans");
         assert_eq!(
             files_in(&data)?,
-            ["a.csv", "b.csv", "c/d.csv", "e.txt", "f.txt"]
+            [".gitignore", "a.csv", "b.csv", "c/d.csv", "e.txt", "f.txt"]
         );
         for (path, bytes) in SCANS {
             assert_eq!(fs::read(data.join(&path["scans/".len()..]))?, bytes);
@@ -1534,7 +1540,7 @@ mod split {
         ok(&sandbox
             .command_in(&clone, &["--offline", "sync"])
             .output()?)?;
-        assert_eq!(files_in(&clone.join("data/scans"))?.len(), 5);
+        assert_eq!(files_in(&clone.join("data/scans"))?.len(), 6);
         Ok(())
     }
 
@@ -1554,7 +1560,10 @@ mod split {
         );
         let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
         assert!(!lock.contains("scans.zip"), "{lock}");
-        assert_eq!(files_in(&sandbox.work().join("data/scans"))?, ["notes.txt"]);
+        assert_eq!(
+            files_in(&sandbox.work().join("data/scans"))?,
+            [".gitignore", "notes.txt"]
+        );
         ok(&sandbox.run(&["sync", "--locked"])?)?;
         Ok(())
     }
@@ -1576,7 +1585,10 @@ mod split {
             text(&added.stderr)?
         );
         let data = sandbox.work().join("data/scans");
-        assert_eq!(files_in(&data)?, ["scans.zip.001", "scans.zip.003"]);
+        assert_eq!(
+            files_in(&data)?,
+            [".gitignore", "scans.zip.001", "scans.zip.003"]
+        );
         assert_eq!(fs::read(data.join("scans.zip.003"))?, parts[2]);
         let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
         assert!(!lock.contains("unpacks_to"), "{lock}");
@@ -1637,7 +1649,13 @@ mod split {
         assert_eq!(stderr.matches("warning:").count(), 2, "{stderr}");
         assert_eq!(
             files_in(&sandbox.work().join("data/shots"))?,
-            ["clips.part1.rar", "clips.part2.rar", "maps.z01", "maps.zip"]
+            [
+                ".gitignore",
+                "clips.part1.rar",
+                "clips.part2.rar",
+                "maps.z01",
+                "maps.zip"
+            ]
         );
         Ok(())
     }
@@ -1684,7 +1702,7 @@ mod split {
             let added = run(&sandbox, &routes, &["add", LINK, "--as", "scans"])?;
             ok(&added)?;
             assert!(!text(&added.stderr)?.contains("webdataset"));
-            let placed = ["a.csv", "b.csv", "c/d.csv", "e.txt", "f.txt"];
+            let placed = [".gitignore", "a.csv", "b.csv", "c/d.csv", "e.txt", "f.txt"];
             assert_eq!(files_in(&sandbox.work().join("data/scans"))?, placed);
             let clone = sandbox.folder("clone")?;
             for name in ["data.toml", "data.lock"] {
@@ -1745,7 +1763,7 @@ mod split {
                 "{manifest}"
             );
             assert!(!sandbox.work().join("data/scans/a.csv").exists());
-            assert_eq!(files_in(&sandbox.work().join("data/scans"))?.len(), 4);
+            assert_eq!(files_in(&sandbox.work().join("data/scans"))?.len(), 5);
             Ok(())
         }
 
@@ -1760,7 +1778,10 @@ mod split {
             )?;
             ok(&added)?;
             let data = sandbox.work().join("data/scans");
-            assert_eq!(files_in(&data)?, ["scans.zip.001", "scans.zip.002"]);
+            assert_eq!(
+                files_in(&data)?,
+                [".gitignore", "scans.zip.001", "scans.zip.002"]
+            );
             assert_eq!(fs::read(data.join("scans.zip.002"))?, halves[1]);
             let manifest = sandbox.work().join("data.toml");
             let text_before = fs::read_to_string(&manifest)?;
@@ -1769,7 +1790,7 @@ mod split {
             let switched = sandbox.run(&["--offline", "sync"])?;
             ok(&switched)?;
             assert_eq!(routes.requests().len(), before, "no request");
-            assert_eq!(files_in(&data)?.len(), 5, "{}", text(&switched.stderr)?);
+            assert_eq!(files_in(&data)?.len(), 6, "{}", text(&switched.stderr)?);
             let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
             assert_eq!(lock.matches("unpacks_to").count(), 1, "{lock}");
             Ok(())
