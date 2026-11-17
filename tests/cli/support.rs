@@ -473,6 +473,26 @@ pub(crate) fn typed(
     Ok(Some((status.code(), shown.read(screen))))
 }
 
+/// what a check that a file stayed as it was compares: its bytes, length and modified time, and on
+/// unix its inode and mode, which a link to the cache's copy or a sealed copy would change.
+pub(crate) fn look(path: &Path) -> Result<(Vec<u8>, u64, SystemTime, u64, u32)> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    #[cfg(unix)]
+    let (inode, mode) = {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.ino(), metadata.mode())
+    };
+    #[cfg(not(unix))]
+    let (inode, mode) = (0, 0);
+    Ok((
+        std::fs::read(path)?,
+        metadata.len(),
+        metadata.modified()?,
+        inode,
+        mode,
+    ))
+}
+
 pub(crate) fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8(bytes.to_vec())?)
 }

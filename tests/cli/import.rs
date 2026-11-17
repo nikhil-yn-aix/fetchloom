@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{Result, Sandbox, json, text, warned, zip_of};
+use crate::support::{Result, Sandbox, json, look, text, warned, zip_of};
 
 /// a folder of two files, one of them in a folder of its own.
 fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
@@ -13,26 +13,6 @@ fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     fs::write(folder.join("sepals.csv"), b"length,width\n5.1,3.5\n")?;
     fs::write(folder.join("petals/red.csv"), b"length\n1.4\n")?;
     Ok(folder)
-}
-
-/// what a check that a file stayed as it was compares: its bytes, length and modified time, and on
-/// unix its inode and mode, which a hardlink or a sealed copy would change.
-fn look(path: &Path) -> Result<(Vec<u8>, u64, std::time::SystemTime, u64, u32)> {
-    let metadata = fs::symlink_metadata(path)?;
-    #[cfg(unix)]
-    let (inode, mode) = {
-        use std::os::unix::fs::MetadataExt;
-        (metadata.ino(), metadata.mode())
-    };
-    #[cfg(not(unix))]
-    let (inode, mode) = (0, 0);
-    Ok((
-        fs::read(path)?,
-        metadata.len(),
-        metadata.modified()?,
-        inode,
-        mode,
-    ))
 }
 
 #[test]

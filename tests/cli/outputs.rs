@@ -5,7 +5,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Routes, Running, Sandbox, file, json, ok, text, wait_until, warned};
+use crate::support::{
+    Result, Routes, Running, Sandbox, file, json, look, ok, text, wait_until, warned,
+};
 
 const CLEAN: &[u8] = b"sepal,petal\n5.1,1.4\n";
 const SUMMARY: &[u8] = b"150 rows\n";
@@ -16,26 +18,6 @@ fn processed(project: &Path) -> Result {
     fs::write(project.join("data/processed/iris_clean.csv"), CLEAN)?;
     fs::write(project.join("data/processed/summary.txt"), SUMMARY)?;
     Ok(())
-}
-
-/// what a check that a file stayed the author's compares: its bytes, length and modified time,
-/// and on unix its inode and mode, which a link to the cache's copy or a sealed copy would change.
-fn look(path: &Path) -> Result<(Vec<u8>, u64, std::time::SystemTime, u64, u32)> {
-    let metadata = fs::symlink_metadata(path)?;
-    #[cfg(unix)]
-    let (inode, mode) = {
-        use std::os::unix::fs::MetadataExt;
-        (metadata.ino(), metadata.mode())
-    };
-    #[cfg(not(unix))]
-    let (inode, mode) = (0, 0);
-    Ok((
-        fs::read(path)?,
-        metadata.len(),
-        metadata.modified()?,
-        inode,
-        mode,
-    ))
 }
 
 /// a rerun of the pipeline: one file rewritten, one gone, one new.
