@@ -566,6 +566,30 @@ fn usage_errors_say_what_is_wrong_and_where_help_is() -> Result {
             "error: --as needs a value\n  help: `fetchloom add --help` says what it takes\n",
         ),
         (
+            &["export", "--force"],
+            "error: --force needs -o <file>\n  \
+             usage: fetchloom export [options] [name]...\n  \
+             help: add -o <file>, or leave out --force\n",
+        ),
+        (
+            &["get", "zenodo:1", "--force"],
+            "error: --force needs -o <file>\n  \
+             usage: fetchloom get [options] <link>...\n  \
+             help: add -o <file>, or leave out --force\n",
+        ),
+        (
+            &["--color", "never", "-C", ".", "export", "--force"],
+            "error: --force needs -o <file>\n  \
+             usage: fetchloom export [options] [name]...\n  \
+             help: add -o <file>, or leave out --force\n",
+        ),
+        (
+            &["get", "--force"],
+            "error: get needs <link>, and --force needs -o <file>\n  \
+             usage: fetchloom get [options] <link>...\n  \
+             help: `fetchloom get --help` says what it takes\n",
+        ),
+        (
             &["completions", "nope"],
             "error: <shell> cannot be \"nope\"\n  help: use one of bash, elvish, fish, powershell or zsh\n",
         ),
