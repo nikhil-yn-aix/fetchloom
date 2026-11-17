@@ -12,7 +12,6 @@ exit codes group failures, while error kinds identify the cause.
 | 30 | `integrity.mismatch`, including size mismatches and changed bytes found by cache verification |
 | 40 | `auth.required` |
 | 50 | `local.io`, `local.not_empty`, `project.invalid`, `project.changed` |
-| 60 | `output.differs` |
 | 130 | `interrupted` |
 
 a cancel you choose at a question keeps its exit code: q or esc at the dataset list and no exit 1, and ctrl-c exits 130. a person sees one `Cancelled` line instead of `error:`, and `--json`, which never asks, reports errors as before. a stop you ask for with ctrl-c during other work is no error either: it exits 130, a person sees a `Stopped` line instead of `error:`, and `--json` reports it as `interrupted`. on linux and macos a SIGTERM, as a scheduler sends a job it ends, stops a run the same way.
@@ -39,7 +38,6 @@ a cancel you choose at a question keeps its exit code: q or esc at the dataset l
 | `local.not_empty` | preserve existing files and choose another `get --dir` folder or `get -o` name; `get -o --force` replaces a file you no longer need. for `push`, name an empty folder or a mirror's top folder, and check that its disk is mounted |
 | `project.invalid` | correct or restore the manifest, lock or project folders |
 | `project.changed` | check the change made to `data.toml` or `data.lock` while the command ran, then run it again |
-| `output.differs` | `add <folder> --as <name> --check` found the folder holding other files than the output pins; `result.differences` lists the files `changed`, `added` and `removed`. rerun the pipeline, or pin what it holds now with `fetchloom add <folder> --as <name> --yes` |
 | `interrupted` | retry when ready; resumable downloads may be reused |
 
 a cached archive that cannot be read because the filesystem failed uses `local.io`, exit 50. archive bytes that are malformed use `source.invalid`, exit 10.

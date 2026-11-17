@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use super::Context;
-use super::sync::disk::{Blocker, Entry, Folders, Survey};
+use super::sync::disk::{self, Blocker, Entry, Folders, Survey};
 use super::sync::placed_archives::PlacedArchives;
 use super::sync::{Scope, place};
 use crate::cache::Cache;
@@ -226,12 +226,52 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         ));
     }
     if strict {
-        ready::ready_by(&ready::of_status(&status), &|line| {
+        let outputs = changed_outputs(&status, &manifest, &project.root);
+        ready::ready_by(&ready::of_status(&status, &outputs), &|line| {
             status.only_sync_of(line)
         })
         .map_err(|error| error.with_report(&status))?;
     }
     Ok(status)
+}
+
+/// the outputs whose folders `status` found holding other files than their pins, counted from the
+/// lists a person reads: a file of other bytes or in a file's way, one no pin places, one gone.
+fn changed_outputs(
+    status: &Status,
+    manifest: &Manifest,
+    root: &std::path::Path,
+) -> Vec<place::ChangedOutput> {
+    let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
+    let up = super::up_to(root, &here);
+    manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| entry.place)
+        .filter_map(|(name, entry)| {
+            let at = entry.at.as_deref()?;
+            let count = |paths: &mut dyn Iterator<Item = &String>| {
+                paths.filter(|path| disk::is_inside(path, at)).count() as u64
+            };
+            let blocked = status.blocked.iter().map(|blocker| &blocker.path);
+            let output = place::ChangedOutput {
+                name: name.clone(),
+                at: at.to_owned(),
+                shown: format!("{up}{at}"),
+                changed: count(
+                    &mut status
+                        .edited
+                        .iter()
+                        .chain(&status.untracked)
+                        .chain(&status.damaged)
+                        .chain(blocked),
+                ),
+                added: count(&mut status.extra.iter()),
+                removed: count(&mut status.missing.iter()),
+            };
+            (output.changed + output.added + output.removed > 0).then_some(output)
+        })
+        .collect()
 }
 
 /// what the hints that name a sync say first while one is refused, after the steps that pin an

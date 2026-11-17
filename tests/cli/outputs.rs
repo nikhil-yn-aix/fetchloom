@@ -169,7 +169,7 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
     assert_eq!(fs::read(work.join("results/.gitignore"))?, b"*\n");
     let lock = fs::read_to_string(work.join("data.lock"))?;
     assert_eq!(lock.matches("{ path = ").count(), 2, "{lock}");
-    let checked = sandbox.run(&["add", "results", "--as", "results", "--check"])?;
+    let checked = sandbox.run(&["status", "--verify", "--check"])?;
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
     let again = sandbox.run(&["add", "results", "--as", "results"])?;
     let stderr = text(&again.stderr)?;
@@ -406,47 +406,86 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
     Ok(())
 }
 
-/// `--check` compares the whole tree and changes nothing: equal is exit 0, and a difference is
-/// a kind and exit code of its own, with each difference in --json.
+/// after a pipeline run, `status --verify --check` is the check a script runs on an output: it
+/// hashes every file, so a rewrite that kept size and time shows, and it fails while the folder
+/// holds other files than the output pins, naming the output once with what changed, as `sync
+/// --strict --verify` does, which heals no part of it. a dry run of the same add shows what pinning
+/// it again would change. none of them writes data.toml or data.lock.
 #[test]
-fn check_compares_the_whole_tree_and_changes_nothing() -> Result {
+fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     processed(&work)?;
     ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
-    let pinned = fs::read_to_string(work.join("data.lock"))?;
-    let same = sandbox.run(&["add", "data/processed", "--as", "processed", "--check"])?;
-    let stderr = text(&same.stderr)?;
-    assert_eq!(same.status.code(), Some(0), "{stderr}");
-    assert!(
-        stderr.contains("Ok data/processed holds the files processed pins"),
-        "{stderr}"
-    );
-    rerun(&work)?;
-    let objects = count_files(&sandbox.cache().join("objects"));
-    let differs = sandbox.run(&[
-        "--json",
-        "add",
-        "data/processed",
-        "--as",
-        "processed",
-        "--check",
-    ])?;
-    let document = json(&differs)?;
-    assert_eq!(differs.status.code(), Some(60), "{document}");
+    let pinned = [
+        fs::read_to_string(work.join("data.toml"))?,
+        fs::read_to_string(work.join("data.lock"))?,
+    ];
+    let check = ["--json", "status", "--verify", "--check"];
+    let same = sandbox.run(&check)?;
+    assert_eq!(same.status.code(), Some(0), "{}", text(&same.stdout)?);
+    let clean = work.join("data/processed/iris_clean.csv");
+    let modified = fs::metadata(&clean)?.modified()?;
+    fs::write(&clean, b"sepal,petal\n5.1,1.5\n")?;
+    fs::File::options()
+        .write(true)
+        .open(&clean)?
+        .set_modified(modified)?;
+    let unhashed = sandbox.run(&["status", "--check"])?;
     assert_eq!(
-        document["errors"][0]["kind"], "output.differs",
+        unhashed.status.code(),
+        Some(0),
+        "only hashing tells: {}",
+        text(&unhashed.stderr)?
+    );
+    let strict = sandbox.run(&["--json", "sync", "--strict", "--verify"])?;
+    let synced = json(&strict)?;
+    assert_eq!(strict.status.code(), Some(1), "{synced}");
+    assert_eq!(synced["errors"][0]["kind"], "data.not_ready", "{synced}");
+    assert_eq!(
+        synced["errors"][0]["details"],
+        serde_json::json!([
+            "data/processed changed since processed was pinned, 1 file changed: `fetchloom sync --force processed` makes it hold just the files processed pins, or `fetchloom add data/processed --as processed` pins what it holds now"
+        ]),
+        "{synced}"
+    );
+    assert_eq!(
+        fs::read(&clean)?,
+        b"sepal,petal\n5.1,1.5\n",
+        "never partly healed"
+    );
+    fs::remove_file(work.join("data/processed/summary.txt"))?;
+    fs::write(work.join("data/processed/plot.png"), b"png")?;
+    let refused = sandbox.run(&check)?;
+    let document = json(&refused)?;
+    assert_eq!(refused.status.code(), Some(1), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "data.not_ready", "{document}");
+    assert_eq!(
+        error["details"],
+        serde_json::json!([
+            "data/processed changed since processed was pinned, 1 file changed, 1 added, 1 removed: `fetchloom sync --force processed` makes it hold just the files processed pins, or `fetchloom add data/processed --as processed` pins what it holds now"
+        ]),
         "{document}"
     );
-    let differences = &document["result"]["differences"];
-    assert_eq!(
-        differences["changed"],
-        serde_json::json!(["iris_clean.csv"])
+    let dry = sandbox.run(&["add", "data/processed", "--as", "processed", "--dry-run"])?;
+    let stderr = text(&dry.stderr)?;
+    assert_eq!(dry.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Would pin processed · 1 file changed, 1 added, 1 removed"),
+        "{stderr}"
     );
-    assert_eq!(differences["added"], serde_json::json!(["plot.png"]));
-    assert_eq!(differences["removed"], serde_json::json!(["summary.txt"]));
-    assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned);
-    assert_eq!(count_files(&sandbox.cache().join("objects")), objects);
+    let listed = sandbox.run(&["-v", "add", "data/processed", "--as", "processed", "-n"])?;
+    let stderr = text(&listed.stderr)?;
+    for line in [
+        "changed iris_clean.csv",
+        "added plot.png",
+        "removed summary.txt",
+    ] {
+        assert!(stderr.contains(line), "{line}: {stderr}");
+    }
+    assert_eq!(fs::read_to_string(work.join("data.toml"))?, pinned[0]);
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned[1]);
     Ok(())
 }
 
@@ -738,7 +777,7 @@ fn a_pin_leaves_out_what_tools_keep_beside_files() -> Result {
         assert_eq!(pinned.matches("{ path = ").count(), 1, "{name}: {lock}");
         assert!(pinned.contains("{ path = \"table.csv\""), "{name}: {lock}");
     }
-    let human = sandbox.run(&["add", "out", "--as", "results", "--check"])?;
+    let human = sandbox.run(&["add", "out", "--as", "results", "--dry-run"])?;
     let stderr = text(&human.stderr)?;
     assert_eq!(human.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains("Skipped #table.csv# and "), "{stderr}");
@@ -768,7 +807,7 @@ fn a_dropping_coming_or_going_is_no_change_to_an_output() -> Result {
         CLEAN,
     )?;
     fs::write(folder.join(".~lock.summary.txt#"), b"lock")?;
-    let checked = sandbox.run(&["add", "data/processed", "--as", "processed", "--check"])?;
+    let checked = sandbox.run(&["status", "--verify", "--check"])?;
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     for kind in ["missing", "edited", "extra", "yours"] {

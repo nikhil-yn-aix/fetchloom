@@ -340,13 +340,14 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
         planted.ok(&sandbox, args)?;
     }
     // a folder of the project pinned where it is, as an output: captured, pinned again after a
-    // rerun, checked, put back whole and untracked
+    // rerun, previewed, checked, put back whole and untracked
     fs::create_dir_all(work.join("results"))?;
     fs::write(work.join("results/r.csv"), b"r\n")?;
     planted.ok(&sandbox, &["add", "results", "--as", "results"])?;
     fs::write(work.join("results/r.csv"), b"rerun\n")?;
     planted.ok(&sandbox, &["add", "results", "--as", "results", "--yes"])?;
-    planted.ok(&sandbox, &["add", "results", "--as", "results", "--check"])?;
+    planted.ok(&sandbox, &["add", "results", "--as", "results", "-n"])?;
+    planted.ok(&sandbox, &["status", "--verify", "--check"])?;
     fs::write(work.join("results/late.csv"), b"late\n")?;
     planted.ok(&sandbox, &["sync", "--force", "results"])?;
     assert!(!work.join("results/late.csv").exists());

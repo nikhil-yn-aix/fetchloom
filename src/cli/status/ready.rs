@@ -5,7 +5,8 @@
 use super::Status;
 use crate::cli::project::command;
 use crate::cli::sync::Scope;
-use crate::cli::sync::place::{Placement, Reason};
+use crate::cli::sync::disk::is_inside;
+use crate::cli::sync::place::{ChangedOutput, Placement, Reason};
 use crate::error::{Error, Kind};
 use crate::project::lock::Waiting;
 
@@ -136,7 +137,7 @@ impl Unready {
                 shown,
                 changes,
             } => format!(
-                "{shown} changed since {name} was pinned, {changes}: `{}` puts back its files, or `{}` pins what it holds now",
+                "{shown} changed since {name} was pinned, {changes}: `{}` makes it hold just the files {name} pins, or `{}` pins what it holds now",
                 command(&format!("sync --force {name}")),
                 command(&format!(
                     "add {} --as {name}",
@@ -234,8 +235,10 @@ pub(in crate::cli) fn after_sync(
     unready
 }
 
-/// what keeps the data of every dataset from being ready, as `status` found the data folder.
-pub(super) fn of_status(status: &Status) -> Vec<Unready> {
+/// what keeps the data of every dataset from being ready, as `status` found the data folder: each
+/// of `outputs`, an output whose folder holds other files than it pins, is one line for all its
+/// files, as sync leaves such a folder whole.
+pub(super) fn of_status(status: &Status, outputs: &[ChangedOutput]) -> Vec<Unready> {
     let mut unready = Vec::new();
     if status.lockless {
         unready.push(Unready::Lockless(status.pins_lockless.clone()));
@@ -269,18 +272,36 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
                 by: status.pinned_by.get(name).copied().unwrap_or("digests"),
             }),
     );
+    let alone = |path: &&String| !outputs.iter().any(|output| is_inside(path, &output.at));
     let each = |paths: &[String], make: fn(String) -> Unready| {
-        paths.iter().cloned().map(make).collect::<Vec<_>>()
+        paths
+            .iter()
+            .filter(alone)
+            .cloned()
+            .map(make)
+            .collect::<Vec<_>>()
     };
     unready.extend(each(&status.missing, Unready::Missing));
-    unready.extend(status.edited.iter().map(|path| Unready::Kept {
-        path: path.clone(),
-        placed: true,
-    }));
-    unready.extend(status.untracked.iter().map(|path| Unready::Kept {
-        path: path.clone(),
-        placed: false,
-    }));
+    unready.extend(
+        status
+            .edited
+            .iter()
+            .filter(alone)
+            .map(|path| Unready::Kept {
+                path: path.clone(),
+                placed: true,
+            }),
+    );
+    unready.extend(
+        status
+            .untracked
+            .iter()
+            .filter(alone)
+            .map(|path| Unready::Kept {
+                path: path.clone(),
+                placed: false,
+            }),
+    );
     unready.extend(each(&status.unreadable, Unready::Unreadable));
     unready.extend(each(&status.outdated, Unready::Outdated));
     unready.extend(each(&status.not_unpacked, Unready::Unpacked));
@@ -288,11 +309,23 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
         status
             .blocked
             .iter()
+            .filter(|blocker| alone(&&blocker.path))
             .map(|blocker| Unready::Blocked(blocker.path.clone())),
     );
-    unready.extend(status.damaged.iter().map(|path| Unready::Damaged {
-        path: path.clone(),
-        hashed: status.hashed_only.contains(path),
+    unready.extend(
+        status
+            .damaged
+            .iter()
+            .filter(alone)
+            .map(|path| Unready::Damaged {
+                path: path.clone(),
+                hashed: status.hashed_only.contains(path),
+            }),
+    );
+    unready.extend(outputs.iter().map(|changed| Unready::Output {
+        name: changed.name.clone(),
+        shown: changed.shown.clone(),
+        changes: changed.summary(),
     }));
     unready
 }

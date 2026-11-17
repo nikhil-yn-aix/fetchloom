@@ -483,7 +483,6 @@ mod tests {
             decompress: false,
             web_page: false,
             no_sync: false,
-            check: false,
             dry: crate::cli::args::DryRun { dry_run: false },
         };
         let reads = |count| {

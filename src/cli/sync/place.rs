@@ -2918,6 +2918,8 @@ fn changed_outputs(
             | Action::Overwrite(_)
             | Action::Blocked(_)
             | Action::Unblock(_) => output.changed += 1,
+            // hashing found other bytes than the look tells, which is a change all the same
+            Action::Replace if survey.damaged.contains(&target.path) => output.changed += 1,
             Action::Place if survey.state.files.contains_key(&target.path) => output.removed += 1,
             _ => {}
         }

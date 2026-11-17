@@ -20,7 +20,6 @@ use super::{
 use crate::cache::Cache;
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
-use crate::project::Project;
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, Source};
 use crate::project::state::{Placed, State};
@@ -61,7 +60,7 @@ struct Walk {
 
 /// pins the folder `start`, `shown` as typed, found at `at` in the project, as the output `--as`
 /// names, or one named after the folder: new, pinned again once the person says yes to what
-/// changed, or with `--check` only compared.
+/// changed, or in a dry run only compared.
 pub(super) async fn pin_held(
     context: &Context,
     adding: &mut AddProject,
@@ -86,10 +85,10 @@ pub(super) async fn pin_held(
     let walked = &walk.walked;
     let pin = entry.and(old.as_ref()).and_then(|lock| lock.get(&name));
     let net = std::sync::Arc::new(context.net());
-    if args.check || args.dry.dry_run {
+    if args.dry.dry_run {
         let work = Loop::new(context, project, net, cache).adding(&name);
         let read = (&walk, start, &source);
-        return compared(&work, read, (&name, shown, &at), pin, args.check);
+        return compared(&work, read, (&name, shown, &at), pin);
     }
     room(context, &cache, walked, shown)?;
     let copied = into_cache(context, &cache, walked, &|copies| {
@@ -189,8 +188,7 @@ async fn pin_new(
 }
 
 /// the folder `start`, `shown` as typed, at `at`, checked and walked for `args`: refused when it
-/// cannot be an output's folder, holds another dataset's file or the cache, or `--check` names
-/// no output.
+/// cannot be an output's folder or holds another dataset's file or the cache.
 fn read<'m>(
     context: &Context,
     adding: &'m AddProject,
@@ -210,19 +208,7 @@ fn read<'m>(
     }
     refuse_folder(manifest, at, shown)?;
     let (name, entry) = output_name(context, manifest, args, at, start, shown)?;
-    if args.check && entry.is_none() {
-        return Err(Error::new(
-            Kind::Usage,
-            format!(
-                "{name} is no output data.toml pins, so there is nothing to check {shown} against"
-            ),
-        )
-        .help(format!(
-            "run `{}` to pin it first",
-            command(&format!("add {} --as {name}", shell(shown)))
-        )));
-    }
-    let writes = !args.dry.dry_run && !args.check;
+    let writes = !args.dry.dry_run;
     if writes {
         adding.project.check_writable()?;
     }
@@ -294,18 +280,17 @@ fn leave_out(walked: &mut Walked, markers: &HashSet<String>) {
     }
 }
 
-/// `--check`, or a dry run: the folder `walk` found at `start` compared with `pin`, read and hashed
-/// where it is, writing nothing. a new output's dry run hashes nothing.
+/// a dry run: the folder `walk` found at `start` compared with `pin`, read and hashed where it is,
+/// writing nothing. a new output's dry run hashes nothing.
 fn compared(
     work: &Loop<'_>,
     (walk, start, source): (&Walk, &Path, &Source),
     (name, shown, at): (&str, &str, &str),
     pin: Option<&Locked>,
-    check: bool,
 ) -> Result<Report, Error> {
     let context = work.context;
     let walked = &walk.walked;
-    if pin.is_none() && !check {
+    if pin.is_none() {
         let files = units::count(walked.files.len() as u64, "file", "files");
         context.output.step(
             "Would add",
@@ -320,9 +305,6 @@ fn compared(
     let read: Vec<Sha256> = hashed.iter().map(|file| file.sha256).collect();
     reread(context, walk, (start, shown), source, &read)?;
     let changes = Changes::of(&hashed, pin.map_or(&[][..], |pin| &pin.files));
-    if check {
-        return checked(context, work.project, (name, shown), &changes);
-    }
     Ok(preview(work, (name, shown), Some(&changes)))
 }
 
@@ -721,50 +703,6 @@ impl Changes {
             .map(|(path, size)| format!("removed {path} · {}", units::size(*size)));
         changed.chain(added).chain(removed).collect()
     }
-
-    /// the paths of each kind, as `--json` lists them.
-    pub(super) fn json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "changed": self.changed.iter().map(|(path, _, _)| path).collect::<Vec<_>>(),
-            "added": self.added.iter().map(|(path, _)| path).collect::<Vec<_>>(),
-            "removed": self.removed.iter().map(|(path, _)| path).collect::<Vec<_>>(),
-        })
-    }
-}
-
-/// `--check`'s answer: ok when the folder holds the pinned files, else `output.differs` naming
-/// each difference.
-fn checked(
-    context: &Context,
-    project: &Project,
-    (name, shown): (&str, &str),
-    changes: &Changes,
-) -> Result<Report, Error> {
-    if changes.is_empty() {
-        context
-            .output
-            .done("Ok", &format!("{shown} holds the files {name} pins"));
-        return Ok(Report {
-            project: project.root.clone(),
-            ..Report::default()
-        });
-    }
-    let mut error = Error::new(
-        Kind::OutputDiffers,
-        format!(
-            "{shown} holds other files than {name} pins: {}",
-            changes.summary()
-        ),
-    );
-    for line in changes.lines() {
-        error = error.detail(line);
-    }
-    Err(error
-        .help(format!(
-            "rerun your pipeline, or run `{}` to pin what it holds now",
-            command(&format!("add {} --as {name} --yes", shell(shown)))
-        ))
-        .with_result(serde_json::json!({ "differences": changes.json() })))
 }
 
 /// a dry run's report: what pinning would change, said, writing nothing.
@@ -833,8 +771,7 @@ fn approved(
                 error = error.detail(line);
             }
             Err(error.help(format!(
-                "run `{again}` to pin what it holds now, `{}` to compare only, or `{}` to make it hold just the files {name} pins",
-                command(&format!("add {} --as {name} --check", shell(shown))),
+                "run `{again}` to pin what it holds now, or `{}` to make it hold just the files {name} pins",
                 command(&format!("sync --force {name}"))
             )))
         }

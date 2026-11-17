@@ -48,13 +48,6 @@ pub(super) async fn path_held(
         let typed = (start.as_path(), shown, at.as_str());
         return in_place::pin_held(context, adding, args, typed, here, starting).await;
     }
-    if args.check {
-        return Err(Error::new(
-            Kind::Usage,
-            format!("{shown} is no folder of the project, so there is no output to check it against"),
-        )
-        .help("--check compares a folder of the project, such as data/processed, with the output data.lock records for it"));
-    }
     import_held(context, adding, args, (&start, shown), here, starting).await
 }
 

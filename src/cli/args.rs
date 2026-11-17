@@ -969,12 +969,6 @@ pub(crate) struct Add {
     #[arg(long, conflicts_with = "input_file", help_heading = "options")]
     pub(crate) no_sync: bool,
 
-    /// compare a folder of the project with the output data.lock records for it, changing
-    /// nothing: exit 0 when it holds the same files, else exit 60 with each file changed, added
-    /// or removed
-    #[arg(long, conflicts_with_all = ["input_file", "no_sync"], help_heading = "options")]
-    pub(crate) check: bool,
-
     #[command(flatten)]
     pub(crate) dry: DryRun,
 }

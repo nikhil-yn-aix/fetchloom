@@ -44,9 +44,6 @@ pub(crate) enum Kind {
     /// --check` found a file data.lock pins that no mirror or source serves, or a dataset its
     /// source no longer lists.
     NotReady,
-    /// `add <folder> --as <output> --check` found the folder holding other files than the output
-    /// pins: a file changed, added or removed.
-    OutputDiffers,
     Interrupted,
 }
 
@@ -73,7 +70,6 @@ impl Kind {
             Kind::ProjectChanged => "project.changed",
             Kind::Outdated => "lock.outdated",
             Kind::NotReady => "data.not_ready",
-            Kind::OutputDiffers => "output.differs",
             Kind::Interrupted => "interrupted",
         }
     }
@@ -96,7 +92,6 @@ impl Kind {
             Kind::AuthRequired => 40,
             Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid | Kind::ProjectChanged => 50,
             // a pipeline's output is not what was pinned, which no disk or network fault causes
-            Kind::OutputDiffers => 60,
             Kind::Interrupted => 130,
         }
     }
@@ -602,7 +597,6 @@ pub(crate) mod tests {
             ProjectChanged,
             Outdated,
             NotReady,
-            OutputDiffers,
             Interrupted,
         ]
         .to_vec()
