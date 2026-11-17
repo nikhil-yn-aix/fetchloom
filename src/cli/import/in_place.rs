@@ -103,9 +103,7 @@ pub(super) async fn pin_held(
         approved(context, (&name, shown), changes)?;
     }
     adding.seed(seeds(&name, &at, walked, &copied.files));
-    if pin.is_none() {
-        adding.pin_first(&at, git_tracks(&project.root, &at));
-    }
+    adding.git_keeps(&at, git_tracks(&project.root, &at));
     let work = Loop::new(context, project, net, cache).adding(&name);
     let mut locked = pinned(&name, &source, copied.files);
     locked.at = Some(at.clone());
@@ -154,7 +152,7 @@ const HOLDERS: [&str; 3] = [".gitkeep", ".keep", ".gitignore"];
 
 /// whether git tracks files of the person's in the output folder `at` of the project at `root`,
 /// besides [`HOLDERS`]: a folder they keep in git, where a marker would hide their next file. read
-/// at an output's first pin alone, so no sync runs git.
+/// at each pin of an output alone, so no sync runs git.
 fn git_tracks(root: &Path, at: &str) -> bool {
     Project::repository(root).is_some()
         && std::env::var_os("PATH")

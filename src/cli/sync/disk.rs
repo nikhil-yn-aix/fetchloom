@@ -88,6 +88,9 @@ pub(crate) struct Survey {
     pub(crate) marks: HashMap<String, Mark>,
     /// whether the data folder was not there when the listing began, as after it was moved away.
     pub(crate) data_gone: bool,
+    /// for an add pinning an output, its folder and whether git tracks the person's files there
+    /// now, which the run's markers follow over the state's record of the last pin.
+    pub(crate) git_keeps: Option<(String, bool)>,
 }
 
 /// what stands where fetchloom made a folder's .gitignore, by the state's record.
@@ -402,6 +405,7 @@ impl Survey {
             outside: Vec::new(),
             marks,
             data_gone,
+            git_keeps: None,
         };
         for link in followed.iter().filter(|link| link.first) {
             let found = link.found.to_string_lossy().into_owned();

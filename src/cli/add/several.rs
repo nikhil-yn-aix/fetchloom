@@ -469,7 +469,7 @@ mod tests {
             lock_text: None,
             unrestored: AtomicBool::new(false),
             seeded: std::sync::Mutex::default(),
-            first: std::sync::Mutex::default(),
+            git_keeps: std::sync::Mutex::default(),
         };
         let context = offline_context();
         let args = Add {

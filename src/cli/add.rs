@@ -27,7 +27,7 @@ use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest, Source};
-use crate::project::state::{Once, Synced};
+use crate::project::state::Synced;
 use crate::project::{Held, Project};
 use crate::source::folder::PAGE_FLAG;
 use crate::source::{Listing, Parsed, Reference, Remote, local};
@@ -50,9 +50,9 @@ pub(super) struct AddProject {
     /// the records of an output's files the add read where they are, which the state takes as
     /// placed once the add's survey is read.
     seeded: std::sync::Mutex<Vec<(String, crate::project::state::Placed)>>,
-    /// at an output's first pin, its folder and whether git tracks the person's files there, which
-    /// the state records once the add's survey is read.
-    first: std::sync::Mutex<Option<(String, bool)>>,
+    /// at a pin of an output, its folder and whether git tracks the person's files there, which the
+    /// add's survey takes once it is read.
+    git_keeps: std::sync::Mutex<Option<(String, bool)>>,
 }
 
 impl AddProject {
@@ -64,13 +64,13 @@ impl AddProject {
             .extend(records);
     }
 
-    /// gives the add's survey what the first pin of the output at `at` found: whether git tracks
-    /// the person's files there, so git keeps the folder and no marker hides it.
-    pub(super) fn pin_first(&self, at: &str, in_git: bool) {
+    /// gives the add's survey what the pin of the output at `at` found: whether git tracks the
+    /// person's files there, so git keeps the folder and no marker hides it.
+    pub(super) fn git_keeps(&self, at: &str, kept: bool) {
         *self
-            .first
+            .git_keeps
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((at.to_owned(), in_git));
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((at.to_owned(), kept));
     }
 
     /// reads data.toml and data.lock as the add finds them once it holds the project.
@@ -267,7 +267,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         lock_text: None,
         unrestored: AtomicBool::new(false),
         seeded: std::sync::Mutex::default(),
-        first: std::sync::Mutex::default(),
+        git_keeps: std::sync::Mutex::default(),
     };
     let read = adding.read();
     // another add may have started the project while this one waited to hold it, and then this
@@ -1292,19 +1292,11 @@ pub(super) async fn sync_add(
         survey.state.files.insert(path, placed);
         survey.needs_writing = true;
     }
-    let first = adding
-        .first
+    survey.git_keeps = adding
+        .git_keeps
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take();
-    if let Some((at, in_git)) = &first {
-        let told = &mut survey.state.told;
-        survey.needs_writing |= if *in_git {
-            told.note(Once::Tracked, at)
-        } else {
-            told.retain(Once::Tracked, |folder| folder != at)
-        };
-    }
     let restored = place::restore_aside(project, &manifest.data_dir, &mut survey, false);
     place::restored_aside(&work.context.output, &restored, false);
     survey.check_doubted(&project.root, &work.cache)?;
@@ -1389,8 +1381,7 @@ pub(super) async fn sync_add(
         });
         // a stop while placing takes back the files placed for the new dataset, so the add is
         // undone whole. once every file is in, the add is complete, and a later stop finds it so
-        let mut placement = work.apply(manifest, &lock, placing, synced)?;
-        placement.kept_in_git = first.filter(|(_, in_git)| *in_git).map(|(at, _)| at);
+        let placement = work.apply(manifest, &lock, placing, synced)?;
         work.context.stop.finish();
         Ok(Outcome {
             lock_changed: written.is_some(),
@@ -2509,7 +2500,7 @@ mod tests {
             lock_text: None,
             unrestored: AtomicBool::new(false),
             seeded: std::sync::Mutex::default(),
-            first: std::sync::Mutex::default(),
+            git_keeps: std::sync::Mutex::default(),
         };
         adding.read().unwrap();
         let updated = format!("{text}\n[datasets.b]\nref = \"https://example.org/b\"\n");

@@ -50,13 +50,14 @@ pub(super) enum Content {
 /// what each dataset folder of `targets` should have for a marker: `*`, or for one the person
 /// shares, the data folder itself or one holding another dataset's folder, the top entries of
 /// the datasets placed there, anchored, and the marker itself, or none past [`MOST_NAMED`] of
-/// them, and none in an output's folder git keeps. the files `state` records for a dataset of
-/// `unsure` count too, since they stay while nothing tells which it needs.
+/// them, and none in an output's folder git keeps. the files the survey's state records for a
+/// dataset of `unsure` count too, since they stay while nothing tells which it needs.
 pub(super) fn contents(
     manifest: &Manifest,
     targets: &[Target],
-    (state, unsure): (&State, Unsure<'_>),
+    (survey, unsure): (&Survey, Unsure<'_>),
 ) -> BTreeMap<String, Content> {
+    let state = &survey.state;
     let unsure = super::unsure(unsure);
     // the plan lists each dataset's targets together, so each run of them is looked at once
     let runs: Vec<&[Target]> = targets
@@ -105,7 +106,7 @@ pub(super) fn contents(
         .into_iter()
         .map(|folder| {
             let content = match named.remove(folder) {
-                _ if kept_in_git(manifest, state, folder) => Content::Tracked,
+                _ if kept_in_git(manifest, survey, folder) => Content::Tracked,
                 None => Content::Text(TEXT.to_vec()),
                 Some(entries) => entries.content(),
             };
@@ -176,14 +177,18 @@ pub(super) fn unnamed(
         .collect()
 }
 
-/// whether git keeps `folder`, an output's, as its first pin found git tracking the person's files
-/// there and the state records: a marker would hide their next file there from git.
-fn kept_in_git(manifest: &Manifest, state: &State, folder: &str) -> bool {
-    state.told.has(Once::Tracked, folder)
-        && manifest
-            .datasets
-            .values()
-            .any(|entry| entry.at.as_deref() == Some(folder))
+/// whether git keeps `folder`, an output's, tracking the person's files there: as the pin this run
+/// makes found, or else as the state records the last pin found. a marker would hide their next
+/// file there from git.
+fn kept_in_git(manifest: &Manifest, survey: &Survey, folder: &str) -> bool {
+    let kept = match &survey.git_keeps {
+        Some((at, kept)) if at == folder => *kept,
+        _ => survey.state.told.has(Once::Tracked, folder),
+    };
+    kept && manifest
+        .datasets
+        .values()
+        .any(|entry| entry.at.as_deref() == Some(folder))
 }
 
 /// whether the person shares `folder`, a dataset's, with its datasets: the data folder itself, or
@@ -658,7 +663,7 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
                 survey.disk.contains_key(&path)
                     || survey.entries.contains_key(&path)
                     || too_full(manifest, state, &folder)
-                    || kept_in_git(manifest, state, &folder)
+                    || kept_in_git(manifest, survey, &folder)
             }
         });
     marked

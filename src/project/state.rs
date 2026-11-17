@@ -106,8 +106,8 @@ pub(crate) enum Once {
     Output,
     /// a data folder link git sees, with the .gitignore line that hides it: the line.
     Link,
-    /// an output's folder git tracked the person's files in at its first pin, which git keeps, so
-    /// fetchloom makes no marker there: the folder.
+    /// an output's folder git tracked the person's files in when it was last pinned, which git
+    /// keeps, so fetchloom makes no marker there: the folder.
     Tracked,
     /// a dataset folder a `*` .gitignore of fetchloom's keeps out of git, the person's files there
     /// too, as said to a person in git: the folder, so one a pipeline writes again is not told of

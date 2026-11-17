@@ -990,3 +990,62 @@ fn a_marker_that_changes_kind_is_told_again() -> Result {
     assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
     Ok(())
 }
+
+/// the line an add prints for an output's folder it leaves to git, which tracks files there.
+fn kept_line(folder: &str) -> String {
+    format!(
+        "       Kept {folder} in git, which tracks files there; fetchloom pins it for sharing too\n"
+    )
+}
+
+/// m3: each pin reads again whether git keeps an output's folder. figures/, where git held only a
+/// .gitkeep at the first pin, gets its .gitignore then; once the person takes it out and commits a
+/// figure there, the next pin leaves the folder to git and says so once, so a new figure shows in
+/// git. when git lets go of the figure, a pin gives the folder its .gitignore back, said again,
+/// and the syncs after keep it.
+#[test]
+fn every_pin_reads_whether_git_keeps_an_outputs_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    write_all(
+        &sandbox,
+        &[("figures/.gitkeep", ""), ("figures/fig1.png", "png 1\n")],
+    )?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    crate::merge::ok(&sandbox, &["add", "figures/.gitkeep"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "folders"])?;
+    let marker = sandbox.work().join("figures/.gitignore");
+    let pin = |expected: &str| -> Result {
+        let pinned = sandbox.run(&["add", "figures", "--as", "figures", "--yes"])?;
+        let stderr = text(&pinned.stderr)?;
+        assert_eq!(pinned.status.code(), Some(0), "{stderr}");
+        assert!(stderr.contains(expected), "{stderr}");
+        Ok(())
+    };
+    pin(&ignored_line("figures"))?;
+    assert_eq!(fs::read(&marker)?, b"*\n");
+    fs::remove_file(&marker)?;
+    crate::merge::ok(&sandbox, &["add", "figures/fig1.png"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "a figure"])?;
+    write_all(&sandbox, &[("figures/fig2.png", "png 2\n")])?;
+    pin(&kept_line("figures"))?;
+    assert!(!marker.exists());
+    assert_eq!(
+        untracked(&sandbox)?.ok_or("git went away")?,
+        ["data.lock", "data.toml", "figures/fig2.png"]
+    );
+    let again = sandbox.run(&["add", "figures", "--as", "figures"])?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("in git"), "said once: {stderr}");
+    crate::merge::ok(&sandbox, &["rm", "-q", "--cached", "figures/fig1.png"])?;
+    pin(&ignored_line("figures"))?;
+    assert_eq!(fs::read(&marker)?, b"*\n");
+    // the syncs after, which read no git, keep what the pin found: a marker that goes comes back
+    fs::remove_file(&marker)?;
+    synced(&sandbox)?;
+    let back = fs::read(&marker).ok();
+    assert_eq!(back.as_deref(), Some(&b"*\n"[..]));
+    Ok(())
+}
