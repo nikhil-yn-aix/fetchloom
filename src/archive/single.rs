@@ -19,13 +19,14 @@ const ENDINGS: [&str; 4] = [".bz2", ".zst", ".gz", ".xz"];
 /// when the name ends in no compression `decompress` takes, or in an archive's; else the name
 /// without the ending, or why no file may take that name.
 pub(crate) fn decompressed_name(path: &str) -> Option<Result<String, String>> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let ending = ENDINGS.iter().find(|ending| {
+        name.len() >= ending.len()
+            && name.as_bytes()[name.len() - ending.len()..].eq_ignore_ascii_case(ending.as_bytes())
+    })?;
     if by_name(path).is_some() {
         return None;
     }
-    let name = path.rsplit('/').next().unwrap_or(path);
-    let lower = name.to_ascii_lowercase();
-    let ending = ENDINGS.iter().find(|ending| lower.ends_with(*ending))?;
-    // the ending is ascii, so the name in lowercase ends at the same byte
     let stripped = &name[..name.len() - ending.len()];
     let refused = |what: String| Some(Err(format!("\"{name}\" would decompress to {what}")));
     if stripped.is_empty() {
