@@ -107,7 +107,7 @@ pub(super) async fn pin_held(
     let output = &work.context.output;
     let folder = from_here(project, here, &at);
     let (outcome, datasets) = match (entry, changes) {
-        (Some(_), Some(changes)) if changes.is_empty() && !lineage_moved(manifest, &locked) => {
+        (Some(_), Some(changes)) if changes.is_empty() => {
             let outcome =
                 sync_add(&work, adding, manifest, None, old, (&names, Vec::new())).await?;
             output.step("Read", &format!("{name} · {told}"));
@@ -121,10 +121,7 @@ pub(super) async fn pin_held(
             output.step("Read", &format!("{name} · {told}"));
             tell_marked(output, &outcome.placed);
             let said = match changes {
-                Some(changes) if !changes.is_empty() => {
-                    format!("{name} · {}", changes.summary())
-                }
-                Some(_) => format!("{name} again, its files as they were"),
+                Some(changes) => format!("{name} · {}", changes.summary()),
                 None => format!("{name} in data.lock, its files are in {folder}"),
             };
             output.done("Pinned", &said);
@@ -306,14 +303,6 @@ fn compared(
     reread(context, walk, (start, shown), source, &read)?;
     let changes = Changes::of(&hashed, pin.map_or(&[][..], |pin| &pin.files));
     Ok(preview(work, (name, shown), Some(&changes)))
-}
-
-/// whether a re-pin of the same bytes as `pin` still changes data.lock, as an input of the output
-/// whose identity data.lock records moved since. the hook for w7-lineage, whose re-pin updates
-/// lineage even when the output's bytes are identical; nothing moves until then.
-fn lineage_moved(manifest: &Manifest, pin: &Locked) -> bool {
-    let _ = (manifest, pin);
-    false
 }
 
 /// what reading the folder `shown` did: its files and bytes, copied or `cloned` into the cache.
