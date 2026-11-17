@@ -1000,22 +1000,31 @@ impl Project {
         self.data_folder(manifest, false)
     }
 
-    /// refuses a data folder `data_dir` that a link leads to, unless [`follow`] follows it, before
-    /// anything reads in it.
-    pub(crate) fn refuse_linked_data_dir(&self, data_dir: &str) -> Result<(), Error> {
+    /// refuses a data folder `data_dir` that a link leads to, unless [`Project::follow`] follows
+    /// it, before anything reads in it. the link it followed, if any.
+    pub(crate) fn refuse_linked_data_dir(&self, data_dir: &str) -> Result<Option<Followed>, Error> {
         let mut folder = self.root.clone();
-        let mut link = None;
+        let mut path = String::new();
+        let mut followed = None;
         for part in data_dir.split('/') {
             folder.push(part);
+            path = if path.is_empty() {
+                part.to_owned()
+            } else {
+                format!("{path}/{part}")
+            };
             if fs::symlink_metadata(&folder).is_ok_and(|metadata| metadata.file_type().is_symlink())
             {
-                follow(&folder, &mut link, &self.data_links)?;
+                self.follow(&folder, &path, &mut followed)?;
             }
         }
-        if link.is_some() && folder.is_dir() {
-            remember(&folder)?;
+        if let Some(link) = &followed {
+            self.take(link)?;
+            if folder.is_dir() {
+                remember(&folder)?;
+            }
         }
-        Ok(())
+        Ok(followed)
     }
 
     /// refuses a data folder `data_dir`, or an output's folder when `output` says it is one, that
@@ -1062,14 +1071,13 @@ impl Project {
     }
 
     fn data_folder(&self, manifest: &Manifest, create: bool) -> Result<PathBuf, Error> {
+        // the one link on the way is checked whole before any folder is made through it
+        let linked = self.refuse_linked_data_dir(&manifest.data_dir)?.is_some();
         let mut folder = self.root.clone();
-        let mut link = None;
         for part in manifest.data_dir.split('/') {
             folder.push(part);
             match fs::symlink_metadata(&folder) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    follow(&folder, &mut link, &self.data_links)?;
-                }
+                Ok(metadata) if metadata.file_type().is_symlink() => {}
                 Ok(metadata) if !metadata.is_dir() => {
                     return Err(Error::new(
                         Kind::ProjectInvalid,
@@ -1097,10 +1105,199 @@ impl Project {
                 }
             }
         }
-        if link.is_some() {
+        if linked {
             remember(&folder)?;
         }
         Ok(folder)
+    }
+
+    /// follows the link at `folder`, `path` in the project, on the way to the data folder, as a
+    /// person on a cluster links `data` to scratch: the first link there, when the folder it leads
+    /// to exists, lies in a folder `data_links` lists and in no other project's folder, and on its
+    /// first follow holds nothing this project did not place. a link a cloned project brings could
+    /// aim placement anywhere, another project's data folder too, so any other is refused, a second
+    /// one included, and the folder a link leads to is never made: one that is gone may be on a
+    /// disk not mounted now.
+    fn follow(
+        &self,
+        folder: &Path,
+        path: &str,
+        followed: &mut Option<Followed>,
+    ) -> Result<(), Error> {
+        if let Some(first) = followed {
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "{} is a second link on the way to the data folder, and fetchloom follows only the one at {}",
+                    folder.display(),
+                    first.at.display()
+                ),
+            )
+            .help("replace the second link with a real folder"));
+        }
+        let found = match fs::canonicalize(folder) {
+            Ok(found) => found,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                let leads = fs::read_link(folder).map_or_else(
+                    |_| folder.to_path_buf(),
+                    |to| {
+                        folder
+                            .parent()
+                            .map_or_else(|| to.clone(), |parent| parent.join(&to))
+                    },
+                );
+                return Err(Error::new(
+                    Kind::ProjectInvalid,
+                    format!(
+                        "{} is a link to {}, which does not exist: its disk may be unmounted",
+                        folder.display(),
+                        crate::machine::plain(&leads).display()
+                    ),
+                )
+                .help("mount the disk that holds it, or point the link at a folder that exists, since fetchloom never makes the folder a link leads to"));
+            }
+            Err(err) => {
+                return Err(Error::io(
+                    format_args!("could not follow the link {}", folder.display()),
+                    &err,
+                ));
+            }
+        };
+        let shown = crate::machine::plain(&found);
+        if !found.is_dir() {
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "{} is a link to {}, a file where the data folder should be",
+                    folder.display(),
+                    shown.display()
+                ),
+            )
+            .help("point the link at a folder"));
+        }
+        let Some(listed) = self
+            .data_links
+            .folders
+            .iter()
+            .filter_map(|entry| fs::canonicalize(entry).ok())
+            .find(|entry| found.starts_with(entry))
+        else {
+            return Err(unlisted(folder, &shown, &self.data_links));
+        };
+        if let Some(other) = self.other_project(&found, &listed) {
+            let other = crate::machine::plain(&other);
+            return Err(taken(
+                folder,
+                &shown,
+                &format!("lies in the project at {}", other.display()),
+            ));
+        }
+        let first = self.first_follow(folder, path, &found)?;
+        *followed = Some(Followed {
+            at: folder.to_path_buf(),
+            path: path.to_owned(),
+            found,
+            first,
+        });
+        Ok(())
+    }
+
+    /// takes the folder `link` leads to for this project's: on the link's first follow only when
+    /// it holds nothing this project did not place, so a placer then opens it there.
+    fn take(&self, link: &Followed) -> Result<(), Error> {
+        let shown = crate::machine::plain(&link.found);
+        if link.first {
+            let unplaced = self.unplaced(&link.path, &link.found).map_err(|err| {
+                Error::io(format_args!("could not read {}", shown.display()), &err)
+            })?;
+            if !unplaced.is_empty() {
+                let such = crate::units::listed(&unplaced, "and");
+                return Err(taken(
+                    &link.at,
+                    &shown,
+                    &format!("holds files this project did not place, such as {such}"),
+                ));
+            }
+        }
+        crate::place::open_at(&link.at, link.found.clone())
+            .map_err(|err| Error::io(format_args!("could not read {}", link.at.display()), &err))
+    }
+
+    /// whether following the link at `folder`, `path` in the project, to `found` is its first
+    /// follow: the state records the link leading elsewhere or nowhere, and no earlier look in
+    /// this run took it there.
+    fn first_follow(&self, folder: &Path, path: &str, found: &Path) -> Result<bool, Error> {
+        let recorded = self.state_within(&[], &|_| false).0.followed.remove(path);
+        if recorded.as_deref() == Some(&*found.to_string_lossy()) {
+            return Ok(false);
+        }
+        let folder = std::path::absolute(folder)
+            .map_err(|err| Error::io(format_args!("could not read {}", folder.display()), &err))?;
+        Ok(crate::place::opened_at(&folder).as_deref() != Some(found))
+    }
+
+    /// the files in `found`, the folder the link `path` in the project leads to, that this
+    /// project's state does not record as its own, by their path in `found`: a file it placed, of
+    /// the size it placed, a marker it made and a file it kept aside are its own, and what a
+    /// system writes by itself, as finder's `.DS_Store`, is nobody's. a move to another disk may
+    /// round a file's time, so its size alone tells it. at most three, enough to name.
+    fn unplaced(&self, path: &str, found: &Path) -> io::Result<Vec<String>> {
+        let below = format!("{path}/");
+        let (state, _) =
+            self.state_within(&[path.to_owned()], &|record| record.starts_with(&below));
+        let mut unplaced = Vec::new();
+        let mut folders = vec![(found.to_path_buf(), String::new())];
+        while let Some((folder, inside)) = folders.pop() {
+            for entry in fs::read_dir(&folder)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let at = if inside.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{inside}/{name}")
+                };
+                let kind = entry.file_type()?;
+                if kind.is_dir() {
+                    folders.push((entry.path(), at));
+                    continue;
+                }
+                let record = format!("{below}{at}");
+                let marker = record
+                    .strip_suffix("/.gitignore")
+                    .is_some_and(|folder| state.markers.contains_key(folder));
+                let placed = state.files.get(&record).is_some_and(|placed| {
+                    entry
+                        .metadata()
+                        .is_ok_and(|found| found.len() == placed.look.size)
+                });
+                let own = marker || placed || state.aside.contains_key(&record);
+                let dropped = kind.is_file() && crate::name::system_file(&name);
+                if !own && !dropped {
+                    unplaced.push(at);
+                    if unplaced.len() == 3 {
+                        return Ok(unplaced);
+                    }
+                }
+            }
+        }
+        Ok(unplaced)
+    }
+
+    /// the folder of another project that `found`, the folder a data folder link leads to, lies
+    /// in, up to `listed`, the listed folder that holds it: one holding data.toml or a .fetchloom
+    /// folder, other than this project's own.
+    fn other_project(&self, found: &Path, listed: &Path) -> Option<PathBuf> {
+        let own = fs::canonicalize(&self.root).ok();
+        found
+            .ancestors()
+            .take_while(|folder| folder.starts_with(listed))
+            .find(|folder| {
+                own.as_deref() != Some(*folder)
+                    && [manifest::FILE, FOLDER]
+                        .iter()
+                        .any(|name| fs::symlink_metadata(folder.join(name)).is_ok())
+            })
+            .map(Path::to_path_buf)
     }
 
     /// the .fetchloom folder, which tells git to ignore it with a .gitignore made where none
@@ -1498,7 +1695,17 @@ pub(crate) struct DataLinks {
     pub(crate) from_variable: bool,
 }
 
-/// notes the data folder at `folder`, reached through a link [`follow`] followed, so a placer
+/// a data folder link a run followed: where it is, its path in the project, the folder it led
+/// to, resolved, and whether this was its first follow, which the state is to record.
+#[derive(Clone, Debug)]
+pub(crate) struct Followed {
+    pub(crate) at: PathBuf,
+    pub(crate) path: String,
+    pub(crate) found: PathBuf,
+    pub(crate) first: bool,
+}
+
+/// notes the data folder at `folder`, reached through a link [`Project::follow`] followed, so a placer
 /// opens the folder found there now, whatever the link says by then.
 fn remember(folder: &Path) -> Result<(), Error> {
     let found = fs::canonicalize(folder)
@@ -1507,73 +1714,18 @@ fn remember(folder: &Path) -> Result<(), Error> {
         .map_err(|err| Error::io(format_args!("could not read {}", folder.display()), &err))
 }
 
-/// follows the link at `folder` on the way to the data folder, as a person on a cluster links
-/// `data` to scratch: the first link there, when the folder it leads to exists and lies in a
-/// folder `data_links` lists. a link a cloned project brings could aim placement anywhere, so any
-/// other is refused, a second one included, and the folder a link leads to is never made: one
-/// that is gone may be on a disk not mounted now.
-fn follow(folder: &Path, link: &mut Option<PathBuf>, listed: &DataLinks) -> Result<(), Error> {
-    if let Some(first) = link {
-        return Err(Error::new(
-            Kind::ProjectInvalid,
-            format!(
-                "{} is a second link on the way to the data folder, and fetchloom follows only the one at {}",
-                folder.display(),
-                first.display()
-            ),
-        )
-        .help("replace the second link with a real folder"));
-    }
-    let found = match fs::canonicalize(folder) {
-        Ok(found) => found,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            let leads = fs::read_link(folder).map_or_else(
-                |_| folder.to_path_buf(),
-                |to| {
-                    folder
-                        .parent()
-                        .map_or_else(|| to.clone(), |parent| parent.join(&to))
-                },
-            );
-            return Err(Error::new(
-                Kind::ProjectInvalid,
-                format!(
-                    "{} is a link to {}, which does not exist: its disk may be unmounted",
-                    folder.display(),
-                    crate::machine::plain(&leads).display()
-                ),
-            )
-            .help("mount the disk that holds it, or point the link at a folder that exists, since fetchloom never makes the folder a link leads to"));
-        }
-        Err(err) => {
-            return Err(Error::io(
-                format_args!("could not follow the link {}", folder.display()),
-                &err,
-            ));
-        }
-    };
-    let shown = crate::machine::plain(&found);
-    if !found.is_dir() {
-        return Err(Error::new(
-            Kind::ProjectInvalid,
-            format!(
-                "{} is a link to {}, a file where the data folder should be",
-                folder.display(),
-                shown.display()
-            ),
-        )
-        .help("point the link at a folder"));
-    }
-    let inside = listed
-        .folders
-        .iter()
-        .filter_map(|entry| fs::canonicalize(entry).ok())
-        .any(|entry| found.starts_with(entry));
-    if !inside {
-        return Err(unlisted(folder, &shown, listed));
-    }
-    *link = Some(folder.to_path_buf());
-    Ok(())
+/// the refusal of the link at `folder` to `found`, a folder `listed` holds, which `why` says is not
+/// this project's to take.
+fn taken(folder: &Path, found: &Path, why: &str) -> Error {
+    Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "{} is a link to {}, which {why}, so fetchloom places nothing through it",
+            folder.display(),
+            found.display()
+        ),
+    )
+    .help("point the link at an empty folder of this project's own: fetchloom never takes over a folder holding what it did not place there")
 }
 
 /// the refusal of the link at `folder` to `found`, which no folder `listed` holds, with how to

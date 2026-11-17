@@ -68,7 +68,7 @@ pub(crate) fn open_at(folder: &Path, found: PathBuf) -> io::Result<()> {
 }
 
 /// where a placer rooted at `root`, absolute, opens it, as [`open_at`] noted.
-fn opened_at(root: &Path) -> Option<PathBuf> {
+pub(crate) fn opened_at(root: &Path) -> Option<PathBuf> {
     OPENED_AT
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

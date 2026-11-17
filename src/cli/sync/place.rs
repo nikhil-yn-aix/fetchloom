@@ -2291,7 +2291,10 @@ fn write_ahead(
             placement.aside_names.insert(moved.clone(), hidden);
         }
     }
-    if placement.aside_names.is_empty() && replacing.is_empty() && !marking {
+    // a first follow's record goes before any file, so a run cut off leaves no file of its own
+    // that the next run's first look takes for another's
+    let followed = survey.followed.iter().any(|link| link.first);
+    if placement.aside_names.is_empty() && replacing.is_empty() && !marking && !followed {
         return Ok(());
     }
     let state = &mut survey.state;

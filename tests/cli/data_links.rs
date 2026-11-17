@@ -277,8 +277,11 @@ fn only_the_one_link_to_the_data_folder_is_followed() -> Result {
     );
     assert_eq!(fs::read_dir(&other)?.count(), 0);
     unlink(&target.join("raw"))?;
+    // once the data folder is this project's, a dataset's folder that is a link stays where it
+    // leads
+    fs::write(&manifest, "")?;
+    ok(&sandbox.run(&["sync"])?)?;
     fs::remove_file(&manifest)?;
-    // a dataset's folder that is a link stays where it leads
     let elsewhere = sandbox.folder("elsewhere")?;
     link_folder(&elsewhere, &target.join("iris"))?;
     let output = sandbox.run(&["add", &link, "--as", "iris"])?;
@@ -300,5 +303,227 @@ fn only_the_one_link_to_the_data_folder_is_followed() -> Result {
         stderr.contains("is inside the data folder data"),
         "{stderr}"
     );
+    Ok(())
+}
+
+/// data.toml and data.lock pinning the file at `link` as iris, written into the work folder as a
+/// clone of a project brings them: no state, and nothing placed.
+fn cloned(sandbox: &Sandbox, link: &str) -> Result {
+    let origin = sandbox.folder("origin")?;
+    let added = sandbox
+        .command_in(&origin, &["add", link, "--as", "iris"])
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(origin.join(name), sandbox.work().join(name))?;
+    }
+    Ok(())
+}
+
+/// the folder the state of the project at `root` records its data folder link `link` leading to.
+fn recorded(root: &Path, link: &str) -> Result<Option<String>> {
+    let state = fs::read(root.join(".fetchloom").join("state"))?;
+    let state: serde_json::Value = serde_json::from_slice(&state)?;
+    Ok(state["followed"][link].as_str().map(str::to_owned))
+}
+
+/// `path` resolved, as a state records a folder a link leads to.
+fn resolved(path: &Path) -> Result<String> {
+    Ok(fs::canonicalize(path)?.to_string_lossy().into_owned())
+}
+
+/// every file and folder below `root`, by its path there.
+fn listing(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(folder)? {
+            let path = entry?.path();
+            if fs::symlink_metadata(&path)?.is_dir() {
+                folders.push(path.clone());
+            }
+            found.push(path.strip_prefix(root)?.to_path_buf());
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// a cloned project's committed `data` link may lead into another project's data folder under a
+/// listed root, as /scratch/$USER holds each of a person's projects. its first follow takes no
+/// folder holding files this project did not place, nor one inside another project's folder, so
+/// neither a sync nor the `sync --force` that replaces files writes anything there.
+#[test]
+fn a_cloned_link_into_another_projects_data_folder_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let root = sandbox.folder("scratch-root")?;
+    let thesis = root.join("thesis").join("data");
+    fs::create_dir_all(thesis.join("iris"))?;
+    fs::write(thesis.join("iris").join("iris.csv"), b"my own table\n")?;
+    let data = sandbox.work().join("data");
+    if link_folder(&thesis, &data).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    cloned(&sandbox, &format!("{}/iris.csv", routes.url))?;
+    ok(&sandbox.run(&["settings", "set", "data_links", &root.display().to_string()])?)?;
+    let before = listing(&thesis)?;
+    for args in [&["sync"][..], &["sync", "--force"]] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                " is a link to {}, which holds files this project did not place, such as iris/iris.csv, so fetchloom places nothing through it\n",
+                real(&thesis)?
+            )),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(listing(&thesis)?, before, "{args:?}");
+        assert_eq!(
+            fs::read(thesis.join("iris").join("iris.csv"))?,
+            b"my own table\n"
+        );
+    }
+    // a data folder inside another project's folder is that project's, though it is empty yet
+    let notes = root.join("notes");
+    fs::create_dir_all(notes.join("data"))?;
+    fs::write(notes.join("data.toml"), b"")?;
+    unlink(&data)?;
+    link_folder(&notes.join("data"), &data)?;
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            " is a link to {}, which lies in the project at {}, so fetchloom places nothing through it\n",
+            real(&notes.join("data"))?,
+            real(&notes)?
+        )),
+        "{stderr}"
+    );
+    assert_eq!(listing(&notes.join("data"))?, Vec::<PathBuf>::new());
+    Ok(())
+}
+
+/// a person who moves their own data folder to scratch and links it back keeps working: the folder
+/// holds what this project placed, the markers it made and what a system writes by itself, so the
+/// first follow takes it and the state records it.
+#[test]
+fn a_data_folder_moved_to_scratch_with_its_state_is_followed() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let scratch = sandbox.folder("scratch")?;
+    let probe = sandbox.work().join("probe");
+    if link_folder(&scratch, &probe).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    unlink(&probe)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    let data = sandbox.work().join("data");
+    let moved = scratch.join("project-data");
+    fs::rename(&data, &moved)?;
+    fs::write(moved.join("iris").join(".DS_Store"), b"finder\n")?;
+    link_folder(&moved, &data)?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    for args in [&["--offline", "sync"][..], &["--offline", "status"]] {
+        let output = sandbox.run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    assert_eq!(fs::read(moved.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&moved)?));
+    Ok(())
+}
+
+/// an empty folder a link leads to is this project's from its first follow on: the state records
+/// it, so a file the person puts there later stops no run.
+#[test]
+fn an_empty_folder_a_link_leads_to_is_followed_and_recorded() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir(&target)?;
+    if link_folder(&target, &sandbox.work().join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
+    fs::write(target.join("notes.txt"), b"mine\n")?;
+    let synced = sandbox.run(&["--offline", "sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    Ok(())
+}
+
+/// a recorded link pointed at another folder is followed only as at first: one holding files this
+/// project did not place is refused and left as it was, and the folder recorded is still followed.
+#[test]
+fn a_recorded_link_pointed_at_a_populated_folder_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir(&target)?;
+    let data = sandbox.work().join("data");
+    if link_folder(&target, &data).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    let other = scratch.join("someone");
+    fs::create_dir_all(other.join("iris"))?;
+    fs::write(other.join("iris").join("iris.csv"), b"theirs\n")?;
+    unlink(&data)?;
+    link_folder(&other, &data)?;
+    let before = listing(&other)?;
+    for args in [
+        &["--offline", "sync"][..],
+        &["--offline", "sync", "--force"],
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("which holds files this project did not place, such as iris/iris.csv"),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(listing(&other)?, before, "{args:?}");
+    }
+    unlink(&data)?;
+    link_folder(&target, &data)?;
+    let back = sandbox.run(&["--offline", "sync"])?;
+    assert_eq!(back.status.code(), Some(0), "{}", text(&back.stderr)?);
     Ok(())
 }

@@ -72,6 +72,11 @@ pub(crate) struct State {
     /// file goes unrecorded, and only one holding that is fetchloom's to rewrite or delete.
     #[serde(default)]
     pub(crate) markers: BTreeMap<String, String>,
+    /// the folder each data folder link led to when fetchloom first followed it, resolved, by the
+    /// link's path in the project: a link still leading there is this project's own, and one
+    /// leading elsewhere is checked as at first.
+    #[serde(default)]
+    pub(crate) followed: BTreeMap<String, String>,
     /// what runs told a person once, so later runs say it again only of a new subject.
     #[serde(default)]
     pub(crate) told: Told,
@@ -443,6 +448,10 @@ impl State {
             out.extend_from_slice(br#","markers":"#);
             serde_json::to_writer(&mut *out, &self.markers)?;
         }
+        if !self.followed.is_empty() {
+            out.extend_from_slice(br#","followed":"#);
+            serde_json::to_writer(&mut *out, &self.followed)?;
+        }
         if !self.told.is_empty() {
             out.extend_from_slice(br#","told":"#);
             serde_json::to_writer(&mut *out, &self.told)?;
@@ -479,7 +488,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         let (mut version, mut files, mut synced) = (None, false, false);
         let (mut dropped, mut freeing, mut folder, mut aside, mut replacing, mut uncached) =
             (false, false, false, false, false, false);
-        let (mut markers, mut told) = (false, false);
+        let (mut markers, mut followed, mut told) = (false, false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -518,6 +527,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "markers" => {
                     state.markers = map.next_value()?;
                     std::mem::replace(&mut markers, true)
+                }
+                "followed" => {
+                    state.followed = map.next_value()?;
+                    std::mem::replace(&mut followed, true)
                 }
                 "told" => {
                     state.told = map.next_value()?;
@@ -608,8 +621,8 @@ type Block = (String, u64, u64);
 
 /// what follows the records: the settled sync, the dropped datasets and those
 /// whose drop has not freed the cache yet, the folder, the files kept aside, those being replaced,
-/// what the cache lacked of the copies, the folders fetchloom marked for git, what runs told once
-/// and the blocks.
+/// what the cache lacked of the copies, the folders fetchloom marked for git, where the data
+/// folder links led, what runs told once and the blocks.
 #[derive(Deserialize)]
 struct Tail {
     #[serde(default)]
@@ -628,6 +641,8 @@ struct Tail {
     uncached: Option<Uncached>,
     #[serde(default)]
     markers: BTreeMap<String, String>,
+    #[serde(default)]
+    followed: BTreeMap<String, String>,
     #[serde(default)]
     told: Told,
     blocks: Vec<Block>,
@@ -740,6 +755,7 @@ fn indexed(
         replacing,
         uncached,
         markers,
+        followed,
         told,
         blocks,
     } = match index(reading, ours)? {
@@ -768,6 +784,7 @@ fn indexed(
         replacing,
         uncached,
         markers,
+        followed,
         told,
     })
 }
@@ -787,6 +804,7 @@ fn by_blocks(
         replacing,
         uncached,
         markers,
+        followed,
         told,
         blocks,
     } = match index(reading, ours)? {
@@ -818,6 +836,7 @@ fn by_blocks(
         replacing,
         uncached,
         markers,
+        followed,
         told,
     })
 }

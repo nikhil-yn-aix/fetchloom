@@ -59,8 +59,11 @@ pub(crate) struct Survey {
     /// takes another spelling.
     alone_index: OnceLock<HashSet<String>>,
     /// whether hashing found files as new as the state unchanged, so a state written now settles
-    /// them for later runs, or a record moved to another spelling of its path.
+    /// them for later runs, or a record moved to another spelling of its path, or a data folder
+    /// link was first followed, which the state is to record.
     pub(crate) needs_writing: bool,
+    /// the data folder links the survey followed into folders `data_links` lists.
+    pub(crate) followed: Vec<crate::project::Followed>,
     /// files under the hidden names placement stages files in.
     temporaries: Vec<String>,
     /// what else the data folder holds: folders, and links and special files, which the survey
@@ -330,8 +333,9 @@ impl Survey {
         level: Level,
     ) -> Result<Survey, Error> {
         let data_dir = folders.data_dir.as_str();
+        let mut followed = Vec::new();
         for folder in folders.all() {
-            project.refuse_linked_data_dir(folder)?;
+            followed.extend(project.refuse_linked_data_dir(folder)?);
         }
         if let Some(cache) = crate::cli::cache_folder() {
             project.refuse_cache_overlap(data_dir, &cache, false)?;
@@ -388,6 +392,7 @@ impl Survey {
             alone,
             alone_index: OnceLock::new(),
             needs_writing: false,
+            followed: Vec::new(),
             temporaries,
             entries,
             holding: OnceLock::new(),
@@ -398,6 +403,12 @@ impl Survey {
             marks,
             data_gone,
         };
+        for link in followed.iter().filter(|link| link.first) {
+            let found = link.found.to_string_lossy().into_owned();
+            survey.state.followed.insert(link.path.clone(), found);
+            survey.needs_writing = true;
+        }
+        survey.followed = followed;
         let other_device = !survey.state.files.is_empty()
             && apart(&native(&project.root, data_dir), &project.own_folder());
         survey.hash_racy(&project.root, written, other_device);
