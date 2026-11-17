@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::support::{
-    Result, Routes, Sandbox, Server, file, json, ok, reply, sha256_hex, tar_of, text,
+    Result, Routes, Sandbox, Server, file, json, ok, reply, sha256_hex, tar_of, text, tree_of,
 };
 
 const CSV: &[u8] = b"sepal,petal\n5.1,1.4\n4.9,1.4\n";
@@ -34,13 +34,6 @@ fn xz(bytes: &[u8]) -> Result<Vec<u8>> {
 
 fn zst(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(zstd::encode_all(bytes, 3)?)
-}
-
-/// the tree data.lock pins for a file that decompresses to `name` holding `bytes`: the SHA-256
-/// of its line, path, size and SHA-256 apart by tabs, as for any archive's files.
-fn tree(name: &str, bytes: &[u8]) -> String {
-    let line = format!("{name}\t{}\t{}\n", bytes.len(), sha256_hex(bytes));
-    sha256_hex(line.as_bytes())
 }
 
 /// 1 GiB of zeros, through `bzip2 -9`: 785 bytes.
@@ -90,7 +83,7 @@ fn add_with_decompress_places_the_unpacked_file_and_pins_both() -> Result {
         packed.len(),
         sha256_hex(&packed),
         server.url,
-        tree("iris.csv", CSV)
+        sha256_hex(tree_of(&[("iris.csv", CSV)]).as_bytes())
     );
     assert!(lock.contains(&pinned), "{lock}");
     assert!(lock.contains("\ndecompress = true\n"), "{lock}");
@@ -221,7 +214,7 @@ fn decompress_in_data_toml_switches_without_a_new_pin() -> Result {
     assert!(
         switched.contains(&format!(
             "unpacks_to = \"sha256:{}\"",
-            tree("iris.csv", CSV)
+            sha256_hex(tree_of(&[("iris.csv", CSV)]).as_bytes())
         )),
         "{switched}"
     );

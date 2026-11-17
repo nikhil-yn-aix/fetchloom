@@ -1231,7 +1231,7 @@ fn forged_archive(sandbox: &Sandbox) -> Result<(Routes, Vec<u8>)> {
         .command_in(&member, &["get", &format!("{}/forged.csv", server.url)])
         .output()?;
     assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
-    let tree = format!("notes.txt\t{}\t{}\n", FORGED.len(), sha256_hex(FORGED));
+    let tree = crate::support::tree_of(&[("notes.txt", FORGED)]);
     let unpacked = sandbox.cache().join("unpacked");
     fs::create_dir_all(&unpacked)?;
     fs::write(unpacked.join(sha256_hex(&zip)), tree)?;
