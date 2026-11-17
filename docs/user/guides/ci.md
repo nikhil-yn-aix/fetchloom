@@ -4,7 +4,7 @@ a CI job can restore a project's data without downloading it on every run: keep 
 
 ## github actions
 
-the fetchloom action installs fetchloom, restores its cache keyed on `data.lock`, runs `fetchloom sync --locked --yes` and saves the cache when `data.lock` changed. after checkout:
+the fetchloom action installs fetchloom, runs `fetchloom sync --locked --yes`, and keeps fetchloom's cache between runs in github's cache, keyed on `data.lock`, where its `cache` input allows. after checkout:
 
 ```yaml
 steps:
@@ -20,13 +20,24 @@ steps:
 | `binary` | a fetchloom program already on the runner, used instead of a release |
 | `project` | the project folder, `.` by default |
 | `mirrors` | [mirrors](mirrors.md) to try before each source, as `FETCHLOOM_MIRRORS` takes them |
+| `cache` | whether github's cache keeps fetchloom's cache: `auto`, the default, `always` or `never`, as [who can read the cache](#who-can-read-the-cache) says |
 
-its `cache-hit` output is `true` when the cache came back from a run with the same `data.lock`. the cache it keeps is fetchloom's own [cache folder](../reference/cache-folder.md), as `fetchloom settings` shows it, and its key holds the runner's system and processor, so linux and windows jobs keep caches of their own.
+its `cache-hit` output is `true` when the cache came back from a run with the same `data.lock`. the cache it keeps is fetchloom's own [cache folder](../reference/cache-folder.md), as `fetchloom settings` shows it, and its key holds the runner's system and processor and the project folder, so linux and windows jobs keep caches of their own, and so does each project.
 
 - the exact key hits when `data.lock` is unchanged. every file is then in the cache, and sync places them without using the network.
 - after a change to `data.lock`, the last cache comes back, so only the files that changed download, and `cache gc --now --yes` drops the files the new lock no longer needs before the cache is saved, so it does not grow with every change.
 - `--locked` fails with `lock.outdated`, exit 1, when `data.toml` and `data.lock` disagree, instead of changing the lock in CI. no error a `--locked` run ends with has a JSON `fix` that would change data.lock, so a job that runs `fix` never undoes it.
 - `--yes` answers the question a download larger than 10 GiB, or the size `FETCHLOOM_ASK_ABOVE` sets, or one the cache's disk has no room for, would ask.
+
+### who can read the cache
+
+a run can restore what a run on the default branch saved in github's cache, and so can a pull request's run, a fork's too, as [github's caching reference](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache) says. on a public repository anyone who opens a pull request can read every file a saved cache holds, a private dataset a run downloaded with a secret among them. in a private repository, everyone who can read the repository can read its cache.
+
+- `auto` keeps the cache, restoring it before the sync and saving it after, in a private repository, or when push would hand each dataset on without asking: its source says anyone may read it, as `access = "public"` in data.lock records, and no key of the runner goes or went with its files. it saves only a cache no other project on the runner uses. otherwise it neither restores nor saves, and a notice on the run says why, once. an internal repository, and a run whose event names no repository, such as a scheduled one, count as public.
+- `always` keeps the cache whatever the data. on a public repository, that gives every file the cache holds, including what other steps of the job put there, to anyone who opens a pull request, so choose it only for data anyone may read.
+- `never` keeps no cache, and says nothing.
+
+`auto` restores only a cache it would save: a run that keeps none downloads its data again, rather than restoring a cache another run left, which nothing would update.
 
 ## gitlab ci
 
