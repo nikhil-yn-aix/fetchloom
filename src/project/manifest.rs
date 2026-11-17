@@ -796,109 +796,16 @@ impl Reader<'_> {
         })
     }
 
-    /// a path inside the project, which may not climb out of it, read as written, so a space is
-    /// kept and a folder ending in one refused, as windows drops it; a leading `./` and a trailing
-    /// `/` name the same folder without them. a dataset's `path` may also be
-    /// [`DATA_FOLDER_ITSELF`], the data folder. `data_dir` and an output's `at` are folders from
-    /// the project's top, held to the same rules.
+    /// a path inside the project, as [`folder`] reads it, written for `key` in `item`.
     fn relative(&self, item: &Item, key: &str) -> Result<String, Error> {
-        let from_top = key == "data_dir" || key == "at";
-        let own_folder = if key == "at" {
-            "use a folder of its own inside the project, such as results"
-        } else {
-            "use a folder of its own inside the project, such as data"
-        };
         let written = self.string(item, key)?;
-        let mut text = written.trim_end_matches('/');
-        while let Some(rest) = text.strip_prefix("./") {
-            text = rest;
-        }
-        let refused = |reason: &str| {
+        folder(written, key).map_err(|(reason, help)| {
             self.error(
                 item.span(),
                 format!("{key} = \"{written}\" in data.toml is refused because {reason}"),
             )
-        };
-        if let Some(reason) = name::metadata(text) {
-            let outside = if reason == name::OWN_FOLDER {
-                ".fetchloom"
-            } else {
-                "the repository's metadata"
-            };
-            return Err(refused(reason).help(format!("choose a {key} outside {outside}")));
-        }
-        if shorthand(text) {
-            let inside = if from_top {
-                "the project"
-            } else {
-                "the data folder"
-            };
-            return Err(refused(&format!("fetchloom does not expand ~ or $NAME, and the folder is always inside {inside}"))
-                .help("to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/clusters/#keep-the-project-and-the-cache-on-one-drive"));
-        }
-        if text == DATA_FOLDER_ITSELF {
-            return match key {
-                "path" => Ok(text.to_owned()),
-                "at" => {
-                    Err(refused("it would mix data with the project's own files").help(own_folder))
-                }
-                _ => Err(refused("it would mix data with the project's own files")
-                    .help("use a folder inside the project, such as data")),
-            };
-        }
-        let first = text.split('/').next().unwrap_or_default();
-        if from_top
-            && PROJECT_FILES
-                .iter()
-                .any(|own| name::fold(own) == name::fold(first))
-        {
-            return Err(refused(&format!(
-                "{first} is the name of one of the project's own files"
-            ))
-            .help(own_folder));
-        }
-        // git reads these files in any folder, and a folder of that name stands in for one
-        if from_top
-            && let Some(file) = text.split('/').find(|part| {
-                GIT_FILES
-                    .iter()
-                    .any(|git| name::fold(git) == name::fold(part))
-            })
-        {
-            return Err(
-                refused(&format!("{file} is the name of a file git reads")).help(own_folder)
-            );
-        }
-        // data placed there would run as code, as a hook husky points git at runs on commit
-        if from_top
-            && let Some(folder) = text.split('/').find(|part| {
-                TOOL_FOLDERS
-                    .iter()
-                    .any(|tool| name::fold(tool) == name::fold(part))
-            })
-        {
-            return Err(
-                refused(&format!("{folder} is a folder other tools run files from"))
-                    .help(own_folder),
-            );
-        }
-        match name::escapes(text) {
-            // a data.toml is shared with windows clones, where every file would hit the same name
-            None => match name::unportable(text) {
-                None => Ok(text.to_owned()),
-                Some(reason) => Err(refused(&reason).help(format!(
-                    "choose a {key} every system can store, since clones on windows read the same data.toml{}",
-                    if key == "data_dir" { ", such as data" } else { "" }
-                ))),
-            },
-            Some(reason) => Err(refused(reason).help(match key {
-                "path" if text.is_empty() => "use \".\" for the data folder itself",
-                "path" => {
-                    "use a folder inside the data folder, with / between folders, or \".\" for the data folder itself"
-                }
-                _ => "use a folder inside the project, with / between folders",
-            })),
-        }
+            .help(help)
+        })
     }
 
     /// one pattern or a list of them.
@@ -972,14 +879,117 @@ impl Reader<'_> {
     }
 }
 
-/// refuses an output of `name` whose folder is or holds the data folder `data_dir`, where fetched
-/// datasets land, as a disk that ignores case or unicode composition sees the two.
+/// a path inside the project, written for `key`, which may not climb out of it, read as written,
+/// so a space is kept and a folder ending in one refused, as windows drops it; a leading `./` and
+/// a trailing `/` name the same folder without them. a dataset's `path` may also be
+/// [`DATA_FOLDER_ITSELF`], the data folder. `data_dir` and an output's `at` are folders from the
+/// project's top, held to the same rules. a refused one gives why, and what to write instead.
+pub(crate) fn folder(written: &str, key: &str) -> Result<String, (String, String)> {
+    let from_top = key == "data_dir" || key == "at";
+    let own_folder = if key == "at" {
+        "use a folder of its own inside the project, such as results"
+    } else {
+        "use a folder of its own inside the project, such as data"
+    };
+    let mut text = written.trim_end_matches('/');
+    while let Some(rest) = text.strip_prefix("./") {
+        text = rest;
+    }
+    let refused = |reason: &str, help: &str| Err((reason.to_owned(), help.to_owned()));
+    if let Some(reason) = name::metadata(text) {
+        let outside = if reason == name::OWN_FOLDER {
+            ".fetchloom"
+        } else {
+            "the repository's metadata"
+        };
+        return refused(reason, &format!("choose a {key} outside {outside}"));
+    }
+    if shorthand(text) {
+        let inside = if from_top {
+            "the project"
+        } else {
+            "the data folder"
+        };
+        return refused(
+            &format!(
+                "fetchloom does not expand ~ or $NAME, and the folder is always inside {inside}"
+            ),
+            "to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/guides/clusters/#keep-the-project-and-the-cache-on-one-drive",
+        );
+    }
+    if text == DATA_FOLDER_ITSELF {
+        let mixed = "it would mix data with the project's own files";
+        return match key {
+            "path" => Ok(text.to_owned()),
+            "at" => refused(mixed, own_folder),
+            _ => refused(mixed, "use a folder inside the project, such as data"),
+        };
+    }
+    let named = |names: &[&str], part: &str| {
+        let part = name::fold(part);
+        names.iter().any(|known| name::fold(known) == part)
+    };
+    let first = text.split('/').next().unwrap_or_default();
+    let part_of = |names: &[&str]| text.split('/').find(|part| named(names, part));
+    let reason = if !from_top {
+        None
+    } else if named(&PROJECT_FILES, first) {
+        Some(format!(
+            "{first} is the name of one of the project's own files"
+        ))
+    } else if let Some(file) = part_of(&GIT_FILES) {
+        // git reads these files in any folder, and a folder of that name stands in for one
+        Some(format!("{file} is the name of a file git reads"))
+    } else {
+        // data placed there would run as code, as a hook husky points git at runs on commit
+        part_of(&TOOL_FOLDERS)
+            .map(|folder| format!("{folder} is a folder other tools run files from"))
+    };
+    if let Some(reason) = reason {
+        return refused(&reason, own_folder);
+    }
+    if let Some(reason) = name::escapes(text) {
+        let help = match key {
+            "path" if text.is_empty() => "use \".\" for the data folder itself",
+            "path" => {
+                "use a folder inside the data folder, with / between folders, or \".\" for the data folder itself"
+            }
+            _ => "use a folder inside the project, with / between folders",
+        };
+        return refused(reason, help);
+    }
+    // a data.toml is shared with windows clones, where every file would hit the same name
+    match name::unportable(text) {
+        None => Ok(text.to_owned()),
+        Some(reason) => {
+            let such = if key == "data_dir" {
+                ", such as data"
+            } else {
+                ""
+            };
+            refused(
+                &reason,
+                &format!(
+                    "choose a {key} every system can store, since clones on windows read the same data.toml{such}"
+                ),
+            )
+        }
+    }
+}
+
+/// whether the folder `at` is or holds the data folder `data_dir`, where fetched datasets land, as
+/// a disk that ignores case or unicode composition sees the two.
+pub(crate) fn holds_data(at: &str, data_dir: &str) -> bool {
+    let (at, data) = (name::fold(at), name::fold(data_dir));
+    at == data || data.starts_with(&format!("{at}/"))
+}
+
+/// refuses an output of `name` whose folder [`holds_data`].
 fn refuse_holding_data(name: &str, entry: &Entry, data_dir: &str) -> Result<(), Error> {
     let Some(at) = &entry.at else {
         return Ok(());
     };
-    let (at_folded, data) = (name::fold(at), name::fold(data_dir));
-    if at_folded != data && !data.starts_with(&format!("{at_folded}/")) {
+    if !holds_data(at, data_dir) {
         return Ok(());
     }
     let error = Error::new(

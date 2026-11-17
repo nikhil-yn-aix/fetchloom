@@ -538,7 +538,8 @@ fn count_files(folder: &Path) -> usize {
 }
 
 /// every file in an output's folder is the output's: an add never takes in another dataset's
-/// files, nor makes an output of the data folder or of the project, and changes nothing then.
+/// files, nor makes an output of the data folder, of the project or of a folder data.toml refuses,
+/// and changes nothing then.
 #[test]
 fn an_output_never_takes_in_another_datasets_files() -> Result {
     let sandbox = Sandbox::new()?;
@@ -546,6 +547,10 @@ fn an_output_never_takes_in_another_datasets_files() -> Result {
     fs::create_dir_all(work.join("results/figures"))?;
     fs::write(work.join("results/r.csv"), b"r\n")?;
     fs::write(work.join("results/figures/f.png"), b"png")?;
+    for folder in [".husky", "data/raw"] {
+        fs::create_dir_all(work.join(folder))?;
+        fs::write(work.join(folder).join("x.csv"), b"x\n")?;
+    }
     ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
     let (toml, lock) = (
         fs::read_to_string(work.join("data.toml"))?,
@@ -559,6 +564,14 @@ fn an_output_never_takes_in_another_datasets_files() -> Result {
         (
             ".",
             "error: . holds the whole project, so it cannot be an output's folder",
+        ),
+        (
+            ".husky",
+            "error: .husky cannot be an output's folder: .husky is a folder other tools run files from",
+        ),
+        (
+            "data",
+            "error: data holds the data folder data, where fetched datasets land, so it cannot be an output's folder",
         ),
     ] {
         let refused = sandbox.run(&["add", folder, "--as", "other"])?;

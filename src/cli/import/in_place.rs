@@ -330,20 +330,13 @@ fn refuse_folder(manifest: &Manifest, at: &str, shown: &str) -> Result<(), Error
             crate::suggested::command("add data/processed --as processed")
         )));
     }
-    let text = format!(
-        "[project]\ndata_dir = {}\n[datasets.output]\nref = \"local\"\nat = {}\n",
-        toml_edit::value(manifest.data_dir.as_str()),
-        toml_edit::value(at)
-    );
-    let Err(error) = Manifest::parse(&text) else {
-        return Ok(());
-    };
-    let said = match error.message.split_once(" is refused because ") {
-        Some((_, reason)) => format!("{shown} cannot be an output's folder: {reason}"),
-        None => format!(
+    let said = match manifest::folder(at, "at") {
+        Err((reason, _)) => format!("{shown} cannot be an output's folder: {reason}"),
+        Ok(at) if manifest::holds_data(&at, &manifest.data_dir) => format!(
             "{shown} holds the data folder {}, where fetched datasets land, so it cannot be an output's folder",
             manifest.data_dir
         ),
+        Ok(_) => return Ok(()),
     };
     Err(Error::new(Kind::Usage, said)
         .help("pin a folder of its own, such as data/processed or results"))
