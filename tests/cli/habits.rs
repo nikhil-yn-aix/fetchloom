@@ -147,6 +147,32 @@ fn a_compressed_file_unpacked_by_hand_points_to_decompress() -> Result {
     Ok(())
 }
 
+/// files a person keeps in a dataset's folder stay when the dataset goes, and the warning says
+/// they are theirs now, as status no longer names them.
+#[test]
+fn removing_a_dataset_says_the_files_left_are_yours() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = iris_server()?;
+    with_iris(&sandbox, &server)?;
+    fs::write(sandbox.work().join("data/iris/iris.parquet"), "par1")?;
+    let removed = sandbox.run(&["--json", "remove", "iris"])?;
+    let document = json(&removed)?;
+    assert_eq!(
+        crate::support::warned(&document),
+        [
+            "data/iris still holds data/iris/iris.parquet, a file fetchloom did not place, so the folder stays; it is yours, and fetchloom no longer looks at it"
+        ],
+        "{document}"
+    );
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["yours"], serde_json::json!([]), "{status}");
+    assert_eq!(
+        fs::read(sandbox.work().join("data/iris/iris.parquet"))?,
+        b"par1"
+    );
+    Ok(())
+}
+
 /// files renamed inside their dataset's folder are put back under the names data.lock pins, and
 /// the help says nothing of moving the data folder, which was never moved.
 #[test]

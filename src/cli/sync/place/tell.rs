@@ -853,7 +853,8 @@ pub(super) fn set_aside(output: &Output, manifest: &Manifest, aside: &BTreeMap<S
 }
 
 /// a warning for each folder no dataset uses now that still holds files fetchloom did not place,
-/// such as a person's work or a changed copy sync kept. `-v` names each file.
+/// such as a person's work or a changed copy sync kept, which are the person's alone from then
+/// on. `-v` names each file.
 fn warn_retired(output: &Output, placement: &Placement) {
     for retired in &placement.retired {
         let folder = &retired.folder;
@@ -863,20 +864,14 @@ fn warn_retired(output: &Output, placement: &Placement) {
                 format!(
                     "{folder} still holds {only}, a file fetchloom did not place, so the folder stays"
                 ),
-                format!(
-                    "`{}` lists it as extra; delete it when you no longer need it",
-                    crate::cli::project::command("status")
-                ),
+                "it is yours, and fetchloom no longer looks at it".to_owned(),
             ),
             [first, ..] => (
                 format!(
                     "{folder} still holds {} files fetchloom did not place, such as {first}, so the folder stays",
                     retired.unplaced.len()
                 ),
-                format!(
-                    "`{}` lists them as extra; delete them when you no longer need them",
-                    crate::cli::project::command("status")
-                ),
+                "they are yours, and fetchloom no longer looks at them".to_owned(),
             ),
         };
         output.warn_detailed(
