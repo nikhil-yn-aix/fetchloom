@@ -73,6 +73,37 @@ class HelperOptions(unittest.TestCase):
                 self.assertEqual(raised.exception.message, f'data.toml has no dataset called "{name}"')
                 self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "--progress", "-C=p", "path", "--yes", "--", name])
 
+    @unittest.skipUnless(os.name == "posix", "the stand-in is a shell script")
+    def test_shell_words_in_names_links_and_paths_reach_fetchloom_as_they_are(self):
+        # each word goes to the program as one argument, through no shell that would act on it
+        answer = json.dumps({"status": "ok", "warnings": [],
+                             "result": {"path": "p", "project": "p", "file": "f", "folder": "d"}})
+        with tempfile.TemporaryDirectory() as folder:
+            program = Path(folder, "fetchloom")
+            program.write_text(f"#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$(dirname \"$0\")/arguments\"\nprintf '%s' '{answer}'\n",
+                               encoding="utf-8")
+            program.chmod(0o755)
+            work = Path(folder, "work")
+            work.mkdir()
+            here = os.getcwd()
+            os.chdir(work)
+            try:
+                for word in ["$(touch ran)", "`touch ran`", "a;b|c&d", ">ran", "x' 'y", 'x" "y', "%PATH%"]:
+                    for call, expected in [
+                        (lambda: fetchloom.path(word, f"p {word}"), [f"-C=p {word}", "path", "--", word]),
+                        (lambda: fetchloom.sync(f"p {word}", names=[word]), [f"-C=p {word}", "sync", "--", word]),
+                        (lambda: fetchloom.get(f"https://e.org/{word}", f"o {word}"),
+                         ["-C=.", "get", f"--output=o {word}", "--", f"https://e.org/{word}"]),
+                    ]:
+                        with self.subTest(word=word, expected=expected[1]):
+                            with patch.object(fetchloom, "_program", return_value=str(program)):
+                                call()
+                            given = Path(folder, "arguments").read_bytes().decode().split("\0")[:-1]
+                            self.assertEqual(given, ["--json", "--progress", *expected])
+            finally:
+                os.chdir(here)
+            self.assertEqual(os.listdir(work), [])
+
     def test_a_project_folder_like_an_option_stays_the_folder(self):
         # after -C as a word of its own, fetchloom reads -proj as its options -p, -r, -o and -j,
         # and --help as a request for help, which answers with no path
@@ -1131,22 +1162,25 @@ class Launcher(unittest.TestCase):
             "python -m fetchloom": f"{found}runpy.run_module('fetchloom', run_name='__main__', alter_sys=True)\n",
         }
 
-    def launch(self, starter, *arguments, stdin=b""):
+    def launch(self, starter, *arguments, stdin=b"", cwd=None):
         environment = dict(os.environ, PYTHONPATH=str(Path(fetchloom.__file__).resolve().parents[1]))
         process = subprocess.Popen(
             [sys.executable, "-c", starter, *arguments],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, cwd=cwd,
         )
         stdout, stderr = process.communicate(stdin, timeout=60)
         return process, stdout, stderr.decode("utf-8")
 
     def test_arguments_stdin_and_exit_code_pass_through(self):
-        arguments = ["two words", "", "--json", "\u00fc", "-"]
+        # words a shell would act on stay words: no shell stands between the launcher and fetchloom
+        arguments = ["two words", "", "--json", "\u00fc", "-", "$(touch ran)", "`touch ran`", "a;b|c&d", ">ran",
+                     "'", '"', "%PATH%", "^&", "!x"]
         for name, starter in self.starters().items():
-            with self.subTest(name):
+            with self.subTest(name), tempfile.TemporaryDirectory() as folder:
                 process, stdout, stderr = self.launch(
-                    starter, "-c", self.PROGRAM, *arguments, stdin=b"piped input\n"
+                    starter, "-c", self.PROGRAM, *arguments, stdin=b"piped input\n", cwd=folder
                 )
+                self.assertEqual(os.listdir(folder), [])
                 self.assertEqual(process.returncode, 3, stderr)
                 report = json.loads(stdout)
                 self.assertEqual(report["arguments"], arguments)

@@ -101,6 +101,44 @@ test_that("a project folder starting with a dash stays the folder", {
   )
 })
 
+test_that("a name, a link and a path a shell would act on reach fetchloom as they are", {
+  skip_on_os("windows")
+  folder <- stand_in('{"schema":1,"status":"ok","result":{"path":"p","file":"f","folder":"d"},"warnings":[],"errors":[]}')
+  work <- withr::local_tempdir()
+  withr::local_dir(work)
+  for (word in c("$(touch ran)", "`touch ran`", "a;b|c&d", ">ran", "x' 'y", "x\" \"y", "%PATH%")) {
+    path(word, paste("p", word))
+    expect_identical(
+      readLines(file.path(folder, "arguments")),
+      c("--json", "--progress", paste0("-C=p ", word), "path", "--", word)
+    )
+    download(paste0("https://e.org/", word), paste("o", word))
+    expect_identical(readLines(file.path(folder, "arguments")), c(
+      "--json", "--progress", "-C=.", "get", paste0("--output=o ", word), "--",
+      paste0("https://e.org/", word)
+    ))
+  }
+  expect_identical(list.files(work, all.files = TRUE, no.. = TRUE), character(0))
+})
+
+test_that("a fetchloom in the working folder or a relative folder of PATH never runs", {
+  skip_on_os("windows")
+  work <- withr::local_tempdir()
+  empty <- withr::local_tempdir()
+  for (folder in c(work, file.path(work, "bin"))) {
+    dir.create(folder, showWarnings = FALSE)
+    writeLines(
+      c("#!/bin/sh", paste0(": > '", file.path(empty, "ran"), "'")),
+      file.path(folder, "fetchloom")
+    )
+    Sys.chmod(file.path(folder, "fetchloom"), "755")
+  }
+  withr::local_dir(work)
+  withr::local_envvar(PATH = paste(".", "", "bin", empty, sep = ":"), HOME = empty, LOCALAPPDATA = empty)
+  expect_error(path("iris"), "the fetchloom program is missing", fixed = TRUE)
+  expect_false(file.exists(file.path(empty, "ran")))
+})
+
 test_that("download() names its path, hash and switches as fetchloom takes them", {
   skip_on_os("windows")
   folder <- stand_in('{"schema":1,"status":"ok","result":{"file":"/w/y.csv","folder":null},"warnings":[],"errors":[]}')
