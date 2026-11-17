@@ -2,6 +2,7 @@
 //! an older pin, remove what no dataset needs, and leave alone every file someone changed or added.
 
 mod mark;
+pub(crate) use mark::is_marker_form;
 #[cfg(test)]
 #[cfg(unix)]
 mod model_tests;
@@ -1965,7 +1966,7 @@ fn output_gained(manifest: &Manifest, survey: &Survey) -> bool {
                 && !survey.state.files.contains_key(path)
                 && !survey.made_by_system(path)
                 && !place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path))
-                && !passed_over(manifest, path)
+                && !passed_over(manifest, survey, path)
         })
 }
 
@@ -3106,8 +3107,9 @@ pub(crate) fn authored(state: &State) -> HashSet<&str> {
 
 /// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
 /// output: its patterns leave it out, or a repository, git's placeholder or a tool keeps it there,
-/// as a capture leaves them out, or the output is dropped here, its files the author's still.
-pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
+/// or it is a .gitignore in the form of fetchloom's marker, as a capture leaves them out, or the
+/// output is dropped here, its files the author's still.
+pub(crate) fn passed_over(manifest: &Manifest, survey: &Survey, path: &str) -> bool {
     manifest.datasets.values().any(|entry| {
         let Some(inside) = entry
             .at
@@ -3126,6 +3128,7 @@ pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
                 .is_some_and(crate::name::git_placeholder)
             || !(source.select.is_empty() || source.select.iter().any(|glob| glob.matches(inside)))
             || source.exclude.iter().any(|glob| glob.matches(inside))
+            || survey.in_marker_form(path)
     })
 }
 
@@ -3210,7 +3213,7 @@ fn changed_outputs(
         };
         let inside = &path[output.at.len() + 1..];
         let name = inside.rsplit('/').next().unwrap_or(inside);
-        if place::is_copy_temporary(name) || passed_over(manifest, path) {
+        if place::is_copy_temporary(name) || passed_over(manifest, survey, path) {
             continue;
         }
         match survey.state.files.get(path) {
@@ -4503,6 +4506,24 @@ mod tests {
         let found = untouched(&project, &manifest, &survey, &seen, false, &Scope::All).unwrap();
 
         assert!(found.is_none(), "a settled sync would leave the copy");
+    }
+
+    /// the marker a renamed output folder took along, in fetchloom's form, is no file the output
+    /// gained, so a settled sync stays on its quick way; a person's new file is one.
+    #[test]
+    fn a_marker_a_renamed_output_took_along_is_no_gain() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::at(dir.path().join("project"));
+        let folder = project.root.join("data").join("features");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join(".gitignore"), b"*\n").unwrap();
+        let manifest =
+            Manifest::parse("[datasets.processed]\nref = \"local\"\nat = \"data/features\"\n")
+                .unwrap();
+
+        assert!(!output_gained(&manifest, &surveyed(&project)));
+        fs::write(folder.join("notes.md"), b"mine").unwrap();
+        assert!(output_gained(&manifest, &surveyed(&project)));
     }
 
     /// a copy damaged to another size says nothing of data.lock, even one the cache trusts unread

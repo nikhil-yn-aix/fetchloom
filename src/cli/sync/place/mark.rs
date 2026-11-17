@@ -358,9 +358,24 @@ fn holds(root: &Path, placer: &Placer, folder: &str, wrote: &str) -> bool {
     let mut held = Vec::new();
     placer.open_read(&file).is_ok_and(|opened| {
         opened.take(READ_MOST + 1).read_to_end(&mut held).is_ok()
-            && held.len() as u64 <= READ_MOST
-            && (held == TEXT || held.starts_with(NAMES.as_bytes()))
+            && in_marker_form(&held)
             && digest::sha256(&held).hex() == wrote
+    })
+}
+
+/// whether `text`, a .gitignore's, is in the form fetchloom writes a marker in: `*`, or the
+/// datasets' entries under its first line, no longer than a marker is read.
+fn in_marker_form(text: &[u8]) -> bool {
+    text.len() as u64 <= READ_MOST && (text == TEXT || text.starts_with(NAMES.as_bytes()))
+}
+
+/// whether `file`, a .gitignore, holds a marker in the form fetchloom writes, whatever the state
+/// records of it, as one a folder took along when it was renamed: fetchloom's own, so never part
+/// of an output, nor a change to one. a link is not followed.
+pub(crate) fn is_marker_form(file: &Path) -> bool {
+    let mut held = Vec::new();
+    crate::volume::read_unfollowed(file).is_ok_and(|opened| {
+        opened.take(READ_MOST + 1).read_to_end(&mut held).is_ok() && in_marker_form(&held)
     })
 }
 

@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use super::Scope;
-use super::place::local;
+use super::place::{is_marker_form, local};
 use crate::cache::{self, Cache};
 use crate::digest::{Block, Sha256};
 use crate::error::Error;
@@ -923,6 +923,12 @@ impl Survey {
     pub(crate) fn is_marker(&self, path: &str) -> bool {
         path.strip_suffix("/.gitignore")
             .is_some_and(|folder| self.state.markers.contains_key(folder))
+    }
+
+    /// whether `path`, a listed file, is a .gitignore in the form fetchloom writes its marker in,
+    /// whatever the state records, as one a renamed folder took along.
+    pub(crate) fn in_marker_form(&self, path: &str) -> bool {
+        path.rsplit('/').next() == Some(".gitignore") && is_marker_form(&native(&self.root, path))
     }
 
     /// the files an interrupted placement left under the hidden names it stages files in, which

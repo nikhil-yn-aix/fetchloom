@@ -11,7 +11,7 @@ use super::super::args::Add;
 use super::super::diff::{self, Change, Pinned};
 use super::super::project::{Outcome, Report, dry_run_done};
 use super::super::sync::disk;
-use super::super::sync::place::{Placement, tell_marked};
+use super::super::sync::place::{Placement, is_marker_form, tell_marked};
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
 use super::{Found, Walked, dataset_name, into_cache, pinned, room, tell_left_out, walk};
@@ -301,11 +301,14 @@ fn markers_in(state: &State, at: &str) -> HashSet<String> {
         .collect()
 }
 
-/// takes the files at `markers` out of `walked`, and git's placeholders, never part of an output.
+/// takes the files at `markers` out of `walked`, any other .gitignore in the form fetchloom writes
+/// its marker in, as one a renamed folder took along, and git's placeholders, never part of an
+/// output.
 fn leave_out(walked: &mut Walked, markers: &HashSet<String>) {
     walked.files.retain(|file| {
         let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-        !markers.contains(&file.path) && !name::git_placeholder(name)
+        let marker = name == ".gitignore" && is_marker_form(&file.source);
+        !markers.contains(&file.path) && !name::git_placeholder(name) && !marker
     });
 }
 

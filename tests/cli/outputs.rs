@@ -216,6 +216,67 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
     Ok(())
 }
 
+/// a renamed output folder takes fetchloom's marker with it, which the state records under the
+/// old name: still the marker writer's own by its text, it is never taken into the output, by a
+/// pin again or its dry run, and never a change, so nothing asks for a yes or tells of an
+/// addition. a .gitignore of the author's own stays the output's, even one that begins as the
+/// marker does.
+#[test]
+fn a_renamed_outputs_folder_never_takes_its_marker_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    fs::create_dir(work.join("data/processed/figures"))?;
+    fs::write(
+        work.join("data/processed/figures/.gitignore"),
+        "*\n!keep.csv\n",
+    )?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    fs::rename(work.join("data/processed"), work.join("data/features"))?;
+    assert_eq!(fs::read(work.join("data/features/.gitignore"))?, b"*\n");
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    fs::write(
+        work.join("data.toml"),
+        manifest.replace("at = \"data/processed\"", "at = \"data/features\""),
+    )?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        listed(&document, "extra"),
+        Vec::<String>::new(),
+        "{document}"
+    );
+    for (args, line) in [
+        (&["sync"][..], "Synced 1 dataset into data"),
+        (
+            &["add", "data/features", "--as", "processed", "--dry-run"],
+            "Would keep processed as it is",
+        ),
+        (
+            &["add", "data/features", "--as", "processed"],
+            "processed is pinned as data/features holds it",
+        ),
+    ] {
+        let said = sandbox.run(args)?;
+        let stderr = text(&said.stderr)?;
+        assert_eq!(said.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(stderr.contains(line), "{args:?}: {stderr}");
+        assert!(!stderr.contains(".gitignore"), "{args:?}: {stderr}");
+        assert!(!stderr.contains("changed since"), "{args:?}: {stderr}");
+    }
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(!lock.contains("path = \".gitignore\""), "{lock}");
+    assert!(lock.contains("path = \"figures/.gitignore\""), "{lock}");
+    let checked = sandbox.run(&["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert!(
+        stderr.contains("Ok all pinned files are in place by size and time, nothing to do"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// git carries data.lock, never an output's bytes: a teammate whose cache and mirrors lack them
 /// still gets every other dataset, and the run names the output once, as made on another machine,
 /// with both ways on, and ends well, so a pipeline run after it can make the output. `path` names

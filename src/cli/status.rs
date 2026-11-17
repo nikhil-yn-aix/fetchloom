@@ -1143,7 +1143,7 @@ fn extra(survey: &Survey, wanted: &HashSet<&str>, manifest: &Manifest) -> Vec<St
         .keys()
         .filter(|path| !wanted.contains(path.as_str()) && !leftovers.contains(path))
         .filter(|path| !survey.made_by_system(path))
-        .filter(|path| !place::passed_over(manifest, path))
+        .filter(|path| !place::passed_over(manifest, survey, path))
         .cloned()
         .collect();
     extra.sort();
