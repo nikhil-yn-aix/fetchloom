@@ -73,7 +73,7 @@ fn generated(bytes: &[u8]) -> Lock {
             });
         }
         let flags = input.byte();
-        let (extract, web_page) = (flags & 1 != 0, flags & 2 != 0);
+        let (extract, web_page, decompress) = (flags & 1 != 0, flags & 2 != 0, flags & 4 != 0);
         let access = [
             Access::Public,
             Access::Login,
@@ -93,6 +93,7 @@ fn generated(bytes: &[u8]) -> Lock {
             reference: format!("https://example.org/{}", input.text()),
             spec: format!("sha256:{}", digest::sha256(bytes)),
             extract,
+            decompress,
             web_page,
             resolved: input.text(),
             title,

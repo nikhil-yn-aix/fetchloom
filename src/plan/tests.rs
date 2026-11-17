@@ -15,6 +15,7 @@ fn lock(datasets: &[(&str, &[&str])]) -> Lock {
                 reference: "https://example.org/x".to_owned(),
                 spec: String::new(),
                 extract: true,
+                decompress: false,
                 web_page: false,
                 resolved: String::new(),
                 title: None,

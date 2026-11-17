@@ -350,13 +350,17 @@ fn listing(stated: &Stated) -> Result<Listing, Error> {
 /// digests its source states; an archive that unpacks says so, as relocking's own downloads do.
 fn jobs(stated: &Stated, listing: &Listing, extract: bool) -> Vec<Job> {
     let name = stated.name();
-    let found = draft::archives(listing.files.iter().map(|file| file.path.as_str()), extract);
+    let found = draft::archives(
+        listing.files.iter().map(|file| file.path.as_str()),
+        extract,
+        false,
+    );
     let whole: HashSet<usize> = found
         .unpack
         .iter()
         .filter_map(|unit| match unit {
             Unit::Whole(index) => Some(*index),
-            Unit::Split(_) => None,
+            Unit::Split(_) | Unit::Decompressed(..) => None,
         })
         .collect();
     listing

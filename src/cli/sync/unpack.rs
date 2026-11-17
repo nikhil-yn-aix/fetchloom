@@ -14,8 +14,8 @@ use super::super::cache::needed_for_drop;
 use super::draft::{self, Draft, Unit, Why};
 use super::place::Placing;
 use super::{Loop, job};
-use crate::archive::{self, System, Unpacked, parts};
-use crate::cache::{Cache, parts_key};
+use crate::archive::{self, Decompressed, Left, System, Unpacked, parts};
+use crate::cache::{Cache, decompressed_key, parts_key};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::{Bar, Output, Ticker, Warning};
@@ -27,9 +27,10 @@ use crate::source::local;
 use crate::threads::Threads;
 use crate::units;
 
-/// an archive the cache holds, to unpack on this machine.
+/// an archive the cache holds, or a single compressed file, to unpack on this machine.
 pub(in crate::cli) struct Unpack {
-    /// its record's key: its SHA-256, or for a split archive, [`parts_key`] of its parts.
+    /// its record's key: its SHA-256, for a split archive [`parts_key`] of its parts, and for a
+    /// single compressed file [`decompressed_key`] of its SHA-256 and the name it decompresses to.
     pub(in crate::cli) archive: Sha256,
     /// a split archive's parts, each SHA-256 and size, in order; empty for one file.
     pub(in crate::cli) parts: Vec<(Sha256, u64)>,
@@ -40,6 +41,8 @@ pub(in crate::cli) struct Unpack {
     /// a first part alone with no tree pinned yet, maybe the start of an archive whose other parts
     /// are elsewhere, so bytes that do not unpack stay packed with a warning, not an error.
     pub(in crate::cli) lone: bool,
+    /// for a single compressed file, its SHA-256 and the name it decompresses to.
+    pub(in crate::cli) decompressed: Option<(Sha256, String)>,
 }
 
 impl Unpack {
@@ -57,6 +60,7 @@ impl Unpack {
             label,
             tree,
             lone: false,
+            decompressed: None,
         }
     }
 
@@ -73,14 +77,38 @@ impl Unpack {
             parts,
             label,
             tree,
+            decompressed: None,
+        }
+    }
+
+    /// a single compressed file of `size` bytes, `packed`, that decompresses to `name`.
+    pub(in crate::cli) fn decompressed(
+        packed: Sha256,
+        size: u64,
+        name: String,
+        label: String,
+        tree: Option<Sha256>,
+    ) -> Unpack {
+        Unpack {
+            archive: decompressed_key(&packed, &name),
+            parts: Vec::new(),
+            size,
+            label,
+            tree,
+            lone: false,
+            decompressed: Some((packed, name)),
         }
     }
 
     /// the archive data.lock pins as `archive`, labelled `label`.
     pub(in crate::cli) fn pinned(archive: &Archive<'_>, label: String) -> Unpack {
         let tree = archive.file.unpacks_to;
+        let file = archive.file;
+        if let Some(name) = archive.decompressed() {
+            return Unpack::decompressed(file.sha256, file.size, name, label, tree);
+        }
         if archive.parts.is_empty() {
-            return Unpack::whole(archive.file.sha256, archive.file.size, label, tree);
+            return Unpack::whole(file.sha256, file.size, label, tree);
         }
         let parts = archive.parts.iter().map(|part| (part.sha256, part.size));
         Unpack::split(parts.collect(), label, tree)
@@ -88,6 +116,9 @@ impl Unpack {
 
     /// the cache objects holding its bytes.
     fn objects(&self) -> Vec<Sha256> {
+        if let Some((packed, _)) = &self.decompressed {
+            return vec![*packed];
+        }
         if self.parts.is_empty() {
             vec![self.archive]
         } else {
@@ -123,6 +154,7 @@ pub(in crate::cli) async fn unpack_all(
     let (at_once, writers) = context.threads.archives(at_once, archives.len());
     let limits = context.settings.archive_limits();
     let failed = Arc::new(AtomicBool::new(false));
+    let stops_for_tests = stops_for_tests();
     let what = match archives.as_slice() {
         [(_, only)] => only.label.clone(),
         _ => units::count(archives.len() as u64, "archive", "archives"),
@@ -143,17 +175,9 @@ pub(in crate::cli) async fn unpack_all(
                 let started = Instant::now();
                 let watch = |now: u64| {
                     told.heard(now);
-                    stop.is_asked() || failed.load(Ordering::Relaxed)
+                    stop.is_asked() || failed.load(Ordering::Relaxed) || stops_for_tests && now > 0
                 };
-                let tree = unpack.tree.as_ref();
-                let unpacked = if unpack.parts.is_empty() {
-                    let size = unpack.size;
-                    let digest = &unpack.archive;
-                    archive::unpack_cached(&cache, digest, size, tree, &limits, &watch, writers)
-                } else {
-                    let parts = &unpack.parts;
-                    archive::unpack_cached_parts(&cache, parts, tree, &limits, &watch, writers)
-                };
+                let unpacked = unpack_one(&cache, &unpack, &limits, &watch, writers);
                 drop(told);
                 (index, unpack, started.elapsed(), unpacked)
             });
@@ -161,12 +185,16 @@ pub(in crate::cli) async fn unpack_all(
         let Some(joined) = tasks.join_next().await else {
             break;
         };
-        let (index, unpack, elapsed, unpacked) = joined.map_err(|err| {
+        let (index, unpack, elapsed, (unpacked, left)) = joined.map_err(|err| {
             Error::new(
                 Kind::LocalIo,
                 format!("unpacking stopped unexpectedly: {err}"),
             )
         })?;
+        if let (Ok(None), Some(why)) = (&unpacked, left) {
+            tell_left(&context.output, &unpack.label, why);
+            continue;
+        }
         match unpacked {
             Ok(Some(unpacked)) => {
                 for digest in &unpacked.added {
@@ -196,6 +224,34 @@ pub(in crate::cli) async fn unpack_all(
         }
     }
     Ok(results)
+}
+
+/// unpacks `unpack` from the cache, as [`unpack_all`] runs each, with why a file decompress was
+/// asked of stays as it came.
+fn unpack_one(
+    cache: &Cache,
+    unpack: &Unpack,
+    limits: &archive::Limits,
+    watch: &dyn Fn(u64) -> bool,
+    writers: Option<usize>,
+) -> (Result<Option<Unpacked>, Error>, Option<Left>) {
+    let tree = unpack.tree.as_ref();
+    let Some((packed, name)) = &unpack.decompressed else {
+        let unpacked = if unpack.parts.is_empty() {
+            let (digest, size) = (&unpack.archive, unpack.size);
+            archive::unpack_cached(cache, digest, size, tree, limits, watch, writers)
+        } else {
+            let parts = &unpack.parts;
+            archive::unpack_cached_parts(cache, parts, tree, limits, watch, writers)
+        };
+        return (unpacked, None);
+    };
+    let packed = (packed, unpack.size);
+    match archive::decompress_cached(cache, packed, name, tree, limits, watch, writers) {
+        Ok(Decompressed::Unpacked(unpacked)) => (Ok(Some(unpacked)), None),
+        Ok(Decompressed::Left(why)) => (Ok(None), Some(why)),
+        Err(err) => (Err(err), None),
+    }
 }
 
 /// what an archive shows while it unpacks: the bytes read, then, while its files are still written,
@@ -319,6 +375,7 @@ impl Loop<'_> {
         let mut slots = Vec::new();
         let mut unpacks = Vec::new();
         for (index, draft) in drafts.iter_mut().enumerate() {
+            draft.refuse_names(&self.told)?;
             for (dataset, path, why) in draft.left_packed() {
                 self.tell_packed(manifest, dataset, path, &why);
             }
@@ -379,7 +436,8 @@ impl Loop<'_> {
             .filter(|locked| self.scope.includes(&locked.name))
         {
             let paths = locked.files.iter().map(|file| file.path.as_str());
-            let archives = draft::archives(paths, locked.extract);
+            // a file decompress left as it came was told so as it was decompressed
+            let archives = draft::archives(paths, locked.extract, false);
             for (at, why) in archives.packed {
                 found.push((locked.name.as_str(), &locked.files[at], Some(why)));
             }
@@ -511,7 +569,12 @@ impl Loop<'_> {
             let found = draft::archives(
                 locked.files.iter().map(|file| file.path.as_str()),
                 locked.extract,
+                locked.decompress,
             );
+            if let Some((_, why)) = found.refused.first() {
+                let patterns = crate::plan::Patterns::InDataToml;
+                return Err(draft::refused_name(&locked.name, why.clone(), patterns));
+            }
             for (at, why) in &found.packed {
                 self.tell_packed(manifest, &locked.name, &locked.files[*at].path, why);
             }
@@ -541,6 +604,9 @@ impl Loop<'_> {
                 slots.push((index, at));
                 unpacks.push(match &unit {
                     Unit::Whole(_) => Unpack::whole(file.sha256, file.size, label, None),
+                    Unit::Decompressed(_, name) => {
+                        Unpack::decompressed(file.sha256, file.size, name.clone(), label, None)
+                    }
                     Unit::Split(set) => {
                         let parts = set.iter().map(|index| {
                             let part = &locked.files[*index];
@@ -746,6 +812,34 @@ fn other_files(dataset: &str, file: &LockedFile) -> Error {
     ))
 }
 
+/// says that the file `label`, which its dataset decompresses, stays as it came, and why.
+fn tell_left(output: &Output, label: &str, why: Left) {
+    match why {
+        Left::Tar => output.warn(
+            Warning::ArchivePacked,
+            &format!(
+                "{label} stays packed: it is a compressed tar, which only extract unpacks, and only by a name that says so, as .tar.gz does"
+            ),
+        ),
+        Left::Plain => output.warn(
+            Warning::ArchiveUnreadable,
+            &format!("{label} is not compressed as its name says, so it stays as it is"),
+        ),
+    }
+}
+
+/// whether a debug build's tests stop every unpacking once it read a byte, as a ctrl-c then
+/// would: `FETCHLOOM_TEST_STOP_UNPACKING` is set.
+#[cfg(debug_assertions)]
+fn stops_for_tests() -> bool {
+    std::env::var_os("FETCHLOOM_TEST_STOP_UNPACKING").is_some()
+}
+
+#[cfg(not(debug_assertions))]
+fn stops_for_tests() -> bool {
+    false
+}
+
 /// says that the lone part `label` stays packed, as its bytes are no archive on their own.
 fn tell_lone(output: &Output, label: &str) {
     output.warn_with(
@@ -830,6 +924,7 @@ mod tests {
                 reference: "https://example.org/set.tar".to_owned(),
                 spec: String::new(),
                 extract: true,
+                decompress: false,
                 web_page: false,
                 resolved: "https://example.org/set.tar".to_owned(),
                 title: None,

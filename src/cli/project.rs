@@ -1970,6 +1970,7 @@ pub(crate) mod tests {
             reference: format!("https://example.org/{name}"),
             spec,
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: format!("https://example.org/{name}"),
             title: None,

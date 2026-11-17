@@ -15,6 +15,7 @@ mod caps;
 mod completions;
 mod concurrent;
 mod copied;
+mod decompress;
 mod diff;
 mod docs;
 mod drop;

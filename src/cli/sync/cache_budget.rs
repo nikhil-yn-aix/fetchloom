@@ -266,6 +266,7 @@ mod tests {
             reference: format!("https://example.org/{name}"),
             spec: String::new(),
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: format!("https://example.org/{name}"),
             title: None,

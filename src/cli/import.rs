@@ -307,7 +307,9 @@ fn import_entry(manifest: &Manifest, supplied: Option<&str>, args: &Add) -> Resu
         &args.filter.exclude,
         !args.no_extract,
     )?;
-    Ok(Manifest::parse(&text)?.datasets["new"].source.clone())
+    let mut source = Manifest::parse(&text)?.datasets["new"].source.clone();
+    source.decompress = args.decompress;
+    Ok(source)
 }
 
 /// data.lock's pin of `name`, when `old` has one that still answers data.toml's `entry`.
@@ -338,6 +340,7 @@ fn same_import(
         && had.select == source.select
         && had.exclude == source.exclude
         && had.extract == source.extract
+        && had.decompress == source.decompress
         && current(old, name, existing)
             .is_some_and(|locked| locked.files.iter().map(pin).eq(copied.iter().map(pin)))
 }
@@ -389,7 +392,7 @@ async fn import_new(
     let patterns = |globs: &[crate::glob::Glob]| -> Vec<String> {
         globs.iter().map(|glob| glob.as_str().to_owned()).collect()
     };
-    let updated = manifest::with_dataset(
+    let mut updated = manifest::with_dataset(
         text,
         name,
         local::IMPORTED,
@@ -397,6 +400,9 @@ async fn import_new(
         &patterns(&source.exclude),
         source.extract,
     )?;
+    if source.decompress {
+        updated = manifest::with_set(&updated, name, "decompress")?;
+    }
     let manifest = Manifest::parse(&updated)?;
     let pinned = pinned(name, &manifest.datasets[name].source, files);
     let names = [name.to_owned()];
@@ -432,15 +438,19 @@ async fn import_new(
 }
 
 /// the source of `name`, an import in data.toml that `add <path> --as <name>` supplies. its
-/// patterns and extract setting stay as data.toml has them.
+/// patterns and its extract and decompress settings stay as data.toml has them.
 fn supplied_entry(manifest: &Manifest, name: &str, args: &Add) -> Result<Source, Error> {
-    if !args.filter.select.is_empty() || !args.filter.exclude.is_empty() || args.no_extract {
+    if !args.filter.select.is_empty()
+        || !args.filter.exclude.is_empty()
+        || args.no_extract
+        || args.decompress
+    {
         return Err(Error::new(
             Kind::Usage,
-            format!("{name} is in data.toml already, so its patterns and extract setting come from there"),
+            format!("{name} is in data.toml already, so its patterns and unpacking settings come from there"),
         )
         .help(format!(
-            "leave out --select, --exclude and --no-extract, or change datasets.{name} in data.toml"
+            "leave out --select, --exclude, --no-extract and --decompress, or change datasets.{name} in data.toml"
         )));
     }
     Ok(manifest.datasets[name].source.clone())
@@ -1597,6 +1607,7 @@ pub(super) fn pinned(name: &str, source: &Source, files: Vec<LockedFile>) -> Loc
         reference: local::IMPORTED.to_owned(),
         spec: lock::spec(source),
         extract: source.extract,
+        decompress: source.decompress,
         web_page: false,
         resolved: local::IMPORTED.to_owned(),
         title: None,

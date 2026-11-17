@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 
 use super::{Lock, LockedFile};
-use crate::archive::parts;
-use crate::cache::{Cache, Member, parts_key};
+use crate::archive::{self, parts};
+use crate::cache::{Cache, Member, decompressed_key, parts_key};
 use crate::digest::Sha256;
 
 /// an archive data.lock pins to unpack.
@@ -21,11 +21,22 @@ pub(crate) struct Archive<'a> {
 impl<'a> Archive<'a> {
     /// the key the cache's record of what it unpacks to goes by.
     pub(crate) fn key(&self) -> Sha256 {
-        if self.parts.is_empty() {
-            self.file.sha256
-        } else {
-            parts_key(self.parts.iter().map(|part| (part.sha256, part.size)))
+        if !self.parts.is_empty() {
+            return parts_key(self.parts.iter().map(|part| (part.sha256, part.size)));
         }
+        match self.decompressed() {
+            Some(name) => decompressed_key(&self.file.sha256, &name),
+            None => self.file.sha256,
+        }
+    }
+
+    /// the name it decompresses to, when it is a single compressed file `decompress` unpacks
+    /// rather than an archive: its name alone says so, as it says which archives extract unpacks.
+    pub(crate) fn decompressed(&self) -> Option<String> {
+        if !self.parts.is_empty() {
+            return None;
+        }
+        archive::decompressed_name(&self.file.path)?.ok()
     }
 
     /// what this machine recorded it unpacks to, when that is the tree data.lock pins. every plan
@@ -220,6 +231,7 @@ mod tests {
                 reference: String::new(),
                 spec: String::new(),
                 extract: true,
+                decompress: false,
                 web_page: false,
                 resolved: String::new(),
                 title: None,

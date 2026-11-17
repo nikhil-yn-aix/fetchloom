@@ -404,6 +404,9 @@ pub(crate) struct Locked {
     /// whether archives unpack, as data.toml asked when the dataset was pinned. it is compared
     /// apart from `spec`, since a switch keeps the files and changes only what they unpack to.
     pub(crate) extract: bool,
+    /// whether single compressed files decompress, as data.toml asked when the dataset was
+    /// pinned, compared apart from `spec` as `extract` is.
+    pub(crate) decompress: bool,
     /// whether data.toml asked for the link's web page when the dataset was pinned, so its pins
     /// may be pages: a relock once it no longer asks never carries one.
     pub(crate) web_page: bool,
@@ -422,7 +425,8 @@ pub(crate) struct Locked {
 /// what changed in a data.toml entry since its dataset was pinned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Drift {
-    /// only `extract`: the pinned files stand, and only what their archives unpack to changes.
+    /// only `extract` or `decompress`: the pinned files stand, and only what they unpack to
+    /// changes.
     Extract,
     /// what is downloaded, so the dataset is resolved again.
     Spec,
@@ -434,7 +438,7 @@ impl Locked {
         let source = &entry.source;
         if self.spec != spec(source) {
             Some(Drift::Spec)
-        } else if self.extract != source.extract {
+        } else if self.extract != source.extract || self.decompress != source.decompress {
             Some(Drift::Extract)
         } else {
             None
@@ -514,6 +518,7 @@ struct StoredDataset {
     reference: Option<String>,
     spec: Option<String>,
     extract: Option<bool>,
+    decompress: Option<bool>,
     web_page: Option<bool>,
     resolved: Option<String>,
     title: Option<String>,
@@ -576,6 +581,7 @@ impl StoredDataset {
             reference,
             spec,
             extract: self.extract.unwrap_or(true),
+            decompress: self.decompress.unwrap_or(false),
             web_page: self.web_page.unwrap_or(false),
             resolved,
             title: self.title,
@@ -996,6 +1002,9 @@ fn write_head(out: &mut String, dataset: &Locked) {
     if !dataset.extract {
         out.push_str("extract = false\n");
     }
+    if dataset.decompress {
+        out.push_str("decompress = true\n");
+    }
     if dataset.web_page {
         out.push_str("web_page = true\n");
     }
@@ -1400,7 +1409,8 @@ fn project<'a>(parts: Option<lists::Parts<'a>>, name: &str) -> Result<lists::Par
 }
 
 /// the hash of everything in a data.toml entry that decides what is downloaded. `copy` and
-/// `path` only change where files go, and `extract` what they unpack to, so they are left out.
+/// `path` only change where files go, and `extract` and `decompress` what they unpack to, so they
+/// are left out.
 pub(crate) fn spec(source: &Source) -> String {
     let mut text = format!("ref={}\n", source.reference);
     for (key, globs) in [("select", &source.select), ("exclude", &source.exclude)] {
@@ -1740,6 +1750,7 @@ mod tests {
                     reference: "https://example.org/z.csv".to_owned(),
                     spec: "sha256:00".to_owned(),
                     extract: false,
+                    decompress: false,
                     web_page: false,
                     resolved: "https://example.org/z.csv".to_owned(),
                     title: None,
@@ -1754,6 +1765,7 @@ mod tests {
                     reference: "zenodo:3608990".to_owned(),
                     spec: "sha256:11".to_owned(),
                     extract: true,
+                    decompress: false,
                     web_page: false,
                     resolved: "zenodo:3608990".to_owned(),
                     title: Some("Iris \"classic\"\tset".to_owned()),
@@ -1799,6 +1811,7 @@ mod tests {
             reference: "zenodo:1".to_owned(),
             spec: "sha256:22".to_owned(),
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: "zenodo:1".to_owned(),
             title: Some("MNIST".to_owned()),
@@ -2859,6 +2872,7 @@ mod tests {
         let locked = Locked {
             spec: spec(&entry("").source),
             extract: true,
+            decompress: false,
             web_page: false,
             ..sample().datasets[1].clone()
         };

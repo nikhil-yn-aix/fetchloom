@@ -1121,6 +1121,7 @@ async fn resolve_add(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
+    entry.source.decompress = args.decompress;
     let kept = engine::filter(&parsed.reference.shown(), &entry, &listing);
     // what the patterns keep is what gets pinned, so the line counts that
     let told = kept.as_deref().ok();
@@ -1141,7 +1142,7 @@ fn added(
     args: &Add,
     addition: &Addition,
 ) -> Result<(String, Manifest), Error> {
-    let updated = manifest::with_dataset(
+    let mut updated = manifest::with_dataset(
         text,
         name,
         &addition.reference,
@@ -1149,11 +1150,11 @@ fn added(
         &args.filter.exclude,
         !args.no_extract,
     )?;
-    let updated = if args.web_page {
-        manifest::with_web_page(&updated, name)?
-    } else {
-        updated
-    };
+    for (asked, key) in [(args.decompress, "decompress"), (args.web_page, "web_page")] {
+        if asked {
+            updated = manifest::with_set(&updated, name, key)?;
+        }
+    }
     let manifest = Manifest::parse(&updated)?;
     Ok((updated, manifest))
 }
@@ -1643,7 +1644,8 @@ impl<'a> Sources<'a> {
                 (
                     source.select != wanted.select
                         || source.exclude != wanted.exclude
-                        || source.extract != wanted.extract,
+                        || source.extract != wanted.extract
+                        || source.decompress != wanted.decompress,
                     source.reference != wanted.reference,
                 )
             })
@@ -1664,6 +1666,8 @@ fn same_settings(manifest: &Manifest, present: &Present<'_>) -> Result<(), Error
         Some(("other patterns", "the patterns of"))
     } else if existing.extract != wanted.extract {
         Some(("another extract setting", "extract on"))
+    } else if existing.decompress != wanted.decompress {
+        Some(("another decompress setting", "decompress on"))
     } else {
         None
     };

@@ -262,7 +262,7 @@ fn a_window_past_the_memory_allowed_is_refused() {
 #[test]
 fn decompressing_past_the_room_its_disk_had_free_stops() {
     let scratch = Scratch::new();
-    let packed = compress(Format::TarGz, &[b'x'; 64 << 10]);
+    let packed = compress(Format::TarGz, &vec![b'x'; 64 << 10]);
     let stored = store(&scratch.cache, &packed);
     let cache = scratch.cache.clone().with_free_room(16 << 10);
     let err = decompress_cached(

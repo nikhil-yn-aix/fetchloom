@@ -213,6 +213,7 @@ mod tests {
             reference: reference.to_owned(),
             spec: crate::project::lock::spec(&manifest.datasets["input"].source),
             extract,
+            decompress: false,
             web_page: false,
             resolved: reference.to_owned(),
             title: Some("the original title".to_owned()),

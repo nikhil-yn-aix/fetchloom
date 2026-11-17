@@ -924,6 +924,10 @@ pub(crate) struct DryRun {
 /// add a dataset to the project and download it into the data folder
 #[derive(Clone, Debug, clap::Args)]
 #[command(group(clap::ArgGroup::new("what").required(true).args(["links", "input_file"])))]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a yes or no on the command line"
+)]
 pub(crate) struct Add {
     /// search words, a link, a DOI, an id such as zenodo:3608990, or a path to files on this
     /// machine, such as ./flowers, which are copied into the cache. several links add a dataset
@@ -946,6 +950,12 @@ pub(crate) struct Add {
     /// keep zip, 7z and tar archives packed, as extract = false in data.toml does
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+
+    /// place each single .gz, .bz2, .xz or .zst file decompressed, under its name without the
+    /// ending, as decompress = true in data.toml does. a compressed tar, as .tar.gz, stays
+    /// extract's
+    #[arg(long, help_heading = "options")]
+    pub(crate) decompress: bool,
 
     /// keep the web page a link answers with as the data, as `web_page = true` in data.toml
     /// does. without it, a page where a file was expected is refused

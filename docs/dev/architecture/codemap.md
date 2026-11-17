@@ -278,6 +278,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | `src/archive/store.rs` | writer threads storing members while one thread reads: queues, staging, and publication only once the whole archive passed | `store_all`, `Writers` | `keep`, `publish_all` |
 | `src/archive/store/stream.rs` | bounded reusable buffers between a large member's decoder and its writer | `channel` | `Sending`, `Receiving` |
 | `src/archive/shards.rs` | numbered tar shards that webdataset loaders read packed, and the hint to keep them so | `shards` | `Shards`, `hint` |
+| `src/archive/single.rs` | single compressed files `decompress` unpacks: the name each decompresses to, refused when no file may take it, and one file decoded through the archive guard, recorded under a key that names it | `decompress_cached`, `decompressed_name` | `Decompressed`, `Left` |
 
 ## plan, place and volume
 

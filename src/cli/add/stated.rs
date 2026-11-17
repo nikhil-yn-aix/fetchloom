@@ -164,6 +164,7 @@ pub(super) fn pinned(
         reference: source.reference.clone(),
         spec: lock::spec(source),
         extract: source.extract,
+        decompress: source.decompress,
         web_page: source.web_page,
         resolved: listing.resolved.to_string(),
         title: listing.title.clone(),

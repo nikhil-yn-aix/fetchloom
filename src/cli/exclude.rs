@@ -1451,6 +1451,7 @@ mod tests {
             reference: source.reference.clone(),
             spec: lock::spec(source),
             extract: source.extract,
+            decompress: source.decompress,
             web_page: false,
             resolved: source.reference.clone(),
             title: None,

@@ -769,6 +769,7 @@ mod tests {
             reference: "https://example.org/a.csv".to_owned(),
             spec: String::new(),
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: "https://example.org/a.csv".to_owned(),
             title: title.map(str::to_owned),

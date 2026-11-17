@@ -172,9 +172,14 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
     let name = lines.value("name")?;
     let reference = lines.value("ref")?;
     let spec = lines.value("spec")?;
-    // the writer records extract only when it is false, and web_page only when it is true
+    // the writer records extract only when it is false, and decompress and web_page only when
+    // they are true
     let extract = !lines.sets("extract");
     if !extract && lines.next()? != "extract = false" {
+        return None;
+    }
+    let decompress = lines.sets("decompress");
+    if decompress && lines.next()? != "decompress = true" {
         return None;
     }
     let web_page = lines.sets("web_page");
@@ -203,6 +208,7 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
         reference,
         spec,
         extract,
+        decompress,
         web_page,
         resolved,
         title,
@@ -456,6 +462,7 @@ mod tests {
             reference: format!("zenodo:{name}"),
             spec: format!("sha256:{}", digest::sha256(name.as_bytes())),
             extract: !extra,
+            decompress: false,
             web_page: false,
             resolved: format!("zenodo:{name}@1"),
             title: extra.then(|| "Iris \"classic\"\tset\nline".to_owned()),

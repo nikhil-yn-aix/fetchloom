@@ -2967,6 +2967,7 @@ mod tests {
             reference: "zenodo:1".to_owned(),
             spec: String::new(),
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: "zenodo:2".to_owned(),
             title: None,

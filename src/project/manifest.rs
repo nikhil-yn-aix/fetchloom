@@ -28,8 +28,16 @@ const GIT_FILES: [&str; 3] = [".gitignore", ".gitattributes", ".gitmodules"];
 const TOOL_FOLDERS: [&str; 5] = [".devcontainer", ".github", ".githooks", ".husky", ".vscode"];
 const TOP_KEYS: [&str; 3] = [required::KEY, "project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
-const DATASET_KEYS: [&str; 8] = [
-    "ref", "select", "exclude", "extract", "members", "web_page", "copy", "path",
+const DATASET_KEYS: [&str; 9] = [
+    "ref",
+    "select",
+    "exclude",
+    "extract",
+    "decompress",
+    "members",
+    "web_page",
+    "copy",
+    "path",
 ];
 /// the keys of the table that chooses the files of one archive.
 const MEMBER_KEYS: [&str; 2] = ["select", "exclude"];
@@ -62,6 +70,9 @@ pub(crate) struct Source {
     pub(crate) select: Vec<Glob>,
     pub(crate) exclude: Vec<Glob>,
     pub(crate) extract: bool,
+    /// whether each single compressed file, as `reads.fastq.gz`, lands decompressed, under its
+    /// name without the ending.
+    pub(crate) decompress: bool,
     /// which files of each archive it unpacks the dataset keeps.
     pub(crate) members: Members,
     /// whether a web page that answers where a file was expected is the data a person asked for,
@@ -366,6 +377,7 @@ fn put_plain(
         select: Vec::new(),
         exclude: Vec::new(),
         extract: true,
+        decompress: false,
         members: Members::new(),
         web_page: false,
     };
@@ -565,6 +577,7 @@ impl Reader<'_> {
             select,
             exclude: self.patterns(table.get("exclude"), "exclude")?,
             extract,
+            decompress: self.boolean(table.get("decompress"), "decompress", false)?,
             members: self.members(table, name, extract)?,
             web_page: self.boolean(table.get("web_page"), "web_page", false)?,
         })
@@ -885,6 +898,7 @@ pub(crate) struct NewDataset<'a> {
     pub(crate) select: &'a [String],
     pub(crate) exclude: &'a [String],
     pub(crate) extract: bool,
+    pub(crate) decompress: bool,
     pub(crate) web_page: bool,
 }
 
@@ -900,6 +914,9 @@ impl NewDataset<'_> {
         }
         if !self.extract {
             table.insert("extract", toml_edit::value(false));
+        }
+        if self.decompress {
+            table.insert("decompress", toml_edit::value(true));
         }
         if self.web_page {
             table.insert("web_page", toml_edit::value(true));
@@ -937,6 +954,7 @@ pub(crate) fn with_dataset(
         select,
         exclude,
         extract,
+        decompress: false,
         web_page: false,
     };
     let mut document = editable(text)?;
@@ -946,16 +964,16 @@ pub(crate) fn with_dataset(
     Ok(document.to_string())
 }
 
-/// data.toml's text with the dataset `name` marked `web_page = true`, as `add --web-page` writes
-/// it once the dataset is in.
-pub(crate) fn with_web_page(text: &str, name: &str) -> Result<String, Error> {
+/// data.toml's text with `key = true` on the dataset `name`, as `add --web-page` and `add
+/// --decompress` write it once the dataset is in.
+pub(crate) fn with_set(text: &str, name: &str, key: &str) -> Result<String, Error> {
     let mut document = editable(text)?;
     if let Some(table) = document
         .get_mut("datasets")
         .and_then(|datasets| datasets.get_mut(name))
         .and_then(Item::as_table_mut)
     {
-        table.insert("web_page", toml_edit::value(true));
+        table.insert(key, toml_edit::value(true));
     }
     Ok(document.to_string())
 }

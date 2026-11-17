@@ -560,6 +560,7 @@ fn values(entry: &Entry) -> impl PartialEq {
         patterns(&source.select),
         patterns(&source.exclude),
         source.extract,
+        source.decompress,
         entry.copy,
         entry.path.clone(),
     )
@@ -1294,6 +1295,7 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
         reference,
         spec,
         extract,
+        decompress,
         web_page,
         resolved,
         title,
@@ -1304,7 +1306,8 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
         files,
     } = locked;
     (
-        name, reference, spec, extract, web_page, resolved, title, license, doi, access, files,
+        name, reference, spec, extract, decompress, web_page, resolved, title, license, doi,
+        access, files,
     )
 }
 

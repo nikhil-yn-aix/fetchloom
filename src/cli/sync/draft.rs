@@ -1,7 +1,7 @@
 //! a dataset on its way into data.lock: resolved and filtered, with every hash no source states
 //! filled in from earlier locks or from the bytes themselves.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 
 use url::Url;
@@ -9,7 +9,7 @@ use url::Url;
 use super::super::fetch::{self, Job};
 use super::unpack::Unpack;
 use crate::archive::{self, Packed, parts};
-use crate::cache::{Cache, UrlRecord, parts_key};
+use crate::cache::{Cache, UrlRecord, decompressed_key, parts_key};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
@@ -23,11 +23,17 @@ use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each says one thing of the dataset apart from the others"
+)]
 pub(super) struct Draft {
     name: String,
     reference: String,
     spec: String,
     extract: bool,
+    /// whether single compressed files decompress.
+    decompress: bool,
     /// whether a web page is the data the entry asks for.
     web_page: bool,
     /// where the entry's patterns were written, for the help of an error.
@@ -107,7 +113,7 @@ impl Draft {
                 let listed = match (remote.sha256, earlier, &stated) {
                     (None, None, None) => {
                         let was = was.as_ref().map(|was| &was.sha256);
-                        unchanged(cache, &remote, was, source.extract)
+                        unchanged(cache, &remote, was, source)
                     }
                     _ => None,
                 };
@@ -126,14 +132,18 @@ impl Draft {
                 // or the zip its source wrapped it in
                 let path = earlier.map_or_else(|| remote.path.clone(), |file| file.path.clone());
                 // the same bytes unpack to the same files while the dataset unpacks and the name
-                // says archive; an upgrade pins this machine's record of them instead, so a tree
-                // another fetchloom version pinned is replaced without downloading again
-                let unpacks = source.extract && archive::by_name(&path) == Some(Packed::Archive);
+                // says archive, or decompresses and the name says compressed; an upgrade pins
+                // this machine's record of them instead, so a tree another fetchloom version
+                // pinned is replaced without downloading again
+                let decompressed = decompressed_as(source.decompress, &path);
+                let unpacks = decompressed.is_some()
+                    || source.extract && archive::by_name(&path) == Some(Packed::Archive);
                 let unpacks_to = earlier
                     .filter(|file| unpacks && known == Some((file.sha256, file.size)))
                     .and_then(|file| {
                         let recorded = if upgrading {
-                            cache.unpacked_tree(&file.sha256)
+                            let key = record_key(file.sha256, decompressed.as_deref());
+                            cache.unpacked_tree(&key)
                         } else {
                             None
                         };
@@ -164,6 +174,7 @@ impl Draft {
             reference: source.reference.clone(),
             spec: lock::spec(source),
             extract: source.extract,
+            decompress: source.decompress,
             web_page: source.web_page,
             patterns: written(entry),
             resolved: listing.resolved.to_string(),
@@ -348,12 +359,30 @@ impl Draft {
         }
     }
 
-    /// the archives among the dataset's files, by their names, while it unpacks.
+    /// the archives among the dataset's files, by their names, while it unpacks, and the single
+    /// compressed files while it decompresses.
     fn archives(&self) -> Archives {
         archives(
             self.files.iter().map(|file| file.path.as_str()),
             self.extract,
+            self.decompress,
         )
+    }
+
+    /// refuses a single compressed file the dataset decompresses whose name without its ending no
+    /// file may take, as `aux.gz`. [`filter`] refuses each name a download cannot change before
+    /// any byte moves; this one is for the names downloads gave. `added` names the datasets an
+    /// add brings, whose patterns came on its command line.
+    pub(super) fn refuse_names(&self, added: &BTreeSet<String>) -> Result<(), Error> {
+        let patterns = if added.contains(&self.name) {
+            Patterns::OnCommandLine
+        } else {
+            self.patterns
+        };
+        match self.archives().refused.into_iter().next() {
+            Some((_, why)) => Err(refused_name(&self.name, why, patterns)),
+            None => Ok(()),
+        }
     }
 
     /// what the parts `set` are, each part's SHA-256 and size in order, once every one is known.
@@ -373,6 +402,9 @@ impl Draft {
             Unit::Split(set) => self
                 .parts(set)
                 .and_then(|parts| cache.unpacked_tree_as(&parts_key(parts), was.as_ref())),
+            Unit::Decompressed(_, name) => first.known.and_then(|(sha256, _)| {
+                cache.unpacked_tree_as(&decompressed_key(&sha256, name), was.as_ref())
+            }),
         }
     }
 
@@ -409,11 +441,12 @@ impl Draft {
                 })
             })
             .collect::<Result<_, Error>>()?;
-        Ok(Draft {
+        let draft = Draft {
             name: locked.name.clone(),
             reference: source.reference.clone(),
             spec: lock::spec(source),
             extract: source.extract,
+            decompress: source.decompress,
             web_page: source.web_page,
             patterns: written(entry),
             resolved: locked.resolved.clone(),
@@ -423,7 +456,9 @@ impl Draft {
             access: locked.access,
             versions: false,
             files,
-        })
+        };
+        draft.refuse_names(&BTreeSet::new())?;
+        Ok(draft)
     }
 
     /// the downloads this dataset needs, each with the index of the file whose hash it learns:
@@ -606,6 +641,7 @@ impl Draft {
             reference: self.reference.clone(),
             spec: self.spec.clone(),
             extract: self.extract,
+            decompress: self.decompress,
             web_page: self.web_page,
             resolved: self.resolved.clone(),
             title: None,
@@ -638,6 +674,11 @@ impl Draft {
                 Unit::Split(set) => self
                     .parts(set)
                     .map(|parts| Unpack::split(parts, label, None)),
+                Unit::Decompressed(index, name) => {
+                    self.files[*index].known.map(|(packed, size)| {
+                        Unpack::decompressed(packed, size, name.clone(), label, None)
+                    })
+                }
             };
             todo.extend(unpack.map(|unpack| (index, unpack)));
         }
@@ -748,6 +789,7 @@ impl Draft {
             reference: self.reference,
             spec: self.spec,
             extract: self.extract,
+            decompress: self.decompress,
             web_page: self.web_page,
             resolved: self.resolved,
             title: self.title,
@@ -765,6 +807,7 @@ impl Draft {
 pub(super) fn switched_import(source: &Source, locked: &Locked) -> Locked {
     let mut switched = locked.clone();
     switched.extract = source.extract;
+    switched.decompress = source.decompress;
     for file in &mut switched.files {
         file.unpacks_to = None;
     }
@@ -797,6 +840,7 @@ pub(super) fn stand_in_trees(locked: &mut Locked, cache: &Cache) -> Vec<String> 
     let found = archives(
         locked.files.iter().map(|file| file.path.as_str()),
         locked.extract,
+        locked.decompress,
     );
     for unit in found.unpack {
         let index = unit.first();
@@ -820,6 +864,9 @@ pub(super) struct Archives {
     pub(super) unpack: Vec<Unit>,
     /// each archive that stays packed, by the index of the file a person's tools open first.
     pub(super) packed: Vec<(usize, Why)>,
+    /// each single compressed file to decompress whose name without its ending no file may take,
+    /// by its index, with why.
+    pub(super) refused: Vec<(usize, String)>,
 }
 
 /// an archive that unpacks, by the index of each of its files.
@@ -829,13 +876,15 @@ pub(super) enum Unit {
     Whole(usize),
     /// an archive split into parts, in order.
     Split(Vec<usize>),
+    /// a single compressed file, and the name it decompresses to.
+    Decompressed(usize, String),
 }
 
 impl Unit {
     /// the file data.lock gives what the archive unpacks to: the archive, or its first part.
     pub(super) fn first(&self) -> usize {
         match self {
-            Unit::Whole(index) => *index,
+            Unit::Whole(index) | Unit::Decompressed(index, _) => *index,
             Unit::Split(set) => set[0],
         }
     }
@@ -843,7 +892,7 @@ impl Unit {
     /// every file of the archive, in order.
     pub(super) fn files(&self) -> Vec<usize> {
         match self {
-            Unit::Whole(index) => vec![*index],
+            Unit::Whole(index) | Unit::Decompressed(index, _) => vec![*index],
             Unit::Split(set) => set.clone(),
         }
     }
@@ -854,6 +903,7 @@ impl Unit {
         match self {
             Unit::Whole(index) => known(&files[*index]).0,
             Unit::Split(set) => parts_key(set.iter().map(|index| known(&files[*index]))),
+            Unit::Decompressed(index, name) => decompressed_key(&known(&files[*index]).0, name),
         }
     }
 }
@@ -872,15 +922,44 @@ pub(super) enum Why {
     Missing(String),
 }
 
-/// the archives among `paths`, a dataset's files, by name: none when the dataset keeps them packed.
-pub(super) fn archives<'a>(paths: impl Iterator<Item = &'a str>, extract: bool) -> Archives {
+/// the archives among `paths`, a dataset's files, by name, none when `extract` is false, and the
+/// single compressed files when `decompress` is true.
+pub(super) fn archives<'a>(
+    paths: impl Iterator<Item = &'a str>,
+    extract: bool,
+    decompress: bool,
+) -> Archives {
     let mut found = Archives::default();
-    if !extract {
+    if !extract && !decompress {
         return found;
     }
     let paths: Vec<&str> = paths.collect();
-    let split = parts::split(paths.iter().copied());
     let mut taken = vec![false; paths.len()];
+    if extract {
+        split_archives(&paths, &mut found, &mut taken);
+    }
+    for (index, path) in paths.iter().enumerate().filter(|(index, _)| !taken[*index]) {
+        match archive::by_name(path) {
+            Some(Packed::Archive) if extract => found.unpack.push(Unit::Whole(index)),
+            Some(Packed::Unsupported(format)) if extract => {
+                found.packed.push((index, Why::Format(format)));
+            }
+            None if decompress => match archive::decompressed_name(path) {
+                Some(Ok(name)) => found.unpack.push(Unit::Decompressed(index, name)),
+                Some(Err(why)) => found.refused.push((index, why)),
+                None => {}
+            },
+            _ => {}
+        }
+    }
+    found.unpack.sort_unstable_by_key(Unit::first);
+    found.packed.sort_unstable_by_key(|(index, _)| *index);
+    found
+}
+
+/// the split archives and spanned volumes among `paths` into `found`, each file of them `taken`.
+fn split_archives(paths: &[&str], found: &mut Archives, taken: &mut [bool]) {
+    let split = parts::split(paths.iter().copied());
     for set in split.sets {
         for index in &set {
             taken[*index] = true;
@@ -906,16 +985,35 @@ pub(super) fn archives<'a>(paths: impl Iterator<Item = &'a str>, extract: bool) 
         };
         found.packed.push((volumes.files[0], why));
     }
-    for (index, path) in paths.iter().enumerate().filter(|(index, _)| !taken[*index]) {
-        match archive::by_name(path) {
-            Some(Packed::Archive) => found.unpack.push(Unit::Whole(index)),
-            Some(Packed::Unsupported(format)) => found.packed.push((index, Why::Format(format))),
-            None => {}
+}
+
+/// the name the file at `path` decompresses to, while its dataset asks for `decompress` and the
+/// name is one a file may take.
+fn decompressed_as(decompress: bool, path: &str) -> Option<String> {
+    decompress
+        .then(|| archive::decompressed_name(path))
+        .flatten()?
+        .ok()
+}
+
+/// the key of the record of what the bytes `sha256` unpack to: their own hash for an archive, or
+/// for a file that decompresses to `name`, [`decompressed_key`] of both.
+fn record_key(sha256: Sha256, decompressed: Option<&str>) -> Sha256 {
+    decompressed.map_or(sha256, |name| decompressed_key(&sha256, name))
+}
+
+/// the refusal of a file `dataset` decompresses, for `why` its name without the ending is no name
+/// a file may take.
+pub(super) fn refused_name(dataset: &str, why: String, patterns: Patterns) -> Error {
+    let help = match patterns {
+        Patterns::OnCommandLine => {
+            "leave it out with --exclude, or add it without --decompress".to_owned()
         }
-    }
-    found.unpack.sort_unstable_by_key(Unit::first);
-    found.packed.sort_unstable_by_key(|(index, _)| *index);
-    found
+        Patterns::InDataToml => format!(
+            "leave it out with an exclude pattern in datasets.{dataset} in data.toml, or keep the file packed with decompress = false there"
+        ),
+    };
+    Error::new(Kind::SourceInvalid, why).help(help)
 }
 
 pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
@@ -962,9 +1060,12 @@ fn stand_in(what: &str) -> Sha256 {
 /// whether downloading the file may still change its path, as [`Draft::learn`] does when a server
 /// names the file or a source wraps it in a zip.
 fn renamed_by_download(file: &DraftFile) -> bool {
-    file.known.is_none()
-        && (file.remote.named_by_server
-            || (source::may_wrap(&file.remote.url) && archive::by_name(&file.path).is_none()))
+    file.known.is_none() && may_rename(&file.remote, &file.path)
+}
+
+/// whether a download of `remote`, to be pinned at `path`, may give it another path.
+fn may_rename(remote: &Remote, path: &str) -> bool {
+    remote.named_by_server || (source::may_wrap(&remote.url) && archive::by_name(path).is_none())
 }
 
 /// records each blob of `learned` as the object a download brought for it, all at once, where
@@ -1014,12 +1115,15 @@ fn unchanged(
     cache: &Cache,
     remote: &Remote,
     was: Option<&Sha256>,
-    extract: bool,
+    source: &Source,
 ) -> Option<UrlRecord> {
     let record = listed_record(cache, remote, was)?;
-    let unpacks = extract && archive::by_name(&remote.path) == Some(Packed::Archive);
+    let decompressed = decompressed_as(source.decompress, &remote.path);
+    let unpacks = decompressed.is_some()
+        || source.extract && archive::by_name(&remote.path) == Some(Packed::Archive);
+    let key = record_key(record.sha256, decompressed.as_deref());
     (cache.find(&record.sha256, Some(record.size)).is_some()
-        || unpacks && cache.holds_unpacked(&record.sha256, None))
+        || unpacks && cache.holds_unpacked(&key, None))
     .then_some(record)
 }
 
@@ -1134,6 +1238,14 @@ pub(in crate::cli) fn filter(
             Patterns::InDataToml => "loosen the patterns in data.toml",
             Patterns::OnCommandLine => "loosen the patterns given to --select and --exclude",
         }));
+    }
+    // before any byte moves; a name a download may still change is refused once the file came
+    let refused = kept
+        .iter()
+        .filter(|file| source.decompress && !may_rename(file, &file.path))
+        .find_map(|file| archive::decompressed_name(&file.path)?.err());
+    if let Some(why) = refused {
+        return Err(refused_name(name, why, written(entry)));
     }
     Ok(kept)
 }
@@ -1434,6 +1546,7 @@ mod tests {
             reference: url.to_string(),
             spec: String::new(),
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: url.to_string(),
             title: None,
@@ -1500,7 +1613,7 @@ mod tests {
             "f.zip",
             "g.csv",
         ];
-        let found = archives(paths.into_iter(), true);
+        let found = archives(paths.into_iter(), true, false);
         assert_eq!(found.unpack, [Unit::Whole(0), Unit::Split(vec![1, 2])]);
         assert_eq!(
             found.packed,
@@ -1523,7 +1636,59 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(archives(paths.into_iter(), false), Archives::default());
+        assert_eq!(
+            archives(paths.into_iter(), false, false),
+            Archives::default()
+        );
+    }
+
+    /// with decompress, a single compressed file unpacks to its name without the ending, and one
+    /// whose name would be no file's is refused; an archive's name stays extract's, so a
+    /// `.tar.gz` stays packed when extract is off.
+    #[test]
+    fn decompress_takes_single_compressed_files_and_leaves_archives_to_extract() {
+        let paths = [
+            "a.csv.gz",
+            "b.tar.gz",
+            ".gz",
+            "c.csv",
+            "d.fastq.zst",
+            "e.zip",
+        ];
+        let units = |extract| {
+            let found = archives(paths.into_iter(), extract, true);
+            (found.unpack, found.refused)
+        };
+        let refused = vec![(
+            2,
+            "\".gz\" would decompress to a file with no name".to_owned(),
+        )];
+        assert_eq!(
+            units(true),
+            (
+                vec![
+                    Unit::Decompressed(0, "a.csv".to_owned()),
+                    Unit::Whole(1),
+                    Unit::Decompressed(4, "d.fastq".to_owned()),
+                    Unit::Whole(5),
+                ],
+                refused.clone()
+            )
+        );
+        assert_eq!(
+            units(false),
+            (
+                vec![
+                    Unit::Decompressed(0, "a.csv".to_owned()),
+                    Unit::Decompressed(4, "d.fastq".to_owned()),
+                ],
+                refused
+            )
+        );
+        let files = [(digest::sha256(b"a"), 1)];
+        let key = Unit::Decompressed(0, "a.csv".to_owned()).key(&files, |file| *file);
+        assert_eq!(key, decompressed_key(&files[0].0, "a.csv"));
+        assert_ne!(key, Unit::Whole(0).key(&files, |file| *file));
     }
 
     /// a file its server names keeps that name on its way down, so its progress line shows it
@@ -1823,6 +1988,7 @@ mod tests {
             reference: packed.source.reference.clone(),
             spec: lock::spec(&packed.source),
             extract: false,
+            decompress: false,
             web_page: false,
             resolved: "https://example.org/set.zip".to_owned(),
             title: Some("set".to_owned()),
@@ -1845,6 +2011,7 @@ mod tests {
         assert_eq!(
             Locked {
                 extract: false,
+                decompress: false,
                 web_page: false,
                 timestamp: locked.timestamp.clone(),
                 files: locked.files.clone(),
@@ -1910,6 +2077,7 @@ mod tests {
             reference: url.to_string(),
             spec: String::new(),
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: url.to_string(),
             title: None,
@@ -1958,6 +2126,7 @@ mod tests {
             reference: url.to_string(),
             spec: String::new(),
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: url.to_string(),
             title: None,
@@ -1997,6 +2166,7 @@ mod tests {
             reference: url.to_string(),
             spec: String::new(),
             extract: true,
+            decompress: false,
             web_page: false,
             resolved: url.to_string(),
             title: None,

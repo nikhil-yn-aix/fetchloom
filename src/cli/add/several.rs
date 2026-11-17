@@ -62,7 +62,9 @@ pub(super) async fn add_several_held(
         .links
         .iter()
         .zip(&listings)
-        .map(|((link, parsed), listing)| listed_entry(link, parsed, listing, extract))
+        .map(|((link, parsed), listing)| {
+            listed_entry(link, parsed, listing, (extract, args.decompress))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let mut lines = FromLine::each(&several);
     if dry_run {
@@ -101,7 +103,7 @@ pub(super) async fn add_several_held(
         &several,
         found,
         &mut lines,
-        (extract, args.web_page),
+        args,
     )?;
     // a dataset a line names that was dropped here comes back, as an add of its link brings it
     let dropped = project.dropped();
@@ -165,7 +167,7 @@ fn new_datasets(
     several: &Several,
     found: Vec<(Listing, Listed)>,
     lines: &mut [FromLine],
-    (extract, web_page): (bool, bool),
+    args: &Add,
 ) -> Result<NewDatasets, Error> {
     let sources = Sources::new(&adding.manifest, old);
     let mut taken: HashSet<String> = adding.manifest.datasets.keys().cloned().collect();
@@ -202,8 +204,9 @@ fn new_datasets(
                 reference: &listed.reference,
                 select: &listed.select,
                 exclude: &[],
-                extract,
-                web_page,
+                extract: !args.no_extract,
+                decompress: args.decompress,
+                web_page: args.web_page,
             })
             .collect();
         let text = manifest::with_datasets(&text, &added)?;
@@ -233,7 +236,7 @@ fn listed_entry(
     link: &str,
     parsed: &Parsed,
     listing: &Listing,
-    extract: bool,
+    (extract, decompress): (bool, bool),
 ) -> Result<Listed, Error> {
     let select = parsed.select();
     let reference = stored_reference(link, parsed);
@@ -247,6 +250,7 @@ fn listed_entry(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
+    entry.source.decompress = decompress;
     engine::filter(&parsed.reference.shown(), &entry, listing)?;
     Ok(Listed {
         reference,
@@ -267,6 +271,7 @@ fn same_settings(
     if existing.select == wanted.select
         && existing.exclude == wanted.exclude
         && existing.extract == wanted.extract
+        && existing.decompress == wanted.decompress
     {
         return Ok(());
     }
@@ -449,7 +454,7 @@ mod tests {
             .map(|(link, parsed)| {
                 let file = link.rsplit('/').next().unwrap();
                 let listing = listed(link, vec![stated(file, link, link.as_bytes())]);
-                let entry = listed_entry(link, parsed, &listing, true).unwrap();
+                let entry = listed_entry(link, parsed, &listing, (true, false)).unwrap();
                 (listing, entry)
             })
             .collect();
@@ -472,6 +477,20 @@ mod tests {
             unrestored: AtomicBool::new(false),
         };
         let context = offline_context();
+        let args = Add {
+            links: Vec::new(),
+            name: None,
+            input_file: None,
+            filter: crate::cli::args::Filter {
+                select: Vec::new(),
+                exclude: Vec::new(),
+            },
+            no_extract: false,
+            decompress: false,
+            web_page: false,
+            no_sync: false,
+            dry: crate::cli::args::DryRun { dry_run: false },
+        };
         let reads = |count| {
             let (several, found) = resolved_links(count);
             let mut lines = FromLine::each(&several);
@@ -483,7 +502,7 @@ mod tests {
                 &several,
                 found,
                 &mut lines,
-                (true, false),
+                &args,
             )
             .unwrap();
             let reads = manifest::tests::reads() - before;
