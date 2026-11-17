@@ -441,9 +441,9 @@ fn a_marker_goes_with_its_dataset() -> Result {
     Ok(())
 }
 
-/// a marker someone deleted comes back with the next sync, which its dry run says first. a
-/// .gitignore of the person's own where a marker would go is never written over, and status
-/// names it as theirs.
+/// a marker someone deleted comes back with the next sync, quietly, since the add said its line
+/// once and neither the dry run nor the sync says it again. a .gitignore of the person's own where
+/// a marker would go is never written over, and status names it as theirs.
 #[test]
 fn a_marker_comes_back_but_never_over_a_persons_file() -> Result {
     let sandbox = Sandbox::new()?;
@@ -462,12 +462,12 @@ fn a_marker_comes_back_but_never_over_a_persons_file() -> Result {
     let dry = sandbox.run(&["sync", "--dry-run"])?;
     assert_eq!(
         without_copy_warning(&text(&dry.stderr)?),
-        "      Would ignore data/iris in git with data/iris/.gitignore, which also hides files you put there\n         Ok dry run, nothing was changed\n"
+        "         Ok all pinned files are in place by size and time; dry run, nothing was changed\n"
     );
     assert!(!marker.exists());
     let synced = sandbox.run(&["sync"])?;
     let stderr = text(&synced.stderr)?;
-    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
+    assert!(!stderr.contains("Ignored"), "{stderr}");
     assert_eq!(fs::read(&marker)?, b"*\n");
 
     let theirs = sandbox.work().join("data/wine/.gitignore");
@@ -661,8 +661,18 @@ fn a_marker_in_a_folder_shared_with_the_person_names_the_datasets_entries() -> R
         format!("{header}/.gitignore\n/iris.csv\n")
     );
     let removed = sandbox.run(&["remove", "inner"])?;
-    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
     assert_eq!(fs::read(data.join("nested/.gitignore"))?, b"*\n");
+    if in_git {
+        assert!(stderr.contains(&ignored_line("data/nested")), "{stderr}");
+        // the remove said it, so the marker made again says nothing more
+        fs::remove_file(data.join("nested/.gitignore"))?;
+        let again = sandbox.run(&["sync"])?;
+        let stderr = text(&again.stderr)?;
+        assert_eq!(again.status.code(), Some(0), "{stderr}");
+        assert!(!stderr.contains("Ignored"), "{stderr}");
+    }
     Ok(())
 }
 
@@ -911,5 +921,72 @@ fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
     let stderr = text(&added.stderr)?;
     assert!(stderr.contains(&ignored_line("results")), "{stderr}");
     assert_eq!(fs::read(work.join("results/.gitignore"))?, b"*\n");
+    Ok(())
+}
+
+/// n8: a pipeline that deletes its output's folder before it writes it again, as `rm -rf` before
+/// a rerun does, gets the folder's .gitignore back from the next sync, as it was, with no line:
+/// the add said it once for the folder, and neither the sync nor its dry run says it again.
+#[test]
+fn the_marker_line_is_said_once_per_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    write_all(&sandbox, &[("results/table.csv", "a,b\n1,2\n")])?;
+    let added = sandbox.run(&["add", "results", "--as", "results"])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&ignored_line("results")), "{stderr}");
+    let folder = sandbox.work().join("results");
+    for rerun in 1..=2 {
+        crate::support::delete_folder(&folder)?;
+        write_all(&sandbox, &[("results/table.csv", "a,b\n1,2\n")])?;
+        let dry = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
+        assert!(!dry.contains("in git"), "{rerun}: {dry}");
+        let stderr = synced(&sandbox)?;
+        assert!(!stderr.contains("in git"), "{rerun}: {stderr}");
+        assert_eq!(fs::read(folder.join(".gitignore"))?, b"*\n", "{rerun}");
+    }
+    Ok(())
+}
+
+/// a folder whose marker changes kind is told again each time, since the person's files there go
+/// from hidden to seen by git or back: data/iris holds `*` until a dataset is placed inside it,
+/// when its marker names iris's entries, and `*` again once that dataset goes.
+#[test]
+fn a_marker_that_changes_kind_is_told_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/masks.csv".to_owned(), file(b"m\n1\n", "\"m1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let link = format!("{}{PATH}", server.url);
+    let added = sandbox.run(&["add", &link])?;
+    let stderr = text(&added.stderr)?;
+    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
+    let manifest = sandbox.work().join("data.toml");
+    let alone = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!(
+            "{alone}\n[datasets.masks]\nref = \"{}/files/masks.csv\"\npath = \"iris/masks\"\n",
+            server.url
+        ),
+    )?;
+    let stderr = synced(&sandbox)?;
+    assert!(
+        stderr.contains(
+            "    Ignored the dataset files in data/iris in git with data/iris/.gitignore, which names them, so files you put there stay in git\n"
+        ),
+        "{stderr}"
+    );
+    fs::write(&manifest, alone)?;
+    let stderr = synced(&sandbox)?;
+    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
     Ok(())
 }

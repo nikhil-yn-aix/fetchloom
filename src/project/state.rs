@@ -109,6 +109,13 @@ pub(crate) enum Once {
     /// an output's folder git tracked the person's files in at its first pin, which git keeps, so
     /// fetchloom makes no marker there: the folder.
     Tracked,
+    /// a dataset folder a `*` .gitignore of fetchloom's keeps out of git, the person's files there
+    /// too, as said to a person in git: the folder, so one a pipeline writes again is not told of
+    /// again.
+    Hidden,
+    /// a dataset folder whose .gitignore of fetchloom's names the datasets' entries, so the
+    /// person's files there stay in git, as said to a person in git: the folder.
+    Named,
 }
 
 impl Once {
@@ -124,6 +131,8 @@ impl Once {
             Once::Output => "output",
             Once::Link => "link",
             Once::Tracked => "tracked",
+            Once::Hidden => "hidden",
+            Once::Named => "named",
         }
     }
 }

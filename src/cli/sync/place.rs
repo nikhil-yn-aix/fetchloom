@@ -126,7 +126,9 @@ pub(crate) struct Placement {
     #[serde(skip)]
     pub(crate) left_behind: Option<LeftBehind>,
     /// dataset folders given a .gitignore that keeps them out of git, or that a dry run would give
-    /// one, each with whether it names the datasets' entries rather than holding `*`.
+    /// one, each with whether it names the datasets' entries rather than holding `*`: those whose
+    /// line no run said yet in that kind, so a folder a pipeline writes again gets its marker
+    /// quietly.
     #[serde(skip)]
     pub(crate) marked: Vec<(String, bool)>,
     /// whether the project is in a git repository, where the lines for `marked` matter.
@@ -494,9 +496,9 @@ fn edited_path(edit: &str) -> &str {
 /// records in `state` what `placement` told once, so later runs stay quiet of it: each edit kept,
 /// with how its file looks on `disk`, each change of an output left whole, each folder told how to
 /// keep away, the data folder told how to keep elsewhere, an R package told where raw files go,
-/// each folder told it is too full to name, and why files were copied on the data folder's disk.
-/// forgets the edits and output changes of `scope` this run found no more, and the folders no
-/// dataset has now. says whether the state changed.
+/// each folder told it is too full to name, why files were copied on the data folder's disk, and
+/// the lines of the markers made. forgets the edits and output changes of `scope` this run found
+/// no more, and the folders no dataset has now. says whether the state changed.
 fn note_told(
     state: &mut State,
     manifest: &Manifest,
@@ -557,6 +559,9 @@ fn note_told(
     }
     if let Some((_, disk)) = &placement.copied {
         changed |= told.note(Once::Copy, disk);
+    }
+    if placement.in_git {
+        changed |= mark::note_said(told, &placement.marked);
     }
     changed
 }
@@ -1295,7 +1300,8 @@ impl<'a> Placing<'a> {
             (&self.survey.state, (&self.unknown, &self.waiting)),
         );
         let planned = mark::planned(&self.survey, &wanted, &contents);
-        placement.marked = mark::would_make(&planned, &contents);
+        let made = mark::would_make(&planned, &contents);
+        placement.marked = mark::untold(&self.survey.state, &made);
         placement.unnamed = untold_unnamed(&self.survey.state, &wanted, &contents);
         placement.in_git = Project::repository(&self.project.root).is_some();
         placement.unmarkable = mark::unmarkable(
@@ -1515,14 +1521,14 @@ impl<'a> Placing<'a> {
         };
         survey.smudge_edited();
         // before the files land, so git never sees a dataset's folder while it fills
-        let (rewritten, marked) = mark::write(
+        let (rewritten, made) = mark::write(
             &project.root,
             &mut placer,
             &mut survey.state,
             &to_mark.write,
             &contents,
         );
-        placement.marked = marked;
+        placement.marked = mark::untold(&survey.state, &made);
         placement.in_git = Project::repository(&project.root).is_some();
         // git keeps a link as a file and never looks behind it, so no line hides what lies there
         let through_link = survey.followed.iter().any(|link| {
@@ -1532,7 +1538,7 @@ impl<'a> Placing<'a> {
                     .strip_prefix(&link.path)
                     .is_some_and(|rest| rest.starts_with('/'))
         });
-        let told_rule = !placement.marked.is_empty()
+        let told_rule = !made.is_empty()
             && !through_link
             && mark::tell_hiding_line(output, &project.root, &manifest.data_dir, &mut survey.state);
         let mut told_link = false;
@@ -1585,8 +1591,7 @@ impl<'a> Placing<'a> {
         tell::set_aside(output, manifest, &state.aside);
         let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding.is_some_and(|adding| undo(project, &root, threads, state, &adding, checked));
-        let taken_back =
-            undone && mark::take_back(&project.root, &mut placer, state, &placement.marked);
+        let taken_back = undone && mark::take_back(&project.root, &mut placer, state, &made);
         // a run that ends early tells no placement, so its error says where each changed copy went
         let ended = |error: Error| kept_copies(error, &placement.changed_copies);
         flushed.map_err(ended)?;
@@ -1698,20 +1703,22 @@ impl<'a> Placing<'a> {
         ) | unlisted;
         let contents = mark::contents(manifest, &targets, (&survey.state, (&unknown, &waiting)));
         let to_mark = mark::planned(&survey, &BTreeSet::new(), &contents);
-        let (rewritten, marked) = mark::write(
+        let (rewritten, made) = mark::write(
             &project.root,
             &mut placer,
             &mut survey.state,
             &to_mark.write,
             &contents,
         );
-        placement.marked = marked;
+        placement.marked = mark::untold(&survey.state, &made);
         placement.in_git = Project::repository(&project.root).is_some();
+        let said =
+            told && placement.in_git && mark::note_said(&mut survey.state.told, &placement.marked);
         survey.smudge_edited();
         let (_, moved_away) = track_aside(&project.root, &mut survey.state, Vec::new());
         let forgot = survey.state.synced.take().is_some();
         let dropped = survey.state.forget_removed(manifest) || moved_away;
-        if removed || forgot || dropped || unmarked || rewritten || survey.needs_writing {
+        if removed || forgot || dropped || unmarked || rewritten || said || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
         // a person's file kept aside may be what keeps a folder, so it is named as sync names it

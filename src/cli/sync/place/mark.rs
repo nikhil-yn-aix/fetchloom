@@ -18,7 +18,7 @@ use crate::output::{Output, Warning};
 use crate::place::{self, Placer};
 use crate::plan::{self, Target};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Once, State};
+use crate::project::state::{Once, State, Told};
 use crate::project::{Project, gitignore_escaped, native};
 
 /// what a marker of a folder only datasets fill holds: git ignores every entry, the marker too.
@@ -454,6 +454,33 @@ pub(super) fn would_make(
         .filter(|(_, there)| !there)
         .filter_map(|(folder, _)| Some((folder.clone(), text_of(contents, folder)? != TEXT)))
         .collect()
+}
+
+/// those of `made`, folders whose marker a run made or changed, each with whether it names the
+/// datasets' entries, whose line no run said to a person in git yet in that kind, as `state`
+/// records, so a folder a pipeline writes again is told of once.
+pub(super) fn untold(state: &State, made: &[(String, bool)]) -> Vec<(String, bool)> {
+    made.iter()
+        .filter(|(folder, named)| !state.told.has(said_as(*named), folder))
+        .cloned()
+        .collect()
+}
+
+/// records that a person in git heard the lines of `said`, each a folder with whether its marker
+/// names the datasets' entries, and forgets the other kind's there, so a change back is told
+/// again. says whether the record changed.
+pub(super) fn note_said(told: &mut Told, said: &[(String, bool)]) -> bool {
+    let mut changed = false;
+    for (folder, named) in said {
+        changed |= told.note(said_as(*named), folder);
+        changed |= told.retain(said_as(!named), |other| other != folder);
+    }
+    changed
+}
+
+/// the kind a marker's line is said once as.
+fn said_as(named: bool) -> Once {
+    if named { Once::Named } else { Once::Hidden }
 }
 
 /// the text `contents` gives the marker of `folder`, none when it gets no marker.
