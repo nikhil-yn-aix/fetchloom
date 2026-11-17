@@ -430,6 +430,17 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     processed(&work)?;
+    let clean = work.join("data/processed/iris_clean.csv");
+    // an old time every disk keeps as given: on a coarse clock a file as new as the state is
+    // hashed, which would find the rewrite without --verify
+    let kept = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let keep_time = || {
+        fs::File::options()
+            .write(true)
+            .open(&clean)?
+            .set_modified(kept)
+    };
+    keep_time()?;
     ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
     let pinned = [
         fs::read_to_string(work.join("data.toml"))?,
@@ -438,13 +449,8 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     let check = ["--json", "status", "--verify", "--check"];
     let same = sandbox.run(&check)?;
     assert_eq!(same.status.code(), Some(0), "{}", text(&same.stdout)?);
-    let clean = work.join("data/processed/iris_clean.csv");
-    let modified = fs::metadata(&clean)?.modified()?;
     fs::write(&clean, b"sepal,petal\n5.1,1.5\n")?;
-    fs::File::options()
-        .write(true)
-        .open(&clean)?
-        .set_modified(modified)?;
+    keep_time()?;
     let unhashed = sandbox.run(&["status", "--check"])?;
     assert_eq!(
         unhashed.status.code(),
