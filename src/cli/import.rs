@@ -44,11 +44,43 @@ pub(super) async fn path_held(
 ) -> Result<Report, Error> {
     let shown = typed.trim();
     let start = located(shown, here, std::env::home_dir().as_deref())?;
-    if let Some(at) = in_place::at_of(&adding.project.root, &start) {
+    let data_dir = &adding.manifest.data_dir;
+    if let Some(at) = in_place::at_of(&adding.project, data_dir, &start)? {
         let typed = (start.as_path(), shown, at.as_str());
         return in_place::pin_held(context, adding, args, typed, here, starting).await;
     }
     import_held(context, adding, args, (&start, shown), here, starting).await
+}
+
+/// `start`, a real path, as a path from the top of `project` with `/` between names, empty for
+/// the project's own folder: below the project's folder, or below its data folder `data_dir`
+/// reached through the link the project follows there, as a cluster's pipeline writes
+/// data/processed onto scratch. none for a path elsewhere.
+pub(super) fn in_project(
+    project: &Project,
+    data_dir: &str,
+    start: &Path,
+) -> Result<Option<String>, Error> {
+    let joined = |below: &Path| -> Option<String> {
+        let names: Option<Vec<&str>> = below.iter().map(std::ffi::OsStr::to_str).collect();
+        names.map(|names| names.join("/"))
+    };
+    if let Ok(root) = std::fs::canonicalize(&project.root)
+        && let Ok(below) = start.strip_prefix(&root)
+    {
+        return Ok(joined(below));
+    }
+    let Some(found) = project.followed_folder(data_dir)? else {
+        return Ok(None);
+    };
+    Ok(start
+        .strip_prefix(&found)
+        .ok()
+        .and_then(joined)
+        .map(|below| match below.as_str() {
+            "" => data_dir.to_owned(),
+            _ => format!("{data_dir}/{below}"),
+        }))
 }
 
 /// `add <path>`: a folder's files, or one file, at `start`, `shown` as typed, read and pinned by

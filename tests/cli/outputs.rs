@@ -6,7 +6,8 @@ use std::path::Path;
 
 use crate::project::{IRIS, PATH};
 use crate::support::{
-    Result, Routes, Running, Sandbox, file, json, look, ok, text, wait_until, warned, warning,
+    Result, Routes, Running, Sandbox, file, json, link_folder, look, ok, skipped, text, wait_until,
+    warned, warning,
 };
 
 const CLEAN: &[u8] = b"sepal,petal\n5.1,1.4\n";
@@ -935,6 +936,41 @@ fn an_output_takes_no_decompress_or_web_page() -> Result {
         assert_eq!(fs::read_to_string(work.join("data.toml"))?, pinned[0]);
         assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned[1]);
     }
+    Ok(())
+}
+
+/// a pipeline on a cluster writes data/processed through the data folder's link onto scratch,
+/// which `data_links` lists, once an import put the raw files there: the output is pinned where it
+/// is, by either spelling, as one in a real data folder is. reading the folder's link takes
+/// nothing over, so the import's own sync records the link's first follow, and what the pipeline
+/// writes there later is the person's.
+#[test]
+fn an_output_in_a_linked_data_folder_is_pinned_where_it_is() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir(&target)?;
+    let work = sandbox.work();
+    if link_folder(&target, &work.join("data")).is_err() {
+        return skipped("symlinks", "no symbolic link can be made here");
+    }
+    let listed = scratch.display().to_string();
+    ok(&sandbox.run(&["settings", "set", "data_links", &listed])?)?;
+    let raw = sandbox.folder("raw")?;
+    fs::write(raw.join("iris.csv"), IRIS)?;
+    ok(&sandbox.run(&["add", "../raw"])?)?;
+    assert_eq!(fs::read(target.join("raw/iris.csv"))?, IRIS);
+    processed(&work)?;
+    for typed in ["data/processed", "./data/processed"] {
+        let pinned = sandbox.run(&["add", typed, "--as", "processed"])?;
+        let stderr = text(&pinned.stderr)?;
+        assert_eq!(pinned.status.code(), Some(0), "{typed}: {stderr}");
+    }
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(manifest.contains("at = \"data/processed\""), "{manifest}");
+    assert_eq!(fs::read(target.join("processed/iris_clean.csv"))?, CLEAN);
+    let checked = sandbox.run(&["status", "--verify", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
     Ok(())
 }
 

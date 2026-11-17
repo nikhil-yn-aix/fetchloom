@@ -1003,6 +1003,19 @@ impl Project {
     /// refuses a data folder `data_dir` that a link leads to, unless [`Project::follow`] follows
     /// it, before anything reads in it. the link it followed, if any.
     pub(crate) fn refuse_linked_data_dir(&self, data_dir: &str) -> Result<Option<Followed>, Error> {
+        let (folder, followed) = self.link_to(data_dir)?;
+        if let Some(link) = &followed {
+            self.take(link)?;
+            if folder.is_dir() {
+                remember(&folder)?;
+            }
+        }
+        Ok(followed)
+    }
+
+    /// the folder `data_dir`, in the project, and the one link on the way to it, as
+    /// [`Project::follow`] follows it, taking nothing over yet.
+    fn link_to(&self, data_dir: &str) -> Result<(PathBuf, Option<Followed>), Error> {
         let mut folder = self.root.clone();
         let mut path = String::new();
         let mut followed = None;
@@ -1018,13 +1031,21 @@ impl Project {
                 self.follow(&folder, &path, &mut followed)?;
             }
         }
-        if let Some(link) = &followed {
-            self.take(link)?;
-            if folder.is_dir() {
-                remember(&folder)?;
-            }
-        }
-        Ok(followed)
+        Ok((folder, followed))
+    }
+
+    /// where the data folder `data_dir` is when [`Project::follow`] follows the one link on the
+    /// way to it: below the folder that link leads to, which the state records at its first
+    /// follow. none when no link is on the way. it takes nothing over, so that first follow stays
+    /// the survey's to check and record.
+    pub(crate) fn followed_folder(&self, data_dir: &str) -> Result<Option<PathBuf>, Error> {
+        let (_, followed) = self.link_to(data_dir)?;
+        Ok(followed.map(|link| {
+            let below = data_dir[link.path.len()..].split('/');
+            below
+                .filter(|part| !part.is_empty())
+                .fold(link.found, |folder, part| folder.join(part))
+        }))
     }
 
     /// refuses a data folder `data_dir`, or an output's folder when `output` says it is one, that

@@ -27,17 +27,18 @@ use crate::stop::Stop;
 use crate::suggested::shell_word;
 use crate::{name, place, plan, units};
 
-/// the folder `start`, found below the project at `root`, as a path from the project's top with
-/// `/` between names: an output's `at`, empty for the project's own folder. none for a path
+/// the folder `start`, a real path, as [`super::in_project`] names it in `project`, whose data
+/// folder is `data_dir`: an output's `at`, empty for the project's own folder. none for a path
 /// outside the project or one that is not a folder.
-pub(super) fn at_of(root: &Path, start: &Path) -> Option<String> {
+pub(super) fn at_of(
+    project: &Project,
+    data_dir: &str,
+    start: &Path,
+) -> Result<Option<String>, Error> {
     if !start.is_dir() {
-        return None;
+        return Ok(None);
     }
-    let root = std::fs::canonicalize(root).ok()?;
-    let below = start.strip_prefix(&root).ok()?;
-    let names: Option<Vec<&str>> = below.iter().map(std::ffi::OsStr::to_str).collect();
-    Some(names?.join("/"))
+    super::in_project(project, data_dir, start)
 }
 
 /// a folder read to be pinned as an output: its name, data.toml's table if it has one, its folder

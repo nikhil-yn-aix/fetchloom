@@ -232,11 +232,11 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let dry_run = args.dry.dry_run;
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    let mut request = request(&mut args)?;
     let found = Project::find(&here);
     let starting = found.is_none();
     let mut project = found.unwrap_or_else(|| Project::at(here.clone()));
     project.data_links = super::project::data_links(context);
+    let mut request = request(&mut args, &project)?;
     if let Request::ListFile(path) = &request {
         request = Request::Link(list_in_project(path, &project.root, &here)?);
     }
@@ -303,9 +303,9 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     })
 }
 
-/// what `args` ask to add: a list of links read or typed, checked whole before any request, a path,
-/// or one link or search words, refused when they name something on this machine.
-fn request(args: &mut Add) -> Result<Request, Error> {
+/// what `args` ask to add in `project`: a list of links read or typed, checked whole before any
+/// request, a path, or one link or search words, refused when they name something on this machine.
+fn request(args: &mut Add, project: &Project) -> Result<Request, Error> {
     if let Some(path) = args.input_file.take() {
         return Ok(Request::ListFile(path));
     }
@@ -333,7 +333,7 @@ fn request(args: &mut Add) -> Result<Request, Error> {
     };
     // with --as, a folder of the project is pinned where it is, as `add data/processed --as
     // processed` reads; without it, the word may be search words too
-    if local::is_path(&link) || (args.name.is_some() && names_project_folder(&link)) {
+    if local::is_path(&link) || (args.name.is_some() && names_project_folder(&link, project)) {
         if args.no_sync {
             // a mistyped path is told first, as an add without --no-sync tells it
             let here = std::env::current_dir()
@@ -347,20 +347,24 @@ fn request(args: &mut Add) -> Result<Request, Error> {
     Ok(Request::Link(link))
 }
 
-/// whether `word`, which is no path as typed, names a folder inside the project the add runs in,
-/// or below the folder it runs in when there is none yet.
-fn names_project_folder(word: &str) -> bool {
+/// whether `word`, which is no path as typed, names a folder inside `project`, the one the add
+/// runs in, or below the folder it runs in when there is none yet: its data folder too, reached
+/// through the link the project follows there.
+fn names_project_folder(word: &str, project: &Project) -> bool {
     let Ok(here) = std::env::current_dir() else {
         return false;
     };
-    let root = Project::find(&here).map_or_else(|| here.clone(), |project| project.root);
-    match (
-        std::fs::canonicalize(here.join(word.trim())),
-        std::fs::canonicalize(&root),
-    ) {
-        (Ok(folder), Ok(root)) => folder.is_dir() && folder.starts_with(&root) && folder != root,
-        _ => false,
-    }
+    let Ok(folder) = std::fs::canonicalize(here.join(word.trim())) else {
+        return false;
+    };
+    let data_dir = project
+        .manifest()
+        .map_or_else(|_| manifest::DATA_DIR.to_owned(), |(_, read)| read.data_dir);
+    folder.is_dir()
+        && matches!(
+            super::import::in_project(project, &data_dir, &folder),
+            Ok(Some(at)) if !at.is_empty()
+        )
 }
 
 /// the reference data.toml gives the list at `path`, typed in `here`: `list:` and its path in the
