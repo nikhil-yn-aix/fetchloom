@@ -733,28 +733,97 @@ fn a_listed_marker_keeps_the_files_of_a_dataset_not_known_here() -> Result {
     Ok(())
 }
 
-/// past a thousand entries in a folder the person shares, the .gitignore holds `*` rather than a
-/// line for each, since git matches every line against every path it looks at.
-#[test]
-fn a_shared_folder_with_too_many_entries_to_name_is_ignored_whole() -> Result {
-    let sandbox = Sandbox::new()?;
-    let names: Vec<String> = (0..1001).map(|at| format!("f{at:04}.csv")).collect();
+/// what `sync` printed on stderr, which must succeed.
+fn synced(sandbox: &Sandbox) -> Result<String> {
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    Ok(stderr)
+}
+
+/// a zip of `count` small csv files at its top, named f0000.csv and on.
+fn many_files(count: usize) -> Result<Vec<u8>> {
+    let names: Vec<String> = (0..count).map(|at| format!("f{at:04}.csv")).collect();
     let members: Vec<(&str, &[u8])> = names
         .iter()
         .map(|name| (name.as_str(), &b"1\n"[..]))
         .collect();
-    let zip = zip_of(&members)?;
-    let server = Routes::start(vec![("/files/many.zip".to_owned(), file(&zip, "\"m1\""))])?;
+    zip_of(&members)
+}
+
+/// the warning for a dataset `many` placing `count` entries in the data folder it shares.
+fn unnamed_warning(count: &str) -> String {
+    format!(
+        "warning: git sees the {count} entries many placed in data/, more than a .gitignore names one by one, and `*` would hide your own files there too\n  help: to keep them out of git, give many a folder of its own, as path = \"many\" in data.toml, where fetchloom's .gitignore needs no list; or add the line /data/ to the project's .gitignore, which hides your own files in data/ too\n"
+    )
+}
+
+/// a thousand entries in a folder the person shares are named one by one. past that, git would
+/// match too many lines, and `*` would hide the person's files there again, so the folder gets no
+/// .gitignore of fetchloom's: the one there goes, and a sync says once which line would keep the
+/// dataset out of git, or that a folder of its own needs none.
+#[test]
+fn a_shared_folder_too_full_to_name_gets_no_wildcard() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![
+        (
+            "/files/many.zip".to_owned(),
+            file(&many_files(1000)?, "\"m1\""),
+        ),
+        (
+            "/files/more.zip".to_owned(),
+            file(&many_files(1001)?, "\"m2\""),
+        ),
+    ])?;
     sandbox.allow(&server.url);
+    let manifest = sandbox.work().join("data.toml");
+    let pin = |zip: &str| -> Result {
+        fs::write(
+            &manifest,
+            format!(
+                "[datasets.many]\nref = \"{}/files/{zip}\"\npath = \".\"\n",
+                server.url
+            ),
+        )?;
+        Ok(())
+    };
+    let marker = sandbox.work().join("data/.gitignore");
+    pin("many.zip")?;
+    let named = synced(&sandbox)?;
+    assert!(!named.contains("git sees"), "{named}");
+    let lines = fs::read_to_string(&marker)?;
+    assert_eq!(
+        lines.lines().count(),
+        1002,
+        "the header, itself and each entry"
+    );
+    assert!(lines.ends_with("/f0999.csv\n"), "{lines}");
+
+    pin("more.zip")?;
+    let unnamed = synced(&sandbox)?;
+    assert!(unnamed.contains(&unnamed_warning("1,001")), "{unnamed}");
+    assert!(!marker.exists(), "no wildcard, and no stale list");
+    // a file put back makes the next sync place again, and still it says nothing more of git
+    crate::support::delete(&sandbox.work().join("data/f0000.csv"))?;
+    let again = synced(&sandbox)?;
+    assert!(again.contains("put back data/f0000.csv"), "{again}");
+    assert!(!again.contains("git sees"), "said once: {again}");
+    assert!(!marker.exists());
+
+    let fresh = Sandbox::new()?;
+    fresh.allow(&server.url);
     fs::write(
-        sandbox.work().join("data.toml"),
+        fresh.work().join("data.toml"),
         format!(
-            "[datasets.many]\nref = \"{}/files/many.zip\"\npath = \".\"\n",
+            "[datasets.many]\nref = \"{}/files/more.zip\"\npath = \".\"\n",
             server.url
         ),
     )?;
-    let synced = sandbox.run(&["sync"])?;
-    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    assert_eq!(fs::read(sandbox.work().join("data/.gitignore"))?, b"*\n");
+    crate::support::ok(&fresh.run(&["lock"])?)?;
+    let dry = text(&fresh.run(&["sync", "--dry-run"])?.stderr)?;
+    assert!(dry.contains(&unnamed_warning("1,001")), "{dry}");
+    let first = synced(&fresh)?;
+    assert!(first.contains(&unnamed_warning("1,001")), "{first}");
+    assert!(!fresh.work().join("data/.gitignore").exists());
     Ok(())
 }

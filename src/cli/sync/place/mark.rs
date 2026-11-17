@@ -12,7 +12,7 @@ use std::io::{self, Read as _, Write as _};
 use std::path::Path;
 
 use super::super::disk::{self, Mark, Survey};
-use super::{Action, Scope, Unsure};
+use super::{Action, Placement, Scope, Unsure};
 use crate::digest;
 use crate::output::{Output, Warning};
 use crate::place::{self, Placer};
@@ -28,22 +28,33 @@ const TEXT: &[u8] = b"*\n";
 const NAMES: &str = "# fetchloom keeps the dataset files placed here out of git, and rewrites this list as they change\n";
 
 /// the most entries a marker names one by one: git matches every line against every path it
-/// looks at, so a folder with more takes `*`.
+/// looks at, so a folder the person shares with more gets no marker.
 const MOST_NAMED: usize = 1000;
 
 /// the most of a marker read to tell whether it holds what fetchloom wrote, far past what it
 /// writes.
 const READ_MOST: u64 = 1 << 20;
 
+/// what the marker of a dataset folder holds, as [`contents`] decides it.
+#[derive(Debug)]
+pub(super) enum Content {
+    /// the marker's text.
+    Text(Vec<u8>),
+    /// no marker: the person shares the folder, and its datasets put this many entries at its
+    /// top, more than a marker names one by one, while `*` would hide the person's files too.
+    Unnamed(usize),
+}
+
 /// what each dataset folder of `targets` should have for a marker: `*`, or for one the person
 /// shares, the data folder itself or one holding another dataset's folder, the top entries of
-/// the datasets placed there, anchored, and the marker itself. the files `state` records for a
-/// dataset of `unsure` count too, since they stay while nothing tells which it needs.
+/// the datasets placed there, anchored, and the marker itself, or none past [`MOST_NAMED`] of
+/// them. the files `state` records for a dataset of `unsure` count too, since they stay while
+/// nothing tells which it needs.
 pub(super) fn contents(
     manifest: &Manifest,
     targets: &[Target],
     (state, unsure): (&State, Unsure<'_>),
-) -> BTreeMap<String, Vec<u8>> {
+) -> BTreeMap<String, Content> {
     let mut folder_of: HashMap<&str, String> = HashMap::new();
     let unsure = super::unsure(unsure);
     for dataset in targets
@@ -92,11 +103,27 @@ pub(super) fn contents(
     placing
         .into_iter()
         .map(|folder| {
-            let text = match named.get(folder) {
-                Some(entries) if entries.len() <= MOST_NAMED => names(entries),
-                _ => TEXT.to_vec(),
+            let content = match named.get(folder) {
+                None => Content::Text(TEXT.to_vec()),
+                Some(entries) if entries.len() <= MOST_NAMED => Content::Text(names(entries)),
+                Some(entries) => Content::Unnamed(entries.len()),
             };
-            (folder.to_owned(), text)
+            (folder.to_owned(), content)
+        })
+        .collect()
+}
+
+/// the folders of `wanted` that `contents` gives no marker, as too full to name, each with how
+/// many entries its datasets put at its top.
+pub(super) fn unnamed(
+    wanted: &BTreeSet<String>,
+    contents: &BTreeMap<String, Content>,
+) -> Vec<(String, usize)> {
+    wanted
+        .iter()
+        .filter_map(|folder| match contents.get(folder) {
+            Some(Content::Unnamed(entries)) => Some((folder.clone(), *entries)),
+            _ => None,
         })
         .collect()
 }
@@ -268,29 +295,34 @@ fn delete(root: &Path, placer: &mut Placer, folder: &str, wrote: &str) {
     }
 }
 
-/// what a run does about the markers of `wanted`, and of every folder whose text `contents` gives:
-/// the folders whose marker it writes, those of `wanted` with nothing at the marker's path or whose
+/// what a run does about the markers of `wanted`, and of every folder `contents` decides on: the
+/// folders whose marker it writes, those of `wanted` with nothing at the marker's path or whose
 /// recorded marker is gone, and those whose marker of fetchloom's should hold another text now, as
-/// after a dataset there came or went, and the records of `wanted` to forget, whose path a link, a
-/// folder or a special file took.
+/// after a dataset there came or went, or none, and the records of `wanted` to forget, whose path
+/// a link, a folder or a special file took, or whose folder gets no marker now.
 pub(super) fn planned(
     survey: &Survey,
     wanted: &BTreeSet<String>,
-    contents: &BTreeMap<String, Vec<u8>>,
+    contents: &BTreeMap<String, Content>,
 ) -> Planned {
     let mut planned = Planned::default();
-    for (folder, text) in contents {
+    for folder in contents.keys() {
+        let text = text_of(contents, folder);
+        let wrote = survey.state.markers.get(folder);
         if let Some(Mark::Made(_)) = survey.marks.get(folder)
-            && survey.state.markers.get(folder) != Some(&digest::sha256(text).hex())
+            && text.is_none_or(|text| wrote != Some(&digest::sha256(text).hex()))
         {
             planned.write.push((folder.clone(), true));
         }
     }
     for folder in wanted {
+        let none = text_of(contents, folder).is_none();
         match survey.marks.get(folder) {
             Some(Mark::Made(_)) => {}
+            Some(Mark::Gone) if none => planned.forget.push(folder.clone()),
             Some(Mark::Gone) => planned.write.push((folder.clone(), false)),
             Some(Mark::Taken) => planned.forget.push(folder.clone()),
+            None if none => {}
             None => {
                 let path = disk::marker(folder);
                 if !survey.disk.contains_key(&path) && !survey.entries.contains_key(&path) {
@@ -303,8 +335,8 @@ pub(super) fn planned(
 }
 
 /// what a run does about the markers of the folders it places files in: the folders whose
-/// marker it writes, each with whether fetchloom's own stands there to rewrite, and the records it
-/// forgets.
+/// marker it writes, each with whether fetchloom's own stands there to rewrite, or to delete when
+/// the folder gets none now, and the records it forgets.
 #[derive(Debug, Default)]
 pub(super) struct Planned {
     pub(super) write: Vec<(String, bool)>,
@@ -317,7 +349,7 @@ pub(super) struct Planned {
 pub(super) fn to_write(
     survey: &mut Survey,
     wanted: &BTreeSet<String>,
-    contents: &BTreeMap<String, Vec<u8>>,
+    contents: &BTreeMap<String, Content>,
 ) -> (Planned, bool) {
     let planned = planned(survey, wanted, contents);
     let state = &mut survey.state;
@@ -326,8 +358,10 @@ pub(super) fn to_write(
         changed |= forget(state, folder);
     }
     for (folder, _) in planned.write.iter().filter(|(_, there)| !there) {
-        note(state, folder, text_of(contents, folder));
-        changed = true;
+        if let Some(text) = text_of(contents, folder) {
+            note(state, folder, text);
+            changed = true;
+        }
     }
     (planned, changed)
 }
@@ -336,42 +370,52 @@ pub(super) fn to_write(
 /// datasets' entries.
 pub(super) fn would_make(
     planned: &Planned,
-    contents: &BTreeMap<String, Vec<u8>>,
+    contents: &BTreeMap<String, Content>,
 ) -> Vec<(String, bool)> {
     planned
         .write
         .iter()
         .filter(|(_, there)| !there)
-        .map(|(folder, _)| (folder.clone(), text_of(contents, folder) != TEXT))
+        .filter_map(|(folder, _)| Some((folder.clone(), text_of(contents, folder)? != TEXT)))
         .collect()
 }
 
-/// the text `contents` gives the marker of `folder`.
-fn text_of<'c>(contents: &'c BTreeMap<String, Vec<u8>>, folder: &str) -> &'c [u8] {
-    contents.get(folder).map_or(TEXT, Vec::as_slice)
+/// the text `contents` gives the marker of `folder`, none when it gets no marker.
+fn text_of<'c>(contents: &'c BTreeMap<String, Content>, folder: &str) -> Option<&'c [u8]> {
+    match contents.get(folder)? {
+        Content::Text(text) => Some(text),
+        Content::Unnamed(_) => None,
+    }
 }
 
 /// writes the marker of each folder `planned` names, with the text `contents` gives it: a new one,
 /// which the state records already, never over anything, and fetchloom's own while it holds what
 /// the state records, or the new text already, as a run cut short after writing it leaves it. one
 /// the person changed is theirs, and its record goes, as does that of a new one that cannot be
-/// made, so a later run tries again. whether the state changed, and the folders a person hears of,
-/// each with whether its marker names the datasets' entries: those made, and those whose marker
-/// went from `*` to naming them or back.
+/// made, so a later run tries again. fetchloom's own in a folder that gets none now is deleted.
+/// whether the state changed, and the folders a person hears of, each with whether its marker
+/// names the datasets' entries: those made, and those whose marker went from `*` to naming them or
+/// back.
 pub(super) fn write(
     root: &Path,
     placer: &mut Placer,
     state: &mut State,
     planned: &[(String, bool)],
-    contents: &BTreeMap<String, Vec<u8>>,
+    contents: &BTreeMap<String, Content>,
 ) -> (bool, Vec<(String, bool)>) {
     let star = digest::sha256(TEXT).hex();
     let mut changed = false;
     let mut told = Vec::new();
     for (folder, there) in planned {
-        let text = text_of(contents, folder);
-        let named = text != TEXT;
         let before = state.markers.get(folder).cloned();
+        let Some(text) = text_of(contents, folder) else {
+            if let Some(wrote) = &before {
+                delete(root, placer, folder, wrote);
+            }
+            changed |= forget(state, folder);
+            continue;
+        };
+        let named = text != TEXT;
         match put(root, placer, state, folder, text, *there) {
             Ok(Put::Written) => {
                 let was_named = before.as_ref().is_some_and(|wrote| *wrote != star);
@@ -486,9 +530,9 @@ pub(super) fn take_back(
     changed
 }
 
-/// whether every dataset folder of `scope` holding files fetchloom placed has its marker, or an
-/// entry of someone else's where the marker would go, and no record waits to be forgotten, as
-/// a run that changes nothing leaves the markers.
+/// whether every dataset folder of `scope` holding files fetchloom placed has its marker, an
+/// entry of someone else's where the marker would go, or none as too full to name, and no record
+/// waits to be forgotten, as a run that changes nothing leaves the markers.
 pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bool {
     let state = &survey.state;
     let placed: BTreeSet<String> = manifest
@@ -508,7 +552,9 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
             Some(Mark::Gone | Mark::Taken) => false,
             None => {
                 let path = disk::marker(&folder);
-                survey.disk.contains_key(&path) || survey.entries.contains_key(&path)
+                survey.disk.contains_key(&path)
+                    || survey.entries.contains_key(&path)
+                    || too_full(manifest, state, &folder)
             }
         });
     marked
@@ -516,6 +562,34 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
             .marks
             .keys()
             .all(|folder| placed.contains(folder) || holds_placed(state, folder))
+}
+
+/// whether the files `state` records in `folder`, one the person shares, put more entries at its
+/// top than a marker names, as [`contents`] counts them, so it gets none.
+fn too_full(manifest: &Manifest, state: &State, folder: &str) -> bool {
+    if !shared(manifest, folder) {
+        return false;
+    }
+    let below = format!("{folder}/");
+    let mut here: HashMap<&str, bool> = HashMap::new();
+    let mut entries = HashSet::new();
+    for (path, placed) in state
+        .files
+        .range(below.clone()..)
+        .take_while(|(path, _)| path.starts_with(&below))
+    {
+        let theirs = *here
+            .entry(placed.dataset.as_str())
+            .or_insert_with(|| plan::folder(manifest, &placed.dataset) == folder);
+        let inside = &path[below.len()..];
+        if theirs
+            && entries.insert(inside.split('/').next().unwrap_or(inside))
+            && entries.len() > MOST_NAMED
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// the dataset folders whose own .gitignore, at the top, `actions` place, so no marker keeps
@@ -627,8 +701,50 @@ pub(super) fn tell_hiding_line(
     true
 }
 
+/// warns of the dataset folders `placement` leaves with no marker of fetchloom's, whose files git
+/// sees.
+pub(super) fn warn_unmarked(output: &Output, manifest: &Manifest, placement: &Placement) {
+    warn_unmarkable(output, &placement.unmarkable);
+    warn_unnamed(output, manifest, &placement.unnamed);
+}
+
+/// warns of each of `folders`, as [`unnamed`] finds them, with how many entries its datasets put
+/// there: git sees them, and hiding the whole folder is the person's choice, never fetchloom's.
+fn warn_unnamed(output: &Output, manifest: &Manifest, folders: &[(String, usize)]) {
+    for (folder, entries) in folders {
+        let datasets: Vec<&str> = manifest
+            .datasets
+            .iter()
+            .filter(|(name, entry)| entry.place && plan::folder(manifest, name) == *folder)
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let own = match datasets.as_slice() {
+            [] => continue,
+            _ if *folder != manifest.data_dir => {
+                format!("keep the folders of other datasets out of {folder}")
+            }
+            [one] => format!("give {one} a folder of its own, as path = \"{one}\" in data.toml"),
+            [first, ..] => format!(
+                "give each a folder of its own, as path = \"{first}\" for {first} in data.toml"
+            ),
+        };
+        output.warn_with(
+            Warning::GitDatasetUnignored,
+            &format!(
+                "git sees the {} entries {} placed in {folder}/, more than a .gitignore names one by one, and `*` would hide your own files there too",
+                crate::units::grouped(*entries as u64),
+                crate::units::listed(&datasets, "and")
+            ),
+            &format!(
+                "to keep them out of git, {own}, where fetchloom's .gitignore needs no list; or add the line /{}/ to the project's .gitignore, which hides your own files in {folder}/ too",
+                escaped(folder)
+            ),
+        );
+    }
+}
+
 /// warns of each of `folders`, as [`unmarkable`] finds them: git sees the dataset's files.
-pub(super) fn warn_unmarkable(output: &Output, folders: &BTreeSet<String>) {
+fn warn_unmarkable(output: &Output, folders: &BTreeSet<String>) {
     for folder in folders {
         output.warn_with(
             Warning::GitDatasetUnignored,
@@ -688,9 +804,54 @@ pub(super) fn tell_made(output: &Output, made: &[(String, bool)], in_git: bool, 
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{TEXT, hiding_line, holds, names};
+    use super::{MOST_NAMED, TEXT, hiding_line, holds, names, settled};
+    use crate::cli::sync::Scope;
+    use crate::cli::sync::disk::Survey;
     use crate::digest;
-    use crate::place::Placer;
+    use crate::place::{Method, Placer};
+    use crate::project::Project;
+    use crate::project::manifest::Manifest;
+    use crate::project::state::{Look, Placed};
+
+    /// a folder the person shares, filled past what a marker names, settles with no marker of
+    /// fetchloom's, so a sync with nothing to do stays quick; one at the limit needs its marker.
+    #[test]
+    fn a_shared_folder_too_full_to_name_settles_with_no_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("data")).unwrap();
+        let project = Project::at(dir.path().to_path_buf());
+        let manifest = Manifest::parse("[datasets.many]\nref = \"x\"\npath = \".\"\n").unwrap();
+        for (count, quiet) in [(MOST_NAMED, false), (MOST_NAMED + 1, true)] {
+            let mut survey = Survey::read(
+                &project,
+                "data",
+                crate::threads::Threads::default(),
+                &crate::stop::Stop::default(),
+            )
+            .unwrap();
+            for at in 0..count {
+                let placed = Placed {
+                    dataset: "many".to_owned(),
+                    sha256: digest::sha256(b"1\n"),
+                    method: Method::Copy,
+                    look: Look {
+                        size: 2,
+                        modified: 1,
+                    },
+                    writable: false,
+                    checked: 0,
+                    adopted: false,
+                    unlinkable: false,
+                    racy_intact: std::sync::OnceLock::new(),
+                };
+                survey
+                    .state
+                    .files
+                    .insert(format!("data/f{at:04}.csv"), placed);
+            }
+            assert_eq!(settled(&manifest, &survey, &Scope::All), quiet, "{count}");
+        }
+    }
 
     /// a record names fetchloom's marker only while the file holds what the record says, in the
     /// form fetchloom writes, so a record that came with a copied state takes no other .gitignore.

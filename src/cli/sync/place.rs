@@ -76,6 +76,10 @@ pub(crate) struct Placement {
     /// keeps it for its own, and no run told yet where raw files go.
     #[serde(skip)]
     pub(crate) r_package: bool,
+    /// dataset folders the person shares that get no marker, as too full to name, which no run
+    /// told of yet, each with how many entries its datasets put there.
+    #[serde(skip)]
+    pub(crate) unnamed: Vec<(String, usize)>,
     /// the datasets the run places or replaces files of.
     #[serde(skip)]
     pub(crate) filled: BTreeSet<String>,
@@ -406,7 +410,23 @@ fn note_told(
     if placement.r_package {
         changed |= told.note(Once::RPackage, data);
     }
+    for (folder, _) in &placement.unnamed {
+        changed |= told.note(Once::Unnamed, folder);
+    }
     changed
+}
+
+/// the folders of `wanted` that `contents` gives no marker, as too full to name, that no run
+/// told of yet, as `state` records.
+fn untold_unnamed(
+    state: &State,
+    wanted: &BTreeSet<String>,
+    contents: &BTreeMap<String, mark::Content>,
+) -> Vec<(String, usize)> {
+    mark::unnamed(wanted, contents)
+        .into_iter()
+        .filter(|(folder, _)| !state.told.has(Once::Unnamed, folder))
+        .collect()
 }
 
 #[expect(
@@ -1034,6 +1054,7 @@ impl<'a> Placing<'a> {
         );
         let planned = mark::planned(&self.survey, &wanted, &contents);
         placement.marked = mark::would_make(&planned, &contents);
+        placement.unnamed = untold_unnamed(&self.survey.state, &wanted, &contents);
         placement.in_git = Project::repository(&self.project.root).is_some();
         placement.unmarkable = mark::unmarkable(
             &self.project.root,
@@ -1210,11 +1231,9 @@ impl<'a> Placing<'a> {
         // the state written ahead must not vouch for the size and time an edit kept
         survey.smudge_edited();
         let contents = mark::contents(manifest, &targets, (&survey.state, (&unknown, &waiting)));
-        let (to_mark, marking) = mark::to_write(
-            &mut survey,
-            &mark::wanted(manifest, &targets, &actions),
-            &contents,
-        );
+        let wanted_marks = mark::wanted(manifest, &targets, &actions);
+        placement.unnamed = untold_unnamed(&survey.state, &wanted_marks, &contents);
+        let (to_mark, marking) = mark::to_write(&mut survey, &wanted_marks, &contents);
         placement.unmarkable = mark::unmarkable(&project.root, manifest, &targets, &actions);
         write_ahead(
             project,

@@ -107,7 +107,7 @@ pub(super) fn tell(
     }
     warn_unreached(output, &placement.unreached);
     warn_restored(output, placement);
-    super::mark::warn_unmarkable(output, &placement.unmarkable);
+    super::mark::warn_unmarked(output, manifest, placement);
 }
 
 /// a warning for each file put back though no edit of this project's showed, saying where its
@@ -586,7 +586,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
             });
         }
     }
-    super::mark::warn_unmarkable(output, &placement.unmarkable);
+    super::mark::warn_unmarked(output, manifest, placement);
 }
 
 /// a line for each folder `folders` placed, or past a few dozen one line for the `datasets` in

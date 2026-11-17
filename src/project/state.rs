@@ -89,6 +89,9 @@ pub(crate) enum Once {
     Moved,
     /// a line of the project's .gitignore that hides the whole data folder: the line.
     Rule,
+    /// a folder the person shares with datasets that put more entries there than a marker names,
+    /// so git sees them: the folder.
+    Unnamed,
     /// an add into the data folder of an R package, which R keeps for its own datasets: the folder.
     RPackage,
 }
@@ -100,6 +103,7 @@ impl Once {
             Once::Refill => "refill",
             Once::Moved => "moved",
             Once::Rule => "rule",
+            Once::Unnamed => "unnamed",
             Once::RPackage => "r_package",
         }
     }
