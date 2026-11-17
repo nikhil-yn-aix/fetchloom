@@ -831,8 +831,9 @@ pub(super) fn tell_hiding_line(
 /// says once to a person at a terminal of the .gitignore line that keeps the data folder link at
 /// `link`, its path in the project, out of git, when no line of the project's .gitignore hides the
 /// link itself: git keeps a link as a file, which a line ending in `/`, as cookiecutter's `/data/`,
-/// never hides, so a commit takes it and each clone then refuses it. fetchloom never edits
-/// .gitignore. says whether the state changed.
+/// never hides, so a commit takes it and each clone then refuses it. no line untracks a link git
+/// has already, and telling which it is would take a run of git, so the hint names the command
+/// that does too. fetchloom never edits .gitignore or git's index. says whether the state changed.
 pub(super) fn tell_link_line(output: &Output, root: &Path, link: &str, state: &mut State) -> bool {
     if !output.watched_story() || output.json() {
         return false;
@@ -847,7 +848,11 @@ pub(super) fn tell_link_line(output: &Output, root: &Path, link: &str, state: &m
             "git sees {link}, the link fetchloom follows to the data folder, so a commit takes it and each clone of this project then refuses it"
         ),
         &format!(
-            "add the line {rule} to the project's .gitignore: a line ending in /, as {rule}/, hides folders alone, never a link. fetchloom never edits .gitignore"
+            "add the line {rule} to the project's .gitignore: a line ending in /, as {rule}/, hides folders alone, never a link. if git tracks it already, `{}` takes it out of git and leaves it where it is. fetchloom never edits .gitignore",
+            crate::suggested::git(
+                root,
+                &format!("rm --cached -- {}", crate::suggested::shell_word(link))
+            )
         ),
     );
     true

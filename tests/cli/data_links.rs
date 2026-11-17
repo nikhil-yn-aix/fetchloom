@@ -625,3 +625,45 @@ fn a_data_folder_on_another_disk_than_the_cache_moves_the_cache() -> Result {
     assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
     Ok(())
 }
+
+/// a data folder link git already tracks, as `git add -A` takes it, stays committed whatever
+/// .gitignore says, so the hint also names the command that takes it out of git and leaves it in
+/// place, with the link's name quoted for the shell.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_committed_data_link_is_told_how_to_leave_git() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir(&target)?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[project]\ndata_dir = \"my data\"\n",
+    )?;
+    link_folder(&target, &sandbox.work().join("my data"))?;
+    crate::merge::ok(&sandbox, &["add", "-A"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "linked"])?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let link = format!("{}/iris.csv", routes.url);
+    let Some(screen) = sandbox.on_a_terminal(&["add", &link, "--as", "iris"])? else {
+        return Ok(());
+    };
+    assert!(screen.contains("Added iris"), "{screen}");
+    assert!(
+        screen.contains(
+            "if git tracks it already, `git rm --cached -- \"my data\"` takes it out of git and leaves it where it is"
+        ),
+        "{screen}"
+    );
+    Ok(())
+}
