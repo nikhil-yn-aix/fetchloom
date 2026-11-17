@@ -540,51 +540,6 @@ fn a_recorded_link_pointed_at_a_populated_folder_is_refused() -> Result {
     Ok(())
 }
 
-/// git sees a data folder link itself, so a commit takes it and each clone then refuses it, and a
-/// line ending in /, as cookiecutter's /data/, hides folders alone. a person at a terminal is told
-/// once of the line that hides the link, /data; with that line there, nothing.
-#[cfg(target_os = "linux")]
-#[test]
-fn a_followed_link_git_sees_is_told_once() -> Result {
-    let told_line = "add the line /data to the project's .gitignore";
-    for (rules, told) in [("/data/\n", true), ("/data\n", false)] {
-        let sandbox = Sandbox::new()?;
-        if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
-            return Ok(());
-        }
-        fs::write(sandbox.work().join(".gitignore"), rules)?;
-        let scratch = sandbox.folder("scratch")?;
-        let target = scratch.join("project-data");
-        fs::create_dir(&target)?;
-        link_folder(&target, &sandbox.work().join("data"))?;
-        ok(&sandbox.run(&[
-            "settings",
-            "set",
-            "data_links",
-            &scratch.display().to_string(),
-        ])?)?;
-        let routes = Routes::start(vec![
-            ("/iris.csv".to_owned(), file(IRIS, "\"1\"")),
-            ("/wine.csv".to_owned(), file(b"wine\n", "\"2\"")),
-        ])?;
-        sandbox.allow(&routes.url);
-        let link = |name: &str| format!("{}/{name}.csv", routes.url);
-        let Some(screen) = sandbox.on_a_terminal(&["add", &link("iris"), "--as", "iris"])? else {
-            return Ok(());
-        };
-        assert!(screen.contains("Added iris"), "{rules}: {screen}");
-        assert_eq!(screen.contains(told_line), told, "{rules}: {screen}");
-        // git never looks behind a link, so no line of .gitignore hides the files there
-        assert!(!screen.contains("keeps all of data/"), "{rules}: {screen}");
-        let again = sandbox
-            .on_a_terminal(&["add", &link("wine"), "--as", "wine"])?
-            .unwrap_or_default();
-        assert!(again.contains("Added wine"), "{rules}: {again}");
-        assert!(!again.contains(told_line), "{rules}, said once: {again}");
-    }
-    Ok(())
-}
-
 /// a data folder linked onto a disk apart from the cache, as clusters keep the code and the cache
 /// in home and the data on scratch, gets copies. the warning names the cache and the data folder,
 /// and its help moves the cache onto the data folder's disk, never the project, whose code
@@ -629,7 +584,6 @@ fn a_data_folder_on_another_disk_than_the_cache_moves_the_cache() -> Result {
 /// a data folder link git already tracks, as `git add -A` takes it, stays committed whatever
 /// .gitignore says, so the hint also names the command that takes it out of git and leaves it in
 /// place, with the link's name quoted for the shell.
-#[cfg(target_os = "linux")]
 #[test]
 fn a_committed_data_link_is_told_how_to_leave_git() -> Result {
     let sandbox = Sandbox::new()?;
@@ -643,7 +597,9 @@ fn a_committed_data_link_is_told_how_to_leave_git() -> Result {
         sandbox.work().join("data.toml"),
         "[project]\ndata_dir = \"my data\"\n",
     )?;
-    link_folder(&target, &sandbox.work().join("my data"))?;
+    if link_folder(&target, &sandbox.work().join("my data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
     crate::merge::ok(&sandbox, &["add", "-A"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "linked"])?;
     ok(&sandbox.run(&[
@@ -655,15 +611,14 @@ fn a_committed_data_link_is_told_how_to_leave_git() -> Result {
     let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
     sandbox.allow(&routes.url);
     let link = format!("{}/iris.csv", routes.url);
-    let Some(screen) = sandbox.on_a_terminal(&["add", &link, "--as", "iris"])? else {
-        return Ok(());
-    };
-    assert!(screen.contains("Added iris"), "{screen}");
+    let added = sandbox.run(&["add", &link, "--as", "iris"])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
     assert!(
-        screen.contains(
+        stderr.contains(
             "if git tracks it already, `git rm --cached -- \"my data\"` takes it out of git and leaves it where it is"
         ),
-        "{screen}"
+        "{stderr}"
     );
     Ok(())
 }
@@ -942,5 +897,71 @@ fn a_folder_another_projects_marker_holds_is_refused() -> Result {
         "{stderr}"
     );
     assert_eq!(listing(&target)?, before);
+    Ok(())
+}
+
+/// git sees a data folder link itself, so a commit takes it and each clone then refuses it, and a
+/// line ending in /, as cookiecutter's /data/, hides folders alone. the line that hides the link,
+/// /data, is said once whatever the terminal, as a notebook runs fetchloom with none, and in --json
+/// as a warning of its kind; with that line there, nothing.
+#[test]
+fn a_followed_link_git_sees_is_told_once() -> Result {
+    for (rules, json) in [("/data/\n", false), ("/data/\n", true), ("/data\n", false)] {
+        let sandbox = Sandbox::new()?;
+        if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+            return Ok(());
+        }
+        fs::write(sandbox.work().join(".gitignore"), rules)?;
+        let scratch = sandbox.folder("scratch")?;
+        let target = scratch.join("project-data");
+        fs::create_dir(&target)?;
+        if link_folder(&target, &sandbox.work().join("data")).is_err() {
+            return crate::support::skipped("symlinks", "no symbolic link can be made here");
+        }
+        ok(&sandbox.run(&[
+            "settings",
+            "set",
+            "data_links",
+            &scratch.display().to_string(),
+        ])?)?;
+        let routes = Routes::start(vec![
+            ("/iris.csv".to_owned(), file(IRIS, "\"1\"")),
+            ("/wine.csv".to_owned(), file(b"wine\n", "\"2\"")),
+        ])?;
+        sandbox.allow(&routes.url);
+        // whether the add of `name` said the /data line, and the root line hiding data/
+        let told = |name: &str| -> Result<(bool, bool)> {
+            let link = format!("{}/{name}.csv", routes.url);
+            let mut args = vec!["add", &link, "--as", name];
+            if json {
+                args.insert(0, "--json");
+            }
+            let output = sandbox.run(&args)?;
+            let stderr = text(&output.stderr)?;
+            assert_eq!(output.status.code(), Some(0), "{name}: {stderr}");
+            if json {
+                let kinds = crate::support::kinds(&crate::support::json(&output)?)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                return Ok((
+                    kinds.iter().any(|kind| kind == "git.data_link_unignored"),
+                    kinds.iter().any(|kind| kind == "git.data_folder_ignored"),
+                ));
+            }
+            Ok((
+                stderr.contains("add the line /data to the project's .gitignore"),
+                stderr.contains("keeps all of data/"),
+            ))
+        };
+        let said = rules == "/data/\n";
+        // git never looks behind a link, so no line of .gitignore hides the files there
+        assert_eq!(told("iris")?, (said, false), "{rules}, json: {json}");
+        assert_eq!(
+            told("wine")?,
+            (false, false),
+            "{rules}, json: {json}, said once"
+        );
+    }
     Ok(())
 }

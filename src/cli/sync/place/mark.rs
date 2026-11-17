@@ -828,16 +828,14 @@ pub(super) fn tell_hiding_line(
     true
 }
 
-/// says once to a person at a terminal of the .gitignore line that keeps the data folder link at
-/// `link`, its path in the project, out of git, when no line of the project's .gitignore hides the
-/// link itself: git keeps a link as a file, which a line ending in `/`, as cookiecutter's `/data/`,
-/// never hides, so a commit takes it and each clone then refuses it. no line untracks a link git
-/// has already, and telling which it is would take a run of git, so the hint names the command
-/// that does too. fetchloom never edits .gitignore or git's index. says whether the state changed.
+/// says once of the .gitignore line that keeps the data folder link at `link`, its path in the
+/// project, out of git, when no line of the project's .gitignore hides the link itself: git keeps a
+/// link as a file, which a line ending in `/`, as cookiecutter's `/data/`, never hides, so a commit
+/// takes it and each clone then refuses it. a notebook runs fetchloom with no terminal, so it is
+/// said whatever the terminal. no line untracks a link git has already, and telling which it is
+/// would take a run of git, so the hint names the command that does too. fetchloom never edits
+/// .gitignore or git's index. says whether the state changed.
 pub(super) fn tell_link_line(output: &Output, root: &Path, link: &str, state: &mut State) -> bool {
-    if !output.watched_story() || output.json() {
-        return false;
-    }
     let rule = format!("/{}", gitignore_escaped(link));
     if link_hidden(root, link) || !state.told.note(Once::Link, &rule) {
         return false;
