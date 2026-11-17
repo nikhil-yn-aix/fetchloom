@@ -153,6 +153,9 @@ pub(super) struct Status {
     /// folder, so a person at a terminal reads the folder once.
     #[serde(skip)]
     gone: HashMap<String, String>,
+    /// each input of a dataset made from others, as it stands against the record of it.
+    #[serde(skip)]
+    lineage: Vec<crate::lineage::Judged>,
 }
 
 /// `status`, hashing every placed file for `verify`, as `--verify` asks, and failing with
@@ -169,6 +172,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
     status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
     warn_git(output, &project, lock.as_deref());
+    crate::lineage::tell(output, &status.lineage, true);
     let waiting: Vec<Waiting> = status.waiting.values().cloned().collect();
     super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
     list(output, &status);
@@ -300,6 +304,7 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     let (status, manifest, lock) = check(project, context.threads, &context.stop, None)?;
     let output = &context.output;
     warn_git(output, project, lock.as_deref());
+    crate::lineage::tell(output, &status.lineage, true);
     if !sum_up(output, &status) {
         return Ok(status);
     }
@@ -595,6 +600,7 @@ fn check(
         ..Status::default()
     };
     let cache = super::peek_cache()?;
+    status.lineage = crate::lineage::judge(&manifest, &lock, &cache);
     let mut survey = Survey::read(project, &manifest.data_dir, threads, stop)?;
     let manifest = dropped_here(&mut status, &manifest, &survey);
     status.unfinished = survey.leftovers().count();

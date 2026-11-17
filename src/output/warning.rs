@@ -44,6 +44,10 @@ pub(crate) enum Warning {
     CacheUnreadable,
     /// the project could not join the cache's list of projects, which gc keeps files for.
     CacheUnregistered,
+    /// a dataset may be stale: files of a dataset it was made from changed since it was pinned.
+    DerivedStale,
+    /// whether a dataset is stale cannot be told for one of the datasets it was made from.
+    DerivedUnchecked,
     /// a server sent a file compressed, which is kept as it came.
     DownloadEncoded,
     /// a server gave no name for a file.
@@ -170,6 +174,8 @@ impl Warning {
             Warning::CacheUnreadable => "cache.unreadable",
             Warning::CacheUnshared => "cache.unshared",
             Warning::CacheUnregistered => "cache.unregistered",
+            Warning::DerivedStale => "derived.stale",
+            Warning::DerivedUnchecked => "derived.unchecked",
             Warning::DownloadEncoded => "download.encoded",
             Warning::DownloadUnnamed => "download.unnamed",
             Warning::DownloadWebPage => "download.web_page",
@@ -259,6 +265,8 @@ mod tests {
             CacheUnreadable,
             CacheUnregistered,
             CacheUnshared,
+            DerivedStale,
+            DerivedUnchecked,
             DownloadEncoded,
             DownloadUnnamed,
             DownloadWebPage,

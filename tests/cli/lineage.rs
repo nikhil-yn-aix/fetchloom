@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::support::{Result, Routes, Sandbox, file, json, ok, sha256_hex, text};
+use crate::support::{Result, Routes, Sandbox, file, json, ok, sha256_hex, text, warning, zip_of};
 
 const PATH: &str = "/files/iris.csv";
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -56,6 +56,9 @@ fn read(sandbox: &Sandbox, name: &str) -> Result<String> {
 fn recorded(name: &str, tree: &str) -> String {
     format!("from = [\n  {{ name = \"{name}\", tree = \"{tree}\" }},\n]\n")
 }
+
+/// the stale warning a person reads for `processed` made from iris.
+const STALE: &str = "warning: processed may be stale: iris's files changed since processed was pinned from them\n  help: rerun your pipeline, then `fetchloom add <folder> --as processed`\n";
 
 /// writes data.toml, two datasets whose `from` lists name each other.
 fn circular(sandbox: &Sandbox) -> Result {
@@ -288,5 +291,380 @@ fn from_names_other_datasets_data_toml_has() -> Result {
     }
     let output = sandbox.run(&["add", &link, "--as", "other", "--no-sync", "--from", "iris"])?;
     assert_eq!(output.status.code(), Some(2));
+    Ok(())
+}
+
+#[test]
+fn status_lock_check_and_sync_each_say_once_that_an_output_may_be_stale() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_iris(&sandbox)?;
+    for args in [&["status"][..], &["lock", "--check"], &["sync"]] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(!stderr.contains("stale"), "{args:?}: {stderr}");
+    }
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        warning(&document, "derived.stale"),
+        &serde_json::Value::Null
+    );
+    iris_changed(&sandbox, &routes)?;
+    for args in [
+        &["status"][..],
+        &["lock", "--check"],
+        &["sync"],
+        &["status"],
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert_eq!(stderr.matches(STALE).count(), 1, "{args:?}: {stderr}");
+        assert_eq!(stderr.matches("stale").count(), 1, "{args:?}: {stderr}");
+    }
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let stale = warning(&document, "derived.stale");
+    assert_eq!(
+        stale,
+        &serde_json::json!({
+            "kind": "derived.stale",
+            "message": "processed may be stale: iris's files changed since processed was pinned from them",
+            "details": [],
+            "help": "rerun your pipeline, then `fetchloom add <folder> --as processed`",
+            "dataset": "processed",
+            "input": "iris",
+            "recorded": tree(&[("iris.csv", IRIS)]),
+            "current": tree(&[("iris.csv", NEWER)]),
+            "reason": "changed",
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn a_rerun_that_makes_the_same_files_ends_the_warning() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_iris(&sandbox)?;
+    iris_changed(&sandbox, &routes)?;
+    assert!(text(&sandbox.run(&["status"])?.stderr)?.contains(STALE));
+    ok(&sandbox.run(&["add", "../processed", "--as", "processed"])?)?;
+    let stderr = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(!stderr.contains("stale"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn only_the_files_an_input_gives_count_not_its_link_or_its_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_iris(&sandbox)?;
+    routes.change(vec![(
+        "/elsewhere/iris.csv".to_owned(),
+        file(IRIS, "\"v9\""),
+    )]);
+    let toml = read(&sandbox, "data.toml")?.replace(
+        &format!("ref = \"{}{PATH}\"\n", routes.url),
+        &format!(
+            "ref = \"{}/elsewhere/iris.csv\"\npath = \"flowers\"\ncopy = true\n",
+            routes.url
+        ),
+    );
+    assert!(toml.contains("elsewhere"), "{toml}");
+    fs::write(sandbox.work().join("data.toml"), toml)?;
+    ok(&sandbox.run(&["sync"])?)?;
+    for args in [&["status"][..], &["lock", "--check"], &["sync"]] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(!stderr.contains("stale"), "{args:?}: {stderr}");
+    }
+    Ok(())
+}
+
+/// what status, `lock --check` and sync say of `processed` once `change` has run on a project
+/// made from iris: the warning `--json status` gives, and whether `lock --check` says it too.
+fn unchecked(
+    change: impl FnOnce(&Sandbox, &Routes) -> Result,
+    check: bool,
+) -> Result<serde_json::Value> {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_iris(&sandbox)?;
+    change(&sandbox, &routes)?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let found = warning(&document, "derived.unchecked").clone();
+    let said = format!(
+        "warning: {}\n  help: {}\n",
+        found["message"].as_str().unwrap_or_default(),
+        found["help"].as_str().unwrap_or_default()
+    );
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    assert_eq!(status.matches(&said).count(), 1, "{status}");
+    if check {
+        let output = sandbox.run(&["lock", "--check"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert_eq!(stderr.matches(&said).count(), 1, "{stderr}");
+    }
+    // sync says only what it knows changed, never what it cannot tell
+    let synced = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(!synced.contains("cannot tell"), "{synced}");
+    assert!(!synced.contains("stale"), "{synced}");
+    Ok(found)
+}
+
+#[test]
+fn an_input_data_toml_no_longer_has_is_missing() -> Result {
+    let found = unchecked(|sandbox, _| ok(&sandbox.run(&["remove", "iris"])?), true)?;
+    assert_eq!(
+        found,
+        serde_json::json!({
+            "kind": "derived.unchecked",
+            "message": "cannot tell whether processed is stale: data.toml has no dataset iris",
+            "details": [],
+            "help": "add iris back, or take it out of processed's from in data.toml",
+            "dataset": "processed",
+            "input": "iris",
+            "recorded": tree(&[("iris.csv", IRIS)]),
+            "current": null,
+            "reason": "missing",
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn an_input_renamed_in_data_toml_is_found_by_its_files() -> Result {
+    let renamed = |sandbox: &Sandbox, _: &Routes| {
+        let toml = read(sandbox, "data.toml")?.replace("[datasets.iris]", "[datasets.flowers]");
+        fs::write(sandbox.work().join("data.toml"), toml)?;
+        ok(&sandbox.run(&["lock"])?)
+    };
+    let found = unchecked(renamed, true)?;
+    let then = tree(&[("iris.csv", IRIS)]);
+    assert_eq!(
+        found,
+        serde_json::json!({
+            "kind": "derived.unchecked",
+            "message": "cannot tell whether processed is stale: data.toml has no dataset iris, though flowers has the files iris had",
+            "details": ["flowers"],
+            "help": "record the new name with `fetchloom add <folder> --as processed --from flowers`",
+            "dataset": "processed",
+            "input": "iris",
+            "recorded": then,
+            "current": then,
+            "reason": "renamed",
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn an_input_data_lock_does_not_pin_yet_is_unlocked() -> Result {
+    let unpinned = |sandbox: &Sandbox, routes: &Routes| {
+        routes.change(vec![(
+            "/files/extra.csv".to_owned(),
+            file(b"x\n", "\"e1\""),
+        )]);
+        let toml = read(sandbox, "data.toml")?
+            .replace("from = [\"iris\"]", "from = [\"iris\", \"extra\"]");
+        let toml = format!(
+            "{toml}\n[datasets.extra]\nref = \"{}/files/extra.csv\"\n",
+            routes.url
+        );
+        fs::write(sandbox.work().join("data.toml"), toml)?;
+        Ok(())
+    };
+    let found = unchecked(unpinned, false)?;
+    assert_eq!(
+        found,
+        serde_json::json!({
+            "kind": "derived.unchecked",
+            "message": "cannot tell whether processed is stale: data.lock does not pin extra's files yet",
+            "details": [],
+            "help": "`fetchloom sync` pins and places them",
+            "dataset": "processed",
+            "input": "extra",
+            "recorded": null,
+            "current": null,
+            "reason": "unlocked",
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn an_input_without_a_record_is_unresolved() -> Result {
+    let unrecorded = |sandbox: &Sandbox, _: &Routes| {
+        let penguins = sandbox.folder("penguins")?;
+        fs::write(penguins.join("penguins.csv"), b"species\nadelie\n")?;
+        ok(&sandbox.run(&["add", "../penguins"])?)?;
+        let toml = read(sandbox, "data.toml")?
+            .replace("from = [\"iris\"]", "from = [\"iris\", \"penguins\"]");
+        fs::write(sandbox.work().join("data.toml"), toml)?;
+        Ok(())
+    };
+    let found = unchecked(unrecorded, true)?;
+    assert_eq!(
+        found,
+        serde_json::json!({
+            "kind": "derived.unchecked",
+            "message": "cannot tell whether processed is stale: data.lock has no record of penguins's files from when processed was pinned",
+            "details": [],
+            "help": "if processed is made from penguins's files as they are now, `fetchloom add <folder> --as processed` records them",
+            "dataset": "processed",
+            "input": "penguins",
+            "recorded": null,
+            "current": tree(&[("penguins.csv", b"species\nadelie\n")]),
+            "reason": "unresolved",
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn an_input_whose_files_were_not_known_is_unresolved() -> Result {
+    let unknown = |sandbox: &Sandbox, _: &Routes| {
+        let then = tree(&[("iris.csv", IRIS)]);
+        let lock = read(sandbox, "data.lock")?.replace(&then, "unknown");
+        fs::write(sandbox.work().join("data.lock"), lock)?;
+        Ok(())
+    };
+    let found = unchecked(unknown, true)?;
+    assert_eq!(
+        found["message"],
+        "cannot tell whether processed is stale: iris's files were not known on the machine that pinned processed"
+    );
+    assert_eq!(found["recorded"], "unknown");
+    assert_eq!(found["current"], tree(&[("iris.csv", IRIS)]));
+    assert_eq!(found["reason"], "unresolved");
+    Ok(())
+}
+
+/// a project whose iris is a zip of two files from a server, with `processed` made from it.
+fn made_from_a_zip(sandbox: &Sandbox) -> Result<Routes> {
+    let zip = zip_of(&[("iris/a.csv", b"a\n"), ("iris/b.csv", b"b\n")])?;
+    let routes = Routes::start(vec![("/files/iris.zip".to_owned(), file(&zip, "\"z1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/iris.zip", routes.url)])?)?;
+    output(sandbox)?;
+    ok(&sandbox.run(&["add", "../processed", "--as", "processed", "--from", "iris"])?)?;
+    Ok(routes)
+}
+
+#[test]
+fn a_members_table_that_keeps_other_files_changes_what_a_pipeline_saw() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _routes = made_from_a_zip(&sandbox)?;
+    let both = tree(&[("a.csv", b"a\n"), ("b.csv", b"b\n")]);
+    assert!(read(&sandbox, "data.lock")?.contains(&recorded("iris", &both)));
+    let toml = format!(
+        "{}\n[datasets.iris.members.\"iris.zip\"]\nselect = [\"iris/a.csv\"]\n",
+        read(&sandbox, "data.toml")?
+    );
+    fs::write(sandbox.work().join("data.toml"), toml)?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let stale = warning(&document, "derived.stale");
+    assert_eq!(stale["recorded"], both.as_str());
+    assert_eq!(stale["current"], tree(&[("a.csv", b"a\n")]).as_str());
+    Ok(())
+}
+
+#[test]
+fn an_archive_never_unpacked_on_this_machine_leaves_its_input_unresolved() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _routes = made_from_a_zip(&sandbox)?;
+    let output = sandbox
+        .command(&["--json", "status"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("other-cache")?)
+        .output()?;
+    let document = json(&output)?;
+    let found = warning(&document, "derived.unchecked");
+    assert_eq!(
+        found["message"],
+        "cannot tell whether processed is stale: this machine does not know iris's files"
+    );
+    assert_eq!(found["help"], "`fetchloom sync iris` brings them");
+    assert_eq!(found["current"], "unknown");
+    assert_eq!(found["reason"], "unresolved");
+    assert_eq!(
+        warning(&document, "derived.stale"),
+        &serde_json::Value::Null
+    );
+    Ok(())
+}
+
+#[test]
+fn staleness_is_direct_only() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_iris(&sandbox)?;
+    let summary = sandbox.folder("summary")?;
+    fs::write(summary.join("summary.txt"), b"1 species\n")?;
+    let added = sandbox.run(&[
+        "add",
+        "../summary",
+        "--as",
+        "summary",
+        "--from",
+        "processed",
+    ])?;
+    ok(&added)?;
+    iris_changed(&sandbox, &routes)?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let stale: Vec<&str> = document["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|warning| warning["kind"] == "derived.stale")
+        .filter_map(|warning| warning["dataset"].as_str())
+        .collect();
+    assert_eq!(stale, ["processed"], "summary's own input did not change");
+    Ok(())
+}
+
+#[test]
+fn inputs_that_changed_together_make_one_line_and_a_warning_each() -> Result {
+    let sandbox = Sandbox::new()?;
+    let penguins = "/files/penguins.csv";
+    let routes = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        (penguins.to_owned(), file(b"species\nadelie\n", "\"p1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    for path in [PATH, penguins] {
+        ok(&sandbox.run(&["add", &format!("{}{path}", routes.url)])?)?;
+    }
+    output(&sandbox)?;
+    let args = [
+        "add",
+        "../processed",
+        "--as",
+        "processed",
+        "--from",
+        "penguins",
+        "--from",
+        "iris",
+    ];
+    ok(&sandbox.run(&args)?)?;
+    assert!(read(&sandbox, "data.toml")?.contains("from = [\"penguins\", \"iris\"]\n"));
+    routes.change(vec![
+        (PATH.to_owned(), file(NEWER, "\"v2\"")),
+        (penguins.to_owned(), file(b"species\ngentoo\n", "\"p2\"")),
+    ]);
+    ok(&sandbox.run(&["lock", "--upgrade"])?)?;
+    let stderr = text(&sandbox.run(&["status"])?.stderr)?;
+    assert_eq!(
+        stderr.matches("warning: processed may be stale: penguins's and iris's files changed since processed was pinned from them\n").count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("stale").count(), 1, "{stderr}");
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let inputs: Vec<&str> = document["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|warning| warning["kind"] == "derived.stale")
+        .filter_map(|warning| warning["input"].as_str())
+        .collect();
+    assert_eq!(inputs, ["penguins", "iris"], "in the order from names them");
     Ok(())
 }

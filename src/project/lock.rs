@@ -435,7 +435,7 @@ pub(crate) struct Recorded {
 }
 
 /// what data.lock writes for a tree that was not known.
-const UNKNOWN: &str = "unknown";
+pub(crate) const UNKNOWN: &str = "unknown";
 
 impl Recorded {
     /// the tree as data.lock writes it.

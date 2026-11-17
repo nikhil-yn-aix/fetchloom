@@ -207,13 +207,15 @@ enum DocumentResult<'a, T> {
 }
 
 /// a warning as `--json` lists it: its kind, what it says, the paths or names it is about, and
-/// what to do, as an error's are.
+/// what to do, as an error's are, and the fields some kinds add for scripts, beside them.
 #[derive(Clone, Debug, Serialize)]
 struct Warned {
     kind: &'static str,
     message: String,
     details: Vec<String>,
     help: Option<String>,
+    #[serde(flatten)]
+    facts: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Warned {
@@ -477,6 +479,30 @@ impl Output {
         help: Option<&str>,
         details: impl IntoIterator<Item = impl std::fmt::Display>,
     ) {
+        self.warn_each(kind, text, help, details, vec![serde_json::Map::new()]);
+    }
+
+    /// a warning a person reads once, which `--json` lists once for each of `facts`, with its
+    /// fields beside the kind: a dataset said once, with a warning for each input of it.
+    pub(crate) fn warn_facts(
+        &self,
+        kind: Warning,
+        text: &str,
+        help: &str,
+        details: &[String],
+        facts: Vec<serde_json::Map<String, serde_json::Value>>,
+    ) {
+        self.warn_each(kind, text, Some(help), details, facts);
+    }
+
+    fn warn_each(
+        &self,
+        kind: Warning,
+        text: &str,
+        help: Option<&str>,
+        details: impl IntoIterator<Item = impl std::fmt::Display>,
+        facts: Vec<serde_json::Map<String, serde_json::Value>>,
+    ) {
         // a name no command here can hold safely is told on a line of its own, once for the
         // message, its details and its help, by one placeholder in all of them
         let details: Vec<String> = details
@@ -497,15 +523,17 @@ impl Output {
         let help = help.map(&mut place);
         let details: Vec<String> = details.iter().map(|detail| place(detail)).collect();
         let text = text.as_str();
+        let details: Vec<String> = details.into_iter().chain(named.iter().cloned()).collect();
         self.warnings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(Warned {
+            .extend(facts.into_iter().map(|facts| Warned {
                 kind: kind.name(),
                 message: text.to_owned(),
-                details: details.into_iter().chain(named.iter().cloned()).collect(),
+                details: details.clone(),
                 help: help.clone(),
-            });
+                facts,
+            }));
         // a warning is about the data, as a kept edit is, so -q keeps it as it keeps errors
         if self.tells(Level::Quiet) {
             let yellow = toned(self.style.color, Tone::Warn);

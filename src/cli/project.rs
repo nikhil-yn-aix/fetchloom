@@ -165,7 +165,11 @@ fn lists_gone(root: &Path) -> bool {
 /// `sync`, failing with `--strict` when the data asked for is not ready once it is done.
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let strict = args.strict.then(|| args.names.clone());
+    let dry_run = args.dry.dry_run;
     let (report, closing) = sync_as_asked(context, args).await?;
+    if !dry_run {
+        tell_stale(context, &report.project);
+    }
     tell_waiting(
         &context.output,
         &report.waiting,
@@ -188,6 +192,42 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     }
     ready.map_err(|error| error.with_report(&report))?;
     Ok(report)
+}
+
+/// says, once a sync is done, which datasets of the project at `root` may be stale, as their
+/// inputs' files changed since they were pinned from them; a data.toml that names no `from` costs
+/// one read. what a sync cannot check is left to status and `lock --check`.
+fn tell_stale(context: &Context, root: &Path) {
+    let project = Project {
+        root: root.to_path_buf(),
+    };
+    let Ok(text) = project.manifest_text() else {
+        return;
+    };
+    if !text.contains("from") {
+        return;
+    }
+    // the sync is done and stands, so a project changed meanwhile only goes unjudged
+    let Ok(manifest) = Project::parse_manifest(&text) else {
+        return;
+    };
+    let made: BTreeSet<&str> = manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| !entry.from.is_empty())
+        .flat_map(|(name, entry)| entry.from.iter().chain([name]))
+        .map(String::as_str)
+        .collect();
+    if made.is_empty() {
+        return;
+    }
+    let (Ok(Some((lock, _))), Ok(cache)) =
+        (project.lock_only(&|name| made.contains(name)), peek_cache())
+    else {
+        return;
+    };
+    let judged = crate::lineage::judge(&manifest, &lock, &cache);
+    crate::lineage::tell(&context.output, &judged, false);
 }
 
 /// the sync `args` asks for, and its last lines, which a dry run tells itself.
@@ -809,6 +849,10 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let old = project.lock()?;
     if args.check {
         let report = check(&project, &manifest, old.as_ref(), &Scope::All)?;
+        if let Some(old) = &old {
+            let judged = crate::lineage::judge(&manifest, old, &peek_cache()?);
+            crate::lineage::tell(&context.output, &judged, true);
+        }
         context.output.done("Ok", "data.lock matches data.toml");
         return Ok(report);
     }
