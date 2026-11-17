@@ -126,13 +126,25 @@ pub(super) struct Loop<'a> {
     verifies: bool,
     /// whether the run ends telling the datasets that may be stale, as a sync does.
     pub(super) judges: bool,
-    /// whether relocking may write a kept pin's tree anew, which `sync --locked` leaves be.
-    refreshes: bool,
+    /// the kept pins whose tree relocking finds again.
+    refresh: Refresh,
     /// what relocking told ahead and fetched, which placing's downloads finish telling.
     ahead: Mutex<Option<Ahead>>,
     /// the files of pins by what their sources state that relocking offline could not fill, which
     /// the run's refusal names with every other file it lacks.
     unfilled: Mutex<Vec<fill::Unfilled>>,
+}
+
+/// the kept pins whose tree relocking finds again; a pin made again always gets its own.
+#[derive(Clone, Copy)]
+enum Refresh {
+    /// none, as `sync --locked` asks.
+    Nothing,
+    /// each of archives a `from` names or with a tree, as its members table may have changed,
+    /// and each of plain files a `from` names that has none yet: a kept pin's files are the same.
+    Changed,
+    /// each a `from` names too, and each of archives with a tree, as `lock` asks.
+    Inputs,
 }
 
 /// downloads a run told before its first batch: the hashes placing downloads later, and what
@@ -176,7 +188,7 @@ impl<'a> Loop<'a> {
             fills: false,
             verifies: false,
             judges: false,
-            refreshes: true,
+            refresh: Refresh::Changed,
             ahead: Mutex::default(),
             unfilled: Mutex::default(),
         }
@@ -191,7 +203,16 @@ impl<'a> Loop<'a> {
     /// relocking keeps each kept pin's tree as data.lock has it, as `sync --locked` asks, whose
     /// data.lock changes only as data.toml asks.
     pub(super) fn keeping_trees(mut self, keep: bool) -> Self {
-        self.refreshes = !keep;
+        if keep {
+            self.refresh = Refresh::Nothing;
+        }
+        self
+    }
+
+    /// relocking finds again the tree of each pin a `from` names, as `lock` mends one a hand
+    /// changed.
+    pub(super) fn mending_trees(mut self) -> Self {
+        self.refresh = Refresh::Inputs;
         self
     }
 
@@ -866,10 +887,8 @@ impl<'a> Loop<'a> {
     }
 
     /// writes in `lock` each dataset's tree as this machine knows it. a pin made again gets its
-    /// own, or keeps its old one while its files are the same. a kept pin keeps its line, but for
-    /// one a `from` names and one of archives with a line, whose members tables may have changed:
-    /// those are checked, unless the run keeps trees. a kept pin whose line changes is written and
-    /// told.
+    /// own, or keeps its old one while its files are the same; a kept pin keeps its line, but for
+    /// those [`Refresh`] finds again. a kept pin whose line changes is written and told.
     fn trees(&self, manifest: &Manifest, lock: &mut Lock, before: &mut Before) {
         let named: BTreeSet<&str> = manifest
             .datasets
@@ -882,10 +901,15 @@ impl<'a> Loop<'a> {
         };
         for (index, kept) in before.kept.clone().into_iter().enumerate() {
             let locked = &lock.datasets[index];
+            let input = named.contains(locked.name.as_str());
             let archives = locked.files.iter().any(|file| file.unpacks_to.is_some());
-            let checked =
-                named.contains(locked.name.as_str()) || (archives && locked.tree.is_some());
-            if kept && !(checked && self.refreshes) {
+            let checked = match self.refresh {
+                Refresh::Nothing => false,
+                Refresh::Changed if archives => input || locked.tree.is_some(),
+                Refresh::Changed => input && locked.tree.is_none(),
+                Refresh::Inputs => input || (archives && locked.tree.is_some()),
+            };
+            if kept && !checked {
                 continue;
             }
             let tree = found(locked);

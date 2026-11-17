@@ -351,8 +351,9 @@ fn status_lock_check_and_sync_each_say_once_that_an_output_may_be_stale() -> Res
 }
 
 /// what each way of syncing says, once iris changed since `processed` was pinned from it in a
-/// project [`made`] with `from`, with how many times it read data.toml and data.lock.
-fn synced_each_way(sandbox: &Sandbox, from: &[&str]) -> Result<Vec<(String, [usize; 2])>> {
+/// project [`made`] with `from`, with how many times it read data.toml and data.lock and found a
+/// dataset's tree.
+fn synced_each_way(sandbox: &Sandbox, from: &[&str]) -> Result<Vec<(String, [usize; 3])>> {
     let routes = made(sandbox, from)?;
     iris_changed(sandbox, &routes)?;
     let placed = sandbox
@@ -386,7 +387,7 @@ fn synced_each_way(sandbox: &Sandbox, from: &[&str]) -> Result<Vec<(String, [usi
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
         let events: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&trace)?)?;
-        let reads = ["read_manifest", "read_lock"].map(|name| {
+        let reads = ["read_manifest", "read_lock", "tree"].map(|name| {
             events
                 .iter()
                 .filter(|event| event["ph"] == "B" && event["name"] == name)
@@ -407,18 +408,20 @@ fn each_way_of_syncing_says_once_that_an_output_may_be_stale() -> Result {
 }
 
 #[test]
-fn a_from_costs_a_sync_no_second_read_of_data_toml_or_data_lock() -> Result {
+fn a_from_costs_a_sync_no_second_read_and_no_tree_to_find() -> Result {
     let made_from = Sandbox::new()?;
     let without = Sandbox::new()?;
     let made_from = synced_each_way(&made_from, &["--from", "iris"])?;
     let without = synced_each_way(&without, &[])?;
-    let reads = |said: &[(String, [usize; 2])], which: usize| -> Vec<usize> {
+    let reads = |said: &[(String, [usize; 3])], which: usize| -> Vec<usize> {
         said.iter().map(|(_, reads)| reads[which]).collect()
     };
     // a data.toml with a `from` is always parsed, where a settled sync may read a plain one
     // without its parser
     assert_eq!(reads(&made_from, 0), [1; 7]);
     assert_eq!(reads(&made_from, 1), reads(&without, 1));
+    // iris's tree is the line data.lock gives it, and its plain files keep it while kept
+    assert_eq!(reads(&made_from, 2), [0; 7]);
     Ok(())
 }
 

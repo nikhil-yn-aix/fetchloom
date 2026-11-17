@@ -891,7 +891,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     if args.dry.dry_run {
         return preview_lock(context, &project, &manifest, old, &upgrade).await;
     }
-    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?);
+    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?).mending_trees();
     let (lock, before) = work
         .relock(&manifest, old, &upgrade, Vec::new())
         .await

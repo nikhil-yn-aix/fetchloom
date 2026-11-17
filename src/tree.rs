@@ -45,6 +45,7 @@ pub(crate) fn identity<'a>(files: impl IntoIterator<Item = (&'a str, u64, Sha256
 /// the identity of `locked`'s files as `entry`'s members tables keep them, or none when this
 /// machine cannot tell: an archive it never unpacked, or members tables that do not fit the pin.
 pub(crate) fn effective(entry: &Entry, locked: &Locked, cache: &Cache) -> Option<Sha256> {
+    let _span = tracing::debug_span!("tree").entered();
     effective_with(entry, locked, &|archive| archive.recorded(cache))
 }
 
