@@ -22,7 +22,7 @@ use std::process::Output;
 use crate::support::{Result, Routes, Sandbox, file, text, zip_of};
 
 /// what fetchloom, or a tool it might start, could look for by name.
-const TOOLS: [&str; 30] = [
+const TOOLS: [&str; 31] = [
     "git",
     "sh",
     "bash",
@@ -39,6 +39,7 @@ const TOOLS: [&str; 30] = [
     "tar",
     "unzip",
     "gzip",
+    "bzip2",
     "xz",
     "zstd",
     "7z",
@@ -267,6 +268,14 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
             format!("{SHELL_WORDS}{SHELL_QUERY}"),
             file(b"words\n", "\"3\""),
         ),
+        (
+            "/reads.csv.gz".to_owned(),
+            file(&crate::decompress::gz(b"r\n")?, "\"4\""),
+        ),
+        (
+            "/notes.txt.bz2".to_owned(),
+            file(&crate::decompress::bz2(b"n\n")?, "\"5\""),
+        ),
     ])?;
     sandbox.allow(&routes.url);
     let Some(weird) = clone_with_shell_words(&sandbox, &routes)? else {
@@ -289,6 +298,7 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
         &["add", &format!("{}/late.zip", routes.url), "--as", "late"],
     )?;
     assert_eq!(fs::read(work.join("data/late/b.csv"))?, b"b\n");
+    decompressing(&sandbox, &planted, &routes)?;
     let mirror = sandbox.folder("mirror")?.display().to_string();
     let got = sandbox.folder("got")?.display().to_string();
     let link = format!("{}/iris.csv", routes.url);
@@ -332,6 +342,34 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
     // a search reaches sites no test may ask, so it is run offline, where it fails
     planted.run_in(&sandbox, &work, &["--offline", "search", "iris"])?;
     in_folders_with_shell_words(&sandbox, &weird)
+}
+
+/// a single compressed file added with `--decompress`, and a sync that decompresses what data.toml
+/// asks of it, each decoded by fetchloom itself.
+fn decompressing(sandbox: &Sandbox, planted: &Planted, routes: &Routes) -> Result {
+    let work = sandbox.work();
+    planted.ok(
+        sandbox,
+        &[
+            "add",
+            &format!("{}/reads.csv.gz", routes.url),
+            "--decompress",
+            "--as",
+            "reads",
+        ],
+    )?;
+    assert_eq!(fs::read(work.join("data/reads/reads.csv"))?, b"r\n");
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    fs::write(
+        work.join("data.toml"),
+        format!(
+            "{manifest}\n[datasets.notes]\nref = \"{}/notes.txt.bz2\"\ndecompress = true\n",
+            routes.url
+        ),
+    )?;
+    planted.ok(sandbox, &["sync", "notes"])?;
+    assert_eq!(fs::read(work.join("data/notes/notes.txt"))?, b"n\n");
+    Ok(())
 }
 
 /// a project, and a cache, in folders whose names a shell would act on, each project folder with

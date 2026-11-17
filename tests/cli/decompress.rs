@@ -12,13 +12,13 @@ const CSV: &[u8] = b"sepal,petal\n5.1,1.4\n4.9,1.4\n";
 
 const KEEP_PACKED: &str = "keep the file packed with decompress = false on its dataset in data.toml, or add it without --decompress";
 
-fn gz(bytes: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn gz(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(bytes)?;
     Ok(encoder.finish()?)
 }
 
-fn bz2(bytes: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn bz2(bytes: &[u8]) -> Result<Vec<u8>> {
     let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
     encoder.write_all(bytes)?;
     Ok(encoder.finish()?)
