@@ -1671,6 +1671,28 @@ fn a_refusing_address_refuses_each_connection() -> Result {
     Ok(())
 }
 
+/// linux gives a connect, as its source port, a port another connection uses when the pair of
+/// addresses differs, so a connect to that port can reach itself and read its own request back.
+/// it picks near a start that moves at random after each connect, so three fresh addresses,
+/// tried 30,000 times each, reach such a port almost surely.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refusing_address_never_connects_to_itself() -> Result {
+    for _ in 0..3 {
+        let refusing = Refusing::new()?;
+        for attempt in 1..=30_000 {
+            let connected = TcpStream::connect(refusing.address);
+            assert!(
+                connected
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::ConnectionRefused),
+                "attempt {attempt}: {connected:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn dropping_a_server_closes_a_connection_waiting_for_a_request() -> Result {
     let server = Server::start("/", vec![file(b"ok", "\"v1\"")])?;
