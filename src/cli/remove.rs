@@ -66,9 +66,12 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         open_cache()?
     };
     let stop = &context.stop;
-    let survey = Survey::read(&project, &Folders::of(&kept), context.threads, stop)?;
+    let folders = Folders::of(&kept);
+    let survey = Survey::read(&project, &folders, context.threads, stop)?;
     let unrecorded = unrecorded(&survey, &gone, &names);
-    let placing = place::Placing::new(&project, &kept, &lock, &cache, false, &Scope::All, survey)?;
+    let mut placing =
+        place::Placing::new(&project, &kept, &lock, &cache, false, &Scope::All, survey)?;
+    placing.unmark_removed(unlisted_outputs(&gone, &folders));
     if dry_run {
         let outcome = previewed(context, &placing, &kept, &listed, &unrecorded);
         return Ok(Report::dry(project.root, names, outcome));
@@ -105,6 +108,15 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         placement: Some(placement),
         ..Report::default()
     })
+}
+
+/// the folders of the outputs of `gone` that none of `folders`, those the removal lists, holds.
+fn unlisted_outputs(gone: &Manifest, folders: &Folders) -> Vec<String> {
+    gone.datasets
+        .values()
+        .filter_map(|entry| entry.at.clone())
+        .filter(|at| folders.holding(at).is_none())
+        .collect()
 }
 
 /// what the removal of `listed` would change, told as the removal tells it.

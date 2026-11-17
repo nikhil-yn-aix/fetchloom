@@ -3,12 +3,14 @@
 //! cloned into the cache from that read, which is what gets pinned; they stay the author's, never
 //! replaced by links, so the pipeline's next run writes over them.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use super::super::add::{AS, AddProject, free_name, from_here, render_add, sync_add, usable};
 use super::super::args::Add;
-use super::super::project::{Report, dry_run_done};
-use super::super::sync::place::tell_marked;
+use super::super::project::{Outcome, Report, dry_run_done};
+use super::super::sync::disk;
+use super::super::sync::place::{Placement, tell_marked};
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
 use super::{
@@ -20,7 +22,7 @@ use crate::error::{Error, Kind};
 use crate::project::Project;
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, Source};
-use crate::project::state::Placed;
+use crate::project::state::{Placed, State};
 use crate::stop::Stop;
 use crate::{name, place, plan, units};
 
@@ -38,13 +40,15 @@ pub(super) fn at_of(root: &Path, start: &Path) -> Option<String> {
 }
 
 /// a folder read to be pinned as an output: its name, data.toml's table if it has one, its folder
-/// as data.toml names it, its patterns, what a walk found there and the cache.
+/// as data.toml names it, its patterns, what a walk found there, the markers it left out and the
+/// cache.
 struct Read<'m> {
     name: String,
     entry: Option<&'m manifest::Entry>,
     at: String,
     source: Source,
     walked: Walked,
+    markers: HashSet<String>,
     cache: Cache,
 }
 
@@ -70,18 +74,19 @@ pub(super) async fn pin_held(
         at,
         source,
         walked,
+        markers,
         cache,
     } = read;
     let pin = entry.and(old.as_ref()).and_then(|lock| lock.get(&name));
     let net = std::sync::Arc::new(context.net());
     if args.check || args.dry.dry_run {
         let work = Loop::new(context, project, net, cache).adding(&name);
-        let read = (&walked, start, &source);
+        let read = (&walked, start, &source, &markers);
         return compared(&work, read, (&name, shown, &at), pin, args.check);
     }
     room(context, &cache, &walked, shown)?;
     let copied = into_cache(context, &cache, &walked, &|| {
-        reread(context, &walked, (start, shown), &source)
+        reread(context, &walked, (start, shown), &source, &markers)
     })?;
     let told = read_line(&walked, copied.cloned, shown);
     let changes = pin.map(|pin| Changes::of(&copied.files, &pin.files));
@@ -120,33 +125,9 @@ pub(super) async fn pin_held(
             (outcome, names.to_vec())
         }
         (None, _) => {
-            let text = adding.text.as_deref().unwrap_or_default();
-            let patterns = |globs: &[crate::glob::Glob]| -> Vec<String> {
-                globs.iter().map(|glob| glob.as_str().to_owned()).collect()
-            };
-            let (select, exclude) = (patterns(&source.select), patterns(&source.exclude));
-            let updated = manifest::with_output(text, &name, &at, &select, &exclude)?;
-            let manifest = Manifest::parse(&updated)?;
-            let given = vec![Given::Locked(locked)];
-            let outcome = sync_add(
-                &work,
-                adding,
-                &manifest,
-                Some(&updated),
-                old,
-                (&names, given),
-            )
-            .await?;
-            output.step("Imported", &format!("{name} · {told}"));
-            let has_files = outcome.placed.planned.contains(&name);
-            render_add(
-                &work,
-                &manifest,
-                (&name, has_files),
-                here,
-                (starting, &outcome.placed),
-                (&[], None),
-            );
+            let new = (name.as_str(), at.as_str(), &source);
+            let outcome =
+                pin_new(&work, adding, new, (locked, old), (&told, here, starting)).await?;
             (outcome, names.to_vec())
         }
     };
@@ -157,6 +138,47 @@ pub(super) async fn pin_held(
         placement: Some(outcome.placed),
         ..Report::default()
     })
+}
+
+/// pins `locked`, the new output `name` at `at` with `source`'s patterns, writing its table into
+/// data.toml, and tells it as an add of the project `starting` does, `told` its read.
+async fn pin_new(
+    work: &Loop<'_>,
+    adding: &AddProject,
+    (name, at, source): (&str, &str, &Source),
+    (locked, old): (Locked, Option<Lock>),
+    (told, here, starting): (&str, &Path, bool),
+) -> Result<Outcome<Placement>, Error> {
+    let text = adding.text.as_deref().unwrap_or_default();
+    let patterns = |globs: &[crate::glob::Glob]| -> Vec<String> {
+        globs.iter().map(|glob| glob.as_str().to_owned()).collect()
+    };
+    let (select, exclude) = (patterns(&source.select), patterns(&source.exclude));
+    let updated = manifest::with_output(text, name, at, &select, &exclude)?;
+    let manifest = Manifest::parse(&updated)?;
+    let names = [name.to_owned()];
+    let given = vec![Given::Locked(locked)];
+    let outcome = sync_add(
+        work,
+        adding,
+        &manifest,
+        Some(&updated),
+        old,
+        (&names, given),
+    )
+    .await?;
+    let output = &work.context.output;
+    output.step("Imported", &format!("{name} · {told}"));
+    let has_files = outcome.placed.planned.contains(name);
+    render_add(
+        work,
+        &manifest,
+        (name, has_files),
+        here,
+        (starting, &outcome.placed),
+        (&[], None),
+    );
+    Ok(outcome)
 }
 
 /// the folder `start`, `shown` as typed, at `at`, checked and walked for `args`: refused when it
@@ -210,17 +232,16 @@ fn read<'m>(
         &context.stop,
     )?;
     // a marker is named .gitignore, so the state is read only for a folder that holds one
-    if walked
+    let markers = if walked
         .files
         .iter()
         .any(|file| file.path.ends_with(".gitignore"))
     {
-        let (state, _) = adding.project.state();
-        let marker = |file: &Found| {
-            super::super::sync::place::marker(&state, &name::joined(&at, &file.path))
-        };
-        walked.files.retain(|file| !marker(file));
-    }
+        markers_in(&adding.project.state().0, &at)
+    } else {
+        HashSet::new()
+    };
+    leave_out(&mut walked, &markers);
     tell_skipped(&context.output, shown, &walked.skipped);
     tell_system(&context.output, shown, &walked.system);
     Ok(Read {
@@ -229,15 +250,34 @@ fn read<'m>(
         at,
         source,
         walked,
+        markers,
         cache,
     })
 }
 
-/// `--check`, or a dry run: the folder `walked` found at `start` compared with `pin`, read and
-/// hashed where it is, writing nothing. a new output's dry run hashes nothing.
+/// the paths in the folder `at` of the markers `state` says fetchloom made there, the .gitignore
+/// that keeps a dataset folder out of git, which is fetchloom's and never part of an output.
+fn markers_in(state: &State, at: &str) -> HashSet<String> {
+    let below = format!("{at}/");
+    state
+        .markers
+        .keys()
+        .filter_map(|folder| disk::marker(folder).strip_prefix(&below).map(str::to_owned))
+        .collect()
+}
+
+/// takes the files at `markers` out of `walked`.
+fn leave_out(walked: &mut Walked, markers: &HashSet<String>) {
+    if !markers.is_empty() {
+        walked.files.retain(|file| !markers.contains(&file.path));
+    }
+}
+
+/// `--check`, or a dry run: the folder `walked` found at `start`, but for its `markers`, compared
+/// with `pin`, read and hashed where it is, writing nothing. a new output's dry run hashes nothing.
 fn compared(
     work: &Loop<'_>,
-    (walked, start, source): (&Walked, &Path, &Source),
+    (walked, start, source, markers): (&Walked, &Path, &Source, &HashSet<String>),
     (name, shown, at): (&str, &str, &str),
     pin: Option<&Locked>,
     check: bool,
@@ -255,7 +295,7 @@ fn compared(
         return Ok(preview(work, (name, shown), None));
     }
     let hashed = hashed(context, walked)?;
-    reread(context, walked, (start, shown), source)?;
+    reread(context, walked, (start, shown), source, markers)?;
     let changes = Changes::of(&hashed, pin.map_or(&[][..], |pin| &pin.files));
     if check {
         return checked(context, work.project, (name, shown), &changes);
@@ -500,12 +540,16 @@ fn reread(
     walked: &Walked,
     (start, shown): (&Path, &str),
     source: &Source,
+    markers: &HashSet<String>,
 ) -> Result<(), Error> {
     // so a CLI test can change the folder between the read and its second walk
     #[cfg(debug_assertions)]
     crate::stop::hold("FETCHLOOM_TEST_HOLD_CAPTURE");
     let most = context.settings.most_files.value;
-    let again = walk(start, shown, source, most, &context.stop);
+    let again = walk(start, shown, source, most, &context.stop).map(|mut again| {
+        leave_out(&mut again, markers);
+        again
+    });
     if again.is_ok_and(|again| same_files(&again, walked)) {
         return Ok(());
     }

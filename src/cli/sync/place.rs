@@ -669,6 +669,12 @@ pub(crate) struct Placing<'a> {
     /// files in a changed output's folder that no pin places, which `--force` removes, each
     /// with its output.
     extras: Vec<(String, String)>,
+    /// the folders of the outputs a removal takes out of data.toml that no folder the run lists
+    /// holds, whose markers it deletes by name.
+    unmarking: Vec<String>,
+    /// the folders of outputs a drop frees here, whose markers stay, as data.lock still pins what
+    /// they hold.
+    still_marked: Vec<String>,
 }
 
 impl<'a> Placing<'a> {
@@ -770,7 +776,21 @@ impl<'a> Placing<'a> {
             outputs,
             changed: if force { Vec::new() } else { changed },
             extras,
+            unmarking: Vec::new(),
+            still_marked: Vec::new(),
         })
+    }
+
+    /// says the removal took out the outputs at `folders`, outside every folder the run lists, so
+    /// it deletes their markers too.
+    pub(crate) fn unmark_removed(&mut self, folders: Vec<String>) {
+        self.unmarking = folders;
+    }
+
+    /// says the run's manifest leaves out the outputs at `folders` though data.toml still names
+    /// them, as a drop's does, so their markers stay.
+    pub(crate) fn keep_marked(&mut self, folders: Vec<String>) {
+        self.still_marked = folders;
     }
 
     /// says the datasets outside the scope were `settled` before the run, as an add in a synced
@@ -1330,6 +1350,8 @@ impl<'a> Placing<'a> {
             outputs,
             changed,
             extras,
+            unmarking: _,
+            still_marked: _,
         } = self;
         let root = placing_root(project, manifest)?;
         let mut placement = Placement {
@@ -1361,6 +1383,7 @@ impl<'a> Placing<'a> {
             &mut placer,
             &mut survey,
             (&targets, (&unknown, &waiting)),
+            &[],
         );
         let folders = swept(&scope, &targets, &actions);
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
@@ -1533,6 +1556,8 @@ impl<'a> Placing<'a> {
             waiting,
             scope,
             outputs,
+            unmarking,
+            still_marked,
             ..
         } = self;
         let root = placing_root(project, manifest)?;
@@ -1550,13 +1575,16 @@ impl<'a> Placing<'a> {
             &mut placement,
         )?;
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
+        // first, as retire forgets the records of markers the run does not list
+        let unlisted = mark::retire_removed(project, &mut survey.state, &unmarking);
         let unmarked = mark::retire(
             &project.root,
             manifest,
             &mut placer,
             &mut survey,
             (&targets, (&unknown, &waiting)),
-        );
+            &still_marked,
+        ) | unlisted;
         let contents = mark::contents(manifest, &targets, (&survey.state, (&unknown, &waiting)));
         let to_mark = mark::planned(&survey, &BTreeSet::new(), &contents);
         let (rewritten, marked) = mark::write(
@@ -2826,14 +2854,6 @@ fn remove_unwanted(
     Ok(changed)
 }
 
-/// whether `path` is a `.gitignore` marker fetchloom made in a dataset's folder, which is never
-/// part of an output: no capture takes it and it is no change to one. the hook for w7-boundary,
-/// which records in `state` the markers it makes; none is one until then.
-pub(crate) fn marker(state: &State, path: &str) -> bool {
-    let _ = (state, path);
-    false
-}
-
 /// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
 /// output: its patterns leave it out, or a repository keeps it there, as a capture leaves both out,
 /// or the output is dropped here, its files the author's still.
@@ -2915,10 +2935,7 @@ fn changed_outputs(
         };
         let inside = &path[output.at.len() + 1..];
         let name = inside.rsplit('/').next().unwrap_or(inside);
-        if place::is_copy_temporary(name)
-            || passed_over(manifest, path)
-            || marker(&survey.state, path)
-        {
+        if place::is_copy_temporary(name) || passed_over(manifest, path) {
             continue;
         }
         match survey.state.files.get(path) {
@@ -3724,6 +3741,8 @@ mod tests {
             outputs: Outputs::default(),
             changed: Vec::new(),
             extras: Vec::new(),
+            unmarking: Vec::new(),
+            still_marked: Vec::new(),
         };
 
         placing
@@ -3920,6 +3939,8 @@ mod tests {
             outputs: Outputs::default(),
             changed: Vec::new(),
             extras: Vec::new(),
+            unmarking: Vec::new(),
+            still_marked: Vec::new(),
         };
         placing
             .apply(
@@ -3990,6 +4011,8 @@ mod tests {
                 outputs: Outputs::default(),
                 changed: Vec::new(),
                 extras: Vec::new(),
+                unmarking: Vec::new(),
+                still_marked: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -4065,6 +4088,8 @@ mod tests {
                 outputs: Outputs::default(),
                 changed: Vec::new(),
                 extras: Vec::new(),
+                unmarking: Vec::new(),
+                still_marked: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -4144,6 +4169,8 @@ mod tests {
             outputs: Outputs::default(),
             changed: Vec::new(),
             extras: Vec::new(),
+            unmarking: Vec::new(),
+            still_marked: Vec::new(),
         };
 
         placing
@@ -4303,6 +4330,8 @@ mod tests {
             outputs: Outputs::default(),
             changed: Vec::new(),
             extras: Vec::new(),
+            unmarking: Vec::new(),
+            still_marked: Vec::new(),
         };
         let holding: Vec<String> = placing
             .holding()

@@ -19,7 +19,7 @@ use crate::place::{self, Placer};
 use crate::plan::{self, Target};
 use crate::project::manifest::Manifest;
 use crate::project::state::{Once, State};
-use crate::project::{gitignore_escaped, native};
+use crate::project::{Project, gitignore_escaped, native};
 
 /// what a marker of a folder only datasets fill holds: git ignores every entry, the marker too.
 const TEXT: &[u8] = b"*\n";
@@ -246,15 +246,22 @@ pub(super) fn wanted(
     })
 }
 
-/// the dataset folders of every dataset `targets` places, and of those whose files are not
-/// known yet, as `unsure` names them, whose markers stay.
+/// the dataset folders of every dataset `targets` places, of those whose files are not known yet,
+/// as `unsure` names them, and of every output, whose markers stay: a dropped output's folder
+/// still holds the files data.lock pins.
 fn needed(manifest: &Manifest, targets: &[Target], unsure: Unsure<'_>) -> BTreeSet<String> {
     let (unknown, waiting) = unsure;
     let mut needed = folders_of(manifest, targets, |_| true);
     let unknown = unknown.iter().map(|(dataset, _)| *dataset);
+    let outputs = manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| entry.is_output())
+        .map(|(name, _)| name.as_str());
     needed.extend(
         unknown
             .chain(waiting.iter().copied())
+            .chain(outputs)
             .map(|dataset| plan::folder(manifest, dataset)),
     );
     needed
@@ -271,18 +278,20 @@ fn holds_placed(state: &State, folder: &str) -> bool {
 }
 
 /// forgets the marker of each folder the state records that no dataset of `targets` or `unsure`
-/// places files in and that holds no file fetchloom placed, as after a dataset's removal or move,
-/// and deletes it while it holds what fetchloom wrote, with the folders it leaves empty. one a
-/// person changed stays theirs, and so does one outside the data folder, where a sync deletes
-/// nothing. says whether the state changed.
+/// places files in, that is none of `kept`, and that holds no file fetchloom placed, as after a
+/// dataset's removal or move, and deletes it while it holds what fetchloom wrote, with the folders
+/// it leaves empty. one a person changed stays theirs, and so does one outside the folders the run
+/// lists, where a sync deletes nothing. says whether the state changed.
 pub(super) fn retire(
     root: &Path,
     manifest: &Manifest,
     placer: &mut Placer,
     survey: &mut Survey,
     (targets, unsure): (&[Target], Unsure<'_>),
+    kept: &[String],
 ) -> bool {
-    let needed = needed(manifest, targets, unsure);
+    let mut needed = needed(manifest, targets, unsure);
+    needed.extend(kept.iter().cloned());
     let going: Vec<String> = survey
         .state
         .markers
@@ -297,6 +306,30 @@ pub(super) fn retire(
         }
     }
     !going.is_empty()
+}
+
+/// forgets the marker of each of `folders`, outputs' folders a removal took out of data.toml that
+/// lie outside every folder the run lists, once none holds a file fetchloom placed, and deletes it
+/// as [`retire`] does, through a placer rooted at the folder, which no link leads to and which is
+/// apart from the cache. says whether the state changed.
+pub(super) fn retire_removed(project: &Project, state: &mut State, folders: &[String]) -> bool {
+    let mut changed = false;
+    for folder in folders {
+        if holds_placed(state, folder) {
+            continue;
+        }
+        let Some(wrote) = state.markers.remove(folder) else {
+            continue;
+        };
+        changed = true;
+        let apart = crate::cli::cache_folder()
+            .is_none_or(|cache| project.refuse_cache_overlap(folder, &cache, true).is_ok());
+        if apart && project.refuse_linked_data_dir(folder).is_ok() {
+            let mut placer = Placer::new(&native(&project.root, folder));
+            delete(&project.root, &mut placer, folder, &wrote);
+        }
+    }
+    changed
 }
 
 /// whether the marker of `folder` is a plain file holding what fetchloom wrote, `wrote` its
@@ -568,7 +601,7 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
     let placed: BTreeSet<String> = manifest
         .datasets
         .iter()
-        .filter(|(_, entry)| entry.place)
+        .filter(|(_, entry)| entry.place || entry.is_output())
         .map(|(name, _)| plan::folder(manifest, name))
         .collect();
     let marked = manifest
@@ -829,7 +862,7 @@ mod tests {
     use crate::place::{Method, Placer};
     use crate::project::Project;
     use crate::project::manifest::Manifest;
-    use crate::project::state::{Look, Placed};
+    use crate::project::state::{Look, Placed, State};
 
     /// a folder the person shares, filled past what a marker names, settles with no marker of
     /// fetchloom's, so a sync with nothing to do stays quick; one at the limit needs its marker.
@@ -951,6 +984,32 @@ mod tests {
         let mut expected: Vec<String> = theirs.iter().map(|name| (*name).to_owned()).collect();
         expected.sort();
         assert_eq!(seen, expected);
+    }
+
+    /// a dropped output's folder still holds the files data.lock pins, so its marker stays and
+    /// leaves the project settled, as a run that changes nothing needs to take its quick way.
+    #[test]
+    fn a_dropped_outputs_marker_leaves_the_project_settled() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::at(dir.path().to_path_buf());
+        std::fs::create_dir_all(project.root.join("results")).unwrap();
+        std::fs::write(project.root.join("results/.gitignore"), TEXT).unwrap();
+        let mut state = State::default();
+        let wrote = digest::sha256(TEXT).hex();
+        state.markers.insert("results".to_owned(), wrote);
+        project.write_state(&state).unwrap();
+        let text = "[datasets.results]\nref = \"local\"\nat = \"results\"\n";
+        let mut manifest = Manifest::parse(text).unwrap();
+        manifest.datasets.get_mut("results").unwrap().place = false;
+        let survey = Survey::read(
+            &project,
+            &Folders::of(&manifest),
+            crate::threads::Threads::default(),
+            &crate::stop::Stop::default(),
+        )
+        .unwrap();
+        assert!(survey.marks.contains_key("results"));
+        assert!(settled(&manifest, &survey, &Scope::All));
     }
 
     /// a line hides a folder whole as git reads it: the folder or one holding it, with or without

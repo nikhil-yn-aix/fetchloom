@@ -107,10 +107,10 @@ impl Owned {
     pub(crate) fn of(manifest: &Manifest) -> Owned {
         let folders = manifest
             .datasets
-            .keys()
-            .map(|name| {
+            .iter()
+            .map(|(name, entry)| {
                 let owned = OwnedFolder {
-                    extras_count: false,
+                    extras_count: entry.is_output(),
                 };
                 (self::folder(manifest, name), owned)
             })

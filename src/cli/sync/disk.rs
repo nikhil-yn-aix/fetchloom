@@ -373,7 +373,7 @@ impl Survey {
             writable,
             alone,
         } = scanned?;
-        let marks = hide_marks(&state, &mut disk, &entries, data_dir, within.as_deref());
+        let marks = hide_marks(&state, &mut disk, &entries, folders, within.as_deref());
         let mut survey = Survey {
             threads,
             started,
@@ -1508,12 +1508,12 @@ fn outermost(folders: &Folders, within: &[String]) -> Vec<String> {
 }
 
 /// takes the .gitignore of each folder `state` says fetchloom marked out of `disk`, the listing of
-/// the data folder at `data_dir`, or of the folders `within` alone, and says how each looks.
+/// `folders`, or of the folders `within` alone, and says how each looks.
 fn hide_marks(
     state: &State,
     disk: &mut HashMap<String, Look>,
     entries: &HashMap<String, Entry>,
-    data_dir: &str,
+    folders: &Folders,
     within: Option<&[String]>,
 ) -> HashMap<String, Mark> {
     state
@@ -1523,7 +1523,7 @@ fn hide_marks(
             let path = marker(folder);
             let listed = match within {
                 Some(folders) => inside_any(&path, folders),
-                None => is_inside(&path, data_dir),
+                None => folders.holding(&path).is_some(),
             };
             listed.then(|| {
                 let mark = match disk.remove(&path) {

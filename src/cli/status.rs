@@ -19,7 +19,7 @@ use crate::plan;
 use crate::project::lock::archives;
 use crate::project::lock::{Lock, LockedFile, Waiting};
 use crate::project::manifest::{self, Manifest};
-use crate::project::state::Look;
+use crate::project::state::{Look, Placed};
 use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::threads::Threads;
@@ -878,10 +878,7 @@ fn compare(
                 place::Held::Pinned => {
                     if !target.copy || place::now_writable(&file) {
                         status.holding.insert(target.sha256);
-                        if record.output {
-                            let found = (target.path.clone(), record.look, *seen);
-                            status.verified_outputs.push(found);
-                        }
+                        status.verified(&target.path, record, *seen);
                         continue;
                     }
                     &mut status.outdated
@@ -1080,7 +1077,7 @@ fn extra(survey: &Survey, wanted: &HashSet<&str>, manifest: &Manifest) -> Vec<St
         .keys()
         .filter(|path| !wanted.contains(path.as_str()) && !leftovers.contains(path))
         .filter(|path| !survey.made_by_system(path))
-        .filter(|path| !place::passed_over(manifest, path) && !place::marker(&survey.state, path))
+        .filter(|path| !place::passed_over(manifest, path))
         .cloned()
         .collect();
     extra.sort();
@@ -1108,6 +1105,15 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 }
 
 impl Status {
+    /// notes the file at `path`, when it is an output's, that hashing found holding its pin though
+    /// it looks other than its `record` says, `seen`, so status keeps that look.
+    fn verified(&mut self, path: &str, record: &Placed, seen: Look) {
+        if record.output {
+            self.verified_outputs
+                .push((path.to_owned(), record.look, seen));
+        }
+    }
+
     /// each kind of file difference with its verb and what follows each path, if anything.
     fn lists(&self) -> [(&'static str, &Vec<String>, Option<String>); 7] {
         [

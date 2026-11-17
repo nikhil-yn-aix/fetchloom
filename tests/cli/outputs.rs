@@ -154,6 +154,62 @@ fn a_teammate_gets_an_output_where_the_author_had_it_and_may_write_it() -> Resul
     Ok(())
 }
 
+/// an output's folder gets the .gitignore any dataset folder gets, outside the data folder too,
+/// for the author and for a teammate. it is fetchloom's, never the output's: no check, pin,
+/// status or sync takes it for a file of the folder.
+#[test]
+fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/iris_clean.csv"), CLEAN)?;
+    fs::write(work.join("results/summary.txt"), SUMMARY)?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    assert_eq!(fs::read(work.join("results/.gitignore"))?, b"*\n");
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert_eq!(lock.matches("{ path = ").count(), 2, "{lock}");
+    let checked = sandbox.run(&["add", "results", "--as", "results", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    let again = sandbox.run(&["add", "results", "--as", "results"])?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("results is pinned as results holds it"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, lock);
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    let synced = sandbox.command_in(&teammate, &["sync"]).output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(teammate.join("results/.gitignore"))?, b"*\n");
+    for project in [&work, &teammate] {
+        let status = sandbox
+            .command_in(project, &["--json", "status"])
+            .output()?;
+        let document = json(&status)?;
+        for kind in ["missing", "edited", "extra", "yours"] {
+            assert_eq!(
+                listed(&document, kind),
+                Vec::<String>::new(),
+                "{kind}: {document}"
+            );
+        }
+        let synced = sandbox.command_in(project, &["--json", "sync"]).output()?;
+        let document = json(&synced)?;
+        assert_eq!(synced.status.code(), Some(0), "{document}");
+        assert!(
+            warned(&document)
+                .iter()
+                .all(|said| !said.contains("changed since")),
+            "{document}"
+        );
+    }
+    Ok(())
+}
+
 /// an output whose files changed, went or came is the author's work in progress: status names
 /// each change, and sync leaves the whole folder as it is, naming the two ways on.
 #[test]
@@ -199,6 +255,7 @@ fn a_changed_output_is_never_partly_healed() -> Result {
     assert_eq!(fs::read(folder.join("iris_clean.csv"))?, CLEAN);
     assert_eq!(fs::read(folder.join("summary.txt"))?, SUMMARY);
     assert!(!folder.join("plot.png").exists(), "the pinned tree, whole");
+    assert_eq!(fs::read(folder.join(".gitignore"))?, b"*\n");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     for kind in ["missing", "edited", "extra"] {
         assert_eq!(
@@ -448,21 +505,66 @@ fn an_add_never_pins_the_cache_as_an_output() -> Result {
     Ok(())
 }
 
-/// removing an output untracks it: the author's files stay as they are.
+/// removing an output untracks it: the author's files stay as they are, and of its folder's
+/// marker, in the data folder or outside it, only one holding what fetchloom wrote goes, so git
+/// sees the folder again. a .gitignore of the author's own, pinned with the output, stays too.
 #[test]
 fn removing_an_output_keeps_the_authors_files() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     processed(&work)?;
-    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/summary.txt"), SUMMARY)?;
+    fs::create_dir_all(work.join("figures"))?;
+    fs::write(work.join("figures/plot.png"), b"png")?;
+    fs::write(work.join("figures/.gitignore"), b"*.tmp\n")?;
+    for (at, name) in [
+        ("data/processed", "processed"),
+        ("results", "results"),
+        ("figures", "figures"),
+    ] {
+        ok(&sandbox.run(&["add", at, "--as", name])?)?;
+    }
+    assert_eq!(fs::read(work.join("results/.gitignore"))?, b"*\n");
+    let changed = work.join("data/processed/.gitignore");
+    fs::write(&changed, b"*\n!summary.txt\n")?;
     let file = work.join("data/processed/iris_clean.csv");
     let before = look(&file)?;
-    let removed = sandbox.run(&["remove", "processed", "--yes"])?;
+    let removed = sandbox.run(&["remove", "processed", "results", "figures", "--yes"])?;
     let stderr = text(&removed.stderr)?;
     assert_eq!(removed.status.code(), Some(0), "{stderr}");
     assert_eq!(look(&file)?, before, "{stderr}");
     assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
+    assert_eq!(fs::read(work.join("results/summary.txt"))?, SUMMARY);
+    assert!(!work.join("results/.gitignore").exists(), "{stderr}");
+    assert_eq!(fs::read(&changed)?, b"*\n!summary.txt\n");
+    assert_eq!(fs::read(work.join("figures/.gitignore"))?, b"*.tmp\n");
+    assert_eq!(fs::read(work.join("figures/plot.png"))?, b"png");
     assert_eq!(fs::read_to_string(work.join("data.toml"))?, "");
+    Ok(())
+}
+
+/// a removed output's folder that a link took the place of on its way, as a moved folder may, is
+/// no folder of the project: what the link leads to keeps its .gitignore.
+#[cfg(unix)]
+#[test]
+fn removing_an_output_deletes_no_marker_through_a_link() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("out/results"))?;
+    fs::write(work.join("out/results/summary.txt"), SUMMARY)?;
+    ok(&sandbox.run(&["add", "out/results", "--as", "results"])?)?;
+    assert_eq!(fs::read(work.join("out/results/.gitignore"))?, b"*\n");
+    let elsewhere = sandbox.folder("elsewhere")?;
+    fs::create_dir_all(elsewhere.join("results"))?;
+    let theirs = elsewhere.join("results/.gitignore");
+    fs::write(&theirs, b"*\n")?;
+    fs::remove_dir_all(work.join("out"))?;
+    std::os::unix::fs::symlink(&elsewhere, work.join("out"))?;
+    let removed = sandbox.run(&["remove", "results", "--yes"])?;
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&theirs)?, b"*\n", "{stderr}");
     Ok(())
 }
 
@@ -601,7 +703,8 @@ fn exclude_leaves_an_outputs_file_out_and_keeps_it() -> Result {
 }
 
 /// drop frees an output's bytes from the cache once a mirror keeps them, and leaves its folder,
-/// the author's, as it is; status counts none of its files.
+/// the author's, as it is, still out of git since data.lock pins it; status counts none of its
+/// files.
 #[test]
 fn dropping_an_output_keeps_its_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -615,6 +718,8 @@ fn dropping_an_output_keeps_its_folder() -> Result {
     assert_eq!(dropped.status.code(), Some(0), "{}", text(&dropped.stderr)?);
     assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
     assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
+    let marker = work.join("data/processed/.gitignore");
+    assert_eq!(fs::read(&marker)?, b"*\n");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     for kind in ["missing", "edited", "extra", "unneeded"] {
         assert_eq!(
@@ -625,6 +730,7 @@ fn dropping_an_output_keeps_its_folder() -> Result {
     }
     ok(&sandbox.run(&["sync"])?)?;
     assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
+    assert_eq!(fs::read(&marker)?, b"*\n");
     Ok(())
 }
 
