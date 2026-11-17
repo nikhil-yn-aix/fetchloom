@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{Result, Sandbox, json, ok, text, warned};
+use crate::support::{Result, Running, Sandbox, json, ok, text, wait_until, warned};
 
 const CLEAN: &[u8] = b"sepal,petal\n5.1,1.4\n";
 const SUMMARY: &[u8] = b"150 rows\n";
@@ -414,5 +414,39 @@ fn removing_an_output_keeps_the_authors_files() -> Result {
     assert_eq!(look(&file)?, before, "{stderr}");
     assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
     assert_eq!(fs::read_to_string(work.join("data.toml"))?, "");
+    Ok(())
+}
+
+/// a folder that changes while add reads it is no state it ever held whole: nothing is pinned and
+/// the cache takes none of its files, whether a file came or one was rewritten at its size.
+#[test]
+fn a_folder_that_changes_while_it_is_read_is_not_pinned() -> Result {
+    for (late, bytes) in [
+        ("late.csv", &b"late\n"[..]),
+        ("iris_clean.csv", &b"sepal,petal\n5.1,1.5\n"[..]),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let work = sandbox.work();
+        processed(&work)?;
+        let release = sandbox.folder("hold")?.join("release");
+        let held = sandbox.folder("hold")?.join("release.held");
+        let mut command = sandbox.command(&["add", "data/processed", "--as", "processed"]);
+        command.env("FETCHLOOM_TEST_HOLD_CAPTURE", &release);
+        let running = Running::start(&mut command)?;
+        wait_until("add to read the folder", || Ok(held.exists()))?;
+        fs::write(work.join("data/processed").join(late), bytes)?;
+        fs::write(&release, b"")?;
+        let output = running.finish()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{late}: {stderr}");
+        assert!(
+            stderr.contains(
+                "error: data/processed changed while it was read: let the pipeline finish, then add again"
+            ),
+            "{late}: {stderr}"
+        );
+        assert!(!work.join("data.lock").exists(), "{late}: {stderr}");
+        assert_eq!(count_files(&sandbox.cache().join("objects")), 0, "{late}");
+    }
     Ok(())
 }

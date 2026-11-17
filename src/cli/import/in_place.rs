@@ -478,6 +478,9 @@ fn reread(
     (start, shown): (&Path, &str),
     source: &Source,
 ) -> Result<(), Error> {
+    // so a CLI test can change the folder between the read and its second walk
+    #[cfg(debug_assertions)]
+    crate::stop::hold("FETCHLOOM_TEST_HOLD_CAPTURE");
     let most = context.settings.most_files.value;
     let again = walk(start, shown, source, most, &context.stop);
     if again.is_ok_and(|again| same_files(&again, walked)) {
@@ -733,6 +736,67 @@ fn seeds(name: &str, at: &str, walked: &Walked, files: &[LockedFile]) -> Vec<(St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::state::Look;
+
+    /// a walk that found `files`, each a path with its size, time and inode.
+    fn walked(files: &[(&str, u64, u64, u64)]) -> Walked {
+        Walked {
+            files: files
+                .iter()
+                .map(|&(path, size, modified, inode)| Found {
+                    path: path.to_owned(),
+                    source: std::path::PathBuf::from(path),
+                    size,
+                    seen: super::super::Seen {
+                        look: Look { size, modified },
+                        node: (inode, 0, 0),
+                        writable: true,
+                    },
+                })
+                .collect(),
+            ..Walked::default()
+        }
+    }
+
+    /// a second walk matches the first only with the same files, each as it was: one more, one
+    /// fewer, or one of another size, time or inode is a folder that changed while it was read.
+    #[test]
+    fn a_second_walk_matches_only_the_same_files_as_they_were() {
+        let first = walked(&[("a.csv", 3, 10, 1), ("b.csv", 4, 20, 2)]);
+        assert!(same_files(
+            &first,
+            &walked(&[("a.csv", 3, 10, 1), ("b.csv", 4, 20, 2)])
+        ));
+        for (changed, how) in [
+            (walked(&[("a.csv", 3, 10, 1)]), "one went"),
+            (
+                walked(&[
+                    ("a.csv", 3, 10, 1),
+                    ("b.csv", 4, 20, 2),
+                    ("c.csv", 1, 30, 3),
+                ]),
+                "one came",
+            ),
+            (
+                walked(&[("a.csv", 3, 10, 1), ("c.csv", 4, 20, 2)]),
+                "one renamed",
+            ),
+            (
+                walked(&[("a.csv", 3, 11, 1), ("b.csv", 4, 20, 2)]),
+                "a later time",
+            ),
+            (
+                walked(&[("a.csv", 3, 10, 1), ("b.csv", 5, 20, 2)]),
+                "another size",
+            ),
+            (
+                walked(&[("a.csv", 3, 10, 9), ("b.csv", 4, 20, 2)]),
+                "another file",
+            ),
+        ] {
+            assert!(!same_files(&first, &changed), "{how}");
+        }
+    }
 
     fn file(path: &str, bytes: &[u8]) -> LockedFile {
         LockedFile {
