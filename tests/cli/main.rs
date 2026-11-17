@@ -7,6 +7,7 @@ mod auth;
 mod azure;
 mod azurite;
 mod basics;
+mod boundary;
 mod bucket_mirrors;
 mod buckets;
 mod cache;

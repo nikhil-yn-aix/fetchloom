@@ -281,10 +281,10 @@ fn remove_deletes_files_and_folders_with_accented_names() -> Result {
     Ok(())
 }
 
-/// status calls the pin missing and the respelled file extra, and force puts the pin back
-/// beside the respelled file, which stays.
+/// status calls the pin missing and the respelled file the person's, kept, and force puts the pin
+/// back beside the respelled file, which stays.
 #[test]
-fn a_respelled_file_is_extra_where_the_disk_tells_names_apart() -> Result {
+fn a_respelled_file_is_yours_where_the_disk_tells_names_apart() -> Result {
     for (original, other, url) in [
         ("iris.csv", "Iris.csv", "/files/iris.csv"),
         ("caf\u{e9}.csv", "cafe\u{301}.csv", "/files/caf%C3%A9.csv"),
@@ -310,7 +310,7 @@ fn a_respelled_file_is_extra_where_the_disk_tells_names_apart() -> Result {
             serde_json::json!([format!("data/iris/{original}")])
         );
         assert_eq!(
-            document["result"]["extra"],
+            document["result"]["yours"],
             serde_json::json!([format!("data/iris/{other}")])
         );
         let output = sandbox.run(&["sync", "--offline", "--force"])?;
@@ -321,7 +321,7 @@ fn a_respelled_file_is_extra_where_the_disk_tells_names_apart() -> Result {
             serde_json::from_slice(&sandbox.run(&["--json", "status"])?.stdout)?;
         assert_eq!(status["result"]["missing"], serde_json::json!([]));
         assert_eq!(
-            status["result"]["extra"],
+            status["result"]["yours"],
             serde_json::json!([format!("data/iris/{other}")])
         );
         assert_eq!(server.requests().len(), 1);
@@ -373,7 +373,7 @@ fn distinct_inodes_do_not_alias() -> Result {
 }
 
 #[test]
-fn where_case_matters_the_exact_name_is_adoptable_and_its_case_twin_extra() -> Result {
+fn where_case_matters_the_exact_name_is_adoptable_and_its_case_twin_yours() -> Result {
     let sandbox = Sandbox::new()?;
     if names_alias(&sandbox, "data", "Data")? {
         return skipped("distinct-names", "this disk takes `Data` for `data`");
@@ -406,7 +406,7 @@ fn where_case_matters_the_exact_name_is_adoptable_and_its_case_twin_extra() -> R
         serde_json::json!(["Data/iris/iris.csv"])
     );
     assert_eq!(
-        document["result"]["extra"],
+        document["result"]["yours"],
         serde_json::json!(["Data/iris/Iris.csv"])
     );
     Ok(())
@@ -2279,7 +2279,8 @@ fn files_already_in_a_shared_folder_are_adopted_and_told_once() -> Result {
 }
 
 /// a pull took the dataset out of data.toml and data.lock, leaving the file fetchloom placed and
-/// the person's notes in its folder; sync then does as status said.
+/// the person's notes in its folder, which no dataset owns now: status names the file sync removes
+/// and never the notes, and sync then does as status said.
 #[test]
 fn status_tells_the_files_sync_removes_from_your_own() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2305,21 +2306,25 @@ fn status_tells_the_files_sync_removes_from_your_own() -> Result {
         fs::write(path, bytes)?;
     }
     let status = sandbox.run(&["status"])?;
-    let told = text(&status.stdout)?;
-    for line in [
-        "      Extra data/penguins/notes.txt\n",
-        "      Extra data/penguins/penguins.csv · fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it\n",
-    ] {
-        assert!(told.contains(line), "{line:?} in\n{told}");
-    }
+    assert_eq!(
+        text(&status.stdout)?,
+        "      Extra data/penguins/penguins.csv · fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it\n"
+    );
+    let stderr = text(&status.stderr)?;
     let hint =
         "  hint: `fetchloom sync` removes the files fetchloom placed that no dataset needs now\n";
-    assert!(text(&status.stderr)?.contains(hint), "{hint:?}");
+    assert!(stderr.contains(hint), "{hint:?}");
+    assert!(!stderr.contains("notes.txt"), "{stderr}");
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(
-        (&status["result"]["extra"], &status["result"]["unneeded"]),
         (
-            &serde_json::json!(["data/penguins/notes.txt"]),
+            &status["result"]["extra"],
+            &status["result"]["yours"],
+            &status["result"]["unneeded"]
+        ),
+        (
+            &serde_json::json!([]),
+            &serde_json::json!([]),
             &serde_json::json!(["data/penguins/penguins.csv"])
         )
     );

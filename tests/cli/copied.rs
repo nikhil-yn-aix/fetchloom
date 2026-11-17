@@ -312,7 +312,7 @@ fn copied_zip(sandbox: &Sandbox, downloads: usize) -> Result<(Server, PathBuf, P
 }
 
 /// with no list of the zip's files, status calls neither the zip missing nor its files extra, and
-/// writes nothing; a file of the person's own beside them is still extra. the list is missing for
+/// writes nothing; a file of the person's own beside them is theirs, kept. the list is missing for
 /// a second person sharing the folder, whose cache never held the zip. a copy would not do: its
 /// state names the folder it came from, so it is not used, and no file has a record.
 #[test]
@@ -345,7 +345,7 @@ fn status_of_a_zip_the_cache_never_held_says_its_files_are_not_checked() -> Resu
         serde_json::json!(["data/dataset/dataset.zip"])
     );
     assert_eq!(
-        (&result["extra"], &result["missing"]),
+        (&result["yours"], &result["missing"]),
         (
             &serde_json::json!(["data/dataset/notes.txt"]),
             &serde_json::json!([])
@@ -355,14 +355,15 @@ fn status_of_a_zip_the_cache_never_held_says_its_files_are_not_checked() -> Resu
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         text(&output.stdout)?,
-        "      Extra data/dataset/notes.txt\n  Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked\n"
+        "  Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked\n"
     );
     assert_eq!(fs::read(two.join(".fetchloom").join("state"))?, state);
     Ok(())
 }
 
 /// in a copy no file has a record, so nothing tells the zip's files from others in its folder:
-/// status calls none of them extra, as it says it does not check them. a file elsewhere is extra.
+/// status calls none of them the person's, as it says it does not check them. a file outside
+/// every dataset's folder is none of status's business.
 #[test]
 fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra() -> Result {
     let sandbox = Sandbox::new()?;
@@ -384,16 +385,17 @@ fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra
         ),
         (
             &serde_json::json!(["data/dataset/dataset.zip"]),
-            &serde_json::json!(["data/notes.txt"]),
+            &serde_json::json!([]),
             &serde_json::json!([])
         ),
         "{document}"
     );
+    assert_eq!(result["yours"], serde_json::json!([]), "{document}");
     let output = status(&["status"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         text(&output.stdout)?,
-        "      Extra data/notes.txt\n  Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked\n"
+        "  Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked\n"
     );
     Ok(())
 }

@@ -50,8 +50,12 @@ pub(super) struct Status {
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
-    /// files no dataset places, not placed by fetchloom or changed since, which `sync` keeps.
+    /// files no dataset places, not placed by fetchloom or changed since, which `sync` keeps, that
+    /// count as differences: a changed copy sync kept, a file moved aside, or one in a folder
+    /// whose extras count.
     extra: Vec<String>,
+    /// files a person put in a dataset's folder, which fetchloom keeps and never counts.
+    yours: Vec<String>,
     /// the files of `extra` named as the changed copy sync keeps of a file it put back, with that
     /// file.
     #[serde(skip)]
@@ -605,6 +609,7 @@ fn check(
         status.extra = extra(&survey, &recorded);
         status.kept_copies = kept_copies(&status.extra, &recorded);
         status.set_aside = set_aside(&status.extra, &survey);
+        sort_extra(&mut status, &plan::Owned::of(&manifest));
         return Ok((status, manifest, lock_text));
     }
     let planned = plan::from_cache(&manifest, &lock, &cache)?;
@@ -863,7 +868,26 @@ fn compare(
         .partition(|path| going.contains(path));
     status.kept_copies = kept_copies(&status.extra, &wanted);
     status.set_aside = set_aside(&status.extra, survey);
+    sort_extra(status, &plan::Owned::of(manifest));
     Ok(())
+}
+
+/// leaves in `extra` only the files fetchloom did not place that count as differences: a changed
+/// copy sync kept, a file moved aside, and any in a folder whose extras count. the others in a
+/// dataset's folder are a person's, kept in `yours`, and those outside every dataset's folder are
+/// none of fetchloom's business.
+fn sort_extra(status: &mut Status, owned: &plan::Owned) {
+    for path in std::mem::take(&mut status.extra) {
+        if status.kept_copies.contains_key(&path) || status.set_aside.contains_key(&path) {
+            status.extra.push(path);
+            continue;
+        }
+        match owned.holding(&path) {
+            Some(folder) if folder.extras_count => status.extra.push(path),
+            Some(_) => status.yours.push(path),
+            None => {}
+        }
+    }
 }
 
 /// the list of `status` for a file fetchloom did not place at `target`'s path, seen as `seen`, as
@@ -1308,6 +1332,32 @@ fn list(output: &Output, status: &Status) {
         (format!("{path} · {cause}"), 1)
     });
     report_rows(output, "Damaged", damaged.collect(), shown);
+    tell_yours(output, status);
+}
+
+/// a faint line on stderr for the files a person put in dataset folders, which fetchloom keeps
+/// and never counts: one by its path, more by their number, each on a line of its own for `-v`.
+fn tell_yours(output: &Output, status: &Status) {
+    let many = match status.yours.as_slice() {
+        [] => return,
+        [one] => return output.faint_step("Kept", &format!("{one} · yours")),
+        many => many,
+    };
+    let count = units::count(many.len() as u64, "file", "files");
+    if output.shows_details() {
+        output.faint_step("Kept", &format!("{count} of yours in dataset folders"));
+        for path in many {
+            output.detail(path);
+        }
+    } else {
+        output.faint_step(
+            "Kept",
+            &format!(
+                "{count} of yours in dataset folders · `{}` lists them",
+                super::project::command("status -v")
+            ),
+        );
+    }
 }
 
 /// at most `shown` of `rows` under `verb`, each a row's text and the files it stands for, then
@@ -1458,6 +1508,56 @@ mod tests {
         assert!(unlocked.sync_repairs_all());
         unlocked.lockless = true;
         assert!(!unlocked.sync_repairs_all(), "a sync would pin new bytes");
+    }
+
+    /// a file fetchloom did not place is a difference only where it means one: a changed copy sync
+    /// kept and a file moved aside wherever they are, and any file in a folder whose extras count,
+    /// the innermost folder deciding. the rest of a dataset's folder is the person's, and a file
+    /// outside every dataset's folder is dropped.
+    #[test]
+    fn only_owned_folders_judge_the_files_fetchloom_did_not_place() {
+        let owned = plan::Owned::from_folders(&[
+            ("data/iris", false),
+            ("data/iris/inner", true),
+            ("data/out", true),
+        ]);
+        let paths = |paths: &[&str]| paths.iter().map(|path| (*path).to_owned()).collect();
+        let mut status = Status {
+            extra: paths(&[
+                "data/iris/notes.txt",
+                "data/iris/iris.csv.changed",
+                "data/iris/inner/made.csv",
+                "data/iris/innermost.csv",
+                "data/iris2/notes.txt",
+                "data/out/new.csv",
+                "data/processed/clean.csv",
+                "data/processed/.clean.csv.aside",
+                "notes.txt",
+            ]),
+            ..Status::default()
+        };
+        status.kept_copies.insert(
+            "data/iris/iris.csv.changed".to_owned(),
+            "data/iris/iris.csv".to_owned(),
+        );
+        status.set_aside.insert(
+            "data/processed/.clean.csv.aside".to_owned(),
+            ("data/processed/clean.csv".to_owned(), true),
+        );
+        sort_extra(&mut status, &owned);
+        assert_eq!(
+            status.extra,
+            paths(&[
+                "data/iris/iris.csv.changed",
+                "data/iris/inner/made.csv",
+                "data/out/new.csv",
+                "data/processed/.clean.csv.aside",
+            ]) as Vec<String>
+        );
+        assert_eq!(
+            status.yours,
+            paths(&["data/iris/notes.txt", "data/iris/innermost.csv"]) as Vec<String>
+        );
     }
 
     #[test]

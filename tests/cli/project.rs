@@ -1538,7 +1538,8 @@ fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
 }
 
 /// each row goes to stdout, where a pipe gets it, and the closing line and hints to stderr, so
-/// `fetchloom status | grep Missing` finds what is missing.
+/// `fetchloom status | grep Missing` finds what is missing. a file of the person's own in a
+/// dataset's folder is no difference: a line on stderr names it as theirs, kept.
 #[test]
 fn status_lists_what_differs() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1556,16 +1557,15 @@ fn status_lists_what_differs() -> Result {
     fs::write(folder.join("iris.csv"), "mine")?;
     fs::write(folder.join("notes.txt"), "mine")?;
     let edited = sandbox.run(&["status"])?;
-    assert_eq!(
-        text(&edited.stdout)?,
-        "     Edited data/iris/iris.csv\n      Extra data/iris/notes.txt\n"
-    );
+    assert_eq!(text(&edited.stdout)?, "     Edited data/iris/iris.csv\n");
     let stderr = text(&edited.stderr)?;
     assert!(
-        stderr.starts_with("      Found 2 differences from data.lock\n  hint: "),
+        stderr.starts_with(
+            "       Kept data/iris/notes.txt · yours\n      Found 1 difference from data.lock\n  hint: "
+        ),
         "{stderr}"
     );
-    assert!(!stderr.contains("data/iris/"), "{stderr}");
+    assert!(!stderr.contains("data/iris/iris.csv"), "{stderr}");
     delete(&folder.join("iris.csv"))?;
     let output = sandbox.run(&["status"])?;
     assert_eq!(output.status.code(), Some(0));
@@ -1578,17 +1578,14 @@ fn status_lists_what_differs() -> Result {
     // the rows are the answer -q keeps; the closing line and hints are what it drops
     let quiet = sandbox.run(&["-q", "status"])?;
     assert_eq!(quiet.status.code(), Some(0));
-    assert_eq!(
-        text(&quiet.stdout)?,
-        "    Missing data/iris/iris.csv\n      Extra data/iris/notes.txt\n"
-    );
+    assert_eq!(text(&quiet.stdout)?, "    Missing data/iris/iris.csv\n");
     assert_eq!(
         crate::support::without_copy_warning(&text(&quiet.stderr)?),
         ""
     );
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(document["result"]["missing"][0], "data/iris/iris.csv");
-    assert_eq!(document["result"]["extra"][0], "data/iris/notes.txt");
+    assert_eq!(document["result"]["yours"][0], "data/iris/notes.txt");
     Ok(())
 }
 
@@ -2012,8 +2009,8 @@ fn status_reports_datasets_removed_from_the_manifest() -> Result {
     Ok(())
 }
 
-/// a project whose data.lock pins 25 files in data/set/a and one each in data/set/b and c, with
-/// only b's in place and 25 files of a person's own in data, for status to list.
+/// a project whose data.lock pins 25 files in data/set/a, one each in data/set/b and c and 25 in
+/// data/set/d, with only b's in place and a person's own files at d's paths, for status to list.
 fn many_differences(sandbox: &Sandbox) -> Result {
     use std::fmt::Write as _;
 
@@ -2027,6 +2024,7 @@ fn many_differences(sandbox: &Sandbox) -> Result {
             sha256_hex(b"kept"),
         )))
         .chain(std::iter::once(("c/only.csv".to_owned(), "1".repeat(64))))
+        .chain((0..25).map(|index| (format!("d/other{index:02}.csv"), "2".repeat(64))))
     {
         writeln!(
             lock,
@@ -2041,8 +2039,14 @@ fn many_differences(sandbox: &Sandbox) -> Result {
     let data = sandbox.work().join("data");
     fs::create_dir_all(data.join("set").join("b"))?;
     fs::write(data.join("set").join("b").join("kept.csv"), b"kept")?;
+    fs::create_dir_all(data.join("set").join("d"))?;
     for index in 0..25 {
-        fs::write(data.join(format!("extra{index:02}.txt")), b"keep")?;
+        fs::write(
+            data.join("set")
+                .join("d")
+                .join(format!("other{index:02}.csv")),
+            b"keep",
+        )?;
     }
     Ok(())
 }
@@ -2056,7 +2060,7 @@ fn status_lists_every_row_for_a_script() -> Result {
     let stdout = text(&output.stdout)?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(stdout.matches("    Missing data/set/a/file").count(), 25);
-    assert_eq!(stdout.matches("      Extra data/extra").count(), 25);
+    assert_eq!(stdout.matches("  Untracked data/set/d/other").count(), 25);
     assert!(!stdout.contains(" more"), "{stdout}");
     Ok(())
 }
@@ -2080,10 +2084,12 @@ fn status_at_a_terminal_names_a_gone_folder_once_and_caps_each_kind() -> Result 
         "{screen}"
     );
     assert!(
-        screen.contains("      Extra data/extra19.txt\n"),
+        screen.contains(
+            "  Untracked data/set/d/other19.csv · holds other bytes than data.lock pins\n"
+        ),
         "{screen}"
     );
-    assert!(!screen.contains("extra20.txt"), "{screen}");
+    assert!(!screen.contains("other20.csv"), "{screen}");
     assert!(
         screen.contains("            and 5 more · `fetchloom status | less` shows all\n"),
         "{screen}"
@@ -2119,21 +2125,21 @@ fn status_keeps_all_differences_in_json() -> Result {
                     "\n[[dataset.files]]\npath = 'file{index:02}.csv'\nsize = 1\nsha256 = '{}'\nurl = 'https://example.org/{index}.csv'",
                     "0".repeat(64)
                 )?;
+                writeln!(
+                    lock,
+                    "\n[[dataset.files]]\npath = 'other{index:02}.csv'\nsize = 4\nsha256 = '{}'\nurl = 'https://example.org/other{index}.csv'",
+                    "2".repeat(64)
+                )?;
             }
         } else {
             writeln!(lock, "files = []")?;
         }
     }
     fs::write(sandbox.work().join("data.lock"), &lock)?;
-    fs::create_dir(sandbox.work().join("data"))?;
+    let set = sandbox.work().join("data").join("set");
+    fs::create_dir_all(&set)?;
     for index in 0..25 {
-        fs::write(
-            sandbox
-                .work()
-                .join("data")
-                .join(format!("extra{index:02}.txt")),
-            b"keep",
-        )?;
+        fs::write(set.join(format!("other{index:02}.csv")), b"keep")?;
     }
     let output = sandbox.run(&["--offline", "status"])?;
     let stdout = text(&output.stdout)?;
@@ -2158,9 +2164,9 @@ fn status_keeps_all_differences_in_json() -> Result {
     );
     assert_eq!(document["result"]["missing"][24], "data/set/file24.csv");
     assert_eq!(
-        document["result"]["extra"]
+        document["result"]["untracked"]
             .as_array()
-            .ok_or("extra is not an array")?
+            .ok_or("untracked is not an array")?
             .len(),
         25
     );
@@ -2172,7 +2178,7 @@ fn status_keeps_all_differences_in_json() -> Result {
     );
     assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
     assert!(!sandbox.work().join(".fetchloom").exists());
-    assert_eq!(fs::read(sandbox.work().join("data/extra24.txt"))?, b"keep");
+    assert_eq!(fs::read(set.join("other24.csv"))?, b"keep");
     Ok(())
 }
 

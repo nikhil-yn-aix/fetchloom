@@ -77,6 +77,68 @@ pub(crate) fn subfolder<'a>(manifest: &'a Manifest, name: &'a str) -> Option<&'a
     }
 }
 
+/// the folders fetchloom owns in a project: each dataset's, and nothing beside them. a file
+/// fetchloom did not place outside all of them is a person's own and none of its business; one
+/// in a dataset's folder is the person's too, kept, unless that folder's `extras_count`.
+#[derive(Debug, Default)]
+pub(crate) struct Owned {
+    /// by the folder's path in the project.
+    folders: HashMap<String, OwnedFolder>,
+}
+
+/// a folder fetchloom owns, and what a file it did not place there is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedFolder {
+    /// whether a file fetchloom did not place there is a difference from data.lock, as in an
+    /// output's folder, whose files are all its own; in a fetched dataset's it is a person's, kept.
+    pub(crate) extras_count: bool,
+}
+
+impl Owned {
+    /// the folder of each dataset `manifest` names.
+    pub(crate) fn of(manifest: &Manifest) -> Owned {
+        let folders = manifest
+            .datasets
+            .keys()
+            .map(|name| {
+                let owned = OwnedFolder {
+                    extras_count: false,
+                };
+                (self::folder(manifest, name), owned)
+            })
+            .collect();
+        Owned { folders }
+    }
+
+    /// the folders of `folders`, each with whether its extras count.
+    #[cfg(test)]
+    pub(crate) fn from_folders(folders: &[(&str, bool)]) -> Owned {
+        let folders = folders
+            .iter()
+            .map(|(folder, extras_count)| {
+                let owned = OwnedFolder {
+                    extras_count: *extras_count,
+                };
+                ((*folder).to_owned(), owned)
+            })
+            .collect();
+        Owned { folders }
+    }
+
+    /// the owned folder `path`, a path in the project, is in, the innermost where folders nest;
+    /// none outside every one.
+    pub(crate) fn holding(&self, path: &str) -> Option<&OwnedFolder> {
+        let mut at = path;
+        while let Some((folder, _)) = at.rsplit_once('/') {
+            if let Some(owned) = self.folders.get(folder) {
+                return Some(owned);
+            }
+            at = folder;
+        }
+        None
+    }
+}
+
 /// the plan for `lock`, with each archive standing for the files the cache records it unpacked
 /// to.
 pub(crate) fn from_cache<'a>(

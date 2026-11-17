@@ -83,7 +83,7 @@ fn shared_folder_removal_keeps_the_other_dataset_and_extras() -> Result {
         "{status}"
     );
     assert_eq!(
-        status["result"]["extra"],
+        status["result"]["yours"],
         serde_json::json!(["data/splits/notes.txt"]),
         "{status}"
     );
