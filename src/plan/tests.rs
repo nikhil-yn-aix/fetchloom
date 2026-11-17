@@ -14,6 +14,7 @@ fn lock(datasets: &[(&str, &[&str])]) -> Lock {
                 name: (*name).to_owned(),
                 reference: "https://example.org/x".to_owned(),
                 spec: String::new(),
+                at: None,
                 extract: true,
                 decompress: false,
                 web_page: false,
@@ -1135,4 +1136,94 @@ fn a_top_folder_is_shared_only_by_every_member() {
 fn caseless_sharp_s_paths_are_refused() {
     let locked = lock(&[("a", &["ß.csv", "ẞ.csv"])]);
     assert!(targets(&manifest(ONE), &locked).is_err());
+}
+
+/// an output lands at its own folder, named from the project's top wherever the data folder is,
+/// as files of its own a pipeline may write over.
+#[test]
+fn an_output_lands_at_its_folder_as_writable_files() {
+    let manifest = manifest(
+        "[project]\ndata_dir = \"data/raw\"\n[datasets.a]\nref = \"x\"\n[datasets.out]\nref = \"local\"\nat = \"data/processed\"\n",
+    );
+    assert_eq!(folder(&manifest, "out"), "data/processed");
+    assert_eq!(subfolder(&manifest, "out"), None);
+    let locked = lock(&[("a", &["x.csv"]), ("out", &["t.csv", "figures/f.png"])]);
+    let targets = targets(&manifest, &locked).unwrap();
+    let placed: Vec<(&str, bool)> = targets
+        .iter()
+        .map(|target| (target.path.as_str(), target.copy))
+        .collect();
+    assert_eq!(
+        placed,
+        [
+            ("data/raw/a/x.csv", false),
+            ("data/processed/t.csv", true),
+            ("data/processed/figures/f.png", true)
+        ]
+    );
+}
+
+/// every file in an output's folder is the output's, so no other dataset's file may sit there,
+/// as a disk that ignores case sees it; an output inside another dataset's folder, as a bids
+/// derivatives folder, stands while that dataset places nothing in it.
+#[test]
+fn an_outputs_folder_holds_no_other_datasets_file() {
+    let iris = "[datasets.iris]\nref = \"x\"\n";
+    for (text, datasets, said) in [
+        (
+            format!("{iris}[datasets.out]\nref = \"local\"\nat = \"data/iris\"\n"),
+            vec![("iris", &["iris.csv"][..]), ("out", &["t.csv"][..])],
+            "dataset iris places data/iris/iris.csv in data/iris, the folder of the output out, where every file is the output's",
+        ),
+        (
+            format!("{iris}[datasets.out]\nref = \"local\"\nat = \"Data/IRIS\"\n"),
+            vec![("iris", &["iris.csv"][..]), ("out", &["t.csv"][..])],
+            "dataset iris places data/iris/iris.csv in Data/IRIS, the folder of the output out, where every file is the output's",
+        ),
+        (
+            format!("{iris}[datasets.out]\nref = \"local\"\nat = \"data/iris/derivatives\"\n"),
+            vec![("iris", &["derivatives/x.tsv", "iris.csv"][..]), ("out", &["t.csv"][..])],
+            "dataset iris places data/iris/derivatives/x.tsv in data/iris/derivatives, the folder of the output out, where every file is the output's",
+        ),
+        (
+            "[datasets.figures]\nref = \"local\"\nat = \"results/figures\"\n[datasets.results]\nref = \"local\"\nat = \"results\"\n".to_owned(),
+            vec![("figures", &["f.png"][..]), ("results", &["r.csv"][..])],
+            "dataset figures places results/figures/f.png in results, the folder of the output results, where every file is the output's",
+        ),
+        (
+            "[datasets.b]\nref = \"y\"\npath = \"processed/extra\"\n[datasets.out]\nref = \"local\"\nat = \"data/processed\"\n".to_owned(),
+            vec![("b", &["z.csv"][..]), ("out", &["t.csv"][..])],
+            "dataset b places data/processed/extra/z.csv in data/processed, the folder of the output out, where every file is the output's",
+        ),
+    ] {
+        let manifest = manifest(&text);
+        let error = targets(&manifest, &lock(&datasets)).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid, "{text}");
+        assert_eq!(error.message, said, "{text}");
+        assert!(
+            error.help.as_deref().is_some_and(|help| help.contains("an at no other dataset places files in")),
+            "{:?}",
+            error.help
+        );
+    }
+    let bids = manifest(
+        "[datasets.ds]\nref = \"x\"\n[datasets.deriv]\nref = \"local\"\nat = \"data/ds/derivatives\"\n",
+    );
+    let locked = lock(&[
+        ("deriv", &["sub-01/x.tsv"]),
+        ("ds", &["participants.tsv", "sub-01/anat/t1.nii"]),
+    ]);
+    let paths: Vec<String> = targets(&bids, &locked)
+        .unwrap()
+        .into_iter()
+        .map(|target| target.path)
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "data/ds/derivatives/sub-01/x.tsv",
+            "data/ds/participants.tsv",
+            "data/ds/sub-01/anat/t1.nii"
+        ]
+    );
 }

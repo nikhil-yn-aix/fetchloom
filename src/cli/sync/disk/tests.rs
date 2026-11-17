@@ -41,7 +41,7 @@ fn parallel_scans_do_not_retain_one_descriptor_per_folder() {
     }
     let found = scan(
         dir.path(),
-        "data",
+        &Folders::data("data"),
         None,
         Threads::default(),
         &Stop::default(),
@@ -74,7 +74,7 @@ fn scan_thread_limits_preserve_files_and_staging_names() {
             .unwrap();
     }
     let serial = Threads::read(&|_| Some("1".into())).unwrap();
-    let expected = scan(root, "data", None, serial, &Stop::default()).unwrap();
+    let expected = scan(root, &Folders::data("data"), None, serial, &Stop::default()).unwrap();
     assert_eq!(expected.found.len(), 513);
     assert_eq!(
         expected.temporaries,
@@ -82,10 +82,24 @@ fn scan_thread_limits_preserve_files_and_staging_names() {
     );
     for count in ["1", "8"] {
         let threads = Threads::read(&|_| Some(count.into())).unwrap();
-        let actual = scan(root, "data", None, threads, &Stop::default()).unwrap();
+        let actual = scan(
+            root,
+            &Folders::data("data"),
+            None,
+            threads,
+            &Stop::default(),
+        )
+        .unwrap();
         assert_eq!(actual, expected);
         assert_eq!(
-            scan(root, "absent", None, threads, &Stop::default()).unwrap(),
+            scan(
+                root,
+                &Folders::data("absent"),
+                None,
+                threads,
+                &Stop::default()
+            )
+            .unwrap(),
             Scanned::default()
         );
     }
@@ -147,7 +161,7 @@ fn a_state_read_beside_the_walk_is_the_same_survey() {
         let threads = Threads::default();
         Survey::surveyed_from(
             &project,
-            "data",
+            &Folders::data("data"),
             None,
             threads,
             &stop,
@@ -186,8 +200,16 @@ fn one_worker_or_lean_reads_the_state_itself() {
     for (cap, level) in [("1", Level::Default), ("", Level::Lean), ("2", Level::Lean)] {
         let _counting = crate::threads::refuse_after(usize::MAX);
         let stop = Stop::default();
-        let survey =
-            Survey::surveyed_from(&project, "data", None, capped(cap), &stop, 0, level).unwrap();
+        let survey = Survey::surveyed_from(
+            &project,
+            &Folders::data("data"),
+            None,
+            capped(cap),
+            &stop,
+            0,
+            level,
+        )
+        .unwrap();
         assert_eq!(survey.state.files.len(), 4);
         assert_eq!(
             crate::threads::spawns_left(),
@@ -266,7 +288,7 @@ fn selected_folders_keep_separator_boundaries_and_shared_paths() {
         "data/café",
     ]
     .map(String::from);
-    let roots = outermost("data", &folders);
+    let roots = outermost(&Folders::data("data"), &folders);
     assert_eq!(
         roots.iter().map(String::as_str).collect::<HashSet<_>>(),
         HashSet::from([
@@ -299,7 +321,10 @@ fn selected_folders_keep_separator_boundaries_and_shared_paths() {
     ] {
         assert_eq!(inside_any(path, &roots), expected, "{path}");
     }
-    let roots = outermost("data", &["data/a".into(), "data".into(), "data/a-".into()]);
+    let roots = outermost(
+        &Folders::data("data"),
+        &["data/a".into(), "data".into(), "data/a-".into()],
+    );
     assert_eq!(roots, ["data"]);
     for (path, expected) in [
         ("data", true),
@@ -309,7 +334,10 @@ fn selected_folders_keep_separator_boundaries_and_shared_paths() {
     ] {
         assert_eq!(inside_any(path, &roots), expected, "{path}");
     }
-    assert!(!inside_any("data/a/x", &outermost("data", &[])));
+    assert!(!inside_any(
+        "data/a/x",
+        &outermost(&Folders::data("data"), &[])
+    ));
 }
 
 /// a first ctrl-c need not wait for the whole listing of a large or slow data folder.
@@ -321,7 +349,8 @@ fn a_survey_ends_at_a_stop_asked_before_it() {
     fs::write(project.root.join("data/a/x"), b"x").unwrap();
     let stop = Stop::default();
     stop.ask();
-    let Err(error) = Survey::read(&project, "data", Threads::default(), &stop) else {
+    let Err(error) = Survey::read(&project, &Folders::data("data"), Threads::default(), &stop)
+    else {
         panic!("the survey listed the data folder after a stop");
     };
     assert_eq!(error.kind, crate::error::Kind::Interrupted);
@@ -364,7 +393,13 @@ fn a_survey_within_folders_lists_and_keeps_only_them() {
         paths.sort();
         paths
     };
-    let whole = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let whole = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     assert_eq!(whole.disk.len(), 6);
     assert_eq!(whole.state.files.len(), 5);
     let within = [
@@ -379,7 +414,7 @@ fn a_survey_within_folders_lists_and_keeps_only_them() {
     .map(String::from);
     let survey = Survey::read_within(
         &project,
-        "data",
+        &Folders::data("data"),
         &within,
         Threads::default(),
         &Stop::default(),
@@ -399,7 +434,7 @@ fn a_survey_within_folders_lists_and_keeps_only_them() {
     assert!(survey.edited.is_empty());
     let all = Survey::read_within(
         &project,
-        "data",
+        &Folders::data("data"),
         &["data/a".to_owned(), "data".to_owned()],
         Threads::default(),
         &Stop::default(),
@@ -407,8 +442,14 @@ fn a_survey_within_folders_lists_and_keeps_only_them() {
     .unwrap();
     assert_eq!(all.disk, whole.disk);
     assert_eq!(all.state.files, whole.state.files);
-    let none =
-        Survey::read_within(&project, "data", &[], Threads::default(), &Stop::default()).unwrap();
+    let none = Survey::read_within(
+        &project,
+        &Folders::data("data"),
+        &[],
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     assert_eq!(none.disk.len(), 0);
     assert_eq!(none.state.files.len(), 0);
 }
@@ -421,7 +462,13 @@ fn racy_edits_are_hashed_and_smudged_without_distrusting_unchanged_files() {
     for path in ["data/changed", "data/intact"] {
         fs::write(project.root.join(path), b"original").unwrap();
     }
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     for path in ["data/changed", "data/intact"] {
         survey.state.files.insert(
             path.to_owned(),
@@ -474,7 +521,13 @@ fn verifying_finds_changes_that_kept_their_size_and_time() {
         project.root.join("object"),
     )
     .is_ok();
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     for (name, method) in placed {
         let path = format!("data/{name}");
         let mut record = record(&project.root, &path, b"original", method);
@@ -543,7 +596,13 @@ fn verification_reuses_intact_racy_hashes_without_hiding_unchecked_files() {
     for (name, time) in files {
         write(name, time, b"original");
     }
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     for (name, _) in files {
         let path = format!("data/{name}");
         let mut placed = record(&project.root, &path, b"original", Method::Copy);
@@ -599,7 +658,13 @@ fn a_data_folder_on_another_device_allows_for_a_coarser_clock() {
     // 10 s, while a state on a finer clock was written at 10.5 s
     let placed = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_010);
     stamp(b"original", placed);
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     survey.state.files.insert(
         "data/table.csv".to_owned(),
         record(&project.root, "data/table.csv", b"original", Method::Copy),
@@ -663,7 +728,13 @@ fn change_marks_hash_old_links_and_refresh_their_listing_metadata() {
             .unwrap();
         fs::hard_link(object, project.root.join("data").join(name)).unwrap();
     }
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     survey.state.files.insert(
         "data/intact".to_owned(),
         record(&project.root, "data/intact", b"intact", Method::Hardlink),
@@ -698,7 +769,13 @@ fn a_changed_file_that_is_no_longer_a_link_is_damaged_not_changed_elsewhere() {
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/file"), b"other").unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
     cache.mark_changed(&placed.sha256).unwrap();
     survey.state.files.insert("data/file".to_owned(), placed);
@@ -721,7 +798,13 @@ fn a_changed_shared_link_the_cache_lost_is_marked_for_the_other_projects() {
         return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
     }
     let cache = Cache::open(project.root.join("cache")).unwrap();
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
     let digest = placed.sha256;
     survey.state.files.insert("data/file".to_owned(), placed);
@@ -740,7 +823,13 @@ fn an_unreadable_doubted_link_is_not_silently_vouched_for() {
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/file"), b"bytes").unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let mut placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
     placed.look.modified = 0;
     survey.disk.insert("data/file".to_owned(), placed.look);
@@ -761,7 +850,13 @@ fn a_mark_whose_time_a_coarse_clock_cut_down_still_doubts_a_link() {
     fs::create_dir(project.root.join("data")).unwrap();
     fs::write(project.root.join("data/file"), b"bytes").unwrap();
     let cache = Cache::open(project.root.join("cache")).unwrap();
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let mut placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
     placed.look.modified = 0;
     placed.checked = 1_700_000_000_500_000_000;
@@ -823,8 +918,13 @@ fn a_changed_link_that_is_the_cached_copy_is_doubted_and_found_damaged() {
     );
     seal(&object);
     let surveyed = || {
-        let mut survey =
-            Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+        let mut survey = Survey::read(
+            &project,
+            &Folders::data("data"),
+            Threads::default(),
+            &Stop::default(),
+        )
+        .unwrap();
         survey.state.files.extend(records.iter().cloned());
         // as reading a state that records them does, so windows reads the links as they are
         survey.look_through_links(&project.root);
@@ -902,7 +1002,13 @@ fn a_repair_doubts_links_to_the_old_copy_alone() {
     fs::hard_link(&object, project.root.join("data/new")).unwrap();
     let mut new = record(&project.root, "data/new", b"good", Method::Hardlink);
     new.checked = checked;
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     survey.state.files.insert("data/old".to_owned(), old);
     survey.state.files.insert("data/new".to_owned(), new);
     assert_eq!(survey.doubted(&project.root, &cache).unwrap(), ["data/old"]);
@@ -928,7 +1034,13 @@ fn a_repair_doubts_links_to_the_old_copy_alone() {
     fs::set_permissions(&old_path, permissions).unwrap();
     let mut old = record(&project.root, "data/old", b"good", Method::Hardlink);
     old.checked = checked;
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let new = record(&project.root, "data/new", b"good", Method::Hardlink);
     assert_eq!(old.look.modified, new.look.modified);
     survey.state.files.insert("data/old".to_owned(), old);
@@ -951,7 +1063,13 @@ fn alias_retargeting_carries_edits_and_the_original_listed_spelling() {
     if !project.root.join("data/a.txt").is_file() {
         return crate::test_skips::skip("aliases", "this disk keeps `a.txt` apart from `A.txt`");
     }
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let placed = record(&project.root, "data/a.txt", b"a", Method::Copy);
     survey
         .state
@@ -1030,7 +1148,13 @@ fn a_name_listed_in_another_composition_is_the_targets_own_file() {
             "this disk keeps two unicode forms of a name apart",
         );
     }
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let listed = survey.disk.keys().next().unwrap().clone();
     let locked = locked("caf\u{e9}.txt", b"a");
     survey.retarget(&project.root, &[target(&locked, "data/caf\u{e9}.txt")]);
@@ -1056,7 +1180,13 @@ fn a_writable_file_listed_in_another_composition_stays_writable_under_the_target
             "this disk keeps two unicode forms of a name apart",
         );
     }
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     assert_eq!(survey.writable.len(), 1);
     let locked = locked("caf\u{e9}.txt", b"a");
     survey.retarget(&project.root, &[target(&locked, "data/caf\u{e9}.txt")]);
@@ -1077,7 +1207,13 @@ fn a_name_listed_in_another_case_stays_apart_until_a_record_joins_them() {
     if !project.root.join("data/a.txt").is_file() {
         return crate::test_skips::skip("aliases", "this disk keeps `a.txt` apart from `A.txt`");
     }
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let locked = locked("a.txt", b"a");
     survey.retarget(&project.root, &[target(&locked, "data/a.txt")]);
     assert_eq!(survey.disk.keys().collect::<Vec<_>>(), ["data/A.txt"]);
@@ -1099,7 +1235,13 @@ fn whatever_stands_in_a_files_way_is_found_from_the_scan_alone() {
     fs::write(data.join("full.csv/inner/kept"), b"work").unwrap();
     symlink(dir.path(), data.join("linked")).unwrap();
     symlink(dir.path().join("elsewhere"), data.join("real/link.csv")).unwrap();
-    let survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let blocker = |path: &str| {
         survey
             .blocker(path)
@@ -1151,7 +1293,13 @@ fn a_folder_in_the_way_is_freed_only_when_removing_files_empties_it() {
     ] {
         fs::write(data.join(file), file).unwrap();
     }
-    let survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     let going: HashSet<String> = [
         "data/alone/a",
         "data/mixed/a",
@@ -1210,7 +1358,7 @@ fn scanning_skips_links_even_when_their_targets_are_files_or_folders() {
         ..
     } = scan(
         dir.path(),
-        "data",
+        &Folders::data("data"),
         None,
         Threads::default(),
         &Stop::default(),
@@ -1230,7 +1378,7 @@ fn scanning_skips_links_even_when_their_targets_are_files_or_folders() {
     assert_eq!(
         scan(
             dir.path(),
-            "missing",
+            &Folders::data("missing"),
             None,
             Threads::default(),
             &Stop::default()
@@ -1274,7 +1422,13 @@ fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
         fs::write(file, path).unwrap();
     }
     std::os::unix::fs::symlink(dir.path(), project.root.join("data/pets/link")).unwrap();
-    let mut survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     for path in placed {
         let record = record(&project.root, path, path.as_bytes(), Method::Copy);
         survey.state.files.insert(path.to_owned(), record);
@@ -1356,12 +1510,12 @@ fn only_real_files_outside_the_data_folder_are_left_behind() {
     }
 
     assert_eq!(
-        outside(root, "inputs/raw", &state, &HashMap::new()),
+        outside(root, &Folders::data("inputs/raw"), &state, &HashMap::new()),
         ["data/iris/iris.csv"]
     );
     let names_alias = root.join("INPUTS").try_exists().unwrap();
     assert_eq!(
-        outside(root, "INPUTS/raw", &state, &HashMap::new())
+        outside(root, &Folders::data("INPUTS/raw"), &state, &HashMap::new())
             .contains(&"inputs/raw/new.csv".to_owned()),
         !names_alias
     );
@@ -1386,8 +1540,13 @@ fn a_folder_left_behind_names_what_fetchloom_did_not_place() {
         fs::write(file, b"bytes").unwrap();
     }
     std::os::unix::fs::symlink(root.join("inputs"), root.join("data/shortcut")).unwrap();
-    let mut survey =
-        Survey::read(&project, "inputs", Threads::default(), &Stop::default()).unwrap();
+    let mut survey = Survey::read(
+        &project,
+        &Folders::data("inputs"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
     survey.state.files.insert(
         "data/iris/iris.csv".to_owned(),
         record(root, "data/iris/iris.csv", b"bytes", Method::Copy),
@@ -1415,8 +1574,13 @@ fn the_folder_left_behind_never_holds_the_data_folder() {
     let dir = tempfile::tempdir().unwrap();
     let project = Project::at(dir.path().to_path_buf());
     let left = |data_dir: &str, outside: &[&str], wanted: &[&str]| {
-        let mut survey =
-            Survey::read(&project, data_dir, Threads::default(), &Stop::default()).unwrap();
+        let mut survey = Survey::read(
+            &project,
+            &Folders::data(data_dir),
+            Threads::default(),
+            &Stop::default(),
+        )
+        .unwrap();
         survey.outside = outside.iter().map(|path| (*path).to_owned()).collect();
         let going: HashSet<&str> = outside.iter().copied().collect();
         let wanted: HashSet<&str> = wanted.iter().copied().collect();

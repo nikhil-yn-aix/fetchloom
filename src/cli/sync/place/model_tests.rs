@@ -173,7 +173,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
     }
     let mut survey = Survey::read(
         project,
-        "data",
+        &crate::cli::sync::disk::Folders::data("data"),
         Threads::default(),
         &crate::stop::Stop::default(),
     )
@@ -266,7 +266,7 @@ fn a_damaged_file_is_replaced_without_force() {
     for copy in [false, true] {
         let mut survey = Survey::read(
             &project,
-            "data",
+            &crate::cli::sync::disk::Folders::data("data"),
             Threads::default(),
             &crate::stop::Stop::default(),
         )
@@ -311,7 +311,7 @@ fn only_a_writable_copy_fetchloom_made_goes_once_copies_are_not_asked_for() {
     for (adopted, expected) in [(false, Choice::Replace), (true, Choice::Keep)] {
         let mut survey = Survey::read(
             &project,
-            "data",
+            &crate::cli::sync::disk::Folders::data("data"),
             Threads::default(),
             &crate::stop::Stop::default(),
         )
@@ -360,7 +360,7 @@ fn only_unwanted_records_of_a_dataset_in_scope_are_let_go() {
                 std::array::from_fn(|bit| flags & (1 << bit) != 0);
             let mut survey = Survey::read(
                 &project,
-                "data",
+                &crate::cli::sync::disk::Folders::data("data"),
                 Threads::default(),
                 &crate::stop::Stop::default(),
             )

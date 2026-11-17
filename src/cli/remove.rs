@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use super::args::Remove;
 use super::project::{Outcome, Report, committed, dry_run_done, find, hold, known};
-use super::sync::disk::Survey;
+use super::sync::disk::{Folders, Survey};
 use super::sync::{Scope, place};
 use super::{Context, open_cache, peek_cache};
 use crate::digest::Sha256;
@@ -66,7 +66,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         open_cache()?
     };
     let stop = &context.stop;
-    let survey = Survey::read(&project, &kept.data_dir, context.threads, stop)?;
+    let survey = Survey::read(&project, &Folders::of(&kept), context.threads, stop)?;
     let unrecorded = unrecorded(&survey, &gone, &names);
     let placing = place::Placing::new(&project, &kept, &lock, &cache, false, &Scope::All, survey)?;
     if dry_run {

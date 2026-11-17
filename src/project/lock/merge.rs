@@ -1294,6 +1294,7 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
         name,
         reference,
         spec,
+        at,
         extract,
         decompress,
         web_page,
@@ -1305,9 +1306,13 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
         timestamp: _,
         files,
     } = locked;
+    // tuples compare at most twelve fields, so the fields go in groups
     (
-        name, reference, spec, extract, decompress, web_page, resolved, title, license, doi,
-        access, files,
+        (
+            name, reference, spec, extract, decompress, web_page, resolved,
+        ),
+        (title, license, doi, access, files),
+        at,
     )
 }
 

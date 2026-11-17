@@ -265,6 +265,7 @@ mod tests {
             name: name.to_owned(),
             reference: format!("https://example.org/{name}"),
             spec: String::new(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,

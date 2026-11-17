@@ -14,7 +14,7 @@ use super::args;
 use super::probe::{self, Ask, Found, Lack, Pinned};
 use super::project::{dry_run_done, find, hold, known};
 use super::sync::Scope;
-use super::sync::disk::Survey;
+use super::sync::disk::{Folders, Survey};
 use super::sync::place::{self, Placement};
 use super::{Context, peek_cache};
 use crate::cache::{Cache, Failure};
@@ -874,7 +874,12 @@ fn preview(
     report: &mut Report,
 ) -> Result<(), Error> {
     let cache = peek_cache()?;
-    let mut survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
+    let mut survey = Survey::read(
+        project,
+        &Folders::of(manifest),
+        context.threads,
+        &context.stop,
+    )?;
     in_place(
         context,
         project,
@@ -1018,7 +1023,12 @@ fn free(
     report: &mut Report,
 ) -> Result<(), Error> {
     let cache = super::cache::hold(context)?;
-    let mut survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
+    let mut survey = Survey::read(
+        project,
+        &Folders::of(manifest),
+        context.threads,
+        &context.stop,
+    )?;
     in_place(
         context,
         project,

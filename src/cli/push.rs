@@ -1822,6 +1822,7 @@ mod tests {
             name: name.to_owned(),
             reference: "zenodo:1".to_owned(),
             spec: "sha256:00".to_owned(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,

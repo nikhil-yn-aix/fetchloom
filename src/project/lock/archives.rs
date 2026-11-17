@@ -255,6 +255,7 @@ mod tests {
                 name: "scans".to_owned(),
                 reference: String::new(),
                 spec: String::new(),
+                at: None,
                 extract: true,
                 decompress: false,
                 web_page: false,

@@ -18,6 +18,7 @@ fn fetched(name: &str, version: u8, files: Vec<LockedFile>) -> Locked {
         name: name.to_owned(),
         reference: format!("zenodo:{name}"),
         spec: format!("sha256:{}", digest::sha256(name.as_bytes())),
+        at: None,
         extract: true,
         decompress: false,
         web_page: false,

@@ -16,6 +16,7 @@ use crate::error::Error;
 use crate::output::Output;
 use crate::place::{self, Method};
 use crate::plan::Target;
+use crate::project::manifest::Manifest;
 use crate::project::state::{Look, State};
 use crate::project::{Project, native};
 use crate::settings::Level;
@@ -74,8 +75,8 @@ pub(crate) struct Survey {
     folded: OnceLock<HashMap<String, String>>,
     /// the project's folder, which paths in it are below.
     root: std::path::PathBuf,
-    /// the data folder, below which entries can stand in a file's way.
-    data_dir: String,
+    /// the data folder and the outputs' folders, below which entries can stand in a file's way.
+    folders: Folders,
     /// the files the state records outside the data folder that are still there, in order, as
     /// fetchloom placed them before `data_dir` changed. a sync never deletes them.
     outside: Vec<String>,
@@ -100,6 +101,73 @@ pub(crate) enum Mark {
 /// ignore all of it.
 pub(crate) fn marker(folder: &str) -> String {
     format!("{folder}/.gitignore")
+}
+
+/// the folders fetchloom places files in, each a path in the project: the data folder, and the
+/// folder of each output that is not inside it, as a disk that ignores case sees it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Folders {
+    pub(crate) data_dir: String,
+    /// in folder order, none inside another.
+    outputs: Vec<String>,
+}
+
+impl Folders {
+    /// the folders the datasets of `manifest` land in.
+    pub(crate) fn of(manifest: &Manifest) -> Folders {
+        let data = name::fold(&manifest.data_dir);
+        let mut outputs: Vec<String> = manifest
+            .datasets
+            .values()
+            .filter_map(|entry| entry.at.clone())
+            .filter(|at| !is_inside(&name::fold(at), &data))
+            .collect();
+        outputs.sort_unstable_by(|left, right| folder_order(left, right));
+        outputs.dedup_by(|folder, parent| is_inside(folder, parent));
+        Folders {
+            data_dir: manifest.data_dir.clone(),
+            outputs,
+        }
+    }
+
+    /// the data folder alone, as a project with no output outside it has.
+    #[cfg(test)]
+    pub(crate) fn data(data_dir: &str) -> Folders {
+        Folders {
+            data_dir: data_dir.to_owned(),
+            outputs: Vec::new(),
+        }
+    }
+
+    /// every folder, the data folder first.
+    pub(crate) fn all(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.data_dir.as_str()).chain(self.outputs.iter().map(String::as_str))
+    }
+
+    /// the outputs' folders outside the data folder.
+    pub(crate) fn outputs(&self) -> &[String] {
+        &self.outputs
+    }
+
+    /// the folder of these that holds `path`, or is it.
+    pub(crate) fn holding(&self, path: &str) -> Option<&str> {
+        self.all().find(|folder| is_inside(path, folder))
+    }
+
+    /// the deepest folder holding them all, empty for the project's own: the one placing works
+    /// below.
+    pub(crate) fn common(&self) -> String {
+        let mut common: Vec<&str> = self.data_dir.split('/').collect();
+        for output in &self.outputs {
+            let same = common
+                .iter()
+                .zip(output.split('/'))
+                .take_while(|(a, b)| name::fold(a) == name::fold(b))
+                .count();
+            common.truncate(same);
+        }
+        common.join("/")
+    }
 }
 
 /// the files fetchloom placed before `data_dir` changed that are still outside the data folder.
@@ -220,55 +288,61 @@ impl Survey {
     /// interrupted once `stop` is asked, before the listing reaches its next folder.
     pub(crate) fn read(
         project: &Project,
-        data_dir: &str,
+        folders: &Folders,
         threads: Threads,
         stop: &Stop,
     ) -> Result<Survey, Error> {
-        Self::surveyed(project, data_dir, None, threads, stop)
+        Self::surveyed(project, folders, None, threads, stop)
     }
 
-    /// [`Survey::read`] of the folders `within` alone, inside `data_dir`, keeping only the state's
-    /// records inside them, so that partial state is never written back.
+    /// [`Survey::read`] of the folders `within` alone, each inside one of `folders`, keeping only
+    /// the state's records inside them, so that partial state is never written back.
     pub(crate) fn read_within(
         project: &Project,
-        data_dir: &str,
+        folders: &Folders,
         within: &[String],
         threads: Threads,
         stop: &Stop,
     ) -> Result<Survey, Error> {
-        Self::surveyed(project, data_dir, Some(within), threads, stop)
+        Self::surveyed(project, folders, Some(within), threads, stop)
     }
 
     fn surveyed(
         project: &Project,
-        data_dir: &str,
+        folders: &Folders,
         within: Option<&[String]>,
         threads: Threads,
         stop: &Stop,
     ) -> Result<Survey, Error> {
         let level = LEVEL.get().copied().unwrap_or_default();
-        Self::surveyed_from(project, data_dir, within, threads, stop, BESIDE_FROM, level)
+        Self::surveyed_from(project, folders, within, threads, stop, BESIDE_FROM, level)
     }
 
     /// [`Survey::surveyed`], reading a whole state of `beside_from` bytes or more on a thread of
     /// its own while it walks the data folder, as [`beside`] decides for `threads` and `level`.
     fn surveyed_from(
         project: &Project,
-        data_dir: &str,
+        folders: &Folders,
         within: Option<&[String]>,
         threads: Threads,
         stop: &Stop,
         beside_from: u64,
         level: Level,
     ) -> Result<Survey, Error> {
-        project.refuse_linked_data_dir(data_dir)?;
+        let data_dir = folders.data_dir.as_str();
+        for folder in folders.all() {
+            project.refuse_linked_data_dir(folder)?;
+        }
         if let Some(cache) = crate::cli::cache_folder() {
-            project.refuse_cache_overlap(data_dir, &cache)?;
+            project.refuse_cache_overlap(data_dir, &cache, false)?;
+            for output in folders.outputs() {
+                project.refuse_cache_overlap(output, &cache, true)?;
+            }
         }
         let started = nanos(SystemTime::now());
         let data_gone = fs::symlink_metadata(native(&project.root, data_dir)).is_err();
-        let within = within.map(|folders| outermost(data_dir, folders));
-        let walk = || scan(&project.root, data_dir, within.as_deref(), threads, stop);
+        let within = within.map(|within| outermost(folders, within));
+        let walk = || scan(&project.root, folders, within.as_deref(), threads, stop);
         let ((state, written), scanned) = if let Some(folders) = &within {
             (
                 project.state_within(folders, &|path| inside_any(path, folders)),
@@ -319,7 +393,7 @@ impl Survey {
             holding: OnceLock::new(),
             folded: OnceLock::new(),
             root: project.root.clone(),
-            data_dir: data_dir.to_owned(),
+            folders: folders.clone(),
             outside: Vec::new(),
             marks,
             data_gone,
@@ -330,7 +404,7 @@ impl Survey {
         // after hash_racy, so a record found under another spelling is looked through too
         survey.look_through_links(&project.root);
         if within.is_none() {
-            survey.outside = outside(&project.root, data_dir, &survey.state, &survey.disk);
+            survey.outside = outside(&project.root, folders, &survey.state, &survey.disk);
         }
         Ok(survey)
     }
@@ -353,7 +427,10 @@ impl Survey {
         let first = files.first()?;
         let below: HashSet<&str> = wanted
             .iter()
-            .filter_map(|path| path.strip_prefix(self.data_dir.as_str())?.strip_prefix('/'))
+            .filter_map(|path| {
+                path.strip_prefix(self.folders.data_dir.as_str())?
+                    .strip_prefix('/')
+            })
             .collect();
         let before = |path: &'_ str| {
             path.match_indices('/')
@@ -370,7 +447,7 @@ impl Survey {
             .unwrap_or_else(|| shared_folder(&files));
         // naming the data folder's own parent would ask the person to delete the data folder too
         let holds_data = |folder: &str| {
-            let (data, folder) = (name::fold(&self.data_dir), name::fold(folder));
+            let (data, folder) = (name::fold(&self.folders.data_dir), name::fold(folder));
             data == folder || data.starts_with(&format!("{folder}/"))
         };
         let folder = Some(folder).filter(|folder| !folder.is_empty() && !holds_data(folder));
@@ -432,11 +509,14 @@ impl Survey {
             let at = sorted.partition_point(|path| *path < below.as_str());
             sorted.get(at).is_some_and(|path| path.starts_with(&below))
         };
-        let start = self.data_dir.len() + 1;
         let mut folders = HashSet::new();
         for path in going {
+            let Some(root) = self.folders.holding(path) else {
+                continue;
+            };
+            let start = root.len() + 1;
             let Some(below) = path
-                .strip_prefix(self.data_dir.as_str())
+                .strip_prefix(root)
                 .and_then(|rest| rest.strip_prefix('/'))
             else {
                 continue;
@@ -673,10 +753,9 @@ impl Survey {
     /// the entry in the way of a file data.lock places at `path`, where no plain file stands: a
     /// non-folder where a folder on its way belongs, or a folder, link or special file at `path`.
     pub(crate) fn blocker(&self, path: &str) -> Option<Blocker> {
-        let start = self.data_dir.len() + 1;
-        let below = path
-            .strip_prefix(self.data_dir.as_str())?
-            .strip_prefix('/')?;
+        let root = self.folders.holding(path)?;
+        let start = root.len() + 1;
+        let below = path.strip_prefix(root)?.strip_prefix('/')?;
         for (end, _) in below.match_indices('/') {
             let folder = &path[..start + end];
             let (folder, found) = if self.disk.contains_key(folder) {
@@ -1108,20 +1187,28 @@ pub(crate) fn vouched_before(written: u64, other_device: bool) -> u64 {
     }
 }
 
-/// the files `state` records outside `data_dir`, placed before it changed, that are still plain
-/// files in real folders, in order, unless they are a data folder file under another spelling.
+/// the files `state` records outside the data folder of `folders`, placed before it changed, that
+/// are still plain files in real folders, in order, unless they are a data folder file under
+/// another spelling. an output's folder outside the data folder is none of these.
 fn outside(
     root: &Path,
-    data_dir: &str,
+    folders: &Folders,
     state: &State,
     disk: &HashMap<String, Look>,
 ) -> Vec<String> {
+    let data_dir = folders.data_dir.as_str();
     let inside = format!("{data_dir}/");
     let mut real = HashMap::new();
     state
         .files
         .keys()
         .filter(|path| !path.starts_with(&inside) && !disk.contains_key(*path))
+        .filter(|path| {
+            !folders
+                .outputs()
+                .iter()
+                .any(|output| is_inside(path, output))
+        })
         .filter(|path| name::escapes(path).is_none())
         .filter(|path| plain_in_real_folders(root, path, &mut real))
         .filter(|path| !same_inside(root, path, data_dir))
@@ -1242,11 +1329,12 @@ fn read_only_alone(metadata: &fs::Metadata) -> bool {
     }
 }
 
-/// lists the data folder, or with `within` only those folders and what stands on the way down to
-/// them, never following links. interrupted once `stop` is asked, before the next folder.
+/// lists the data folder and the outputs' folders, or with `within` only those folders and what
+/// stands on the way down to them, never following links. interrupted once `stop` is asked, before
+/// the next folder.
 fn scan(
     root: &Path,
-    data_dir: &str,
+    folders: &Folders,
     within: Option<&[String]>,
     threads: Threads,
     stop: &Stop,
@@ -1258,10 +1346,17 @@ fn scan(
     let mut parents = 0;
     let mut entries = HashMap::new();
     let starts = match within {
-        None => vec![(native(root, data_dir), data_dir.to_owned())],
-        Some(folders) => folders
+        None => folders
+            .all()
+            .map(|folder| (native(root, folder), folder.to_owned()))
+            .collect(),
+        Some(within) => within
             .iter()
-            .filter(|folder| way_down(root, data_dir, folder, &mut entries, &mut scanned))
+            .filter(|folder| {
+                folders
+                    .holding(folder)
+                    .is_some_and(|top| way_down(root, top, folder, &mut entries, &mut scanned))
+            })
             .map(|folder| (native(root, folder), folder.clone()))
             .collect(),
     };
@@ -1331,16 +1426,16 @@ fn scan_pending(
     }
 }
 
-/// whether `folder`, inside `data_dir`, is reached through real folders as a whole scan would
-/// reach it, recording what stands on the way as that scan would.
+/// whether `folder`, inside `top`, a folder fetchloom places files in, is reached through real
+/// folders as a whole scan would reach it, recording what stands on the way as that scan would.
 fn way_down(
     root: &Path,
-    data_dir: &str,
+    top: &str,
     folder: &str,
     entries: &mut HashMap<String, Entry>,
     scanned: &mut Scanned,
 ) -> bool {
-    let Some(below) = folder.strip_prefix(data_dir).and_then(|rest| {
+    let Some(below) = folder.strip_prefix(top).and_then(|rest| {
         if rest.is_empty() {
             Some(None)
         } else {
@@ -1352,7 +1447,7 @@ fn way_down(
     let Some(below) = below else {
         return true;
     };
-    let mut path = data_dir.to_owned();
+    let mut path = top.to_owned();
     for part in below.split('/') {
         path.push('/');
         path.push_str(part);
@@ -1399,12 +1494,14 @@ fn folder_order(left: &str, right: &str) -> std::cmp::Ordering {
         })
 }
 
-/// `folders` inside `data_dir` without those inside another, which listing that one covers.
-fn outermost(data_dir: &str, folders: &[String]) -> Vec<String> {
-    if folders.iter().any(|folder| folder == data_dir) {
+/// `within`, folders inside those of `folders`, without those inside another, which listing that
+/// one covers.
+fn outermost(folders: &Folders, within: &[String]) -> Vec<String> {
+    let data_dir = folders.data_dir.as_str();
+    if folders.outputs().is_empty() && within.iter().any(|folder| folder == data_dir) {
         return vec![data_dir.to_owned()];
     }
-    let mut sorted: Vec<&String> = folders.iter().collect();
+    let mut sorted: Vec<&String> = within.iter().collect();
     sorted.sort_unstable_by(|left, right| folder_order(left, right));
     sorted.dedup_by(|folder, parent| is_inside(folder, parent));
     sorted.into_iter().cloned().collect()

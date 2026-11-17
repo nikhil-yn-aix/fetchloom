@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use super::Context;
-use super::sync::disk::{Blocker, Entry, Survey};
+use super::sync::disk::{Blocker, Entry, Folders, Survey};
 use super::sync::placed_archives::PlacedArchives;
 use super::sync::{Scope, place};
 use crate::cache::Cache;
@@ -638,7 +638,7 @@ fn check(
         ..Status::default()
     };
     let cache = super::peek_cache()?;
-    let mut survey = Survey::read(project, &manifest.data_dir, threads, stop)?;
+    let mut survey = Survey::read(project, &Folders::of(&manifest), threads, stop)?;
     let manifest = dropped_here(&mut status, &manifest, &survey);
     status.unfinished = survey.leftovers().count();
     // status writes no state, so files hashing found unchanged ask for nothing
@@ -1651,7 +1651,13 @@ mod tests {
         ] {
             std::fs::write(folder.join(name), name).unwrap();
         }
-        let survey = Survey::read(&project, "data", Threads::default(), &Stop::default()).unwrap();
+        let survey = Survey::read(
+            &project,
+            &Folders::data("data"),
+            Threads::default(),
+            &Stop::default(),
+        )
+        .unwrap();
 
         assert_eq!(
             extra(&survey, &HashSet::new()),

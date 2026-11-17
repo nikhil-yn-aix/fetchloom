@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::args::Exclude;
 use super::project::{committed, dry_run_done, find, hold};
-use super::sync::disk::Survey;
+use super::sync::disk::{Folders, Survey};
 use super::sync::place::{self, Changes, Placement};
 use super::sync::{Scope, without_files};
 use super::{Context, open_cache, peek_cache};
@@ -165,7 +165,7 @@ pub(super) async fn run(context: &Context, args: Exclude) -> Result<Report, Erro
     pace.look()?;
     let survey = Survey::read(
         &project,
-        &new_manifest.data_dir,
+        &Folders::of(&new_manifest),
         context.threads,
         &context.stop,
     )?;
@@ -1450,6 +1450,7 @@ mod tests {
             name: name.to_owned(),
             reference: source.reference.clone(),
             spec: lock::spec(source),
+            at: None,
             extract: source.extract,
             decompress: source.decompress,
             web_page: false,

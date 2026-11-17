@@ -24,6 +24,7 @@ fn pin(name: &str, reference: &str, bytes: &[u8]) -> Locked {
         name: name.to_owned(),
         reference: reference.to_owned(),
         spec: spec(&entry.source),
+        at: None,
         extract: true,
         decompress: false,
         web_page: false,

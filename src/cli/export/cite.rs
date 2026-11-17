@@ -768,6 +768,7 @@ mod tests {
             name: name.to_owned(),
             reference: "https://example.org/a.csv".to_owned(),
             spec: String::new(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,

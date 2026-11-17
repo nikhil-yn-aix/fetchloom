@@ -912,6 +912,7 @@ mod tests {
                 name: "set".to_owned(),
                 reference: "https://example.org/set.tar".to_owned(),
                 spec: String::new(),
+                at: None,
                 extract: true,
                 decompress: false,
                 web_page: false,

@@ -308,7 +308,7 @@ impl<'a> Loop<'a> {
     ) -> Result<Option<Partial>, Error> {
         let mut survey = Survey::read(
             self.project,
-            &manifest.data_dir,
+            &disk::Folders::of(manifest),
             self.context.threads,
             &self.context.stop,
         )?;
@@ -1094,14 +1094,20 @@ impl<'a> Loop<'a> {
                     match locked.drift(entry) {
                         None => kept.push(locked),
                         // an import's files stand as data.lock pins them, so a switch only
-                        // learns what its archives unpack to
-                        Some(Drift::Extract) if local::is_imported(&source.reference) => {
-                            whole.push(draft::switched_import(source, &locked));
+                        // learns what its archives unpack to, or where the output lives
+                        Some(Drift::Extract | Drift::At)
+                            if local::is_imported(&source.reference) =>
+                        {
+                            whole.push(draft::switched_import(entry, &locked));
                             others.push(locked);
                         }
                         Some(Drift::Extract) => {
                             let draft = Draft::switched(entry, source, &locked)?;
                             drafts.push((locked.name.clone(), draft));
+                            others.push(locked);
+                        }
+                        Some(Drift::At) => {
+                            whole.push(draft::moved(entry, &locked));
                             others.push(locked);
                         }
                         Some(Drift::Spec) => others.push(locked),
@@ -3008,6 +3014,7 @@ mod tests {
             name: name.to_owned(),
             reference: "zenodo:1".to_owned(),
             spec: String::new(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,

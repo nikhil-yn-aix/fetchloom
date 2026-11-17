@@ -824,7 +824,7 @@ mod tests {
 
     use super::{MOST_NAMED, TEXT, hiding_line, holds, names, settled};
     use crate::cli::sync::Scope;
-    use crate::cli::sync::disk::Survey;
+    use crate::cli::sync::disk::{Folders, Survey};
     use crate::digest;
     use crate::place::{Method, Placer};
     use crate::project::Project;
@@ -842,7 +842,7 @@ mod tests {
         for (count, quiet) in [(MOST_NAMED, false), (MOST_NAMED + 1, true)] {
             let mut survey = Survey::read(
                 &project,
-                "data",
+                &Folders::data("data"),
                 crate::threads::Threads::default(),
                 &crate::stop::Stop::default(),
             )

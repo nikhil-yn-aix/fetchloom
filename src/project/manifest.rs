@@ -28,7 +28,7 @@ const GIT_FILES: [&str; 3] = [".gitignore", ".gitattributes", ".gitmodules"];
 const TOOL_FOLDERS: [&str; 5] = [".devcontainer", ".github", ".githooks", ".husky", ".vscode"];
 const TOP_KEYS: [&str; 3] = [required::KEY, "project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
-const DATASET_KEYS: [&str; 9] = [
+const DATASET_KEYS: [&str; 10] = [
     "ref",
     "select",
     "exclude",
@@ -38,7 +38,10 @@ const DATASET_KEYS: [&str; 9] = [
     "web_page",
     "copy",
     "path",
+    "at",
 ];
+/// the keys an output takes no value for: its files stay where and as its pipeline wrote them.
+const NOT_FOR_OUTPUTS: [&str; 5] = ["path", "extract", "copy", "web_page", "members"];
 /// the keys of the table that chooses the files of one archive.
 const MEMBER_KEYS: [&str; 2] = ["select", "exclude"];
 
@@ -56,6 +59,9 @@ pub(crate) struct Entry {
     /// where the dataset lands inside the data folder, when not under its name: a folder, or
     /// [`DATA_FOLDER_ITSELF`].
     pub(crate) path: Option<String>,
+    /// for an output, a dataset pinned from the project's own files where its pipeline wrote
+    /// them, that folder, from the project's top.
+    pub(crate) at: Option<String>,
     /// whether a run places its files in the data folder: false only for a dataset `fetchloom
     /// drop` freed here, which a run that does not name it leaves out.
     pub(crate) place: bool,
@@ -232,6 +238,12 @@ impl Entry {
     pub(crate) fn is_import(&self) -> bool {
         crate::source::local::is_imported(&self.source.reference)
     }
+
+    /// whether the dataset is an output: its tree is the one its pipeline wrote at `at`, extra
+    /// files there count, and its files stay writable.
+    pub(crate) fn is_output(&self) -> bool {
+        self.at.is_some()
+    }
 }
 
 impl Manifest {
@@ -279,6 +291,9 @@ impl Manifest {
                 let entry = reader.entry(table, name, item)?;
                 datasets.insert(name.to_owned(), entry);
             }
+        }
+        for (name, entry) in &datasets {
+            refuse_holding_data(name, entry, &data_dir)?;
         }
         Ok(Manifest { data_dir, datasets })
     }
@@ -398,6 +413,7 @@ fn put_plain(
             source,
             copy: false,
             path: None,
+            at: None,
             place: true,
             lines: BTreeMap::new(),
         },
@@ -466,16 +482,62 @@ impl Reader<'_> {
         if table.contains_key("members") && table.iter().all(|(key, _)| key == "members") {
             return Err(self.left_members(datasets, table, name, item.span().or(key_span)));
         }
+        let at = table
+            .get("at")
+            .map(|item| self.relative(item, "at"))
+            .transpose()?;
+        let mut source = self.source(table, name, item.span().or(key_span))?;
+        if let Some(at) = &at {
+            self.output(table, name, at, &source)?;
+            source.extract = false;
+        }
         Ok(Entry {
-            source: self.source(table, name, item.span().or(key_span))?,
+            source,
             copy: self.boolean(table.get("copy"), "copy", false)?,
             path: table
                 .get("path")
                 .map(|item| self.relative(item, "path"))
                 .transpose()?,
+            at,
             place: true,
             lines,
         })
+    }
+
+    /// refuses what an output at `at`, the dataset `name` whose table is `table`, cannot take: a
+    /// key that would move, unpack, link or fetch its files, or a ref other than an import's.
+    fn output(
+        &self,
+        table: &dyn TableLike,
+        name: &str,
+        at: &str,
+        source: &Source,
+    ) -> Result<(), Error> {
+        if let Some(key) = NOT_FOR_OUTPUTS
+            .into_iter()
+            .find(|key| table.contains_key(key))
+        {
+            return Err(self
+                .error(
+                    table.key(key).and_then(Key::span),
+                    format!(
+                        "datasets.{name} is an output, kept at {at} as its pipeline wrote it, so it takes no {key}"
+                    ),
+                )
+                .help(format!("remove {key} from datasets.{name} in data.toml")));
+        }
+        if !crate::source::local::is_imported(&source.reference) {
+            return Err(self
+                .error(
+                    table.get("ref").and_then(Item::span),
+                    format!(
+                        "datasets.{name} has at = \"{at}\", which only an output pinned from the project's own files has, so its ref must be \"{}\"",
+                        crate::source::local::IMPORTED
+                    ),
+                )
+                .help("to choose where a fetched dataset lands in the data folder, use path instead of at"));
+        }
+        Ok(())
     }
 
     /// the refusal of `name`, a dataset with members tables alone, as when only its own table was
@@ -730,8 +792,15 @@ impl Reader<'_> {
     /// a path inside the project, which may not climb out of it, read as written, so a space is
     /// kept and a folder ending in one refused, as windows drops it; a leading `./` and a trailing
     /// `/` name the same folder without them. a dataset's `path` may also be
-    /// [`DATA_FOLDER_ITSELF`], the data folder.
+    /// [`DATA_FOLDER_ITSELF`], the data folder. `data_dir` and an output's `at` are folders from
+    /// the project's top, held to the same rules.
     fn relative(&self, item: &Item, key: &str) -> Result<String, Error> {
+        let from_top = key == "data_dir" || key == "at";
+        let own_folder = if key == "at" {
+            "use a folder of its own inside the project, such as results"
+        } else {
+            "use a folder of its own inside the project, such as data"
+        };
         let written = self.string(item, key)?;
         let mut text = written.trim_end_matches('/');
         while let Some(rest) = text.strip_prefix("./") {
@@ -752,7 +821,7 @@ impl Reader<'_> {
             return Err(refused(reason).help(format!("choose a {key} outside {outside}")));
         }
         if shorthand(text) {
-            let inside = if key == "data_dir" {
+            let inside = if from_top {
                 "the project"
             } else {
                 "the data folder"
@@ -763,12 +832,15 @@ impl Reader<'_> {
         if text == DATA_FOLDER_ITSELF {
             return match key {
                 "path" => Ok(text.to_owned()),
+                "at" => {
+                    Err(refused("it would mix data with the project's own files").help(own_folder))
+                }
                 _ => Err(refused("it would mix data with the project's own files")
                     .help("use a folder inside the project, such as data")),
             };
         }
         let first = text.split('/').next().unwrap_or_default();
-        if key == "data_dir"
+        if from_top
             && PROJECT_FILES
                 .iter()
                 .any(|own| name::fold(own) == name::fold(first))
@@ -776,21 +848,22 @@ impl Reader<'_> {
             return Err(refused(&format!(
                 "{first} is the name of one of the project's own files"
             ))
-            .help("use a folder of its own inside the project, such as data"));
+            .help(own_folder));
         }
         // git reads these files in any folder, and a folder of that name stands in for one
-        if key == "data_dir"
+        if from_top
             && let Some(file) = text.split('/').find(|part| {
                 GIT_FILES
                     .iter()
                     .any(|git| name::fold(git) == name::fold(part))
             })
         {
-            return Err(refused(&format!("{file} is the name of a file git reads"))
-                .help("use a folder of its own inside the project, such as data"));
+            return Err(
+                refused(&format!("{file} is the name of a file git reads")).help(own_folder)
+            );
         }
         // data placed there would run as code, as a hook husky points git at runs on commit
-        if key == "data_dir"
+        if from_top
             && let Some(folder) = text.split('/').find(|part| {
                 TOOL_FOLDERS
                     .iter()
@@ -799,7 +872,7 @@ impl Reader<'_> {
         {
             return Err(
                 refused(&format!("{folder} is a folder other tools run files from"))
-                    .help("use a folder of its own inside the project, such as data"),
+                    .help(own_folder),
             );
         }
         match name::escapes(text) {
@@ -890,6 +963,29 @@ impl Reader<'_> {
             format!("{FILE}:{line}   {}", self.text[start..end].trim())
         }
     }
+}
+
+/// refuses an output of `name` whose folder is or holds the data folder `data_dir`, where fetched
+/// datasets land, as a disk that ignores case or unicode composition sees the two.
+fn refuse_holding_data(name: &str, entry: &Entry, data_dir: &str) -> Result<(), Error> {
+    let Some(at) = &entry.at else {
+        return Ok(());
+    };
+    let (at_folded, data) = (name::fold(at), name::fold(data_dir));
+    if at_folded != data && !data.starts_with(&format!("{at_folded}/")) {
+        return Ok(());
+    }
+    let error = Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "at = \"{at}\" in datasets.{name} holds the data folder {data_dir}, where fetched datasets land"
+        ),
+    );
+    let error = match entry.lines.get("at") {
+        Some(line) => error.detail(line.clone()),
+        None => error,
+    };
+    Err(error.help("pin the output in a folder of its own, such as data/processed or results"))
 }
 
 /// whether a folder is shell shorthand a person may expect expanded, as `~` or `${SCRATCH}`.

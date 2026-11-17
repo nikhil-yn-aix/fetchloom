@@ -542,6 +542,7 @@ mod tests {
                 name: "weather".to_owned(),
                 reference: "https://example.org/weather".to_owned(),
                 spec: "sha256:00".to_owned(),
+                at: None,
                 extract: true,
                 decompress: false,
                 web_page: false,

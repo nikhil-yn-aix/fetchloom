@@ -1576,6 +1576,7 @@ pub(super) fn pinned(name: &str, source: &Source, files: Vec<LockedFile>) -> Loc
         name: name.to_owned(),
         reference: local::IMPORTED.to_owned(),
         spec: lock::spec(source),
+        at: None,
         extract: source.extract,
         decompress: source.decompress,
         web_page: false,

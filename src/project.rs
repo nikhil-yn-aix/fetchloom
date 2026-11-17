@@ -1018,25 +1018,44 @@ impl Project {
         Ok(())
     }
 
-    /// refuses a data folder `data_dir` that is the cache folder at `cache`, lies in it or holds
-    /// it, before anything is read or written there: a dataset's files would pass for the cache's
-    /// own records, as an unpacked archive's, or land among them.
-    pub(crate) fn refuse_cache_overlap(&self, data_dir: &str, cache: &Path) -> Result<(), Error> {
+    /// refuses a data folder `data_dir`, or an output's folder when `output` says it is one, that
+    /// is the cache folder at `cache`, lies in it or holds it, before anything is read or written
+    /// there: a dataset's files would pass for the cache's own records, as an unpacked archive's,
+    /// or land among them.
+    pub(crate) fn refuse_cache_overlap(
+        &self,
+        data_dir: &str,
+        cache: &Path,
+        output: bool,
+    ) -> Result<(), Error> {
         let folder = native(&self.root, data_dir);
         let shown = cache.display();
+        let what = if output {
+            "the output folder"
+        } else {
+            "the data folder"
+        };
         let (said, help) = match overlap::overlap(&folder, cache) {
             None => return Ok(()),
             Some(overlap::Overlap::Inside) => (
                 format!(
-                    "the data folder {data_dir} is inside the cache folder {shown}, where a dataset's files would pass for the cache's own"
+                    "{what} {data_dir} is inside the cache folder {shown}, where a dataset's files would pass for the cache's own"
                 ),
-                "set data_dir in [project] in data.toml to a folder outside the cache, such as data, or keep the cache elsewhere with FETCHLOOM_CACHE",
+                if output {
+                    "set the output's at in data.toml to a folder outside the cache, or keep the cache elsewhere with FETCHLOOM_CACHE"
+                } else {
+                    "set data_dir in [project] in data.toml to a folder outside the cache, such as data, or keep the cache elsewhere with FETCHLOOM_CACHE"
+                },
             ),
             Some(overlap::Overlap::Holds) => (
                 format!(
-                    "the cache folder {shown} is inside the data folder {data_dir}, where datasets' files are placed"
+                    "the cache folder {shown} is inside {what} {data_dir}, where datasets' files are placed"
                 ),
-                "keep the cache outside the data folder: set FETCHLOOM_CACHE, or the cache setting with `fetchloom settings set cache <folder>`, to a folder elsewhere",
+                if output {
+                    "keep the cache outside the output's folder: set FETCHLOOM_CACHE, or the cache setting with `fetchloom settings set cache <folder>`, to a folder elsewhere"
+                } else {
+                    "keep the cache outside the data folder: set FETCHLOOM_CACHE, or the cache setting with `fetchloom settings set cache <folder>`, to a folder elsewhere"
+                },
             ),
         };
         Err(Error::new(Kind::ProjectInvalid, said).help(help))

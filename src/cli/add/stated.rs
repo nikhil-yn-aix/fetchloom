@@ -163,6 +163,7 @@ pub(super) fn pinned(
         name: name.to_owned(),
         reference: source.reference.clone(),
         spec: lock::spec(source),
+        at: None,
         extract: source.extract,
         decompress: source.decompress,
         web_page: source.web_page,

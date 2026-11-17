@@ -92,6 +92,7 @@ fn generated(bytes: &[u8]) -> Lock {
             name: format!("set{dataset_index}"),
             reference: format!("https://example.org/{}", input.text()),
             spec: format!("sha256:{}", digest::sha256(bytes)),
+            at: None,
             extract,
             decompress,
             web_page,

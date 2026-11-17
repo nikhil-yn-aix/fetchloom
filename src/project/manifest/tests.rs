@@ -222,9 +222,9 @@ const METADATA_COMPONENTS: &[&str] = &[
 
 fn refuses_metadata(key: &str, table: &str) {
     let mut taken = vec![".gitlab", "data/git", "data/.hgdata"];
-    // a data_dir named as one of git's own files, or a folder other tools run files from, is
-    // refused on its own
-    if key != "data_dir" {
+    // a data_dir or an output's folder named as one of git's own files, or a folder other tools
+    // run files from, is refused on its own
+    if key != "data_dir" && key != "at" {
         taken.extend([".gitignore", ".github"]);
     }
     for path in taken {
@@ -966,7 +966,7 @@ fn unknown_keys_are_rejected_at_each_table_level() {
         (
             "[datasets.x]\nref = 'zenodo:1'\nunknown_setting = true\n",
             "data.toml:3   unknown_setting = true",
-            "the keys here are ref, select, exclude, extract, decompress, members, web_page, copy, path",
+            "the keys here are ref, select, exclude, extract, decompress, members, web_page, copy, path, at",
         ),
         (
             "[datasets.x]\nref = 'zenodo:1'\n[datasets.x.members.'x.zip']\nexculde = ['a/b.csv']\n",
@@ -1705,4 +1705,129 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
     .unwrap();
     let plain = read_plain(&added).unwrap_or_else(|| panic!("{added:?} is not read plain"));
     assert_eq!(plain.datasets.keys().collect::<Vec<_>>(), ["iris", "paper"]);
+}
+
+/// an output's `at` names a folder from the project's top, as a pipeline writes it, and an output
+/// keeps its files as written: nothing in it is unpacked.
+#[test]
+fn an_output_lives_at_a_folder_named_from_the_project() {
+    let manifest = parse(
+        "[project]\ndata_dir = 'data/raw'\n[datasets.processed]\nref = 'local'\nat = './data/processed/'\nexclude = '*.log'\n",
+    );
+    let entry = &manifest.datasets["processed"];
+    assert_eq!(entry.at.as_deref(), Some("data/processed"));
+    assert_eq!(entry.path, None);
+    assert!(!entry.source.extract);
+    assert_eq!(patterns(&entry.source.exclude), ["*.log"]);
+    assert_eq!(
+        entry.lines.get("at").map(String::as_str),
+        Some("data.toml:5   at = './data/processed/'")
+    );
+    let fetched = parse("[datasets.iris]\nref = 'https://example.org/iris.csv'\n");
+    assert_eq!(fetched.datasets["iris"].at, None);
+}
+
+/// a cloned data.toml chooses where an output lands, so `at` is held to the data folder's rules.
+#[test]
+fn an_outputs_folder_is_refused_where_a_data_folder_is() {
+    let table = "[datasets.out]\nref = 'local'";
+    refuses_metadata("at", table);
+    for (written, reason) in [
+        (".husky", ".husky is a folder other tools run files from"),
+        (
+            "apps/.GitHub/x",
+            ".GitHub is a folder other tools run files from",
+        ),
+        (
+            "out/.gitignore",
+            ".gitignore is the name of a file git reads",
+        ),
+        (
+            "Data.Lock.D",
+            "Data.Lock.D is the name of one of the project's own files",
+        ),
+        (".", "it would mix data with the project's own files"),
+        ("../outside", "it climbs out of its folder"),
+        (
+            "~/results",
+            "fetchloom does not expand ~ or $NAME, and the folder is always inside the project",
+        ),
+    ] {
+        let error = fails(&format!("{table}\nat = '{written}'\n"));
+        assert_eq!(error.kind, Kind::ProjectInvalid, "{written}");
+        assert_eq!(
+            error.message,
+            format!("at = \"{written}\" in data.toml is refused because {reason}")
+        );
+        assert_eq!(error.details, [format!("data.toml:3   at = '{written}'")]);
+    }
+}
+
+/// an output's files are the ones its pipeline wrote, kept writable and whole, so keys that would
+/// place them elsewhere, unpack or link them, or fetch them have no meaning there.
+#[test]
+fn an_output_takes_no_key_that_changes_its_files() {
+    for key in [
+        "path = 'processed'",
+        "extract = true",
+        "copy = true",
+        "web_page = true",
+        "members.'a.zip'.select = '*.csv'",
+    ] {
+        let name = key.split(['=', '.', ' ']).next().unwrap();
+        let error = fails(&format!(
+            "[datasets.out]\nref = 'local'\nat = 'results'\n{key}\n"
+        ));
+        assert_eq!(error.kind, Kind::ProjectInvalid, "{key}");
+        assert_eq!(
+            error.message,
+            format!(
+                "datasets.out is an output, kept at results as its pipeline wrote it, so it takes no {name}"
+            ),
+            "{key}"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(format!("remove {name} from datasets.out in data.toml").as_str())
+        );
+    }
+    let error = fails("[datasets.out]\nref = 'https://example.org/a.csv'\nat = 'results'\n");
+    assert_eq!(
+        error.message,
+        "datasets.out has at = \"results\", which only an output pinned from the project's own files has, so its ref must be \"local\""
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some("to choose where a fetched dataset lands in the data folder, use path instead of at")
+    );
+}
+
+/// an output's folder never is or holds the data folder, where fetched datasets land, in any
+/// case a disk may fold; one inside it is where cookiecutter's data/processed is.
+#[test]
+fn an_outputs_folder_never_holds_the_data_folder() {
+    for (data_dir, at) in [("data", "data"), ("data", "./DATA/"), ("data/raw", "data")] {
+        let error = fails(&format!(
+            "[project]\ndata_dir = '{data_dir}'\n[datasets.out]\nref = 'local'\nat = '{at}'\n"
+        ));
+        assert_eq!(error.kind, Kind::ProjectInvalid, "{at}");
+        let read = at.trim_start_matches("./").trim_end_matches('/');
+        assert_eq!(
+            error.message,
+            format!(
+                "at = \"{read}\" in datasets.out holds the data folder {data_dir}, where fetched datasets land"
+            )
+        );
+        assert_eq!(error.details, [format!("data.toml:5   at = '{at}'")]);
+        assert_eq!(
+            error.help.as_deref(),
+            Some("pin the output in a folder of its own, such as data/processed or results")
+        );
+    }
+    let inside = parse("[datasets.out]\nref = 'local'\nat = 'data/processed'\n");
+    assert_eq!(inside.datasets["out"].at.as_deref(), Some("data/processed"));
+    let beside = parse(
+        "[project]\ndata_dir = 'data/raw'\n[datasets.out]\nref = 'local'\nat = 'data/raw-2'\n",
+    );
+    assert_eq!(beside.datasets["out"].at.as_deref(), Some("data/raw-2"));
 }

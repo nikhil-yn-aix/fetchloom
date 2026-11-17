@@ -57,21 +57,29 @@ pub(crate) struct Plan<'a> {
 }
 
 /// the folder a dataset lands in, relative to the project: the data folder itself for
-/// `path = "."`.
+/// `path = "."`, and an output's own folder for an output.
 pub(crate) fn folder(manifest: &Manifest, name: &str) -> String {
+    if let Some(at) = manifest
+        .datasets
+        .get(name)
+        .and_then(|entry| entry.at.as_deref())
+    {
+        return at.to_owned();
+    }
     match subfolder(manifest, name) {
         None => manifest.data_dir.clone(),
         Some(inner) => format!("{}/{inner}", manifest.data_dir),
     }
 }
 
-/// the folder a dataset lands in below the data folder, or none for `path = "."`.
+/// the folder a dataset lands in below the data folder: none for `path = "."`, which lands in the
+/// data folder itself, or for an output, which lands at its own folder.
 pub(crate) fn subfolder<'a>(manifest: &'a Manifest, name: &'a str) -> Option<&'a str> {
-    match manifest
-        .datasets
-        .get(name)
-        .and_then(|entry| entry.path.as_deref())
-    {
+    let entry = manifest.datasets.get(name);
+    if entry.is_some_and(manifest::Entry::is_output) {
+        return None;
+    }
+    match entry.and_then(|entry| entry.path.as_deref()) {
         Some(manifest::DATA_FOLDER_ITSELF) => None,
         inner => Some(inner.unwrap_or(name)),
     }
@@ -246,11 +254,13 @@ fn planned<'a>(
             archives_named(&dataset.name, source, dataset)?;
         }
         let (targets, unknown) = (plan.targets.len(), plan.unknown.len());
+        // a pipeline writes its output again, so its files are never links to the cache's copy
+        let copy = entry.copy || entry.is_output();
         let expanded = expand(
             &mut plan,
             &dataset.name,
             &folder,
-            entry.copy,
+            copy,
             &dataset.files,
             &source.members,
             members,
@@ -266,7 +276,7 @@ fn planned<'a>(
                 &mut plan,
                 &dataset.name,
                 &folder,
-                entry.copy,
+                copy,
                 &dataset.files,
                 &unfiltered,
                 members,
@@ -274,6 +284,7 @@ fn planned<'a>(
         }
     }
     check_by(&plan.targets, patterns)?;
+    check_outputs(manifest, &plan.targets)?;
     span.record("files", plan.targets.len());
     Ok(plan)
 }
@@ -852,6 +863,53 @@ pub(crate) fn unportable(
         .collect();
     paths.sort_unstable();
     paths
+}
+
+/// refuses a file of one dataset in the folder of an output of another, as a disk that ignores
+/// case sees it: every file in an output's folder is the output's, so a capture never takes in
+/// another dataset's file and a sync never places one among the output's.
+fn check_outputs(manifest: &Manifest, targets: &[Target]) -> Result<(), Error> {
+    let outputs: Vec<(&str, &manifest::Entry, String)> = manifest
+        .datasets
+        .iter()
+        .filter_map(|(name, entry)| {
+            let at = entry.at.as_deref()?;
+            Some((name.as_str(), entry, format!("{}/", key(at))))
+        })
+        .collect();
+    if outputs.is_empty() {
+        return Ok(());
+    }
+    for target in targets {
+        let path = key(&target.path);
+        let Some((output, entry, _)) = outputs
+            .iter()
+            .find(|(output, _, inside)| target.dataset != *output && path.starts_with(inside))
+        else {
+            continue;
+        };
+        let at = entry.at.as_deref().unwrap_or_default();
+        let error = Error::new(
+            Kind::ProjectInvalid,
+            format!(
+                "dataset {} places {} in {at}, the folder of the output {output}, where every file is the output's",
+                target.dataset, target.path
+            ),
+        );
+        let error = match entry.lines.get("at") {
+            Some(line) => error.detail(line.clone()),
+            None => error,
+        };
+        let other = match manifest.datasets.get(target.dataset) {
+            Some(other) if other.is_output() => "at",
+            _ => "path",
+        };
+        return Err(error.help(format!(
+            "give datasets.{output} an at no other dataset places files in, or datasets.{} another {other}",
+            target.dataset
+        )));
+    }
+    Ok(())
 }
 
 /// refuses targets that cannot all be stored: a name this machine cannot store, two files on one

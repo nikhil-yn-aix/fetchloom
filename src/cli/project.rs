@@ -13,7 +13,7 @@ use serde::Serialize;
 use tracing::Instrument as _;
 
 use super::args;
-use super::sync::disk::{self, Survey};
+use super::sync::disk::{self, Folders, Survey};
 use super::sync::place::{self, Changes, Download, Placement, Preview, Seen};
 use super::sync::{self as engine, Given, Loop, Scope, Upgrade};
 use super::{Context, open_cache, peek_cache};
@@ -370,7 +370,7 @@ async fn sync_plain(
     let old = lock.map(|(lock, _)| lock);
     let waiting = old.as_ref().map(waiting_in).unwrap_or_default();
     let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?).filling();
-    let mut survey = surveyed(&work, &plain.data_dir, false)?;
+    let mut survey = surveyed(&work, &Folders::of(&plain), false)?;
     let dropped = survey.state.dropped.clone();
     super::drop::tell_left_out(&context.output, plain, &Scope::All, &dropped);
     let plain = &*super::drop::placed_by(plain, &Scope::All, &dropped);
@@ -464,7 +464,7 @@ fn settled_named(
     let reading = context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read_within(
         project,
-        &manifest.data_dir,
+        &Folders::of(manifest),
         &folders,
         context.threads,
         &context.stop,
@@ -533,7 +533,12 @@ fn settled_unheld(
         Err(_) => (peek_cache()?, false),
     };
     let reading = context.output.setup("Reading", "the data folder");
-    let mut survey = Survey::read(project, &manifest.data_dir, context.threads, &context.stop)?;
+    let mut survey = Survey::read(
+        project,
+        &Folders::of(&manifest),
+        context.threads,
+        &context.stop,
+    )?;
     drop(reading);
     // hashing proved files placed too recently to trust by time unchanged, and only asks for the
     // state to be written again, which this project cannot take. an edit it found stays an edit
@@ -1148,6 +1153,10 @@ fn check(
                 "{name} changed extract in data.toml; `{}` needs no network for it while its archives are cached",
                 super::project::command("lock")
             )),
+            Some(Some(Drift::At)) => stale.push(format!(
+                "{name} changed at in data.toml; `{}` needs no network for it",
+                super::project::command("lock")
+            )),
             Some(None) => {}
         }
     }
@@ -1265,22 +1274,22 @@ pub(super) async fn sync_all(
     run: Run<'_>,
 ) -> Result<Outcome<Placement>, Error> {
     refuse_named_waiting(old.as_ref(), &work.scope)?;
-    let survey = surveyed(work, &manifest.data_dir, run.verify)?;
+    let survey = surveyed(work, &Folders::of(manifest), run.verify)?;
     sync_surveyed(work, manifest, old, given, run, survey).await
 }
 
 /// the data folder as a sync starts from it: read, its doubted links checked, and with `verify`
 /// every file hashed.
-fn surveyed(work: &Loop<'_>, data_dir: &str, verify: bool) -> Result<Survey, Error> {
+fn surveyed(work: &Loop<'_>, folders: &Folders, verify: bool) -> Result<Survey, Error> {
     let reading = work.context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(
         work.project,
-        data_dir,
+        folders,
         work.context.threads,
         &work.context.stop,
     )?;
     drop(reading);
-    let restored = place::restore_aside(work.project, data_dir, &mut survey, false);
+    let restored = place::restore_aside(work.project, &folders.data_dir, &mut survey, false);
     place::restored_aside(&work.context.output, &restored, false);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
@@ -1457,7 +1466,7 @@ pub(super) async fn preview_all(
     let reading = work.context.output.setup("Reading", "the data folder");
     let mut survey = Survey::read(
         work.project,
-        &manifest.data_dir,
+        &Folders::of(manifest),
         work.context.threads,
         &work.context.stop,
     )?;
@@ -1985,6 +1994,7 @@ pub(crate) mod tests {
             name: name.to_owned(),
             reference: format!("https://example.org/{name}"),
             spec,
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,
@@ -2241,8 +2251,13 @@ pub(crate) mod tests {
             manifest: digest::sha256(b""),
             lock: Some(digest::sha256(text.as_bytes())),
         };
-        let survey =
-            Survey::read(&project, &manifest.data_dir, first.threads, &first.stop).unwrap();
+        let survey = Survey::read(
+            &project,
+            &Folders::of(&manifest),
+            first.threads,
+            &first.stop,
+        )
+        .unwrap();
         assert!(
             place::untouched(&project, &manifest, &survey, &seen, false, &Scope::All)
                 .unwrap()

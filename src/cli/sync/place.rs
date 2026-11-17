@@ -10,7 +10,7 @@ mod tell;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -1211,10 +1211,10 @@ impl<'a> Placing<'a> {
             unlisted,
             vouched,
         } = self;
-        let data_dir = project.data_dir(manifest)?;
+        let root = placing_root(project, manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir)
+        let mut placer = Placer::new(&root)
             .with_threads(survey.threads)
             .with_stop(std::sync::Arc::clone(stop));
         // removing first means a file that moved never collides with its own old copy
@@ -1316,7 +1316,7 @@ impl<'a> Placing<'a> {
                 checked,
                 &mut placement,
             );
-        let stays = settle_aside(project, &data_dir, threads, &placement, |(path, sha256)| {
+        let stays = settle_aside(project, &root, threads, &placement, |(path, sha256)| {
             flushed.is_ok()
                 && state
                     .files
@@ -1327,8 +1327,7 @@ impl<'a> Placing<'a> {
         let replaced = forget_replaced(&project.root, state, checked);
         tell::set_aside(output, manifest, &state.aside);
         let undone = (stopped || failure.is_some() || flushed.is_err())
-            && adding
-                .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
+            && adding.is_some_and(|adding| undo(project, &root, threads, state, &adding, checked));
         let taken_back =
             undone && mark::take_back(&project.root, &mut placer, state, &placement.marked);
         // a run that ends early tells no placement, so its error says where each changed copy went
@@ -1350,7 +1349,7 @@ impl<'a> Placing<'a> {
             .any(|tally| tally.unlinked > 0)
             .then(|| placer.unlinked())
             .flatten()
-            .map(|why| (why, data_disk(&data_dir)))
+            .map(|why| (why, data_disk(&native(&project.root, &manifest.data_dir))))
             .filter(|(_, disk)| !state.told.has(Once::Copy, disk));
         placement.r_package = telling
             && told.is_some_and(|names| !names.is_empty())
@@ -1399,10 +1398,10 @@ impl<'a> Placing<'a> {
             scope,
             ..
         } = self;
-        let data_dir = project.data_dir(manifest)?;
+        let root = placing_root(project, manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir).with_threads(survey.threads);
+        let mut placer = Placer::new(&root).with_threads(survey.threads);
         let removed = remove_unwanted(
             project,
             manifest,
@@ -1873,13 +1872,13 @@ fn added_here(
 /// and a file it took as placed stays, losing its record. says whether the state changed.
 fn undo(
     project: &Project,
-    data_dir: &Path,
+    root: &Path,
     threads: crate::threads::Threads,
     state: &mut crate::project::state::State,
     adding: &[(String, bool)],
     checked: u64,
 ) -> bool {
-    let mut placer = Placer::new(data_dir).with_threads(threads);
+    let mut placer = Placer::new(root).with_threads(threads);
     let mut changed = false;
     for (path, placed_here) in adding {
         let Some(record) = state.files.get(path) else {
@@ -1910,7 +1909,7 @@ fn undo(
 /// the path it had. a stop does not stop this.
 fn settle_aside(
     project: &Project,
-    data_dir: &Path,
+    root: &Path,
     threads: crate::threads::Threads,
     placement: &Placement,
     in_place: impl Fn(&(String, Sha256)) -> bool,
@@ -1919,7 +1918,7 @@ fn settle_aside(
     if placement.set_aside.is_empty() {
         return stays;
     }
-    let mut placer = Placer::new(data_dir).with_threads(threads);
+    let mut placer = Placer::new(root).with_threads(threads);
     for set in &placement.set_aside {
         let back = !set.stead.iter().all(&in_place);
         let done = if back {
@@ -2879,6 +2878,18 @@ fn still_placed<'s>(survey: &'s Survey, root: &'s Path) -> impl Fn(&str, &Placed
     }
 }
 
+/// the folder placing works below, the data folder made if missing: the data folder itself, or the
+/// deepest folder holding it and every output's folder.
+fn placing_root(project: &Project, manifest: &Manifest) -> Result<PathBuf, Error> {
+    let data_dir = project.data_dir(manifest)?;
+    let common = super::disk::Folders::of(manifest).common();
+    Ok(if common == manifest.data_dir {
+        data_dir
+    } else {
+        native(&project.root, &common)
+    })
+}
+
 /// how the file at `path` looks now, read again right before a delete, since downloads may have run
 /// for hours since the scan and someone may have changed it.
 fn now(path: &Path) -> Option<Look> {
@@ -3301,7 +3312,7 @@ mod tests {
     fn surveyed(project: &Project) -> Survey {
         Survey::read(
             project,
-            "data",
+            &crate::cli::sync::disk::Folders::data("data"),
             crate::threads::Threads::default(),
             &crate::stop::Stop::default(),
         )

@@ -15,7 +15,7 @@ use super::args::Add;
 use super::import::import_held;
 use super::links;
 use super::project::{Outcome, Report, committed, dry_run_done, hold, preview_all, register};
-use super::sync::disk::{self, Survey};
+use super::sync::disk::{self, Folders, Survey};
 use super::sync::place::{self, Placement, tell_marked};
 use super::sync::{self as engine, Given, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
@@ -1233,7 +1233,7 @@ pub(super) async fn sync_add(
     let imported = !given.is_empty() && given.iter().all(|given| matches!(given, Given::Locked(_)));
     let mut pinning = imported.then(|| pinning_line(work, names)).flatten();
     let stop = &work.context.stop;
-    let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads, stop)?;
+    let mut survey = Survey::read(project, &Folders::of(manifest), work.context.threads, stop)?;
     let restored = place::restore_aside(project, &manifest.data_dir, &mut survey, false);
     place::restored_aside(&work.context.output, &restored, false);
     survey.check_doubted(&project.root, &work.cache)?;

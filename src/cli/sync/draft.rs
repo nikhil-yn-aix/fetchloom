@@ -634,6 +634,7 @@ impl Draft {
             name: self.name.clone(),
             reference: self.reference.clone(),
             spec: self.spec.clone(),
+            at: None,
             extract: self.extract,
             decompress: self.decompress,
             web_page: self.web_page,
@@ -782,6 +783,7 @@ impl Draft {
             name: self.name,
             reference: self.reference,
             spec: self.spec,
+            at: None,
             extract: self.extract,
             decompress: self.decompress,
             web_page: self.web_page,
@@ -796,16 +798,25 @@ impl Draft {
     }
 }
 
-/// the pin of `locked`, an import, once data.toml switched its `extract` to `source`'s: the same
-/// files, with what each archive unpacks to left to learn again.
-pub(super) fn switched_import(source: &Source, locked: &Locked) -> Locked {
+/// the pin of `locked`, an import, once data.toml switched its `extract` or its `at` to `entry`'s:
+/// the same files, with what each archive unpacks to left to learn again.
+pub(super) fn switched_import(entry: &Entry, locked: &Locked) -> Locked {
     let mut switched = locked.clone();
-    switched.extract = source.extract;
-    switched.decompress = source.decompress;
+    switched.extract = entry.source.extract;
+    switched.decompress = entry.source.decompress;
+    switched.at.clone_from(&entry.at);
     for file in &mut switched.files {
         file.unpacks_to = None;
     }
     switched
+}
+
+/// the pin of `locked` once data.toml changed only its `at` to `entry`'s: the same files, pinned for
+/// the folder data.toml names.
+pub(super) fn moved(entry: &Entry, locked: &Locked) -> Locked {
+    let mut moved = locked.clone();
+    moved.at.clone_from(&entry.at);
+    moved
 }
 
 /// the pin of `locked` once `source`'s exclude leaves out the files at `paths`, made without a
@@ -1536,6 +1547,7 @@ mod tests {
             name: "set".to_owned(),
             reference: url.to_string(),
             spec: String::new(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,
@@ -1978,6 +1990,7 @@ mod tests {
             name: "set".to_owned(),
             reference: packed.source.reference.clone(),
             spec: lock::spec(&packed.source),
+            at: None,
             extract: false,
             decompress: false,
             web_page: false,
@@ -2067,6 +2080,7 @@ mod tests {
             name: "w".to_owned(),
             reference: url.to_string(),
             spec: String::new(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,
@@ -2116,6 +2130,7 @@ mod tests {
             name: "d".to_owned(),
             reference: url.to_string(),
             spec: String::new(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,
@@ -2156,6 +2171,7 @@ mod tests {
             name: "d".to_owned(),
             reference: url.to_string(),
             spec: String::new(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,

@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::args;
 use super::project::{Run, Waited, find, hold_until, known_with_rest, locked, sync_all};
-use super::sync::disk::{Survey, is_inside};
+use super::sync::disk::{Folders, Survey, is_inside};
 use super::sync::place::Seen;
 use super::sync::{Loop, Scope};
 use super::{Context, open_cache, peek_cache};
@@ -431,7 +431,7 @@ fn ready_path(
     };
     let survey = Survey::read_within(
         project,
-        &manifest.data_dir,
+        &Folders::of(manifest),
         std::slice::from_ref(&wanted),
         context.threads,
         &context.stop,

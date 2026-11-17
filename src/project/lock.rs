@@ -410,6 +410,9 @@ pub(crate) struct Locked {
     /// whether data.toml asked for the link's web page when the dataset was pinned, so its pins
     /// may be pages: a relock once it no longer asks never carries one.
     pub(crate) web_page: bool,
+    /// for an output, the folder it lives at, from the project's top, as data.toml said when it
+    /// was pinned. placing reads data.toml's; this one tells what a pin was made for.
+    pub(crate) at: Option<String>,
     pub(crate) resolved: String,
     pub(crate) title: Option<String>,
     pub(crate) license: Option<String>,
@@ -428,6 +431,9 @@ pub(crate) enum Drift {
     /// only `extract` or `decompress`: the pinned files stand, and only what they unpack to
     /// changes.
     Extract,
+    /// only `at`: the pinned files stand, and only where the output lives, or whether the
+    /// dataset is one, changes.
+    At,
     /// what is downloaded, so the dataset is resolved again.
     Spec,
 }
@@ -440,6 +446,8 @@ impl Locked {
             Some(Drift::Spec)
         } else if self.extract != source.extract || self.decompress != source.decompress {
             Some(Drift::Extract)
+        } else if self.at != entry.at {
+            Some(Drift::At)
         } else {
             None
         }
@@ -520,6 +528,7 @@ struct StoredDataset {
     extract: Option<bool>,
     decompress: Option<bool>,
     web_page: Option<bool>,
+    at: Option<String>,
     resolved: Option<String>,
     title: Option<String>,
     license: Option<String>,
@@ -576,6 +585,17 @@ impl StoredDataset {
                 )));
             }
         };
+        // only ever shown, as diff shows a move, so a line break could fake another line there
+        if let Some(at) = self
+            .at
+            .as_deref()
+            .filter(|at| at.contains(char::is_control))
+        {
+            return Err(broken(format!(
+                "data.lock gives {name} the folder {}, which holds a line break or another control character",
+                quoted(at)
+            )));
+        }
         let mut locked = Locked {
             name,
             reference,
@@ -583,6 +603,7 @@ impl StoredDataset {
             extract: self.extract.unwrap_or(true),
             decompress: self.decompress.unwrap_or(false),
             web_page: self.web_page.unwrap_or(false),
+            at: self.at,
             resolved,
             title: self.title,
             license: self.license,
@@ -998,6 +1019,9 @@ fn write_head(out: &mut String, dataset: &Locked) {
         ("spec", &dataset.spec),
     ] {
         let _ = writeln!(out, "{key} = {}", quoted(value));
+    }
+    if let Some(at) = &dataset.at {
+        let _ = writeln!(out, "at = {}", quoted(at));
     }
     if !dataset.extract {
         out.push_str("extract = false\n");
@@ -1749,6 +1773,7 @@ mod tests {
                     name: "zeta".to_owned(),
                     reference: "https://example.org/z.csv".to_owned(),
                     spec: "sha256:00".to_owned(),
+                    at: None,
                     extract: false,
                     decompress: false,
                     web_page: false,
@@ -1764,6 +1789,7 @@ mod tests {
                     name: "iris".to_owned(),
                     reference: "zenodo:3608990".to_owned(),
                     spec: "sha256:11".to_owned(),
+                    at: None,
                     extract: true,
                     decompress: false,
                     web_page: false,
@@ -1810,6 +1836,7 @@ mod tests {
             name: "mnist".to_owned(),
             reference: "zenodo:1".to_owned(),
             spec: "sha256:22".to_owned(),
+            at: None,
             extract: true,
             decompress: false,
             web_page: false,
@@ -2885,6 +2912,56 @@ mod tests {
         assert_eq!(
             locked.drift(&entry("extract = false\nselect = \"*.csv\"\n")),
             Some(Drift::Spec)
+        );
+    }
+
+    /// an output's folder is kept in its pin as data.toml names it, read back as written, and a
+    /// pin for another folder, or for none, is out of date only in where the output lives.
+    #[test]
+    fn an_outputs_folder_is_written_beside_its_ref_and_drifts_on_its_own() {
+        let entry = |extra: &str| {
+            Manifest::parse(&format!("[datasets.x]\nref = \"local\"\n{extra}"))
+                .unwrap()
+                .datasets["x"]
+                .clone()
+        };
+        let output = entry("at = \"data/processed\"\n");
+        let mut files = sample().datasets[1].files.clone();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        let locked = Locked {
+            name: "x".to_owned(),
+            reference: "local".to_owned(),
+            spec: spec(&output.source),
+            at: Some("data/processed".to_owned()),
+            extract: false,
+            web_page: false,
+            files,
+            ..sample().datasets[1].clone()
+        };
+        let text = Lock {
+            datasets: vec![locked.clone()],
+            ..Lock::default()
+        }
+        .render();
+        assert!(
+            text.contains("ref = \"local\"\nspec = \"sha256:")
+                && text.contains("\"\nat = \"data/processed\"\nextract = false\n"),
+            "{text}"
+        );
+        assert_eq!(Lock::parse(&text).unwrap().datasets, [locked.clone()]);
+        assert_eq!(locked.drift(&output), None);
+        assert_eq!(locked.drift(&entry("at = \"results\"\n")), Some(Drift::At));
+        let fetched = Locked {
+            at: None,
+            ..locked.clone()
+        };
+        assert_eq!(fetched.drift(&output), Some(Drift::At));
+        // only ever shown, so a line break there could fake another line in a diff
+        let broken = Lock::parse(&text.replace("data/processed", "data\\nprocessed")).unwrap_err();
+        assert_eq!(broken.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            broken.message,
+            "data.lock gives x the folder \"data\\nprocessed\", which holds a line break or another control character"
         );
     }
 
