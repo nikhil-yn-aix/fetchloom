@@ -610,7 +610,7 @@ fn closing(
     let elsewhere: Vec<String> = placement
         .elsewhere
         .iter()
-        .map(|(name, _)| name.clone())
+        .map(|left| left.name.clone())
         .collect();
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
@@ -850,7 +850,7 @@ async fn preview_sync(
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
     let mut absent = waiting_named(&waits, manifest, &work.scope);
     let elsewhere = &outcome.placed.placement.elsewhere;
-    absent.extend(elsewhere.iter().map(|(name, _)| name.clone()));
+    absent.extend(elsewhere.iter().map(|left| left.name.clone()));
     dry_run_done(
         &context.output,
         nothing

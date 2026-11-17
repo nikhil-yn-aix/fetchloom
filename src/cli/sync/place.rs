@@ -149,9 +149,49 @@ pub(crate) struct Placement {
     #[serde(skip)]
     pub(crate) cleared_outputs: Vec<(String, String)>,
     /// the outputs whose files no cache or mirror this machine reaches holds, which the run
-    /// leaves out, each with its folder as a command run here names it.
+    /// leaves out.
     #[serde(skip)]
-    pub(crate) elsewhere: Vec<(String, String)>,
+    pub(crate) elsewhere: Vec<Elsewhere>,
+}
+
+/// an output whose files no cache or mirror the run reaches holds, which it leaves out, as one a
+/// clone of the project that made it lacks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Elsewhere {
+    pub(crate) name: String,
+    /// its folder as a command run here names it.
+    pub(crate) shown: String,
+    /// the output and its pinned tree, as a run tells of it once, so a new pin is told of again.
+    pub(crate) pin: String,
+    /// whether an earlier run told of this pin, so this one names it in its last line alone.
+    pub(crate) told: bool,
+}
+
+impl Elsewhere {
+    /// the output `name`, `shown` as a command names its folder, as `lock` pins it, told of by no
+    /// run yet.
+    pub(crate) fn new(name: &str, shown: String, lock: &Lock) -> Elsewhere {
+        let members: Vec<crate::cache::Member> = lock
+            .get(name)
+            .map(|locked| {
+                locked
+                    .files
+                    .iter()
+                    .map(|file| crate::cache::Member {
+                        path: file.path.clone(),
+                        size: file.size,
+                        sha256: file.sha256,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Elsewhere {
+            name: name.to_owned(),
+            shown,
+            pin: format!("{name}:{}", crate::cache::tree_hash(&members).hex()),
+            told: false,
+        }
+    }
 }
 
 /// an output whose folder changed since it was pinned: files of other bytes, files no pin places
@@ -523,6 +563,11 @@ fn note_told(
         .iter()
         .map(|output| output.change.as_str())
         .collect();
+    let elsewhere: HashSet<&str> = placement
+        .elsewhere
+        .iter()
+        .map(|output| output.pin.as_str())
+        .collect();
     let files = &state.files;
     let told = &mut state.told;
     let mut changed = told.retain(Once::Edit, |edit| {
@@ -540,6 +585,16 @@ fn note_told(
     });
     for output in &outputs {
         changed |= told.note(Once::Output, output);
+    }
+    // an output this run placed, or pinned anew, is told of again once its files are elsewhere
+    changed |= told.retain(Once::Elsewhere, |pin| {
+        elsewhere.contains(pin)
+            || pin.rsplit_once(':').is_some_and(|(name, _)| {
+                manifest.datasets.contains_key(name) && !scope.includes(name)
+            })
+    });
+    for pin in &elsewhere {
+        changed |= told.note(Once::Elsewhere, pin);
     }
     changed |= told.retain(Once::Refill, |folder| folders.contains(folder));
     for edit in &edits {
@@ -747,9 +802,8 @@ pub(crate) struct Placing<'a> {
     /// the folders of outputs a drop frees here, whose markers stay, as data.lock still pins what
     /// they hold.
     still_marked: Vec<String>,
-    /// the outputs left out, as no cache or mirror this machine reaches holds their files, each
-    /// with its folder as a command names it.
-    elsewhere: Vec<(String, String)>,
+    /// the outputs left out, as no cache or mirror this machine reaches holds their files.
+    elsewhere: Vec<Elsewhere>,
 }
 
 impl<'a> Placing<'a> {
@@ -858,10 +912,16 @@ impl<'a> Placing<'a> {
     }
 
     /// leaves out the outputs of `elsewhere`, whose files no cache or mirror this machine reaches
-    /// holds, each with its folder as a command names it: their folders stay as they are, and the
-    /// run settles nothing, since their files are still to come.
-    pub(crate) fn leave_out(&mut self, elsewhere: Vec<(String, String)>) {
-        let names: HashSet<&str> = elsewhere.iter().map(|(name, _)| name.as_str()).collect();
+    /// holds: their folders stay as they are, and the run settles nothing, since their files are
+    /// still to come. each is told of once per pin, as the state records.
+    pub(crate) fn leave_out(&mut self, mut elsewhere: Vec<Elsewhere>) {
+        for output in &mut elsewhere {
+            output.told = self.survey.state.told.has(Once::Elsewhere, &output.pin);
+        }
+        let names: HashSet<&str> = elsewhere
+            .iter()
+            .map(|output| output.name.as_str())
+            .collect();
         for (target, action) in self.targets.iter().zip(&mut self.actions) {
             if names.contains(target.dataset) {
                 *action = Action::Unselected;

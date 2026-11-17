@@ -116,6 +116,9 @@ pub(crate) enum Once {
     /// a dataset folder whose .gitignore of fetchloom's names the datasets' entries, so the
     /// person's files there stay in git, as said to a person in git: the folder.
     Named,
+    /// an output whose files no cache or mirror this machine reaches holds, as made on another
+    /// machine: the output and its pinned tree, so a new pin is told of again.
+    Elsewhere,
 }
 
 impl Once {
@@ -133,6 +136,7 @@ impl Once {
             Once::Tracked => "tracked",
             Once::Hidden => "hidden",
             Once::Named => "named",
+            Once::Elsewhere => "elsewhere",
         }
     }
 }

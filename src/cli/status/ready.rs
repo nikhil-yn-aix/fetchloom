@@ -253,7 +253,7 @@ pub(in crate::cli) fn after_sync(
         placement
             .elsewhere
             .iter()
-            .map(|(name, shown)| (name, shown)),
+            .map(|left| (&left.name, &left.shown)),
     ));
     unready.extend(
         waiting

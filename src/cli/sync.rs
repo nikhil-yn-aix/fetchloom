@@ -20,7 +20,7 @@ use url::Url;
 
 use self::disk::Survey;
 use self::draft::Draft;
-use self::place::{Download, Placement, Placing, Preview};
+use self::place::{Download, Elsewhere, Placement, Placing, Preview};
 use self::placed_archives::PlacedArchives;
 use self::rename::Rename;
 use super::Context;
@@ -251,17 +251,19 @@ impl<'a> Loop<'a> {
         // changed, stays small
         match Box::pin(self.prepare(manifest, lock, plan, force, survey)).await {
             Ok(mut placing) => {
-                let elsewhere = self.elsewhere(manifest);
-                placing.leave_out(elsewhere.clone());
-                let placement = self.apply(manifest, lock, placing, synced);
-                self.warn_elsewhere(&elsewhere);
-                placement
+                placing.leave_out(self.elsewhere(manifest, lock));
+                let placement = self.apply(manifest, lock, placing, synced)?;
+                self.warn_elsewhere(&placement.elsewhere);
+                Ok(placement)
             }
             // a sync still places the datasets it has whole, of those named or of all, and names
             // the rest
             Err(error) if lacks_files(&error) => {
                 let placed = self.place_whole(manifest, lock, force, synced, changed);
-                self.warn_elsewhere(&self.elsewhere(manifest));
+                match &placed {
+                    Ok(Some(partial)) => self.warn_elsewhere(&partial.placement.elsewhere),
+                    _ => self.warn_elsewhere(&self.elsewhere(manifest, lock)),
+                }
                 match placed {
                     Ok(Some(partial)) => Err(self.partly(error, partial)),
                     Ok(None) => Err(self.before_placing(error)),
@@ -278,14 +280,14 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// the outputs this run leaves out, as no cache or mirror it reaches holds their files, each
-    /// with its folder as a command run here names it.
-    fn elsewhere(&self, manifest: &Manifest) -> Vec<(String, String)> {
+    /// the outputs this run leaves out, as no cache or mirror it reaches holds their files, as
+    /// `lock` pins them.
+    fn elsewhere(&self, manifest: &Manifest, lock: &Lock) -> Vec<Elsewhere> {
         self.made_elsewhere
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .map(|name| (name.clone(), self.shown(manifest, name)))
+            .map(|name| Elsewhere::new(name, self.shown(manifest, name), lock))
             .collect()
     }
 
@@ -295,11 +297,13 @@ impl<'a> Loop<'a> {
     }
 
     /// warns of each output of `elsewhere`, made on another machine, with both ways to bring
-    /// its files here.
-    fn warn_elsewhere(&self, elsewhere: &[(String, String)]) {
-        for (name, at) in elsewhere {
-            let said = local::made_elsewhere(name, at);
-            self.context.output.warn_with(
+    /// its files here: once per output and pin, though in every json document, which a script
+    /// reads alone.
+    fn warn_elsewhere(&self, elsewhere: &[Elsewhere]) {
+        let output = &self.context.output;
+        for left in elsewhere.iter().filter(|left| output.json() || !left.told) {
+            let said = local::made_elsewhere(&left.name, &left.shown);
+            output.warn_with(
                 Warning::OutputElsewhere,
                 &said.message,
                 said.help.as_deref().unwrap_or_default(),
@@ -422,7 +426,8 @@ impl<'a> Loop<'a> {
         let survey = placing.into_survey();
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let scope = Scope::Only(whole.clone());
-        let placing = Placing::from_plan(self.project, manifest, plan, force, &scope, survey)?;
+        let mut placing = Placing::from_plan(self.project, manifest, plan, force, &scope, survey)?;
+        placing.leave_out(self.elsewhere(manifest, lock));
         let placement = self.apply(manifest, lock, placing, synced)?;
         Ok(Some(Partial {
             placed: whole.into_iter().collect(),
@@ -1298,8 +1303,7 @@ impl<'a> Loop<'a> {
             .into_iter()
             .partition(|(dataset, _)| manifest.datasets.get(dataset).is_some_and(Entry::is_output));
         let (mirrored, elsewhere) = self.made_where(manifest, lock, made).await?;
-        placing.leave_out(elsewhere.clone());
-        self.warn_elsewhere(&elsewhere);
+        placing.leave_out(elsewhere);
         let archives = archives::of(lock, wanted);
         for (dataset, archive) in &archives {
             if archive.file.unpacks_to.is_some() {
@@ -1350,6 +1354,7 @@ impl<'a> Loop<'a> {
             }
         }
         let mut preview = placing.preview(guessed);
+        self.warn_elsewhere(&preview.placement.elsewhere);
         preview.changes.to_download = Some(fetch::planned(
             self.context,
             jobs.iter()
@@ -1369,13 +1374,13 @@ impl<'a> Loop<'a> {
 
     /// of `made`, files of outputs the cache lacks, those a run takes from the reuse folders or a
     /// mirror, as downloads, and the outputs it leaves out, since no such place holds all their
-    /// files, each with its folder as a command names it.
+    /// files.
     async fn made_where(
         &self,
         manifest: &Manifest,
         lock: &Lock,
         made: Vec<(String, &LockedFile)>,
-    ) -> Result<(Vec<Download>, Vec<(String, String)>), Error> {
+    ) -> Result<(Vec<Download>, Vec<Elsewhere>), Error> {
         if made.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -1401,10 +1406,7 @@ impl<'a> Loop<'a> {
             .collect();
         let elsewhere = lacking
             .into_iter()
-            .map(|name| {
-                let shown = self.shown(manifest, &name);
-                (name, shown)
-            })
+            .map(|name| Elsewhere::new(&name, self.shown(manifest, &name), lock))
             .collect();
         Ok((mirrored, elsewhere))
     }

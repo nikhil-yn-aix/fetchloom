@@ -254,7 +254,7 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
     let synced = sync(&["sync"])?;
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
-    assert_eq!(stderr.matches(said).count(), 1, "{stderr}");
+    assert!(!stderr.contains(said), "told by the run before: {stderr}");
     assert!(
         stderr.contains(
             "Ok all pinned files but processed's are in place by size and time, nothing to do"
@@ -282,7 +282,7 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
     let stderr = text(&path.stderr)?;
     assert_eq!(path.status.code(), Some(0), "{stderr}");
     assert_eq!(text(&path.stdout)?, format!("{}\n", folder.display()));
-    assert!(stderr.contains(&format!("warning: {said}\n")), "{stderr}");
+    assert!(!stderr.contains(said), "told by the runs before: {stderr}");
     let document = json(&sync(&["--json", "path", "processed"])?)?;
     assert_eq!(
         document["result"],
@@ -315,6 +315,79 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
     let mirror = mirror.to_string_lossy();
     let pushed = json(&sync(&["--json", "push", "--to", &mirror, "--yes"])?)?;
     assert_eq!(pushed["errors"][0]["message"], said, "{pushed}");
+    Ok(())
+}
+
+/// a teammate without an output's bytes is told once per output and pin, by sync and path alike,
+/// that it was made on another machine; each sync's last line still names it, and json says it on
+/// every run, as a script reads each run alone. a new pin is told of again.
+#[test]
+fn an_output_made_elsewhere_is_told_once_per_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let server = Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])?;
+    let link = format!("{}{PATH}", server.url);
+    sandbox.allow(&link);
+    ok(&sandbox.run(&["add", &link])?)?;
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    let cache = sandbox.folder("teammate-cache")?;
+    let pull = || -> Result {
+        for file in ["data.toml", "data.lock"] {
+            fs::copy(work.join(file), teammate.join(file))?;
+        }
+        Ok(())
+    };
+    let run = |args: &[&str]| -> Result<String> {
+        let output = sandbox
+            .command_in(&teammate, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        Ok(stderr)
+    };
+    let said = "warning: processed was made on another machine";
+    let path: &[&str] = &["path", "processed"];
+    let sync: &[&str] = &["sync"];
+    pull()?;
+    let first = run(path)?;
+    assert_eq!(first.matches(said).count(), 1, "{first}");
+    for (args, last) in [
+        (path, ""),
+        (
+            sync,
+            "Synced 1 dataset into data · processed waits for its files",
+        ),
+        (
+            sync,
+            "Ok all pinned files but processed's are in place by size and time, nothing to do",
+        ),
+    ] {
+        let again = run(args)?;
+        assert!(!again.contains(said), "{args:?}: {again}");
+        assert!(again.contains(last), "{args:?}: {again}");
+    }
+    let document = json(
+        &sandbox
+            .command_in(&teammate, &["--json", "sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?,
+    )?;
+    assert!(
+        warning(&document, "output.elsewhere")["message"].is_string(),
+        "{document}"
+    );
+    rerun(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?)?;
+    pull()?;
+    let repinned = run(sync)?;
+    assert_eq!(repinned.matches(said).count(), 1, "{repinned}");
+    for args in [sync, path] {
+        let again = run(args)?;
+        assert!(!again.contains(said), "{args:?}: {again}");
+    }
     Ok(())
 }
 
