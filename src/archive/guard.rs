@@ -6,8 +6,8 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 use super::names::{Named, Names};
-use super::tar::unreadable_stream;
-use super::{Limits, REFUSED_HELP, Skipped, not_written, past};
+use super::tar::unreadable_stream_for;
+use super::{Limits, Skipped, Unpacking, not_written, past_for};
 use crate::cache::Share;
 use crate::error::{Error, Kind};
 use crate::space::Filesystem;
@@ -49,6 +49,8 @@ impl Meter {
 }
 
 pub(super) struct Guard<'a> {
+    /// what unpacks, which the refusals name.
+    unpacking: Unpacking,
     limits: &'a Limits,
     watch: &'a dyn Fn(u64) -> bool,
     meter: &'a Meter,
@@ -80,6 +82,7 @@ impl<'a> Guard<'a> {
         meter: &'a Meter,
     ) -> Self {
         Guard {
+            unpacking: Unpacking::Archive,
             limits,
             watch,
             meter,
@@ -94,6 +97,12 @@ impl<'a> Guard<'a> {
             taken: 0,
             took: 0,
         }
+    }
+
+    /// a guard for one compressed file `decompress` unpacks, which its refusals call a file.
+    pub(super) fn decompressing(mut self) -> Self {
+        self.unpacking = Unpacking::File;
+        self
     }
 
     pub(super) fn writing_to(mut self, cache: &'a Path, filesystem: Filesystem) -> Self {
@@ -150,7 +159,8 @@ impl<'a> Guard<'a> {
 
     pub(super) fn check_entries(&self, entries: u64) -> Result<(), Error> {
         if entries > self.limits.members {
-            return Err(past(
+            return Err(past_for(
+                self.unpacking,
                 format!(
                     "the archive holds more than {}, the most fetchloom unpacks from one archive",
                     units::count(self.limits.members, "entry", "entries")
@@ -200,7 +210,7 @@ impl<'a> Guard<'a> {
                 }
                 Ok(read) => read,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                Err(err) => return Err(unreadable_stream(Some(path), &err, self.limits.memory)),
+                Err(err) => return Err(self.unreadable(path, &err)),
             };
             self.written += read as u64;
             member += read as u64;
@@ -227,7 +237,7 @@ impl<'a> Guard<'a> {
                 Ok(0) => return Ok(()),
                 Ok(passed) => self.skip(passed as u64)?,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                Err(err) => return Err(unreadable_stream(Some(path), &err, self.limits.memory)),
+                Err(err) => return Err(self.unreadable(path, &err)),
             }
             self.check_stopped()?;
         }
@@ -243,6 +253,11 @@ impl<'a> Guard<'a> {
         std::mem::take(&mut self.system)
     }
 
+    /// the error for the stream that stopped decompressing at `path`.
+    fn unreadable(&self, path: &str, err: &io::Error) -> Error {
+        unreadable_stream_for(self.unpacking, Some(path), err, self.limits.memory)
+    }
+
     pub(super) fn check_stopped(&self) -> Result<(), Error> {
         if (self.watch)(self.meter.compressed.get()) {
             return Err(Error::new(
@@ -255,11 +270,18 @@ impl<'a> Guard<'a> {
 
     fn check_limits(&self, path: &str) -> Result<(), Error> {
         if self.written > self.limits.bytes {
-            return Err(past(
-                format!(
-                    "\"{path}\" takes the archive past {}, the most fetchloom unpacks from one archive",
-                    units::size(self.limits.bytes)
+            let most = units::size(self.limits.bytes);
+            let message = match self.unpacking {
+                Unpacking::Archive => format!(
+                    "\"{path}\" takes the archive past {most}, the most fetchloom unpacks from one archive"
                 ),
+                Unpacking::File => format!(
+                    "\"{path}\" decompresses to more than {most}, the most fetchloom unpacks from one file"
+                ),
+            };
+            return Err(past_for(
+                self.unpacking,
+                message,
                 "FETCHLOOM_ARCHIVE_SIZE",
                 "archive_size",
             ));
@@ -283,20 +305,27 @@ impl<'a> Guard<'a> {
         if fits {
             return Ok(());
         }
+        let (unpacks, others) = match self.unpacking {
+            Unpacking::Archive => ("the archive unpacks", "the archives"),
+            Unpacking::File => ("the file decompresses", "what else"),
+        };
         let beside = if beside {
-            ", with the archives unpacked at the same time"
+            format!(", with {others} unpacked at the same time")
         } else {
-            ""
+            String::new()
         };
         Err(Error::new(
             Kind::LocalIo,
             format!(
-                "the archive unpacks to more than the {} the disk holding the cache at {} had free{beside}",
+                "{unpacks} to more than the {} the disk holding the cache at {} had free{beside}",
                 units::size(free),
                 units::path(cache)
             ),
         )
-        .help(format!("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again; or {REFUSED_HELP}")))
+        .help(format!(
+            "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again; or {}",
+            self.unpacking.packed_help()
+        )))
     }
 
     fn check_ratio(&self, at: Option<&str>) -> Result<(), Error> {
@@ -305,12 +334,21 @@ impl<'a> Guard<'a> {
         if expanded >= RATIO_FLOOR
             && u128::from(expanded) > u128::from(compressed) * u128::from(self.limits.ratio)
         {
-            let at = at.map(|path| format!(" at \"{path}\"")).unwrap_or_default();
-            return Err(past(
-                format!(
-                    "the archive grew past {} times its compressed size{at}, which is how zip bombs fill disks",
-                    self.limits.ratio
+            let ratio = self.limits.ratio;
+            let message = match (self.unpacking, at) {
+                (Unpacking::File, Some(path)) => format!(
+                    "\"{path}\" grew past {ratio} times its compressed size as it decompressed, which is how compression bombs fill disks"
                 ),
+                (_, at) => {
+                    let at = at.map(|path| format!(" at \"{path}\"")).unwrap_or_default();
+                    format!(
+                        "the archive grew past {ratio} times its compressed size{at}, which is how zip bombs fill disks"
+                    )
+                }
+            };
+            return Err(past_for(
+                self.unpacking,
+                message,
                 "FETCHLOOM_ARCHIVE_RATIO",
                 "archive_ratio",
             ));

@@ -56,6 +56,46 @@ pub(crate) fn detect(input: &Input, memory: u64) -> Result<Detected, Error> {
     })
 }
 
+/// what a file `decompress` was asked of holds, by its bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Single {
+    /// one compressed stream, or several joined, of the compression the tar format of the same
+    /// compression names.
+    Stream(Format),
+    /// a tar in a compressed stream: extract's, never decompress's.
+    Tar,
+    /// no compressed stream fetchloom reads.
+    Other,
+}
+
+/// what `input`, a file whose name says it is compressed, holds. a stream whose decoder would
+/// need more memory than `memory` allows counts as one, so decompressing it refuses it and says
+/// why, never leaving it packed in silence.
+pub(super) fn single(input: &Input, memory: u64) -> Result<Single, Error> {
+    let mut file = Joined::open(input).map_err(|(path, err)| unreadable(path, &err))?;
+    let unread = |err: io::Error| unreadable(input.first(), &err);
+    let mut block = [0; BLOCK];
+    let len = read_up_to(&mut file, &mut block).map_err(unread)?;
+    let head = &block[..len];
+    if signed(head).is_some() {
+        return Ok(Single::Other);
+    }
+    let Some(format) = compression(head) else {
+        return Ok(Single::Other);
+    };
+    file.rewind().map_err(unread)?;
+    let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory) else {
+        return Ok(Single::Stream(format));
+    };
+    let mut first = [0; BLOCK];
+    let tar = read_up_to(&mut decoded, &mut first).is_ok_and(|len| is_tar_header(&first[..len]));
+    Ok(if tar {
+        Single::Tar
+    } else {
+        Single::Stream(format)
+    })
+}
+
 /// the tar format a compressed stream would hold, judged by its magic number.
 fn compression(head: &[u8]) -> Option<Format> {
     // zstd streams may open with a skippable frame, as pzstd writes them

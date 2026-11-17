@@ -7,6 +7,7 @@ mod names;
 pub(crate) mod parts;
 mod sevenz;
 mod shards;
+mod single;
 mod store;
 mod tar;
 mod zip;
@@ -24,6 +25,7 @@ pub(crate) use detect::Format;
 pub(crate) use detect::{Detected, detect};
 pub(crate) use input::Input;
 pub(crate) use shards::{Shards, shards, toml_key};
+pub(crate) use single::{Decompressed, Left, decompress_cached, decompressed_name};
 
 use guard::{Guard, Meter};
 
@@ -439,14 +441,58 @@ fn unopened(path: &Path, err: &io::Error) -> Error {
 
 const REFUSED_HELP: &str = "keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract";
 
+/// how a person keeps a single compressed file packed, as [`REFUSED_HELP`] says of an archive.
+pub(crate) const FILE_PACKED_HELP: &str = "keep the file packed with decompress = false on its dataset in data.toml, or add it without --decompress";
+
+/// what unpacks: an archive, or a single compressed file `decompress` unpacks, which its messages
+/// name and say how to keep packed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unpacking {
+    Archive,
+    File,
+}
+
+impl Unpacking {
+    /// what a message calls it.
+    fn noun(self) -> &'static str {
+        match self {
+            Unpacking::Archive => "archive",
+            Unpacking::File => "file",
+        }
+    }
+
+    /// what a message says is done to it.
+    fn verb(self) -> &'static str {
+        match self {
+            Unpacking::Archive => "unpack",
+            Unpacking::File => "decompress",
+        }
+    }
+
+    /// how a person keeps it packed.
+    fn packed_help(self) -> &'static str {
+        match self {
+            Unpacking::Archive => REFUSED_HELP,
+            Unpacking::File => FILE_PACKED_HELP,
+        }
+    }
+}
+
 fn refused(message: impl Into<String>) -> Error {
     Error::new(Kind::SourceInvalid, message).help(REFUSED_HELP)
 }
 
 /// an archive past a limit that `variable` or the settings file's `key` raises.
 fn past(message: impl Into<String>, variable: &str, key: &str) -> Error {
+    past_for(Unpacking::Archive, message, variable, key)
+}
+
+/// [`past`], for what `unpacking` says unpacks.
+fn past_for(unpacking: Unpacking, message: impl Into<String>, variable: &str, key: &str) -> Error {
     Error::new(Kind::SourceInvalid, message).help(format!(
-        "if you trust the archive, raise {variable}, or {key} in the settings file. otherwise {REFUSED_HELP}"
+        "if you trust the {}, raise {variable}, or {key} in the settings file. otherwise {}",
+        unpacking.noun(),
+        unpacking.packed_help()
     ))
 }
 
@@ -460,33 +506,58 @@ fn refused_member(path: &str, reason: &str) -> Error {
 /// the error for an archive not read to its end, unpacked within `memory`; a disk's own failure
 /// stays `local.io`.
 fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static), memory: u64) -> Error {
+    damaged_for(Unpacking::Archive, at, err, memory)
+}
+
+/// [`damaged`], for what `unpacking` says unpacks.
+fn damaged_for(
+    unpacking: Unpacking,
+    at: Option<&str>,
+    err: &(dyn std::error::Error + 'static),
+    memory: u64,
+) -> Error {
+    let noun = unpacking.noun();
     if let Some(error) = crate::error::io_cause(err) {
         let doing = match at {
-            Some(path) => format!("could not read the cached archive at \"{path}\""),
-            None => "could not read the cached archive".to_owned(),
+            Some(path) => format!("could not read the cached {noun} at \"{path}\""),
+            None => format!("could not read the cached {noun}"),
         };
         return Error::io(doing, error);
     }
     if tar::needs_too_much_memory(err) {
-        return past(
+        return past_for(
+            unpacking,
             format!(
-                "the archive's xz stream needs more than {} of memory to unpack",
-                crate::units::size(memory)
+                "the {noun}'s xz stream needs more than {} of memory to {}",
+                crate::units::size(memory),
+                unpacking.verb()
             ),
-            "FETCHLOOM_MEMORY, which gives each archive a quarter of it",
+            &format!("FETCHLOOM_MEMORY, which gives each {noun} a quarter of it"),
             "memory",
         );
     }
     let at = at.map(crate::name::abridged);
-    let message = match (at, ends_early(err)) {
-        (Some(path), true) => {
+    let message = match (unpacking, at, ends_early(err)) {
+        (Unpacking::File, _, true) => {
+            "the file is damaged: it ends before its stream does".to_owned()
+        }
+        (Unpacking::File, _, false) => format!("the file is damaged: {err}"),
+        (Unpacking::Archive, Some(path), true) => {
             format!("the archive is damaged: it ends in the middle of \"{path}\"")
         }
-        (None, true) => "the archive is damaged: it ends in the middle of a file".to_owned(),
-        (Some(path), false) => format!("the archive is damaged at \"{path}\": {err}"),
-        (None, false) => format!("the archive is damaged: {err}"),
+        (Unpacking::Archive, None, true) => {
+            "the archive is damaged: it ends in the middle of a file".to_owned()
+        }
+        (Unpacking::Archive, Some(path), false) => {
+            format!("the archive is damaged at \"{path}\": {err}")
+        }
+        (Unpacking::Archive, None, false) => format!("the archive is damaged: {err}"),
     };
-    Error::new(Kind::SourceInvalid, message).help(DAMAGED_HELP)
+    let help = match unpacking {
+        Unpacking::Archive => DAMAGED_HELP,
+        Unpacking::File => FILE_DAMAGED_HELP,
+    };
+    Error::new(Kind::SourceInvalid, message).help(help)
 }
 
 /// whether `err` says the archive's bytes ran out before what they hold did: a decoder's
@@ -514,6 +585,8 @@ fn ends_early(err: &(dyn std::error::Error + 'static)) -> bool {
 }
 
 const DAMAGED_HELP: &str = "ask the dataset's authors for a fixed copy, or keep it packed with extract = false in data.toml or --no-extract";
+
+const FILE_DAMAGED_HELP: &str = "ask the dataset's authors for a fixed copy, or keep it packed with decompress = false in data.toml or without --decompress";
 
 fn cut_short() -> Error {
     Error::new(

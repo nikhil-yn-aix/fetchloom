@@ -56,6 +56,14 @@ pub(crate) fn parts_key(parts: impl IntoIterator<Item = (Sha256, u64)>) -> Sha25
     digest::sha256(text.as_bytes())
 }
 
+/// the key the record of what a single compressed file decompressed to goes by: the SHA-256 of a
+/// `fetchloom decompressed` line, then the packed file's hex SHA-256 and the name it decompresses
+/// to, a line each. never the packed file's own hash, since the same bytes under another name
+/// decompress to a file of that other name.
+pub(crate) fn decompressed_key(packed: &Sha256, name: &str) -> Sha256 {
+    digest::sha256(format!("fetchloom decompressed\n{packed}\n{name}\n").as_bytes())
+}
+
 impl Cache {
     /// records what `archive` unpacked to, and returns the tree hash.
     pub(crate) fn record_unpacked(

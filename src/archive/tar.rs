@@ -12,7 +12,7 @@ use liblzma::stream::{CONCATENATED, Stream};
 use super::guard::{Guard, Meter};
 use super::input::Input;
 use super::names::Named;
-use super::{Format, Keep, damaged, refused, refused_member};
+use super::{Format, Keep, Unpacking, damaged_for, refused, refused_member};
 use crate::error::Error;
 use crate::units;
 
@@ -78,18 +78,39 @@ pub(super) fn unreadable_stream(
     err: &(dyn std::error::Error + 'static),
     memory: u64,
 ) -> Error {
+    unreadable_stream_for(Unpacking::Archive, at, err, memory)
+}
+
+/// [`unreadable_stream`], for what `unpacking` says unpacks.
+pub(super) fn unreadable_stream_for(
+    unpacking: Unpacking,
+    at: Option<&str>,
+    err: &(dyn std::error::Error + 'static),
+    memory: u64,
+) -> Error {
     if needs_too_large_window(err) {
         let window = 1 << zstd_window_log(memory);
-        return super::past(
+        let noun = unpacking.noun();
+        return super::past_for(
+            unpacking,
             format!(
-                "the archive's zstd stream needs a window larger than {} to unpack",
-                units::size(window)
+                "the {noun}'s zstd stream needs a window larger than {} to {}",
+                units::size(window),
+                unpacking.verb()
             ),
-            "FETCHLOOM_MEMORY, which gives each archive a quarter of it",
+            &format!("FETCHLOOM_MEMORY, which gives each {noun} a quarter of it"),
             "memory",
         );
     }
-    damaged(at, err, memory)
+    damaged_for(unpacking, at, err, memory)
+}
+
+/// `input`'s bytes as `meter` counts them while a decompressor reads them.
+pub(super) fn counted<'m>(input: &Input, meter: &'m Meter) -> Result<impl BufRead + 'm, Error> {
+    Ok(Counted {
+        inner: input.open(meter)?,
+        meter,
+    })
 }
 
 pub(super) fn unpack(
