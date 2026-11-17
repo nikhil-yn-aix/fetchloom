@@ -1770,6 +1770,7 @@ fn an_output_takes_no_key_that_changes_its_files() {
     for key in [
         "path = 'processed'",
         "extract = true",
+        "decompress = true",
         "copy = true",
         "web_page = true",
         "members.'a.zip'.select = '*.csv'",

@@ -41,7 +41,14 @@ const DATASET_KEYS: [&str; 10] = [
     "at",
 ];
 /// the keys an output takes no value for: its files stay where and as its pipeline wrote them.
-const NOT_FOR_OUTPUTS: [&str; 5] = ["path", "extract", "copy", "web_page", "members"];
+const NOT_FOR_OUTPUTS: [&str; 6] = [
+    "path",
+    "extract",
+    "decompress",
+    "copy",
+    "web_page",
+    "members",
+];
 /// the keys of the table that chooses the files of one archive.
 const MEMBER_KEYS: [&str; 2] = ["select", "exclude"];
 

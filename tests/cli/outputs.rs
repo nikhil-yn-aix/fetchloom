@@ -489,6 +489,34 @@ fn an_output_never_takes_in_another_datasets_files() -> Result {
     Ok(())
 }
 
+/// an output keeps the files its pipeline wrote, so `--decompress`, which places single compressed
+/// files unpacked, is refused for one, new or pinned, before anything is written.
+#[test]
+fn an_output_takes_no_decompress() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    let said = "error: data/processed is an output, kept as its pipeline wrote it, so it takes no --decompress";
+    let add = ["add", "data/processed", "--as", "processed", "--decompress"];
+    let refused = sandbox.run(&add)?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains(said), "{stderr}");
+    assert!(!work.join("data.toml").exists(), "{stderr}");
+    ok(&sandbox.run(&add[..4])?)?;
+    let pinned = [
+        fs::read_to_string(work.join("data.toml"))?,
+        fs::read_to_string(work.join("data.lock"))?,
+    ];
+    let refused = sandbox.run(&add)?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains(said), "{stderr}");
+    assert_eq!(fs::read_to_string(work.join("data.toml"))?, pinned[0]);
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned[1]);
+    Ok(())
+}
+
 /// a cloned data.toml chooses where an output lands, so `at` is held to the data folder's rules
 /// and kept apart from the cache, before anything is written.
 #[test]

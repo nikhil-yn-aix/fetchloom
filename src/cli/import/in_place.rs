@@ -198,6 +198,15 @@ fn read<'m>(
     old: Option<&Lock>,
 ) -> Result<Read<'m>, Error> {
     let manifest = &adding.manifest;
+    if args.decompress {
+        return Err(Error::new(
+            Kind::Usage,
+            format!(
+                "{shown} is an output, kept as its pipeline wrote it, so it takes no --decompress"
+            ),
+        )
+        .help("leave out --decompress"));
+    }
     refuse_folder(manifest, at, shown)?;
     let (name, entry) = output_name(context, manifest, args, at, start, shown)?;
     if args.check && entry.is_none() {
