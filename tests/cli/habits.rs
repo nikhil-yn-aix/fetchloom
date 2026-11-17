@@ -5,32 +5,9 @@
 
 use std::fs;
 
+use crate::boundary::{iris_server, synced, with_iris};
 use crate::project::{IRIS, PATH};
-use crate::support::{
-    Result, Routes, Sandbox, delete, delete_folder, file, json, text, without_copy_warning, zip_of,
-};
-
-/// a server answering iris at [`PATH`], as often as asked.
-fn iris_server() -> Result<Routes> {
-    Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])
-}
-
-/// iris added to the project in `sandbox` from `server`, its file at data/iris/iris.csv.
-fn with_iris(sandbox: &Sandbox, server: &Routes) -> Result {
-    let link = format!("{}{PATH}", server.url);
-    sandbox.allow(&link);
-    let added = sandbox.run(&["add", &link])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    Ok(())
-}
-
-/// what `sync` printed on stderr, which must succeed, without the copy note fat disks add.
-fn synced(sandbox: &Sandbox) -> Result<String> {
-    let output = sandbox.run(&["sync"])?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(0), "{stderr}");
-    Ok(without_copy_warning(&stderr))
-}
+use crate::support::{Result, Routes, Sandbox, delete, delete_folder, file, json, text, zip_of};
 
 /// a fix made in place, as `sed -i` makes it, writing a new file under the old name: the sync
 /// after it says once that the edit stays, naming first the ways that keep it, and last the

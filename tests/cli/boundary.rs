@@ -10,12 +10,12 @@ use crate::support::{
 };
 
 /// a server answering iris at [`PATH`], as often as asked.
-fn iris_server() -> Result<Routes> {
+pub(crate) fn iris_server() -> Result<Routes> {
     Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])
 }
 
 /// iris added to the project in `sandbox` from `server`, its file at data/iris/iris.csv.
-fn with_iris(sandbox: &Sandbox, server: &Routes) -> Result {
+pub(crate) fn with_iris(sandbox: &Sandbox, server: &Routes) -> Result {
     add_ok(sandbox, &format!("{}{PATH}", server.url))
 }
 
@@ -733,12 +733,12 @@ fn a_listed_marker_keeps_the_files_of_a_dataset_not_known_here() -> Result {
     Ok(())
 }
 
-/// what `sync` printed on stderr, which must succeed.
-fn synced(sandbox: &Sandbox) -> Result<String> {
+/// what `sync` printed on stderr, which must succeed, without the copy note fat disks add.
+pub(crate) fn synced(sandbox: &Sandbox) -> Result<String> {
     let output = sandbox.run(&["sync"])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    Ok(stderr)
+    Ok(without_copy_warning(&stderr))
 }
 
 /// a zip of `count` small csv files at its top, named f0000.csv and on.
