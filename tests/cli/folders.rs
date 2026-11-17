@@ -46,13 +46,24 @@ fn nginx(folder: &str, entries: &[&str]) -> Vec<Part> {
 
 /// a listing as nginx's autoindex writes it, as dwd's states each file's size in bytes.
 fn nginx_sized(folder: &str, entries: &[&str]) -> Vec<Part> {
-    let rows = entries
+    let rows: Vec<(&str, String)> = entries
         .iter()
         .map(|entry| {
             let size = [("iris.csv", IRIS), ("tips.csv", TIPS), ("new.csv", NEW)]
                 .iter()
                 .find(|(name, _)| name == entry)
                 .map_or_else(|| "-".to_owned(), |(_, bytes)| bytes.len().to_string());
+            (*entry, size)
+        })
+        .collect();
+    nginx_stating(folder, &rows)
+}
+
+/// a listing as nginx's autoindex writes it, stating each entry's size as `rows` give it.
+fn nginx_stating(folder: &str, rows: &[(&str, String)]) -> Vec<Part> {
+    let rows = rows
+        .iter()
+        .map(|(entry, size)| {
             format!(
                 "<a href=\"{entry}\">{entry}</a>{:>40}{size:>20}\r\n",
                 "16-Nov-2026 09:00:07"
@@ -690,6 +701,65 @@ fn a_listing_that_rounds_sizes_sizes_the_folder_about() -> Result {
             "nothing downloads before the question: {later:?}"
         );
     }
+    Ok(())
+}
+
+/// a `rate` cap holds a run's downloads together under it, so the dry run's time heeds it: 600 MiB
+/// from a host known to send 100 MiB/s take under 10 s, and at 1 MiB/s about 10 min, or at least
+/// that once the host's speed is not known.
+#[test]
+fn a_dry_run_times_its_downloads_under_the_rate_cap() -> Result {
+    let size = (300_u64 << 20).to_string();
+    let server = Routes::start(vec![(
+        "/big/".to_owned(),
+        nginx_stating("/big/", &[("a.bin", size.clone()), ("b.bin", size)]),
+    )])?;
+    let folder = format!("{}/big/", server.url);
+    let sandbox = Sandbox::new()?;
+    let speeds = sandbox.speeds();
+    fs::create_dir_all(speeds.parent().ok_or("no folder for speeds")?)?;
+    fs::write(
+        &speeds,
+        r#"{"hosts":{"127.0.0.1":{"rate":104857600.0,"overhead":0.1,"heard":1}}}"#,
+    )?;
+    let planned = |rate: Option<&str>| -> Result<String> {
+        let mut dry = sandbox.command(&["add", &folder, "--dry-run"]);
+        match rate {
+            Some(rate) => dry.env("FETCHLOOM_RATE", rate),
+            None => dry.env_remove("FETCHLOOM_RATE"),
+        };
+        let output = dry.output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let line = stderr
+            .lines()
+            .find(|line| line.contains("Would download"))
+            .ok_or_else(|| format!("no total: {stderr}"))?;
+        Ok(line.trim_start().to_owned())
+    };
+    assert_eq!(
+        planned(None)?,
+        "Would download 2 files · 600.0 MiB · under 10 s"
+    );
+    assert_eq!(
+        planned(Some("1M"))?,
+        "Would download 2 files · 600.0 MiB · about 10 min"
+    );
+    let document = json(
+        &sandbox
+            .command(&["--json", "add", &folder, "--dry-run"])
+            .env("FETCHLOOM_RATE", "1M")
+            .output()?,
+    )?;
+    assert_eq!(
+        document["result"]["changes"]["to_download"]["time"],
+        serde_json::json!({"bound": "about", "seconds": 600})
+    );
+    crate::support::delete(&speeds)?;
+    assert_eq!(
+        planned(Some("1M"))?,
+        "Would download 2 files · 600.0 MiB · at least 10 min"
+    );
     Ok(())
 }
 

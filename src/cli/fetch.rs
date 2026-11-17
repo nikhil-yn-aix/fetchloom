@@ -1369,11 +1369,12 @@ pub(super) fn askable(
         .collect()
 }
 
-/// the run's limits on downloads at once.
+/// the run's limits on downloads at once, and on the bytes a second they take together.
 pub(super) fn limits(context: &Context) -> estimate::Limits {
     estimate::Limits {
         jobs: context.settings.jobs.value,
         host_jobs: context.settings.host_jobs.value,
+        rate: context.settings.rate.value,
     }
 }
 
@@ -2319,6 +2320,7 @@ mod tests {
             limits: estimate::Limits {
                 jobs: 1,
                 host_jobs: 1,
+                rate: None,
             },
             stop: Arc::default(),
             waiting: AtomicUsize::new(0),

@@ -1,6 +1,6 @@
 //! how long downloads should take, judged before any starts: a pure function of the files and
 //! bytes each host serves, what this machine remembers of each host's speed, the pacing fetchloom
-//! keeps to and its job limits.
+//! keeps to, its job limits and its `rate` cap.
 
 use std::time::Duration;
 
@@ -91,11 +91,13 @@ pub(crate) struct Host {
     pub(crate) most: Option<usize>,
 }
 
-/// downloads running at once: `jobs` in all, `host_jobs` to one host.
+/// downloads running at once: `jobs` in all, `host_jobs` to one host, and the most bytes a second
+/// they take together, the `rate` setting, when one is set.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Limits {
     pub(crate) jobs: usize,
     pub(crate) host_jobs: usize,
+    pub(crate) rate: Option<u64>,
 }
 
 /// whether a time is an estimate or a floor.
@@ -134,7 +136,8 @@ impl Time {
 /// allows, `jobs` and its files, so it takes the longest of three: its work spread over its
 /// streams; its largest file, which one stream carries alone; and its pacing, one request per
 /// spacing, `files × spacing`. hosts run side by side, so all of them take the longest host, or
-/// all their work spread over `jobs` streams when that is longer.
+/// all their work spread over `jobs` streams when that is longer. a `rate` cap holds every
+/// download together, so their bytes take at least their sum over it, however fast each host.
 ///
 /// a host without a remembered speed, or with a file of unknown size, has no estimate, only its
 /// pacing as a floor. then the whole is at least the longest part that is known, the other hosts'
@@ -148,6 +151,7 @@ impl Time {
 pub(crate) fn time(hosts: &[Host], limits: Limits) -> Option<Time> {
     let jobs = limits.jobs.max(1);
     let (mut longest, mut work, mut known) = (0.0_f64, 0.0_f64, true);
+    let mut all = 0.0_f64;
     for host in hosts.iter().filter(|host| host.files != Some(0)) {
         let streams = [limits.host_jobs, host.most.unwrap_or(usize::MAX), jobs]
             .into_iter()
@@ -167,6 +171,7 @@ pub(crate) fn time(hosts: &[Host], limits: Limits) -> Option<Time> {
             .spacing
             .map_or(0.0, |spacing| files * spacing.as_secs_f64());
         longest = longest.max(floor);
+        all += bytes;
         let Some(speed) = host
             .speed
             .filter(|speed| host.unknown == 0 && speed.rate > 0.0)
@@ -183,7 +188,15 @@ pub(crate) fn time(hosts: &[Host], limits: Limits) -> Option<Time> {
     }
     #[expect(clippy::cast_precision_loss, reason = "a few streams")]
     let spread = work / jobs as f64;
-    let seconds = longest.max(spread);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "an estimate needs no exact rate"
+    )]
+    let capped = limits
+        .rate
+        .filter(|rate| *rate > 0)
+        .map_or(0.0, |rate| all / rate as f64);
+    let seconds = longest.max(spread).max(capped);
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -290,6 +303,7 @@ mod tests {
     const LIMITS: Limits = Limits {
         jobs: 8,
         host_jobs: 4,
+        rate: None,
     };
 
     fn known(files: u64, bytes: u64, largest: u64, rate: f64, overhead: f64) -> Host {
@@ -444,6 +458,7 @@ mod tests {
         let few = Limits {
             jobs: 2,
             host_jobs: 4,
+            rate: None,
         };
         let c = known(4, 40 * MIB, 10 * MIB, A_MIB, 0.0);
         // 160 s of work over 2 streams
@@ -470,6 +485,32 @@ mod tests {
             "1.0 MiB and 2 of unknown size · the time shows once it starts"
         );
         assert_eq!(total.facts(false), "1.0 MiB and 2 of unknown size");
+    }
+
+    /// a `rate` cap of 1 MiB/s holds every download together: 16 files of 4.1 GiB in all, over
+    /// four streams of 10 MiB/s, take about 2 min uncapped and about 70 under the cap, and with
+    /// half of them from a host never seen, at least 70.
+    #[test]
+    fn a_rate_cap_holds_every_download_together() {
+        let capped = Limits {
+            rate: Some(MIB),
+            ..LIMITS
+        };
+        let size = 4198 * MIB;
+        let ghcn = known(16, size, size / 16, 10.0 * A_MIB, 0.1);
+        assert_eq!(time(std::slice::from_ref(&ghcn), LIMITS), Some(about(105)));
+        assert_eq!(time(std::slice::from_ref(&ghcn), capped), Some(about(4198)));
+        let halves = [
+            known(8, size / 2, size / 16, 10.0 * A_MIB, 0.1),
+            Host {
+                files: Some(8),
+                bytes: size / 2,
+                largest: size / 16,
+                ..Host::default()
+            },
+        ];
+        assert_eq!(time(&halves, capped), Some(at_least(4198)));
+        assert_eq!(time(&halves, LIMITS), None);
     }
 
     /// sizes a listing rounds count about, in the total and in its time, beside any unknown.
