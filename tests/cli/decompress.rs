@@ -6,7 +6,9 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use crate::support::{Result, Routes, Sandbox, Server, file, json, ok, reply, sha256_hex, text};
+use crate::support::{
+    Result, Routes, Sandbox, Server, file, json, ok, reply, sha256_hex, tar_of, text,
+};
 
 const CSV: &[u8] = b"sepal,petal\n5.1,1.4\n4.9,1.4\n";
 
@@ -32,17 +34,6 @@ fn xz(bytes: &[u8]) -> Result<Vec<u8>> {
 
 fn zst(bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(zstd::encode_all(bytes, 3)?)
-}
-
-/// a tar holding one file, `name`, of `bytes`.
-fn tar_of(name: &str, bytes: &[u8]) -> Result<Vec<u8>> {
-    let mut builder = tar::Builder::new(Vec::new());
-    let mut header = tar::Header::new_gnu();
-    header.set_size(bytes.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-    builder.append_data(&mut header, name, bytes)?;
-    Ok(builder.into_inner()?)
 }
 
 /// the tree data.lock pins for a file that decompresses to `name` holding `bytes`: the SHA-256
@@ -256,7 +247,7 @@ fn decompress_in_data_toml_switches_without_a_new_pin() -> Result {
 #[test]
 fn a_compressed_tar_stays_extracts_job() -> Result {
     let sandbox = Sandbox::new()?;
-    let packed = gz(&tar_of("iris.csv", CSV)?)?;
+    let packed = gz(&tar_of(&[("iris.csv", CSV)])?)?;
     let routes = Routes::start(
         ["/files/flowers.tar.gz", "/kept/flowers.tar.gz"]
             .into_iter()
@@ -293,7 +284,7 @@ fn a_folder_decompresses_and_leaves_what_is_no_single_compressed_file() -> Resul
     let flowers = sandbox.work().join("flowers");
     fs::create_dir_all(flowers.join("sub"))?;
     fs::write(flowers.join("sub").join("iris.csv.gz"), gz(CSV)?)?;
-    let inner = gz(&tar_of("iris.csv", CSV)?)?;
+    let inner = gz(&tar_of(&[("iris.csv", CSV)])?)?;
     fs::write(flowers.join("inner.gz"), &inner)?;
     fs::write(flowers.join("notes.gz"), b"plain notes\n")?;
     let output = sandbox.run(&["--json", "add", "./flowers", "--decompress"])?;

@@ -1099,7 +1099,7 @@ mod shards {
     use super::{Result, Sandbox, file, files_in, fs, ok, run, text};
     use crate::buckets::{s3_listing, s3_page};
     use crate::support::Routes;
-    use crate::support::md5_hex;
+    use crate::support::{md5_hex, tar_of};
 
     const LINK: &str = "s3://shard-bucket/shards/";
 
@@ -1109,24 +1109,11 @@ mod shards {
     /// the hint's end for them in a project: one members table for every shard.
     const MEMBERS: &str = "to unpack them and keep only some files of each, write one members table, [datasets.shards.members.\"train-*.tar\"]";
 
-    /// a tar holding `files`, each a name and its bytes.
-    fn tar_of(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
-        let mut builder = tar::Builder::new(Vec::new());
-        for (name, body) in files {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder.append_data(&mut header, name, body.as_slice())?;
-        }
-        Ok(builder.into_inner()?)
-    }
-
     /// a bucket whose `shards/` prefix holds 8 numbered tar shards of one file each.
     fn bucket() -> Result<Routes> {
         let mut objects = Vec::new();
         for number in 0..8 {
-            let body = tar_of(&[(format!("sample-{number}.txt"), b"x".to_vec())])?;
+            let body = tar_of(&[(&format!("sample-{number}.txt"), b"x")])?;
             objects.push((format!("shards/train-{number:06}.tar"), body));
         }
         served(&objects)
@@ -1145,7 +1132,11 @@ mod shards {
                 ));
             }
         }
-        tar_of(&files)
+        let entries: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|(name, body)| (name.as_str(), body.as_slice()))
+            .collect();
+        tar_of(&entries)
     }
 
     /// a bucket whose `shards/` prefix holds the first `count` speech shards.

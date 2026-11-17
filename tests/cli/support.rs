@@ -520,6 +520,19 @@ pub(crate) fn zip_of(entries: &[(&str, &[u8])]) -> Result<Vec<u8>> {
     Ok(archive.finish()?.into_inner())
 }
 
+/// a tar of `entries`, each a path and its bytes, with gnu headers and mode 644.
+pub(crate) fn tar_of(entries: &[(&str, &[u8])]) -> Result<Vec<u8>> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, bytes) in entries {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, path, *bytes)?;
+    }
+    Ok(builder.into_inner()?)
+}
+
 pub(crate) fn json(output: &Output) -> Result<serde_json::Value> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }

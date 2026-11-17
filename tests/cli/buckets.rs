@@ -12,7 +12,7 @@ use sha2::Sha256;
 
 use crate::support::{
     Fetchloom, Part, Result, Routes, Sandbox, Server, delete, file, hex, json, md5_hex, reply,
-    sha256_hex, text,
+    sha256_hex, tar_of, text,
 };
 
 const PARTICIPANTS: &[u8] = b"participant_id\tsex\nsub-01\tF\n";
@@ -1837,17 +1837,6 @@ fn get_counts_the_files_it_keeps_when_it_resolves() -> Result {
     Ok(())
 }
 
-/// a tar holding the one file `name`, with `body`.
-fn tar_of(name: &str, body: &[u8]) -> Result<Vec<u8>> {
-    let mut builder = tar::Builder::new(Vec::new());
-    let mut header = tar::Header::new_gnu();
-    header.set_size(body.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-    builder.append_data(&mut header, name, body)?;
-    Ok(builder.into_inner()?)
-}
-
 /// the routes of an s3-compatible bucket `speech` listing `shards/` with each object's size and
 /// `ETag`, and serving each object; such a service promises no MD5 in an `ETag`.
 fn speech_bucket(objects: &[(String, Vec<u8>, String)]) -> Vec<(String, Vec<Part>)> {
@@ -1870,10 +1859,8 @@ fn speech_bucket(objects: &[(String, Vec<u8>, String)]) -> Vec<(String, Vec<Part
 fn speech_shards(count: usize) -> Result<Vec<(String, Vec<u8>, String)>> {
     (0..count)
         .map(|number| {
-            let body = tar_of(
-                &format!("sample-{number}.txt"),
-                format!("sample {number}").as_bytes(),
-            )?;
+            let name = format!("sample-{number}.txt");
+            let body = tar_of(&[(&name, format!("sample {number}").as_bytes())])?;
             let etag = md5_hex(&body);
             Ok((format!("shards/shard-{number:06}.tar"), body, etag))
         })
@@ -1958,7 +1945,7 @@ fn an_add_in_a_shared_cache_downloads_an_object_another_member_recorded() -> Res
     let shards = speech_shards(2)?;
     let (key, body, etag) = &shards[0];
     // other bytes of the same size, which the member's run records under the object's `ETag`
-    let forged = tar_of("sample-0.txt", b"sample X")?;
+    let forged = tar_of(&[("sample-0.txt", b"sample X")])?;
     assert_eq!(forged.len(), body.len());
     let routes = Routes::start(speech_bucket(&shards))?;
     sandbox.allow(&routes.url);
@@ -1988,11 +1975,11 @@ fn an_upgrade_downloads_an_object_listed_with_another_etag_or_size() -> Result {
     let sandbox = Sandbox::new()?;
     let mut shards = speech_shards(3)?;
     let routes = speech_project(&sandbox, &shards)?;
-    let changed = tar_of("sample-0.txt", b"sample 0 again")?;
+    let changed = tar_of(&[("sample-0.txt", b"sample 0 again")])?;
     shards[0].2 = md5_hex(&changed);
     shards[0].1 = changed;
     // a service that keeps the ETag of bytes whose size changed still lists the new size
-    shards[1].1 = tar_of("sample-1.txt", &[b'x'; 600])?;
+    shards[1].1 = tar_of(&[("sample-1.txt", &[b'x'; 600])])?;
     routes.change(speech_bucket(&shards));
     let asked = routes.targets().len();
 
@@ -2059,7 +2046,7 @@ fn bytes_changed_under_an_unchanged_etag_are_refused_where_they_are_downloaded()
     let mut shards = speech_shards(2)?;
     let routes = speech_project(&sandbox, &shards)?;
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
-    let changed = tar_of("sample-1.txt", b"sample 9")?;
+    let changed = tar_of(&[("sample-1.txt", b"sample 9")])?;
     assert_eq!(changed.len(), shards[1].1.len());
     shards[1].1 = changed;
     routes.change(speech_bucket(&shards));
