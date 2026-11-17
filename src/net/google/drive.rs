@@ -586,6 +586,7 @@ impl Net {
             revalidate: false,
             record: fetch.record,
             held: None,
+            was: None,
             unpack: fetch.unpack,
             mirror: fetch.mirror,
             page: fetch.page,

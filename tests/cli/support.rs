@@ -1253,6 +1253,8 @@ pub(crate) struct Routes {
     together: Arc<Mutex<std::collections::HashSet<String>>>,
     /// the start of targets answered only to a request whose head holds a line, lowercased.
     keyed: Arc<Mutex<Vec<(String, String)>>>,
+    /// targets answered `304 Not Modified` to a request that asks with their `ETag`.
+    unchanged: Arc<Mutex<Vec<(String, String)>>>,
     _running: ServerTask,
 }
 
@@ -1264,6 +1266,7 @@ impl Routes {
         let turns = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let together = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let keyed: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+        let unchanged: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -1272,6 +1275,7 @@ impl Routes {
         let queued = turns.clone();
         let gated = together.clone();
         let locked = keyed.clone();
+        let validated = unchanged.clone();
         let running = ServerTask::start(listener, move |listener, stop| {
             let missing = head("404 Not Found", &[("Content-Length", "0")]);
             // what was asked of the targets answered together, and the connections that wait
@@ -1299,6 +1303,12 @@ impl Routes {
                     });
                 if unkeyed {
                     let _ = stream.write_all(&missing);
+                    let _ = stream.flush();
+                    drop(connection);
+                    continue;
+                }
+                if let Some(kept) = not_modified(&validated, &target, &lines) {
+                    let _ = stream.write_all(&kept);
                     let _ = stream.flush();
                     drop(connection);
                     continue;
@@ -1341,6 +1351,7 @@ impl Routes {
             turns,
             together,
             keyed,
+            unchanged,
             _running: running,
         };
         served.change(routes);
@@ -1409,6 +1420,15 @@ impl Routes {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|(kept, _)| kept != start);
+    }
+
+    /// answers `target` with `304 Not Modified` to a request asking `If-None-Match` with `etag`,
+    /// as a server whose file still has that `ETag` does, and as before to any other request.
+    pub(crate) fn unchanged(&self, target: &str, etag: &str) {
+        self.unchanged
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((target.to_owned(), etag.to_owned()));
     }
 
     /// the head of every request so far, lowercased.
@@ -1484,6 +1504,21 @@ pub(crate) fn file(body: &[u8], etag: &str) -> Vec<Part> {
         &[("Content-Length", &body.len().to_string()), ("ETag", etag)],
         body,
     )
+}
+
+/// the answer `304 Not Modified` to a request for `target` whose head, lowercased as `lines`, asks
+/// with the `ETag` it has among `unchanged`, as [`Routes::unchanged`] names them.
+fn not_modified(
+    unchanged: &Mutex<Vec<(String, String)>>,
+    target: &str,
+    lines: &str,
+) -> Option<Vec<u8>> {
+    let unchanged = unchanged.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_, etag) = unchanged.iter().find(|(asked, etag)| {
+        let line = format!("if-none-match: {}", etag.to_ascii_lowercase());
+        asked == target && lines.lines().any(|held| held.trim() == line)
+    })?;
+    Some(head("304 Not Modified", &[("ETag", etag)]))
 }
 
 /// a value that other threads change, and a signal at each change, so a test can wait for what

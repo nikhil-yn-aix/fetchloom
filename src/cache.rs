@@ -353,6 +353,26 @@ fn exposed_on(root: &Path) -> Option<String> {
     }
 }
 
+/// whether users other than this one may write the url records of the cache at `root`, so one
+/// there may be theirs: its folder, or the `urls` folder in it, is another user's, or its group or
+/// every user may write it, as a group shares a lab's, setgid and writable by the group, as the
+/// clusters guide makes it.
+#[cfg(unix)]
+fn others_write(root: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let user = rustix::process::geteuid().as_raw();
+    [root.to_path_buf(), root.join("urls")]
+        .iter()
+        .any(|folder| {
+            fs::metadata(folder).is_ok_and(|found| found.uid() != user || found.mode() & 0o022 != 0)
+        })
+}
+
+#[cfg(not(unix))]
+fn others_write(_root: &Path) -> bool {
+    false
+}
+
 /// what keeps the cache at `root`, which its group shares, from staying one the group may add to:
 /// the folders in it that let only their owners write to them, as one another program or an
 /// account outside the group made may, since a run gives the group its write on each folder it
@@ -651,6 +671,8 @@ pub(crate) struct Cache {
     room: Arc<Room>,
     /// what the group the cache is shared with gets of what this run makes in it.
     sharing: Sharing,
+    /// whether users other than this one may write the cache's url records.
+    others_write: bool,
     /// on windows, what removes the cache's files, shared by every clone.
     #[cfg(not(unix))]
     remover: Arc<Remover>,
@@ -821,6 +843,7 @@ impl Cache {
         }
         Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
+            others_write: others_write(&root),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
@@ -860,6 +883,7 @@ impl Cache {
         let sharing = Sharing::of(&root);
         Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
+            others_write: others_write(&root),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
@@ -1106,6 +1130,15 @@ impl Cache {
 
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {
         self.urls.find(&self.root, url)
+    }
+
+    /// the record of what `url` served, when it may stand for those bytes without their download:
+    /// any in a cache only this user writes; in one others may write, as a group shares a lab's,
+    /// only one naming `was`, the bytes data.lock already pins for the link, since anyone there
+    /// may add a record naming bytes of their choosing.
+    pub(crate) fn vouched_url_record(&self, url: &str, was: Option<&Sha256>) -> Option<UrlRecord> {
+        let record = self.url_record(url)?;
+        (!self.others_write || was == Some(&record.sha256)).then_some(record)
     }
 
     pub(crate) fn save_url_record(&self, record: &UrlRecord) -> io::Result<()> {
@@ -2938,6 +2971,62 @@ pub(crate) mod tests {
         cache.save_url_record(&record).unwrap();
         assert_eq!(cache.url_record(&record.url), Some(record));
         assert_eq!(cache.url_record("https://example.org/other"), None);
+    }
+
+    /// a record stands for its bytes in a cache only this user writes; in one a group shares, or
+    /// its group or every user may write, only when it names the pin it is asked with, since
+    /// anyone there may have written it.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_others_may_have_written_stands_only_for_the_pinned_bytes() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let (_dir, cache) = cache();
+        let recorded = store(&cache, b"recorded").digest;
+        let other = digest::sha256(b"pinned before");
+        let url = "https://example.org/iris.csv";
+        cache
+            .save_url_record(&UrlRecord {
+                url: url.to_owned(),
+                sha256: recorded,
+                size: 8,
+                name: None,
+                validators: Validators::default(),
+                page: false,
+            })
+            .unwrap();
+        for was in [None, Some(&recorded), Some(&other)] {
+            assert!(cache.vouched_url_record(url, was).is_some(), "{was:?}");
+        }
+        // the cache's folder as a group shares it, or its group or every user may write it, or
+        // the `urls` folder in it as every user may write it
+        let urls = cache.root.join("urls");
+        for (folder, mode) in [
+            (&cache.root, 0o770),
+            (&cache.root, 0o777),
+            (&urls, 0o777),
+            (&cache.root, 0o2770),
+        ] {
+            fs::set_permissions(folder, fs::Permissions::from_mode(mode)).unwrap();
+            if fs::metadata(folder).unwrap().mode() & 0o7777 != mode {
+                return crate::test_skips::skip("permissions", "this disk keeps no setgid folder");
+            }
+            let opened = Cache::open(cache.root.clone()).unwrap();
+            for (was, stands) in [
+                (None, false),
+                (Some(&recorded), true),
+                (Some(&other), false),
+            ] {
+                assert_eq!(
+                    opened.vouched_url_record(url, was).is_some(),
+                    stands,
+                    "{} {mode:o} {was:?}",
+                    folder.display()
+                );
+            }
+            for folder in [&cache.root, &urls] {
+                fs::set_permissions(folder, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
     }
 
     #[test]

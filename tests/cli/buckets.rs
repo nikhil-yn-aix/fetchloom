@@ -1939,6 +1939,43 @@ fn an_upgrade_downloads_only_the_objects_a_listing_shows_are_new_or_changed() ->
     Ok(())
 }
 
+/// in a cache a group shares, an add never takes an object's bytes from another member's record,
+/// though the listing states the `ETag` and size that record names: anyone there may record other
+/// bytes under them, so the object is downloaded.
+#[cfg(unix)]
+#[test]
+fn an_add_in_a_shared_cache_downloads_an_object_another_member_recorded() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !crate::folders::shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let shards = speech_shards(2)?;
+    let (key, body, etag) = &shards[0];
+    // other bytes of the same size, which the member's run records under the object's `ETag`
+    let forged = tar_of("sample-0.txt", b"sample X")?;
+    assert_eq!(forged.len(), body.len());
+    let routes = Routes::start(speech_bucket(&shards))?;
+    sandbox.allow(&routes.url);
+    routes.change(vec![(
+        format!("/speech/{key}"),
+        file(&forged, &format!("\"{etag}\"")),
+    )]);
+    let member = sandbox.folder("member")?;
+    let link = format!("{}/speech/{key}", routes.url);
+    let got = sandbox.command_in(&member, &["get", &link]).output()?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    routes.change(speech_bucket(&shards));
+
+    let reference = format!("s3:{}/speech/shards/", routes.url);
+    let added = sandbox.run(&["add", &reference, "--as", "shards"])?;
+
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&sha256_hex(body)), "{lock}");
+    assert!(!lock.contains(&sha256_hex(&forged)), "{lock}");
+    Ok(())
+}
+
 /// a record that no longer matches counts as none, and the new bytes are pinned.
 #[test]
 fn an_upgrade_downloads_an_object_listed_with_another_etag_or_size() -> Result {

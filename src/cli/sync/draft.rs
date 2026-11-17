@@ -105,7 +105,10 @@ impl Draft {
                     _ => stated(cache, &remote),
                 };
                 let listed = match (remote.sha256, earlier, &stated) {
-                    (None, None, None) => unchanged(cache, &remote, source.extract),
+                    (None, None, None) => {
+                        let was = was.as_ref().map(|was| &was.sha256);
+                        unchanged(cache, &remote, was, source.extract)
+                    }
                     _ => None,
                 };
                 let known = match (remote.sha256, remote.size) {
@@ -270,8 +273,13 @@ impl Draft {
             let Unit::Split(set) = unit else {
                 continue;
             };
-            let Some(records) = self.recalled(&set, cache, |remote| listed_record(cache, remote))
-            else {
+            let Some(records) = self.recalled(&set, cache, |file| {
+                listed_record(
+                    cache,
+                    &file.remote,
+                    file.was.as_ref().map(|was| &was.sha256),
+                )
+            }) else {
                 continue;
             };
             for (index, record) in set.into_iter().zip(records) {
@@ -288,7 +296,7 @@ impl Draft {
         &self,
         set: &[usize],
         cache: &Cache,
-        record: impl Fn(&Remote) -> Option<UrlRecord>,
+        record: impl Fn(&DraftFile) -> Option<UrlRecord>,
     ) -> Option<Vec<UrlRecord>> {
         let records = set
             .iter()
@@ -297,7 +305,7 @@ impl Draft {
                 let remote = &file.remote;
                 let unknown =
                     file.known.is_none() && remote.sha256.is_none() && remote.md5.is_none();
-                unknown.then(|| record(remote)).flatten()
+                unknown.then(|| record(file)).flatten()
             })
             .collect::<Option<Vec<UrlRecord>>>()?;
         let key = parts_key(records.iter().map(|record| (record.sha256, record.size)));
@@ -423,9 +431,10 @@ impl Draft {
             // a part of an archive this cache unpacked is asked whether it changed, as a lone
             // archive is, rather than downloaded again
             if let Unit::Split(set) = &unit
-                && let Some(records) = self.recalled(set, cache, |remote| {
+                && let Some(records) = self.recalled(set, cache, |file| {
+                    let was = file.was.as_ref().map(|was| &was.sha256);
                     cache
-                        .url_record(remote.url.as_str())
+                        .vouched_url_record(file.remote.url.as_str(), was)
                         .filter(|record| !record.page)
                 })
             {
@@ -472,6 +481,7 @@ impl Draft {
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
                 record: vouched_by_server(&self.resolved, remote.url.as_str()),
                 held: held[index],
+                was: file.was.as_ref().map(|was| was.sha256),
                 unpack: whole[index],
                 page: self.web_page,
                 named: learn && remote.named_by_server,
@@ -989,8 +999,14 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<crate::cache::Stated> {
 
 /// what the cache recorded the link served, while the listing's strong `ETag` and size match it and
 /// the cache holds its bytes or files, trusting `ETag`s to change; a web page is asked for again.
-fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord> {
-    let record = listed_record(cache, remote)?;
+/// `was` is data.lock's pin of the file, which alone a record in a cache others write may name.
+fn unchanged(
+    cache: &Cache,
+    remote: &Remote,
+    was: Option<&Sha256>,
+    extract: bool,
+) -> Option<UrlRecord> {
+    let record = listed_record(cache, remote, was)?;
     let unpacks = extract && archive::by_name(&remote.path) == Some(Packed::Archive);
     (cache.find(&record.sha256, Some(record.size)).is_some()
         || unpacks && cache.holds_unpacked(&record.sha256, None))
@@ -998,14 +1014,15 @@ fn unchanged(cache: &Cache, remote: &Remote, extract: bool) -> Option<UrlRecord>
 }
 
 /// what the cache recorded the link served, while the listing's strong `ETag` and size match it,
-/// whether or not the cache still holds those bytes; never a web page.
-fn listed_record(cache: &Cache, remote: &Remote) -> Option<UrlRecord> {
+/// whether or not the cache still holds those bytes; never a web page. in a cache others may
+/// write, only a record naming `was`, data.lock's pin of the file, counts.
+fn listed_record(cache: &Cache, remote: &Remote, was: Option<&Sha256>) -> Option<UrlRecord> {
     let etag = remote
         .etag
         .as_deref()
         .filter(|etag| etag.starts_with('"'))?;
     let size = remote.size?;
-    let record = cache.url_record(remote.url.as_str())?;
+    let record = cache.vouched_url_record(remote.url.as_str(), was)?;
     (!record.page && record.size == size && record.validators.etag.as_deref() == Some(etag))
         .then_some(record)
 }

@@ -241,7 +241,7 @@ pub(super) async fn again_offline(
     parsed: &Parsed,
     key: &str,
 ) -> Result<Option<(PathBuf, Done)>, Error> {
-    let kept = cache.url_record(key);
+    let kept = cache.vouched_url_record(key, None);
     let name = kept
         .as_ref()
         .and_then(|kept| kept.name.clone())
@@ -521,12 +521,13 @@ fn there_unhashed(remote: &Remote, force: bool, destination: &Destination) -> Re
 }
 
 /// what the link served the last time it was downloaded here, for a link whose source states
-/// no hash.
+/// no hash, when that record may stand for those bytes: never one in a cache others may write,
+/// since a get has no data.lock pin a record there must name.
 fn recorded(cache: &Cache, remote: &Remote) -> Option<UrlRecord> {
     if remote.sha256.is_some() || remote.md5.is_some() {
         return None;
     }
-    cache.url_record(remote.url.as_str())
+    cache.vouched_url_record(remote.url.as_str(), None)
 }
 
 /// what the run learned of the bytes the link served last time, `record`, which the server is

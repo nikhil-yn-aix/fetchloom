@@ -982,3 +982,207 @@ fn a_sync_keeps_records_only_of_files_their_server_vouches_for() -> Result {
     }
     Ok(())
 }
+
+/// bytes a member of the cache's group chose, other than the server's, for its record of a link.
+#[cfg(unix)]
+const FORGED: &[u8] = b"sepal,petal\n9.9,9.9\nchosen,by another member\n";
+
+/// makes the sandbox's cache one a group shares, as the clusters guide makes a lab's: a setgid
+/// folder its group may write. false where the disk keeps no setgid folder.
+#[cfg(unix)]
+pub(crate) fn shared_cache(sandbox: &Sandbox) -> Result<bool> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let cache = sandbox.cache();
+    fs::create_dir_all(&cache)?;
+    fs::set_permissions(&cache, fs::Permissions::from_mode(0o2770))?;
+    Ok(fs::metadata(&cache)?.mode() & 0o7777 == 0o2770)
+}
+
+/// another member of the cache's group records `link` as serving [`FORGED`] under the `ETag`
+/// `"i1"` the server gives iris.csv: a run of their own while the server sent those bytes, as
+/// any member may write a record of their choosing. then the server sends iris.csv again, and
+/// answers a request asking with `"i1"` that it is unchanged.
+#[cfg(unix)]
+fn forge(sandbox: &Sandbox, server: &Routes, link: &str) -> Result {
+    server.change(vec![("/data/iris.csv".to_owned(), file(FORGED, "\"i1\""))]);
+    let member = sandbox.folder("member")?;
+    let got = sandbox.command_in(&member, &["get", link]).output()?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    assert_eq!(fs::read(member.join("iris/iris.csv"))?, FORGED);
+    server.change(vec![("/data/iris.csv".to_owned(), file(IRIS, "\"i1\""))]);
+    server.unchanged("/data/iris.csv", "\"i1\"");
+    Ok(())
+}
+
+/// in a cache a group shares, an upgrade of a folder never pins the bytes another member's
+/// record of a file names: the server's answer that the file is unchanged since that record
+/// vouches for its validators, not for those bytes, so the file is asked again whole.
+#[cfg(unix)]
+#[test]
+fn an_upgrade_in_a_shared_cache_never_pins_bytes_another_member_recorded() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let server = served(python)?;
+    let added = sandbox.run(&["add", &format!("{}/data/", server.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    forge(&sandbox, &server, &format!("{}/data/iris.csv", server.url))?;
+    sandbox.allow(&server.url);
+    let upgraded = sandbox.run(&["lock", "--upgrade"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&sha256_hex(IRIS)), "{lock}");
+    assert!(!lock.contains(&sha256_hex(FORGED)), "{lock}");
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data/data/iris.csv"))?,
+        text(IRIS)?
+    );
+    Ok(())
+}
+
+/// in a cache a group shares, an add of a link another member recorded downloads the link's
+/// bytes and pins them, never those the record names; offline, where nothing can be downloaded,
+/// the add stops as for bytes the cache lacks.
+#[cfg(unix)]
+#[test]
+fn an_add_in_a_shared_cache_downloads_what_another_member_recorded() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let server = served(python)?;
+    let link = format!("{}/data/iris.csv", server.url);
+    forge(&sandbox, &server, &link)?;
+    let offline = sandbox.run(&["--offline", "add", &link])?;
+    let said = text(&offline.stderr)?;
+    assert_eq!(offline.status.code(), Some(20), "{said}");
+    assert!(
+        said.contains("run it again without --offline to download it"),
+        "{said}"
+    );
+    assert!(!sandbox.work().join("data.lock").exists(), "{said}");
+    let added = sandbox.run(&["add", &link])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&sha256_hex(IRIS)), "{lock}");
+    assert!(!lock.contains(&sha256_hex(FORGED)), "{lock}");
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data/iris/iris.csv"))?,
+        text(IRIS)?
+    );
+    Ok(())
+}
+
+/// in a cache a group shares, a get of a link another member recorded downloads the link's
+/// bytes, never those the record names: a get has no pin of its own a record there must name, so
+/// offline it writes nothing.
+#[cfg(unix)]
+#[test]
+fn a_get_in_a_shared_cache_downloads_what_another_member_recorded() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let server = served(python)?;
+    let link = format!("{}/data/iris.csv", server.url);
+    forge(&sandbox, &server, &link)?;
+    let offline = sandbox.folder("offline")?;
+    let kept = sandbox
+        .command_in(&offline, &["--offline", "get", &link, "-o", "iris.csv"])
+        .output()?;
+    assert_ne!(kept.status.code(), Some(0), "{}", text(&kept.stderr)?);
+    assert!(
+        !offline.join("iris.csv").exists(),
+        "{}",
+        text(&kept.stderr)?
+    );
+    let mine = sandbox.folder("mine")?;
+    let got = sandbox.command_in(&mine, &["get", &link]).output()?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    assert_eq!(fs::read_to_string(mine.join("iris/iris.csv"))?, text(IRIS)?);
+    Ok(())
+}
+
+/// in a cache a group shares, a teammate whose cache records agree with their data.lock still
+/// asks whether each file changed, and downloads nothing when none did.
+#[cfg(unix)]
+#[test]
+fn a_teammate_in_a_shared_cache_whose_records_agree_downloads_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let server = served(python)?;
+    let added = sandbox.run(&["add", &format!("{}/data/", server.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    sandbox.allow(&server.url);
+    let synced = sandbox.command_in(&teammate, &["sync"]).output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    server.unchanged("/data/iris.csv", "\"i1\"");
+    server.unchanged("/data/sub/tips.csv", "\"t1\"");
+    let before = server.requests().len();
+    let upgraded = sandbox
+        .command_in(&teammate, &["--json", "lock", "--upgrade"])
+        .output()?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stdout)?
+    );
+    assert_eq!(json(&upgraded)?["result"]["lock_changed"], false);
+    let asked = &server.requests()[before..];
+    for (file, etag) in [
+        ("/data/iris.csv", "\"i1\""),
+        ("/data/sub/tips.csv", "\"t1\""),
+    ] {
+        let head = asked
+            .iter()
+            .find(|head| head.starts_with(&format!("get {file} ")))
+            .ok_or_else(|| format!("{file} was not asked: {asked:?}"))?;
+        assert!(
+            head.contains(&format!("if-none-match: {etag}")),
+            "{file} was asked without its etag: {head}"
+        );
+    }
+    Ok(())
+}
+
+/// in a cache no group shares, only this user writes its records, so an add of a link it
+/// fetched before asks whether the file changed, and downloads nothing when it did not.
+#[test]
+fn an_add_in_a_private_cache_asks_with_its_own_record() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(python)?;
+    let link = format!("{}/data/iris.csv", server.url);
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let got = sandbox.command_in(&elsewhere, &["get", &link]).output()?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    server.unchanged("/data/iris.csv", "\"i1\"");
+    let before = server.requests().len();
+    let added = sandbox.run(&["add", &link])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let asked = &server.requests()[before..];
+    assert!(
+        asked
+            .iter()
+            .any(|head| head.starts_with("get /data/iris.csv ")
+                && head.contains("if-none-match: \"i1\"")),
+        "{asked:?}"
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&sha256_hex(IRIS)), "{lock}");
+    Ok(())
+}

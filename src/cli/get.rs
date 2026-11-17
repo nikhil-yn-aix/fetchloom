@@ -774,7 +774,7 @@ fn held(cache: &Cache, job: &Job, placed: Option<&Path>) -> Option<Sha256> {
     if !job.fetch.revalidate {
         return None;
     }
-    let record = cache.url_record(job.fetch.url.as_str())?;
+    let record = cache.vouched_url_record(job.fetch.url.as_str(), None)?;
     let there = || {
         placed.is_some_and(|path| {
             std::fs::metadata(path).is_ok_and(|found| found.is_file() && found.len() == record.size)

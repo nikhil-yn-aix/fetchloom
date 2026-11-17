@@ -112,6 +112,9 @@ pub(crate) struct Fetch {
     /// as `get -o` wrote. when the url's record names them, the server is asked whether they
     /// changed, and a large file asks about its size only once the server sends it.
     pub(crate) held: Option<Sha256>,
+    /// the bytes data.lock pinned for the link before an upgrade asks about it again: in a cache
+    /// others may write, only a record naming these stands for what the link serves.
+    pub(crate) was: Option<Sha256>,
     /// the bytes are an archive the caller unpacks, so the files it unpacked to stand for it in
     /// the cache once its own object is gone.
     pub(crate) unpack: bool,
@@ -173,6 +176,7 @@ impl Fetch {
             revalidate: false,
             record: false,
             held: None,
+            was: None,
             unpack: false,
             mirror: false,
             page: false,
@@ -181,10 +185,11 @@ impl Fetch {
         }
     }
 
-    /// what the url served the last time it was downloaded, when those bytes are at hand: in the
-    /// cache, or as the ones `held` names.
+    /// what the url served the last time it was downloaded, when the record may stand for those
+    /// bytes, as [`Cache::vouched_url_record`] decides, and they are at hand: in the cache, or as
+    /// the ones `held` names.
     pub(crate) fn remembered(&self, cache: &Cache) -> Option<UrlRecord> {
-        let record = cache.url_record(self.url.as_str())?;
+        let record = cache.vouched_url_record(self.url.as_str(), self.was.as_ref())?;
         (self.held == Some(record.sha256) || holds(cache, self, &record.sha256, Some(record.size)))
             .then_some(record)
     }
@@ -751,6 +756,7 @@ impl Net {
             revalidate: false,
             record: fetch.record,
             held: None,
+            was: None,
             unpack: fetch.unpack,
             mirror: fetch.mirror,
             page: fetch.page,
