@@ -428,9 +428,12 @@ pub(crate) struct Locked {
 /// what changed in a data.toml entry since its dataset was pinned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Drift {
-    /// only `extract` or `decompress`: the pinned files stand, and only what they unpack to
-    /// changes.
-    Extract,
+    /// only `extract`, `decompress` or both, as `keys` names them: the pinned files stand, and
+    /// only what the `files` among them unpack to changes.
+    Unpack {
+        keys: &'static str,
+        files: &'static str,
+    },
     /// only `at`: the pinned files stand, and only where the output lives, or whether the
     /// dataset is one, changes.
     At,
@@ -442,10 +445,19 @@ impl Locked {
     /// what changed in `entry` since this pin was made, or nothing when it still answers it.
     pub(crate) fn drift(&self, entry: &Entry) -> Option<Drift> {
         let source = &entry.source;
+        let unpack = match (
+            self.extract != source.extract,
+            self.decompress != source.decompress,
+        ) {
+            (false, false) => None,
+            (true, false) => Some(("extract", "archives")),
+            (false, true) => Some(("decompress", "compressed files")),
+            (true, true) => Some(("extract and decompress", "archives and compressed files")),
+        };
         if self.spec != spec(source) {
             Some(Drift::Spec)
-        } else if self.extract != source.extract || self.decompress != source.decompress {
-            Some(Drift::Extract)
+        } else if let Some((keys, files)) = unpack {
+            Some(Drift::Unpack { keys, files })
         } else if self.at != entry.at {
             Some(Drift::At)
         } else {
@@ -2907,7 +2919,10 @@ mod tests {
         assert_eq!(locked.drift(&entry("copy = true\n")), None);
         assert_eq!(
             locked.drift(&entry("extract = false\n")),
-            Some(Drift::Extract)
+            Some(Drift::Unpack {
+                keys: "extract",
+                files: "archives"
+            })
         );
         assert_eq!(
             locked.drift(&entry("extract = false\nselect = \"*.csv\"\n")),

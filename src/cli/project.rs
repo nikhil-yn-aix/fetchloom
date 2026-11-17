@@ -1166,11 +1166,11 @@ fn check(
         {
             None => stale.push(format!("{name} is not in data.lock yet")),
             Some(Some(Drift::Spec)) => stale.push(format!("{name} changed in data.toml")),
-            Some(Some(Drift::Extract)) if stated.is_some() => {
+            Some(Some(Drift::Unpack { .. })) if stated.is_some() => {
                 stale.push(format!("{name} changed in data.toml"));
             }
-            Some(Some(Drift::Extract)) => stale.push(format!(
-                "{name} changed extract in data.toml; `{}` needs no network for it while its archives are cached",
+            Some(Some(Drift::Unpack { keys, files })) => stale.push(format!(
+                "{name} changed {keys} in data.toml; `{}` needs no network for it while its {files} are cached",
                 super::project::command("lock")
             )),
             Some(Some(Drift::At)) => stale.push(format!(

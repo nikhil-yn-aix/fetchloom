@@ -1271,3 +1271,45 @@ fn get_refuses_a_name_no_file_may_take() -> Result {
     assert_eq!(work_names(&sandbox)?, Vec::<String>::new());
     Ok(())
 }
+
+/// a change of `decompress` in data.toml is named as one, apart from `extract`, by lock --check and
+/// by export, with the same kind and exit code a change of `extract` gets, and a change of both
+/// names both.
+#[test]
+fn lock_check_names_a_change_of_decompress() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = gz(CSV)?;
+    let server = Server::start("/files/iris.csv.gz", vec![file(&packed, "\"g1\"")])?;
+    sandbox.allow(&server.url);
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let plain = fs::read_to_string(&manifest)?;
+    let lock = "`fetchloom lock` needs no network for it while its";
+    for (lines, keys, files) in [
+        ("decompress = true\n", "decompress", "compressed files"),
+        (
+            "extract = false\ndecompress = true\n",
+            "extract and decompress",
+            "archives and compressed files",
+        ),
+    ] {
+        fs::write(&manifest, format!("{plain}{lines}"))?;
+        let checked = sandbox.run(&["--json", "lock", "--check"])?;
+        assert_eq!(checked.status.code(), Some(1), "{}", text(&checked.stderr)?);
+        let error = &json(&checked)?["errors"][0];
+        assert_eq!(error["kind"], "lock.outdated", "{error}");
+        assert_eq!(
+            error["details"][0],
+            format!("iris changed {keys} in data.toml; {lock} {files} are cached"),
+            "{error}"
+        );
+        let exported = sandbox.run(&["export"])?;
+        let stderr = text(&exported.stderr)?;
+        assert_eq!(exported.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains(&format!("  iris changed {keys} in data.toml\n")),
+            "{stderr}"
+        );
+    }
+    Ok(())
+}

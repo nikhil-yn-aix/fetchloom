@@ -315,7 +315,9 @@ fn inventory(
         let stale = match pinned.map(|locked| locked.drift(entry)) {
             None => format!("{name} is not in data.lock yet"),
             Some(Some(lock::Drift::Spec)) => format!("{name} changed in data.toml"),
-            Some(Some(lock::Drift::Extract)) => format!("{name} changed extract in data.toml"),
+            Some(Some(lock::Drift::Unpack { keys, .. })) => {
+                format!("{name} changed {keys} in data.toml")
+            }
             Some(Some(lock::Drift::At)) => format!("{name} changed at in data.toml"),
             Some(None) => continue,
         };

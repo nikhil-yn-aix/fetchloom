@@ -1120,13 +1120,13 @@ impl<'a> Loop<'a> {
                         None => kept.push(locked),
                         // an import's files stand as data.lock pins them, so a switch only
                         // learns what its archives unpack to, or where the output lives
-                        Some(Drift::Extract | Drift::At)
+                        Some(Drift::Unpack { .. } | Drift::At)
                             if local::is_imported(&source.reference) =>
                         {
                             whole.push(draft::switched_import(entry, &locked));
                             others.push(locked);
                         }
-                        Some(Drift::Extract) => {
+                        Some(Drift::Unpack { .. }) => {
                             let draft = Draft::switched(entry, source, &locked)?;
                             drafts.push((locked.name.clone(), draft));
                             others.push(locked);
