@@ -299,12 +299,22 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
     )?;
     assert_eq!(fs::read(work.join("data/late/b.csv"))?, b"b\n");
     decompressing(&sandbox, &planted, &routes)?;
+    // a dataset made from two others, which every command below judges
+    let processed = sandbox.folder("processed")?;
+    fs::write(processed.join("counts.csv"), b"species,count\nsetosa,1\n")?;
+    let processed = processed.display().to_string();
+    let from = ["--from", "iris", "--from", "late"];
+    planted.ok(
+        &sandbox,
+        &[&["add", &processed, "--as", "processed"][..], &from].concat(),
+    )?;
     let mirror = sandbox.folder("mirror")?.display().to_string();
     let got = sandbox.folder("got")?.display().to_string();
     let link = format!("{}/iris.csv", routes.url);
     for args in [
         &["lock"][..],
         &["lock", "--check"],
+        &["lock", "--check", "--fail-on-stale"],
         &["status"],
         &["--json", "status"],
         &["sync"],
