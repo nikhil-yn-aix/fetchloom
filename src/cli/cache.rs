@@ -1194,9 +1194,13 @@ fn owner_besides(root: &Path, me: u32) -> Option<u32> {
 
 /// the name of the user `id`, as `id -nu` tells it: a cluster's accounts are mostly kept in a
 /// directory service, which `/etc/passwd` does not list and only the system's own lookup asks.
+/// the system's own `id` comes first, then one in an absolute folder on PATH, never one a relative
+/// folder names: that would be wherever fetchloom runs, as in a cloned project.
 #[cfg(unix)]
 fn user_name(id: u32) -> Option<String> {
-    let told = std::process::Command::new("id")
+    let program = crate::machine::installed(std::ffi::OsStr::new("/usr/bin:/bin"), "id")
+        .or_else(|| crate::machine::installed(&std::env::var_os("PATH")?, "id"))?;
+    let told = std::process::Command::new(program)
         .arg("-nu")
         .arg(id.to_string())
         .stdin(std::process::Stdio::null())
