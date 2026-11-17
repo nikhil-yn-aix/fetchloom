@@ -291,13 +291,7 @@ impl<'a> Loop<'a> {
 
     /// the folder of `name` as a command run here names it.
     fn shown(&self, manifest: &Manifest, name: &str) -> String {
-        let root = &self.project.root;
-        let here = std::env::current_dir().unwrap_or_else(|_| root.clone());
-        format!(
-            "{}{}",
-            super::up_to(root, &here),
-            plan::folder(manifest, name)
-        )
+        super::folder_from_here(&self.project.root, &plan::folder(manifest, name))
     }
 
     /// warns of each output of `elsewhere`, made on another machine, with both ways to bring
@@ -1112,7 +1106,7 @@ impl<'a> Loop<'a> {
                 ));
             }
         }
-        refuse_imports(manifest, &asks, &others)?;
+        refuse_imports(manifest, &asks, &others, &self.project.root)?;
         let added: HashSet<String> = listed.iter().map(|(name, _)| name.clone()).collect();
         let listings = self.resolve_all(manifest, asks, listed).await?;
         for (name, listing) in listings {
@@ -2292,11 +2286,13 @@ impl<'a> Loop<'a> {
 }
 
 /// refuses `asks`, the datasets a relock would resolve again, when one is an import: it names no
-/// source to list it again, so the run stops before it asks anyone. `others` holds the old pins.
+/// source to list it again, so the run stops before it asks anyone, and an output's folder is
+/// read again only by its add. `others` holds the old pins, and `root` is the project's folder.
 fn refuse_imports(
     manifest: &Manifest,
     asks: &[(String, String)],
     others: &Lock,
+    root: &std::path::Path,
 ) -> Result<(), Error> {
     let Some((name, _)) = asks
         .iter()
@@ -2304,12 +2300,16 @@ fn refuse_imports(
     else {
         return Ok(());
     };
+    let entry = &manifest.datasets[name];
+    let at = entry
+        .is_output()
+        .then(|| super::folder_from_here(root, &plan::folder(manifest, name)));
     let error = if others.get(name).is_some() {
-        local::changed(name)
+        local::changed(name, at.as_deref())
     } else {
-        local::unpinned(name)
+        local::unpinned(name, at.as_deref())
     };
-    Err(cite_place(error, &manifest.datasets[name], "ref"))
+    Err(cite_place(error, entry, "ref"))
 }
 
 /// what [`Loop::relock_dry`] found relocking would do.

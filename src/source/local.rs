@@ -27,9 +27,31 @@ pub(crate) fn unlisted() -> Error {
     ))
 }
 
-/// the refusal of a changed data.toml entry of `name`, an import: only importing the files
-/// again can pin other ones.
-pub(crate) fn changed(name: &str) -> Error {
+/// the command that pins what the folder of the output `name` holds now, `at` as a command names
+/// it, keeping its table in data.toml as written.
+fn pinned_again(name: &str, at: &str) -> String {
+    crate::suggested::command(&format!(
+        "add {} --as {name}",
+        crate::suggested::shell_word(at)
+    ))
+}
+
+/// the refusal of a changed data.toml entry of `name`: an import, which only importing the files
+/// again can pin other ones of, or an output, whose folder `at`, as a command names it, is pinned
+/// again by the new entry.
+pub(crate) fn changed(name: &str, at: Option<&str>) -> Error {
+    if let Some(at) = at {
+        return Error::new(
+            Kind::ReferenceUnresolved,
+            format!(
+                "{name} is an output, so a change to its entry in data.toml takes a new pin of its folder"
+            ),
+        )
+        .help(format!(
+            "run `{}` to pin what it holds by the new entry, or put datasets.{name} back as it was",
+            pinned_again(name, at)
+        ));
+    }
     Error::new(
         Kind::ReferenceUnresolved,
         format!("{name} was imported from files, so a change to its entry in data.toml cannot pin other files"),
@@ -41,9 +63,20 @@ pub(crate) fn changed(name: &str) -> Error {
     ))
 }
 
-/// the refusal of `name`, an import that data.lock holds no pin of: nothing tells which files
-/// it was, not even a rename, since every import's table reads the same.
-pub(crate) fn unpinned(name: &str) -> Error {
+/// the refusal of `name` that data.lock holds no pin of: an import, which nothing tells the files
+/// of, not even a rename, since every import's table reads the same, or an output, whose folder
+/// `at`, as a command names it, holds them.
+pub(crate) fn unpinned(name: &str, at: Option<&str>) -> Error {
+    if let Some(at) = at {
+        return Error::new(
+            Kind::ReferenceUnresolved,
+            format!("{name} is an output, and data.lock holds no pin of it"),
+        )
+        .help(format!(
+            "run `{}` to pin what it holds",
+            pinned_again(name, at)
+        ));
+    }
     Error::new(
         Kind::ReferenceUnresolved,
         format!("{name} was imported from files, and data.lock holds no pin of them"),
@@ -54,8 +87,19 @@ pub(crate) fn unpinned(name: &str) -> Error {
     ))
 }
 
-/// the refusal to upgrade `name`, an import.
-pub(crate) fn no_newer(name: &str) -> Error {
+/// the refusal to upgrade `name`: an import, or an output, whose folder `at`, as a command names
+/// it, is pinned again only by the add that read it.
+pub(crate) fn no_newer(name: &str, at: Option<&str>) -> Error {
+    if let Some(at) = at {
+        return Error::new(
+            Kind::ReferenceUnresolved,
+            format!("{name} is an output, so no source has a newer version of it"),
+        )
+        .help(format!(
+            "run `{}` to pin what it holds now",
+            pinned_again(name, at)
+        ));
+    }
     Error::new(
         Kind::ReferenceUnresolved,
         format!("{name} was imported from files, and no source has a newer version of them"),

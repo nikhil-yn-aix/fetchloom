@@ -699,6 +699,85 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
     Ok(())
 }
 
+/// lock never reads an output's folder: an upgrade of one is refused with the one step that pins
+/// what its folder holds now, and an upgrade of every dataset passes it by, saying so.
+#[test]
+fn lock_upgrade_names_the_add_that_pins_an_output_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let pinned = fs::read_to_string(work.join("data.lock"))?;
+    rerun(&work)?;
+    let refused = sandbox.run(&["--json", "lock", "--upgrade", "processed"])?;
+    let document = json(&refused)?;
+    assert_eq!(refused.status.code(), Some(10), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(
+        error["message"], "processed is an output, so no source has a newer version of it",
+        "{document}"
+    );
+    assert_eq!(
+        error["help"], "run `fetchloom add data/processed --as processed` to pin what it holds now",
+        "{document}"
+    );
+    let every = sandbox.run(&["lock", "--upgrade"])?;
+    let stderr = text(&every.stderr)?;
+    assert_eq!(every.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Skipped processed, an output, which `fetchloom add data/processed --as processed` pins again"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned);
+    Ok(())
+}
+
+/// an output's table changed in data.toml, as a new exclude, is pinned by the same add, which
+/// reads the folder by the new table and keeps it as written: sync, lock, status and both checks
+/// name that one step, never a removal that would lose the table.
+#[test]
+fn a_changed_outputs_table_is_pinned_again_by_its_add() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    let table = manifest.replace(
+        "at = \"data/processed\"\n",
+        "at = \"data/processed\"\n# the clean table alone\nexclude = \"*.txt\"\n",
+    );
+    assert_ne!(table, manifest);
+    fs::write(work.join("data.toml"), &table)?;
+    let add = "`fetchloom add data/processed --as processed`";
+    for args in [
+        &["sync"][..],
+        &["lock"],
+        &["status"],
+        &["status", "--check"],
+        &["lock", "--check"],
+    ] {
+        let said = sandbox.run(args)?;
+        let stderr = text(&said.stderr)?;
+        assert!(stderr.contains(add), "{args:?}: {stderr}");
+        assert!(!stderr.contains("remove processed"), "{args:?}: {stderr}");
+        assert!(
+            !stderr.contains("imported from files"),
+            "{args:?}: {stderr}"
+        );
+    }
+    let repinned = sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?;
+    let stderr = text(&repinned.stderr)?;
+    assert_eq!(repinned.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read_to_string(work.join("data.toml"))?, table);
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(!lock.contains("summary.txt"), "{lock}");
+    let checked = sandbox.run(&["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    Ok(())
+}
+
 /// after a pipeline run, `status --verify --check` is the check a script runs on an output: it
 /// hashes every file, so a rewrite that kept size and time shows, and it fails while the folder
 /// holds other files than the output pins, naming the output once with what changed, as `sync

@@ -383,6 +383,13 @@ fn up_to(root: &std::path::Path, here: &std::path::Path) -> String {
     "../".repeat(depth)
 }
 
+/// `folder`, a folder of the project at `root` as data.toml names it, as a command run from the
+/// current folder names it.
+fn folder_from_here(root: &std::path::Path, folder: &str) -> String {
+    let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
+    format!("{}{folder}", up_to(root, &here))
+}
+
 /// the warning that `what` goes again after `wait`, as try `next` of `of`: `trying iris.csv again
 /// in 1.2 s (try 2 of 5)`. a count past tries that `waited` for a rate limit says so.
 fn retry_line(

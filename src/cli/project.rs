@@ -890,14 +890,15 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let upgrade = match args.upgrade {
         None => Upgrade::Nothing,
         Some(names) if names.is_empty() => {
-            tell_imports_kept(&context.output, &manifest);
+            tell_imports_kept(&context.output, &project, &manifest);
             Upgrade::All
         }
         Some(names) => {
             for name in &names {
                 known(&manifest, name, "lock --upgrade")?;
                 if manifest.datasets[name].is_import() {
-                    return Err(local::no_newer(name));
+                    let at = output_from_here(&project, &manifest, name);
+                    return Err(local::no_newer(name, at.as_deref()));
                 }
             }
             // a dataset waiting for its list is never resolved
@@ -1026,21 +1027,48 @@ fn without_private_lfs(mut error: Error, manifest: &Manifest, upgrade: &Upgrade)
     error
 }
 
-fn tell_imports_kept(output: &Output, manifest: &Manifest) {
-    let imported: Vec<&str> = manifest
+fn tell_imports_kept(output: &Output, project: &Project, manifest: &Manifest) {
+    let (outputs, imported): (Vec<&str>, Vec<&str>) = manifest
         .datasets
         .iter()
         .filter(|(_, entry)| entry.is_import())
         .map(|(name, _)| name.as_str())
-        .collect();
-    if imported.is_empty() {
-        return;
+        .partition(|name| manifest.datasets[*name].is_output());
+    if !imported.is_empty() {
+        let names = units::listed(&imported, "and");
+        output.step(
+            "Skipped",
+            &format!("{names}, imported from files, which no source has a newer version of"),
+        );
     }
-    let names = units::listed(&imported, "and");
-    output.step(
-        "Skipped",
-        &format!("{names}, imported from files, which no source has a newer version of"),
-    );
+    let again = match outputs.as_slice() {
+        [] => return,
+        [one] => format!(
+            "{one}, an output, which `{}` pins again",
+            command(&format!(
+                "add {} --as {one}",
+                crate::suggested::shell_word(&super::folder_from_here(
+                    &project.root,
+                    &plan::folder(manifest, one)
+                ))
+            ))
+        ),
+        many => format!(
+            "{}, outputs, which `{}` pins again",
+            units::listed(many, "and"),
+            command("add <folder> --as <name>")
+        ),
+    };
+    output.step("Skipped", &again);
+}
+
+/// the folder of `name`, when it is an output, as a command run here names it.
+fn output_from_here(project: &Project, manifest: &Manifest, name: &str) -> Option<String> {
+    manifest
+        .datasets
+        .get(name)
+        .filter(|entry| entry.is_output())
+        .map(|_| super::folder_from_here(&project.root, &plan::folder(manifest, name)))
 }
 
 /// `lock --dry-run`, which never downloads, unpacks or writes. a file no checksum pins keeps its
@@ -1193,10 +1221,22 @@ fn check(
     let empty = Lock::default();
     let old = old.unwrap_or(&empty);
     let mut stale: Vec<String> = Vec::new();
+    // an output's folder is read again only by its add, which its line names, as lock refuses it
+    let mut outputs = 0;
     for (name, entry) in &manifest.datasets {
         if !scope.includes(name) {
             continue;
         }
+        let pinning = |said: &str| {
+            let at = output_from_here(project, manifest, name)?;
+            Some(format!(
+                "{said}; `{}` pins what its folder holds",
+                command(&format!(
+                    "add {} --as {name}",
+                    crate::suggested::shell_word(&at)
+                ))
+            ))
+        };
         // a pin by its source's digests counts as locked until data.toml changes, and so does
         // one waiting for its list, whose missing list is told of below
         let stated = old.stated(name).map(|stated| &stated.pin);
@@ -1207,6 +1247,15 @@ fn check(
             .or(waiting)
             .map(|locked| locked.drift(entry))
         {
+            None | Some(Some(Drift::Spec)) if entry.is_output() => {
+                let said = if old.get(name).is_some() {
+                    format!("{name} changed in data.toml")
+                } else {
+                    format!("{name} is not in data.lock yet")
+                };
+                stale.extend(pinning(&said));
+                outputs += 1;
+            }
             None => stale.push(format!("{name} is not in data.lock yet")),
             Some(Some(Drift::Spec)) => stale.push(format!("{name} changed in data.toml")),
             Some(Some(Drift::Unpack { .. })) if stated.is_some() => {
@@ -1232,11 +1281,18 @@ fn check(
         }
     }
     if !stale.is_empty() {
+        let others = stale.len() > outputs;
         let mut error = Error::new(Kind::Outdated, "data.lock is out of date with data.toml");
         for line in stale {
             error = error.detail(line);
         }
-        return Err(error.help(format!("run `{}` and commit data.lock", command("lock"))));
+        let lock = format!("run `{}`", command("lock"));
+        let steps = match (outputs > 0, others) {
+            (true, true) => format!("pin each output again as its line says, then {lock}"),
+            (true, false) => "pin each output again as its line says".to_owned(),
+            (false, _) => lock,
+        };
+        return Err(error.help(format!("{steps} and commit data.lock")));
     }
     // its pin stands, but nothing here can place or check it until its list is back
     if let Some(waiting) = old

@@ -2,11 +2,13 @@
 //! data.lock pins what data.toml asks. `sync --strict` and
 //! `status --check` share it, failing with `data.not_ready`.
 
+use std::collections::HashSet;
+
 use super::Status;
 use crate::cli::project::command;
 use crate::cli::sync::Scope;
 use crate::cli::sync::disk::is_inside;
-use crate::cli::sync::place::{ChangedOutput, Placement, Reason};
+use crate::cli::sync::place::{Placement, Reason};
 use crate::error::{Error, Kind};
 use crate::project::lock::Waiting;
 
@@ -37,8 +39,13 @@ pub(in crate::cli) enum Unready {
     /// every dataset, since there is no data.lock, with what pins them.
     Lockless(String),
     /// an import no sync pins, since no source lists its files: one whose entry changed since
-    /// data.lock `pinned` it, or one data.lock holds no pin of.
-    Import { name: String, pinned: bool },
+    /// data.lock `pinned` it, or one data.lock holds no pin of. an output's folder `at`, as a
+    /// command names it, is pinned again by its add.
+    Import {
+        name: String,
+        pinned: bool,
+        at: Option<String>,
+    },
     /// a dataset its source's digests pin, `by` naming them, that no sync has downloaded yet.
     NotDownloaded { name: String, by: &'static str },
     /// a dataset whose file list, which data.lock names, is not beside it.
@@ -113,11 +120,11 @@ impl Unready {
                 "{name} is not pinned as data.toml asks: `{}` pins and places it",
                 command(sync)
             ),
-            Unready::Import { name, pinned } => {
+            Unready::Import { name, pinned, at } => {
                 let refused = if *pinned {
-                    crate::source::local::changed(name)
+                    crate::source::local::changed(name, at.as_deref())
                 } else {
-                    crate::source::local::unpinned(name)
+                    crate::source::local::unpinned(name, at.as_deref())
                 };
                 match refused.help {
                     Some(help) => format!("{}: {help}", refused.message),
@@ -242,7 +249,12 @@ pub(in crate::cli) fn after_sync(
                 changes: changed.summary(),
             }),
     );
-    unready.extend(elsewhere(&placement.elsewhere));
+    unready.extend(elsewhere(
+        placement
+            .elsewhere
+            .iter()
+            .map(|(name, shown)| (name, shown)),
+    ));
     unready.extend(
         waiting
             .iter()
@@ -254,22 +266,45 @@ pub(in crate::cli) fn after_sync(
 
 /// a line for each output of `outputs`, whose files this machine lacks, with its folder as a
 /// command names it.
-fn elsewhere(outputs: &[(String, String)]) -> impl Iterator<Item = Unready> + '_ {
-    outputs.iter().map(|(name, shown)| Unready::Elsewhere {
+fn elsewhere<'o>(
+    outputs: impl IntoIterator<Item = (&'o String, &'o String)>,
+) -> impl Iterator<Item = Unready> {
+    outputs.into_iter().map(|(name, shown)| Unready::Elsewhere {
         name: name.clone(),
         shown: shown.clone(),
     })
 }
 
+/// the outputs of `status` whose files this machine lacks, made on another machine, each with its
+/// folder as a command names it, and those files. a changed output is none, as sync leaves it
+/// whole.
+fn lacking_outputs(status: &Status) -> (Vec<(&String, &String)>, HashSet<&String>) {
+    let made: Vec<(&String, &String)> = status
+        .outputs
+        .iter()
+        .filter(|(name, _)| {
+            status.imported_elsewhere.contains_key(*name)
+                && !status
+                    .changed_outputs
+                    .iter()
+                    .any(|changed| changed.name == **name)
+        })
+        .collect();
+    let lacking = made
+        .iter()
+        .filter_map(|(name, _)| status.imported_elsewhere.get(*name))
+        .flatten()
+        .collect();
+    (made, lacking)
+}
+
 /// what keeps the data of every dataset from being ready, as `status` found the data folder: each
-/// of `outputs`, an output whose folder holds other files than it pins, is one line for all its
-/// files, as sync leaves such a folder whole, and so is each output `made` elsewhere, whose files
-/// this machine lacks, with its folder as a command names it.
-pub(super) fn of_status(
-    status: &Status,
-    outputs: &[ChangedOutput],
-    made: &[(String, String)],
-) -> Vec<Unready> {
+/// output whose folder holds other files than it pins is one line for all its files, as sync
+/// leaves such a folder whole, and so is each output whose files this machine lacks, made on
+/// another machine.
+pub(super) fn of_status(status: &Status) -> Vec<Unready> {
+    let outputs = &status.changed_outputs;
+    let (made, lacking) = lacking_outputs(status);
     let mut unready = Vec::new();
     if status.lockless {
         unready.push(Unready::Lockless(status.pins_lockless.clone()));
@@ -283,6 +318,7 @@ pub(super) fn of_status(
                     Some(&pinned) => Unready::Import {
                         name: name.clone(),
                         pinned,
+                        at: status.outputs.get(name).cloned(),
                     },
                     None => Unready::Unpinned(name.clone()),
                 }),
@@ -303,11 +339,6 @@ pub(super) fn of_status(
                 by: status.pinned_by.get(name).copied().unwrap_or("digests"),
             }),
     );
-    let lacking: std::collections::HashSet<&String> = made
-        .iter()
-        .filter_map(|(name, _)| status.imported_elsewhere.get(name))
-        .flatten()
-        .collect();
     let alone = |path: &&String| {
         !lacking.contains(*path) && !outputs.iter().any(|output| is_inside(path, &output.at))
     };

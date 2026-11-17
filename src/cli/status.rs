@@ -80,6 +80,10 @@ pub(super) struct Status {
     /// files: no link fetches them, so no sync places them.
     #[serde(skip)]
     imported_elsewhere: BTreeMap<String, Vec<String>>,
+    /// each output's folder as a command run here names it, by name, for the step that pins it
+    /// again and the line that says it was made on another machine.
+    #[serde(skip)]
+    outputs: BTreeMap<String, String>,
     /// datasets `fetchloom drop` freed on this machine, which a plain sync leaves out.
     dropped: Vec<String>,
     /// those of `dropped` no source gives back: imports.
@@ -190,7 +194,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
                 status.pins_lockless
             ));
         } else {
-            tell_imports(output, &status.imports);
+            tell_imports(output, &status);
         }
         if !status.lockless && status.needs_sync() {
             let does = match (status.places(), status.unneeded.is_empty()) {
@@ -207,7 +211,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
                 super::project::command("sync")
             ));
         }
-        tell_imported_elsewhere(output, (&project, &manifest), &status.imported_elsewhere);
+        tell_imported_elsewhere(output, &status);
         tell_repairs(output, &status);
     }
     if status.unfinished > 0 {
@@ -224,9 +228,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         ));
     }
     if strict {
-        let outputs = &status.changed_outputs;
-        let made = made_elsewhere(&status, (&project, &manifest));
-        ready::ready_by(&ready::of_status(&status, outputs, &made), &|line| {
+        ready::ready_by(&ready::of_status(&status), &|line| {
             status.only_sync_of(line)
         })
         .map_err(|error| error.with_report(&status))?;
@@ -281,36 +283,6 @@ fn changed_outputs(
         .collect()
 }
 
-/// the outputs whose files this machine lacks, as `status` found them, but those a sync leaves
-/// whole as changed, each with its folder as a command run here names it.
-fn made_elsewhere(
-    status: &Status,
-    (project, manifest): (&Project, &Manifest),
-) -> Vec<(String, String)> {
-    let here = std::env::current_dir().unwrap_or_else(|_| project.root.clone());
-    let up = super::up_to(&project.root, &here);
-    status
-        .imported_elsewhere
-        .keys()
-        .filter(|name| {
-            manifest
-                .datasets
-                .get(*name)
-                .is_some_and(manifest::Entry::is_output)
-                && !status
-                    .changed_outputs
-                    .iter()
-                    .any(|changed| changed.name == **name)
-        })
-        .map(|name| {
-            (
-                name.clone(),
-                format!("{up}{}", plan::folder(manifest, name)),
-            )
-        })
-        .collect()
-}
-
 /// what the hints that name a sync say first while one is refused, after the steps that pin an
 /// import.
 const FIRST: &str = "once the steps above are done, ";
@@ -349,14 +321,15 @@ fn tell_repairs(output: &Output, status: &Status) {
     }
 }
 
-/// how to pin each import of `imports`, which no sync pins, by the words a sync refuses it with:
+/// how to pin each import of `status`, which no sync pins, by the words a sync refuses it with:
 /// an import whose entry changed since data.lock pinned it, or one data.lock holds no pin of.
-fn tell_imports(output: &Output, imports: &BTreeMap<String, bool>) {
-    for (name, pinned) in imports {
+fn tell_imports(output: &Output, status: &Status) {
+    for (name, pinned) in &status.imports {
+        let at = status.outputs.get(name).map(String::as_str);
         let refused = if *pinned {
-            crate::source::local::changed(name)
+            crate::source::local::changed(name, at)
         } else {
-            crate::source::local::unpinned(name)
+            crate::source::local::unpinned(name, at)
         };
         if let Some(help) = refused.help {
             output.hint(&help);
@@ -364,31 +337,18 @@ fn tell_imports(output: &Output, imports: &BTreeMap<String, bool>) {
     }
 }
 
-/// how to bring the missing files of each import of `lacking`, which no sync fetches. an output,
-/// made on another machine, comes from a mirror, or from running its pipeline here.
-fn tell_imported_elsewhere(
-    output: &Output,
-    (project, manifest): (&Project, &Manifest),
-    lacking: &BTreeMap<String, Vec<String>>,
-) {
-    let (outputs, names): (Vec<&str>, Vec<&str>) =
-        lacking.keys().map(String::as_str).partition(|name| {
-            manifest
-                .datasets
-                .get(*name)
-                .is_some_and(manifest::Entry::is_output)
-        });
+/// how to bring the missing files of each import of `status` whose bytes this machine lacks,
+/// which no sync fetches. an output, made on another machine, comes from a mirror, or from
+/// running its pipeline here.
+fn tell_imported_elsewhere(output: &Output, status: &Status) {
+    let (outputs, names): (Vec<&str>, Vec<&str>) = status
+        .imported_elsewhere
+        .keys()
+        .map(String::as_str)
+        .partition(|name| status.outputs.contains_key(*name));
     let made = match outputs.as_slice() {
         [] => None,
-        [one] => {
-            let here = std::env::current_dir().unwrap_or_else(|_| project.root.clone());
-            let at = format!(
-                "{}{}",
-                super::up_to(&project.root, &here),
-                plan::folder(manifest, one)
-            );
-            Some(ready::made_elsewhere(one, &at))
-        }
+        [one] => Some(ready::made_elsewhere(one, &status.outputs[*one])),
         many => Some(format!(
             "{} were made on another machine, so only a mirror that holds their files brings them here, or your pipeline run here, then `{}` for each",
             units::listed(many, "and"),
@@ -743,6 +703,7 @@ fn check(
         renamed,
         waiting,
         imports,
+        outputs: output_folders(project, &manifest),
         pins_lockless: if lockless {
             super::project::unpinned(&manifest)
         } else {
@@ -803,6 +764,19 @@ fn check(
     drop(planned);
     status.changed_outputs = changed_outputs(&status, &manifest, &project.root, &survey.state);
     Ok((status, manifest, lock_text))
+}
+
+/// the folder of each output of `manifest`, by name, as a command run here names it.
+fn output_folders(project: &Project, manifest: &Manifest) -> BTreeMap<String, String> {
+    manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| entry.is_output())
+        .map(|(name, _)| {
+            let at = plan::folder(manifest, name);
+            (name.clone(), super::folder_from_here(&project.root, &at))
+        })
+        .collect()
 }
 
 /// `manifest` as a plain sync places it, without the datasets dropped here, which `status` names:
@@ -1392,6 +1366,13 @@ fn tell_unlocked(output: &Output, status: &Status) {
                 "data.lock pins it as {old}, which data.toml does not have, and {} keeps that pin under this name without asking the source",
                 status.a_sync()
             ),
+            (None, Some(true)) if status.outputs.contains_key(name) => {
+                "an output, so a change to its entry in data.toml takes a new pin of its folder"
+                    .to_owned()
+            }
+            (None, Some(false)) if status.outputs.contains_key(name) => {
+                "an output, and data.lock holds no pin of it".to_owned()
+            }
             (None, Some(true)) => {
                 "imported from files, so a change to its entry in data.toml cannot pin other files"
                     .to_owned()
