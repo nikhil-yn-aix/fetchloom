@@ -154,7 +154,8 @@ pub(in crate::cli) async fn unpack_all(
     let (at_once, writers) = context.threads.archives(at_once, archives.len());
     let limits = context.settings.archive_limits();
     let failed = Arc::new(AtomicBool::new(false));
-    let stops_for_tests = stops_for_tests();
+    // a debug build's tests stop every unpacking once it read a byte, as a ctrl-c then would
+    let stops_for_tests = crate::machine::pretended("FETCHLOOM_TEST_STOP_UNPACKING").is_some();
     let what = match archives.as_slice() {
         [(_, only)] => only.label.clone(),
         _ => units::count(archives.len() as u64, "archive", "archives"),
@@ -826,18 +827,6 @@ fn tell_left(output: &Output, label: &str, why: Left) {
             &format!("{label} is not compressed as its name says, so it stays as it is"),
         ),
     }
-}
-
-/// whether a debug build's tests stop every unpacking once it read a byte, as a ctrl-c then
-/// would: `FETCHLOOM_TEST_STOP_UNPACKING` is set.
-#[cfg(debug_assertions)]
-fn stops_for_tests() -> bool {
-    std::env::var_os("FETCHLOOM_TEST_STOP_UNPACKING").is_some()
-}
-
-#[cfg(not(debug_assertions))]
-fn stops_for_tests() -> bool {
-    false
 }
 
 /// says that the lone part `label` stays packed, as its bytes are no archive on their own.

@@ -128,7 +128,7 @@ fn memory_under(root: &Path) -> Option<Room> {
 
 /// the number a debug build takes from the variable `name` in place of this machine's, so CLI
 /// tests and docs examples print the same anywhere. release builds never read it.
-fn pretended(name: &str) -> Option<u64> {
+pub(crate) fn pretended(name: &str) -> Option<u64> {
     #[cfg(debug_assertions)]
     {
         std::env::var(name).ok()?.parse().ok()
