@@ -459,6 +459,9 @@ fn the_owner_of_an_unreadable_project_is_named_by_the_systems_id() -> Result {
     use std::os::unix::fs::MetadataExt;
     let sandbox = Sandbox::new()?;
     let me = fs::metadata(sandbox.work())?.uid();
+    if me == 0 {
+        return skipped("unprivileged", "root may look into every folder");
+    }
     // a folder of another user's that this one may not look into, as root's home
     let Some(theirs) = ["/root", "/var/root"]
         .into_iter()
@@ -470,7 +473,7 @@ fn the_owner_of_an_unreadable_project_is_named_by_the_systems_id() -> Result {
         })
     else {
         return skipped(
-            "unprivileged",
+            "closed-folder",
             "no folder of another user's is closed to this one",
         );
     };

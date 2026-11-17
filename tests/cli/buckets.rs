@@ -1067,8 +1067,8 @@ fn a_profile_that_signs_in_gets_its_keys_from_the_aws_cli() -> Result {
     Ok(())
 }
 
-/// only absolute PATH folders count, so an `aws` in a relative one, which a cloned project could
-/// hold, never runs.
+/// only absolute PATH folders count, so an `aws` in the working folder or a relative one, which a
+/// cloned project could hold, never runs, nor does one an empty entry would find there.
 #[test]
 fn a_profile_that_signs_in_without_the_aws_cli_says_to_install_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1079,13 +1079,19 @@ fn a_profile_that_signs_in_without_the_aws_cli_says_to_install_it() -> Result {
         &config,
         "[profile lab]\nsso_session = lab\nsso_account_id = 123456789012\nsso_role_name = reader\n",
     )?;
-    let planted = sandbox.folder("work/bin")?;
     let ran = sandbox.work().join("ran");
-    #[cfg(unix)]
-    program(&planted.join("aws"), &format!(": > '{}'", ran.display()))?;
-    #[cfg(windows)]
-    fs::write(planted.join("aws.exe"), b"not a program")?;
-    let path = std::env::join_paths([std::path::PathBuf::from("bin"), sandbox.folder("empty")?])?;
+    for planted in [sandbox.work(), sandbox.folder("work/bin")?] {
+        #[cfg(unix)]
+        program(&planted.join("aws"), &format!(": > '{}'", ran.display()))?;
+        #[cfg(windows)]
+        fs::write(planted.join("aws.exe"), b"not a program")?;
+    }
+    let path = std::env::join_paths([
+        std::path::PathBuf::from("."),
+        std::path::PathBuf::new(),
+        std::path::PathBuf::from("bin"),
+        sandbox.folder("empty")?,
+    ])?;
     let output = profile_command(
         &sandbox,
         &routes.url,

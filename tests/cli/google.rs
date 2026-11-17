@@ -490,12 +490,28 @@ fn a_listed_private_bucket_is_read_with_application_default_credentials() -> Res
     for name in ["data.toml", "data.lock"] {
         fs::copy(work.join(name), clone.join(name))?;
     }
+    // fetchloom reads the login gcloud saved and never runs gcloud, even one on PATH
+    let tools = sandbox.folder("tools")?;
+    let ran = sandbox.folder("ran")?.join("gcloud");
+    #[cfg(unix)]
+    crate::buckets::program(&tools.join("gcloud"), &format!(": > '{}'", ran.display()))?;
+    #[cfg(windows)]
+    fs::write(
+        tools.join("gcloud.cmd"),
+        format!("@echo off\r\ntype nul > \"{}\"\r\n", ran.display()),
+    )?;
+    let mut path = vec![tools];
+    path.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
     let synced = command(&sandbox, &standin, &clone, &["--json", "sync", "--locked"])
         .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
         .env("FETCHLOOM_GCS_BUCKETS", "lab-private")
         .env("CLOUDSDK_CONFIG", login(&sandbox)?)
+        .env("PATH", std::env::join_paths(path)?)
         .output()?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stdout)?);
+    assert!(!ran.exists(), "gcloud ran");
     assert_eq!(fs::read(clone.join("data/raw/a.csv"))?, PARTICIPANTS);
     assert_eq!(
         standin.sent()[4..],

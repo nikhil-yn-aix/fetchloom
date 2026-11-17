@@ -330,6 +330,44 @@ fn a_listed_private_container_is_read_with_its_account_key() -> Result {
     Ok(())
 }
 
+/// the az cli counts only in an absolute folder on PATH: one in the working folder, or in a
+/// folder PATH names relatively or by an empty entry, which a cloned project could hold, never
+/// runs, and no token goes with any request.
+#[cfg(unix)]
+#[test]
+fn an_az_cli_a_project_holds_never_runs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/", vec![unauthenticated()])?;
+    let ran = sandbox.folder("az")?.join("ran");
+    for planted in [sandbox.work(), sandbox.folder("work/bin")?] {
+        crate::buckets::program(&planted.join("az"), &format!(": > '{}'", ran.display()))?;
+    }
+    let path = std::env::join_paths([
+        std::path::PathBuf::from("."),
+        std::path::PathBuf::new(),
+        std::path::PathBuf::from("bin"),
+        sandbox.folder("empty")?,
+    ])?;
+    let output = sandbox
+        .command(&["--json", "add", "azure:lab/raw/scans/", "--as", "scans"])
+        .env("FETCHLOOM_TEST_HOSTS", &server.url)
+        .env("FETCHLOOM_AZURE_CONTAINERS", "azure:lab/raw")
+        .env("AZURE_TOKEN_CREDENTIALS", "AzureCliCredential")
+        .env("PATH", path)
+        .output()?;
+    assert!(!ran.exists(), "{}", text(&output.stderr)?);
+    assert!(!output.status.success(), "{}", text(&output.stdout)?);
+    assert!(
+        text(&output.stdout)?.contains("no folder on PATH holds the az cli"),
+        "{}",
+        text(&output.stdout)?
+    );
+    for head in server.requests() {
+        assert!(!head.contains("authorization"), "{head}");
+    }
+    Ok(())
+}
+
 /// with no SAS or key in the environment, `az account get-access-token` runs once from PATH, and
 /// its token goes with the listing once refused and with the blob, never shown.
 #[cfg(unix)]
