@@ -93,6 +93,9 @@ struct Dataset {
     /// same size tells nothing of their bytes.
     #[serde(skip)]
     modified: Vec<String>,
+    /// for an output, the project's folder it was made in, which no source serves.
+    #[serde(skip)]
+    at: Option<String>,
 }
 
 impl Dataset {
@@ -114,6 +117,7 @@ impl Dataset {
             mirrors: BTreeSet::new(),
             locked: String::new(),
             modified: Vec::new(),
+            at: None,
         }
     }
 
@@ -138,8 +142,8 @@ impl Dataset {
 struct Unserved {
     /// the file as data.lock names it, after its dataset: `iris/iris.csv`.
     file: String,
-    /// `changed`, `gone` or `imported` for a file not served, `refused` or `unknown` for one
-    /// not checked.
+    /// `changed`, `gone`, `imported` or `local` for a file not served, `refused` or `unknown`
+    /// for one not checked.
     outcome: &'static str,
     /// for `changed`, the size the source serves in its place.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,7 +160,7 @@ impl Unserved {
     /// the file and why no place serves it, as a row and the `--check` error say it.
     fn said(&self) -> String {
         match self.outcome {
-            "imported" => format!("{} · {}", self.file, self.message),
+            "imported" | "local" => format!("{} · {}", self.file, self.message),
             outcome => format!("{} · {outcome}: {}", self.file, self.message),
         }
     }
@@ -392,6 +396,7 @@ fn pinned<'l>(
         };
         report.datasets.push(Dataset {
             locked: pin.timestamp.clone(),
+            at: entry.at.clone(),
             ..Dataset::new(name, &pin.resolved)
         });
         if entry.is_import() {
@@ -598,7 +603,10 @@ fn gathered(context: &Context, report: &mut Report, pinned: &[Pinned<'_>], found
                 dataset.no_size += 1;
                 report.served += 1;
             }
-            Found::Nowhere(lack) if lack.lost() => dataset.not_served.push(unserved(pinned, lack)),
+            Found::Nowhere(lack) if lack.lost() => {
+                let unserved = local(unserved(pinned, lack), dataset.at.as_deref());
+                dataset.not_served.push(unserved);
+            }
             Found::Nowhere(lack) => {
                 report.unchecked += 1;
                 dataset.unchecked.push(unserved(pinned, lack));
@@ -651,6 +659,21 @@ fn unserved(pinned: &Pinned<'_>, lack: Lack) -> Unserved {
         message: error.message,
         help: error.help.map(String::from),
         kind: error.kind,
+    }
+}
+
+/// `unserved` for a file of an output made at `at`, which has no source to lose it: `local`, not
+/// `imported`, as made in this project.
+fn local(unserved: Unserved, at: Option<&str>) -> Unserved {
+    match at {
+        Some(at) if unserved.outcome == "imported" => Unserved {
+            outcome: "local",
+            message: format!(
+                "it is an output made in this project, at {at}, and no mirror holds it"
+            ),
+            ..unserved
+        },
+        _ => unserved,
     }
 }
 
@@ -857,8 +880,13 @@ fn tell_dataset(output: &Output, dataset: &Dataset, shown: Option<usize>) {
             &format!("{} · {files}{mirrored}{size_note}", dataset.name),
         );
     }
+    let unserved = if dataset.at.is_some() {
+        "Local"
+    } else {
+        "Not served"
+    };
     for (label, listed, tail) in [
-        ("Not served", &dataset.not_served, ""),
+        (unserved, &dataset.not_served, ""),
         ("Unchecked", &dataset.unchecked, ""),
         (
             "Source lost",

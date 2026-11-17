@@ -450,3 +450,43 @@ fn a_folder_that_changes_while_it_is_read_is_not_pinned() -> Result {
     }
     Ok(())
 }
+
+/// an output has no source: audit calls a file of it no mirror holds local, and diff says when
+/// an output moved, with the same files, as data.lock records where it lives.
+#[test]
+fn audit_and_diff_say_what_an_output_is() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let document = json(&sandbox.run(&["--json", "audit"])?)?;
+    let unserved = &document["result"]["datasets"][0]["not_served"];
+    assert_eq!(unserved[0]["outcome"], "local", "{document}");
+    assert_eq!(
+        unserved[0]["message"],
+        "it is an output made in this project, at data/processed, and no mirror holds it"
+    );
+    let audited = sandbox.run(&["audit"])?;
+    let told = text(&audited.stdout)?;
+    assert!(told.contains("Local processed · 2 of 2 files"), "{told}");
+    crate::merge::ok(&sandbox, &["add", "-A"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "pinned"])?;
+    fs::rename(work.join("data/processed"), work.join("data/clean"))?;
+    let moved = fs::read_to_string(work.join("data.toml"))?.replace("data/processed", "data/clean");
+    fs::write(work.join("data.toml"), moved)?;
+    ok(&sandbox.run(&["lock"])?)?;
+    let diff = text(&sandbox.run(&["diff"])?.stdout)?;
+    assert!(
+        diff.contains("processed changed: at data/processed \u{2192} data/clean; the same files"),
+        "{diff}"
+    );
+    let document = json(&sandbox.run(&["--json", "diff"])?)?;
+    assert_eq!(
+        document["result"]["datasets"][0]["fields"],
+        serde_json::json!([{ "name": "at", "before": "data/processed", "after": "data/clean" }])
+    );
+    Ok(())
+}

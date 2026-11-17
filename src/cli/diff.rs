@@ -384,6 +384,7 @@ impl<'a> Pin<'a> {
         vec![
             ("ref", Some(masked(&locked.reference))),
             ("spec", Some(locked.spec.clone())),
+            ("at", locked.at.clone()),
             ("extract", Some(locked.extract.to_string())),
             ("web_page", Some(locked.web_page.to_string())),
             ("resolved", Some(masked(&locked.resolved))),
@@ -577,6 +578,17 @@ fn fields_said(fields: &[Field]) -> Vec<String> {
         said.push(match changed.name {
             "spec" if field("ref").is_some() || field("web_page").is_some() => continue,
             "spec" => "select or exclude changed in data.toml".to_owned(),
+            // an output never unpacks, so becoming one or no longer says it
+            "extract" if field("at").is_some() => continue,
+            "at" => match (&changed.before, &changed.after) {
+                (None, Some(after)) => format!("now an output, at {}", plain(after)),
+                (Some(before), None) => format!("no longer an output, was at {}", plain(before)),
+                _ => format!(
+                    "at {} \u{2192} {}",
+                    value(&changed.before),
+                    value(&changed.after)
+                ),
+            },
             "resolved"
                 if field("ref").is_some_and(|reference| {
                     reference.before == changed.before && reference.after == changed.after
