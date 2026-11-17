@@ -1078,6 +1078,65 @@ fn an_output_in_a_linked_data_folder_is_pinned_where_it_is() -> Result {
     Ok(())
 }
 
+/// the pipeline runs first and its output is pinned next, the first run to follow a fresh data
+/// folder link: the capture claims the files of the folder it pins, so the link is taken with
+/// them, and later runs follow it without a word. a file of no dataset beside that folder still
+/// refuses the link, as the capture claims nothing else.
+#[test]
+fn a_capture_may_be_the_first_to_follow_a_data_link() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir(&target)?;
+    let work = sandbox.work();
+    if link_folder(&target, &work.join("data")).is_err() {
+        return skipped("symlinks", "no symbolic link can be made here");
+    }
+    let listed = scratch.display().to_string();
+    ok(&sandbox.run(&["settings", "set", "data_links", &listed])?)?;
+    processed(&work)?;
+    let pinned = sandbox.run(&["add", "./data/processed", "--as", "processed"])?;
+    let stderr = text(&pinned.stderr)?;
+    assert_eq!(pinned.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(target.join("processed/iris_clean.csv"))?, CLEAN);
+    for args in [&["status", "--verify", "--check"][..], &["sync"]] {
+        let quiet = sandbox.run(args)?;
+        let stderr = text(&quiet.stderr)?;
+        assert_eq!(quiet.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(!stderr.contains("did not place"), "{args:?}: {stderr}");
+    }
+    let other = sandbox.folder("other")?;
+    let elsewhere = scratch.join("other-data");
+    fs::create_dir(&elsewhere)?;
+    link_folder(&elsewhere, &other.join("data"))?;
+    processed(&other)?;
+    fs::write(elsewhere.join("notes.txt"), b"no dataset's")?;
+    fs::create_dir(elsewhere.join("processed-old"))?;
+    fs::write(elsewhere.join("processed-old/run.log"), b"an older run")?;
+    let refused = sandbox
+        .command_in(
+            &other,
+            &["--json", "add", "./data/processed", "--as", "processed"],
+        )
+        .output()?;
+    let document = json(&refused)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "project.invalid", "{document}");
+    let said = error["message"].as_str().unwrap_or_default();
+    assert!(
+        said.contains("which holds files this project did not place, such as "),
+        "{document}"
+    );
+    for stray in ["notes.txt", "processed-old/run.log"] {
+        assert!(said.contains(stray), "{stray}: {document}");
+    }
+    for claimed in ["iris_clean.csv", "summary.txt"] {
+        assert!(!said.contains(claimed), "{claimed}: {document}");
+    }
+    assert!(!other.join("data.toml").exists(), "{document}");
+    Ok(())
+}
+
 /// a cloned data.toml chooses where an output lands, so `at` is held to the data folder's rules
 /// and kept apart from the cache, before anything is written.
 #[test]

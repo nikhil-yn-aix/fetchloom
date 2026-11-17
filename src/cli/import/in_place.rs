@@ -72,6 +72,7 @@ pub(super) async fn pin_held(
     starting: bool,
 ) -> Result<Report, Error> {
     let old = adding.old.take();
+    adding.project.captured = Some(at.to_owned());
     let adding = &*adding;
     let project = &adding.project;
     let manifest = &adding.manifest;

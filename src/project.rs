@@ -51,6 +51,10 @@ pub(crate) struct Project {
     pub(crate) root: PathBuf,
     /// the folders its data folder may be a link into on this machine.
     pub(crate) data_links: DataLinks,
+    /// the folder an output's capture pins in this run, as the project names it: on a data folder
+    /// link's first follow its files are this project's, as the person claims them and a capture
+    /// only reads them.
+    pub(crate) captured: Option<String>,
 }
 
 /// the project lock, held while a command changes the project. dropping it lets others in.
@@ -290,6 +294,7 @@ impl Project {
         Project {
             root,
             data_links: DataLinks::default(),
+            captured: None,
         }
     }
 
@@ -1259,9 +1264,10 @@ impl Project {
 
     /// the files in `found`, the folder the link `path` in the project leads to, that this
     /// project's state does not record as its own, by their path in `found`: a file it placed, of
-    /// the size it placed, a marker it made and a file it kept aside are its own, and what a
-    /// system writes by itself, as finder's `.DS_Store`, is nobody's. a move to another disk may
-    /// round a file's time, so its size alone tells it. at most three, enough to name.
+    /// the size it placed, a marker it made, a file it kept aside and one in the folder this run's
+    /// capture pins are its own, and what a system writes by itself, as finder's `.DS_Store`, is
+    /// nobody's. a move to another disk may round a file's time, so its size alone tells it. at
+    /// most three, enough to name.
     fn unplaced(&self, path: &str, found: &Path) -> io::Result<Vec<String>> {
         let below = format!("{path}/");
         let (state, _) =
@@ -1291,7 +1297,11 @@ impl Project {
                         .metadata()
                         .is_ok_and(|found| found.len() == placed.look.size)
                 });
-                let own = marker || placed || state.aside.contains_key(&record);
+                let claimed = self
+                    .captured
+                    .as_deref()
+                    .is_some_and(|at| record.starts_with(&format!("{at}/")));
+                let own = marker || placed || claimed || state.aside.contains_key(&record);
                 let dropped = kind.is_file() && crate::name::system_file(&name);
                 if !own && !dropped {
                     unplaced.push(at);
