@@ -168,6 +168,29 @@ pub(crate) struct ChangedOutput {
 }
 
 impl ChangedOutput {
+    /// the output `name` at `at`, `shown` as a command names it, with no change counted yet.
+    pub(crate) fn new(name: &str, at: &str, shown: String) -> ChangedOutput {
+        ChangedOutput {
+            name: name.to_owned(),
+            at: at.to_owned(),
+            shown,
+            changed: 0,
+            added: 0,
+            removed: 0,
+            change: String::new(),
+            told: false,
+        }
+    }
+
+    /// this output with what changed, `changes`, as a run tells it once, and whether one did.
+    fn told_of(mut self, mut changes: Vec<String>, told: &crate::project::state::Told) -> Self {
+        changes.sort_unstable();
+        let changes = crate::digest::sha256(changes.join("\n").as_bytes()).hex();
+        self.change = format!("{}:{changes}", self.name);
+        self.told = told.has(Once::Output, &self.change);
+        self
+    }
+
     /// `1 file changed, 2 added, 1 removed`, leaving out what is none.
     pub(crate) fn summary(&self) -> String {
         changes_said(self.changed, self.added, self.removed)
@@ -2944,6 +2967,18 @@ fn remove_unwanted(
     Ok(changed)
 }
 
+/// the outputs whose folders hold the author's own files, as `state` recorded their capture there:
+/// every difference from the pin in such a folder is the author's, so sync renews no file there and
+/// fills in none, which would mix two runs of a pipeline in one folder.
+pub(crate) fn authored(state: &State) -> HashSet<&str> {
+    state
+        .files
+        .values()
+        .filter(|placed| placed.output && placed.adopted)
+        .map(|placed| placed.dataset.as_str())
+        .collect()
+}
+
 /// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
 /// output: its patterns leave it out, or a repository or a tool keeps it there, as a capture leaves
 /// them out, or the output is dropped here, its files the author's still.
@@ -2985,17 +3020,8 @@ fn changed_outputs(
         .iter()
         .filter(|(name, entry)| entry.place && scope.includes(name))
         .filter_map(|(name, entry)| {
-            let at = entry.at.clone()?;
-            let output = ChangedOutput {
-                name: name.clone(),
-                shown: format!("{up}{at}"),
-                at,
-                changed: 0,
-                added: 0,
-                removed: 0,
-                change: String::new(),
-                told: false,
-            };
+            let at = entry.at.as_deref()?;
+            let output = ChangedOutput::new(name, at, format!("{up}{at}"));
             Some((name.as_str(), (output, Vec::new())))
         })
         .collect();
@@ -3006,11 +3032,20 @@ fn changed_outputs(
         Some(look) => format!("{how} {path} {}:{}", look.size, look.modified),
         None => format!("{how} {path}"),
     };
+    let authored = authored(&survey.state);
+    let adopted = |path: &str| {
+        survey
+            .state
+            .files
+            .get(path)
+            .is_some_and(|placed| placed.adopted)
+    };
     for (target, action) in targets.iter().zip(actions) {
         let Some((output, changes)) = found.get_mut(target.dataset) else {
             continue;
         };
         let path = target.path.as_str();
+        let ours = authored.contains(target.dataset);
         match action {
             Action::Leave(Reason::Changed | Reason::Foreign | Reason::Shared)
             | Action::Overwrite(_)
@@ -3019,12 +3054,13 @@ fn changed_outputs(
                 output.changed += 1;
                 changes.push(change("changed", path));
             }
-            // hashing found other bytes than the look tells, which is a change all the same
-            Action::Replace if survey.damaged.contains(path) => {
+            // hashing found other bytes than the look tells, which is a change all the same, and
+            // so is the author's file of another run, as after a branch switch
+            Action::Replace if survey.damaged.contains(path) || adopted(path) => {
                 output.changed += 1;
                 changes.push(change("changed", path));
             }
-            Action::Place if survey.state.files.contains_key(path) => {
+            Action::Place if ours || survey.state.files.contains_key(path) => {
                 output.removed += 1;
                 changes.push(change("removed", path));
             }
@@ -3050,11 +3086,13 @@ fn changed_outputs(
         }
         match survey.state.files.get(path) {
             // placed for an older pin and unchanged, which removal takes
-            Some(placed) if placed.dataset == output.name && placed.look == *look => {}
-            Some(placed) if placed.dataset == output.name => {
+            Some(placed)
+                if placed.dataset == output.name && placed.look == *look && !placed.adopted => {}
+            Some(placed) if placed.dataset == output.name && placed.look != *look => {
                 output.changed += 1;
                 changes.push(change("changed", path));
             }
+            // the author's file of another run, which no pin places now, is an addition too
             _ => {
                 output.added += 1;
                 changes.push(change("added", path));
@@ -3063,17 +3101,10 @@ fn changed_outputs(
         }
     }
     extras.sort_unstable();
-    let told = &survey.state.told;
     let changed: Vec<ChangedOutput> = found
         .into_values()
         .filter(|(output, _)| output.is_changed())
-        .map(|(mut output, mut changes)| {
-            changes.sort_unstable();
-            let changes = crate::digest::sha256(changes.join("\n").as_bytes()).hex();
-            output.change = format!("{}:{changes}", output.name);
-            output.told = told.has(Once::Output, &output.change);
-            output
-        })
+        .map(|(output, changes)| output.told_of(changes, &survey.state.told))
         .collect();
     let left: HashSet<&str> = changed.iter().map(|output| output.name.as_str()).collect();
     extras.retain(|(_, name)| left.contains(name.as_str()));

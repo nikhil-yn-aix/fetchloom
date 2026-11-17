@@ -124,6 +124,28 @@ fn a_teammate_gets_an_output_where_the_author_had_it_and_may_write_it() -> Resul
         use std::os::unix::fs::MetadataExt;
         assert_eq!(metadata.nlink(), 1, "a file of its own, not the cache's");
     }
+    // the files fetchloom placed for a teammate follow the author's next pin, as for any dataset
+    rerun(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    let synced = sandbox.command_in(&teammate, &["sync"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("changed since"), "{stderr}");
+    assert_eq!(
+        fs::read(&placed)?,
+        fs::read(work.join("data/processed/iris_clean.csv"))?
+    );
+    assert!(
+        teammate.join("data/processed/plot.png").is_file(),
+        "{stderr}"
+    );
+    assert!(
+        !teammate.join("data/processed/summary.txt").exists(),
+        "{stderr}"
+    );
     fs::write(&placed, b"rerun\n")?;
     let status = sandbox
         .command_in(&teammate, &["--json", "status"])
@@ -351,6 +373,107 @@ fn a_changed_output_is_never_partly_healed() -> Result {
             "{kind}: {document}"
         );
     }
+    Ok(())
+}
+
+/// the author switches git branches between two pinned runs of a pipeline: data.lock pins run 1
+/// again while the folder holds run 2. sync renews no part of it, as that would leave both runs
+/// mixed in one folder; it says the output changed, as status does, and `sync --force` restores
+/// run 1 exactly.
+#[test]
+fn a_branch_switch_between_two_pinned_runs_mixes_no_runs() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let folder = work.join("data/processed");
+    fs::create_dir_all(&folder)?;
+    fs::write(folder.join("clean.csv"), b"v1,a\n")?;
+    fs::write(folder.join("summary.txt"), b"v1\n")?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let git = |args: &[&str]| -> Result {
+        crate::merge::ok(&sandbox, args)?;
+        Ok(())
+    };
+    git(&["add", "-A"])?;
+    git(&["commit", "-qm", "run 1"])?;
+    git(&["checkout", "-qb", "run2"])?;
+    fs::write(folder.join("clean.csv"), b"v2,bb\n")?;
+    fs::remove_file(folder.join("summary.txt"))?;
+    fs::write(folder.join("fig.txt"), b"v2\n")?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?)?;
+    git(&["commit", "-qam", "run 2"])?;
+    git(&["checkout", "-q", "-"])?;
+    let held = || -> Result<Vec<(String, Vec<u8>)>> {
+        let mut held = Vec::new();
+        for entry in fs::read_dir(&folder)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name != ".gitignore" {
+                held.push((name, fs::read(entry.path())?));
+            }
+        }
+        held.sort();
+        Ok(held)
+    };
+    let run2 = held()?;
+    let checked = sandbox.run(&["status", "--check"])?;
+    let said = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{said}");
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    let changes = "1 file changed, 1 added, 1 removed";
+    assert!(
+        said.contains(&format!(
+            "data/processed changed since processed was pinned, {changes}"
+        )),
+        "{said}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "warning: data/processed changed since processed was pinned: {changes}, so sync leaves it as it is"
+        )),
+        "{stderr}"
+    );
+    assert_eq!(held()?, run2, "no part of run 1 placed among run 2");
+    ok(&sandbox.run(&["sync", "--force", "processed"])?)?;
+    let run1 = [
+        ("clean.csv".to_owned(), b"v1,a\n".to_vec()),
+        ("summary.txt".to_owned(), b"v1\n".to_vec()),
+    ];
+    assert_eq!(held()?, run1);
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
+/// a teammate's clone holds no file of an output before its first sync: status says sync places
+/// them, never that the output changed, and never offers to pin the empty folder.
+#[test]
+fn a_clone_before_its_first_sync_has_an_output_to_place_not_a_changed_one() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), clone.join(name))?;
+    }
+    let checked = sandbox
+        .command_in(&clone, &["status", "--check"])
+        .output()?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("changed since"), "{stderr}");
+    assert!(
+        stderr.contains("data/processed/iris_clean.csv is missing: `fetchloom sync` places it"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("help: run `fetchloom sync` to put them in place"),
+        "{stderr}"
+    );
     Ok(())
 }
 

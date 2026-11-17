@@ -73,6 +73,9 @@ pub(super) struct Status {
     /// why the files in place of each of `not_unpacked` that has some cannot stand for it.
     #[serde(skip)]
     unproven: HashMap<String, String>,
+    /// the outputs whose folders hold other files than their pins, as sync judges them.
+    #[serde(skip)]
+    changed_outputs: Vec<place::ChangedOutput>,
     /// the imports with a file of `missing` whose bytes this machine's cache lacks, with those
     /// files: no link fetches them, so no sync places them.
     #[serde(skip)]
@@ -221,8 +224,8 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         ));
     }
     if strict {
-        let outputs = changed_outputs(&status, &manifest, &project.root);
-        ready::ready_by(&ready::of_status(&status, &outputs), &|line| {
+        let outputs = &status.changed_outputs;
+        ready::ready_by(&ready::of_status(&status, outputs), &|line| {
             status.only_sync_of(line)
         })
         .map_err(|error| error.with_report(&status))?;
@@ -230,15 +233,20 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
     Ok(status)
 }
 
-/// the outputs whose folders `status` found holding other files than their pins, counted from the
-/// lists a person reads: a file of other bytes or in a file's way, one no pin places, one gone.
+/// the outputs whose folders `status` found holding other files than their pins, as sync judges
+/// them, counted from the lists a person reads: a file of other bytes or in a file's way, one no
+/// pin places, one gone. where the author's own files are, as `state` records the capture, a file
+/// of another pin is a change too, and so is a pinned file never there, as after a branch switch.
 fn changed_outputs(
     status: &Status,
     manifest: &Manifest,
     root: &std::path::Path,
+    state: &crate::project::state::State,
 ) -> Vec<place::ChangedOutput> {
     let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
     let up = super::up_to(root, &here);
+    let authored = place::authored(state);
+    let adopted = |path: &&String| state.files.get(*path).is_some_and(|placed| placed.adopted);
     manifest
         .datasets
         .iter()
@@ -249,23 +257,24 @@ fn changed_outputs(
                 paths.filter(|path| disk::is_inside(path, at)).count() as u64
             };
             let blocked = status.blocked.iter().map(|blocker| &blocker.path);
-            let output = place::ChangedOutput {
-                name: name.clone(),
-                at: at.to_owned(),
-                shown: format!("{up}{at}"),
-                changed: count(
-                    &mut status
-                        .edited
-                        .iter()
-                        .chain(&status.untracked)
-                        .chain(&status.damaged)
-                        .chain(blocked),
-                ),
-                added: count(&mut status.extra.iter()),
-                removed: count(&mut status.missing.iter()),
-                change: String::new(),
-                told: false,
-            };
+            let ours = authored.contains(name.as_str());
+            let mut output = place::ChangedOutput::new(name, at, format!("{up}{at}"));
+            output.changed = count(
+                &mut status
+                    .edited
+                    .iter()
+                    .chain(&status.untracked)
+                    .chain(&status.damaged)
+                    .chain(blocked)
+                    .chain(status.outdated.iter().filter(adopted)),
+            );
+            output.added = count(&mut status.extra.iter());
+            output.removed = count(
+                &mut status
+                    .missing
+                    .iter()
+                    .filter(|path| ours || state.files.contains_key(*path)),
+            );
             (output.changed + output.added + output.removed > 0).then_some(output)
         })
         .collect()
@@ -732,6 +741,7 @@ fn check(
         status.kept_copies = kept_copies(&status.extra, &recorded);
         status.set_aside = set_aside(&status.extra, &survey);
         sort_extra(&mut status, &plan::Owned::of(&manifest));
+        status.changed_outputs = changed_outputs(&status, &manifest, &project.root, &survey.state);
         return Ok((status, manifest, lock_text));
     }
     let planned = planned(
@@ -766,6 +776,7 @@ fn check(
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     drop(planned);
+    status.changed_outputs = changed_outputs(&status, &manifest, &project.root, &survey.state);
     Ok((status, manifest, lock_text))
 }
 
