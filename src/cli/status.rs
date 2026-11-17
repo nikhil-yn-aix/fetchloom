@@ -172,8 +172,8 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
     status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
     warn_git(output, &project, lock.as_deref());
-    crate::lineage::tell_stale(output, &status.lineage);
-    crate::lineage::tell_unchecked(output, &status.lineage);
+    super::lineage::tell_stale(output, &status.lineage);
+    super::lineage::tell_unchecked(output, &status.lineage);
     let waiting: Vec<Waiting> = status.waiting.values().cloned().collect();
     super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
     list(output, &status);
@@ -305,8 +305,8 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     let (status, manifest, lock) = check(project, context.threads, &context.stop, None)?;
     let output = &context.output;
     warn_git(output, project, lock.as_deref());
-    crate::lineage::tell_stale(output, &status.lineage);
-    crate::lineage::tell_unchecked(output, &status.lineage);
+    super::lineage::tell_stale(output, &status.lineage);
+    super::lineage::tell_unchecked(output, &status.lineage);
     if !sum_up(output, &status) {
         return Ok(status);
     }

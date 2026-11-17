@@ -22,7 +22,6 @@ use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::name;
 use crate::source::Access;
-use crate::tree::Identity;
 
 pub(crate) const FILE: &str = "data.lock";
 /// the one format of data.lock, a lock that keeps lists in [`lists::FOLDER`] included.
@@ -427,11 +426,12 @@ pub(crate) struct Locked {
 }
 
 /// a dataset another was made from, as data.lock keeps it in that one's `from`: its name, and
-/// the identity of its files when that one was pinned from them, none when they were not known.
+/// the identity of its files when that one was pinned from them ([`crate::tree::identity`]),
+/// none when they were not known.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Recorded {
     pub(crate) name: String,
-    pub(crate) tree: Option<Identity>,
+    pub(crate) tree: Option<Sha256>,
 }
 
 /// what data.lock writes for a tree that was not known.
@@ -441,7 +441,7 @@ impl Recorded {
     /// the tree as data.lock writes it.
     pub(crate) fn tree_text(&self) -> String {
         self.tree
-            .map_or_else(|| UNKNOWN.to_owned(), |tree| tree.to_string())
+            .map_or_else(|| UNKNOWN.to_owned(), |tree| format!("sha256:{tree}"))
     }
 }
 
@@ -1622,7 +1622,7 @@ fn recorded(dataset: &str, stored: Vec<StoredRecord>) -> Result<Vec<Recorded>, E
         }
         let tree = match input.tree.as_str() {
             UNKNOWN => None,
-            text => Some(Identity::parse(text).ok_or_else(|| {
+            text => Some(prefixed(text).ok_or_else(|| {
                 broken(format!(
                     "data.lock gives {} in the from of {dataset} a tree that is neither sha256: and 64 hex digits nor unknown",
                     input.name
@@ -3067,7 +3067,7 @@ mod tests {
     #[test]
     fn from_reads_back_as_written_and_refuses_what_fetchloom_never_writes() {
         let mut lock = sample_sorted();
-        let tree = Identity::parse(&format!("sha256:{}", digest::sha256(b"tree"))).unwrap();
+        let tree = digest::sha256(b"tree");
         lock.datasets[0].from = vec![
             Recorded {
                 name: "raw".to_owned(),
@@ -3080,14 +3080,14 @@ mod tests {
         ];
         let text = lock.render();
         let written = format!(
-            "locked = \"2026-10-27T17:30:00Z\"\nfrom = [\n  {{ name = \"raw\", tree = \"{tree}\" }},\n  {{ name = \"zeta\", tree = \"unknown\" }},\n]\nfiles = ["
+            "locked = \"2026-10-27T17:30:00Z\"\nfrom = [\n  {{ name = \"raw\", tree = \"sha256:{tree}\" }},\n  {{ name = \"zeta\", tree = \"unknown\" }},\n]\nfiles = ["
         );
         assert!(text.contains(&written), "{text}");
         assert_eq!(Lock::parse(&text).unwrap(), lock);
         let swapped = text.replace(
             &written,
             &format!(
-                "locked = \"2026-10-27T17:30:00Z\"\nfrom = [{{ name = \"zeta\", tree = \"unknown\" }}, {{ name = \"raw\", tree = \"{tree}\" }}]\nfiles = ["
+                "locked = \"2026-10-27T17:30:00Z\"\nfrom = [{{ name = \"zeta\", tree = \"unknown\" }}, {{ name = \"raw\", tree = \"sha256:{tree}\" }}]\nfiles = ["
             ),
         );
         assert_ne!(swapped, text);

@@ -8,7 +8,7 @@
 //! a later version starts with its own line, so identities of two versions never meet. no path
 //! in a pin holds a tab or a line break, so the text reads back one way only.
 
-use std::fmt::{self, Write as _};
+use std::fmt::Write as _;
 
 use crate::cache::{Cache, Member};
 use crate::digest::{Hasher, Sha256};
@@ -20,50 +20,25 @@ use crate::project::manifest::Entry;
 /// the first line of the text version 1 hashes.
 const VERSION: &str = "fetchloom tree 1\n";
 
-/// the SHA-256 of a tree's text, as data.lock writes it: `sha256:` and 64 hex digits.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct Identity(Sha256);
-
-impl Identity {
-    /// the identity of the files `files` gives by their paths in the dataset, sizes and SHA-256,
-    /// in any order.
-    pub(crate) fn of<'a>(files: impl IntoIterator<Item = (&'a str, u64, Sha256)>) -> Identity {
-        let mut files: Vec<(&str, u64, Sha256)> = files.into_iter().collect();
-        files.sort_unstable_by(|a, b| a.0.cmp(b.0));
-        let mut hasher = Hasher::default();
-        hasher.update(VERSION.as_bytes());
-        let mut line = String::new();
-        for (path, size, sha256) in files {
-            line.clear();
-            let _ = writeln!(line, "{path}\t{size}\t{sha256}");
-            hasher.update(line.as_bytes());
-        }
-        Identity(hasher.finish().0)
+/// the identity of the files `files` gives by their paths in the dataset, sizes and SHA-256, in
+/// any order: the SHA-256 of version 1's text, which data.lock writes as `sha256:` and its hex.
+pub(crate) fn identity<'a>(files: impl IntoIterator<Item = (&'a str, u64, Sha256)>) -> Sha256 {
+    let mut files: Vec<(&str, u64, Sha256)> = files.into_iter().collect();
+    files.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    let mut hasher = Hasher::default();
+    hasher.update(VERSION.as_bytes());
+    let mut line = String::new();
+    for (path, size, sha256) in files {
+        line.clear();
+        let _ = writeln!(line, "{path}\t{size}\t{sha256}");
+        hasher.update(line.as_bytes());
     }
-
-    /// the identity `text` gives as data.lock writes it, `sha256:` and 64 hex digits.
-    pub(crate) fn parse(text: &str) -> Option<Identity> {
-        let hex = text.strip_prefix("sha256:")?;
-        (hex.len() == 64).then_some(())?;
-        Sha256::from_hex(hex).map(Identity)
-    }
-}
-
-impl fmt::Display for Identity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "sha256:{}", self.0)
-    }
-}
-
-impl fmt::Debug for Identity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "tree {self}")
-    }
+    hasher.finish().0
 }
 
 /// the identity of `locked`'s files as `entry`'s members tables keep them, or none when this
 /// machine cannot tell: an archive it never unpacked, or members tables that do not fit the pin.
-pub(crate) fn effective(entry: &Entry, locked: &Locked, cache: &Cache) -> Option<Identity> {
+pub(crate) fn effective(entry: &Entry, locked: &Locked, cache: &Cache) -> Option<Sha256> {
     effective_with(entry, locked, &|archive| archive.recorded(cache))
 }
 
@@ -72,7 +47,7 @@ fn effective_with(
     entry: &Entry,
     locked: &Locked,
     members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
-) -> Option<Identity> {
+) -> Option<Sha256> {
     let mut plan = Plan::default();
     plan::expand(
         &mut plan,
@@ -87,7 +62,7 @@ fn effective_with(
     if !plan.unknown.is_empty() {
         return None;
     }
-    Some(Identity::of(plan.targets.iter().map(|target| {
+    Some(identity(plan.targets.iter().map(|target| {
         (target.path.as_str(), target.size, target.sha256)
     })))
 }
@@ -160,23 +135,23 @@ mod tests {
         format!("sha256:{}", digest::sha256(text.as_bytes()))
     }
 
+    fn shown(tree: Option<Sha256>) -> Option<String> {
+        tree.map(|tree| format!("sha256:{tree}"))
+    }
+
     #[test]
     fn version_one_hashes_sorted_lines_of_path_size_and_sha256() {
         let setosa = digest::sha256(b"setosa\n");
         let iris = digest::sha256(b"iris\n");
-        let tree = Identity::of([("b/iris.csv", 5, iris), ("a.csv", 7, setosa)]);
+        let tree = identity([("b/iris.csv", 5, iris), ("a.csv", 7, setosa)]);
         assert_eq!(
-            tree.to_string(),
+            format!("sha256:{tree}"),
             expected(&[
                 &format!("a.csv\t7\t{setosa}"),
                 &format!("b/iris.csv\t5\t{iris}")
             ])
         );
-        assert_eq!(Identity::of([]).to_string(), expected(&[]));
-        assert_eq!(Identity::parse(&tree.to_string()), Some(tree));
-        for wrong in ["unknown", "sha256:12", &tree.to_string()[7..]] {
-            assert_eq!(Identity::parse(wrong), None, "{wrong}");
-        }
+        assert_eq!(format!("sha256:{}", identity([])), expected(&[]));
     }
 
     #[test]
@@ -220,7 +195,7 @@ mod tests {
         let loose = locked(vec![file("a.csv", b"a\n"), file("b.csv", b"b\n")]);
         assert_eq!(effective_with(&entry(""), &loose, &|_| None), tree);
         assert_eq!(
-            tree.map(|tree| tree.to_string()),
+            shown(tree),
             Some(expected(&[
                 &format!("a.csv\t2\t{}", digest::sha256(b"a\n")),
                 &format!("b.csv\t2\t{}", digest::sha256(b"b\n")),
@@ -249,7 +224,7 @@ mod tests {
         packed.files[0].unpacks_to = None;
         let tree = effective_with(&entry("extract = false\n"), &packed, &|_| None);
         assert_eq!(
-            tree.map(|tree| tree.to_string()),
+            shown(tree),
             Some(expected(&[&format!(
                 "iris.zip\t9\t{}",
                 digest::sha256(b"zip bytes")

@@ -168,7 +168,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let dry_run = args.dry.dry_run;
     let (report, closing) = sync_as_asked(context, args).await?;
     if !dry_run {
-        tell_stale(context, &report.project);
+        stale_after_sync(context, &report.project);
     }
     tell_waiting(
         &context.output,
@@ -197,7 +197,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
 /// says, once a sync is done, which datasets of the project at `root` may be stale, as their
 /// inputs' files changed since they were pinned from them; a data.toml that names no `from` costs
 /// one read. what a sync cannot check is left to status and `lock --check`.
-fn tell_stale(context: &Context, root: &Path) {
+fn stale_after_sync(context: &Context, root: &Path) {
     let project = Project {
         root: root.to_path_buf(),
     };
@@ -227,7 +227,7 @@ fn tell_stale(context: &Context, root: &Path) {
         return;
     };
     let judged = crate::lineage::judge(&manifest, &lock, &cache);
-    crate::lineage::tell_stale(&context.output, &judged);
+    super::lineage::tell_stale(&context.output, &judged);
 }
 
 /// the sync `args` asks for, and its last lines, which a dry run tells itself.
@@ -845,10 +845,10 @@ fn check_lock(
         .any(|entry| !entry.from.is_empty());
     if let Some(old) = old.filter(|_| made) {
         let judged = crate::lineage::judge(manifest, old, &peek_cache()?);
-        crate::lineage::tell_unchecked(&context.output, &judged);
+        super::lineage::tell_unchecked(&context.output, &judged);
         match crate::lineage::stale_error(&judged).filter(|_| fail_on_stale) {
             Some(stale) => return Err(stale),
-            None => crate::lineage::tell_stale(&context.output, &judged),
+            None => super::lineage::tell_stale(&context.output, &judged),
         }
     }
     context.output.done("Ok", "data.lock matches data.toml");

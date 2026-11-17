@@ -35,11 +35,11 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value};
 
 use crate::cache::Cache;
+use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::output::{Output, Warning};
 use crate::project::lock::{Lock, Recorded, UNKNOWN};
 use crate::project::manifest::{Entry, Manifest};
-use crate::tree::{self, Identity};
+use crate::tree;
 use crate::units;
 
 /// the identity of `name`'s files as data.toml and `lock` have them now, or none when this machine
@@ -50,7 +50,7 @@ pub(crate) fn current(
     lock: &Lock,
     name: &str,
     cache: &Cache,
-) -> Option<Identity> {
+) -> Option<Sha256> {
     let entry = manifest.datasets.get(name)?;
     let locked = lock
         .get(name)
@@ -169,8 +169,8 @@ pub(crate) struct Judged {
 pub(crate) fn judge(manifest: &Manifest, lock: &Lock, cache: &Cache) -> Vec<Judged> {
     let mut judged = Vec::new();
     // each dataset's files now, found once, and only when a judgment asks
-    let mut trees: BTreeMap<&str, Option<Identity>> = BTreeMap::new();
-    let mut tree = |name: &str| -> Option<Identity> {
+    let mut trees: BTreeMap<&str, Option<Sha256>> = BTreeMap::new();
+    let mut tree = |name: &str| -> Option<Sha256> {
         if let Some(known) = trees.get(name) {
             return *known;
         }
@@ -212,13 +212,13 @@ pub(crate) fn judge(manifest: &Manifest, lock: &Lock, cache: &Cache) -> Vec<Judg
                             }
                             None => State::Unrecorded,
                         };
-                        (state, Some(now.to_string()))
+                        (state, Some(shown(now)))
                     }
                 }
             };
             let (current, again) = match &state {
                 State::Renamed { to } => (
-                    tree(to).map(|tree| tree.to_string()),
+                    tree(to).map(shown),
                     again(dataset, entry, Some((input, to))),
                 ),
                 _ => (now, again(dataset, entry, None)),
@@ -242,8 +242,8 @@ fn moved(
     manifest: &Manifest,
     dataset: &str,
     input: &str,
-    then: Option<Identity>,
-    tree: &mut dyn FnMut(&str) -> Option<Identity>,
+    then: Option<Sha256>,
+    tree: &mut dyn FnMut(&str) -> Option<Sha256>,
 ) -> State {
     let Some(then) = then else {
         return State::Missing;
@@ -257,6 +257,11 @@ fn moved(
         (Some(to), None) => State::Renamed { to: to.clone() },
         _ => State::Missing,
     }
+}
+
+/// a tree as data.lock writes it.
+fn shown(tree: Sha256) -> String {
+    format!("sha256:{tree}")
 }
 
 /// whether `lock` pins `name`'s files as data.toml asks.
@@ -291,14 +296,29 @@ fn said(dataset: &str, inputs: &[&Judged]) -> (String, String) {
     )
 }
 
-/// tells, once for each dataset of `judged`, the inputs whose files changed. the exit code stays
-/// as it was.
-pub(crate) fn tell_stale(output: &Output, judged: &[Judged]) {
-    for (dataset, inputs) in changed(judged) {
-        let (message, help) = said(dataset, &inputs);
-        let facts = inputs.iter().map(|one| facts(one)).collect();
-        output.warn_facts(Warning::DerivedStale, &message, &help, &[], facts);
-    }
+/// a warning about a dataset's inputs as status, `lock --check` and sync tell it: what it says
+/// once, and its fields for `--json`, once for each input it is about.
+pub(crate) struct Said {
+    pub(crate) message: String,
+    pub(crate) help: String,
+    pub(crate) details: Vec<String>,
+    pub(crate) facts: Vec<Map<String, Value>>,
+}
+
+/// for each dataset of `judged` whose inputs' files changed, the warning that it may be stale.
+pub(crate) fn stale(judged: &[Judged]) -> Vec<Said> {
+    changed(judged)
+        .into_iter()
+        .map(|(dataset, inputs)| {
+            let (message, help) = said(dataset, &inputs);
+            Said {
+                message,
+                help,
+                details: Vec::new(),
+                facts: inputs.iter().map(|one| facts(one)).collect(),
+            }
+        })
+        .collect()
 }
 
 /// the failure of a check told to fail while a dataset of `judged` may be stale, as
@@ -333,8 +353,10 @@ pub(crate) fn stale_error(judged: &[Judged]) -> Option<Error> {
     Some(error)
 }
 
-/// tells each input of `judged` whose state cannot be checked, with what would let it be.
-pub(crate) fn tell_unchecked(output: &Output, judged: &[Judged]) {
+/// for each input of `judged` whose state cannot be checked, the warning that says so and what
+/// would let it be.
+pub(crate) fn unchecked(judged: &[Judged]) -> Vec<Said> {
+    let mut said = Vec::new();
     for one in judged {
         let (dataset, input) = (one.dataset.as_str(), one.input.as_str());
         let (why, help, details) = match &one.state {
@@ -378,14 +400,14 @@ pub(crate) fn tell_unchecked(output: &Output, judged: &[Judged]) {
                 Vec::new(),
             ),
         };
-        output.warn_facts(
-            Warning::DerivedUnchecked,
-            &format!("cannot tell whether {dataset} is stale: {why}"),
-            &help,
-            &details,
-            vec![facts(one)],
-        );
+        said.push(Said {
+            message: format!("cannot tell whether {dataset} is stale: {why}"),
+            help,
+            details,
+            facts: vec![facts(one)],
+        });
     }
+    said
 }
 
 /// the help that names the add that records `one`'s input as it is now.
@@ -492,15 +514,15 @@ mod tests {
     }
 
     /// the identity of a dataset pinned to one file of `bytes`, by [`pin`].
-    fn tree_of(name: &str, bytes: &[u8]) -> Identity {
-        Identity::of([(
+    fn tree_of(name: &str, bytes: &[u8]) -> Sha256 {
+        tree::identity([(
             format!("{name}.csv").as_str(),
             bytes.len() as u64,
             digest::sha256(bytes),
         )])
     }
 
-    fn record(name: &str, tree: Option<Identity>) -> Recorded {
+    fn record(name: &str, tree: Option<Sha256>) -> Recorded {
         Recorded {
             name: name.to_owned(),
             tree,

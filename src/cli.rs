@@ -15,6 +15,7 @@ mod ftp;
 mod get;
 mod help;
 mod import;
+mod lineage;
 mod links;
 mod list;
 mod logs;

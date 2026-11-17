@@ -10,7 +10,6 @@ use super::{
 use crate::digest::{Md5, Sha256};
 use crate::name;
 use crate::source::Access;
-use crate::tree::Identity;
 
 /// [`read_only`] of every dataset with its files.
 #[cfg(test)]
@@ -310,7 +309,7 @@ fn inputs(lines: &mut Lines) -> Option<Vec<Recorded>> {
         }
         let tree = match tree.as_ref() {
             UNKNOWN => None,
-            text => Some(Identity::parse(text)?),
+            text => Some(prefixed(text)?),
         };
         inputs.push(Recorded {
             name: name.into_owned(),
@@ -518,10 +517,7 @@ mod tests {
                 vec![
                     Recorded {
                         name: "made-from".to_owned(),
-                        tree: Identity::parse(&format!(
-                            "sha256:{}",
-                            digest::sha256(name.as_bytes())
-                        )),
+                        tree: Some(digest::sha256(name.as_bytes())),
                     },
                     Recorded {
                         name: "unknown".to_owned(),
