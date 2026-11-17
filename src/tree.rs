@@ -1,46 +1,18 @@
 //! the identity of a dataset's effective tree: the files a pipeline reading its folder sees, after
 //! archives unpack and members tables choose, by their paths in the dataset, sizes and SHA-256.
-//! data.lock keeps it for each dataset another was made from, so nothing else may change it: not
-//! a link, a time, a note or where the dataset lands.
+//! data.lock keeps it with each dataset's pin, and with a dataset made from others theirs as they
+//! were, so nothing else may change it: not a link, a time, a note or where the dataset lands.
 //!
-//! version 1 is the SHA-256 of the line `fetchloom tree 1`, then a line per file sorted by path,
-//! its path, size and SHA-256 in hex between tabs, as an archive's `unpacks_to` lists its files.
-//! a later version starts with its own line, so identities of two versions never meet. no path
-//! in a pin holds a tab or a line break, so the text reads back one way only.
+//! it is the tree hash data.lock gives an archive as `unpacks_to` ([`tree_hash`]), so an archive
+//! whose files a dataset places as they are has the dataset's identity, and data.lock's version
+//! versions both.
 
-use std::io::Write as _;
-
-use crate::cache::{Cache, Member};
-use crate::digest::{Hasher, Sha256};
+use crate::cache::{Cache, Member, tree_hash};
+use crate::digest::Sha256;
 use crate::plan::{self, Plan};
 use crate::project::lock::Locked;
 use crate::project::lock::archives::Archive;
 use crate::project::manifest::Entry;
-
-/// the first line of the text version 1 hashes.
-const VERSION: &str = "fetchloom tree 1\n";
-
-/// the identity of the files `files` gives by their paths in the dataset, sizes and SHA-256, in
-/// any order: the SHA-256 of version 1's text, which data.lock writes as `sha256:` and its hex.
-pub(crate) fn identity<'a>(files: impl IntoIterator<Item = (&'a str, u64, Sha256)>) -> Sha256 {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut files: Vec<(&str, u64, Sha256)> = files.into_iter().collect();
-    files.sort_unstable_by(|a, b| a.0.cmp(b.0));
-    let mut hasher = Hasher::default();
-    hasher.update(VERSION.as_bytes());
-    let mut line = Vec::new();
-    for (path, size, sha256) in files {
-        line.clear();
-        let _ = write!(line, "{path}\t{size}\t");
-        for byte in sha256.bytes() {
-            line.push(DIGITS[usize::from(byte >> 4)]);
-            line.push(DIGITS[usize::from(byte & 0x0f)]);
-        }
-        line.push(b'\n');
-        hasher.update(&line);
-    }
-    hasher.finish().0
-}
 
 /// the identity of `locked`'s files as `entry`'s members tables keep them, or none when this
 /// machine cannot tell: an archive it never unpacked, or members tables that do not fit the pin.
@@ -57,7 +29,7 @@ fn effective_with(
 ) -> Option<Sha256> {
     // without an archive each file is where data.lock lists it, which no members table moves
     if locked.files.iter().all(|file| file.unpacks_to.is_none()) {
-        return Some(identity(
+        return Some(tree_hash(
             locked
                 .files
                 .iter()
@@ -78,7 +50,7 @@ fn effective_with(
     if !plan.unknown.is_empty() {
         return None;
     }
-    Some(identity(plan.targets.iter().map(|target| {
+    Some(tree_hash(plan.targets.iter().map(|target| {
         (target.path.as_str(), target.size, target.sha256)
     })))
 }
@@ -142,9 +114,9 @@ mod tests {
         }
     }
 
-    /// version 1's text for `lines`, written out by hand, so the test does not trust the code.
+    /// the tree hash of `lines`, written out by hand, so the test does not trust the code.
     fn expected(lines: &[&str]) -> String {
-        let mut text = "fetchloom tree 1\n".to_owned();
+        let mut text = String::new();
         for line in lines {
             text.push_str(line);
             text.push('\n');
@@ -157,18 +129,23 @@ mod tests {
     }
 
     #[test]
-    fn version_one_hashes_sorted_lines_of_path_size_and_sha256() {
-        let setosa = digest::sha256(b"setosa\n");
-        let iris = digest::sha256(b"iris\n");
-        let tree = identity([("b/iris.csv", 5, iris), ("a.csv", 7, setosa)]);
+    fn the_identity_is_the_tree_hash_of_sorted_lines_of_path_size_and_sha256() {
+        let iris = locked(vec![
+            file("b/iris.csv", b"iris\n"),
+            file("a.csv", b"setosa\n"),
+        ]);
         assert_eq!(
-            format!("sha256:{tree}"),
-            expected(&[
-                &format!("a.csv\t7\t{setosa}"),
-                &format!("b/iris.csv\t5\t{iris}")
-            ])
+            shown(effective_with(&entry(""), &iris, &|_| None)),
+            Some(expected(&[
+                &format!("a.csv\t7\t{}", digest::sha256(b"setosa\n")),
+                &format!("b/iris.csv\t5\t{}", digest::sha256(b"iris\n")),
+            ]))
         );
-        assert_eq!(format!("sha256:{}", identity([])), expected(&[]));
+        let empty = locked(Vec::new());
+        assert_eq!(
+            shown(effective_with(&entry(""), &empty, &|_| None)),
+            Some(expected(&[]))
+        );
     }
 
     #[test]

@@ -1400,15 +1400,8 @@ fn a_zenodo_record_pins_as_it_always_has() -> Result {
         .lines()
         .filter(|line| !line.starts_with("locked = "))
         .fold(String::new(), |lock, line| lock + line + "\n");
-    // the tree is version 1's: the SHA-256 of its first line and a line for each file
-    let tree = sha256_hex(
-        format!(
-            "fetchloom tree 1\nrows.csv\t{}\t{}\n",
-            ROWS.len(),
-            sha256_hex(ROWS)
-        )
-        .as_bytes(),
-    );
+    // the tree hash of its files, as an archive's `unpacks_to`: a line for each file
+    let tree = sha256_hex(format!("rows.csv\t{}\t{}\n", ROWS.len(), sha256_hex(ROWS)).as_bytes());
     assert_eq!(
         lock,
         format!(

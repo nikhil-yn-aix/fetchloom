@@ -152,7 +152,7 @@ mod tests {
     use sevenz_rust2::{Archive, ArchiveEntry, Error as Seven, Password};
 
     use super::super::samples::{Scratch, seven_zip, seven_zip_with};
-    use super::super::{Format, Limits, tree_hash, unpack};
+    use super::super::{Format, Limits, Member, tree_hash, unpack};
     use super::{REPARSE_POINT, UNIX_EXTENSION, failed};
     use crate::error::Kind;
 
@@ -225,7 +225,10 @@ mod tests {
                 let (_, bytes) = TREE.iter().find(|(name, _)| *name == member.path).unwrap();
                 scratch.assert_stored(member, bytes);
             }
-            assert_eq!(unpacked.tree, tree_hash(&unpacked.members));
+            assert_eq!(
+                unpacked.tree,
+                tree_hash(unpacked.members.iter().map(Member::line))
+            );
         }
     }
 

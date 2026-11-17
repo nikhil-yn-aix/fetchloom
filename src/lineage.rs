@@ -567,7 +567,7 @@ mod tests {
 
     /// the identity of a dataset pinned to one file of `bytes`, by [`pin`].
     fn tree_of(name: &str, bytes: &[u8]) -> Sha256 {
-        tree::identity([(
+        crate::cache::tree_hash([(
             format!("{name}.csv").as_str(),
             bytes.len() as u64,
             digest::sha256(bytes),

@@ -42,7 +42,10 @@ fn only_file(scratch: &Scratch, outcome: Decompressed, bytes: &[u8]) -> Member {
         panic!("{:?}", unpacked.members);
     };
     scratch.assert_stored(member, bytes);
-    assert_eq!(unpacked.tree, tree_hash(&unpacked.members));
+    assert_eq!(
+        unpacked.tree,
+        tree_hash(unpacked.members.iter().map(Member::line))
+    );
     member.clone()
 }
 

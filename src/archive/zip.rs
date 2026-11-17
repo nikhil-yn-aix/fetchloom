@@ -173,7 +173,7 @@ pub(super) mod tests {
     use ::zip::{CompressionMethod, System, ZipWriter};
 
     use super::super::samples::{Scratch, zip_of, zip_with};
-    use super::super::{Format, Unpacked, tree_hash};
+    use super::super::{Format, Member, Unpacked, tree_hash};
     use crate::digest;
     use crate::error::Kind;
 
@@ -215,7 +215,10 @@ pub(super) mod tests {
             assert_eq!(member.sha256, digest::sha256(bytes));
             scratch.assert_stored(member, bytes);
         }
-        assert_eq!(unpacked.tree, tree_hash(&unpacked.members));
+        assert_eq!(
+            unpacked.tree,
+            tree_hash(unpacked.members.iter().map(Member::line))
+        );
     }
 
     fn assert_files(scratch: &Scratch, unpacked: &Unpacked) {

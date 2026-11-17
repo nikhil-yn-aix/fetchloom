@@ -20,20 +20,29 @@ pub(crate) struct Member {
     pub(crate) sha256: Sha256,
 }
 
-/// the lines of a tree, sorted by path.
-pub(crate) fn tree(members: &[Member]) -> String {
-    let mut sorted: Vec<&Member> = members.iter().collect();
-    sorted.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    let mut text = String::with_capacity(members.len() * 96);
-    for member in sorted {
-        let _ = writeln!(text, "{}\t{}\t{}", member.path, member.size, member.sha256);
+impl Member {
+    /// what its line of a tree holds: its path, size and SHA-256.
+    pub(crate) fn line(&self) -> (&str, u64, Sha256) {
+        (&self.path, self.size, self.sha256)
+    }
+}
+
+/// the lines of a tree of `files`, each a path, a size and a SHA-256 between tabs, sorted by
+/// path.
+pub(crate) fn tree<'a>(files: impl IntoIterator<Item = (&'a str, u64, Sha256)>) -> String {
+    let mut sorted: Vec<(&str, u64, Sha256)> = files.into_iter().collect();
+    sorted.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    let mut text = String::with_capacity(sorted.len() * 96);
+    for (path, size, sha256) in sorted {
+        let _ = writeln!(text, "{path}\t{size}\t{sha256}");
     }
     text
 }
 
-/// the tree hash `data.lock` records as `unpacks_to`.
-pub(crate) fn tree_hash(members: &[Member]) -> Sha256 {
-    digest::sha256(tree(members).as_bytes())
+/// the tree hash of `files`, the one identity of a tree data.lock records: an archive's
+/// `unpacks_to`, of its members, and a dataset's `tree`, of the files a pipeline sees in it.
+pub(crate) fn tree_hash<'a>(files: impl IntoIterator<Item = (&'a str, u64, Sha256)>) -> Sha256 {
+    digest::sha256(tree(files).as_bytes())
 }
 
 /// the members `bytes` list, a tree from elsewhere such as a mirror, when they hash to `tree` and
@@ -71,7 +80,7 @@ impl Cache {
         archive: &Sha256,
         members: &[Member],
     ) -> io::Result<Sha256> {
-        let text = tree(members);
+        let text = tree(members.iter().map(Member::line));
         self.write_atomically(&self.unpacked_path(archive), text.as_bytes())?;
         Ok(digest::sha256(text.as_bytes()))
     }
@@ -226,7 +235,7 @@ mod tests {
     fn a_known_tree_matches_python() {
         // python: sha256("".join(f"{p}\t{len(d)}\t{sha256(d).hexdigest()}\n" for p, d in sorted(files.items())).encode())
         assert_eq!(
-            tree_hash(&known_tree()).hex(),
+            tree_hash(known_tree().iter().map(Member::line)).hex(),
             "fbeb559c9ccd9ab662f75914d0c93c7f2c94333ed82b6c4a151d0d342cb1e358"
         );
     }
@@ -239,7 +248,7 @@ mod tests {
         let (dir, cache) = cache();
         let archive = digest::sha256(b"an archive");
         let theirs = dir.path().join("theirs");
-        fs::write(&theirs, tree(&known_tree())).unwrap();
+        fs::write(&theirs, tree(known_tree().iter().map(Member::line))).unwrap();
         let path = cache.unpacked_path(&archive);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&theirs, &path).unwrap();
@@ -279,12 +288,15 @@ mod tests {
     fn the_order_members_arrive_in_does_not_matter() {
         let mut reversed = known_tree();
         reversed.reverse();
-        assert_eq!(tree_hash(&reversed), tree_hash(&known_tree()));
+        assert_eq!(
+            tree_hash(reversed.iter().map(Member::line)),
+            tree_hash(known_tree().iter().map(Member::line))
+        );
     }
 
     #[test]
     fn an_empty_tree_is_the_hash_of_no_lines() {
-        assert_eq!(tree_hash(&[]), digest::sha256(b""));
+        assert_eq!(tree_hash([]), digest::sha256(b""));
     }
 
     #[test]
@@ -292,7 +304,7 @@ mod tests {
         let (_dir, cache) = cache();
         let archive = digest::sha256(b"archive");
         let tree = cache.record_unpacked(&archive, &known_tree()).unwrap();
-        assert_eq!(tree, tree_hash(&known_tree()));
+        assert_eq!(tree, tree_hash(known_tree().iter().map(Member::line)));
         let mut sorted = known_tree();
         sorted.sort_by(|a, b| a.path.cmp(&b.path));
         assert_eq!(cache.unpacked(&archive, Some(&tree)), Some(sorted.clone()));
@@ -307,8 +319,8 @@ mod tests {
     fn a_tree_is_kept_only_when_it_hashes_to_the_lock() {
         let (_dir, cache) = cache();
         let archive = digest::sha256(b"archive");
-        let bytes = tree(&known_tree());
-        let pinned = tree_hash(&known_tree());
+        let bytes = tree(known_tree().iter().map(Member::line));
+        let pinned = tree_hash(known_tree().iter().map(Member::line));
         let other = digest::sha256(b"another tree");
         assert!(
             !cache

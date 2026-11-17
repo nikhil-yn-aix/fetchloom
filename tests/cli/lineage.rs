@@ -14,16 +14,15 @@ const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const NEWER: &[u8] = b"sepal_length,species\n6.3,virginica\n";
 const COUNTS: &[u8] = b"species,count\nsetosa,1\n";
 
-/// the identity version 1 gives a tree of `files`, worked out here apart from fetchloom's code:
-/// the SHA-256 of `fetchloom tree 1` and a line per file, by path, of its path, size and SHA-256.
+/// the tree hash of `files`, as data.lock gives an archive's `unpacks_to`, worked out here apart
+/// from fetchloom's code: the SHA-256 of a line per file, by path, of its path, size and SHA-256.
 fn tree(files: &[(&str, &[u8])]) -> String {
     let mut lines: Vec<String> = files
         .iter()
         .map(|(path, bytes)| format!("{path}\t{}\t{}\n", bytes.len(), sha256_hex(bytes)))
         .collect();
     lines.sort();
-    let text = format!("fetchloom tree 1\n{}", lines.concat());
-    format!("sha256:{}", sha256_hex(text.as_bytes()))
+    format!("sha256:{}", sha256_hex(lines.concat().as_bytes()))
 }
 
 /// a folder beside the project holding `counts.csv`, the output a pipeline made.
@@ -1001,6 +1000,20 @@ fn an_input_with_no_tree_line_nor_cache_stays_unresolved_and_never_fails() -> Re
     let unchecked = warning(&document, "derived.unchecked");
     assert_eq!(unchecked["reason"], "unresolved");
     assert_eq!(unchecked["current"], "unknown");
+    Ok(())
+}
+
+#[test]
+fn a_dataset_of_an_archive_whose_files_land_as_they_are_has_the_archives_tree() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = zip_of(&[("a.csv", b"a\n"), ("b.csv", b"b\n")])?;
+    let routes = Routes::start(vec![("/files/iris.zip".to_owned(), file(&zip, "\"z1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/iris.zip", routes.url)])?)?;
+    let lock = read(&sandbox, "data.lock")?;
+    let both = tree(&[("a.csv", b"a\n"), ("b.csv", b"b\n")]);
+    assert!(lock.contains(&format!("tree = \"{both}\"")), "{lock}");
+    assert!(lock.contains(&format!("unpacks_to = \"{both}\"")), "{lock}");
     Ok(())
 }
 

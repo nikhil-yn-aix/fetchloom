@@ -342,7 +342,7 @@ pub(crate) fn unpack(
         members.extend(linked);
         members.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     }
-    let tree = tree_hash(&members);
+    let tree = tree_hash(members.iter().map(Member::line));
     Ok(Unpacked {
         members,
         tree,

@@ -418,7 +418,7 @@ pub(crate) struct Locked {
     pub(crate) access: Access,
     /// when the pinned data last changed, in UTC.
     pub(crate) timestamp: String,
-    /// the identity of the files a pipeline sees in it ([`crate::tree::identity`]), when the
+    /// the identity of the files a pipeline sees in it ([`crate::cache::tree_hash`]), when the
     /// machine that wrote it knew them: always for plain files, for archives once unpacked there.
     pub(crate) tree: Option<Sha256>,
     /// the datasets this one was made from, as an add recorded them, by name. only an add
@@ -429,7 +429,7 @@ pub(crate) struct Locked {
 }
 
 /// a dataset another was made from, as data.lock keeps it in that one's `from`: its name, and
-/// the identity of its files when that one was pinned from them ([`crate::tree::identity`]),
+/// the identity of its files when that one was pinned from them ([`crate::cache::tree_hash`]),
 /// none when they were not known.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Recorded {

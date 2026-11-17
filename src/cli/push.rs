@@ -16,7 +16,7 @@ use super::args;
 use super::fetch::data_folder::DataFolder;
 use super::project::{find, known, locked};
 use super::sync::{Loop, Scope, place};
-use crate::cache::Cache;
+use crate::cache::{Cache, Member};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Failed, Fault, Item, Put, Refused, State, Target, There};
@@ -878,7 +878,7 @@ fn needed(
         let members = |archive: &Archive<'_>| {
             let found = archive.recorded(cache)?;
             if let Some(tree) = archive.file.unpacks_to {
-                let size = crate::cache::tree(&found).len() as u64;
+                let size = crate::cache::tree(found.iter().map(Member::line)).len() as u64;
                 if size > crate::mirror::largest_tree() {
                     let parts: Vec<LockedFile> = archive.files().into_iter().cloned().collect();
                     wholes.borrow_mut().push(parts);
@@ -1261,7 +1261,9 @@ fn write_bucket(
         uploads.push(s3::Upload {
             item: needed.item,
             there: *there,
-            source: s3::Source::Made(crate::cache::tree(&members).into_bytes()),
+            source: s3::Source::Made(
+                crate::cache::tree(members.iter().map(Member::line)).into_bytes(),
+            ),
         });
     }
     let started = planned.state == State::New;
@@ -1399,7 +1401,7 @@ fn put_lists(
                 )
             })?;
         Ok(std::io::Cursor::new(
-            crate::cache::tree(&members).into_bytes(),
+            crate::cache::tree(members.iter().map(Member::line)).into_bytes(),
         ))
     };
     target

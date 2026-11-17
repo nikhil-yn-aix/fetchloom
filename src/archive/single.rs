@@ -7,7 +7,7 @@ use super::guard::{Guard, Meter};
 use super::input::Input;
 use super::names::Named;
 use super::{BUFFER, Limits, Skipped, Unpacked, Unpacking, by_name, refused, store, tar, unopened};
-use crate::cache::{Cache, decompressed_key, tree_hash};
+use crate::cache::{Cache, Member, decompressed_key, tree_hash};
 use crate::digest::Sha256;
 use crate::error::Error;
 
@@ -135,7 +135,7 @@ fn decompress(
         guard.check_stopped()
     })?;
     room.keep();
-    let tree = tree_hash(&members);
+    let tree = tree_hash(members.iter().map(Member::line));
     Ok(Unpacked {
         members,
         tree,
