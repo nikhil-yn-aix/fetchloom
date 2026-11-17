@@ -2826,6 +2826,14 @@ fn remove_unwanted(
     Ok(changed)
 }
 
+/// whether `path` is a `.gitignore` marker fetchloom made in a dataset's folder, which is never
+/// part of an output: no capture takes it and it is no change to one. the hook for w7-boundary,
+/// which records in `state` the markers it makes; none is one until then.
+pub(crate) fn marker(state: &State, path: &str) -> bool {
+    let _ = (state, path);
+    false
+}
+
 /// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
 /// output: its patterns leave it out, or a repository keeps it there, as a capture leaves both out,
 /// or the output is dropped here, its files the author's still.
@@ -2907,7 +2915,10 @@ fn changed_outputs(
         };
         let inside = &path[output.at.len() + 1..];
         let name = inside.rsplit('/').next().unwrap_or(inside);
-        if place::is_copy_temporary(name) || passed_over(manifest, path) {
+        if place::is_copy_temporary(name)
+            || passed_over(manifest, path)
+            || marker(&survey.state, path)
+        {
             continue;
         }
         match survey.state.files.get(path) {

@@ -96,7 +96,7 @@ pub(super) async fn pin_held(
     let output = &work.context.output;
     let folder = from_here(project, here, &at);
     let (outcome, datasets) = match (entry, changes) {
-        (Some(_), Some(changes)) if changes.is_empty() => {
+        (Some(_), Some(changes)) if changes.is_empty() && !lineage_moved(manifest, &locked) => {
             let outcome =
                 sync_add(&work, adding, manifest, None, old, (&names, Vec::new())).await?;
             output.step("Read", &format!("{name} · {told}"));
@@ -109,10 +109,13 @@ pub(super) async fn pin_held(
             let outcome = sync_add(&work, adding, manifest, None, old, (&names, given)).await?;
             output.step("Read", &format!("{name} · {told}"));
             tell_marked(output, &outcome.placed);
-            let said = changes.map_or_else(
-                || format!("{name} in data.lock, its files are in {folder}"),
-                |changes| format!("{name} · {}", changes.summary()),
-            );
+            let said = match changes {
+                Some(changes) if !changes.is_empty() => {
+                    format!("{name} · {}", changes.summary())
+                }
+                Some(_) => format!("{name} again, its files as they were"),
+                None => format!("{name} in data.lock, its files are in {folder}"),
+            };
             output.done("Pinned", &said);
             (outcome, names.to_vec())
         }
@@ -199,13 +202,25 @@ fn read<'m>(
     let at = entry
         .and_then(|entry| entry.at.clone())
         .unwrap_or_else(|| at.to_owned());
-    let walked = walk(
+    let mut walked = walk(
         start,
         shown,
         &source,
         context.settings.most_files.value,
         &context.stop,
     )?;
+    // a marker is named .gitignore, so the state is read only for a folder that holds one
+    if walked
+        .files
+        .iter()
+        .any(|file| file.path.ends_with(".gitignore"))
+    {
+        let (state, _) = adding.project.state();
+        let marker = |file: &Found| {
+            super::super::sync::place::marker(&state, &name::joined(&at, &file.path))
+        };
+        walked.files.retain(|file| !marker(file));
+    }
     tell_skipped(&context.output, shown, &walked.skipped);
     tell_system(&context.output, shown, &walked.system);
     Ok(Read {
@@ -246,6 +261,14 @@ fn compared(
         return checked(context, work.project, (name, shown), &changes);
     }
     Ok(preview(work, (name, shown), Some(&changes)))
+}
+
+/// whether a re-pin of the same bytes as `pin` still changes data.lock, as an input of the output
+/// whose identity data.lock records moved since. the hook for w7-lineage, whose re-pin updates
+/// lineage even when the output's bytes are identical; nothing moves until then.
+fn lineage_moved(manifest: &Manifest, pin: &Locked) -> bool {
+    let _ = (manifest, pin);
+    false
 }
 
 /// what reading the folder `shown` did: its files and bytes, copied or `cloned` into the cache.
