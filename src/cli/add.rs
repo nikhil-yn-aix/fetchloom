@@ -1642,10 +1642,7 @@ impl<'a> Sources<'a> {
             .into_iter()
             .min_by_key(|(_, source)| {
                 (
-                    source.select != wanted.select
-                        || source.exclude != wanted.exclude
-                        || source.extract != wanted.extract
-                        || source.decompress != wanted.decompress,
+                    !source.same_settings(wanted),
                     source.reference != wanted.reference,
                 )
             })
@@ -1662,28 +1659,27 @@ fn same_settings(manifest: &Manifest, present: &Present<'_>) -> Result<(), Error
         listing,
     } = *present;
     let (existing, wanted) = (&manifest.datasets[name].source, &entry.source);
-    let differs = if existing.select != wanted.select || existing.exclude != wanted.exclude {
-        Some(("other patterns", "the patterns of"))
-    } else if existing.extract != wanted.extract {
-        Some(("another extract setting", "extract on"))
-    } else if existing.decompress != wanted.decompress {
-        Some(("another decompress setting", "decompress on"))
-    } else {
-        None
-    };
-    match differs {
-        Some((differs, setting)) => Err(Error::new(
-            Kind::Usage,
-            format!(
-                "{} is already in data.toml as {name}, with {differs}",
-                listing.resolved.shown()
-            ),
-        )
-        .help(format!(
-            "change {setting} {name} in data.toml, or pass --as <name> to add it a second time"
-        ))),
-        None => Ok(()),
+    if existing.same_settings(wanted) {
+        return Ok(());
     }
+    let (differs, setting) =
+        if existing.select != wanted.select || existing.exclude != wanted.exclude {
+            ("other patterns", "the patterns of")
+        } else if existing.extract != wanted.extract {
+            ("another extract setting", "extract on")
+        } else {
+            ("another decompress setting", "decompress on")
+        };
+    Err(Error::new(
+        Kind::Usage,
+        format!(
+            "{} is already in data.toml as {name}, with {differs}",
+            listing.resolved.shown()
+        ),
+    )
+    .help(format!(
+        "change {setting} {name} in data.toml, or pass --as <name> to add it a second time"
+    )))
 }
 
 /// `add` of a dataset data.toml has already, as [`Sources::present`] finds it. with the same

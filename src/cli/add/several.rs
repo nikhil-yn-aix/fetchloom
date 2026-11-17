@@ -267,12 +267,7 @@ fn same_settings(
     name: &str,
     at: &str,
 ) -> Result<(), Error> {
-    let (existing, wanted) = (&existing.source, &wanted.source);
-    if existing.select == wanted.select
-        && existing.exclude == wanted.exclude
-        && existing.extract == wanted.extract
-        && existing.decompress == wanted.decompress
-    {
+    if existing.source.same_settings(&wanted.source) {
         return Ok(());
     }
     Err(Error::new(

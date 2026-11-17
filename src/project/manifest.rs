@@ -80,6 +80,17 @@ pub(crate) struct Source {
     pub(crate) web_page: bool,
 }
 
+impl Source {
+    /// whether `other` takes the same files of its source as this: the same patterns, and
+    /// archives and compressed files unpacked alike.
+    pub(crate) fn same_settings(&self, other: &Source) -> bool {
+        self.select == other.select
+            && self.exclude == other.exclude
+            && self.extract == other.extract
+            && self.decompress == other.decompress
+    }
+}
+
 /// what a dataset keeps of the archives it unpacks: a table per archive, keyed by its path as
 /// data.lock gives it or by a glob, as `"shard-*.tar"`, for every archive that matches.
 #[derive(Clone, Debug, Default)]

@@ -337,10 +337,7 @@ fn same_import(
     let had = &existing.source;
     let pin = |file: &lock::LockedFile| (file.path.clone(), file.size, file.sha256);
     local::is_imported(&had.reference)
-        && had.select == source.select
-        && had.exclude == source.exclude
-        && had.extract == source.extract
-        && had.decompress == source.decompress
+        && had.same_settings(source)
         && current(old, name, existing)
             .is_some_and(|locked| locked.files.iter().map(pin).eq(copied.iter().map(pin)))
 }
