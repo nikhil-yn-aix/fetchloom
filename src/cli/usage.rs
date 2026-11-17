@@ -372,7 +372,7 @@ fn describe(
         }
         _ => None,
     };
-    let (message, needed) = said(err, parent, usage.as_deref(), line);
+    let (message, needed) = said(err, parent, usage.as_deref());
     let placement = (err.kind() == ErrorKind::UnknownArgument)
         .then(|| {
             let arg = named(ContextKind::InvalidArg)?;
@@ -447,13 +447,11 @@ fn describe(
 }
 
 /// the error line for `err`, a missing argument said as what `parent` needs from its usage lines
-/// `forms`, with the help for an option another typed on `line` needs when that is all that is
-/// missing: `--force needs -o <file>`, then add it or leave out --force.
+/// `forms`, with the help when all that is missing is the file -o names, which --force needs.
 fn said(
     err: &clap::Error,
     parent: Option<&str>,
     forms: Option<&[String]>,
-    line: &[String],
 ) -> (String, Option<String>) {
     let (Some(forms), Some(parent)) = (forms, parent) else {
         return (message(err), None);
@@ -461,32 +459,28 @@ fn said(
     if err.kind() != ErrorKind::MissingRequiredArgument {
         return (message(err), None);
     }
-    let needed = needed_options(err, parent, line);
+    let missing = typed(err, ContextKind::InvalidArg);
+    // the one option that needs another is the --force of export and get, which needs -o
+    let output = matches!(parent, "export" | "get")
+        && missing.iter().any(|missing| missing == "--output <file>");
+    if !output {
+        return (needs(parent, forms), None);
+    }
+    let force = "--force needs -o <file>";
     // an argument of the command itself is missing too, as clap names it in angle brackets
-    let own = typed(err, ContextKind::InvalidArg)
-        .iter()
-        .any(|missing| !missing.starts_with('-'));
-    let help = match (own, needed.as_slice()) {
-        (false, [(Some(by), option), ..]) => Some(format!("add {option}, or leave out {by}")),
-        _ => None,
-    };
-    (
-        needs(parent, forms, (own || needed.is_empty(), &needed)),
-        help,
-    )
+    if missing.iter().any(|missing| !missing.starts_with('-')) {
+        (format!("{}, and {force}", needs(parent, forms)), None)
+    } else {
+        (
+            force.to_owned(),
+            Some("add -o <file>, or leave out --force".to_owned()),
+        )
+    }
 }
 
-/// what a command needs: with `own`, from the part of each usage line after its options, without
-/// what is optional there, as in `add needs <link>, <path> or -i <file>` and `path needs <name>`;
-/// then each option that another typed one needs, as in `--force needs -o <file>`.
-fn needs(command: &str, forms: &[String], (own, options): (bool, &[Needed])) -> String {
-    let mut said: Vec<String> = options
-        .iter()
-        .map(|(by, option)| format!("{} needs {option}", by.as_deref().unwrap_or(command)))
-        .collect();
-    if !own {
-        return said.join(", and ");
-    }
+/// what a command needs, from the part of each usage line after its options, without what is
+/// optional there, as in `add needs <link>, <path> or -i <file>` and `path needs <name>`.
+fn needs(command: &str, forms: &[String]) -> String {
     let wanted: Vec<String> = forms
         .iter()
         .map(|form| {
@@ -506,78 +500,7 @@ fn needs(command: &str, forms: &[String], (own, options): (bool, &[Needed])) -> 
             kept.trim().trim_end_matches("...").to_owned()
         })
         .collect();
-    said.insert(
-        0,
-        format!("{command} needs {}", crate::units::listed(&wanted, "or")),
-    );
-    said.join(", and ")
-}
-
-/// an option clap found missing, as fetchloom shows it, with the typed option that needs it.
-type Needed = (Option<String>, String);
-
-/// each option clap says is missing for `command` that another typed on `line` needs, as
-/// `--force` needs `-o <file>`. clap names no such other, so it is the first typed option that,
-/// taken off the line, leaves the line read whole with the option no longer missing.
-fn needed_options(err: &clap::Error, command: &str, line: &[String]) -> Vec<Needed> {
-    typed(err, ContextKind::InvalidArg)
-        .into_iter()
-        .filter(|missing| missing.starts_with('-'))
-        .map(|missing| (needing(line, &missing), shown_option(command, &missing)))
-        .collect()
-}
-
-/// the option typed on `line`, before any `--`, without which clap reads the line and no longer
-/// misses `missing`. one whose value would then be read as the command, as `-C` before it, is not.
-fn needing(line: &[String], missing: &str) -> Option<String> {
-    let root = args::Args::command();
-    let end = line
-        .iter()
-        .position(|word| word == "--")
-        .unwrap_or(line.len());
-    let freed = |at: usize| {
-        let rest = line
-            .iter()
-            .enumerate()
-            .filter(|(other, _)| *other != at)
-            .map(|(_, word)| word.as_str());
-        match root
-            .clone()
-            .try_get_matches_from(std::iter::once("fetchloom").chain(rest))
-        {
-            Ok(_) => true,
-            Err(err) => {
-                err.kind() == ErrorKind::MissingRequiredArgument
-                    && !typed(&err, ContextKind::InvalidArg)
-                        .iter()
-                        .any(|arg| arg == missing)
-            }
-        }
-    };
-    (0..end)
-        .filter(|at| line[*at].starts_with('-') && line[*at] != "-")
-        .find(|at| freed(*at))
-        .map(|at| line[at].split('=').next().unwrap_or(&line[at]).to_owned())
-}
-
-/// `missing`, an option as clap names it for `command`, as `--output <file>`, in the short
-/// spelling where it has one, as `-o <file>`, which fetchloom's own messages use.
-fn shown_option(command: &str, missing: &str) -> String {
-    let (flag, value) = missing.split_once(' ').unwrap_or((missing, ""));
-    let root = args::Args::command();
-    let short = flag.strip_prefix("--").and_then(|long| {
-        command
-            .split(' ')
-            .try_fold(&root, |command, name| command.find_subcommand(name))?
-            .get_arguments()
-            .find(|arg| arg.get_long() == Some(long))?
-            .get_short()
-    });
-    match (short, value) {
-        (Some(short), "") => format!("-{short}"),
-        (Some(short), value) => format!("-{short} {value}"),
-        (None, _) => missing.to_owned(),
-    }
+    format!("{command} needs {}", crate::units::listed(&wanted, "or"))
 }
 
 /// the command line the person likely meant, with a wrong command or option corrected.
