@@ -31,8 +31,9 @@ fn write_all(sandbox: &Sandbox, files: &[(&str, &str)]) -> Result {
 
 /// status judges only what lies in a dataset's folder: files a pipeline writes beside the
 /// datasets, as cookiecutter's data/processed and data/interim, are never counted or listed, and
-/// files a person puts in a dataset's folder are named as theirs, kept, never counted. sync, with
-/// --force too, leaves every one as it was, and lock --check has nothing to say of them.
+/// files a person puts in a dataset's folder are theirs, kept, never counted: a plain status says
+/// nothing of them, `-v` and json name them. sync, with --force too, leaves every one as it was,
+/// and lock --check has nothing to say of them.
 #[test]
 fn only_files_in_dataset_folders_are_judged() -> Result {
     let sandbox = Sandbox::new()?;
@@ -52,7 +53,7 @@ fn only_files_in_dataset_folders_are_judged() -> Result {
     let told = without_copy_warning(&text(&status.stderr)?);
     assert_eq!(
         told,
-        "       Kept 2 files of yours in dataset folders · `fetchloom status -v` lists them\n         Ok everything matches data.lock by size and time\n"
+        "         Ok everything matches data.lock by size and time\n"
     );
     let bare = sandbox.run(&[])?;
     assert_eq!(
@@ -86,8 +87,10 @@ fn only_files_in_dataset_folders_are_judged() -> Result {
     fs::remove_file(sandbox.work().join("data/iris/notes/readme.md"))?;
     fs::remove_file(sandbox.work().join("data/iris/iris_clean.csv"))?;
     let one = without_copy_warning(&text(&sandbox.run(&["status"])?.stderr)?);
+    assert!(!one.contains("one.csv"), "{one}");
+    let one = without_copy_warning(&text(&sandbox.run(&["status", "-v"])?.stderr)?);
     assert!(
-        one.starts_with("       Kept data/iris/one.csv · yours\n"),
+        one.contains("       Kept data/iris/one.csv · yours\n"),
         "{one}"
     );
 

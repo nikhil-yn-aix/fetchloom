@@ -1402,7 +1402,7 @@ fn every_command_that_places_files_keeps_the_dataset_folder_out_of_git() -> Resu
 
 /// each row goes to stdout, where a pipe gets it, and the closing line and hints to stderr, so
 /// `fetchloom status | grep Missing` finds what is missing. a file of the person's own in a
-/// dataset's folder is no difference: a line on stderr names it as theirs, kept.
+/// dataset's folder is no difference, and a plain status says nothing of it; json names it.
 #[test]
 fn status_lists_what_differs() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1423,9 +1423,7 @@ fn status_lists_what_differs() -> Result {
     assert_eq!(text(&edited.stdout)?, "     Edited data/iris/iris.csv\n");
     let stderr = text(&edited.stderr)?;
     assert!(
-        stderr.starts_with(
-            "       Kept data/iris/notes.txt · yours\n      Found 1 difference from data.lock\n  hint: "
-        ),
+        stderr.starts_with("      Found 1 difference from data.lock\n  hint: "),
         "{stderr}"
     );
     assert!(!stderr.contains("data/iris/iris.csv"), "{stderr}");

@@ -8,7 +8,7 @@ use crate::support::{Result, Routes, Sandbox, delete, file, json, ok, text};
 
 /// a file named as sync names the changed copy it keeps of a file it put back gets a row saying
 /// what it is and what to do with it; any other file of a person's in the folder is theirs, kept,
-/// with no row.
+/// with no row, and only `-v` names it.
 #[test]
 fn a_changed_copy_sync_kept_says_what_to_do_with_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -29,9 +29,11 @@ fn a_changed_copy_sync_kept_says_what_to_do_with_it() -> Result {
         )
     );
     let stderr = text(&output.stderr)?;
+    assert!(!stderr.contains("notes.changed"), "{stderr}");
+    let detailed = text(&sandbox.run(&["status", "-v"])?.stderr)?;
     assert!(
-        stderr.contains("       Kept data/iris/notes.changed · yours\n"),
-        "{stderr}"
+        detailed.contains("       Kept data/iris/notes.changed · yours\n"),
+        "{detailed}"
     );
     // with the pinned file edited too, status surveys the whole folder and says the same
     delete(&folder.join("iris.csv"))?;
@@ -49,8 +51,8 @@ fn a_changed_copy_sync_kept_says_what_to_do_with_it() -> Result {
 }
 
 /// the files finder, a mac on another disk and explorer make in a data folder are no difference,
-/// a person's own file there is named as theirs, kept, and a folder sync or remove leaves holding
-/// only the system's files goes, taking them with it.
+/// a person's own file there is theirs, kept, which json names, and a folder sync or remove leaves
+/// holding only the system's files goes, taking them with it.
 #[test]
 fn files_the_system_makes_are_no_difference() -> Result {
     let sandbox = Sandbox::new()?;
@@ -78,10 +80,7 @@ fn files_the_system_makes_are_no_difference() -> Result {
     ok(&output)?;
     assert_eq!(text(&output.stdout)?, "");
     let stderr = text(&output.stderr)?;
-    assert!(
-        stderr.contains("       Kept data/b/notes.txt · yours\n"),
-        "{stderr}"
-    );
+    assert!(!stderr.contains("notes.txt"), "{stderr}");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(document["result"]["extra"], serde_json::json!([]));
     assert_eq!(

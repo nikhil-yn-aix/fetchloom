@@ -5,6 +5,5 @@ expression: streams
 stdout:
     Missing data/iris/iris.csv
 stderr:
-       Kept data/iris/notes.txt · yours
       Found 1 difference from data.lock
   hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps

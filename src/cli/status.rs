@@ -1380,28 +1380,23 @@ fn list(output: &Output, status: &Status) {
     tell_yours(output, status);
 }
 
-/// a faint line on stderr for the files a person put in dataset folders, which fetchloom keeps
-/// and never counts: one by its path, more by their number, each on a line of its own for `-v`.
+/// with `-v`, a faint line on stderr for the files a person put in dataset folders, which
+/// fetchloom keeps and never counts: one by its path, more by their number, each then on a line of
+/// its own. a plain status says nothing of them.
 fn tell_yours(output: &Output, status: &Status) {
-    let many = match status.yours.as_slice() {
-        [] => return,
-        [one] => return output.faint_step("Kept", &format!("{one} · yours")),
-        many => many,
-    };
-    let count = units::count(many.len() as u64, "file", "files");
-    if output.shows_details() {
-        output.faint_step("Kept", &format!("{count} of yours in dataset folders"));
-        for path in many {
-            output.detail(path);
+    if !output.shows_details() {
+        return;
+    }
+    match status.yours.as_slice() {
+        [] => {}
+        [one] => output.faint_step("Kept", &format!("{one} · yours")),
+        many => {
+            let count = units::count(many.len() as u64, "file", "files");
+            output.faint_step("Kept", &format!("{count} of yours in dataset folders"));
+            for path in many {
+                output.detail(path);
+            }
         }
-    } else {
-        output.faint_step(
-            "Kept",
-            &format!(
-                "{count} of yours in dataset folders · `{}` lists them",
-                super::project::command("status -v")
-            ),
-        );
     }
 }
 
