@@ -274,6 +274,7 @@ mod tests {
             doi: None,
             access: crate::source::Access::Public,
             timestamp: "2026-11-15T00:00:00Z".to_owned(),
+            from: Vec::new(),
             files,
         }
     }

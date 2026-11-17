@@ -777,6 +777,7 @@ mod tests {
             doi: doi.map(str::to_owned),
             access: crate::source::Access::Public,
             timestamp: "2026-11-13T00:09:08Z".to_owned(),
+            from: Vec::new(),
             files: Vec::new(),
         }
     }

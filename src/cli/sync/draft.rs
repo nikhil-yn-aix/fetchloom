@@ -649,6 +649,7 @@ impl Draft {
             doi: None,
             access: self.access,
             timestamp: String::new(),
+            from: Vec::new(),
             files,
         }
     }
@@ -797,6 +798,7 @@ impl Draft {
             doi: self.doi,
             access: self.access,
             timestamp: now.to_owned(),
+            from: Vec::new(),
             files,
         })
     }
@@ -1555,6 +1557,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            from: Vec::new(),
             files: vec![LockedFile {
                 path: "set.zip".to_owned(),
                 size: archive.size,
@@ -1997,6 +2000,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            from: Vec::new(),
             files: vec![
                 file("notes.txt", digest::sha256(b"notes"), 5),
                 file("set.zip", archive.digest, archive.size),
@@ -2086,6 +2090,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            from: Vec::new(),
             files: vec![LockedFile {
                 path: "weights.npz".to_owned(),
                 size: bytes.size,
@@ -2135,6 +2140,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            from: Vec::new(),
             files: vec![file("900150983cd24fb0d6963f7d28e17f72")],
         };
         let remote = |md5: &str| Remote {
@@ -2175,6 +2181,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            from: Vec::new(),
             files: vec![LockedFile {
                 path: "data.csv".to_owned(),
                 size: 4,

@@ -33,6 +33,7 @@ fn pin(name: &str, reference: &str, bytes: &[u8]) -> Locked {
         doi: None,
         access: Access::Unknown,
         timestamp: "2026-11-10T00:00:00Z".to_owned(),
+        from: Vec::new(),
         files: vec![LockedFile {
             path: format!("{name}.csv"),
             size: bytes.len() as u64,

@@ -221,6 +221,7 @@ mod tests {
             doi: None,
             access: crate::source::Access::Unknown,
             timestamp: "2026-11-12T00:00:00Z".to_owned(),
+            from: Vec::new(),
             files: vec![crate::project::lock::LockedFile {
                 path: "original.csv".to_owned(),
                 size: 3,

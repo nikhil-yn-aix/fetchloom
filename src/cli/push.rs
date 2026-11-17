@@ -1831,6 +1831,7 @@ mod tests {
             doi: None,
             access,
             timestamp: "2026-11-10T00:00:00Z".to_owned(),
+            from: Vec::new(),
             files: Vec::<LockedFile>::new(),
         }
     }

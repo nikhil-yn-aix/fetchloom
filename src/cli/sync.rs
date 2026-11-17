@@ -2165,15 +2165,18 @@ struct Drafted {
 }
 
 /// the lock of `kept` and `drafted` entries, by name, with whether each dataset was kept; a pin
-/// keeps its date while its data stays, so resolving it again changes nothing.
+/// keeps its date while its data stays, so resolving it again changes nothing, and what it was
+/// made from, which only an add records.
 fn settled(others: &Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec<bool>) {
     let mut datasets: Vec<(Locked, bool)> = kept.into_iter().map(|locked| (locked, true)).collect();
     datasets.extend(drafted.into_iter().map(|mut locked| {
-        if let Some(before) = others.get(&locked.name)
-            && before.resolved == locked.resolved
-            && before.files == locked.files
-        {
-            locked.timestamp.clone_from(&before.timestamp);
+        if let Some(before) = others.get(&locked.name) {
+            if before.resolved == locked.resolved && before.files == locked.files {
+                locked.timestamp.clone_from(&before.timestamp);
+            }
+            if locked.from.is_empty() {
+                locked.from.clone_from(&before.from);
+            }
         }
         (locked, false)
     }));
@@ -2977,6 +2980,7 @@ mod tests {
             doi: None,
             access: source::Access::Unknown,
             timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            from: Vec::new(),
             files: vec![LockedFile {
                 path: "data.csv".to_owned(),
                 size: 4,

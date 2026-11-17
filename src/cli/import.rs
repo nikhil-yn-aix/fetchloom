@@ -1615,6 +1615,7 @@ pub(super) fn pinned(name: &str, source: &Source, files: Vec<LockedFile>) -> Loc
         doi: None,
         access: Access::Unknown,
         timestamp: String::new(),
+        from: Vec::new(),
         files,
     }
 }

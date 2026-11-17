@@ -4,10 +4,13 @@
 use std::borrow::Cow;
 
 use super::lists::Listed;
-use super::{Locked, LockedFile, Parsed, Stated, StatedFile, VERSION, Words, prefixed};
+use super::{
+    Locked, LockedFile, Parsed, Recorded, Stated, StatedFile, UNKNOWN, VERSION, Words, prefixed,
+};
 use crate::digest::{Md5, Sha256};
 use crate::name;
 use crate::source::Access;
+use crate::tree::Identity;
 
 /// [`read_only`] of every dataset with its files.
 #[cfg(test)]
@@ -203,6 +206,11 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
         Access::Unknown
     };
     let timestamp = lines.value("locked")?;
+    let from = if lines.sets("from") {
+        inputs(lines)?
+    } else {
+        Vec::new()
+    };
     let mut locked = Locked {
         name,
         reference,
@@ -216,6 +224,7 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
         doi,
         access,
         timestamp,
+        from,
         files: Vec::new(),
     };
     if lines.sets("downloaded") {
@@ -277,6 +286,37 @@ fn stated(pin: Locked, lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option
         files,
         written,
     }))
+}
+
+/// a dataset's `from` as the writer gives it: `from = [`, a line per dataset it was made from,
+/// sorted by name, `  { name = "…", tree = "…" },`, and `]`.
+fn inputs(lines: &mut Lines) -> Option<Vec<Recorded>> {
+    if lines.next()? != "from = [" {
+        return None;
+    }
+    let mut inputs: Vec<Recorded> = Vec::new();
+    loop {
+        let line = lines.next()?;
+        if line == "]" {
+            return Some(inputs);
+        }
+        let (name, rest) = string(line.strip_prefix("  { name = ")?)?;
+        let (tree, rest) = string(rest.strip_prefix(", tree = ")?)?;
+        if rest != " },"
+            || name::dataset_name_problem(&name).is_some()
+            || inputs.last().is_some_and(|last| *last.name >= *name)
+        {
+            return None;
+        }
+        let tree = match tree.as_ref() {
+            UNKNOWN => None,
+            text => Some(Identity::parse(text)?),
+        };
+        inputs.push(Recorded {
+            name: name.into_owned(),
+            tree,
+        });
+    }
 }
 
 /// a list kept beside data.lock: the line `files_in = ["…", "…"]`, then the lines of
@@ -474,6 +514,23 @@ mod tests {
                 Access::Unknown
             },
             timestamp: "2026-10-27T17:30:00Z".to_owned(),
+            from: if extra {
+                vec![
+                    Recorded {
+                        name: "made-from".to_owned(),
+                        tree: Identity::parse(&format!(
+                            "sha256:{}",
+                            digest::sha256(name.as_bytes())
+                        )),
+                    },
+                    Recorded {
+                        name: "unknown".to_owned(),
+                        tree: None,
+                    },
+                ]
+            } else {
+                Vec::new()
+            },
             files: files.to_vec(),
         };
         vec![

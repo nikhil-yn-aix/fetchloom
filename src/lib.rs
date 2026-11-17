@@ -26,6 +26,7 @@ mod space;
 mod stop;
 mod suggested;
 mod threads;
+mod tree;
 mod units;
 mod volume;
 mod work;

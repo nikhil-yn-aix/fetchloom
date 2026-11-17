@@ -1007,6 +1007,7 @@ mod tests {
             doi: None,
             access: Access::Unknown,
             timestamp: String::new(),
+            from: Vec::new(),
             files,
         };
         let never = crate::digest::sha256(b"never unpacked");
@@ -1106,6 +1107,7 @@ mod tests {
                 doi: None,
                 access: Access::Unknown,
                 timestamp: "2026-01-01T00:00:00Z".to_owned(),
+                from: Vec::new(),
                 files,
             }
         };

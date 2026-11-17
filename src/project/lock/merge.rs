@@ -1303,11 +1303,12 @@ fn untimed(locked: &Locked) -> impl PartialEq + '_ {
         doi,
         access,
         timestamp: _,
+        from,
         files,
     } = locked;
     (
-        name, reference, spec, extract, decompress, web_page, resolved, title, license, doi,
-        access, files,
+        (name, reference, spec, extract, decompress, web_page),
+        (resolved, title, license, doi, access, from, files),
     )
 }
 

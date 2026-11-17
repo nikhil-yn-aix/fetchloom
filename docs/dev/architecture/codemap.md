@@ -287,6 +287,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | file | owns | start at | other items |
 |---|---|---|---|
 | `src/plan.rs` | where every pinned file lands: destinations expanded, clashes found before anything is written, names compared as a disk that ignores case does | `Plan`, `Target` | `Patterns`, `folder`, `from_cache`, `inputs`, `foresee`, `expand`, `unpacked_paths`, `check` |
+| `src/tree.rs` | the identity of a dataset's effective tree: the files a pipeline sees after archives unpack and members tables choose, versioned, which lineage compares | `Identity` |  |
 | `src/place.rs` | the filesystem work that fills destinations: reflink, else hardlink, else copy, and copies made durable | `Placer`, `Method` | `Order`, `Unlinked`, `place_all`, `relink_all`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_coarse`, `run_hashes` |
 | `src/place/parents.rs` | on unix, directory handles that keep later path swaps out of placement | `Parents` |  |
 | `src/place/parents_windows.rs` | the windows twin: folder handles that deny deletion while placement uses their paths | `Parents` |  |

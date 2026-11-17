@@ -172,6 +172,7 @@ pub(super) fn pinned(
         doi: listing.doi.clone(),
         access: listing.access,
         timestamp: units::timestamp(SystemTime::now()),
+        from: Vec::new(),
         files: Vec::new(),
     };
     Ok(Stated {

@@ -22,6 +22,7 @@ use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::name;
 use crate::source::Access;
+use crate::tree::Identity;
 
 pub(crate) const FILE: &str = "data.lock";
 /// the one format of data.lock, a lock that keeps lists in [`lists::FOLDER`] included.
@@ -418,8 +419,30 @@ pub(crate) struct Locked {
     pub(crate) access: Access,
     /// when the pinned data last changed, in UTC.
     pub(crate) timestamp: String,
+    /// the datasets this one was made from, as an add recorded them, by name. only an add
+    /// writes them; every other change of the pin keeps them as they were.
+    pub(crate) from: Vec<Recorded>,
     /// sorted by path.
     pub(crate) files: Vec<LockedFile>,
+}
+
+/// a dataset another was made from, as data.lock keeps it in that one's `from`: its name, and
+/// the identity of its files when that one was pinned from them, none when they were not known.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Recorded {
+    pub(crate) name: String,
+    pub(crate) tree: Option<Identity>,
+}
+
+/// what data.lock writes for a tree that was not known.
+const UNKNOWN: &str = "unknown";
+
+impl Recorded {
+    /// the tree as data.lock writes it.
+    pub(crate) fn tree_text(&self) -> String {
+        self.tree
+            .map_or_else(|| UNKNOWN.to_owned(), |tree| tree.to_string())
+    }
 }
 
 /// what changed in a data.toml entry since its dataset was pinned.
@@ -527,12 +550,21 @@ struct StoredDataset {
     access: Option<Access>,
     #[serde(rename = "locked")]
     timestamp: String,
+    from: Option<Vec<StoredRecord>>,
     downloaded: Option<bool>,
     files: Option<Vec<StoredFile>>,
     files_in: Option<Vec<String>>,
     file_count: Option<u64>,
     file_bytes: Option<u64>,
     files_sha256: Option<String>,
+}
+
+/// one dataset of a `from` list, its tree as data.lock writes it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredRecord {
+    name: String,
+    tree: String,
 }
 
 /// one file of a `files` list: a downloaded dataset's with its SHA-256, or one its source states
@@ -553,6 +585,7 @@ impl StoredDataset {
     fn parsed(mut self) -> Result<Parsed, Error> {
         let listed = self.listed()?;
         let name = self.name;
+        let from = recorded(&name, self.from.unwrap_or_default())?;
         let (Some(reference), Some(spec), Some(resolved)) =
             (self.reference, self.spec, self.resolved)
         else {
@@ -589,6 +622,7 @@ impl StoredDataset {
             doi: self.doi,
             access: self.access.unwrap_or_default(),
             timestamp: self.timestamp,
+            from,
             files: Vec::new(),
         };
         if stated {
@@ -1022,6 +1056,20 @@ fn write_head(out: &mut String, dataset: &Locked) {
         let _ = writeln!(out, "access = \"{}\"", dataset.access.word());
     }
     let _ = writeln!(out, "locked = {}", quoted(&dataset.timestamp));
+    if !dataset.from.is_empty() {
+        let mut inputs: Vec<&Recorded> = dataset.from.iter().collect();
+        inputs.sort_by(|a, b| a.name.cmp(&b.name));
+        out.push_str("from = [\n");
+        for input in inputs {
+            let _ = writeln!(
+                out,
+                "  {{ name = {}, tree = \"{}\" }},",
+                quoted(&input.name),
+                input.tree_text()
+            );
+        }
+        out.push_str("]\n");
+    }
 }
 
 /// a source's table in the order data.lock keeps its keys, optional ones only when set.
@@ -1560,6 +1608,42 @@ fn prefixed(text: &str) -> Option<Sha256> {
     text.strip_prefix("sha256:").and_then(Sha256::from_hex)
 }
 
+/// the datasets `stored` records `dataset` was made from, sorted by name, or the refusal of a
+/// `from` fetchloom never writes: a name no dataset can have, a tree neither a hash nor unknown,
+/// or a name twice.
+fn recorded(dataset: &str, stored: Vec<StoredRecord>) -> Result<Vec<Recorded>, Error> {
+    let mut inputs = Vec::with_capacity(stored.len());
+    for input in stored {
+        if name::dataset_name_problem(&input.name).is_some() {
+            return Err(broken(format!(
+                "data.lock says {dataset} was made from {}, which is no dataset's name",
+                quoted(&input.name)
+            )));
+        }
+        let tree = match input.tree.as_str() {
+            UNKNOWN => None,
+            text => Some(Identity::parse(text).ok_or_else(|| {
+                broken(format!(
+                    "data.lock gives {} in the from of {dataset} a tree that is neither sha256: and 64 hex digits nor unknown",
+                    input.name
+                ))
+            })?),
+        };
+        inputs.push(Recorded {
+            name: input.name,
+            tree,
+        });
+    }
+    inputs.sort_by(|a, b| a.name.cmp(&b.name));
+    if let Some(pair) = inputs.windows(2).find(|pair| pair[0].name == pair[1].name) {
+        return Err(broken(format!(
+            "data.lock says {dataset} was made from {} twice",
+            pair[0].name
+        )));
+    }
+    Ok(inputs)
+}
+
 /// refuses a lock that would place a file outside its dataset's folder. fetchloom never writes
 /// such a path, so the lock was edited or made by someone else.
 fn check_paths<'a>(dataset: &str, paths: impl Iterator<Item = &'a String>) -> Result<(), Error> {
@@ -1758,6 +1842,7 @@ mod tests {
                     doi: None,
                     access: Access::Unknown,
                     timestamp: "2026-10-27T17:30:00Z".to_owned(),
+                    from: Vec::new(),
                     files: vec![file("z.csv", b"z")],
                 },
                 Locked {
@@ -1773,6 +1858,7 @@ mod tests {
                     doi: Some("10.5281/zenodo.3608990".to_owned()),
                     access: Access::Public,
                     timestamp: "2026-10-27T17:30:00Z".to_owned(),
+                    from: Vec::new(),
                     files: vec![
                         LockedFile {
                             md5: Md5::from_hex("900150983cd24fb0d6963f7d28e17f72"),
@@ -1819,6 +1905,7 @@ mod tests {
             doi: None,
             access: Access::Public,
             timestamp: "2026-11-15T07:00:00Z".to_owned(),
+            from: Vec::new(),
             files: Vec::new(),
         };
         Stated {
@@ -2975,5 +3062,61 @@ mod tests {
     #[test]
     fn control_characters_are_escaped() {
         assert_eq!(quoted("a\u{1}b\u{7f}"), "\"a\\u0001b\\u007F\"");
+    }
+
+    #[test]
+    fn from_reads_back_as_written_and_refuses_what_fetchloom_never_writes() {
+        let mut lock = sample_sorted();
+        let tree = Identity::parse(&format!("sha256:{}", digest::sha256(b"tree"))).unwrap();
+        lock.datasets[0].from = vec![
+            Recorded {
+                name: "raw".to_owned(),
+                tree: Some(tree),
+            },
+            Recorded {
+                name: "zeta".to_owned(),
+                tree: None,
+            },
+        ];
+        let text = lock.render();
+        let written = format!(
+            "locked = \"2026-10-27T17:30:00Z\"\nfrom = [\n  {{ name = \"raw\", tree = \"{tree}\" }},\n  {{ name = \"zeta\", tree = \"unknown\" }},\n]\nfiles = ["
+        );
+        assert!(text.contains(&written), "{text}");
+        assert_eq!(Lock::parse(&text).unwrap(), lock);
+        let swapped = text.replace(
+            &written,
+            &format!(
+                "locked = \"2026-10-27T17:30:00Z\"\nfrom = [{{ name = \"zeta\", tree = \"unknown\" }}, {{ name = \"raw\", tree = \"{tree}\" }}]\nfiles = ["
+            ),
+        );
+        assert_ne!(swapped, text);
+        assert_eq!(
+            Lock::parse(&swapped).unwrap(),
+            lock,
+            "any order reads sorted"
+        );
+        for (from, message) in [
+            (
+                "[{ name = \"Raw Data\", tree = \"unknown\" }]",
+                "data.lock says iris was made from \"Raw Data\", which is no dataset's name",
+            ),
+            (
+                "[{ name = \"raw\", tree = \"sha256:12\" }]",
+                "data.lock gives raw in the from of iris a tree that is neither sha256: and 64 hex digits nor unknown",
+            ),
+            (
+                "[{ name = \"raw\", tree = \"unknown\" }, { name = \"raw\", tree = \"unknown\" }]",
+                "data.lock says iris was made from raw twice",
+            ),
+        ] {
+            let edited = text.replace(
+                &written,
+                &format!("locked = \"2026-10-27T17:30:00Z\"\nfrom = {from}\nfiles = ["),
+            );
+            let error = Lock::parse(&edited).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(error.message, message);
+        }
     }
 }
