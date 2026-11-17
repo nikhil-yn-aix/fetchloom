@@ -155,6 +155,7 @@ impl Dataset {
             files: found.files,
             unavailable: Vec::new(),
             warnings,
+            rounded: None,
         })
     }
 

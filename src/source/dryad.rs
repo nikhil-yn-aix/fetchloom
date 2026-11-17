@@ -94,6 +94,7 @@ impl Dataset {
             license: license.map(|license| licence_name(&license)),
             doi: Some(self.doi.clone()),
             files,
+            rounded: None,
         })
     }
 

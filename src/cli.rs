@@ -1242,15 +1242,16 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
     about(context, &pinned, &below, started)
 }
 
-/// asks before a large download, or one the cache's disk may lack room for, `room` being the cache
-/// folder and the bytes needed on its disk. `yes` answers it; with no terminal it stops and names
-/// the flag. true when a person said yes to going on without room, which covers the size too.
+/// asks before a large download, `size` about as large where a listing rounds it, or one the
+/// cache's disk may lack room for, `room` being the cache folder and the bytes needed on its disk.
+/// `yes` answers it; with no terminal it stops and names the flag. true when a person said yes to
+/// going on without room, which covers the size too.
 fn confirm(
     output: &Output,
     yes: bool,
     above: u64,
     what: &str,
-    bytes: u64,
+    size: crate::net::estimate::Size,
     room: Option<(&std::path::Path, u64)>,
 ) -> Result<bool, Error> {
     confirm_doing(
@@ -1258,7 +1259,7 @@ fn confirm(
         yes,
         above,
         what,
-        bytes,
+        size,
         room,
         &format!("downloading {what}"),
     )
@@ -1270,7 +1271,7 @@ fn confirm_doing(
     yes: bool,
     above: u64,
     what: &str,
-    bytes: u64,
+    size: crate::net::estimate::Size,
     room: Option<(&std::path::Path, u64)>,
     doing: &str,
 ) -> Result<bool, Error> {
@@ -1283,10 +1284,10 @@ fn confirm_doing(
             return Ok(true);
         }
     }
-    if bytes <= above {
+    if size.bytes() <= above {
         return Ok(false);
     }
-    ask(output, yes, what, &units::size(bytes), above).map(|()| false)
+    ask(output, yes, what, &size.words(), above).map(|()| false)
 }
 
 /// asks whether to go on `doing` what needs `needed` bytes on the disk holding `cache`, which has

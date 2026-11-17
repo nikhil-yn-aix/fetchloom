@@ -42,14 +42,23 @@ const LISTS: [&str; 3] = ["pre", "table", "ul"];
 
 /// one entry of a listing: a file, or a folder, whose link ends in `/`, by its name with its
 /// character references and percent escapes undone, its link, and the size in bytes its row
-/// states, as nginx's `621` at a row's end or ncei's in a size column; one rounded, as `1.3M`,
-/// is none.
+/// states, as nginx's `621` at a row's end or ncei's in a size column, or else about the bytes of
+/// one it rounds to a unit, as apache's `1.3M`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Entry {
     pub(super) name: String,
     pub(super) link: Url,
     pub(super) folder: bool,
     pub(super) size: Option<u64>,
+    pub(super) about: Option<u64>,
+}
+
+/// the size a row of a listing states: in bytes, as nginx's `621`, or rounded to a unit, as
+/// apache's `1.3M`, about this many bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stated {
+    Bytes(u64),
+    About(u64),
 }
 
 /// what a listing holds: the entries of its folder, each once, in the order it gives them, and
@@ -72,7 +81,7 @@ struct Link {
     url: Option<Url>,
     names_parent: bool,
     goes_up: bool,
-    size: Option<u64>,
+    size: Option<Stated>,
 }
 
 impl Link {
@@ -192,7 +201,14 @@ pub(super) fn read(html: &str, page: &Url, folder: &Url) -> Result<Index, Unread
                 name: decoded.into_owned(),
                 link: link.clone(),
                 folder: is_folder,
-                size: *size,
+                size: match size {
+                    Some(Stated::Bytes(bytes)) => Some(*bytes),
+                    _ => None,
+                },
+                about: match size {
+                    Some(Stated::About(bytes)) => Some(*bytes),
+                    _ => None,
+                },
             });
         }
     }
@@ -332,7 +348,7 @@ struct Anchor {
     names_folder: bool,
     names_parent: bool,
     goes_up: bool,
-    size: Option<u64>,
+    size: Option<Stated>,
 }
 
 /// each link in `list`, a list written as the element `tag`, in order; `lower` is the list in
@@ -364,7 +380,7 @@ fn links(list: &str, lower: &str, tag: &str) -> Vec<Anchor> {
                 goes_up,
             } = text_says(list, lower, end, close);
             let size = match (tag == "pre").then(|| ending(lower, close)) {
-                Some(Ending::Bytes(bytes)) => Some(bytes),
+                Some(Ending::Size(size)) => Some(size),
                 Some(Ending::Words) => {
                     described = true;
                     None
@@ -394,8 +410,8 @@ fn links(list: &str, lower: &str, tag: &str) -> Vec<Anchor> {
 
 /// a table's rows as [`links`] reads them, in its pass: the column the table heads "Size", as
 /// apache, lighttpd, rclone and caddy head theirs, once its heading is read, and the row being
-/// read. a cell there that is a whole number, as `3659`, is the size of the row's links; any
-/// other, as `9.3K`, `20 B` or `-`, states none, and so do rows above the heading.
+/// read. a cell there that is a size, as `3659` or `9.3K`, is the size of the row's links; any
+/// other, as `-`, states none, and so do rows above the heading.
 #[derive(Default)]
 struct Rows {
     column: Option<usize>,
@@ -405,7 +421,7 @@ struct Rows {
     opened: usize,
     /// where the row's cell in the size column opens, until it ends, and the size it holds.
     sized: Option<usize>,
-    size: Option<u64>,
+    size: Option<Stated>,
     /// the row's first link among those found.
     first: usize,
 }
@@ -457,7 +473,7 @@ impl Rows {
     /// ends the size column's cell at `end`, if it is open, reading the size it holds.
     fn close(&mut self, lower: &str, end: usize) {
         if let Some(start) = self.sized.take() {
-            self.size = number(lower, start, end);
+            self.size = cell(lower, start, end);
         }
     }
 }
@@ -534,11 +550,11 @@ fn text(list: &str, lower: &str, at: usize) -> String {
 /// what a row of a `<pre>` list holds after a link: its last word up to the next tag or line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Ending {
-    /// a size in bytes, as NCBI and nginx write `621`.
-    Bytes(u64),
+    /// a size, in bytes as NCBI and nginx write `621`, or rounded as apache writes `1.3M`.
+    Size(Stated),
     /// words, as apache's description of a file, so no row's last word is sure to be its size.
     Words,
-    /// a rounded size, as `1.3M`, a folder's `-`, nothing, or a link whose text holds a tag.
+    /// a folder's `-`, nothing, or a link whose text holds a tag.
     Other,
 }
 
@@ -555,13 +571,21 @@ fn ending(lower: &str, close: Option<usize>) -> Ending {
     let Some(last) = words.split_ascii_whitespace().next_back() else {
         return Ending::Other;
     };
-    if let Some(bytes) = whole(last) {
-        Ending::Bytes(bytes)
-    } else if last == "-" || rounded(last) {
+    if let Some(size) = sized(last) {
+        Ending::Size(size)
+    } else if last == "-" {
         Ending::Other
     } else {
         Ending::Words
     }
+}
+
+/// the size `text`, in lowercase, states: a whole number of bytes, as `3659`, or about the bytes
+/// of one rounded to a unit, as `9.3k`.
+fn sized(text: &str) -> Option<Stated> {
+    whole(text)
+        .map(Stated::Bytes)
+        .or_else(|| about(text).map(Stated::About))
 }
 
 /// the bytes `text` states when it is a whole number, as `3659`.
@@ -571,38 +595,49 @@ fn whole(text: &str) -> Option<u64> {
         .flatten()
 }
 
-/// whether `word` is a size rounded to a unit, as apache and nginx write `9.3K` or `34M`.
-fn rounded(word: &str) -> bool {
+/// about how many bytes `word`, in lowercase, states, a size rounded to a unit, as apache and
+/// nginx write `9.3K` or `34M` and caddy `1.3 KiB`. a K is 1024 bytes, as those servers count it,
+/// however written.
+fn about(word: &str) -> Option<u64> {
     let number = word.trim_end_matches(|c: char| c.is_ascii_alphabetic());
-    let unit = &word[number.len()..];
-    let (whole, fraction) = number.split_once('.').unwrap_or((number, "0"));
-    !whole.is_empty()
-        && whole
+    let power = match &word[number.len()..] {
+        "b" => 0,
+        "k" | "kb" | "kib" => 1,
+        "m" | "mb" | "mib" => 2,
+        "g" | "gb" | "gib" => 3,
+        "t" | "tb" | "tib" => 4,
+        "p" | "pb" | "pib" => 5,
+        _ => return None,
+    };
+    let unit = 1024_u64.pow(power);
+    let number = number.trim_end();
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if whole.is_empty()
+        || !whole
             .bytes()
             .chain(fraction.bytes())
             .all(|byte| byte.is_ascii_digit())
-        && matches!(
-            unit.to_ascii_lowercase().as_str(),
-            "k" | "m"
-                | "g"
-                | "t"
-                | "p"
-                | "kb"
-                | "mb"
-                | "gb"
-                | "tb"
-                | "pb"
-                | "kib"
-                | "mib"
-                | "gib"
-                | "tib"
-                | "pib"
-        )
+    {
+        return None;
+    }
+    // servers round to a tenth, so places past the third change no estimate
+    let fraction = &fraction[..fraction.len().min(3)];
+    let part = match fraction {
+        "" => 0,
+        digits => {
+            digits.parse::<u64>().ok()? * unit / 10_u64.pow(u32::try_from(digits.len()).ok()?)
+        }
+    };
+    whole
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(unit)?
+        .checked_add(part)
 }
 
-/// the whole number a cell that opens at `open` and ends by `to` holds as its one text, as
-/// `3659`; `lower` is the table in lowercase.
-fn number(lower: &str, open: usize, to: usize) -> Option<u64> {
+/// the size a cell that opens at `open` and ends by `to` holds as its one text, as `3659` or
+/// `9.3k`; `lower` is the table in lowercase.
+fn cell(lower: &str, open: usize, to: usize) -> Option<Stated> {
     let mut at = next_byte(lower, b'>', open, to).map_or(to, |end| end + 1);
     let mut found = None;
     while at < to {
@@ -612,7 +647,7 @@ fn number(lower: &str, open: usize, to: usize) -> Option<u64> {
             if found.is_some() {
                 return None;
             }
-            found = Some(whole(text)?);
+            found = Some(sized(text)?);
         }
         at = next_byte(lower, b'>', next, to).map_or(to, |close| close + 1);
     }
@@ -749,6 +784,7 @@ impl Folder {
             counted: 0,
             seen: HashMap::new(),
             warnings: Vec::new(),
+            rounded: HashMap::new(),
         };
         walk.add("", &self.url, index)?;
         while let Some((path, url)) = walk.folders.pop_front() {
@@ -781,6 +817,7 @@ impl Folder {
             unavailable: Vec::new(),
             warnings: walk.warnings,
             within,
+            rounded: (!walk.rounded.is_empty()).then_some(walk.rounded),
         })
     }
 
@@ -967,6 +1004,8 @@ struct Walk<'a> {
     /// folder it lies in does.
     seen: HashMap<String, u64>,
     warnings: Vec<String>,
+    /// about how many bytes each file is whose size its listing rounds, by its path.
+    rounded: HashMap<String, u64>,
 }
 
 impl Walk<'_> {
@@ -988,6 +1027,9 @@ impl Walk<'_> {
                     self.folders.push_back((at, entry.link));
                 }
             } else if self.keeps(&at) {
+                if let Some(about) = entry.about {
+                    self.rounded.insert(at.clone(), about);
+                }
                 self.files.push(Remote {
                     path: at,
                     size: entry.size,

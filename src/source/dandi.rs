@@ -117,6 +117,7 @@ impl Dandiset {
             files,
             unavailable,
             warnings,
+            rounded: None,
         })
     }
 

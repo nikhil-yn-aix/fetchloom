@@ -280,6 +280,7 @@ impl Prefix {
             files,
             unavailable: Vec::new(),
             warnings: Vec::new(),
+            rounded: None,
         })
     }
 

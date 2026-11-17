@@ -219,6 +219,7 @@ impl Entry {
             license: None,
             doi: None,
             files: vec![file],
+            rounded: None,
         })
     }
 

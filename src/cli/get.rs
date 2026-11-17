@@ -1178,7 +1178,7 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
         context,
         missing
             .iter()
-            .map(|job| (fetch::host_of(job), job.fetch.expect.size)),
+            .map(|job| (fetch::host_of(job), fetch::size_of(job))),
     );
     let called = fetch::called(missing.iter().map(|job| job.label.as_str()), planned.files);
     fetch::tell_planned(&context.output, &called, &planned);
@@ -1187,7 +1187,7 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
         context.yes,
         context.settings.ask_above.value,
         &what,
-        size,
+        planned.size(),
         Some((cache.root(), room)),
         &doing,
     )
@@ -1730,6 +1730,7 @@ mod tests {
             files: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
+            rounded: None,
         };
         let paths = ["aux/a.csv".to_owned(), "aux/b.csv".to_owned()];
         assert_eq!(
@@ -2018,6 +2019,7 @@ mod tests {
             unavailable: Vec::new(),
             warnings: Vec::new(),
             within: Vec::new(),
+            rounded: None,
         };
         let args = Get {
             links: Vec::new(),

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use super::Listed;
 use crate::units;
 
 /// a host's remembered speed: bytes a second over one stream, and the seconds each file waits
@@ -16,15 +17,71 @@ pub(crate) struct Speed {
     pub(crate) overhead: f64,
 }
 
+/// what is known of a download's size before it starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Size {
+    /// its bytes, as its source or data.lock states them.
+    Bytes(u64),
+    /// about this many bytes, as a folder listing rounds them to a unit, as `1.3M`.
+    About(u64),
+    /// nothing, until its server answers.
+    Unknown,
+}
+
+impl Size {
+    /// a file's `size`, if known, and what a folder listing says of it, `listed`: its bytes, or
+    /// about those the listing rounds it to.
+    pub(crate) fn of(size: Option<u64>, listed: Listed) -> Size {
+        match (size, listed) {
+            (Some(bytes), _) => Size::Bytes(bytes),
+            (None, Listed::About(bytes)) => Size::About(bytes),
+            (None, _) => Size::Unknown,
+        }
+    }
+
+    /// this size and `other` added up: about where either is, unknown where either is.
+    pub(crate) fn and(self, other: Size) -> Size {
+        match (self, other) {
+            (Size::Unknown, _) | (_, Size::Unknown) => Size::Unknown,
+            (Size::Bytes(one), Size::Bytes(two)) => Size::Bytes(one.saturating_add(two)),
+            (one, two) => Size::About(one.bytes().saturating_add(two.bytes())),
+        }
+    }
+
+    /// the bytes it counts, none when unknown.
+    pub(crate) fn bytes(self) -> u64 {
+        match self {
+            Size::Bytes(bytes) | Size::About(bytes) => bytes,
+            Size::Unknown => 0,
+        }
+    }
+
+    /// as a person reads it: `2.4 GiB`, or `about 2.4 GiB`.
+    pub(crate) fn words(self) -> String {
+        match self {
+            Size::About(bytes) => format!("about {}", units::size(bytes)),
+            size => units::size(size.bytes()),
+        }
+    }
+}
+
+impl From<Option<u64>> for Size {
+    fn from(size: Option<u64>) -> Size {
+        size.map_or(Size::Unknown, Size::Bytes)
+    }
+}
+
 /// the downloads planned from one host, under the name its requests are paced and counted by.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Host {
     /// none when a catalog gives a dataset's bytes but not how many files hold them.
     pub(crate) files: Option<u64>,
-    /// the bytes of the files whose size is known.
+    /// the bytes of the files whose size is known, about as many where a listing rounds it.
     pub(crate) bytes: u64,
     /// files whose size only their download tells.
     pub(crate) unknown: u64,
+    /// files whose size a listing rounds, counted about in `bytes`.
+    pub(crate) rounded: u64,
     /// the largest file's bytes, or 0 when only the whole is known.
     pub(crate) largest: u64,
     pub(crate) speed: Option<Speed>,
@@ -146,12 +203,15 @@ pub(crate) fn time(hosts: &[Host], limits: Limits) -> Option<Time> {
 }
 
 /// what a run would download: its files, their known bytes, how many sizes only the downloads
-/// tell, and how long they should take, as `--json` gives it.
+/// tell, how many of those bytes a listing's rounded sizes give, and how long they should take,
+/// as `--json` gives it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct Total {
     pub(crate) files: u64,
     pub(crate) bytes: u64,
     pub(crate) sizes_unknown: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(crate) sizes_rounded: u64,
     /// none without grounds, when only a bar can tell the time once the downloads start.
     pub(crate) time: Option<Time>,
 }
@@ -166,6 +226,7 @@ impl Total {
                 .map(|host| host.bytes)
                 .fold(0, u64::saturating_add),
             sizes_unknown: hosts.iter().map(|host| host.unknown).sum(),
+            sizes_rounded: hosts.iter().map(|host| host.rounded).sum(),
             time: hosts
                 .iter()
                 .any(|host| host.files.is_some_and(|files| files > 0))
@@ -179,16 +240,26 @@ impl Total {
         self.files > self.sizes_unknown
     }
 
+    /// the bytes of the sizes known, about them where a listing rounds one.
+    pub(crate) fn size(&self) -> Size {
+        if self.sizes_rounded > 0 {
+            Size::About(self.bytes)
+        } else {
+            Size::Bytes(self.bytes)
+        }
+    }
+
     /// the facts after what downloads: `1.2 GiB · about 3 min`, with `and 2 of unknown size` when
-    /// some sizes are not known. without grounds for a time, `live` says a bar will show one, as
-    /// `1.2 GiB · the time shows once it starts`; elsewhere the size stands alone.
+    /// some sizes are not known, and `about 1.2 GiB` when a listing rounds some. without grounds
+    /// for a time, `live` says a bar will show one, as `1.2 GiB · the time shows once it starts`;
+    /// elsewhere the size stands alone.
     pub(crate) fn facts(&self, live: bool) -> String {
         let size = match (self.sizes_unknown, self.is_sized()) {
-            (0, _) => units::size(self.bytes),
+            (0, _) => self.size().words(),
             (_, false) => "size unknown".to_owned(),
             (unknown, true) => format!(
                 "{} and {} of unknown size",
-                units::size(self.bytes),
+                self.size().words(),
                 units::grouped(unknown)
             ),
         };
@@ -198,6 +269,15 @@ impl Total {
             (None, false) => size,
         }
     }
+}
+
+/// whether `count` is none, so `--json` leaves out a count only some runs have.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+fn is_zero(count: &u64) -> bool {
+    *count == 0
 }
 
 #[cfg(test)]
@@ -390,5 +470,27 @@ mod tests {
             "1.0 MiB and 2 of unknown size · the time shows once it starts"
         );
         assert_eq!(total.facts(false), "1.0 MiB and 2 of unknown size");
+    }
+
+    /// sizes a listing rounds count about, in the total and in its time, beside any unknown.
+    #[test]
+    fn a_total_of_rounded_sizes_is_about() {
+        let rounded = Host {
+            rounded: 2,
+            ..known(2, 3 * MIB, 2 * MIB, A_MIB, 0.0)
+        };
+        let total = Total::of(std::slice::from_ref(&rounded), LIMITS);
+        assert_eq!(total.facts(false), "about 3.0 MiB · under 10 s");
+        let unsure = Host {
+            files: Some(3),
+            unknown: 1,
+            ..rounded
+        };
+        assert_eq!(
+            Total::of(&[unsure], LIMITS).facts(false),
+            "about 3.0 MiB and 1 of unknown size"
+        );
+        assert_eq!(Size::Bytes(1).and(Size::About(2)), Size::About(3));
+        assert_eq!(Size::About(1).and(Size::Unknown), Size::Unknown);
     }
 }

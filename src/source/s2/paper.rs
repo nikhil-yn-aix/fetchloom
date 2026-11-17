@@ -148,6 +148,7 @@ impl Paper {
             }],
             unavailable: Vec::new(),
             warnings: Vec::new(),
+            rounded: None,
         })
     }
 

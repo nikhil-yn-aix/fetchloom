@@ -78,6 +78,7 @@ impl Link {
                 etag: None,
                 blob: None,
             }],
+            rounded: None,
         }
     }
 }

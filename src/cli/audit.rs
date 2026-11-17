@@ -1205,6 +1205,7 @@ mod tests {
             unavailable: Vec::new(),
             warnings: Vec::new(),
             within: Vec::new(),
+            rounded: None,
         };
         let same = listing("Iris", Some("cc0-1.0"), Access::Public);
         assert!(changes(&asked, &same).is_empty());

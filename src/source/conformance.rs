@@ -707,6 +707,10 @@ const HOSTILE: [&str; 17] = [
 ];
 
 /// what resolving a row came to.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a row's outcome is judged at once, one row at a time"
+)]
 enum Outcome {
     Listed(Listing),
     Failed(Error),

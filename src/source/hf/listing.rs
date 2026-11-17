@@ -48,6 +48,7 @@ impl Repo {
             license: info.license(),
             doi: info.doi(),
             files,
+            rounded: None,
         })
     }
 

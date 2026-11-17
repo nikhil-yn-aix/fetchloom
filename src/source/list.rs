@@ -978,6 +978,7 @@ fn listing(list: &List, entries: Vec<Entry>, folder: Option<&Url>) -> Result<Lis
         unavailable: Vec::new(),
         warnings: Vec::new(),
         within: Vec::new(),
+        rounded: None,
     })
 }
 

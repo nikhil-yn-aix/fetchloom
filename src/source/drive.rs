@@ -153,6 +153,7 @@ impl Item {
                 etag: None,
                 blob: None,
             }],
+            rounded: None,
         })
     }
 }

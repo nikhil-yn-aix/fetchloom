@@ -145,6 +145,7 @@ impl Release {
             license: None,
             doi: None,
             files,
+            rounded: None,
         })
     }
 

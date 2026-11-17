@@ -370,6 +370,7 @@ impl Folder {
             license: None,
             doi: None,
             files,
+            rounded: None,
         })
     }
 

@@ -197,6 +197,7 @@ impl Metadata {
                 })
                 .map(|identifier| identifier.attributes.value),
             files,
+            rounded: None,
         }
     }
 }

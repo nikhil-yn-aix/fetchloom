@@ -81,6 +81,7 @@ fn a_file_linked_outside_its_sources_files_is_refused() {
         unavailable: Vec::new(),
         warnings: Vec::new(),
         within: Vec::new(),
+        rounded: None,
     };
     let kept = "https://zenodo.org/api/records/3608990/files/iris.csv/content";
     assert!(crate::source::check(&reference, listing(kept), 10).is_ok());

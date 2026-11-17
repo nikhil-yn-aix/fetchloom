@@ -163,6 +163,7 @@ impl Accession {
             license: None,
             doi: None,
             files: found.files,
+            rounded: None,
         })
     }
 

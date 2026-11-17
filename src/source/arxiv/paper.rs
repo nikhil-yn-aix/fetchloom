@@ -58,6 +58,7 @@ impl Paper {
             files: vec![file],
             unavailable: Vec::new(),
             warnings: Vec::new(),
+            rounded: None,
         })
     }
 

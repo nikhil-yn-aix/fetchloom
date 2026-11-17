@@ -27,7 +27,7 @@ use super::fetch::{self, Again, Job};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::net::{Expect, Fetch, Fetched, Net, Origin};
+use crate::net::{Expect, Fetch, Fetched, Net, Origin, estimate};
 use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::archives::{self, Archive};
@@ -1215,7 +1215,7 @@ impl<'a> Loop<'a> {
         preview.changes.to_download = Some(fetch::planned(
             self.context,
             jobs.iter()
-                .map(|job| (fetch::host_of(job), job.fetch.expect.size)),
+                .map(|job| (fetch::host_of(job), fetch::size_of(job))),
         ));
         preview.changes.download = jobs
             .into_iter()
@@ -1328,7 +1328,7 @@ impl<'a> Loop<'a> {
             lock,
             Verbs::DONE,
             Some(&self.told),
-            &HashSet::new(),
+            &HashMap::new(),
         );
         Ok(text)
     }
@@ -1484,10 +1484,10 @@ impl<'a> Loop<'a> {
         )
         .map_err(|error| self.as_left(error))?;
         let told = || lacking.iter().copied().chain(&ahead);
-        let (size, room) = budget(told());
+        let room = budget(told());
         let planned = fetch::planned(
             self.context,
-            told().map(|job| (fetch::host_of(job), job.fetch.expect.size)),
+            told().map(|job| (fetch::host_of(job), fetch::size_of(job))),
         );
         let called = fetch::called(told().map(|job| job.label.as_str()), planned.files);
         // the question covers the files the line after it tells, placing's later ones too
@@ -1498,7 +1498,7 @@ impl<'a> Loop<'a> {
             self.yes(),
             self.context.settings.ask_above.value,
             &what,
-            size,
+            planned.size(),
             Some((self.cache.root(), room)),
         )
         .map_err(|error| self.as_left(error))?;
@@ -1645,7 +1645,7 @@ impl<'a> Loop<'a> {
             self.yes(),
             self.context.settings.ask_above.value,
             &units::count(planned.files, "file", "files"),
-            size,
+            estimate::Size::Bytes(size),
             Some((self.cache.root(), room)),
         )
         .map_err(|error| self.as_left(error))?;
@@ -2335,11 +2335,12 @@ pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
 /// the most datasets pinned for the first time that get a line each; the rest are counted.
 const FIRST_PINS: usize = 20;
 
-/// the labels of the `jobs` whose size only their download can tell.
-pub(super) fn sizeless(jobs: &[Job]) -> HashSet<String> {
+/// the labels of the `jobs` whose size only their download can tell, each with what is known of
+/// it: about what a folder listing rounds it to, or nothing.
+pub(super) fn sizeless(jobs: &[Job]) -> HashMap<String, estimate::Size> {
     jobs.iter()
         .filter(|job| job.fetch.expect.size.is_none())
-        .map(|job| job.label.clone())
+        .map(|job| (job.label.clone(), fetch::size_of(job)))
         .collect()
 }
 
@@ -2352,7 +2353,7 @@ pub(super) fn tell_lock(
     lock: &Lock,
     verbs: Verbs,
     told: Option<&BTreeSet<String>>,
-    sizeless: &HashSet<String>,
+    sizeless: &HashMap<String, estimate::Size>,
 ) {
     for (verb, text) in lock_lines(output, before, lock, verbs, told, sizeless) {
         output.step(verb, &text);
@@ -2366,7 +2367,7 @@ fn lock_lines(
     lock: &Lock,
     verbs: Verbs,
     told: Option<&BTreeSet<String>>,
-    sizeless: &HashSet<String>,
+    sizeless: &HashMap<String, estimate::Size>,
 ) -> Vec<(&'static str, String)> {
     let told = told.filter(|_| !output.shows_details());
     let is_told = |name: &str| told.is_some_and(|told| told.contains(name));
@@ -2457,8 +2458,12 @@ fn lock_lines(
 }
 
 /// the line for a dataset data.lock pins for the first time; `sizeless` labels the files whose size
-/// only a download can tell, as in a dry run.
-fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> String {
+/// only a download can tell, as in a dry run, with about what a listing rounds one to.
+fn first_pin(
+    output: &Output,
+    locked: &Locked,
+    sizeless: &HashMap<String, estimate::Size>,
+) -> String {
     let resolved = Reference::parse(&locked.resolved).map_or_else(
         |_| locked.resolved.clone(),
         |parsed| parsed.reference.shown_short(),
@@ -2471,23 +2476,26 @@ fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> St
             .map(|title| output.clip(title, TITLE)),
     );
     facts.push(units::count(locked.files.len() as u64, "file", "files"));
-    let (mut unknown, mut size) = (0, 0_u64);
+    let mut total = estimate::Total {
+        files: locked.files.len() as u64,
+        ..estimate::Total::default()
+    };
     for file in &locked.files {
-        if sizeless.contains(&format!("{}/{}", locked.name, file.path)) {
-            unknown += 1;
-        } else {
-            size = size.saturating_add(file.size);
+        let label = format!("{}/{}", locked.name, file.path);
+        match sizeless
+            .get(&label)
+            .copied()
+            .unwrap_or(estimate::Size::Bytes(file.size))
+        {
+            estimate::Size::Bytes(size) => total.bytes = total.bytes.saturating_add(size),
+            estimate::Size::About(size) => {
+                total.bytes = total.bytes.saturating_add(size);
+                total.sizes_rounded += 1;
+            }
+            estimate::Size::Unknown => total.sizes_unknown += 1,
         }
     }
-    facts.push(match unknown {
-        0 => units::size(size),
-        _ if unknown == locked.files.len() => "size unknown".to_owned(),
-        count => format!(
-            "{} and {} of unknown size",
-            units::size(size),
-            units::grouped(count as u64)
-        ),
-    });
+    facts.push(total.facts(false));
     format!(
         "{}, new in {}: {}",
         locked.name,
@@ -2672,16 +2680,13 @@ fn untold<'d>(
         .collect()
 }
 
-/// the bytes `jobs` of known size transfer, and the room they need on the cache's disk, twice the
-/// size of an archive whose files nobody listed: a lower bound, as it may unpack to much more.
-fn budget<'j>(jobs: impl Iterator<Item = &'j Job>) -> (u64, u64) {
+/// the room `jobs` of known size need on the cache's disk, twice the size of an archive whose
+/// files nobody listed: a lower bound, as it may unpack to much more.
+fn budget<'j>(jobs: impl Iterator<Item = &'j Job>) -> u64 {
     jobs.filter_map(|job| Some((job.fetch.expect.size?, job.fetch.unpack)))
-        .fold((0, 0), |(moved, room), (size, unpacks)| {
+        .fold(0, |room, (size, unpacks)| {
             let unpacked = if unpacks { size } else { 0 };
-            (
-                moved.saturating_add(size),
-                room.saturating_add(size).saturating_add(unpacked),
-            )
+            room.saturating_add(size).saturating_add(unpacked)
         })
 }
 
@@ -2801,13 +2806,12 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
     } else {
         format!("{files} in {}", within.join(", "))
     });
-    let size = kept
-        .iter()
-        .try_fold(0, |total: u64, file| Some(total.saturating_add(file.size?)));
-    facts.extend(
-        size.filter(|_| narrowed || listing.unavailable.is_empty())
-            .map(units::size),
-    );
+    let size = kept.iter().fold(estimate::Size::Bytes(0), |total, file| {
+        total.and(estimate::Size::of(file.size, listing.listed(file)))
+    });
+    if size != estimate::Size::Unknown && (narrowed || listing.unavailable.is_empty()) {
+        facts.push(size.words());
+    }
     if !narrowed && !listing.unavailable.is_empty() {
         facts.push(units::count(
             listing.unavailable.len() as u64,
@@ -2909,8 +2913,8 @@ mod tests {
     use crate::output::{Level, Style};
     use crate::source::recorded::block_on;
 
-    /// a question about a download's size counts only what it transfers; a file kept as it came, or
-    /// of unknown size, adds no room, and the sum saturates rather than wrapping.
+    /// an archive to unpack needs room for itself and its files; a file kept as it came adds its
+    /// size alone, one of unknown size none, and the sum saturates rather than wrapping.
     #[test]
     fn an_archive_to_unpack_needs_room_for_its_files_too() {
         const MB: u64 = 1_000_000;
@@ -2934,9 +2938,9 @@ mod tests {
             job(Some(MB / 2), false),
             job(None, true),
         ];
-        assert_eq!(budget(jobs.iter()), (MB + MB / 2, 2 * MB + MB / 2));
+        assert_eq!(budget(jobs.iter()), 2 * MB + MB / 2);
         let huge = [job(Some(u64::MAX), true)];
-        assert_eq!(budget(huge.iter()), (u64::MAX, u64::MAX));
+        assert_eq!(budget(huge.iter()), u64::MAX);
     }
 
     fn context() -> Context {
@@ -3444,7 +3448,7 @@ mod tests {
             datasets: vec![locked("gone"), locked("kept")],
             ..Lock::default()
         }));
-        let sized = HashSet::new();
+        let sized = HashMap::new();
         assert_eq!(
             lock_lines(&context.output, &before, &lock, Verbs::DONE, None, &sized),
             [
@@ -3471,7 +3475,7 @@ mod tests {
             datasets: (0..25).map(|n| locked(&format!("set-{n:02}"))).collect(),
             ..Lock::default()
         };
-        let sizeless = HashSet::from(["set-00/data.csv".to_owned()]);
+        let sizeless = HashMap::from([("set-00/data.csv".to_owned(), estimate::Size::Unknown)]);
         let lines = lock_lines(
             &context.output,
             &Before::whole(None),
@@ -3510,7 +3514,7 @@ mod tests {
                 &Lock::default(),
                 verbs,
                 None,
-                &HashSet::new(),
+                &HashMap::new(),
             )
         };
         assert_eq!(
@@ -3574,6 +3578,7 @@ mod tests {
             files: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
+            rounded: None,
         };
         tell_resolved(&output, &listing);
         assert_eq!(
@@ -3618,6 +3623,7 @@ mod tests {
             files: (0..1001).map(remote).collect(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
+            rounded: None,
         };
         tell_kept(&output, &listing, &listing.files[..1000]);
         let said = output.said().join("\n");
@@ -3638,6 +3644,7 @@ mod tests {
             files: Vec::new(),
             unavailable: Vec::new(),
             warnings: vec!["osf:ezcuj has 2 components".to_owned()],
+            rounded: None,
         };
         tell_resolved(&context.output, &listing);
         assert_eq!(context.output.warned(), ["osf:ezcuj has 2 components"]);

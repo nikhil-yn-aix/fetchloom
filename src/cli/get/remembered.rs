@@ -64,6 +64,7 @@ pub(super) fn listing(
         unavailable: Vec::new(),
         warnings: Vec::new(),
         within: Vec::new(),
+        rounded: None,
     })
 }
 

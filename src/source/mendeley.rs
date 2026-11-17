@@ -90,6 +90,7 @@ impl Dataset {
                 .and_then(|licence| licence.short_name.or(licence.full_name)),
             doi: described.doi.and_then(|doi| doi.id),
             files: found.files,
+            rounded: None,
         })
     }
 

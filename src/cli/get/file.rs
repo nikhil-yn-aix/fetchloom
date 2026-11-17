@@ -1304,6 +1304,7 @@ mod tests {
             files: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
+            rounded: None,
         };
         let remote = |path: &str| Remote {
             path: path.to_owned(),

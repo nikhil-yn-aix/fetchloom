@@ -292,6 +292,7 @@ impl Record {
                 .find_map(|right| right.id),
             doi: answer.pids.doi.map(|doi| doi.identifier),
             files,
+            rounded: None,
         })
     }
 
@@ -349,6 +350,7 @@ impl Record {
             license: answer.metadata.license.map(|license| license.id),
             doi: answer.doi,
             files,
+            rounded: None,
         })
     }
 

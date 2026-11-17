@@ -136,6 +136,7 @@ impl Competition {
                 .filter(|license| !license.is_empty() && license != "Unknown"),
             doi: None,
             files,
+            rounded: None,
         })
     }
 

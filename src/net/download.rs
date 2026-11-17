@@ -81,6 +81,9 @@ pub(crate) enum Listed {
     No,
     /// the expected size is the one the listing states in bytes, as nginx's `621`.
     Bytes,
+    /// the listing rounds the size to a unit, as apache's `1.3M`: about this many bytes, and no
+    /// expected size.
+    About(u64),
 }
 
 #[derive(Clone)]

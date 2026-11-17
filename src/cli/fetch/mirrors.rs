@@ -755,7 +755,7 @@ async fn from_web(
         context.yes,
         context.settings.ask_above.value,
         &units::count(ask.len() as u64, "file", "files"),
-        total,
+        crate::net::estimate::Size::Bytes(total),
         Some((cache.root(), total)),
     )?;
     let jobs = ask

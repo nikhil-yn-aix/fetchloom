@@ -29,7 +29,7 @@ struct Planned {
     /// the files it would download, by their listed paths, with the size each source states.
     download: Vec<Download>,
     /// the host each of those downloads starts at, with its size, in the same order.
-    hosts: Vec<(String, Option<u64>)>,
+    hosts: Vec<(String, crate::net::estimate::Size)>,
     /// files whose bytes the cache holds from the last get, whose server is asked whether they
     /// changed.
     check: Vec<String>,
@@ -224,7 +224,7 @@ fn fetching(
     });
     planned
         .hosts
-        .push((fetch::host_of(job), job.fetch.expect.size));
+        .push((fetch::host_of(job), fetch::size_of(job)));
     Ok(())
 }
 

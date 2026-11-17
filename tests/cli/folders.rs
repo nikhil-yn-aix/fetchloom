@@ -613,6 +613,86 @@ fn a_file_that_grew_since_its_listing_is_taken_as_it_comes() -> Result {
     Ok(())
 }
 
+/// gencode's release folder, which ebi's apache lists with sizes rounded to a unit, as `856M`.
+const GENCODE: &str = "/pub/databases/gencode/Gencode_human/release_46/";
+
+/// a listing that rounds its sizes, as gencode's does, sizes the folder about: the dry run of an
+/// add and of a get say about how much the folder brings, a sum of the listing's rounded sizes,
+/// and past `ask_above` the add and the get ask about that much before their first download.
+#[test]
+fn a_listing_that_rounds_sizes_sizes_the_folder_about() -> Result {
+    let html = fs::read_to_string(
+        crate::support::workspace().join("tests/fixtures/sources/folder/gencode.html"),
+    )?;
+    let mapping = format!("{GENCODE}GRCh37_mapping/");
+    let server = Routes::start(vec![
+        (GENCODE.to_owned(), page(&html)),
+        (mapping.clone(), nginx(&mapping, &[])),
+    ])?;
+    let folder = format!("{}{GENCODE}", server.url);
+    let sandbox = Sandbox::new()?;
+    for command in ["add", "get"] {
+        let dry = sandbox.run(&[command, &folder, "--dry-run"])?;
+        let stderr = text(&dry.stderr)?;
+        assert_eq!(dry.status.code(), Some(0), "{stderr}");
+        assert!(
+            stderr.contains(&format!("Resolved {folder} · 43 files · about 2.4 GiB\n")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("Would download 43 files · about 2.4 GiB"),
+            "{stderr}"
+        );
+    }
+    let dry = sandbox.run(&["--json", "add", &folder, "--dry-run"])?;
+    let changes = &json(&dry)?["result"]["changes"];
+    let total = &changes["to_download"];
+    assert_eq!(total["sizes_rounded"], 42, "{total}");
+    assert_eq!(total["sizes_unknown"], 0, "{total}");
+    let bytes = total["bytes"].as_u64().unwrap_or_default();
+    assert!(
+        (23 << 30) / 10 < bytes && bytes < (25 << 30) / 10,
+        "{total}"
+    );
+    let downloads = changes["download"].as_array().cloned().unwrap_or_default();
+    let exact = downloads.iter().find(|file| {
+        file["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("/gencode.v46.metadata.Selenocysteine.gz"))
+    });
+    assert_eq!(
+        exact.map(|file| &file["size"]),
+        Some(&serde_json::json!(771))
+    );
+    assert_eq!(
+        downloads
+            .iter()
+            .filter(|file| file["size"].is_null())
+            .count(),
+        42,
+        "a rounded size is the listing's, not the file's: {downloads:?}"
+    );
+
+    for command in ["add", "get"] {
+        let before = server.targets().len();
+        let asked = sandbox
+            .command(&["--json", command, &folder])
+            .env("FETCHLOOM_ASK_ABOVE", "1G")
+            .output()?;
+        assert_eq!(asked.status.code(), Some(1), "{}", text(&asked.stdout)?);
+        assert_eq!(
+            json(&asked)?["errors"][0]["message"],
+            "downloading 43 files needs about 2.4 GiB, and fetchloom cannot ask you here"
+        );
+        let later = &server.targets()[before..];
+        assert!(
+            later.iter().all(|target| target.ends_with('/')),
+            "nothing downloads before the question: {later:?}"
+        );
+    }
+    Ok(())
+}
+
 /// files whose sizes only their server states, as a listing that gives none leaves them, count
 /// together against `ask_above` and `cache_budget`, as a sync from data.lock counts the sizes it
 /// knows: three files of 1 MiB at 2 MiB stop an add no one can answer, naming them all.

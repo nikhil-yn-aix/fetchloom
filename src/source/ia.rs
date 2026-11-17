@@ -150,6 +150,7 @@ impl Item {
             license: text(&metadata.licenseurl),
             doi: None,
             files,
+            rounded: None,
         })
     }
 

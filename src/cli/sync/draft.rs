@@ -1400,6 +1400,7 @@ mod tests {
                 etag: None,
                 blob: None,
             }],
+            rounded: None,
         };
         let locked = Locked {
             name: "set".to_owned(),
@@ -1527,6 +1528,7 @@ mod tests {
                     etag: None,
                     blob: None,
                 }],
+                rounded: None,
             };
             let draft =
                 Draft::new("notes", entry, &entry.source, listing, None, false, &cache).unwrap();
@@ -1565,6 +1567,7 @@ mod tests {
                 license: None,
                 doi: None,
                 files,
+                rounded: None,
             };
             Draft::new(
                 "scans",
@@ -1676,6 +1679,7 @@ mod tests {
                 license: None,
                 doi: None,
                 files,
+                rounded: None,
             };
             Draft::new("scans", entry, &entry.source, listing, None, false, &cache).unwrap()
         };
@@ -1715,6 +1719,7 @@ mod tests {
             license: None,
             doi: None,
             files: ["a.csv", "sub/b[1].csv", "c.csv"].map(remote).to_vec(),
+            rounded: None,
         };
         let pinned = |text: &str, previous: Option<&Locked>| {
             let manifest = Manifest::parse(text).unwrap();
@@ -1871,6 +1876,7 @@ mod tests {
                 etag: None,
                 blob: None,
             }],
+            rounded: None,
         };
         let locked = |unpacks_to| Locked {
             name: "w".to_owned(),
@@ -2001,6 +2007,7 @@ mod tests {
                 etag: None,
                 blob: None,
             }],
+            rounded: None,
         };
         let entry = &manifest.datasets["d"];
         for upgrading in [true, false] {
@@ -2197,6 +2204,7 @@ mod tests {
                 etag: None,
                 blob: None,
             }],
+            rounded: None,
         };
         let manifest = Manifest::parse("[datasets.raw]\nref = \"s3://lab-raw/raw/\"\n").unwrap();
         let entry = &manifest.datasets["raw"];
@@ -2469,6 +2477,7 @@ mod tests {
                     etag: Some(etag.to_owned()),
                     blob: None,
                 }],
+                rounded: None,
             };
             let draft =
                 Draft::new("report", entry, &entry.source, listing, None, false, &cache).unwrap();
@@ -2514,6 +2523,7 @@ mod tests {
                     blob: None,
                 })
                 .collect(),
+            rounded: None,
         };
         let kept = filter("rows", &entry, &listing)?;
         Ok(kept.into_iter().map(|file| file.path).collect())

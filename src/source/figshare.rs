@@ -146,6 +146,7 @@ impl Article {
             license: answer.license.map(|license| license.name),
             doi: answer.doi,
             files,
+            rounded: None,
         })
     }
 

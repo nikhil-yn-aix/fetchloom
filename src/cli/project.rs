@@ -1097,7 +1097,7 @@ async fn preview_lock(
         context,
         dry.jobs
             .iter()
-            .map(|job| (super::fetch::host_of(job), job.fetch.expect.size)),
+            .map(|job| (super::fetch::host_of(job), super::fetch::size_of(job))),
     );
     super::fetch::tell_would_fetch(output, &download, &to_download);
     for archive in &dry.unpack {
@@ -2083,6 +2083,7 @@ pub(crate) mod tests {
             files,
             unavailable: Vec::new(),
             warnings: Vec::new(),
+            rounded: None,
         }
     }
 

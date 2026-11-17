@@ -111,6 +111,7 @@ impl Month {
             files,
             unavailable: Vec::new(),
             warnings,
+            rounded: None,
         })
     }
 

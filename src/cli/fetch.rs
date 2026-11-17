@@ -21,7 +21,9 @@ use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
-use crate::net::{Event, Expect, Fetch, Fetched, Net, NoVersion, Origin, Resumable, estimate};
+use crate::net::{
+    Event, Expect, Fetch, Fetched, Listed, Net, NoVersion, Origin, Resumable, estimate,
+};
 use crate::output::{Bar, Output, Ticker, Warning};
 use crate::source::folder::PAGE_FLAG;
 use crate::source::{self, Remote};
@@ -1023,10 +1025,15 @@ impl<'a> Watch<'a> {
         }
         let left = total.map_or(0, |total| total.saturating_sub(resumed));
         let unknown = self.job.fetch.expect.size.is_none();
+        // the size a listing rounds was asked about before the downloads, as a known one is
+        let asked = matches!(self.job.fetch.listed, Listed::About(_));
         let free = self.approval.cache.as_deref().map(self.approval.free);
         // the sizes only servers state count together, as the sizes a run knows do
         let together = match total.filter(|_| unknown) {
-            Some(total) => self.together(left, room_needed(Some(total), 0, self.job.fetch.unpack)),
+            Some(total) => self.together(
+                if asked { 0 } else { left },
+                room_needed(Some(total), 0, self.job.fetch.unpack),
+            ),
             None => (left, 0),
         };
         // a download that may have found its bytes unchanged was not asked about before
@@ -1048,7 +1055,7 @@ impl<'a> Watch<'a> {
                 })?;
             } else if unknown && let Some((past, doing)) = self.past_budget(total, together.1) {
                 self.approve(Question::Budget, || self.ask_budget(past, &doing))?;
-            } else if left > self.approval.above {
+            } else if !asked && left > self.approval.above {
                 let size = units::size(left);
                 self.approve(Question::Size, || {
                     super::ask(
@@ -1059,7 +1066,7 @@ impl<'a> Watch<'a> {
                         self.approval.above,
                     )
                 })?;
-            } else if together.0 > self.approval.above {
+            } else if !asked && together.0 > self.approval.above {
                 let what = self.overall.told_as(&self.label());
                 let size = format!("more than {}", units::size(self.approval.above));
                 self.approve(Question::Size, || {
@@ -1075,7 +1082,8 @@ impl<'a> Watch<'a> {
             {
                 self.overall.sized(&host_of(self.job), total);
             }
-            self.unbounded.store(total.is_none(), Ordering::Relaxed);
+            self.unbounded
+                .store(total.is_none() && !asked, Ordering::Relaxed);
             self.received.store(resumed, Ordering::Relaxed);
             // a try that starts over takes again what its last try took
             let mine = self.reported.swap(0, Ordering::Relaxed);
@@ -1287,28 +1295,33 @@ fn encoded(path: &str, encoding: &str) -> (String, String) {
     (said, help)
 }
 
-/// how long the downloads `jobs`, each a host and a size if known, should take, added up by pacing
-/// name from each host's remembered speed, its source's pacing and the run's job limits.
-pub(super) fn planned(
+/// how long the downloads `jobs`, each a host and what is known of its size, should take, added
+/// up by pacing name from each host's remembered speed, its source's pacing and the run's job
+/// limits.
+pub(super) fn planned<S: Into<estimate::Size>>(
     context: &Context,
-    jobs: impl IntoIterator<Item = (String, Option<u64>)>,
+    jobs: impl IntoIterator<Item = (String, S)>,
 ) -> estimate::Total {
     let hosts: Vec<estimate::Host> = hosts(context, jobs).into_values().collect();
     estimate::Total::of(&hosts, limits(context))
 }
 
 /// [`planned`]'s downloads by the name each host is paced under, before they are added up.
-fn hosts(
+fn hosts<S: Into<estimate::Size>>(
     context: &Context,
-    jobs: impl IntoIterator<Item = (String, Option<u64>)>,
+    jobs: impl IntoIterator<Item = (String, S)>,
 ) -> BTreeMap<String, estimate::Host> {
     let mut hosts: BTreeMap<String, estimate::Host> = BTreeMap::new();
     for (host, size) in jobs {
         let planned = hosts.entry(source::paced_as(&host)).or_default();
         *planned.files.get_or_insert(0) += 1;
-        match size {
-            Some(size) => add_size(planned, size),
-            None => planned.unknown += 1,
+        match size.into() {
+            estimate::Size::Bytes(size) => add_size(planned, size),
+            estimate::Size::About(size) => {
+                add_size(planned, size);
+                planned.rounded += 1;
+            }
+            estimate::Size::Unknown => planned.unknown += 1,
         }
     }
     for (name, host) in &mut hosts {
@@ -1367,6 +1380,12 @@ pub(super) fn limits(context: &Context) -> estimate::Limits {
 /// the host a job's requests start at, as its downloads are queued and its speed remembered.
 pub(super) fn host_of(job: &Job) -> String {
     crate::net::host(&job.fetch.from).to_ascii_lowercase()
+}
+
+/// what is known of the size of a job's file before its download: the size it expects, or about
+/// what a folder listing rounds it to.
+pub(super) fn size_of(job: &Job) -> estimate::Size {
+    estimate::Size::of(job.fetch.expect.size, job.fetch.listed)
 }
 
 /// says, before downloads start, what `total` brings and about how long it takes, as `Downloading
@@ -2325,8 +2344,7 @@ mod tests {
         let total = estimate::Total {
             files: 4,
             bytes: 205_824,
-            sizes_unknown: 0,
-            time: None,
+            ..estimate::Total::default()
         };
         let sizeless = estimate::Total {
             sizes_unknown: 4,
@@ -2392,8 +2410,7 @@ mod tests {
             let total = estimate::Total {
                 files,
                 bytes: files * 10,
-                sizes_unknown: 0,
-                time: None,
+                ..estimate::Total::default()
             };
             tell_would_fetch(&output, &downloads, &total);
             let said = output.said();
@@ -3036,6 +3053,70 @@ mod tests {
         let approval = Approval::new(crate::settings::ASK_ABOVE);
         let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
         assert_eq!(watch.on(&started).unwrap_err().kind, Kind::Unconfirmed);
+    }
+
+    /// a size a folder listing rounds was asked about with the run's others before any download
+    /// began, so what its server states, or sends with no size stated, asks nothing again, while
+    /// `cache_budget` still judges what the server states.
+    #[test]
+    fn a_rounded_size_asked_about_before_asks_nothing_again() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let mut job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
+            label: "big.bin".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let started = |total| Event::Started {
+            total,
+            resumed: 0,
+            resumable: Resumable::Maybe,
+        };
+        let (overall, held) = (overall(), Held::default());
+        let watch_with = |job: &Job, approval: &Approval| {
+            let watch = Watch::new(job, &output, &overall, approval, false, &held);
+            watch
+                .on(&started(Some(2 << 20)))
+                .and_then(|()| watch.on(&started(None)))
+                .and_then(|()| watch.on(&Event::Bytes(2 << 20)))
+        };
+        let above = Approval::new(1 << 20);
+        assert_eq!(
+            watch_with(&job, &above).unwrap_err().kind,
+            Kind::Unconfirmed
+        );
+        job.fetch.listed = Listed::About(2 << 20);
+        let asked = Approval::new(1 << 20);
+        watch_with(&job, &asked).unwrap();
+        // nor does it count among the sizes only servers state, which a file beside it asks about
+        let unlisted = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/small.bin").unwrap()),
+            label: "small.bin".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        Watch::new(&unlisted, &output, &overall, &asked, false, &held)
+            .on(&started(Some(1 << 19)))
+            .unwrap();
+        let budget = Approval::new(crate::settings::ASK_ABOVE).with_budget(1 << 20, 0);
+        let stopped = watch_with(&job, &budget).unwrap_err();
+        assert!(
+            stopped.message.contains("cache_budget"),
+            "{}",
+            stopped.message
+        );
     }
 
     #[test]

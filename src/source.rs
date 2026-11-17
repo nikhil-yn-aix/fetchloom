@@ -35,7 +35,7 @@ mod s2;
 pub(crate) mod search;
 pub(crate) mod share;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
 
@@ -290,6 +290,10 @@ pub(crate) struct Listing {
     /// the folders listed when only those were, as [`Glob::scope`] writes them: `sub-*/anat` stands
     /// for each folder it matches and an empty one for the top's files. empty for a whole listing.
     pub(crate) within: Vec<String>,
+    /// about how many bytes each file is, by its path, whose size a folder listing gives only
+    /// rounded to a unit, as apache's `1.3M`: what plans its download, binding none of its bytes.
+    /// none where the listing rounds no size.
+    pub(crate) rounded: Option<HashMap<String, u64>>,
 }
 
 impl Listing {
@@ -360,10 +364,14 @@ impl Listing {
     }
 
     /// what the listing says of `remote`'s size that binds no download: a web server's folder
-    /// listing states a size as the file was when it listed it.
+    /// listing states a size as the file was when it listed it, in bytes or rounded.
     pub(crate) fn listed(&self, remote: &Remote) -> crate::net::Listed {
+        let about = || self.rounded.as_ref()?.get(&remote.path).copied();
         match (&self.resolved, remote.size) {
             (Reference::Folder(_), Some(_)) => crate::net::Listed::Bytes,
+            (Reference::Folder(_), None) => {
+                about().map_or(crate::net::Listed::No, crate::net::Listed::About)
+            }
             _ => crate::net::Listed::No,
         }
     }
@@ -1294,6 +1302,7 @@ fn single(url: &Url) -> Listing {
             etag: None,
             blob: None,
         }],
+        rounded: None,
     }
 }
 

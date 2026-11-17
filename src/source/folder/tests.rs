@@ -208,9 +208,9 @@ fn file_sizes(index: &Index) -> Vec<(String, Option<u64>)> {
 }
 
 /// a row states its file's size in bytes, as `621`, as the last word of a list's row or in a
-/// table's column headed "Size". one rounded, as `9.3K` or caddy's `20 B`, states none, and so
-/// does every row of a list whose first line heads a description, as apache's does, or where a
-/// row ends in words, and every row of a table with no size column.
+/// table's column headed "Size". one rounded, as `9.3K` or caddy's `20 B`, states none in bytes,
+/// and nor does any row of a list whose first line heads a description, as apache's does, or
+/// where a row ends in words, or of a table with no size column.
 #[test]
 fn a_row_states_its_files_size_in_bytes_alone() {
     let owned = |sizes: &[(&str, Option<u64>)]| -> Vec<(String, Option<u64>)> {
@@ -287,6 +287,84 @@ Name  Last modified  Size  Description<hr><a href=\"../\">../</a>
     assert_eq!(
         file_sizes(&read_at(unheaded, DATA).unwrap()),
         owned(&[("a.csv", None)])
+    );
+}
+
+/// a row that rounds its file's size to a unit, as apache's `9.3K`, nginx's `2.4G` or caddy's
+/// `20 B`, states about as many bytes, a K counting 1024; one in bytes states no about, and nor
+/// does any row of a list whose rows may end in descriptions.
+#[test]
+fn a_rounded_size_is_about_its_bytes() {
+    let abouts = |index: &Index| -> Vec<(String, Option<u64>)> {
+        index
+            .entries
+            .iter()
+            .filter(|entry| !entry.folder)
+            .map(|entry| (entry.name.clone(), entry.about))
+            .collect()
+    };
+    let owned = |abouts: &[(&str, Option<u64>)]| -> Vec<(String, Option<u64>)> {
+        abouts
+            .iter()
+            .map(|(name, about)| ((*name).to_owned(), *about))
+            .collect()
+    };
+    let read_fixture = |fixture: &str, folder: &str| {
+        abouts(&read_at(&String::from_utf8(fixture_bytes(fixture)).unwrap(), folder).unwrap())
+    };
+    let gtf = "Saccharomyces_cerevisiae.R64-1-1.113";
+    assert_eq!(
+        read_fixture(
+            "folder/apache.html",
+            "https://ftp.ensembl.org/pub/release-113/gtf/saccharomyces_cerevisiae/"
+        ),
+        owned(&[
+            ("CHECKSUMS", None),
+            ("README", Some(9 * 1024 + 307)),
+            (&format!("{gtf}.abinitio.gtf.gz"), None),
+            (&format!("{gtf}.gtf.gz"), Some(581 * 1024)),
+        ])
+    );
+    assert_eq!(
+        read_fixture("folder/caddy.html", "http://127.0.0.1:19340/sub/"),
+        owned(&[("iris.csv", Some(20)), ("read me.txt", Some(6))])
+    );
+    assert_eq!(
+        read_fixture(
+            "folder/ndbc.html",
+            "https://www.ndbc.noaa.gov/data/realtime2/"
+        ),
+        owned(&[
+            ("32ST0.ocean", Some(82 * 1024)),
+            ("32ST0.srad", Some(39 * 1024)),
+            ("32ST0.txt", Some(95 * 1024)),
+        ])
+    );
+    let rounded = "<html><head><title>Index of /data/</title></head><body><pre>\
+<a href=\"../\">../</a>
+<a href=\"a.gz\">a.gz</a>  13-May-2024 16:01  1.3M
+<a href=\"b.gz\">b.gz</a>  13-May-2024 16:01  2.4G
+<a href=\"c.gz\">c.gz</a>  13-May-2024 16:01  1.25k
+<a href=\"d.txt\">d.txt</a>  13-May-2024 16:01  771
+</pre></body></html>";
+    let index = read_at(rounded, DATA).unwrap();
+    assert_eq!(
+        abouts(&index),
+        owned(&[
+            ("a.gz", Some((1 << 20) + 3 * (1 << 20) / 10)),
+            ("b.gz", Some((2 << 30) + 4 * (1 << 30) / 10)),
+            ("c.gz", Some(1024 + 25 * 1024 / 100)),
+            ("d.txt", None),
+        ])
+    );
+    assert_eq!(index.entries[3].size, Some(771));
+    let described = "<html><head><title>Index of /data/</title></head><body><pre>\
+Name  Last modified  Size  Description<hr><a href=\"../\">../</a>
+<a href=\"b.csv\">b.csv</a>  2026-11-16 09:00  1.3K  rows from 2020
+</pre></body></html>";
+    assert_eq!(
+        abouts(&read_at(described, DATA).unwrap()),
+        owned(&[("b.csv", None)])
     );
 }
 

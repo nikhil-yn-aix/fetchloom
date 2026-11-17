@@ -342,6 +342,7 @@ fn listing(stated: &Stated) -> Result<Listing, Error> {
         unavailable: Vec::new(),
         warnings: Vec::new(),
         within: Vec::new(),
+        rounded: None,
     })
 }
 

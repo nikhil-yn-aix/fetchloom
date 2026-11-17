@@ -147,6 +147,7 @@ impl Version {
             }),
             doi,
             files,
+            rounded: None,
         })
     }
 
