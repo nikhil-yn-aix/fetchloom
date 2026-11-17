@@ -40,16 +40,22 @@ pub(super) fn at_of(root: &Path, start: &Path) -> Option<String> {
 }
 
 /// a folder read to be pinned as an output: its name, data.toml's table if it has one, its folder
-/// as data.toml names it, its patterns, what a walk found there, the markers it left out and the
-/// cache.
+/// as data.toml names it, its patterns, the walk of it and the cache.
 struct Read<'m> {
     name: String,
     entry: Option<&'m manifest::Entry>,
     at: String,
     source: Source,
+    walk: Walk,
+    cache: Cache,
+}
+
+/// what a walk of an output's folder found, the markers it left out, and when it began, which a
+/// second walk must find again.
+struct Walk {
     walked: Walked,
     markers: HashSet<String>,
-    cache: Cache,
+    started: u64,
 }
 
 /// pins the folder `start`, `shown` as typed, found at `at` in the project, as the output `--as`
@@ -73,27 +79,27 @@ pub(super) async fn pin_held(
         entry,
         at,
         source,
-        walked,
-        markers,
+        walk,
         cache,
     } = read;
+    let walked = &walk.walked;
     let pin = entry.and(old.as_ref()).and_then(|lock| lock.get(&name));
     let net = std::sync::Arc::new(context.net());
     if args.check || args.dry.dry_run {
         let work = Loop::new(context, project, net, cache).adding(&name);
-        let read = (&walked, start, &source, &markers);
+        let read = (&walk, start, &source);
         return compared(&work, read, (&name, shown, &at), pin, args.check);
     }
-    room(context, &cache, &walked, shown)?;
-    let copied = into_cache(context, &cache, &walked, &|| {
-        reread(context, &walked, (start, shown), &source, &markers)
+    room(context, &cache, walked, shown)?;
+    let copied = into_cache(context, &cache, walked, &|copies| {
+        reread(context, &walk, (start, shown), &source, copies)
     })?;
-    let told = read_line(&walked, copied.cloned, shown);
+    let told = read_line(walked, copied.cloned, shown);
     let changes = pin.map(|pin| Changes::of(&copied.files, &pin.files));
     if let Some(changes) = changes.as_ref().filter(|changes| !changes.is_empty()) {
         approved(context, (&name, shown), changes)?;
     }
-    adding.seed(seeds(&name, &at, &walked, &copied.files));
+    adding.seed(seeds(&name, &at, walked, &copied.files));
     let work = Loop::new(context, project, net, cache).adding(&name);
     let mut locked = pinned(&name, &source, copied.files);
     locked.at = Some(at.clone());
@@ -224,6 +230,7 @@ fn read<'m>(
     let at = entry
         .and_then(|entry| entry.at.clone())
         .unwrap_or_else(|| at.to_owned());
+    let started = units::nanos(std::time::SystemTime::now());
     let mut walked = walk(
         start,
         shown,
@@ -249,8 +256,11 @@ fn read<'m>(
         entry,
         at,
         source,
-        walked,
-        markers,
+        walk: Walk {
+            walked,
+            markers,
+            started,
+        },
         cache,
     })
 }
@@ -273,16 +283,17 @@ fn leave_out(walked: &mut Walked, markers: &HashSet<String>) {
     }
 }
 
-/// `--check`, or a dry run: the folder `walked` found at `start`, but for its `markers`, compared
-/// with `pin`, read and hashed where it is, writing nothing. a new output's dry run hashes nothing.
+/// `--check`, or a dry run: the folder `walk` found at `start` compared with `pin`, read and hashed
+/// where it is, writing nothing. a new output's dry run hashes nothing.
 fn compared(
     work: &Loop<'_>,
-    (walked, start, source, markers): (&Walked, &Path, &Source, &HashSet<String>),
+    (walk, start, source): (&Walk, &Path, &Source),
     (name, shown, at): (&str, &str, &str),
     pin: Option<&Locked>,
     check: bool,
 ) -> Result<Report, Error> {
     let context = work.context;
+    let walked = &walk.walked;
     if pin.is_none() && !check {
         let files = units::count(walked.files.len() as u64, "file", "files");
         context.output.step(
@@ -295,7 +306,8 @@ fn compared(
         return Ok(preview(work, (name, shown), None));
     }
     let hashed = hashed(context, walked)?;
-    reread(context, walked, (start, shown), source, markers)?;
+    let read: Vec<Sha256> = hashed.iter().map(|file| file.sha256).collect();
+    reread(context, walk, (start, shown), source, &read)?;
     let changes = Changes::of(&hashed, pin.map_or(&[][..], |pin| &pin.files));
     if check {
         return checked(context, work.project, (name, shown), &changes);
@@ -532,25 +544,33 @@ fn hashed(context: &Context, walked: &Walked) -> Result<Vec<LockedFile>, Error> 
         .collect()
 }
 
-/// refuses the files `walked` found in `start` once a second walk finds them otherwise: one more
-/// or fewer, or one of another size, time or file, so what was read is no state the folder held.
-/// files written apart may still belong to no single run, which no walk can tell.
+/// refuses the files `walk` found in `start` once a second walk finds them otherwise: one more or
+/// fewer, or one of another size, time or file, or once a file a coarse clock leaves in doubt
+/// holds other bytes than were `read`, the digests in the files' order, so what was read is no
+/// state the folder held. files written apart may still belong to no single run, which no walk
+/// can tell.
 fn reread(
     context: &Context,
-    walked: &Walked,
+    walk: &Walk,
     (start, shown): (&Path, &str),
     source: &Source,
-    markers: &HashSet<String>,
+    read: &[Sha256],
 ) -> Result<(), Error> {
     // so a CLI test can change the folder between the read and its second walk
     #[cfg(debug_assertions)]
     crate::stop::hold("FETCHLOOM_TEST_HOLD_CAPTURE");
     let most = context.settings.most_files.value;
-    let again = walk(start, shown, source, most, &context.stop).map(|mut again| {
-        leave_out(&mut again, markers);
+    let again = super::walk(start, shown, source, most, &context.stop).map(|mut again| {
+        leave_out(&mut again, &walk.markers);
         again
     });
-    if again.is_ok_and(|again| same_files(&again, walked)) {
+    let now = |file: &Found| {
+        let block = Block::sized(file.size.saturating_add(1));
+        super::super::sync::disk::hash_plain(&file.source, block).ok()
+    };
+    if again.is_ok_and(|again| same_files(&again, &walk.walked))
+        && !rewritten_unseen(&walk.walked, read, walk.started, context.threads, &now)
+    {
         return Ok(());
     }
     Err(Error::new(
@@ -558,6 +578,29 @@ fn reread(
         format!("{shown} changed while it was read: let the pipeline finish, then add again"),
     )
     .help("fetchloom pins a folder only as it stood the whole time it read it, and pinned nothing"))
+}
+
+/// whether a file of `walked` that a coarse clock leaves in doubt holds other bytes `now` than were
+/// `read`, in the files' order. a file written no two seconds before the walk `started` is in
+/// doubt, as fat's clock keeps the size and time of a file rewritten in the tick it was written,
+/// so no second walk tells; an older one's size and time vouch for it, and it is not read again.
+fn rewritten_unseen(
+    walked: &Walked,
+    read: &[Sha256],
+    started: u64,
+    threads: crate::threads::Threads,
+    now: &(dyn Fn(&Found) -> Option<Sha256> + Sync),
+) -> bool {
+    let vouched = disk::vouched_before(started, true);
+    let doubted: Vec<(&Found, &Sha256)> = walked
+        .files
+        .iter()
+        .zip(read)
+        .filter(|(file, _)| file.seen.look.modified >= vouched)
+        .collect();
+    place::run_all(&doubted, threads, |(file, read)| now(file) != Some(**read))
+        .into_iter()
+        .any(|changed| changed)
 }
 
 /// whether two walks of one folder found the same files, each as it was.
@@ -863,6 +906,76 @@ mod tests {
         ] {
             assert!(!same_files(&first, &changed), "{how}");
         }
+    }
+
+    /// a file written in the two seconds before the walk is read again, as a coarse clock keeps
+    /// its size and time through a rewrite in that tick: other bytes than were read are a change.
+    /// an older file's size and time vouch for it, so it is never read again.
+    #[test]
+    fn a_file_written_in_the_clocks_last_tick_is_read_again() {
+        let second = 1_000_000_000;
+        let started = 100 * second;
+        let first = walked(&[
+            ("old.csv", 3, started - 3 * second, 1),
+            ("edge.csv", 3, started - 2 * second, 2),
+            ("new.csv", 3, started - second, 3),
+        ]);
+        let read = [b"old", b"edg", b"new"].map(|bytes| crate::digest::sha256(bytes));
+        let reads = |now: [&[u8]; 3]| {
+            let asked = std::sync::Mutex::new(Vec::new());
+            let threads = crate::threads::Threads::default();
+            let changed = rewritten_unseen(&first, &read, started, threads, &|file: &Found| {
+                asked.lock().unwrap().push(file.path.clone());
+                let at = first
+                    .files
+                    .iter()
+                    .position(|found| found.path == file.path)?;
+                Some(crate::digest::sha256(now[at]))
+            });
+            let mut asked = asked.into_inner().unwrap();
+            asked.sort();
+            (changed, asked)
+        };
+        let doubted = vec!["edge.csv".to_owned(), "new.csv".to_owned()];
+        assert_eq!(reads([b"OLD", b"edg", b"new"]), (false, doubted.clone()));
+        assert_eq!(reads([b"old", b"edg", b"NEW"]), (true, doubted.clone()));
+        assert_eq!(reads([b"old", b"EDG", b"new"]), (true, doubted));
+    }
+
+    /// the second walk reads a file of the clock's last tick again: bytes other than the copy's
+    /// are a change though the file looks as it did, and the copy's bytes are none.
+    #[test]
+    fn the_second_walk_reads_a_file_of_the_last_tick_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("processed");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("clean.csv"), b"a,b\n").unwrap();
+        let context = crate::cli::project::tests::offline_context();
+        let text = manifest::with_output("", "processed", "processed", &[], &[]).unwrap();
+        let source = Manifest::parse(&text).unwrap().datasets["processed"]
+            .source
+            .clone();
+        let most = crate::net::MOST_FILES;
+        let walked =
+            super::super::walk(&folder, "processed", &source, most, &context.stop).unwrap();
+        let started = walked.files[0].seen.look.modified + 1_000_000_000;
+        let walk = Walk {
+            walked,
+            markers: HashSet::new(),
+            started,
+        };
+        let shown = (folder.as_path(), "processed");
+        let read = |bytes: &[u8]| {
+            reread(
+                &context,
+                &walk,
+                shown,
+                &source,
+                &[crate::digest::sha256(bytes)],
+            )
+        };
+        assert!(read(b"a,b\n").is_ok());
+        assert_eq!(read(b"a,c\n").unwrap_err().kind, Kind::ProjectChanged);
     }
 
     fn file(path: &str, bytes: &[u8]) -> LockedFile {

@@ -17,6 +17,7 @@ use super::sync::{Given, Loop};
 use super::{Context, open_cache, peek_cache};
 use crate::archive;
 use crate::cache::{Cache, Sealed};
+use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::output::{Output, Warning};
@@ -125,7 +126,7 @@ async fn import_held(
         return Ok(preview_import(&work, manifest, found, &name, here));
     }
     room(context, &cache, &walked, shown)?;
-    let copied = into_cache(context, &cache, &walked, &|| Ok(()))?;
+    let copied = into_cache(context, &cache, &walked, &|_| Ok(()))?;
     let how = if copied.cloned { "cloned" } else { "copied" };
     let told = format!(
         "{} · {}, {how} into the cache; {shown} is unchanged",
@@ -1333,13 +1334,13 @@ pub(super) struct Copied {
 }
 
 /// copies every file `walked` found into the cache and pins each. none is in the cache under its
-/// hash until every one is on disk and `unchanged` passes, so a failure, a stop or a change seen
-/// meanwhile leaves none of them there.
+/// hash until every one is on disk and `unchanged` passes, given the digests of the copies in the
+/// files' order, so a failure, a stop or a change seen meanwhile leaves none of them there.
 fn into_cache(
     context: &Context,
     cache: &Cache,
     walked: &Walked,
-    unchanged: &dyn Fn() -> Result<(), Error>,
+    unchanged: &dyn Fn(&[Sha256]) -> Result<(), Error>,
 ) -> Result<Copied, Error> {
     let found = &walked.files;
     // many objects flush together, since one flush each costs far more than writing a small file
@@ -1357,7 +1358,14 @@ fn into_cache(
     let flush_each = true;
     let Sealing { sealed, cloned } = sealed(context, cache, walked, flush_each)?;
     context.stop.check()?;
-    unchanged()?;
+    let copies: Vec<Sha256> = sealed
+        .iter()
+        .filter_map(|slot| {
+            let slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+            slot.as_ref().map(|sealed| sealed.digest)
+        })
+        .collect();
+    unchanged(&copies)?;
     // every file is copied, and the disk still has to keep them before they are in the cache
     let finishing = context.output.wait(
         "Finishing",
@@ -2008,7 +2016,7 @@ mod tests {
             &context.stop,
         )
         .unwrap();
-        let copied = into_cache(&context, &cache, &walked, &|| Ok(())).unwrap();
+        let copied = into_cache(&context, &cache, &walked, &|_| Ok(())).unwrap();
         let pins: Vec<(&str, u64, crate::digest::Sha256, &str)> = copied
             .files
             .iter()
@@ -2066,7 +2074,7 @@ mod tests {
         if crate::test_links::link_folder(&outside, &root.join("sub")).is_err() {
             return crate::test_skips::skip("junctions", "this disk makes no junctions");
         }
-        let copied = into_cache(&context, &cache, &walked, &|| Ok(()));
+        let copied = into_cache(&context, &cache, &walked, &|_| Ok(()));
         assert!(copied.is_err(), "the junction was read through");
         let theirs = crate::digest::sha256(b"someone's own bytes");
         assert!(cache.find(&theirs, None).is_none());
