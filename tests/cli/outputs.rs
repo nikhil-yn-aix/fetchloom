@@ -1043,37 +1043,46 @@ fn dropping_an_output_keeps_its_folder() -> Result {
     Ok(())
 }
 
-/// "changed" means content: a rerun that writes the same bytes is no change, and the status that
-/// hashed the file to tell keeps its new look, so the next status reads none of it again.
+/// "changed" means content: a rerun that writes the same bytes is no change. status, which writes
+/// nothing, hashes such a file each time it looks; the next sync records its new look, so a later
+/// run hashes it no more: once per sync.
 #[test]
-fn a_rewrite_with_the_same_bytes_is_no_change_and_is_hashed_once() -> Result {
+fn a_rewrite_with_the_same_bytes_is_no_change_and_is_hashed_once_per_sync() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     processed(&work)?;
     ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
     let clean = work.join("data/processed/iris_clean.csv");
+    let recorded = |state: &serde_json::Value| {
+        state["files"]["data/processed/iris_clean.csv"]["look"]["modified"]
+            .as_u64()
+            .map(u128::from)
+    };
+    let state = || -> Result<serde_json::Value> {
+        Ok(serde_json::from_slice(&fs::read(
+            work.join(".fetchloom/state"),
+        )?)?)
+    };
+    let pinned = recorded(&state()?);
     sandbox.wait_for_a_later_time(fs::metadata(&clean)?.modified()?)?;
     fs::write(&clean, CLEAN)?;
-    let document = json(&sandbox.run(&["--json", "status"])?)?;
-    for kind in ["missing", "edited", "extra", "untracked"] {
-        assert_eq!(
-            listed(&document, kind),
-            Vec::<String>::new(),
-            "{kind}: {document}"
-        );
-    }
     let modified = fs::metadata(&clean)?
         .modified()?
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
-    let state: serde_json::Value =
-        serde_json::from_slice(&fs::read(work.join(".fetchloom/state"))?)?;
-    let look = &state["files"]["data/processed/iris_clean.csv"]["look"];
-    assert_eq!(
-        look["modified"].as_u64().map(u128::from),
-        Some(modified),
-        "{state}"
-    );
+    for _ in 0..2 {
+        let document = json(&sandbox.run(&["--json", "status"])?)?;
+        for kind in ["missing", "edited", "extra", "untracked"] {
+            assert_eq!(
+                listed(&document, kind),
+                Vec::<String>::new(),
+                "{kind}: {document}"
+            );
+        }
+        assert_eq!(recorded(&state()?), pinned, "status writes nothing");
+    }
+    ok(&sandbox.run(&["sync"])?)?;
+    assert_eq!(recorded(&state()?), Some(modified));
     Ok(())
 }
 
