@@ -645,20 +645,8 @@ fn a_data_folder_on_another_device_allows_for_a_coarser_clock() {
     let dir = tempfile::tempdir().unwrap();
     let project = Project::at(dir.path().to_path_buf());
     fs::create_dir(project.root.join("data")).unwrap();
-    let path = project.root.join("data/table.csv");
-    let stamp = |bytes: &[u8], time: SystemTime| {
-        fs::write(&path, bytes).unwrap();
-        fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(time)
-            .unwrap();
-    };
-    // fat cuts times down to two seconds: a file placed at 10.3 s and edited at 11 s keeps
-    // 10 s, while a state on a finer clock was written at 10.5 s
-    let placed = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_010);
-    stamp(b"original", placed);
+    let path = "data/table.csv";
+    fs::write(project.root.join(path), b"original").unwrap();
     let mut survey = Survey::read(
         &project,
         &Folders::data("data"),
@@ -666,17 +654,37 @@ fn a_data_folder_on_another_device_allows_for_a_coarser_clock() {
         &Stop::default(),
     )
     .unwrap();
-    survey.state.files.insert(
-        "data/table.csv".to_owned(),
-        record(&project.root, "data/table.csv", b"original", Method::Copy),
-    );
-    stamp(b"modified", placed);
-    let written = nanos(placed) + 500_000_000;
-
-    survey.hash_racy(&project.root, written, false);
-    assert!(survey.edited.is_empty(), "one clock dates both");
-    survey.hash_racy(&project.root, written, true);
-    assert_eq!(survey.edited, HashSet::from(["data/table.csv".to_owned()]));
+    fs::write(project.root.join(path), b"modified").unwrap();
+    let second = 1_000_000_000;
+    let placed = 1_700_000_010 * second;
+    let fine = placed + 345_678_901;
+    // (the time the file keeps, when the state was written after it, on another device, hashed)
+    let cases = [
+        // fat cuts times down to two seconds: a file placed at 10.3 s and edited at 11 s keeps
+        // 10 s, while a state on a finer clock was written at 10.5 s. one clock dating both
+        // would show the edit as no older than the state
+        (placed, second / 2, false, false),
+        (placed, second / 2, true, true),
+        // one clock may trail the other by a tick
+        (placed, 2 * second + second / 100, true, true),
+        // a time off the hundredths came from a finer clock, so only its tick is in doubt
+        (fine, second / 2, true, false),
+        (fine, second / 100, true, true),
+    ];
+    for (modified, later, other_device, hashed) in cases {
+        let original = record(&project.root, path, b"original", Method::Copy);
+        let look = Look {
+            modified,
+            ..original.look
+        };
+        survey.disk.insert(path.to_owned(), look);
+        let recorded = crate::project::state::Placed { look, ..original };
+        survey.state.files.insert(path.to_owned(), recorded);
+        survey.edited.clear();
+        survey.hash_racy(&project.root, modified + later, other_device);
+        let case = (modified - placed, later, other_device);
+        assert_eq!(survey.edited.contains(path), hashed, "{case:?}");
+    }
 }
 
 #[test]

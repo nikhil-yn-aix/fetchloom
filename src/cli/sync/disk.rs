@@ -631,16 +631,18 @@ impl Survey {
     fn look_through_links(&mut self, _root: &Path) {}
 
     /// carries listed aliases to missing recorded names, then hashes files that look as recorded
-    /// but are not older than the state, `written`: a coarse clock gives a file edited in the tick
-    /// it was placed the size and time recorded for it.
+    /// but whose time may hide a write after the state, `written`: a coarse clock gives a file
+    /// edited in the tick it was placed the size and time recorded for it.
     fn hash_racy(&mut self, root: &Path, written: u64, other_device: bool) {
-        let written = vouched_before(written, other_device);
+        let doubted = |placed: &crate::project::state::Placed| {
+            may_hide_a_write(placed.look.modified, written, other_device)
+        };
         let mut racy = Vec::new();
         let mut missing = Vec::new();
         for (path, placed) in &self.state.files {
             match self.disk.get(path) {
                 None => missing.push(path),
-                Some(seen) if placed.look.modified >= written && *seen == placed.look => {
+                Some(seen) if doubted(placed) && *seen == placed.look => {
                     racy.push((path, placed));
                 }
                 Some(_) => {}
@@ -658,7 +660,7 @@ impl Survey {
             self.folded.take();
             self.listed.insert(path.clone(), listed);
             if let Some(placed) = self.state.files.get(path)
-                && placed.look.modified >= written
+                && doubted(placed)
                 && look == placed.look
             {
                 racy.push((path, placed));
@@ -1174,17 +1176,20 @@ pub(crate) fn hash_plain(path: &Path, block: Block) -> std::io::Result<Sha256> {
     Sha256::of_reader(crate::volume::read_unfollowed(path)?, block)
 }
 
-/// the coarsest clock step a data folder may keep: fat cuts a file's time down to two seconds.
-pub(crate) const COARSE: u64 = 2_000_000_000;
-
-/// the time before which a state written at `written` vouches for files that look as recorded.
-/// a data folder on an `other_device` may keep a coarser clock, so there it is `COARSE` earlier.
-pub(crate) fn vouched_before(written: u64, other_device: bool) -> u64 {
-    if other_device {
-        written.saturating_sub(COARSE)
-    } else {
-        written
-    }
+/// whether a file whose time is `modified` may have been written again at `moment` or later and
+/// kept that time, so only its bytes tell. a file system that dated `moment` itself shows a later
+/// write no earlier. against a clock `apart`, the time may stand for a write up to one step of the
+/// file's clock later, plus the twenty milliseconds by which one system clock may trail another:
+/// fat, exfat and hfs+ keep times on whole hundredths of a second, in steps of up to two seconds,
+/// and a finer time's step is too small to count.
+pub(crate) fn may_hide_a_write(modified: u64, moment: u64, apart: bool) -> bool {
+    const TICK: u64 = 20_000_000;
+    let step = match (apart, modified.is_multiple_of(10_000_000)) {
+        (false, _) => 0,
+        (true, true) => 2_000_000_000 + TICK,
+        (true, false) => TICK,
+    };
+    modified.saturating_add(step) >= moment
 }
 
 /// the files `state` records outside the data folder of `folders`, placed before it changed, that

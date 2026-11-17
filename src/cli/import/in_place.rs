@@ -557,10 +557,9 @@ fn reread(
 }
 
 /// whether a file of `walked` that its clock leaves in doubt holds other bytes `now` than were
-/// `read`, in the files' order. a file written within its clock's [`time_step`] before the walk
-/// `started` is in doubt, as such a clock keeps the size and time of a file rewritten in the step
-/// it was written, so no second walk tells; an older one's size and time vouch for it, and it is
-/// not read again.
+/// `read`, in the files' order. a file whose time [`disk::may_hide_a_write`] after the walk
+/// `started`, by the system's clock, is in doubt, so no second walk tells; an older one's size
+/// and time vouch for it, and it is not read again.
 fn rewritten_unseen(
     walked: &Walked,
     read: &[Sha256],
@@ -572,25 +571,11 @@ fn rewritten_unseen(
         .files
         .iter()
         .zip(read)
-        .filter(|(file, _)| {
-            let modified = file.seen.look.modified;
-            modified.saturating_add(time_step(modified)) >= started
-        })
+        .filter(|(file, _)| disk::may_hide_a_write(file.seen.look.modified, started, true))
         .collect();
     place::run_all(&doubted, threads, |(file, read)| now(file) != Some(**read))
         .into_iter()
         .any(|changed| changed)
-}
-
-/// the step of the clock that kept `modified`, in nanoseconds, as the time shows it: one on a whole
-/// hundredth of a second, as fat, exfat and hfs+ keep times, may stand for any time in two
-/// seconds; any other was kept within a system clock's tick, no longer than twenty milliseconds.
-fn time_step(modified: u64) -> u64 {
-    if modified.is_multiple_of(10_000_000) {
-        disk::COARSE
-    } else {
-        20_000_000
-    }
 }
 
 /// whether two walks of one folder found the same files, each as it was.

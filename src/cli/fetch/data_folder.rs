@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cache::{Cache, Copied, Sealed, holds_pinned};
 use crate::cli::Context;
-use crate::cli::sync::disk::{apart, vouched_before};
+use crate::cli::sync::disk::{apart, may_hide_a_write};
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::mirror::Wanted;
@@ -39,9 +39,10 @@ pub(in crate::cli) struct DataFolder {
     name: String,
     /// by object, each path that may hold it, in the order of the plan.
     paths: HashMap<Sha256, Vec<Place>>,
-    /// the time before which the project's state vouches for a file that still looks as it
-    /// records, as sync trusts it.
-    before: u64,
+    /// when the project's state was written, and whether this folder's clock is apart from the
+    /// state's: a file that still looks as recorded counts unread only once its time could not
+    /// hide a later write, as sync trusts it.
+    written: (u64, bool),
 }
 
 /// a path below the project folder, with `/` between folders, that may hold an object, with what
@@ -71,10 +72,13 @@ enum Said {
 }
 
 /// what `record` says of a file that looks as `now`: something only while the file looks
-/// exactly as recorded, and was recorded before `before`, as sync trusts a recorded file.
-fn said(record: Option<Record>, now: Look, before: u64) -> Said {
+/// exactly as recorded, by a time that could not hide a write after the state was `written`, as
+/// sync trusts a recorded file.
+fn said(record: Option<Record>, now: Look, (written, apart): (u64, bool)) -> Said {
     match record {
-        Some(record) if record.look == now && record.look.modified < before => {
+        Some(record)
+            if record.look == now && !may_hide_a_write(record.look.modified, written, apart) =>
+        {
             if record.pinned {
                 Said::Pinned
             } else {
@@ -126,7 +130,7 @@ impl DataFolder {
         let mut data = DataFolder::of(project, manifest, places);
         if !data.is_empty() && !state.files.is_empty() {
             let other_device = apart(&data.folder, &project.own_folder());
-            data.before = vouched_before(written, other_device);
+            data.written = (written, other_device);
         }
         data
     }
@@ -151,7 +155,7 @@ impl DataFolder {
             folder,
             name: manifest.data_dir.clone(),
             paths,
-            before: 0,
+            written: (0, false),
         }
     }
 
@@ -184,7 +188,7 @@ impl DataFolder {
                 let Some(now) = readable(&placer, &path) else {
                     return false;
                 };
-                match said(place.record, now, self.before) {
+                match said(place.record, now, self.written) {
                     Said::Pinned => true,
                     Said::Other => false,
                     Said::Nothing if now.size != want.size => false,
@@ -303,7 +307,7 @@ impl DataFolder {
             let Some(now) = readable(placer, &path) else {
                 continue;
             };
-            if said(place.record, now, self.before) == Said::Other {
+            if said(place.record, now, self.written) == Said::Other {
                 continue;
             }
             match cache.copy_in(&path, &want.digest, want.size, flush, stop)? {
@@ -479,7 +483,7 @@ mod tests {
         let data = |look| {
             let places = std::iter::once((wanted().digest, place(look)));
             DataFolder {
-                before: u64::MAX,
+                written: (u64::MAX, false),
                 ..DataFolder::of(&project, &manifest, places)
             }
         };
