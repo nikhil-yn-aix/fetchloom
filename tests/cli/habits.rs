@@ -79,9 +79,11 @@ fn a_deleted_dataset_folder_names_drop_once() -> Result {
     let first = synced(&sandbox)?;
     assert!(first.contains(hint), "{first}");
     assert_eq!(fs::read(folder.join("iris.csv"))?, IRIS);
-    delete_folder(&folder)?;
-    let again = synced(&sandbox)?;
-    assert!(!again.contains("hint:"), "{again}");
+    for _ in 0..2 {
+        delete_folder(&folder)?;
+        let again = synced(&sandbox)?;
+        assert!(!again.contains("hint:"), "{again}");
+    }
     Ok(())
 }
 

@@ -27,7 +27,7 @@ use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed, State, Synced, Uncached};
+use crate::project::state::{Look, Once, Placed, State, Synced, Uncached};
 use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::work::Work;
@@ -72,6 +72,10 @@ pub(crate) struct Placement {
     /// it elsewhere. its folders are named apart then.
     #[serde(skip)]
     pub(crate) moved: bool,
+    /// for an add, that the project is an R package, whose data/ the datasets land in though R
+    /// keeps it for its own, and no run told yet where raw files go.
+    #[serde(skip)]
+    pub(crate) r_package: bool,
     /// the datasets the run places or replaces files of.
     #[serde(skip)]
     pub(crate) filled: BTreeSet<String>,
@@ -222,12 +226,12 @@ impl Placement {
             .collect();
         let told = &survey.state.told;
         if survey.data_gone {
-            self.moved = !self.refilled.is_empty() && !told.moved;
+            self.moved = !self.refilled.is_empty() && !told.has(Once::Moved, &manifest.data_dir);
         } else {
             self.to_drop = self
                 .refilled
                 .iter()
-                .filter(|folder| !told.refilled.contains(*folder))
+                .filter(|folder| !told.has(Once::Refill, folder))
                 .cloned()
                 .collect();
         }
@@ -331,10 +335,10 @@ impl Kept {
 
     fn of(target: &Target, reason: Reason, survey: &Survey) -> Kept {
         let told = reason == Reason::Changed
-            && survey
-                .disk
-                .get(&target.path)
-                .is_some_and(|look| survey.state.told.edits.get(&target.path) == Some(look));
+            && survey.disk.get(&target.path).is_some_and(|look| {
+                let edit = edited(&target.path, look);
+                survey.state.told.has(Once::Edit, &edit)
+            });
         Kept {
             dataset: Some(target.dataset.to_owned()),
             earlier: survey
@@ -348,50 +352,59 @@ impl Kept {
     }
 }
 
-/// records in `state` the folders `placement` told how to keep away, and forgets those no dataset
-/// places files in now. says whether the state changed.
-fn note_told_refills(state: &mut State, manifest: &Manifest, placement: &Placement) -> bool {
-    let told = &mut state.told;
-    let before = told.clone();
-    told.moved |= placement.moved;
-    told.refilled.extend(placement.to_drop.iter().cloned());
+/// what an edit of the file at `path` is told of as: the path and how the file looks.
+fn edited(path: &str, look: &Look) -> String {
+    format!("{path}:{}:{}", look.size, look.modified)
+}
+
+/// the path of an edit [`edited`] names.
+fn edited_path(edit: &str) -> &str {
+    edit.rsplitn(3, ':').nth(2).unwrap_or(edit)
+}
+
+/// records in `state` what `placement` told once, so later runs stay quiet of it: each edit kept,
+/// with how its file looks on `disk`, each folder told how to keep away, the data folder told how
+/// to keep elsewhere, and an R package told where raw files go. forgets the edits of `scope` this
+/// run kept no more, and the folders no dataset has now. says whether the state changed.
+fn note_told(
+    state: &mut State,
+    manifest: &Manifest,
+    placement: &Placement,
+    disk: &HashMap<String, Look>,
+    scope: &Scope,
+) -> bool {
+    let edits: HashSet<String> = placement
+        .kept
+        .iter()
+        .filter(|kept| kept.reason == Reason::Changed)
+        .filter_map(|kept| Some(edited(&kept.path, disk.get(&kept.path)?)))
+        .collect();
     let folders: BTreeSet<String> = manifest
         .datasets
         .keys()
         .map(|name| plan::folder(manifest, name))
         .collect();
-    told.refilled.retain(|folder| folders.contains(folder));
-    *told != before
-}
-
-/// records in `state` each edit of `kept` told of, with how its file looks on `disk`, so later
-/// runs only count it while it stays as it is, and forgets those of `scope` this run kept no
-/// more. says whether the state changed.
-fn note_told_edits(
-    state: &mut State,
-    kept: &[Kept],
-    disk: &HashMap<String, Look>,
-    scope: &Scope,
-) -> bool {
-    let edits: HashMap<&str, &Look> = kept
-        .iter()
-        .filter(|kept| kept.reason == Reason::Changed)
-        .filter_map(|kept| Some((kept.path.as_str(), disk.get(&kept.path)?)))
-        .collect();
-    let before = state.told.edits.len();
     let files = &state.files;
-    state.told.edits.retain(|path, _| {
-        edits.contains_key(path.as_str())
+    let told = &mut state.told;
+    let mut changed = told.retain(Once::Edit, |edit| {
+        edits.contains(edit)
             || files
-                .get(path)
+                .get(edited_path(edit))
                 .is_some_and(|placed| !scope.includes(&placed.dataset))
     });
-    let mut changed = state.told.edits.len() != before;
-    for (path, look) in edits {
-        if state.told.edits.get(path) != Some(look) {
-            state.told.edits.insert(path.to_owned(), *look);
-            changed = true;
-        }
+    changed |= told.retain(Once::Refill, |folder| folders.contains(folder));
+    for edit in &edits {
+        changed |= told.note(Once::Edit, edit);
+    }
+    for folder in &placement.to_drop {
+        changed |= told.note(Once::Refill, folder);
+    }
+    let data = &manifest.data_dir;
+    if placement.moved {
+        changed |= told.note(Once::Moved, data);
+    }
+    if placement.r_package {
+        changed |= told.note(Once::RPackage, data);
     }
     changed
 }
@@ -1019,7 +1032,8 @@ impl<'a> Placing<'a> {
             &self.targets,
             (&self.survey.state, (&self.unknown, &self.waiting)),
         );
-        placement.marked = mark::would_make(&self.survey, &wanted, &contents);
+        let planned = mark::planned(&self.survey, &wanted, &contents);
+        placement.marked = mark::would_make(&planned, &contents);
         placement.in_git = Project::repository(&self.project.root).is_some();
         placement.unmarkable = mark::unmarkable(
             &self.project.root,
@@ -1196,7 +1210,7 @@ impl<'a> Placing<'a> {
         // the state written ahead must not vouch for the size and time an edit kept
         survey.smudge_edited();
         let contents = mark::contents(manifest, &targets, (&survey.state, (&unknown, &waiting)));
-        let (to_mark, marking) = mark::to_make(
+        let (to_mark, marking) = mark::to_write(
             &mut survey,
             &mark::wanted(manifest, &targets, &actions),
             &contents,
@@ -1224,21 +1238,14 @@ impl<'a> Placing<'a> {
         };
         survey.smudge_edited();
         // before the files land, so git never sees a dataset's folder while it fills
-        placement.marked = mark::make(
+        let (rewritten, marked) = mark::write(
             &project.root,
             &mut placer,
             &mut survey.state,
-            to_mark.make,
+            &to_mark.write,
             &contents,
         );
-        let (rewritten, turned) = mark::rewrite(
-            &project.root,
-            &mut placer,
-            &mut survey.state,
-            &to_mark.rewrite,
-            &contents,
-        );
-        placement.marked.extend(turned);
+        placement.marked = marked;
         placement.in_git = Project::repository(&project.root).is_some();
         let told_rule = !placement.marked.is_empty()
             && mark::tell_hiding_line(output, &project.root, &manifest.data_dir, &mut survey.state);
@@ -1302,14 +1309,18 @@ impl<'a> Placing<'a> {
         let marks = unmarked || marking || rewritten || told_rule || taken_back;
         // what a run that ends in an error never tells stays untold
         let telling = !stopped && failure.is_none();
-        let told_edits = telling && note_told_edits(state, &placement.kept, &survey.disk, &scope);
-        let told_refills = telling && note_told_refills(state, manifest, &placement);
+        placement.r_package = telling
+            && told.is_some_and(|names| !names.is_empty())
+            && manifest.data_dir == crate::project::manifest::DATA_DIR
+            && !state.told.has(Once::RPackage, &manifest.data_dir)
+            && project.is_r_package();
+        let noted = telling && note_told(state, manifest, &placement, &survey.disk, &scope);
         record(
             project,
             state,
             synced,
             recorded,
-            needs_writing || dropped || marks || told_edits || told_refills,
+            needs_writing || dropped || marks || noted,
         )
         .map_err(ended)?;
         if stopped {
@@ -1370,15 +1381,15 @@ impl<'a> Placing<'a> {
             (&targets, (&unknown, &waiting)),
         );
         let contents = mark::contents(manifest, &targets, (&survey.state, (&unknown, &waiting)));
-        let to_rewrite = mark::planned(&survey, &BTreeSet::new(), &contents).rewrite;
-        let (rewritten, turned) = mark::rewrite(
+        let to_mark = mark::planned(&survey, &BTreeSet::new(), &contents);
+        let (rewritten, marked) = mark::write(
             &project.root,
             &mut placer,
             &mut survey.state,
-            &to_rewrite,
+            &to_mark.write,
             &contents,
         );
-        placement.marked.extend(turned);
+        placement.marked = marked;
         placement.in_git = Project::repository(&project.root).is_some();
         survey.smudge_edited();
         let (_, moved_away) = track_aside(&project.root, &mut survey.state, Vec::new());

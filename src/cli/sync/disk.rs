@@ -826,7 +826,7 @@ impl Survey {
     /// whether `path` is the .gitignore of a folder the state says fetchloom marked.
     pub(crate) fn is_marker(&self, path: &str) -> bool {
         path.strip_suffix("/.gitignore")
-            .is_some_and(|folder| self.state.marked.contains(folder))
+            .is_some_and(|folder| self.state.markers.contains_key(folder))
     }
 
     /// the files an interrupted placement left under the hidden names it stages files in, which
@@ -1420,8 +1420,8 @@ fn hide_marks(
     within: Option<&[String]>,
 ) -> HashMap<String, Mark> {
     state
-        .marked
-        .iter()
+        .markers
+        .keys()
         .filter_map(|folder| {
             let path = marker(folder);
             let listed = match within {

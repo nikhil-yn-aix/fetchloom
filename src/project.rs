@@ -26,6 +26,9 @@ const FOLDER: &str = ".fetchloom";
 /// the most an owner record is read for. one is a line of JSON naming a command and a process.
 const OWNER_CAP: u64 = 64 << 10;
 
+/// the most of a DESCRIPTION file read to find its `Package:` field, far past any real one.
+const DESCRIPTION_READ: u64 = 1 << 20;
+
 /// the most of a .gitignore fetchloom reads to look for a line hiding a folder, many times what a
 /// person writes.
 const GITIGNORE_CAP: u64 = 1 << 20;
@@ -302,6 +305,17 @@ impl Project {
         None
     }
 
+    /// whether the project is an R package: its DESCRIPTION file names one.
+    pub(crate) fn is_r_package(&self) -> bool {
+        let mut text = Vec::new();
+        File::open(self.root.join("DESCRIPTION"))
+            .and_then(|file| file.take(DESCRIPTION_READ).read_to_end(&mut text))
+            .is_ok()
+            && String::from_utf8_lossy(&text)
+                .lines()
+                .any(|line| line.starts_with("Package:"))
+    }
+
     /// where the git repository `start` is in begins: the nearest folder at or above it holding
     /// `.git`.
     pub(crate) fn repository(start: &Path) -> Option<&Path> {
@@ -507,10 +521,10 @@ impl Project {
         TOLD.call_once(|| {
             tracing::debug!(folder = %self.root.display(), "the state was written for another folder, so it is not used");
         });
-        // a forged record can at most hide a .gitignore in the data folder, or delete one of `*`
+        // a forged record can at most hide a .gitignore in the data folder, or rewrite or delete
+        // one in the form fetchloom writes
         let mut kept = State::default();
-        kept.marked = state.marked;
-        kept.listed = state.listed;
+        kept.markers = state.markers;
         (kept, 0)
     }
 

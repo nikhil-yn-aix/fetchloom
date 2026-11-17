@@ -1423,44 +1423,18 @@ pub(super) fn render_add(
     (starting, placed): (bool, &Placement),
     (private, list): (&[url::Origin], Option<&str>),
 ) {
-    tell_started(work, manifest, starting);
+    tell_started(work, starting);
     tell_marked(&work.context.output, placed);
     tell_added(work, manifest, added, here, (private, list));
 }
 
-fn tell_started(work: &Loop<'_>, manifest: &Manifest, starting: bool) {
+fn tell_started(work: &Loop<'_>, starting: bool) {
     if starting {
-        let output = &work.context.output;
-        output.step(
+        work.context.output.step(
             "Started",
             &format!("a project in {}", units::path(&work.project.root)),
         );
-        if manifest.data_dir == manifest::DATA_DIR && is_r_package(&work.project.root) {
-            output.warn_with(
-                Warning::ProjectRPackage,
-                "this folder is an R package, whose data/ holds the datasets R loads, and R CMD check refuses other files there",
-                &format!(
-                    "set data_dir = \"data-raw\" under [project] in data.toml, then run `{}` to place the files there",
-                    super::project::command("sync")
-                ),
-            );
-        }
     }
-}
-
-/// the most of a DESCRIPTION file read to find its `Package:` field, far past any real one.
-const DESCRIPTION_READ: u64 = 1 << 20;
-
-/// whether `root` holds an R package: a DESCRIPTION file naming its package.
-fn is_r_package(root: &Path) -> bool {
-    use std::io::Read as _;
-    let mut text = Vec::new();
-    std::fs::File::open(root.join("DESCRIPTION"))
-        .and_then(|file| file.take(DESCRIPTION_READ).read_to_end(&mut text))
-        .is_ok()
-        && String::from_utf8_lossy(&text)
-            .lines()
-            .any(|line| line.starts_with("Package:"))
 }
 
 /// the origins of `references`, links an add pinned, that are on a private address, such as a lab

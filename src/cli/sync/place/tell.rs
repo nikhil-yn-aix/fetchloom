@@ -95,6 +95,16 @@ pub(super) fn tell(
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
     warn_put_back(output, placement, "put back");
+    if placement.r_package {
+        output.warn_with(
+            Warning::ProjectRPackage,
+            "this folder is an R package, whose data/ holds the datasets R loads, and R CMD check refuses other files there",
+            &format!(
+                "set data_dir = \"data-raw\" under [project] in data.toml, then run `{}` to place the files there",
+                crate::cli::project::command("sync")
+            ),
+        );
+    }
     warn_unreached(output, &placement.unreached);
     warn_restored(output, placement);
     super::mark::warn_unmarkable(output, &placement.unmarkable);
