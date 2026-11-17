@@ -2855,8 +2855,8 @@ fn remove_unwanted(
 }
 
 /// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
-/// output: its patterns leave it out, or a repository keeps it there, as a capture leaves both out,
-/// or the output is dropped here, its files the author's still.
+/// output: its patterns leave it out, or a repository or a tool keeps it there, as a capture leaves
+/// them out, or the output is dropped here, its files the author's still.
 pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
     manifest.datasets.values().any(|entry| {
         let Some(inside) = entry
@@ -2869,6 +2869,7 @@ pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
         let source = &entry.source;
         !entry.place
             || crate::name::metadata(inside).is_some()
+            || inside.split('/').any(crate::name::made_by_tool)
             || !(source.select.is_empty() || source.select.iter().any(|glob| glob.matches(inside)))
             || source.exclude.iter().any(|glob| glob.matches(inside))
     })
@@ -2877,8 +2878,8 @@ pub(crate) fn passed_over(manifest: &Manifest, path: &str) -> bool {
 /// the outputs in `scope` whose folders changed since they were pinned, as `survey` saw them and
 /// `actions` decided their files: a file of other bytes or something in a file's way, a file a
 /// record placed there that is gone, or a file there no pin places that the output's patterns
-/// keep, with those last files. links, special files and what a system or a repository makes
-/// there are never an output's, as a capture never takes them.
+/// keep, with those last files. links, special files and what a system, a repository or a tool
+/// makes there are never an output's, as a capture never takes them.
 fn changed_outputs(
     (root, manifest): (&Path, &Manifest),
     targets: &[Target],

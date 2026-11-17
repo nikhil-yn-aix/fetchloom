@@ -675,13 +675,138 @@ fn removing_an_output_deletes_no_marker_through_a_link() -> Result {
     Ok(())
 }
 
+/// what tools keep beside the files they work on, one of each kind, with the folder's one table.
+const DROPPINGS: [&str; 12] = [
+    ".table.csv.swp",
+    ".table.csv.swo",
+    "table.csv~",
+    "#table.csv#",
+    ".#notes.txt",
+    ".~lock.table.csv#",
+    "~$book.xlsx",
+    ".nfs0000000001a2b3c400000002",
+    ".fuse_hidden0000000a00000001",
+    ".ipynb_checkpoints/table-checkpoint.csv",
+    "__pycache__/m.cpython-312.pyc",
+    "sub/.ipynb_checkpoints/x-checkpoint.csv",
+];
+
+/// `folder` holding table.csv and each of [`DROPPINGS`], and on unix emacs' lock, a link.
+fn with_droppings(folder: &Path) -> Result {
+    for dropping in DROPPINGS {
+        let file = folder.join(dropping);
+        fs::create_dir_all(file.parent().ok_or("a dropping outside any folder")?)?;
+        fs::write(file, b"tool")?;
+    }
+    fs::write(folder.join("table.csv"), CLEAN)?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("someone@host.4242:1700000000", folder.join(".#table.csv"))?;
+    Ok(())
+}
+
+/// the files editors, office suites, notebooks, python and network disks keep beside a person's
+/// while they work are never data: a capture pins the folder without them, as an import from
+/// outside the project does, and one line says what it skipped, no warning.
+#[test]
+fn a_pin_leaves_out_what_tools_keep_beside_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let out = work.join("out");
+    fs::create_dir_all(&out)?;
+    with_droppings(&out)?;
+    let mine = sandbox.folder("mine")?;
+    with_droppings(&mine)?;
+    for (args, name) in [
+        (&["--json", "add", "out", "--as", "results"][..], "results"),
+        (&["--json", "add", "../mine"], "mine"),
+    ] {
+        let added = sandbox.run(args)?;
+        let document = json(&added)?;
+        assert_eq!(added.status.code(), Some(0), "{name}: {document}");
+        let skipped = document["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|warning| warning["kind"] == "import.skipped")
+            .count();
+        assert_eq!(skipped, 0, "{name}: {document}");
+        let lock = fs::read_to_string(work.join("data.lock"))?;
+        let pinned = lock
+            .split("[[dataset]]")
+            .find(|table| table.contains(&format!("name = \"{name}\"")));
+        let pinned = pinned.ok_or("no table")?;
+        assert_eq!(pinned.matches("{ path = ").count(), 1, "{name}: {lock}");
+        assert!(pinned.contains("{ path = \"table.csv\""), "{name}: {lock}");
+    }
+    let human = sandbox.run(&["add", "out", "--as", "results", "--check"])?;
+    let stderr = text(&human.stderr)?;
+    assert_eq!(human.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Skipped #table.csv# and "), "{stderr}");
+    assert!(
+        stderr.contains(" more working files of editors and tools in out\n"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a dropping coming or going is no change: an output pinned while an editor had a file open is
+/// unchanged once the editor closes, and once a notebook and an office suite leave theirs.
+#[test]
+fn a_dropping_coming_or_going_is_no_change_to_an_output() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    let folder = work.join("data/processed");
+    fs::write(folder.join(".iris_clean.csv.swp"), b"vim")?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert_eq!(lock.matches("{ path = ").count(), 2, "{lock}");
+    fs::remove_file(folder.join(".iris_clean.csv.swp"))?;
+    fs::create_dir_all(folder.join(".ipynb_checkpoints"))?;
+    fs::write(
+        folder.join(".ipynb_checkpoints/iris_clean-checkpoint.csv"),
+        CLEAN,
+    )?;
+    fs::write(folder.join(".~lock.summary.txt#"), b"lock")?;
+    let checked = sandbox.run(&["add", "data/processed", "--as", "processed", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    for kind in ["missing", "edited", "extra", "yours"] {
+        assert_eq!(
+            listed(&document, kind),
+            Vec::<String>::new(),
+            "{kind}: {document}"
+        );
+    }
+    let synced = sandbox.run(&["--json", "sync"])?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    assert!(
+        warned(&document)
+            .iter()
+            .all(|said| !said.contains("changed since")),
+        "{document}"
+    );
+    let again = sandbox.run(&["add", "data/processed", "--as", "processed"])?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("processed is pinned as data/processed holds it"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, lock);
+    Ok(())
+}
+
 /// a folder that changes while add reads it is no state it ever held whole: nothing is pinned and
-/// the cache takes none of its files, whether a file came or one was rewritten at its size.
+/// the cache takes none of its files, whether a file came or one was rewritten at its size. a
+/// tool's working file coming meanwhile, as an editor's swap file, is no change.
 #[test]
 fn a_folder_that_changes_while_it_is_read_is_not_pinned() -> Result {
-    for (late, bytes) in [
-        ("late.csv", &b"late\n"[..]),
-        ("iris_clean.csv", &b"sepal,petal\n5.1,1.5\n"[..]),
+    for (late, bytes, changes) in [
+        ("late.csv", &b"late\n"[..], true),
+        ("iris_clean.csv", &b"sepal,petal\n5.1,1.5\n"[..], true),
+        (".iris_clean.csv.swp", &b"vim"[..], false),
     ] {
         let sandbox = Sandbox::new()?;
         let work = sandbox.work();
@@ -696,6 +821,12 @@ fn a_folder_that_changes_while_it_is_read_is_not_pinned() -> Result {
         fs::write(&release, b"")?;
         let output = running.finish()?;
         let stderr = text(&output.stderr)?;
+        if !changes {
+            assert_eq!(output.status.code(), Some(0), "{late}: {stderr}");
+            let lock = fs::read_to_string(work.join("data.lock"))?;
+            assert_eq!(lock.matches("{ path = ").count(), 2, "{late}: {lock}");
+            continue;
+        }
         assert_eq!(output.status.code(), Some(50), "{late}: {stderr}");
         assert!(
             stderr.contains(

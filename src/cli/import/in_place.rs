@@ -14,7 +14,8 @@ use super::super::sync::place::{Placement, tell_marked};
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
 use super::{
-    Found, Walked, dataset_name, into_cache, pinned, room, tell_skipped, tell_system, walk,
+    Found, Walked, dataset_name, into_cache, pinned, room, tell_dropped, tell_skipped, tell_system,
+    walk,
 };
 use crate::cache::Cache;
 use crate::digest::{Block, Sha256};
@@ -260,6 +261,7 @@ fn read<'m>(
     leave_out(&mut walked, &markers);
     tell_skipped(&context.output, shown, &walked.skipped);
     tell_system(&context.output, shown, &walked.system);
+    tell_dropped(&context.output, shown, &walked.dropped);
     Ok(Read {
         name,
         entry,

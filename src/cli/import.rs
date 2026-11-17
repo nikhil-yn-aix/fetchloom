@@ -635,6 +635,7 @@ fn walk_import(
     let output = &context.output;
     tell_skipped(output, shown, &walked.skipped);
     tell_system(output, shown, &walked.system);
+    tell_dropped(output, shown, &walked.dropped);
     if supplied.is_none()
         && source.extract
         && output.shows_hints()
@@ -672,6 +673,24 @@ fn tell_skipped(output: &Output, shown: &str, skipped: &[String]) {
         ),
     };
     output.warn_detailed(Warning::ImportSkipped, &said, None, skipped);
+}
+
+/// says what an import left out as tools' own, such as vim's swap files.
+pub(super) fn tell_dropped(output: &Output, shown: &str, dropped: &[String]) {
+    match dropped {
+        [] => {}
+        [one] => output.step(
+            "Skipped",
+            &format!("{one} in {shown}, a working file of an editor or a tool"),
+        ),
+        [first, rest @ ..] => output.step(
+            "Skipped",
+            &format!(
+                "{first} and {} more working files of editors and tools in {shown}",
+                units::grouped(rest.len() as u64)
+            ),
+        ),
+    }
 }
 
 /// says what an import left out as the system's own, such as finder's `.DS_Store`.
@@ -1073,6 +1092,8 @@ pub(super) struct Walked {
     pub(super) skipped: Vec<String>,
     /// what the system writes into folders by itself, such as finder's `.DS_Store`, left out.
     pub(super) system: Vec<String>,
+    /// what tools keep beside the files they work on, such as vim's swap files, left out.
+    pub(super) dropped: Vec<String>,
 }
 
 impl Walked {
@@ -1122,10 +1143,9 @@ pub(super) fn walk(
                     continue;
                 }
                 let relative = name::joined(&folder, file_name);
-                if name::made_by_system(file_name) {
-                    walked.system.push(relative);
+                let Some(relative) = by_name(&mut walked, file_name, relative) else {
                     continue;
-                }
+                };
                 let kind = listed.file_type().map_err(|err| {
                     Error::io(
                         format_args!("could not read {}", listed.path().display()),
@@ -1188,10 +1208,24 @@ pub(super) fn walk(
     }
     walked.skipped.sort_unstable();
     walked.system.sort_unstable();
+    walked.dropped.sort_unstable();
     kept(&mut walked, source, shown)?;
     walked.files.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     checked_names(&walked.files, shown)?;
     Ok(walked)
+}
+
+/// `relative`, the path of `file_name`, unless its name leaves it out as the system's or a tool's
+/// own, which `walked` then notes as such.
+fn by_name(walked: &mut Walked, file_name: &str, relative: String) -> Option<String> {
+    if name::made_by_system(file_name) {
+        walked.system.push(relative);
+    } else if name::made_by_tool(file_name) {
+        walked.dropped.push(relative);
+    } else {
+        return Some(relative);
+    }
+    None
 }
 
 /// keeps the files `source`'s select and exclude patterns choose. a select pattern that keeps

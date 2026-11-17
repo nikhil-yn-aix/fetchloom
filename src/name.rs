@@ -720,6 +720,34 @@ pub(crate) fn made_by_system(name: &str) -> bool {
         .any(|made| name.eq_ignore_ascii_case(made))
 }
 
+/// whether `name`, a file's or folder's own, is one a tool keeps beside the files it works on and
+/// never data: vim's and nano's swap files, the backups editors end with `~`, emacs' autosave and
+/// lock files, libreoffice's and office's lock files, the names nfs and fuse give a file deleted
+/// while still open, jupyter's checkpoints and python's bytecode cache.
+pub(crate) fn made_by_tool(name: &str) -> bool {
+    let swap = name
+        .strip_prefix('.')
+        .and_then(|rest| rest.rsplit_once('.'))
+        .is_some_and(|(stem, ending)| {
+            !stem.is_empty()
+                && ending.len() == 3
+                && ending.starts_with("sw")
+                && matches!(ending.as_bytes()[2], b'a'..=b'p')
+        });
+    let open_deleted = name.strip_prefix(".nfs").is_some_and(|rest| {
+        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_hexdigit() || b == b'.')
+    });
+    swap || open_deleted
+        || (name.len() > 1 && name.ends_with('~'))
+        || (name.len() > 2 && name.starts_with('#') && name.ends_with('#'))
+        || (name.len() > 2 && name.starts_with(".#"))
+        || (name.starts_with(".~lock.") && name.ends_with('#'))
+        || (name.len() > 2 && name.starts_with("~$"))
+        || name.starts_with(".fuse_hidden")
+        || name == ".ipynb_checkpoints"
+        || name == "__pycache__"
+}
+
 /// whether `name`, a file's own, is one of the files of [`made_by_system`] a system writes beside
 /// a person's and that hold nothing of theirs, unlike what its folders hold, as a disk's trash
 /// holds what they may still restore.
@@ -1247,6 +1275,53 @@ mod tests {
             "Trashes",
         ] {
             assert!(!made_by_system(name), "{name}");
+        }
+    }
+
+    /// what tools keep beside the files they work on is known by its exact shape, and a name that
+    /// only looks alike, as data may, stays data.
+    #[test]
+    fn names_tools_keep_beside_files_are_known_and_data_is_not() {
+        for name in [
+            ".iris.csv.swp",
+            ".iris.csv.swo",
+            ".env.swa",
+            "iris.csv~",
+            "#iris.csv#",
+            ".#iris.csv",
+            ".~lock.iris.csv#",
+            "~$book.xlsx",
+            ".nfs0000000001a2b3c400000002",
+            ".nfs.5f3a.4.4",
+            ".fuse_hidden0000000a00000001",
+            ".ipynb_checkpoints",
+            "__pycache__",
+        ] {
+            assert!(made_by_tool(name), "{name}");
+        }
+        for name in [
+            "iris.csv",
+            "iris.swp",
+            ".iris.csv.swq",
+            ".swp",
+            "~",
+            "~$",
+            "##",
+            ".#",
+            "#iris.csv",
+            "iris~v2.csv",
+            "~iris.csv",
+            ".lock.iris.csv#",
+            ".~lock.iris.csv",
+            ".nfs",
+            ".nfsconfig",
+            ".gitkeep",
+            ".RData",
+            ".Rhistory",
+            "ipynb_checkpoints",
+            "__init__.py",
+        ] {
+            assert!(!made_by_tool(name), "{name}");
         }
     }
 }
