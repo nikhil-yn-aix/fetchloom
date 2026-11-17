@@ -240,14 +240,7 @@ fn warn_in_git(output: &Output, root: &Path, (start, shown): (&Path, &str)) {
         Some(below) => (below, "the project"),
         None => (inside, "the repository"),
     };
-    let mut pattern = String::from("/");
-    for c in holder.chars() {
-        // a pattern reads these as wildcards or an escape
-        if matches!(c, '*' | '?' | '[' | '\\') {
-            pattern.push('\\');
-        }
-        pattern.push(c);
-    }
+    let mut pattern = format!("/{}", crate::project::gitignore_escaped(&holder));
     if start.is_dir() {
         pattern.push('/');
     }

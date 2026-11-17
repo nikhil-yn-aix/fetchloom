@@ -1158,6 +1158,29 @@ fn is_repository(folder: &Path) -> bool {
     folder.join(".git").exists()
 }
 
+/// `path`, a name or a path in a project, as a .gitignore pattern that names it and nothing else:
+/// git reads `[`, `]`, `*`, `?` and `\` as a pattern, and drops the spaces that end a line unless
+/// each is escaped. no line can hold a line break, so each control character becomes `?`, which
+/// matches it, and a few names beside it.
+pub(crate) fn gitignore_escaped(path: &str) -> String {
+    let kept = path.trim_end_matches(' ');
+    let mut pattern = String::with_capacity(path.len());
+    for c in kept.chars() {
+        match c {
+            '[' | ']' | '*' | '?' | '\\' => {
+                pattern.push('\\');
+                pattern.push(c);
+            }
+            c if c.is_control() => pattern.push('?'),
+            c => pattern.push(c),
+        }
+    }
+    for _ in kept.len()..path.len() {
+        pattern.push_str("\\ ");
+    }
+    pattern
+}
+
 /// .gitignore's text, read without following a link and only up to [`GITIGNORE_CAP`]: a link a
 /// clone holds would have the file it names copied in, and a pipe or a device never ends.
 /// `InvalidInput` for a link or a special file, `FileTooLarge` past the cap.

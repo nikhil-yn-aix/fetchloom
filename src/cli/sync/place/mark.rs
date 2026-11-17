@@ -18,8 +18,8 @@ use crate::output::{Output, Warning};
 use crate::place::{self, Placer};
 use crate::plan::{self, Target};
 use crate::project::manifest::Manifest;
-use crate::project::native;
 use crate::project::state::{Once, State};
+use crate::project::{gitignore_escaped, native};
 
 /// what a marker of a folder only datasets fill holds: git ignores every entry, the marker too.
 const TEXT: &[u8] = b"*\n";
@@ -145,28 +145,13 @@ fn names(entries: &BTreeSet<(&str, bool)>) -> Vec<u8> {
     text.push_str("/.gitignore\n");
     for (name, folder) in entries {
         text.push('/');
-        text.push_str(&literal(name));
+        text.push_str(&gitignore_escaped(name));
         if *folder {
             text.push('/');
         }
         text.push('\n');
     }
     text.into_bytes()
-}
-
-/// `name` as a .gitignore line names it: git reads `[`, `*`, `?` and `\` as a pattern, and drops
-/// the spaces that end a line unless each is escaped. no line can hold a line break, so each
-/// control character becomes `?`, which matches it, and a few names beside it.
-fn literal(name: &str) -> String {
-    let kept = name.trim_end_matches(' ');
-    let mut line: String = escaped(kept)
-        .chars()
-        .map(|c| if c.is_control() { '?' } else { c })
-        .collect();
-    for _ in kept.len()..name.len() {
-        line.push_str("\\ ");
-    }
-    line
 }
 
 /// records that the marker of `folder` holds `text`.
@@ -630,7 +615,7 @@ fn hiding_line(root: &Path, folder: &str, deliberate: bool) -> Option<(usize, St
     let taken_back = |line: &str| {
         line.strip_prefix('!').is_some_and(|rule| {
             rule.trim_start_matches('/')
-                .starts_with(&format!("{}/", escaped(top)))
+                .starts_with(&format!("{}/", gitignore_escaped(top)))
         })
     };
     if deliberate && text.lines().any(taken_back) {
@@ -639,7 +624,7 @@ fn hiding_line(root: &Path, folder: &str, deliberate: bool) -> Option<(usize, St
     let mut rules = Vec::new();
     let mut at = Some(folder);
     while let Some(current) = at {
-        let literal = escaped(current);
+        let literal = gitignore_escaped(current);
         for form in [
             "/{}/", "{}/", "/{}", "{}", "/{}/*", "{}/*", "/{}/**", "{}/**",
         ] {
@@ -655,18 +640,6 @@ fn hiding_line(root: &Path, folder: &str, deliberate: bool) -> Option<(usize, St
             .any(|form| form == rule)
             .then(|| (index + 1, rule.to_owned()))
     })
-}
-
-/// `folder` as a .gitignore line names it and nothing else: git reads `[`, `*`, `?` and `\` in a
-/// line as a pattern.
-fn escaped(folder: &str) -> String {
-    folder
-        .chars()
-        .flat_map(|c| {
-            let escape = matches!(c, '[' | ']' | '*' | '?' | '\\').then_some('\\');
-            escape.into_iter().chain([c])
-        })
-        .collect()
 }
 
 /// once markers keep dataset folders out of git, says once to a person at a terminal of a line of
@@ -737,7 +710,7 @@ fn warn_unnamed(output: &Output, manifest: &Manifest, folders: &[(String, usize)
             ),
             &format!(
                 "to keep them out of git, {own}, where fetchloom's .gitignore needs no list; or add the line /{}/ to the project's .gitignore, which hides your own files in {folder}/ too",
-                escaped(folder)
+                gitignore_escaped(folder)
             ),
         );
     }
@@ -753,7 +726,7 @@ fn warn_unmarkable(output: &Output, folders: &BTreeSet<String>) {
             ),
             &format!(
                 "to keep it out, add the line /{}/ to .gitignore",
-                escaped(folder)
+                gitignore_escaped(folder)
             ),
         );
     }
