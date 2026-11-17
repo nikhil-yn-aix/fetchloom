@@ -1031,7 +1031,7 @@ const GEO_FILELIST: &[u8] = b"#Archive/File\tName\tTime\tSize\tType\n";
 
 /// NCBI's file server for GSE1000: its folder, and the folders in it holding `(path, bytes)`
 /// files, as `matrix/GSE1000_series_matrix.txt.gz`, each index rounding sizes as NCBI's do.
-fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
+pub(crate) fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
     let index = |folder: &str, parent: &str, entries: &[String]| -> Vec<Part> {
         let links = entries
             .iter()

@@ -624,6 +624,52 @@ fn a_file_that_grew_since_its_listing_is_taken_as_it_comes() -> Result {
     Ok(())
 }
 
+/// a size a source states binds the download, as GEO's filelist states each tar's, so a tar whose
+/// server sends more than stated is refused; a folder listing's binds nothing, so a file whose
+/// server sends more than its listing says is pinned as it came.
+#[test]
+fn a_size_a_source_states_binds_its_download_and_a_listings_does_not() -> Result {
+    let grown = [IRIS, b"4.9,1.5\n".as_slice()].concat();
+    let sandbox = Sandbox::new()?;
+    let filelist = format!(
+        "#Archive/File\tName\tTime\tSize\tType\nArchive\tGSE1000_RAW.tar\t10/05/2026 16:24:00\t{}\tTAR\n",
+        IRIS.len()
+    );
+    let geo = crate::repositories::geo(&[
+        ("suppl/filelist.txt", filelist.as_bytes()),
+        ("suppl/GSE1000_RAW.tar", &grown),
+    ])?;
+    let refused = sandbox
+        .command(&["add", "geo:GSE1000", "--no-extract"])
+        .env("FETCHLOOM_TEST_HOSTS", &geo.url)
+        .output()?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(30), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "sent {} B for https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/suppl/GSE1000_RAW.tar, where {} B were expected",
+            grown.len(),
+            IRIS.len()
+        )),
+        "{stderr}"
+    );
+    assert!(!sandbox.work().join("data.lock").exists());
+
+    let server = Routes::start(vec![
+        ("/data/".to_owned(), nginx_sized("/data/", &["iris.csv"])),
+        ("/data/iris.csv".to_owned(), file(&grown, "\"i2\"")),
+    ])?;
+    let folder = format!("{}/data/", server.url);
+    let added = sandbox.run(&["add", &folder])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(
+        pinned(&lock, "data"),
+        [pin("iris.csv", &grown, &format!("{folder}iris.csv"))]
+    );
+    Ok(())
+}
+
 /// gencode's release folder, which ebi's apache lists with sizes rounded to a unit, as `856M`.
 const GENCODE: &str = "/pub/databases/gencode/Gencode_human/release_46/";
 
