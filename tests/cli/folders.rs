@@ -1198,6 +1198,182 @@ fn an_md5_another_member_recorded_for_its_bytes_spares_the_download() -> Result 
     Ok(())
 }
 
+/// the notes an archive a server sends holds, at notes.zip.
+#[cfg(unix)]
+const NOTES: &[u8] = b"collected in 2020\n";
+
+/// a server with notes.zip, holding [`NOTES`] as notes.txt, and another member's bytes at
+/// forged.csv; the member's run brings those bytes into the cache, and their record says the
+/// archive unpacked to them: the archive's bytes are the server's, but not what they hold.
+#[cfg(unix)]
+fn forged_archive(sandbox: &Sandbox) -> Result<(Routes, Vec<u8>)> {
+    let zip = crate::support::zip_of(&[("notes.txt", NOTES)])?;
+    let server = Routes::start(vec![
+        ("/notes.zip".to_owned(), file(&zip, "\"z1\"")),
+        ("/forged.csv".to_owned(), file(FORGED, "\"f1\"")),
+    ])?;
+    let member = sandbox.folder("member")?;
+    let got = sandbox
+        .command_in(&member, &["get", &format!("{}/forged.csv", server.url)])
+        .output()?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    let tree = format!("notes.txt\t{}\t{}\n", FORGED.len(), sha256_hex(FORGED));
+    let unpacked = sandbox.cache().join("unpacked");
+    fs::create_dir_all(&unpacked)?;
+    fs::write(unpacked.join(sha256_hex(&zip)), tree)?;
+    Ok((server, zip))
+}
+
+/// in a cache a group shares, an add of an archive never places the files another member's
+/// record says it unpacked to: the archive is unpacked here, and its own files pinned.
+#[cfg(unix)]
+#[test]
+fn an_archive_another_member_recorded_unpacks_to_its_own_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let (server, _) = forged_archive(&sandbox)?;
+
+    let added = sandbox.run(&["add", &format!("{}/notes.zip", server.url)])?;
+
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data/notes/notes.txt"))?,
+        text(NOTES)?
+    );
+    Ok(())
+}
+
+/// in a cache a group shares, an upgrade of an archive whose bytes did not change keeps the files
+/// data.lock pins it unpacking to, never those another member's record names.
+#[cfg(unix)]
+#[test]
+fn an_upgrade_keeps_the_files_an_archive_unpacks_to_in_a_shared_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let zip = crate::support::zip_of(&[("notes.txt", NOTES)])?;
+    let server = Routes::start(vec![("/notes.zip".to_owned(), file(&zip, "\"z1\""))])?;
+    let added = sandbox.run(&["add", &format!("{}/notes.zip", server.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let (forged, _) = forged_archive(&sandbox)?;
+    drop(forged);
+    sandbox.allow(&server.url);
+
+    let upgraded = sandbox.run(&["lock", "--upgrade"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    let synced = sandbox.run(&["sync"])?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read_to_string(sandbox.work().join("data.lock"))?, lock);
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data/notes/notes.txt"))?,
+        text(NOTES)?
+    );
+    Ok(())
+}
+
+/// in a cache a group shares, a teammate's upgrade of an archive whose own bytes the cache let
+/// go asks whether it changed, and downloads nothing when it did not: the files it unpacked to
+/// are the tree data.lock pins.
+#[cfg(unix)]
+#[test]
+fn a_teammate_upgrading_an_unchanged_archive_in_a_shared_cache_downloads_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let zip = crate::support::zip_of(&[("notes.txt", NOTES)])?;
+    let server = Routes::start(vec![("/notes.zip".to_owned(), file(&zip, "\"z1\""))])?;
+    let added = sandbox.run(&["add", &format!("{}/notes.zip", server.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    sandbox.allow(&server.url);
+    let synced = sandbox.command_in(&teammate, &["sync"]).output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    server.unchanged("/notes.zip", "\"z1\"");
+    let before = server.requests().len();
+
+    let upgraded = sandbox
+        .command_in(&teammate, &["--json", "lock", "--upgrade"])
+        .output()?;
+
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stdout)?
+    );
+    assert_eq!(json(&upgraded)?["result"]["lock_changed"], false);
+    let asked = &server.requests()[before..];
+    assert!(
+        asked
+            .iter()
+            .all(|head| head.contains("if-none-match: \"z1\"")),
+        "{asked:?}"
+    );
+    Ok(())
+}
+
+/// in a cache only this user writes, an upgrade of an unchanged archive pins the tree this
+/// machine recorded it unpacking to, in place of another one data.lock names, as another
+/// version's could, without downloading the archive again.
+#[test]
+fn an_upgrade_in_a_private_cache_pins_the_tree_this_machine_recorded() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = crate::support::zip_of(&[("notes.txt", b"collected in 2020\n")])?;
+    let server = Routes::start(vec![("/notes.zip".to_owned(), file(&zip, "\"z1\""))])?;
+    let added = sandbox.run(&["add", &format!("{}/notes.zip", server.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let path = sandbox.work().join("data.lock");
+    let lock = fs::read_to_string(&path)?;
+    let (_, tree) = lock
+        .split_once("unpacks_to = \"sha256:")
+        .ok_or("no tree pinned")?;
+    let tree = &tree[..64];
+    fs::write(
+        &path,
+        lock.replace(tree, &sha256_hex(b"another version's tree")),
+    )?;
+    server.unchanged("/notes.zip", "\"z1\"");
+    sandbox.allow(&server.url);
+    let before = server.requests().len();
+
+    let upgraded = sandbox.run(&["lock", "--upgrade"])?;
+
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    // a changed pin takes the upgrade's time, which may be a later second
+    let untimed = |lock: &str| {
+        let lines = lock.lines().filter(|line| !line.starts_with("locked = "));
+        lines.collect::<Vec<_>>().join("\n")
+    };
+    assert_eq!(untimed(&fs::read_to_string(&path)?), untimed(&lock));
+    let asked = &server.requests()[before..];
+    assert!(
+        asked
+            .iter()
+            .all(|head| head.contains("if-none-match: \"z1\"")),
+        "{asked:?}"
+    );
+    Ok(())
+}
+
 /// in a cache a group shares, a teammate whose cache records agree with their data.lock still
 /// asks whether each file changed, and downloads nothing when none did.
 #[cfg(unix)]

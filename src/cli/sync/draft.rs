@@ -309,7 +309,13 @@ impl Draft {
             })
             .collect::<Option<Vec<UrlRecord>>>()?;
         let key = parts_key(records.iter().map(|record| (record.sha256, record.size)));
-        cache.holds_unpacked(&key, None).then_some(records)
+        let was = set
+            .first()
+            .and_then(|first| self.files[*first].was.as_ref())
+            .and_then(|was| was.unpacks_to);
+        cache
+            .holds_unpacked_as(&key, was.as_ref())
+            .then_some(records)
     }
 
     /// gives each split archive's first part its pinned tree while every part is the one pinned, or
@@ -355,15 +361,18 @@ impl Draft {
         set.iter().map(|index| self.files[*index].known).collect()
     }
 
-    /// what this machine recorded the archive `unit` unpacks to, once its bytes are known.
+    /// what this machine recorded the archive `unit` unpacks to, once its bytes are known; in a
+    /// cache others may write, only the tree data.lock pinned it unpacking to.
     fn recorded(&self, unit: &Unit, cache: &Cache) -> Option<Sha256> {
+        let first = &self.files[unit.first()];
+        let was = first.was.as_ref().and_then(|was| was.unpacks_to);
         match unit {
-            Unit::Whole(index) => self.files[*index]
+            Unit::Whole(_) => first
                 .known
-                .and_then(|(sha256, _)| cache.unpacked_tree(&sha256)),
+                .and_then(|(sha256, _)| cache.unpacked_tree_as(&sha256, was.as_ref())),
             Unit::Split(set) => self
                 .parts(set)
-                .and_then(|parts| cache.unpacked_tree(&parts_key(parts))),
+                .and_then(|parts| cache.unpacked_tree_as(&parts_key(parts), was.as_ref())),
         }
     }
 
@@ -482,6 +491,7 @@ impl Draft {
                 record: vouched_by_server(&self.resolved, remote.url.as_str()),
                 held: held[index],
                 was: file.was.as_ref().map(|was| was.sha256),
+                unpacked_was: file.was.as_ref().and_then(|was| was.unpacks_to),
                 unpack: whole[index],
                 page: self.web_page,
                 named: learn && remote.named_by_server,

@@ -84,16 +84,15 @@ impl Cache {
     }
 
     /// what `archive` unpacked to on this machine. given a tree hash, only a record of that tree
-    /// counts.
+    /// counts; without one, none in a cache others may write, where anyone may record any files
+    /// for an archive.
     pub(crate) fn unpacked(&self, archive: &Sha256, tree: Option<&Sha256>) -> Option<Vec<Member>> {
-        let bytes = self.unpacked_bytes(archive)?;
-        if tree.is_some_and(|tree| digest::sha256(&bytes) != *tree) {
-            return None;
-        }
-        parse(std::str::from_utf8(&bytes).ok()?)
+        self.unpacked_with_tree(archive, tree)
+            .map(|(_, members)| members)
     }
 
-    /// whether every file `archive` unpacked to is in the cache, so its own bytes are not needed.
+    /// whether every file `archive` unpacked to is in the cache, so its own bytes are not needed,
+    /// as [`Cache::unpacked`] finds them.
     pub(crate) fn holds_unpacked(&self, archive: &Sha256, tree: Option<&Sha256>) -> bool {
         self.unpacked(archive, tree).is_some_and(|members| {
             members
@@ -102,16 +101,45 @@ impl Cache {
         })
     }
 
-    /// the tree hash of what `archive` unpacked to on this machine, when it was recorded.
-    pub(crate) fn unpacked_tree(&self, archive: &Sha256) -> Option<Sha256> {
-        self.unpacked_with_tree(archive).map(|(tree, _)| tree)
+    /// [`Cache::holds_unpacked`] with `was`, the tree data.lock pins the archive unpacking to,
+    /// as the record must name in a cache others may write; in one only this user writes, any
+    /// record counts.
+    pub(crate) fn holds_unpacked_as(&self, archive: &Sha256, was: Option<&Sha256>) -> bool {
+        self.holds_unpacked(archive, was.filter(|_| self.others_write))
     }
 
-    /// reads a member record and its hash together, so both describe the same bytes.
-    pub(crate) fn unpacked_with_tree(&self, archive: &Sha256) -> Option<(Sha256, Vec<Member>)> {
+    /// the tree hash of what `archive` unpacked to on this machine, when it was recorded and
+    /// [`Cache::unpacked`] takes the record without a tree hash.
+    pub(crate) fn unpacked_tree(&self, archive: &Sha256) -> Option<Sha256> {
+        self.unpacked_tree_as(archive, None)
+    }
+
+    /// [`Cache::unpacked_tree`] with `was`, the tree data.lock pins the archive unpacking to, as
+    /// [`Cache::holds_unpacked_as`] takes it.
+    pub(crate) fn unpacked_tree_as(
+        &self,
+        archive: &Sha256,
+        was: Option<&Sha256>,
+    ) -> Option<Sha256> {
+        self.unpacked_with_tree(archive, was.filter(|_| self.others_write))
+            .map(|(tree, _)| tree)
+    }
+
+    /// reads a member record and its hash together, so both describe the same bytes, when
+    /// [`Cache::unpacked`] takes it with `tree`.
+    pub(crate) fn unpacked_with_tree(
+        &self,
+        archive: &Sha256,
+        tree: Option<&Sha256>,
+    ) -> Option<(Sha256, Vec<Member>)> {
         let bytes = self.unpacked_bytes(archive)?;
+        let hashed = digest::sha256(&bytes);
+        let stands = match tree {
+            Some(tree) => hashed == *tree,
+            None => !self.others_write,
+        };
         let members = parse(std::str::from_utf8(&bytes).ok()?)?;
-        Some((digest::sha256(&bytes), members))
+        stands.then_some((hashed, members))
     }
 
     /// the bytes of the record of `archive`, from a plain file read without following a link:
@@ -209,7 +237,7 @@ mod tests {
         std::os::unix::fs::symlink(&theirs, &path).unwrap();
 
         assert_eq!(cache.unpacked(&archive, None), None);
-        assert!(cache.unpacked_with_tree(&archive).is_none());
+        assert!(cache.unpacked_with_tree(&archive, None).is_none());
     }
 
     #[test]

@@ -241,10 +241,7 @@ impl Told {
 /// what `unpack` unpacked to when another run recorded it while this one waited, with every file
 /// in the cache, so it needs neither its own bytes nor a second unpacking.
 fn recorded(cache: &Cache, unpack: &Unpack) -> Option<Unpacked> {
-    let (tree, members) = cache.unpacked_with_tree(&unpack.archive)?;
-    if unpack.tree.is_some_and(|wanted| wanted != tree) {
-        return None;
-    }
+    let (tree, members) = cache.unpacked_with_tree(&unpack.archive, unpack.tree.as_ref())?;
     members
         .iter()
         .all(|member| cache.find(&member.sha256, Some(member.size)).is_some())

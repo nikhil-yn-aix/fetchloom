@@ -115,6 +115,9 @@ pub(crate) struct Fetch {
     /// the bytes data.lock pinned for the link before an upgrade asks about it again: in a cache
     /// others may write, only a record naming these stands for what the link serves.
     pub(crate) was: Option<Sha256>,
+    /// the tree data.lock pins those bytes unpacking to, which alone a record of what an archive
+    /// unpacked to must name in a cache others may write.
+    pub(crate) unpacked_was: Option<Sha256>,
     /// the bytes are an archive the caller unpacks, so the files it unpacked to stand for it in
     /// the cache once its own object is gone.
     pub(crate) unpack: bool,
@@ -177,6 +180,7 @@ impl Fetch {
             record: false,
             held: None,
             was: None,
+            unpacked_was: None,
             unpack: false,
             mirror: false,
             page: false,
@@ -2114,6 +2118,7 @@ fn as_it_is_now(fetch: &Fetch, current: Url) -> Fetch {
         record: fetch.record,
         held: None,
         was: None,
+        unpacked_was: None,
         unpack: fetch.unpack,
         mirror: fetch.mirror,
         page: fetch.page,
@@ -2142,7 +2147,8 @@ fn unread(error: Error, refused: Error, version: &str) -> Error {
 /// whether the cache holds these bytes: as an object, or, for an archive the caller unpacks, as
 /// every file it unpacked to.
 fn holds(cache: &Cache, fetch: &Fetch, digest: &Sha256, size: Option<u64>) -> bool {
-    cache.find(digest, size).is_some() || fetch.unpack && cache.holds_unpacked(digest, None)
+    cache.find(digest, size).is_some()
+        || fetch.unpack && cache.holds_unpacked_as(digest, fetch.unpacked_was.as_ref())
 }
 
 /// whether a credential of this machine went with `response`'s request or a hop before it, as

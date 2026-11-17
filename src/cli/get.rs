@@ -1364,7 +1364,7 @@ async fn unpack(
             }
             _ => continue,
         }
-        if let Some((tree, members)) = cache.unpacked_with_tree(&file.sha256)
+        if let Some((tree, members)) = cache.unpacked_with_tree(&file.sha256, None)
             && members
                 .iter()
                 .all(|member| cache.find(&member.sha256, Some(member.size)).is_some())
