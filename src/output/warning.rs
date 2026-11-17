@@ -44,6 +44,9 @@ pub(crate) enum Warning {
     CacheUnreadable,
     /// the project could not join the cache's list of projects, which gc keeps files for.
     CacheUnregistered,
+    /// the cache had lost its tag, as a cleaner deleting old files takes it, and held only what
+    /// fetchloom keeps there.
+    CacheUntagged,
     /// a server sent a file compressed, which is kept as it came.
     DownloadEncoded,
     /// a server gave no name for a file.
@@ -170,6 +173,7 @@ impl Warning {
             Warning::CacheUnreadable => "cache.unreadable",
             Warning::CacheUnshared => "cache.unshared",
             Warning::CacheUnregistered => "cache.unregistered",
+            Warning::CacheUntagged => "cache.untagged",
             Warning::DownloadEncoded => "download.encoded",
             Warning::DownloadUnnamed => "download.unnamed",
             Warning::DownloadWebPage => "download.web_page",
@@ -259,6 +263,7 @@ mod tests {
             CacheUnreadable,
             CacheUnregistered,
             CacheUnshared,
+            CacheUntagged,
             DownloadEncoded,
             DownloadUnnamed,
             DownloadWebPage,

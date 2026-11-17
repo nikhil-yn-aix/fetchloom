@@ -644,17 +644,6 @@ fn moved_by_variable(error: Error, err: &std::io::Error, root: &std::path::Path)
         .filter(|file| !chosen && file.cache().is_some())
         .is_some_and(|file| file.path.is_some());
     if crate::cache::is_foreign(err) {
-        // a new cache inside a cache whose tag is gone would download everything again and leave
-        // the old files where gc never frees them
-        if let Some(put_back) = crate::cache::tag_back(root) {
-            return error.or_help(if filed {
-                format!(
-                    "{put_back}; if not, choose an empty folder outside it with `fetchloom settings set cache <folder>`, or set FETCHLOOM_CACHE to one"
-                )
-            } else {
-                format!("{put_back}; if not, set FETCHLOOM_CACHE to an empty folder outside it")
-            });
-        }
         let inside = root.join("fetchloom-cache");
         let inside = inside.to_string_lossy();
         return error.or_help(if filed {
@@ -697,7 +686,8 @@ fn open_unheld() -> Result<Cache, Error> {
     let root = cache_root()?;
     blocked(&root)?;
     let existed = root.is_dir();
-    Cache::open(root.clone()).map_err(|err| {
+    let untagged = crate::cache::lost_tag(&root);
+    let cache = Cache::open(root.clone()).map_err(|err| {
         let error = Error::io(
             format_args!("could not open the cache at {}", root.display()),
             &err,
@@ -708,7 +698,11 @@ fn open_unheld() -> Result<Cache, Error> {
             return error.help(crate::cache::READ_ONLY);
         }
         moved_by_variable(error, &err, &root)
-    })
+    })?;
+    if untagged {
+        tell_untagged(&root, true);
+    }
+    Ok(cache)
 }
 
 /// the cache this machine uses, for a dry run: read as it is, with no folder or file created, so
@@ -730,7 +724,35 @@ fn peek_cache() -> Result<Cache, Error> {
     if let Some((output, _)) = WAITS.get() {
         tell_exposed(output, cache.root());
     }
+    if crate::cache::lost_tag(cache.root()) {
+        tell_untagged(cache.root(), false);
+    }
     Ok(cache)
+}
+
+/// warns once a run that the cache at `root` had lost its tag, which a cleaner deleting files by
+/// age takes first, as it was made with the cache: one opened to write got it back, and one only
+/// read, as status reads it, keeps the promise to change nothing.
+fn tell_untagged(root: &std::path::Path, put_back: bool) {
+    static TOLD: std::sync::Once = std::sync::Once::new();
+    let Some((output, _)) = WAITS.get() else {
+        return;
+    };
+    TOLD.call_once(|| {
+        let root = root.display();
+        output.warn(
+            Warning::CacheUntagged,
+            &if put_back {
+                format!(
+                    "the cache at {root} had lost its tag, CACHEDIR.TAG, which a cleaner deleting old files takes first, so fetchloom put it back"
+                )
+            } else {
+                format!(
+                    "the cache at {root} has lost its tag, CACHEDIR.TAG, which a cleaner deleting old files takes first; a command that writes to the cache puts it back"
+                )
+            },
+        );
+    });
 }
 
 /// for a command that only frees or checks a cache, as gc and verify do: the cache folder when it

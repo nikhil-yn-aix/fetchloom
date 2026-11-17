@@ -69,11 +69,12 @@ const SYSTEM_NAMES: [&str; 7] = [
     "$RECYCLE.BIN",
 ];
 
-/// refuses `root` as the cache unless it holds fetchloom's tag, or nothing but what a system keeps
+/// refuses `root` as the cache unless it holds fetchloom's tag, nothing but what a system keeps
 /// there, fetchloom's own state and what a first run stopped before its tag was whole leaves: the
-/// start of the tag and macos's mark against indexing. gc clears old files from tmp/, and the tag
-/// tells backup tools to skip the whole folder, which a folder of a person's own files must not
-/// get, as a home named by mistake, or a scratch folder whose folders have a cache's names.
+/// start of the tag and macos's mark against indexing, or only what a cache whose tag is gone
+/// holds, as [`lost_its_tag`] says. gc clears old files from tmp/, and the tag tells backup tools
+/// to skip the whole folder, which a folder of a person's own files must not get, as a home named
+/// by mistake, or a scratch folder whose folders have a cache's names.
 fn adoptable(root: &Path) -> io::Result<()> {
     if is_cache(root) {
         return Ok(());
@@ -88,32 +89,25 @@ fn adoptable(root: &Path) -> io::Result<()> {
         // a run making the cache at the same time writes its whole tag before any folder of it,
         // so a folder that has the tag by now is that cache
         if !left_before_tag(root, &entry?.file_name()) && !is_cache(root) {
-            let untagged = lost_its_tag(root);
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                Foreign { untagged },
-            ));
+            if lost_its_tag(root) {
+                return Ok(());
+            }
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, Foreign));
         }
     }
     Ok(())
 }
 
 /// the refusal of a folder of other files as the cache, which an empty or a new folder avoids.
-/// `untagged` is a folder that looks like a cache whose tag is gone, as [`lost_its_tag`] says.
 #[derive(Debug)]
-struct Foreign {
-    untagged: bool,
-}
+struct Foreign;
 
 impl std::fmt::Display for Foreign {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(if self.untagged {
-            "it looks like a fetchloom cache whose tag is gone: it holds only what a cache holds, \
-             but no CACHEDIR.TAG, the file fetchloom knows its cache by"
-        } else {
+        formatter.write_str(
             "it holds other files and is not a fetchloom cache, and fetchloom makes its cache only \
-             in an empty folder or a new one"
-        })
+             in an empty folder or a new one",
+        )
     }
 }
 
@@ -124,11 +118,12 @@ pub(crate) fn is_foreign(err: &io::Error) -> bool {
     matches!(err.get_ref(), Some(inner) if inner.is::<Foreign>())
 }
 
-/// whether `root`, a folder without the tag, holds only what a cache holds, so it looks like a
-/// cache whose tag is gone: a cleaner leaves one, and so does a build that made a cache's folders
-/// before its tag, stopped between them. gc removes old files from tmp/, and the tag makes backup
-/// tools skip the folder, so a folder whose objects/, tmp/ or projects/ holds a name fetchloom
-/// never gives a file there, as a person's notes, is no such cache.
+/// whether `root`, a folder without the tag, holds only what a cache holds, so it is a cache whose
+/// tag is gone: a cleaner that deletes old files takes the tag first and leaves the folders, and a
+/// build that made a cache's folders before its tag, stopped between them, leaves one too. every
+/// name at its top is one fetchloom keeps there, objects/ is there, and objects/, tmp/ and
+/// projects/ hold only names fetchloom gives, so a folder with any other name in them, as a
+/// person's notes, is no such cache: the tag makes backup tools skip the folder.
 fn lost_its_tag(root: &Path) -> bool {
     let entries = |folder: &Path| -> Option<Vec<(String, fs::Metadata)>> {
         let mut found = Vec::new();
@@ -176,26 +171,10 @@ fn lost_its_tag(root: &Path) -> bool {
         })
 }
 
-/// how to put the tag back in `root` when it looks like a cache whose tag is gone, as
-/// [`lost_its_tag`] says: a command for the system's usual shell that makes the tag, and refuses a
-/// file already at its name, a link included, so it never writes where a link leads.
-pub(crate) fn tag_back(root: &Path) -> Option<String> {
-    if !lost_its_tag(root) {
-        return None;
-    }
-    let tag = root.join("CACHEDIR.TAG");
-    let tag = crate::suggested::shell_word(&tag.to_string_lossy()).into_owned();
-    let signature = TAG.lines().next().unwrap_or_default();
-    let command = if cfg!(windows) {
-        format!(
-            "New-Item -ItemType File -Path {tag} -Value ('{signature}', '# a cache made by fetchloom' -join [char]10)"
-        )
-    } else {
-        format!("(set -C; printf '{signature}\\n# a cache made by fetchloom\\n' > {tag})")
-    };
-    Some(format!(
-        "if it is your fetchloom cache, put its tag back with `{command}` and run the command again"
-    ))
+/// whether `root` is a cache whose tag is gone, as [`lost_its_tag`] says, which [`Cache::open`]
+/// tags again and [`Cache::unopened`] reads as it is.
+pub(crate) fn lost_tag(root: &Path) -> bool {
+    !is_cache(root) && lost_its_tag(root)
 }
 
 /// whether `root` is a fetchloom cache: it holds fetchloom's tag, never only a cache's folder names.
@@ -2144,8 +2123,8 @@ pub(crate) mod tests {
 
     /// gc clears old files from tmp/ and the tag tells backup tools to skip the whole folder, so a
     /// folder of someone's own files, as a home folder named by mistake, never becomes the cache,
-    /// even when its folders have a cache's names, as a scratch folder's may, or a cache lost its
-    /// tag.
+    /// even when its folders have a cache's names, as a scratch folder's may, or a cache that lost
+    /// its tag holds a file of a person's.
     #[test]
     fn a_folder_of_other_files_never_becomes_the_cache() {
         let folders: [&[&str]; 8] = [
@@ -2153,7 +2132,12 @@ pub(crate) mod tests {
             &["tmp/important.txt"],
             &["tmp/notes.txt", "objects/pack1"],
             &["projects/myapp/main.py"],
-            &["objects/ab/cdef", "partial/0/", "gc.lock"],
+            &[
+                "objects/ab/cdef",
+                "partial/0/",
+                "gc.lock",
+                "objects/notes.txt",
+            ],
             &["state/speeds.json", "state/notes.txt"],
             &["state/old/speeds.json"],
             &["state"],
@@ -2275,10 +2259,10 @@ pub(crate) mod tests {
         assert_eq!(fs::read_to_string(root.join("CACHEDIR.TAG")).unwrap(), TAG);
     }
 
-    /// a folder holding only what a cache holds but no tag looks like a cache whose tag is gone,
-    /// as a cleaner leaves one, or as a build that made a cache's folders before its tag left one
-    /// when stopped between them; a scratch folder with a cache's names and files of its own does
-    /// not.
+    /// a folder holding only what a cache holds but no tag is a cache whose tag is gone, as a
+    /// cleaner leaves one, or as a build that made a cache's folders before its tag left one when
+    /// stopped between them: opening it puts the tag back, and reading it as it is writes nothing.
+    /// a scratch folder with a cache's names and files of its own stays refused.
     #[test]
     fn a_cache_whose_tag_was_deleted_is_told_apart() {
         let (_dir, cache) = cache();
@@ -2291,14 +2275,13 @@ pub(crate) mod tests {
         for folder in FOLDERS {
             fs::create_dir(stopped.path().join(folder)).unwrap();
         }
-        let gone = "it looks like a fetchloom cache whose tag is gone: it holds only what a cache \
-                    holds, but no CACHEDIR.TAG, the file fetchloom knows its cache by";
         for root in [cache.root.clone(), stopped.path().to_path_buf()] {
-            let error = Cache::open(root.clone()).unwrap_err();
-            assert_eq!(error.to_string(), gone, "{}", root.display());
-            let error = Cache::unopened(root.clone()).unwrap_err();
-            assert_eq!(error.to_string(), gone, "{}", root.display());
-            assert!(!root.join("CACHEDIR.TAG").exists());
+            assert!(lost_tag(&root), "{}", root.display());
+            Cache::unopened(root.clone()).unwrap();
+            assert!(!root.join("CACHEDIR.TAG").exists(), "{}", root.display());
+            Cache::open(root.clone()).unwrap();
+            assert_eq!(fs::read_to_string(root.join("CACHEDIR.TAG")).unwrap(), TAG);
+            assert!(!lost_tag(&root), "{}", root.display());
         }
         let scratch = tempfile::tempdir().unwrap();
         for file in ["tmp/notes.txt", "objects/pack1"] {
@@ -2306,11 +2289,18 @@ pub(crate) mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, b"mine").unwrap();
         }
-        let error = Cache::open(scratch.path().to_path_buf()).unwrap_err();
-        assert!(
-            error.to_string().starts_with("it holds other files"),
-            "{error}"
-        );
+        assert!(!lost_tag(scratch.path()));
+        let refusals = [
+            Cache::open(scratch.path().to_path_buf()).unwrap_err(),
+            Cache::unopened(scratch.path().to_path_buf()).unwrap_err(),
+        ];
+        for error in refusals {
+            assert!(
+                error.to_string().starts_with("it holds other files"),
+                "{error}"
+            );
+        }
+        assert!(!scratch.path().join("CACHEDIR.TAG").exists());
     }
 
     /// a team's cache may be another member's folder or one their group writes; only the owner

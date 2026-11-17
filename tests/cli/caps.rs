@@ -271,7 +271,7 @@ fn a_cache_folder_runs_refuse_is_not_saved() -> Result {
         );
         assert!(!path.exists(), "{stderr}");
     }
-    // a cache whose tag is gone gets the command that puts it back, never a new cache inside it
+    // a cache whose tag a cleaner took is still plainly a cache, which the setting may name
     let tagless = sandbox.folder("tagless")?;
     sandbox.make_cache(&tagless)?;
     std::fs::remove_file(tagless.join("CACHEDIR.TAG"))?;
@@ -279,16 +279,7 @@ fn a_cache_folder_runs_refuse_is_not_saved() -> Result {
         .command(&["settings", "set", "cache", &tagless.display().to_string()])
         .env_remove("FETCHLOOM_CACHE")
         .output()?;
-    let stderr = text(&set.stderr)?;
-    assert_eq!(set.status.code(), Some(2), "{stderr}");
-    assert!(
-        stderr.contains("it looks like a fetchloom cache whose tag is gone")
-            && stderr.contains("put its tag back with `")
-            && stderr.contains("if not, choose an empty folder outside it")
-            && !stderr.contains("fetchloom-cache"),
-        "{stderr}"
-    );
-    assert!(!path.exists(), "{stderr}");
+    assert_eq!(set.status.code(), Some(0), "{}", text(&set.stderr)?);
     let empty = sandbox.folder("empty")?;
     let set = sandbox
         .command(&["settings", "set", "cache", &empty.display().to_string()])

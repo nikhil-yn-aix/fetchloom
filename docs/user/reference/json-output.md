@@ -119,6 +119,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `cache.unreadable` | a path in the cache, or the data.lock of a project it keeps files for, could not be read or removed |
 | `cache.unshared` | in a cache its group shares, a setgid folder the group may write, a folder in it lets only its owner write to it, or on linux the run's umask keeps the group from writing what the run adds, so the group's other members cannot add to the cache |
 | `cache.unregistered` | the project could not join the cache's list of projects, so `cache gc` may delete files it needs |
+| `cache.untagged` | the cache had lost its tag, `CACHEDIR.TAG`, which a cleaner deleting old files takes first, and held nothing but what fetchloom keeps there: a command that writes to the cache put the tag back, and one that only reads it, as `status`, changes nothing and says such a command will |
 | `download.encoded` | a server sent a file compressed with `Content-Encoding`, and it is kept as sent |
 | `download.unnamed` | a server gave no name for a file |
 | `download.web_page` | a link meant for a data file answered with a web page |

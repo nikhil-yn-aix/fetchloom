@@ -667,75 +667,95 @@ fn gc_refuses_a_folder_with_a_caches_names_and_no_tag() -> Result {
     Ok(())
 }
 
-/// a cache whose tag was deleted is refused as any folder without the tag is, but said to look like
-/// a cache whose tag is gone, with a command that puts the tag back, which works, and never a new
-/// cache inside it, which would download everything again and strand the old files.
+/// a scratch purge takes a cache's oldest files, its tag first, and leaves its folders. a folder
+/// that holds nothing but what fetchloom keeps there is plainly its cache, so every command goes
+/// on and says so once a run: one that writes to the cache puts the tag back, and one that only
+/// reads it, as status, changes nothing. a folder with any other name in it stays refused.
 #[test]
-fn a_cache_whose_tag_was_deleted_says_how_to_put_it_back() -> Result {
+fn a_purged_cache_gets_its_tag_back_and_every_command_goes_on() -> Result {
     let sandbox = Sandbox::new()?;
-    // a space, as a windows profile folder may hold, which the command must quote
-    let cache = sandbox.folder("lab cache")?;
-    sandbox.make_cache(&cache)?;
-    fs::remove_file(cache.join("CACHEDIR.TAG"))?;
-    let gc = || {
-        sandbox
-            .command(&["cache", "gc"])
-            .env("FETCHLOOM_CACHE", &cache)
-            .output()
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    let cache = sandbox.cache();
+    let tag = cache.join("CACHEDIR.TAG");
+    purge(&cache)?;
+    assert!(!tag.exists());
+    let said = |args: &[&str]| -> Result<String> {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        Ok(stderr)
     };
-    let output = gc()?;
-    let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(50), "{stderr}");
-    assert!(
-        stderr.contains(&format!(
-            "error: could not open the cache at {}: it looks like a fetchloom cache whose tag is gone: it holds only what a cache holds, but no CACHEDIR.TAG, the file fetchloom knows its cache by\n",
-            cache.display()
-        )),
-        "{stderr}"
+    let lost = format!(
+        "warning: the cache at {} has lost its tag, CACHEDIR.TAG, which a cleaner deleting old files takes first; a command that writes to the cache puts it back\n",
+        cache.display()
     );
-    let help = stderr
-        .lines()
-        .find_map(|line| line.strip_prefix("  help: "))
-        .ok_or("no help")?;
-    assert!(
-        help.starts_with("if it is your fetchloom cache, put its tag back with `")
-            && help.ends_with(
-                "` and run `fetchloom cache gc` again; if not, set FETCHLOOM_CACHE to an empty folder outside it"
-            )
-            && !help.contains("fetchloom-cache"),
-        "{help}"
+    for args in [&["--offline", "status"][..], &["--offline", "path", "iris"]] {
+        let stderr = said(args)?;
+        assert_eq!(
+            stderr.matches("lost its tag").count(),
+            1,
+            "{args:?}: {stderr}"
+        );
+        assert!(stderr.contains(&lost), "{args:?}: {stderr}");
+        assert!(!tag.exists(), "{args:?} changes nothing");
+    }
+    let put_back = format!(
+        "warning: the cache at {} had lost its tag, CACHEDIR.TAG, which a cleaner deleting old files takes first, so fetchloom put it back\n",
+        cache.display()
     );
-    let command = help.split('`').nth(1).ok_or("the help gives no command")?;
-    let put_back = put_back_with(command)?;
-    assert!(put_back.status.success(), "{command}: {put_back:?}");
-    ok(&gc()?)?;
-    // a second time the tag is there, and the command refuses to write over it
-    assert!(!put_back_with(command)?.status.success(), "{command}");
+    let synced = said(&["sync"])?;
+    assert_eq!(synced.matches("lost its tag").count(), 1, "{synced}");
+    assert!(synced.contains(&put_back), "{synced}");
+    assert!(tagged(&tag)?, "{synced}");
+    for args in [
+        &["--offline", "status"][..],
+        &["--offline", "path", "iris"],
+        &["sync"],
+    ] {
+        let stderr = said(args)?;
+        assert!(!stderr.contains("lost its tag"), "{args:?}: {stderr}");
+    }
+    // path reads the cache, then opens it to place the file it lacks, and tells only once
+    purge(&cache)?;
+    crate::support::delete(&sandbox.work().join("data").join("iris").join("iris.csv"))?;
+    let placed = said(&["path", "iris"])?;
+    assert_eq!(placed.matches("lost its tag").count(), 1, "{placed}");
+    assert!(placed.contains(&lost), "{placed}");
+    assert!(tagged(&tag)?, "{placed}");
+    // a person's file among what a purge left is no cache's, so the folder stays refused
+    purge(&cache)?;
+    fs::write(cache.join("objects").join("notes.txt"), b"mine")?;
+    for args in [&["--offline", "status"][..], &["sync"]] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("it holds other files and is not a fetchloom cache"),
+            "{args:?}: {stderr}"
+        );
+        assert!(!tag.exists(), "{args:?}");
+    }
     Ok(())
 }
 
-/// runs `command` as a person pastes it into the system's usual shell.
-fn put_back_with(command: &str) -> Result<std::process::Output> {
-    #[cfg(unix)]
-    let output = std::process::Command::new("sh")
-        .args(["-c", command])
-        .output()?;
-    #[cfg(windows)]
-    let output = {
-        use std::io::Write as _;
-        let mut shell = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", "-"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-        let mut stdin = shell.stdin.take().ok_or("no stdin")?;
-        writeln!(stdin, "{command}")?;
-        writeln!(stdin, "exit $(if ($?) {{ 0 }} else {{ 1 }})")?;
-        drop(stdin);
-        shell.wait_with_output()?
-    };
-    Ok(output)
+/// whether the file `tag` is fetchloom's tag.
+fn tagged(tag: &std::path::Path) -> Result<bool> {
+    Ok(fs::read_to_string(tag)?.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n"))
+}
+
+/// deletes every file below `root` and keeps its folders, as a purge of old files does.
+fn purge(root: &std::path::Path) -> Result {
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        if fs::symlink_metadata(&path)?.is_dir() {
+            purge(&path)?;
+        } else {
+            crate::support::delete(&path)?;
+        }
+    }
+    Ok(())
 }
 
 /// every file and folder below `root`, by its path there.
