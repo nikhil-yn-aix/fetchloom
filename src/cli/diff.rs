@@ -71,7 +71,7 @@ struct Dataset {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum Change {
+pub(in crate::cli) enum Change {
     Added,
     Removed,
     Changed,
@@ -87,24 +87,33 @@ struct Field {
 
 /// a file whose pin differs: its size and digests before and after, none on a side without it.
 #[derive(Debug, PartialEq, Eq, Serialize)]
-struct File {
-    path: String,
-    change: Change,
-    before: Option<Pinned>,
-    after: Option<Pinned>,
+pub(in crate::cli) struct File {
+    pub(in crate::cli) path: String,
+    pub(in crate::cli) change: Change,
+    pub(in crate::cli) before: Option<Pinned>,
+    pub(in crate::cli) after: Option<Pinned>,
 }
 
 /// a file's pin: its size and SHA-256, or for a dataset not downloaded yet, the SHA-256 or MD5
 /// its source states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-struct Pinned {
-    size: u64,
+pub(in crate::cli) struct Pinned {
+    pub(in crate::cli) size: u64,
     sha256: Option<Sha256>,
     #[serde(skip_serializing_if = "Option::is_none")]
     md5: Option<Md5>,
 }
 
 impl Pinned {
+    /// the pin data.lock records of `file`, a downloaded one's.
+    pub(in crate::cli) fn of(file: &LockedFile) -> Pinned {
+        Pinned {
+            size: file.size,
+            sha256: Some(file.sha256),
+            md5: file.md5,
+        }
+    }
+
     /// whether `other` pins the same bytes: the same size, and the same SHA-256 where both have
     /// one, else the same MD5 where both have one, as a sync checks a stated pin. pins that share
     /// no checksum never show the same bytes.
@@ -403,14 +412,7 @@ impl<'a> Pin<'a> {
             Pin::Fetched(locked) => locked
                 .files
                 .iter()
-                .map(|file: &'a LockedFile| {
-                    let pinned = Pinned {
-                        size: file.size,
-                        sha256: Some(file.sha256),
-                        md5: file.md5,
-                    };
-                    (file.path.as_str(), pinned)
-                })
+                .map(|file: &'a LockedFile| (file.path.as_str(), Pinned::of(file)))
                 .collect(),
             Pin::Stated(stated) => stated
                 .files
@@ -639,7 +641,7 @@ fn fields(before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Vec<Field> {
 
 /// the files added, removed and changed from `before` to `after`, each sorted by path, as data.lock
 /// keeps them: a file changes when its bytes do, as [`Pinned::same`] tells, not when its link does.
-fn files(before: Vec<(&str, Pinned)>, after: Vec<(&str, Pinned)>) -> Vec<File> {
+pub(in crate::cli) fn files(before: Vec<(&str, Pinned)>, after: Vec<(&str, Pinned)>) -> Vec<File> {
     let mut found = Vec::new();
     let mut was = before.into_iter().peekable();
     let mut now = after.into_iter().peekable();

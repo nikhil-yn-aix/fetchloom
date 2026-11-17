@@ -8,6 +8,7 @@ use std::path::Path;
 
 use super::super::add::{AS, AddProject, free_name, from_here, render_add, sync_add, usable};
 use super::super::args::Add;
+use super::super::diff::{self, Change, Pinned};
 use super::super::project::{Outcome, Report, dry_run_done};
 use super::super::sync::disk;
 use super::super::sync::place::{Placement, tell_marked};
@@ -602,6 +603,14 @@ fn same_files(now: &Walked, then: &Walked) -> bool {
             .all(|(now, then)| now.path == then.path && now.seen == then.seen)
 }
 
+/// each of `files` by its path, with its pin.
+fn pins(files: &[LockedFile]) -> Vec<(&str, Pinned)> {
+    files
+        .iter()
+        .map(|file| (file.path.as_str(), Pinned::of(file)))
+        .collect()
+}
+
 /// what an output's folder holds compared with its pin, each list in path order.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Changes {
@@ -612,33 +621,21 @@ pub(super) struct Changes {
 }
 
 impl Changes {
-    /// how `found` differs from `pinned`, both sorted by path.
+    /// how `found` differs from `pinned`, both sorted by path, as diff tells two pins apart.
     pub(super) fn of(found: &[LockedFile], pinned: &[LockedFile]) -> Changes {
         let mut changes = Changes::default();
-        let (mut found, mut pinned) = (found.iter().peekable(), pinned.iter().peekable());
-        loop {
-            match (found.peek(), pinned.peek()) {
-                (None, None) => return changes,
-                (Some(now), Some(then)) if now.path == then.path => {
-                    if now.sha256 != then.sha256 || now.size != then.size {
-                        changes
-                            .changed
-                            .push((now.path.clone(), then.size, now.size));
-                    }
-                    found.next();
-                    pinned.next();
+        let size = |pin: Option<Pinned>| pin.map_or(0, |pin| pin.size);
+        for file in diff::files(pins(pinned), pins(found)) {
+            match file.change {
+                Change::Changed => {
+                    let sizes = (size(file.before), size(file.after));
+                    changes.changed.push((file.path, sizes.0, sizes.1));
                 }
-                (Some(now), then) if then.is_none_or(|then| now.path < then.path) => {
-                    changes.added.push((now.path.clone(), now.size));
-                    found.next();
-                }
-                (_, Some(then)) => {
-                    changes.removed.push((then.path.clone(), then.size));
-                    pinned.next();
-                }
-                (Some(_), None) => unreachable!("a file found with no pin left is added above"),
+                Change::Added => changes.added.push((file.path, size(file.after))),
+                Change::Removed => changes.removed.push((file.path, size(file.before))),
             }
         }
+        changes
     }
 
     pub(super) fn is_empty(&self) -> bool {
