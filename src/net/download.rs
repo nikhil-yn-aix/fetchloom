@@ -746,23 +746,7 @@ impl Net {
         let Some((current, version)) = versioned else {
             return self.drive_download(fetch, cache, known, on).await;
         };
-        let now = Fetch {
-            url: fetch.url.clone(),
-            from: current,
-            divert: fetch.divert,
-            expired: fetch.expired,
-            expect: fetch.expect,
-            listed: fetch.listed,
-            revalidate: false,
-            record: fetch.record,
-            held: None,
-            was: None,
-            unpack: fetch.unpack,
-            mirror: fetch.mirror,
-            page: fetch.page,
-            named: fetch.named,
-            label: fetch.label.clone(),
-        };
+        let now = as_it_is_now(fetch, current);
         let bucket = super::s3::Bucket::holding(&fetch.from);
         if bucket
             .as_ref()
@@ -2116,6 +2100,28 @@ fn two_lengths(url: &Url, stated: u64, received: u64) -> Error {
 }
 
 /// whether a pinned version could not be read: refused, 401 or 403, or gone, 404 or 410.
+/// `fetch` for the object at `current` as it is now, not its pinned version: what it held or was
+/// pinned at stays behind. every field is named, so a new one gets decided here.
+fn as_it_is_now(fetch: &Fetch, current: Url) -> Fetch {
+    Fetch {
+        url: fetch.url.clone(),
+        from: current,
+        divert: fetch.divert,
+        expired: fetch.expired,
+        expect: fetch.expect,
+        listed: fetch.listed,
+        revalidate: false,
+        record: fetch.record,
+        held: None,
+        was: None,
+        unpack: fetch.unpack,
+        mirror: fetch.mirror,
+        page: fetch.page,
+        named: fetch.named,
+        label: fetch.label.clone(),
+    }
+}
+
 fn unreadable(error: &Error) -> bool {
     matches!(error.kind, Kind::AuthRequired | Kind::ReferenceUnresolved)
 }
