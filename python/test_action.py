@@ -131,10 +131,12 @@ def holds(condition, context):
 @unittest.skipIf(os.name == "nt", "github runs the action's bash steps in git bash; the windows action lane runs them")
 class CacheTests(unittest.TestCase):
     def walk(self, cache=None, visibility="public", push=None, push_after=None, push_code=0,
-             projects=(PROJECT,), hit=False, planted=False, project="project", mirrors=""):
+             push_after_code=None, projects=(PROJECT,), hit=False, planted=False, project="project",
+             mirrors=""):
         """the action's run with the ``cache`` input, in a repository of ``visibility``, fetchloom
-        answering push --dry-run with ``push`` before a sync and ``push_after`` once one ran, and
-        its cache serving ``projects``; with ``hit``, github's cache holds the run's exact key.
+        answering push --dry-run with ``push`` and exit code ``push_code`` before a sync, and with
+        ``push_after`` and ``push_after_code`` once one ran, each the same as before unless given,
+        and its cache serving ``projects``; with ``hit``, github's cache holds the run's exact key.
 
         with ``planted``, the stand-in comes as the binary input names it, through the install
         step and GITHUB_PATH, and the workspace and the project hold a bait for every program the
@@ -147,7 +149,8 @@ class CacheTests(unittest.TestCase):
         files = {"settings.json": document("settings", {"settings": [{"name": "cache", "value": str(folder / "cache"),
                                                                        "origin": "default"}]}),
                  "push.json": push or nothing, "push.code": str(push_code),
-                 "push-after.json": push_after or push or nothing, "push-after.code": str(push_code),
+                 "push-after.json": push_after or push or nothing,
+                 "push-after.code": str(push_code if push_after_code is None else push_after_code),
                  "cache.json": serving(*projects), "asked": ""}
         for name, text in files.items():
             (answers / name).write_text(text, encoding="utf-8")
@@ -177,13 +180,15 @@ class CacheTests(unittest.TestCase):
         base = [".", "bin", "", *system] if planted else [str(tools), *system]
         added = folder / "path"
         added.write_text("", encoding="utf-8")
-        run = {"ran": [], "saved": [], "said": "", "failed": None}
+        run = {"ran": [], "restored": None, "saved": [], "said": "", "failed": None}
         for step in action_steps():
             if not holds(step.get("if", ""), context):
                 continue
             run["ran"].append(step["name"])
             outputs = {}
             if step.get("uses", "").startswith("actions/cache/restore@"):
+                run["restored"] = (expanded(step["with"]["key"], context),
+                                   expanded(step["with"]["restore-keys"], context))
                 outputs["cache-hit"] = "true" if hit else ""
             elif step.get("uses", "").startswith("actions/cache/save@"):
                 run["saved"].append(expanded(step["with"]["key"], context))
@@ -298,6 +303,17 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(run["saved"], [])
         self.assertEqual(len(run["notices"]), 1, run["said"])
 
+    def test_an_after_sync_question_fetchloom_cannot_answer_saves_nothing(self):
+        # the check before the sync found nothing to ask, so the cache came back; the one after it
+        # sees what the sync brought, and a check that failed is no clean one
+        failed = document("push", None, status="error",
+                          errors=[{"kind": "local.io", "message": "could not read the cache"}])
+        run = self.walk(cache="auto", push_after=failed, push_after_code=1)
+        self.assertIsNone(run["failed"])
+        self.assertIn("restore the cache", run["ran"])
+        self.assertEqual(run["saved"], [])
+        self.assertEqual(len(run["notices"]), 1, run["said"])
+
     def test_a_cache_input_other_than_the_three_fails_the_run(self):
         run = self.walk(cache="sometimes")
         self.assertIsNotNone(run["failed"])
@@ -319,8 +335,15 @@ class CacheTests(unittest.TestCase):
                 self.assertIn(f"-C={run['project']} sync --locked --yes", run["asked"])
 
     def test_each_project_keeps_a_cache_of_its_own(self):
+        # a restore takes the newest cache whose key starts with restore-keys, so a start two
+        # projects share would hand one the other's cache, which it then never saves over
         first, second = self.walk(cache="auto"), self.walk(cache="auto")
         self.assertNotEqual(first["saved"], second["saved"], "two project folders share a key")
+        self.assertNotEqual(first["restored"][1], second["restored"][1], "two project folders share restore-keys")
+        for run, other in ((first, second), (second, first)):
+            key, start = run["restored"]
+            self.assertTrue(key.startswith(start), (key, start))
+            self.assertFalse(other["restored"][0].startswith(start), (start, other["restored"][0]))
 
 
 if __name__ == "__main__":
