@@ -831,9 +831,9 @@ fn a_shared_folder_too_full_to_name_gets_no_wildcard() -> Result {
 /// n3: results/, an output's folder the person keeps in git with its tables committed, gets no
 /// .gitignore at its first pin, which would hide the next table from git: the add says once that
 /// git keeps it and fetchloom pins it too, and a sync or a pin again says nothing more of it. a
-/// folder git holds only a .gitkeep in is not kept in git and gets its .gitignore, and so do a
-/// teammate's clone of results/, since only a first pin looks at git, never a sync, and results/
-/// pinned first again once git no longer tracks it.
+/// folder git holds only a .gitkeep, a .keep or a .gitignore in, at any depth, is not kept in git
+/// and gets its .gitignore, and so do a teammate's clone of results/, since only a first pin looks
+/// at git, never a sync, and results/ pinned first again once git no longer tracks it.
 #[test]
 fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
     let sandbox = Sandbox::new()?;
@@ -842,6 +842,8 @@ fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
         &[
             ("results/table1.csv", "a,b\n1,2\n"),
             ("processed/.gitkeep", ""),
+            ("figures/.keep", ""),
+            ("models/sub/.gitignore", "*.tmp\n"),
         ],
     )?;
     if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
@@ -849,6 +851,14 @@ fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
     }
     crate::merge::ok(&sandbox, &["add", "-A"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "tables"])?;
+    write_all(
+        &sandbox,
+        &[
+            ("processed/clean.csv", "x\n"),
+            ("figures/fig1.svg", "<svg/>\n"),
+            ("models/sub/weights.bin", "w\n"),
+        ],
+    )?;
     let work = sandbox.work();
     let added = sandbox.run(&["add", "results", "--as", "results"])?;
     let stderr = text(&added.stderr)?;
@@ -869,16 +879,12 @@ fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
     let stderr = text(&again.stderr)?;
     assert_eq!(again.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains("in git"), "{stderr}");
-    let processed = sandbox.run(&["add", "processed", "--as", "processed"])?;
-    let stderr = text(&processed.stderr)?;
-    assert!(stderr.contains(&ignored_line("processed")), "{stderr}");
-    write_all(
-        &sandbox,
-        &[
-            ("results/table2.csv", "c,d\n3,4\n"),
-            ("processed/clean.csv", "x\n"),
-        ],
-    )?;
+    for folder in ["processed", "figures", "models"] {
+        let added = sandbox.run(&["add", folder, "--as", folder])?;
+        let stderr = text(&added.stderr)?;
+        assert!(stderr.contains(&ignored_line(folder)), "{stderr}");
+    }
+    write_all(&sandbox, &[("results/table2.csv", "c,d\n3,4\n")])?;
     assert_eq!(
         untracked(&sandbox)?.ok_or("git went away")?,
         ["data.lock", "data.toml", "results/table2.csv"]
