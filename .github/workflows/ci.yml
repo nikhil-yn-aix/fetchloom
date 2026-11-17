@@ -429,9 +429,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # action.yml with the fetchloom this job builds: the first run takes the data from a folder
-  # mirror, its source gone, and the second, with the cache folder, the data and the mirror
-  # removed and no network, from the cache the first run saved
+  # action.yml with the fetchloom this job builds, in this public repository: the first runs take
+  # the data from a folder mirror, its source gone. the default keeps a cache for the project whose
+  # data.lock says anyone may read its data, and none for the one whose source says nothing, which
+  # cache: always keeps. with the cache folder, the data and the mirror removed and no network, the
+  # later runs place both from the caches they restore, and cache: never restores none
   action:
     name: action on ${{ matrix.os }}
     if: inputs.scope != 'tests'
@@ -462,33 +464,82 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'pull_request' }}
       - run: cargo build --locked --bin fetchloom
-      - name: pin a file and push it to a folder mirror
+      - name: pin a file in two projects and push it to a folder mirror
         run: ${{ matrix.python }} python/ci_action.py prepare --root "$RUNNER_TEMP/action" --binary target/debug/fetchloom${{ matrix.exe }}
-      - name: first run, from the mirror
-        id: first
+      - name: the project of public data, by default, from the mirror
+        id: open
         uses: $/
         with:
           binary: target/debug/fetchloom${{ matrix.exe }}
-          project: ${{ runner.temp }}/action/project
+          project: ${{ runner.temp }}/action/open
           mirrors: ${{ runner.temp }}/action/mirror
+      - name: the other project, by default
+        id: closed
+        uses: $/
+        with:
+          binary: target/debug/fetchloom${{ matrix.exe }}
+          project: ${{ runner.temp }}/action/closed
+          mirrors: ${{ runner.temp }}/action/mirror
+      # each restore lands in an empty cache folder, as on a fresh runner: windows refuses to
+      # replace the read-only files a restore would find there
+      - name: remove the cache folder and the placed data
+        run: ${{ matrix.python }} python/ci_action.py clear --root "$RUNNER_TEMP/action" --binary target/debug/fetchloom${{ matrix.exe }}
+      - name: the other project, with cache always
+        id: always
+        uses: $/
+        with:
+          binary: target/debug/fetchloom${{ matrix.exe }}
+          project: ${{ runner.temp }}/action/closed
+          mirrors: ${{ runner.temp }}/action/mirror
+          cache: always
       - name: remove the cache folder, the placed data and the mirror
         run: ${{ matrix.python }} python/ci_action.py forget --root "$RUNNER_TEMP/action" --binary target/debug/fetchloom${{ matrix.exe }}
-      - name: second run, from the restored cache alone
-        id: second
+      - name: the project of public data, from its restored cache alone
+        id: open-again
         uses: $/
         env:
           FETCHLOOM_OFFLINE: '1'
         with:
           binary: target/debug/fetchloom${{ matrix.exe }}
-          project: ${{ runner.temp }}/action/project
-      - name: the first run missed the cache and the second restored it
+          project: ${{ runner.temp }}/action/open
+      - name: remove the cache folder and the placed data again
+        run: ${{ matrix.python }} python/ci_action.py clear --root "$RUNNER_TEMP/action" --binary target/debug/fetchloom${{ matrix.exe }}
+      - name: the other project, from the cache always kept
+        id: always-again
+        uses: $/
         env:
-          FIRST: ${{ steps.first.outputs.cache-hit }}
-          SECOND: ${{ steps.second.outputs.cache-hit }}
+          FETCHLOOM_OFFLINE: '1'
+        with:
+          binary: target/debug/fetchloom${{ matrix.exe }}
+          project: ${{ runner.temp }}/action/closed
+          cache: always
+      - name: the project of public data, with cache never
+        id: never
+        uses: $/
+        env:
+          FETCHLOOM_OFFLINE: '1'
+        with:
+          binary: target/debug/fetchloom${{ matrix.exe }}
+          project: ${{ runner.temp }}/action/open
+          cache: never
+      # the default saved nothing for the other project, so the run with always found no cache
+      # under its key, and never restored none though one waited under its key
+      - name: each run restored the cache it should
+        env:
+          OPEN: ${{ steps.open.outputs.cache-hit }}
+          CLOSED: ${{ steps.closed.outputs.cache-hit }}
+          ALWAYS: ${{ steps.always.outputs.cache-hit }}
+          OPEN_AGAIN: ${{ steps.open-again.outputs.cache-hit }}
+          ALWAYS_AGAIN: ${{ steps.always-again.outputs.cache-hit }}
+          NEVER: ${{ steps.never.outputs.cache-hit }}
         run: |
-          echo "cache-hit: first run '$FIRST', second run '$SECOND'"
-          test "$FIRST" != true
-          test "$SECOND" = true
+          echo "cache-hit: open '$OPEN', closed '$CLOSED', always '$ALWAYS', open again '$OPEN_AGAIN', always again '$ALWAYS_AGAIN', never '$NEVER'"
+          test "$OPEN" != true
+          test -z "$CLOSED"
+          test "$ALWAYS" != true
+          test "$OPEN_AGAIN" = true
+          test "$ALWAYS_AGAIN" = true
+          test -z "$NEVER"
           ${{ matrix.python }} python/ci_action.py check --root "$RUNNER_TEMP/action"
 
   # the R package in r/, checked by R CMD check against the fetchloom this job builds; the check
