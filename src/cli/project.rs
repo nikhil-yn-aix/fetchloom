@@ -626,8 +626,11 @@ fn closing(
             next: None,
         };
     }
-    let warned =
-        placement.kept.iter().any(|kept| !kept.told) || !placement.changed_outputs.is_empty();
+    let warned = placement.kept.iter().any(|kept| !kept.told)
+        || placement
+            .changed_outputs
+            .iter()
+            .any(|changed| !changed.told);
     let left: Vec<&str> = placement
         .changed_outputs
         .iter()

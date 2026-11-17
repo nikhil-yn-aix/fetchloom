@@ -156,6 +156,11 @@ pub(crate) struct ChangedOutput {
     pub(crate) changed: u64,
     pub(crate) added: u64,
     pub(crate) removed: u64,
+    /// what changed, as a run tells of it once: the output's name and the SHA-256 of each file
+    /// changed, added or gone, with how each looks.
+    pub(crate) change: String,
+    /// whether an earlier run told of this change, so this one only counts it.
+    pub(crate) told: bool,
 }
 
 impl ChangedOutput {
@@ -456,10 +461,11 @@ fn edited_path(edit: &str) -> &str {
 }
 
 /// records in `state` what `placement` told once, so later runs stay quiet of it: each edit kept,
-/// with how its file looks on `disk`, each folder told how to keep away, the data folder told how
-/// to keep elsewhere, an R package told where raw files go, each folder told it is too full to
-/// name, and why files were copied on the data folder's disk. forgets the edits of `scope` this
-/// run kept no more, and the folders no dataset has now. says whether the state changed.
+/// with how its file looks on `disk`, each change of an output left whole, each folder told how to
+/// keep away, the data folder told how to keep elsewhere, an R package told where raw files go,
+/// each folder told it is too full to name, and why files were copied on the data folder's disk.
+/// forgets the edits and output changes of `scope` this run found no more, and the folders no
+/// dataset has now. says whether the state changed.
 fn note_told(
     state: &mut State,
     manifest: &Manifest,
@@ -478,6 +484,11 @@ fn note_told(
         .keys()
         .map(|name| plan::folder(manifest, name))
         .collect();
+    let outputs: HashSet<&str> = placement
+        .changed_outputs
+        .iter()
+        .map(|output| output.change.as_str())
+        .collect();
     let files = &state.files;
     let told = &mut state.told;
     let mut changed = told.retain(Once::Edit, |edit| {
@@ -486,6 +497,16 @@ fn note_told(
                 .get(edited_path(edit))
                 .is_some_and(|placed| !scope.includes(&placed.dataset))
     });
+    // an output the run did not look at keeps what was told of it
+    changed |= told.retain(Once::Output, |change| {
+        outputs.contains(change)
+            || change.rsplit_once(':').is_some_and(|(name, _)| {
+                manifest.datasets.contains_key(name) && !scope.includes(name)
+            })
+    });
+    for output in &outputs {
+        changed |= told.note(Once::Output, output);
+    }
     changed |= told.retain(Once::Refill, |folder| folders.contains(folder));
     for edit in &edits {
         changed |= told.note(Once::Edit, edit);
@@ -2906,7 +2927,8 @@ fn changed_outputs(
 ) -> (Vec<ChangedOutput>, Vec<(String, String)>) {
     let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
     let up = crate::cli::up_to(root, &here);
-    let mut found: BTreeMap<&str, (ChangedOutput, &manifest::Entry)> = manifest
+    // each output with the files that changed in its folder, each as a run tells it once
+    let mut found: BTreeMap<&str, (ChangedOutput, Vec<String>)> = manifest
         .datasets
         .iter()
         .filter(|(name, entry)| entry.place && scope.includes(name))
@@ -2919,25 +2941,41 @@ fn changed_outputs(
                 changed: 0,
                 added: 0,
                 removed: 0,
+                change: String::new(),
+                told: false,
             };
-            Some((name.as_str(), (output, entry)))
+            Some((name.as_str(), (output, Vec::new())))
         })
         .collect();
     if found.is_empty() {
         return (Vec::new(), Vec::new());
     }
+    let change = |how: &str, path: &str| match survey.disk.get(path) {
+        Some(look) => format!("{how} {path} {}:{}", look.size, look.modified),
+        None => format!("{how} {path}"),
+    };
     for (target, action) in targets.iter().zip(actions) {
-        let Some((output, _)) = found.get_mut(target.dataset) else {
+        let Some((output, changes)) = found.get_mut(target.dataset) else {
             continue;
         };
+        let path = target.path.as_str();
         match action {
             Action::Leave(Reason::Changed | Reason::Foreign | Reason::Shared)
             | Action::Overwrite(_)
             | Action::Blocked(_)
-            | Action::Unblock(_) => output.changed += 1,
+            | Action::Unblock(_) => {
+                output.changed += 1;
+                changes.push(change("changed", path));
+            }
             // hashing found other bytes than the look tells, which is a change all the same
-            Action::Replace if survey.damaged.contains(&target.path) => output.changed += 1,
-            Action::Place if survey.state.files.contains_key(&target.path) => output.removed += 1,
+            Action::Replace if survey.damaged.contains(path) => {
+                output.changed += 1;
+                changes.push(change("changed", path));
+            }
+            Action::Place if survey.state.files.contains_key(path) => {
+                output.removed += 1;
+                changes.push(change("removed", path));
+            }
             _ => {}
         }
     }
@@ -2947,7 +2985,7 @@ fn changed_outputs(
         if wanted.contains(path.as_str()) || survey.made_by_system(path) {
             continue;
         }
-        let Some((output, _)) = found
+        let Some((output, changes)) = found
             .values_mut()
             .find(|(output, _)| super::disk::is_inside(path, &output.at))
         else {
@@ -2961,18 +2999,29 @@ fn changed_outputs(
         match survey.state.files.get(path) {
             // placed for an older pin and unchanged, which removal takes
             Some(placed) if placed.dataset == output.name && placed.look == *look => {}
-            Some(placed) if placed.dataset == output.name => output.changed += 1,
+            Some(placed) if placed.dataset == output.name => {
+                output.changed += 1;
+                changes.push(change("changed", path));
+            }
             _ => {
                 output.added += 1;
+                changes.push(change("added", path));
                 extras.push((path.clone(), output.name.clone()));
             }
         }
     }
     extras.sort_unstable();
+    let told = &survey.state.told;
     let changed: Vec<ChangedOutput> = found
         .into_values()
-        .map(|(output, _)| output)
-        .filter(ChangedOutput::is_changed)
+        .filter(|(output, _)| output.is_changed())
+        .map(|(mut output, mut changes)| {
+            changes.sort_unstable();
+            let changes = crate::digest::sha256(changes.join("\n").as_bytes()).hex();
+            output.change = format!("{}:{changes}", output.name);
+            output.told = told.has(Once::Output, &output.change);
+            output
+        })
         .collect();
     let left: HashSet<&str> = changed.iter().map(|output| output.name.as_str()).collect();
     extras.retain(|(_, name)| left.contains(name.as_str()));

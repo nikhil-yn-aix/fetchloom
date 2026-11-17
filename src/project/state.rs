@@ -96,6 +96,9 @@ pub(crate) enum Once {
     Unnamed,
     /// an add into the data folder of an R package, which R keeps for its own datasets: the folder.
     RPackage,
+    /// an output whose folder changed since it was pinned, which sync leaves whole: the output
+    /// and what changed in its folder, so a new change is told of again.
+    Output,
 }
 
 impl Once {
@@ -108,6 +111,7 @@ impl Once {
             Once::Copy => "copy",
             Once::Unnamed => "unnamed",
             Once::RPackage => "r_package",
+            Once::Output => "output",
         }
     }
 }

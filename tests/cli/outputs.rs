@@ -382,6 +382,55 @@ fn a_sync_leaving_a_changed_output_never_says_all_is_in_place() -> Result {
     Ok(())
 }
 
+/// a changed output is told of once per change, as a kept edit is: a later sync finding the same
+/// change, or its dry run, only counts it in the last line, in json too, also after runs that left
+/// the output out, and a new change is told of again, as is a change after the output was pinned
+/// again.
+#[test]
+fn a_changed_output_is_told_once_per_change() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let clean = work.join("data/processed/iris_clean.csv");
+    fs::write(&clean, b"sepal,petal\n5.1,1.5\n")?;
+    let told = |args: &[&str]| -> Result<(bool, String)> {
+        let synced = sandbox.run(args)?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(0), "{args:?}: {stderr}");
+        let said = if args.contains(&"--json") {
+            json(&synced)?["warnings"].to_string()
+        } else {
+            stderr.clone()
+        };
+        Ok((said.contains("changed since processed was pinned"), stderr))
+    };
+    let (said, stderr) = told(&["sync"])?;
+    assert!(said, "{stderr}");
+    // runs that leave the output out keep what was told of it
+    let flowers = sandbox.folder("flowers")?;
+    fs::write(flowers.join("sepals.csv"), b"5.1\n")?;
+    ok(&sandbox.run(&["add", "../flowers"])?)?;
+    ok(&sandbox.run(&["sync", "flowers"])?)?;
+    for args in [&["sync"][..], &["sync", "--dry-run"], &["--json", "sync"]] {
+        let (said, stderr) = told(args)?;
+        assert!(!said, "{args:?} told it again: {stderr}");
+        if args.len() == 1 {
+            assert!(stderr.contains(", processed left as it is\n"), "{stderr}");
+        }
+    }
+    // a size every clock tells apart, as a coarse one may give both writes one time
+    fs::write(&clean, b"sepal,petal\n5.1,1.5\n4.9,1.4\n")?;
+    let (said, stderr) = told(&["sync"])?;
+    assert!(said, "a new change: {stderr}");
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?)?;
+    ok(&sandbox.run(&["sync"])?)?;
+    fs::write(&clean, b"sepal,petal\n5.1,1.6\n")?;
+    let (said, stderr) = told(&["sync"])?;
+    assert!(said, "changed after a pin: {stderr}");
+    Ok(())
+}
+
 /// after a rerun, the same add shows what changed and pins it in one step with --yes, keeping
 /// the table's comments and settings; without a terminal or --yes it changes nothing.
 #[test]

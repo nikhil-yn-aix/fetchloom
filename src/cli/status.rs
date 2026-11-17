@@ -263,6 +263,8 @@ fn changed_outputs(
                 ),
                 added: count(&mut status.extra.iter()),
                 removed: count(&mut status.missing.iter()),
+                change: String::new(),
+                told: false,
             };
             (output.changed + output.added + output.removed > 0).then_some(output)
         })
