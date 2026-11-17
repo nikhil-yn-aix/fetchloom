@@ -1084,8 +1084,9 @@ impl Project {
         Ok(folder)
     }
 
-    /// the .fetchloom folder, which tells git to ignore it the first time it is made. one this call
-    /// made and could not finish goes again.
+    /// the .fetchloom folder, which tells git to ignore it with a .gitignore made where none
+    /// stands: when the folder is made, and again after a cleanup took the file but left the
+    /// folder. a folder this call made and could not finish goes again.
     fn inner(&self) -> Result<PathBuf, Error> {
         let folder = self.root.join(FOLDER);
         let created = match fs::create_dir(&folder) {
@@ -1115,8 +1116,9 @@ impl Project {
             )
             .help("replace .fetchloom with a real folder before running this command"));
         }
+        let ignore = folder.join(".gitignore");
         if created {
-            let finished = write_atomically(&folder.join(".gitignore"), b"*\n")
+            let finished = write_atomically(&ignore, b"*\n")
                 .map_err(|err| {
                     Error::io(format_args!("could not write {}", folder.display()), &err)
                 })
@@ -1126,9 +1128,21 @@ impl Project {
                     })
                 });
             if let Err(error) = finished {
-                let _ = fs::remove_file(folder.join(".gitignore"));
+                let _ = fs::remove_file(&ignore);
                 let _ = fs::remove_dir(&folder);
                 return Err(error);
+            }
+        } else if fs::symlink_metadata(&ignore)
+            .is_err_and(|err| err.kind() == io::ErrorKind::NotFound)
+        {
+            // over nothing: a file someone put there meanwhile stays
+            let made = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&ignore)
+                .and_then(|file| fill(file, b"*\n"));
+            if let Err(err) = made {
+                tracing::debug!(%err, "could not make .fetchloom/.gitignore again");
             }
         }
         Ok(folder)

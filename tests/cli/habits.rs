@@ -254,3 +254,22 @@ fn the_copy_reason_is_told_once() -> Result {
     assert!(!second.contains("inside onedrive"), "{second}");
     Ok(())
 }
+
+/// a cleanup that takes .fetchloom/.gitignore while the folder stays, as a purge of old files
+/// does: the next sync makes it again, so git never takes the project's own records, and a file of
+/// the person's there stays as it is.
+#[test]
+fn a_lost_gitignore_of_the_project_folder_comes_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = iris_server()?;
+    with_iris(&sandbox, &server)?;
+    let ignore = sandbox.work().join(".fetchloom/.gitignore");
+    assert_eq!(fs::read(&ignore)?, b"*\n");
+    fs::remove_file(&ignore)?;
+    synced(&sandbox)?;
+    assert_eq!(fs::read(&ignore)?, b"*\n");
+    fs::write(&ignore, "state\n")?;
+    synced(&sandbox)?;
+    assert_eq!(fs::read(&ignore)?, b"state\n");
+    Ok(())
+}
