@@ -690,6 +690,12 @@ pub(crate) struct Cache {
     locks: bool,
 }
 
+/// whether the object of each SHA-256 in each cache has each MD5 a record there claims for it, as
+/// this run hashed it, so an object is hashed once a run however often a record asks.
+type Proved = std::collections::HashMap<(PathBuf, Md5, Sha256), bool>;
+static PROVED_MD5S: std::sync::LazyLock<std::sync::Mutex<Proved>> =
+    std::sync::LazyLock::new(std::sync::Mutex::default);
+
 /// the placer windows removes the cache's files through, made at the first removal and kept, so
 /// each removal does not open the cache's root and the folders above it again.
 #[cfg(not(unix))]
@@ -1160,7 +1166,8 @@ impl Cache {
             .map(|stated| (stated.digest, stated.size))
     }
 
-    /// [`Cache::stated_md5`], with the S3 version the bytes were.
+    /// [`Cache::stated_md5`], with the S3 version the bytes were. in a cache others may write,
+    /// where anyone may record any bytes for an MD5, only bytes that have it count.
     pub(crate) fn stated(&self, md5: &Md5, url: &str) -> Option<Stated> {
         // a record is a line; one someone put there as a link or a pipe is none
         let mut text = String::new();
@@ -1168,11 +1175,32 @@ impl Cache {
             .and_then(|file| file.take(4096).read_to_string(&mut text))
             .ok()?;
         let mut words = text.split_whitespace();
-        Some(Stated {
+        let stated = Stated {
             digest: Sha256::from_hex(words.next()?)?,
             size: words.next()?.parse().ok()?,
             version: words.next().map(str::to_owned),
-        })
+        };
+        (!self.others_write || self.holds_md5(md5, &stated.digest, stated.size)).then_some(stated)
+    }
+
+    /// whether the object for `digest`, of `size` bytes, has the MD5 `md5`, hashed once a run.
+    fn holds_md5(&self, md5: &Md5, digest: &Sha256, size: u64) -> bool {
+        let key = (self.root.clone(), *md5, *digest);
+        let proved = || {
+            PROVED_MD5S
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        if let Some(held) = proved().get(&key).copied() {
+            return held;
+        }
+        // a cache's own checks hash without a stop, as a doubted object's do
+        let held = self.find(digest, Some(size)).is_some_and(|path| {
+            object::md5_of(&path, size, &crate::stop::Stop::default())
+                .is_ok_and(|found| found == Some(*md5))
+        });
+        proved().insert(key, held);
+        held
     }
 
     pub(crate) fn save_stated_md5(&self, md5: &Md5, url: &str, stated: &Stated) -> io::Result<()> {

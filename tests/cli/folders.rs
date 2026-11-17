@@ -1111,6 +1111,93 @@ fn a_get_in_a_shared_cache_downloads_what_another_member_recorded() -> Result {
     Ok(())
 }
 
+/// in a cache a group shares, a file its source pins by an MD5 is never taken from another
+/// member's record of that MD5 for its link: the bytes the record names must have that MD5, so
+/// bytes without it are no copy of the file, and the file is downloaded.
+#[cfg(unix)]
+#[test]
+fn an_md5_another_member_recorded_stands_only_for_bytes_that_have_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let server = served(python)?;
+    let sums = format!("{}  iris.csv\n", crate::support::md5_hex(IRIS));
+    server.change(vec![
+        ("/data/MD5SUMS".to_owned(), file(sums.as_bytes(), "\"m1\"")),
+        ("/forged.csv".to_owned(), file(FORGED, "\"f1\"")),
+    ]);
+    // the member's own bytes in the cache, and their record that iris.csv's MD5 names them
+    let member = sandbox.folder("member")?;
+    let got = sandbox
+        .command_in(&member, &["get", &format!("{}/forged.csv", server.url)])
+        .output()?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    let md5 = crate::support::md5_hex(IRIS);
+    let link = format!("{}/data/iris.csv", server.url);
+    let record = sandbox
+        .cache()
+        .join("stated/md5")
+        .join(&md5[..2])
+        .join(format!("{}-{}", &md5[2..], sha256_hex(link.as_bytes())));
+    fs::create_dir_all(record.parent().ok_or("no folder")?)?;
+    fs::write(
+        &record,
+        format!("{} {}\n", sha256_hex(FORGED), FORGED.len()),
+    )?;
+
+    let added = sandbox.run(&["add", &format!("list:{}/data/MD5SUMS", server.url)])?;
+
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&sha256_hex(IRIS)), "{lock}");
+    assert!(!lock.contains(&sha256_hex(FORGED)), "{lock}");
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data/data/iris.csv"))?,
+        text(IRIS)?
+    );
+    Ok(())
+}
+
+/// in a cache a group shares, a member's record of a file's MD5 stands for bytes that have it:
+/// another project's add of the same list takes the file from the cache, asking only for the
+/// list.
+#[cfg(unix)]
+#[test]
+fn an_md5_another_member_recorded_for_its_bytes_spares_the_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let server = served(python)?;
+    let sums = format!("{}  iris.csv\n", crate::support::md5_hex(IRIS));
+    server.change(vec![(
+        "/data/MD5SUMS".to_owned(),
+        file(sums.as_bytes(), "\"m1\""),
+    )]);
+    let list = format!("list:{}/data/MD5SUMS", server.url);
+    let member = sandbox.folder("member")?;
+    let added = sandbox.command_in(&member, &["add", &list]).output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let before = server.requests().len();
+
+    let added = sandbox.run(&["add", &list])?;
+
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let asked = &server.requests()[before..];
+    assert!(
+        asked
+            .iter()
+            .all(|head| !head.starts_with("get /data/iris.csv ")),
+        "{asked:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data/data/iris.csv"))?,
+        text(IRIS)?
+    );
+    Ok(())
+}
+
 /// in a cache a group shares, a teammate whose cache records agree with their data.lock still
 /// asks whether each file changed, and downloads nothing when none did.
 #[cfg(unix)]

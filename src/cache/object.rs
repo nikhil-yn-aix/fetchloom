@@ -10,7 +10,7 @@ use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
 
 use super::{Cache, Staging, Stored};
-use crate::digest::{BlobHasher, BlobId, Block, Hasher, Sha256};
+use crate::digest::{BlobHasher, BlobId, Block, Hasher, Md5, Md5Hasher, Sha256};
 use crate::stop::Stop;
 use crate::volume::{Volume, is_plain};
 
@@ -311,6 +311,30 @@ pub(super) fn blob_id_of(source: &Path, size: u64, stop: &Stop) -> io::Result<Op
         return Ok(None);
     };
     let (mut hasher, mut read) = (BlobHasher::new(size), 0_u64);
+    let most = size.saturating_add(1);
+    let ended = each_block(&mut input, most, Block::sized(most), stop, |block| {
+        hasher.update(block);
+        read += block.len() as u64;
+        Ok(())
+    });
+    match ended {
+        Ok(()) => Ok((read == size).then(|| hasher.finish())),
+        Err(Fault::Source(_)) => Ok(None),
+        Err(Fault::Cache(err)) => Err(err),
+    }
+}
+
+/// the MD5 of the file at `source` when it is a plain file of `size` bytes, read as
+/// [`blob_id_of`] reads it. a file that cannot be read has none.
+///
+/// # Errors
+///
+/// `Interrupted` when `stop` asks.
+pub(super) fn md5_of(source: &Path, size: u64, stop: &Stop) -> io::Result<Option<Md5>> {
+    let Ok(mut input) = opened(source, size) else {
+        return Ok(None);
+    };
+    let (mut hasher, mut read) = (Md5Hasher::default(), 0_u64);
     let most = size.saturating_add(1);
     let ended = each_block(&mut input, most, Block::sized(most), stop, |block| {
         hasher.update(block);

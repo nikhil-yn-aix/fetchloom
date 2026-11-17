@@ -121,6 +121,20 @@ impl Md5 {
     }
 }
 
+/// an MD5 taken as bytes stream past, for bytes a record says have one.
+#[derive(Default)]
+pub(crate) struct Md5Hasher(md5::Md5);
+
+impl Md5Hasher {
+    pub(crate) fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub(crate) fn finish(self) -> Md5 {
+        Md5(self.0.finalize().into())
+    }
+}
+
 impl BlobId {
     /// reads 40 hex digits, in either case.
     pub(crate) fn from_hex(text: &str) -> Option<BlobId> {
