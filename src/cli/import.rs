@@ -8,8 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use icu_normalizer::ComposingNormalizerBorrowed;
-
 use super::add::{AS, AddProject, free_name, from_here, render_add, sync_add, usable};
 use super::args::Add;
 use super::project::{Report, dry_run_done};
@@ -1099,7 +1097,7 @@ pub(super) fn walk(
                     })?;
                     if is_plain(&metadata) {
                         walked.files.push(Found {
-                            path: composed(&relative),
+                            path: crate::name::composed(&relative),
                             source: listed.path(),
                             size: metadata.len(),
                         });
@@ -1123,7 +1121,7 @@ pub(super) fn walk(
             .and_then(|name| name.to_str())
             .ok_or_else(|| refused(shown, shown, "its name is not text every machine can read"))?;
         walked.files.push(Found {
-            path: composed(file_name),
+            path: crate::name::composed(file_name),
             source: start.to_path_buf(),
             size: found.len(),
         });
@@ -1173,17 +1171,6 @@ fn kept(walked: &mut Walked, source: &Source, shown: &str) -> Result<(), Error> 
         .help("name a folder that holds files, or loosen --select and --exclude"));
     }
     Ok(())
-}
-
-/// `path` in NFC, as an archive's member is kept, so a name written either way pins alike.
-fn composed(path: &str) -> String {
-    if path.is_ascii() {
-        path.to_owned()
-    } else {
-        ComposingNormalizerBorrowed::new_nfc()
-            .normalize(path)
-            .into_owned()
-    }
 }
 
 /// refuses a name data.lock could not pin for every machine, as an archive's member is refused,
@@ -2075,7 +2062,7 @@ mod tests {
             assert_eq!(error.message, message, "{paths:?}");
         }
         assert!(checked_names(&found(&["a/b.csv", "a/c.csv", "b.csv"]), "./flowers").is_ok());
-        assert_eq!(composed("cafe\u{301}.csv"), "caf\u{e9}.csv");
+        assert_eq!(crate::name::composed("cafe\u{301}.csv"), "caf\u{e9}.csv");
     }
 
     #[test]

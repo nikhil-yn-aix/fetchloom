@@ -643,6 +643,17 @@ pub(crate) fn spelled(path: &str) -> Cow<'_, str> {
     )
 }
 
+/// `path` in NFC, as an archive's member is kept, so a name written either way pins alike.
+pub(crate) fn composed(path: &str) -> String {
+    if path.is_ascii() {
+        path.to_owned()
+    } else {
+        ComposingNormalizerBorrowed::new_nfc()
+            .normalize(path)
+            .into_owned()
+    }
+}
+
 /// `name` as this machine's disks tell names apart: composed on macos, whose filesystems see
 /// composed and decomposed unicode as one name, and unchanged elsewhere.
 pub(crate) fn as_disk_sees(name: &str) -> std::borrow::Cow<'_, str> {

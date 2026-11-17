@@ -101,10 +101,14 @@ impl PlacedArchives {
                 .disk
                 .keys()
                 .filter(|placed| !temporary.contains(placed));
-            let below = layout.below(files.map(String::as_str));
-            if below.is_empty() {
+            let listed = layout.below(files.map(String::as_str));
+            if listed.is_empty() {
                 continue;
             }
+            let below: Vec<(&str, &str)> = listed
+                .iter()
+                .map(|(placed, inside)| (*placed, inside.as_str()))
+                .collect();
             let placed: Vec<String> = below
                 .iter()
                 .map(|(placed, _)| (*placed).to_owned())
@@ -320,11 +324,12 @@ impl Layout {
         })
     }
 
-    /// each file of `files`, paths in the project, below the folder the archive's files land
-    /// below and pinned by none of the dataset's whole files, with its path there, in order.
-    fn below<'f>(&self, files: impl Iterator<Item = &'f str>) -> Vec<(&'f str, &'f str)> {
+    /// each file of `files`, paths in the project as the disk lists them, below the folder the
+    /// archive's files land below and pinned by none of the dataset's whole files, with its path
+    /// there in NFC, as an archive's members are kept, in order.
+    fn below<'f>(&self, files: impl Iterator<Item = &'f str>) -> Vec<(&'f str, String)> {
         let prefix = format!("{}/", self.base);
-        let mut below: Vec<(&str, &str)> = files
+        let mut below: Vec<(&str, String)> = files
             .filter(|placed| !self.whole.contains(*placed))
             .filter(|placed| {
                 !self
@@ -332,7 +337,7 @@ impl Layout {
                     .iter()
                     .any(|other| placed.starts_with(other.as_str()))
             })
-            .filter_map(|placed| Some((placed, placed.strip_prefix(&prefix)?)))
+            .filter_map(|placed| Some((placed, name::composed(placed.strip_prefix(&prefix)?))))
             .collect();
         below.sort_unstable();
         below
@@ -433,7 +438,11 @@ mod tests {
 
     /// the paths in the archive each guess gives the files of `placed`, paths in the project.
     fn guessed(layout: &Layout, placed: &[&str]) -> Vec<Vec<String>> {
-        let below = layout.below(placed.iter().copied());
+        let listed = layout.below(placed.iter().copied());
+        let below: Vec<(&str, &str)> = listed
+            .iter()
+            .map(|(placed, inside)| (*placed, inside.as_str()))
+            .collect();
         guesses(layout, &below)
             .into_iter()
             .map(|guess| guess.into_iter().map(|(_, path)| path).collect())
@@ -492,6 +501,18 @@ mod tests {
         assert_eq!(
             guessed(&layout, &["data/a.csv", "data/iris/iris.csv"])[0],
             ["a.csv"]
+        );
+    }
+
+    /// a disk may list a name decomposed, as a mac can, while an archive's members are kept in NFC.
+    #[test]
+    fn a_file_listed_decomposed_is_guessed_by_its_composed_name() {
+        assert_eq!(
+            guessed(
+                &layout("set", "set.zip", true),
+                &["data/set/cafe\u{301}.csv"]
+            )[0],
+            ["caf\u{e9}.csv"]
         );
     }
 
