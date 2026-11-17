@@ -124,7 +124,7 @@ fn sync_dry_run_lists_downloads_with_their_sizes_and_fetches_none() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "      Would fetch iris/iris.csv · 32 B\n      Would place data/iris · 1 file\nwarning: a sync would put back data/iris/iris.csv, which was deleted or moved, since data.lock pins it\n  help: data/iris/iris.csv is the only file of iris, so to leave it out for good, run `fetchloom remove iris`; keep files of your own in a folder outside data/\n         Ok dry run, nothing was changed\n"
+        "      Would fetch iris/iris.csv · 32 B\n      Would place data/iris · 1 file\nwarning: a sync would put back data/iris/iris.csv, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins\n         Ok dry run, nothing was changed\n"
     );
     let document = json(
         &sandbox

@@ -427,10 +427,6 @@ fn hints_after_a_run_with_c_name_the_project_and_the_dataset_placed() -> Result 
         )),
         "{synced}"
     );
-    assert!(
-        synced.contains(&format!("run `fetchloom -C {typed} remove cows`")),
-        "{synced}"
-    );
     Ok(())
 }
 

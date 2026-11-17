@@ -6,7 +6,7 @@
 use std::fs;
 
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Routes, Sandbox, delete, delete_folder, file, text, without_copy_warning};
+use crate::support::{Result, Routes, Sandbox, delete, delete_folder, file, json, text, without_copy_warning, zip_of};
 
 /// a server answering iris at [`PATH`], as often as asked.
 fn iris_server() -> Result<Routes> {
@@ -101,5 +101,75 @@ fn a_moved_data_folder_names_data_dir_once() -> Result {
     delete_folder(&data)?;
     let again = synced(&sandbox)?;
     assert!(!again.contains("hint:"), "{again}");
+    Ok(())
+}
+
+/// a single compressed file unpacked by hand, as `gunzip -f` leaves it: the put-back help names
+/// decompress = true first, which keeps the unpacked file, and the next sync takes that file as
+/// placed and lets the packed one go.
+#[test]
+fn a_compressed_file_unpacked_by_hand_points_to_decompress() -> Result {
+    let sandbox = Sandbox::new()?;
+    let csv = b"gene,value\nbrca1,2.5\n";
+    let packed = crate::decompress::gz(csv)?;
+    let server = Routes::start(vec![(
+        "/files/visits.csv.gz".to_owned(),
+        file(&packed, "\"g1\""),
+    )])?;
+    let link = format!("{}/files/visits.csv.gz", server.url);
+    sandbox.allow(&link);
+    let added = sandbox.run(&["add", &link])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let folder = sandbox.work().join("data/visits");
+    delete(&folder.join("visits.csv.gz"))?;
+    fs::write(folder.join("visits.csv"), csv)?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    let document = json(&output)?;
+    assert_eq!(
+        crate::support::warned(&document),
+        [
+            "put back data/visits/visits.csv.gz, which was deleted or moved, since data.lock pins it; to keep data/visits/visits.csv, which you unpacked, in its place, set decompress = true for visits in data.toml"
+        ],
+        "{document}"
+    );
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace(
+            "[datasets.visits]\n",
+            "[datasets.visits]\ndecompress = true\n",
+        ),
+    )?;
+    synced(&sandbox)?;
+    assert_eq!(fs::read(folder.join("visits.csv"))?, csv);
+    assert!(!folder.join("visits.csv.gz").exists());
+    Ok(())
+}
+
+/// files renamed inside their dataset's folder are put back under the names data.lock pins, and
+/// the help says nothing of moving the data folder, which was never moved.
+#[test]
+fn renamed_files_are_put_back_without_naming_data_dir() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = zip_of(&[("wave1.csv", &b"a\n1\n"[..]), ("wave2.csv", b"a\n2\n")])?;
+    let server = Routes::start(vec![("/files/survey.zip".to_owned(), file(&zip, "\"s1\""))])?;
+    let link = format!("{}/files/survey.zip", server.url);
+    sandbox.allow(&link);
+    let added = sandbox.run(&["add", &link])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let folder = sandbox.work().join("data/survey");
+    for (from, to) in [
+        ("wave1.csv", "2026_survey_w1.csv"),
+        ("wave2.csv", "2026_survey_w2.csv"),
+    ] {
+        fs::rename(folder.join(from), folder.join(to))?;
+    }
+    let renamed = synced(&sandbox)?;
+    assert!(
+        renamed.contains("warning: put back 2 files that were deleted or moved"),
+        "{renamed}"
+    );
+    assert!(!renamed.contains("data_dir"), "{renamed}");
     Ok(())
 }

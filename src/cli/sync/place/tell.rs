@@ -94,7 +94,7 @@ pub(super) fn tell(
     }
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
-    warn_put_back(output, manifest, placement, "put back");
+    warn_put_back(output, placement, "put back");
     warn_unreached(output, &placement.unreached);
     warn_restored(output, placement);
     super::mark::warn_unmarkable(output, &placement.unmarkable);
@@ -207,7 +207,7 @@ const NAMED: usize = 5;
 /// a warning for the files someone deleted or moved that a sync puts back, as `verb` says, with up
 /// to [`NAMED`] ways to leave them out for good. a folder deleted whole is named once, and a
 /// dataset's own folder deleted whole is a fresh start, which needs no warning.
-fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, verb: &str) {
+fn warn_put_back(output: &Output, placement: &Placement, verb: &str) {
     let fresh = |path: &String| {
         placement
             .emptied
@@ -238,52 +238,42 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
         }
     }
     let said = put_back_said(verb, &paths, &items, &folders);
-    let mut leave = Vec::new();
-    if let Some((name, files, path)) = items
+    let mut help = Vec::new();
+    let unpacked: Vec<&(String, String)> = paths
         .iter()
-        .find(|(_, _, path)| !placement.unexcludable.contains_key(*path))
-    {
-        let (what, name) = if *files > 1 {
-            ("folder", *name)
-        } else {
-            ("file", path.as_str())
-        };
-        leave.push(format!(
-            "to leave a {what} out for good, run `{}`",
-            crate::cli::project::command(&format!("exclude {}", crate::cli::shell_word(name)))
+        .filter_map(|path| placement.unpacked.get(*path))
+        .collect();
+    // the file the person unpacked by hand stays theirs, and decompress takes it as placed
+    if let Some((beside, _)) = unpacked.first() {
+        let datasets: BTreeSet<&str> = unpacked
+            .iter()
+            .map(|(_, dataset)| dataset.as_str())
+            .collect();
+        let datasets: Vec<&str> = datasets.into_iter().collect();
+        help.push(format!(
+            "to keep {beside}, which you unpacked, in its place, set decompress = true for {} in data.toml",
+            units::listed(&datasets, "and")
         ));
     }
-    let mut told = BTreeSet::new();
-    for (path, dataset) in paths
-        .iter()
-        .filter_map(|path| Some((*path, placement.unexcludable.get(*path)?)))
-    {
-        if leave.len() == NAMED {
-            break;
-        }
-        if told.insert(dataset) {
-            leave.push(format!(
-                "{path} is the only file of {dataset}, so to leave it out for good, run `{}`",
-                crate::cli::project::command(&format!("remove {dataset}"))
+    if unpacked.len() < paths.len() {
+        help.push(
+            "there is nothing to do: each sync puts back the files data.lock pins".to_owned(),
+        );
+        if let Some((name, files, path)) = items.iter().find(|(_, _, path)| {
+            !placement.unexcludable.contains_key(*path) && !placement.unpacked.contains_key(*path)
+        }) {
+            let (what, name) = if *files > 1 {
+                ("folder", *name)
+            } else {
+                ("file", path.as_str())
+            };
+            help.push(format!(
+                "to leave a {what} out for good, run `{}`",
+                crate::cli::project::command(&format!("exclude {}", crate::cli::shell_word(name)))
             ));
         }
     }
-    let data = &manifest.data_dir;
-    leave.push(format!(
-        "keep files of your own in a folder outside {data}/"
-    ));
-    // nothing of the data folder was left, as when the folder itself was moved
-    if paths.len() > 1 && placement.unchanged == 0 && paths.len() as u64 == placement.placed {
-        leave.push(format!(
-            "to keep the data folder somewhere else than {data}/, set data_dir in data.toml"
-        ));
-    }
-    output.warn_detailed(
-        Warning::PlacePutBack,
-        &said,
-        Some(&leave.join("; ")),
-        &paths,
-    );
+    output.warn_detailed(Warning::PlacePutBack, &said, Some(&help.join("; ")), &paths);
     for path in paths {
         output.detail(path);
     }
@@ -558,7 +548,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     left_behind(output, manifest, placement.left_behind.as_ref());
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
-    warn_put_back(output, manifest, placement, "a sync would put back");
+    warn_put_back(output, placement, "a sync would put back");
     warn_unreached(output, &placement.unreached);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
@@ -1349,8 +1339,9 @@ mod tests {
         }
     }
 
-    /// the help gives exclude with the first file it can leave out, quoted for a shell, else a
-    /// dataset's removal, and `data_dir` when the whole data folder was gone.
+    /// the help says there is nothing to do, then gives exclude with the first file it can leave
+    /// out, quoted for a shell. the only file of a dataset gets no more, and a whole data folder
+    /// put back no `data_dir`, which a sync of a moved folder tells of apart.
     #[test]
     fn files_put_back_are_counted_and_the_first_five_named() {
         let output = Output::new(
@@ -1366,7 +1357,6 @@ mod tests {
             false,
             false,
         );
-        let manifest = Manifest::parse("[datasets.pets]\nref = \"x\"\n").unwrap();
         let put_back = |paths: &[&str], unexcludable: Vec<(&str, &str)>| Placement {
             put_back: paths.iter().map(|path| (*path).to_owned()).collect(),
             unexcludable: unexcludable
@@ -1379,39 +1369,39 @@ mod tests {
             .map(|n| format!("data/pets/my images/{n}.png"))
             .collect();
         let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-        warn_put_back(&output, &manifest, &put_back(&paths, vec![]), "put back");
+        warn_put_back(&output, &put_back(&paths, vec![]), "put back");
         let first = put_back(&paths[..1], vec![]);
-        warn_put_back(&output, &manifest, &first, "a sync would put back");
-        warn_put_back(&output, &manifest, &put_back(&[], vec![]), "put back");
+        warn_put_back(&output, &first, "a sync would put back");
+        warn_put_back(&output, &put_back(&[], vec![]), "put back");
         let only = put_back(&["data/m/m.csv"], vec![("data/m/m.csv", "m")]);
-        warn_put_back(&output, &manifest, &only, "put back");
+        warn_put_back(&output, &only, "put back");
         let both = put_back(
             &["data/m/m.csv", "data/pets/b.png"],
             vec![("data/m/m.csv", "m")],
         );
-        warn_put_back(&output, &manifest, &both, "put back");
+        warn_put_back(&output, &both, "put back");
         let many: Vec<String> = (0..5000).map(|n| format!("data/pets/{n}.png")).collect();
         let mut gone = put_back(&many.iter().map(String::as_str).collect::<Vec<_>>(), vec![]);
         gone.placed = 5000;
-        warn_put_back(&output, &manifest, &gone, "put back");
-        let own = "keep files of your own in a folder outside data/";
+        warn_put_back(&output, &gone, "put back");
+        let nothing = "there is nothing to do: each sync puts back the files data.lock pins";
         assert_eq!(
             output.warned(),
             [
                 format!(
-                    "put back 7 files that were deleted or moved, since data.lock pins them: data/pets/my images/1.png, data/pets/my images/2.png, data/pets/my images/3.png, data/pets/my images/4.png, data/pets/my images/5.png and 2 more; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`; {own}"
+                    "put back 7 files that were deleted or moved, since data.lock pins them: data/pets/my images/1.png, data/pets/my images/2.png, data/pets/my images/3.png, data/pets/my images/4.png, data/pets/my images/5.png and 2 more; {nothing}; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`"
                 ),
                 format!(
-                    "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`; {own}"
+                    "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; {nothing}; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`"
                 ),
                 format!(
-                    "put back data/m/m.csv, which was deleted or moved, since data.lock pins it; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; {own}"
+                    "put back data/m/m.csv, which was deleted or moved, since data.lock pins it; {nothing}"
                 ),
                 format!(
-                    "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/pets/b.png; to leave a file out for good, run `fetchloom exclude data/pets/b.png`; data/m/m.csv is the only file of m, so to leave it out for good, run `fetchloom remove m`; {own}"
+                    "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/pets/b.png; {nothing}; to leave a file out for good, run `fetchloom exclude data/pets/b.png`"
                 ),
                 format!(
-                    "put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more; to leave a file out for good, run `fetchloom exclude data/pets/0.png`; {own}; to keep the data folder somewhere else than data/, set data_dir in data.toml"
+                    "put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more; {nothing}; to leave a file out for good, run `fetchloom exclude data/pets/0.png`"
                 ),
             ]
         );

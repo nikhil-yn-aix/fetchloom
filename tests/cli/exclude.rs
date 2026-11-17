@@ -542,7 +542,7 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     ok(&output)?;
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it\n  help: to leave a file out for good, run `fetchloom exclude data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/\n"),
+        stderr.contains("warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/pets/images/dog_010_corrupt.png`\n"),
         "{stderr}"
     );
     assert_eq!(fs::read(&dog)?, b"broken");
@@ -562,7 +562,7 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     );
     assert_eq!(document["result"]["placement"]["placed"], 2);
     // a drive that cannot link warns of that too, so the warning is found, not counted
-    let warning = "put back 2 files that were deleted or moved, since data.lock pins them: data/pets/images/cat_001.png, data/pets/labels.csv; to leave a file out for good, run `fetchloom exclude data/pets/images/cat_001.png`; keep files of your own in a folder outside data/";
+    let warning = "put back 2 files that were deleted or moved, since data.lock pins them: data/pets/images/cat_001.png, data/pets/labels.csv; there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/pets/images/cat_001.png`";
     assert!(
         crate::support::warned(&document)
             .iter()
@@ -585,7 +585,7 @@ fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() ->
     ok(&output)?;
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("warning: put back the 3 files in data/tree/sub/, which was deleted or moved, since data.lock pins them\n  help: to leave a folder out for good, run `fetchloom exclude data/tree/sub`; keep files of your own in a folder outside data/\n"),
+        stderr.contains("warning: put back the 3 files in data/tree/sub/, which was deleted or moved, since data.lock pins them\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a folder out for good, run `fetchloom exclude data/tree/sub`\n"),
         "{stderr}"
     );
     for gone in [folder.clone(), sandbox.work().join("data")] {

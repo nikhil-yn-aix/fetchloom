@@ -53,6 +53,11 @@ pub(crate) struct Placement {
     /// its dataset, by path, with that dataset.
     #[serde(skip)]
     pub(crate) unexcludable: BTreeMap<String, String>,
+    /// those of `put_back` that are single compressed files of a dataset that keeps them packed,
+    /// each with the file a person unpacked from it beside it, as `gunzip` leaves it, and the
+    /// dataset.
+    #[serde(skip)]
+    pub(crate) unpacked: BTreeMap<String, (String, String)>,
     /// those of `put_back` in a folder that held no file, with that folder, no higher than
     /// their dataset's own, so a warning names the folder once.
     #[serde(skip)]
@@ -190,6 +195,31 @@ impl Placement {
             }
             self.emptied.insert(target.path.clone(), folder.to_owned());
         }
+        self.unpacked = targets
+            .iter()
+            .filter(|target| back.contains(target.path.as_str()))
+            .filter(|target| {
+                manifest
+                    .datasets
+                    .get(target.dataset)
+                    .is_some_and(|entry| !entry.source.decompress)
+            })
+            .filter_map(|target| {
+                let Some(Ok(name)) = crate::archive::decompressed_name(&target.path) else {
+                    return None;
+                };
+                let beside = match target.path.rsplit_once('/') {
+                    Some((folder, _)) => format!("{folder}/{name}"),
+                    None => name,
+                };
+                let theirs =
+                    survey.disk.contains_key(&beside) && !survey.state.files.contains_key(&beside);
+                theirs.then(|| {
+                    let dataset = target.dataset.to_owned();
+                    (target.path.clone(), (beside, dataset))
+                })
+            })
+            .collect();
         let told = &survey.state.told;
         if survey.data_gone {
             self.moved = !self.refilled.is_empty() && !told.moved;
