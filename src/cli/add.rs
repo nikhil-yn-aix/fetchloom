@@ -44,6 +44,9 @@ pub(super) struct AddProject {
     /// data.lock as read, until the add takes it to lock again.
     pub(super) old: Option<Lock>,
     lock_text: Option<String>,
+    /// what `--from` says the dataset was made from, each name once; none keeps what data.toml
+    /// says.
+    from: Vec<String>,
     /// a failed add could not put back what it changed in data.toml or data.lock, so its error
     /// holds the steps that do.
     unrestored: AtomicBool,
@@ -234,6 +237,12 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
                 .map_err(|error| stopped(context, error, true))?,
         )
     };
+    let mut from: Vec<String> = Vec::with_capacity(args.from.len());
+    for input in &args.from {
+        if !from.contains(input) {
+            from.push(input.clone());
+        }
+    }
     let mut adding = AddProject {
         project,
         held,
@@ -241,9 +250,12 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         manifest: Manifest::parse("")?,
         old: None,
         lock_text: None,
+        from,
         unrestored: AtomicBool::new(false),
     };
-    let read = adding.read();
+    let read = adding
+        .read()
+        .and_then(|()| made_from(&adding.manifest, &adding.from, args.name.as_deref()));
     // another add may have started the project while this one waited to hold it, and then this
     // one neither started it nor may take it back
     let starting = starting && adding.text.is_none();
@@ -416,6 +428,16 @@ fn several(args: &Add, links: Vec<String>) -> Result<Several, Error> {
         .help(format!(
             "add the link to name on its own, as in `{}`",
             super::project::command("add <link> --as <name>")
+        )));
+    }
+    if !args.from.is_empty() {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("--from records what one dataset was made from, and {what} add {count}"),
+        )
+        .help(format!(
+            "add the link made from them on its own, as in `{}`",
+            super::project::command("add <link> --from <dataset>")
         )));
     }
     if !args.filter.select.is_empty() || !args.filter.exclude.is_empty() {
@@ -1212,6 +1234,76 @@ fn settled_before(
         })
 }
 
+/// refuses a `--from` that cannot hold before the add asks any source: a name data.toml has no
+/// dataset of, or that of the dataset `--as` names.
+fn made_from(manifest: &Manifest, from: &[String], name: Option<&str>) -> Result<(), Error> {
+    for input in from {
+        if Some(input.as_str()) == name {
+            return Err(itself(input));
+        }
+        if !manifest.datasets.contains_key(input) {
+            let error = Error::new(
+                Kind::Usage,
+                format!("--from names {input}, which is not a dataset in data.toml"),
+            );
+            return Err(
+                match name::closest(input, manifest.datasets.keys().map(String::as_str)) {
+                    Some(best) => error.help(format!("did you mean {best}?")),
+                    None => error.help("add the datasets it was made from first"),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// the refusal of a dataset `--from` says was made from itself.
+fn itself(name: &str) -> Error {
+    Error::new(Kind::Usage, format!("{name} cannot be made from itself"))
+        .help(format!("leave {name} out of --from"))
+}
+
+/// `manifest` and its text with `--from` written into the dataset of `names` an add pins, or none
+/// when it gives none; a `--from` that names the dataset, or leads back to it through what others
+/// were made from, is refused.
+fn declared(
+    adding: &AddProject,
+    manifest: &Manifest,
+    updated: Option<&str>,
+    names: &[String],
+) -> Result<Option<(String, Manifest)>, Error> {
+    let ([name], false) = (names, adding.from.is_empty()) else {
+        return Ok(None);
+    };
+    if adding.from.contains(name) {
+        return Err(itself(name));
+    }
+    let mut inputs: BTreeMap<&str, &[String]> = manifest
+        .datasets
+        .iter()
+        .map(|(name, entry)| (name.as_str(), entry.from.as_slice()))
+        .collect();
+    inputs.insert(name, &adding.from);
+    if let Some(mut circle) = manifest::circle(&inputs) {
+        circle.pop();
+        let start = circle.iter().position(|along| along == name).unwrap_or(0);
+        circle.rotate_left(start);
+        circle.push(name.clone());
+        return Err(Error::new(
+            Kind::Usage,
+            format!("data.toml would say {}", manifest::told_circle(&circle)),
+        )
+        .help(format!(
+            "leave {} out of --from: a dataset cannot be made from itself, even by way of others",
+            circle[1]
+        )));
+    }
+    let text = updated.or(adding.text.as_deref()).unwrap_or_default();
+    let text = manifest::with_from(text, name, &adding.from)?;
+    let manifest = Manifest::parse(&text)?;
+    Ok(Some((text, manifest)))
+}
+
 /// brings the project in line with `manifest`, the add's data.toml, `updated` its text when the add
 /// changes it. every byte goes into the cache before data.toml or data.lock is written, so an add
 /// cut off while it downloads has changed nothing; a later failure or stop puts both back.
@@ -1228,6 +1320,11 @@ pub(super) async fn sync_add(
     datasets: (&[String], Vec<Given>),
 ) -> Result<Outcome<Placement>, Error> {
     let (names, given) = datasets;
+    let declared = declared(adding, manifest, updated, names)?;
+    let (manifest, updated) = match &declared {
+        Some((text, manifest)) => (manifest, Some(text.as_str())),
+        None => (manifest, updated),
+    };
     let project = work.project;
     // pinning many files takes a while, which a first add sat through untold. downloads tell
     // their own lines, so this one starts once every byte is in, or at once for an import
@@ -1242,11 +1339,13 @@ pub(super) async fn sync_add(
     // a dataset dropped here that the add names comes back, as `sync <name>` brings it back
     super::drop::brought_back(&mut survey, &names.iter().cloned().collect());
     work.placing_next();
-    let (lock, before) = work
+    let (mut lock, before) = work
         .relock(manifest, old, &Upgrade::Nothing, given)
         .instrument(tracing::debug_span!("relock"))
         .await?;
     work.tell_versions_kept(manifest, &before, &lock, &Upgrade::Nothing);
+    // an add is the one word that a dataset was made from its inputs as they are now
+    let recorded = crate::lineage::record(&mut lock, manifest, names, &work.cache);
     // a lock whose files cannot all land is refused before anything is written, so data.lock
     // never pins what no sync can place
     let placed = super::drop::placed_adding(manifest, names, &survey);
@@ -1265,7 +1364,7 @@ pub(super) async fn sync_add(
     if !changed.is_empty() {
         return Err(changed_meanwhile(&changed));
     }
-    let relocked = (!before.holds(&lock)).then(|| lock.render());
+    let relocked = (!recorded.is_empty() || !before.holds(&lock)).then(|| lock.render());
     let mut saved = if updated.is_some() || relocked.is_some() {
         Some(BeforeAdd::save(
             project,
@@ -1329,6 +1428,11 @@ pub(super) async fn sync_add(
     })();
     match committed {
         Ok(outcome) => {
+            for (name, inputs) in recorded.iter().filter(|(_, inputs)| !inputs.is_empty()) {
+                work.context
+                    .output
+                    .step("Recorded", &crate::lineage::told_record(name, inputs));
+            }
             work.drop_unpacked(&lock);
             // parts the old data.lock named stayed until the add could no longer go back to it
             if outcome.lock_changed {
@@ -2447,6 +2551,7 @@ mod tests {
             manifest: Manifest::parse("").unwrap(),
             old: None,
             lock_text: None,
+            from: Vec::new(),
             unrestored: AtomicBool::new(false),
         };
         adding.read().unwrap();

@@ -101,6 +101,7 @@ data.toml holds what a person asked for, data.lock what it resolved to, and `.fe
 | `src/project/lock/merge.rs` | data.toml and data.lock merged a dataset at a time after a git merge, with the choices a person made | `merge` | `Merged`, `Summary`, `Side`, `Choices`, `decide`, `decide_removals`, `kept`, `reads` |
 | `src/project/lock/merge/markers.rs` | each side, and the base, read back from git's conflict lines without the tables a conflict cuts, beside the sides whole from git | `split` | `Sides`, `first` |
 | `src/project/overlap.rs` | where a project's data may never go: the cache folder, each found through the links above it and compared as a disk that ignores case compares names | `overlap`, `Overlap` | `resolved`, `folded` |
+| `src/lineage.rs` | what a dataset was made from: the record of its inputs' trees an add makes, which only an add changes | `record` | `current`, `told_record` |
 | `src/project/state.rs` | `.fetchloom/state`, one JSON document with an index of its records: each placed file's size and time (`Look`) and the last sync's inputs (`Synced`) | `State`, `Placed` | `nanos`, `render`, `read_within`, `read_whole` |
 | `src/project/git.rs` | git found and run as a bounded reader with no shell: each side of an unfinished merge whole, with the base, from its index or the commits being merged, the files git tracks, and a commit named by a revision that is never an option, with the plain files it holds | `stages`, `known`, `resolve`, `blobs` | `find`, `Stages`, `committed`, `tracked`, `Known`, `blob`, `Unnamed` |
 
@@ -287,7 +288,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | file | owns | start at | other items |
 |---|---|---|---|
 | `src/plan.rs` | where every pinned file lands: destinations expanded, clashes found before anything is written, names compared as a disk that ignores case does | `Plan`, `Target` | `Patterns`, `folder`, `from_cache`, `inputs`, `foresee`, `expand`, `unpacked_paths`, `check` |
-| `src/tree.rs` | the identity of a dataset's effective tree: the files a pipeline sees after archives unpack and members tables choose, versioned, which lineage compares | `Identity` |  |
+| `src/tree.rs` | the identity of a dataset's effective tree: the files a pipeline sees after archives unpack and members tables choose, versioned, which lineage compares | `Identity` | `effective` |
 | `src/place.rs` | the filesystem work that fills destinations: reflink, else hardlink, else copy, and copies made durable | `Placer`, `Method` | `Order`, `Unlinked`, `place_all`, `relink_all`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all`, `run_coarse`, `run_hashes` |
 | `src/place/parents.rs` | on unix, directory handles that keep later path swaps out of placement | `Parents` |  |
 | `src/place/parents_windows.rs` | the windows twin: folder handles that deny deletion while placement uses their paths | `Parents` |  |

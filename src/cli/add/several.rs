@@ -474,6 +474,7 @@ mod tests {
             manifest: Manifest::parse("").unwrap(),
             old: None,
             lock_text: None,
+            from: Vec::new(),
             unrestored: AtomicBool::new(false),
         };
         let context = offline_context();
@@ -489,6 +490,7 @@ mod tests {
             decompress: false,
             web_page: false,
             no_sync: false,
+            from: Vec::new(),
             dry: crate::cli::args::DryRun { dry_run: false },
         };
         let reads = |count| {

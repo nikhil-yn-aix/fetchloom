@@ -1106,6 +1106,20 @@ pub(crate) fn with_dataset(
     Ok(document.to_string())
 }
 
+/// data.toml's text with the dataset `name` made from `inputs`, as `add --from` writes it: its
+/// `from` replaced in place, or added at its end.
+pub(crate) fn with_from(text: &str, name: &str, inputs: &[String]) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    if let Some(table) = document
+        .get_mut("datasets")
+        .and_then(|datasets| datasets.get_mut(name))
+        .and_then(Item::as_table_like_mut)
+    {
+        table.insert("from", toml_edit::value(inputs.iter().collect::<Array>()));
+    }
+    Ok(document.to_string())
+}
+
 /// data.toml's text with `key = true` on the dataset `name`, as `add --web-page` and `add
 /// --decompress` write it once the dataset is in.
 pub(crate) fn with_set(text: &str, name: &str, key: &str) -> Result<String, Error> {

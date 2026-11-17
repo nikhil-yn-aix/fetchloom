@@ -10,6 +10,7 @@ mod cli;
 mod digest;
 mod error;
 mod glob;
+mod lineage;
 mod machine;
 mod mirror;
 mod name;

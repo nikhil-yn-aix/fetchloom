@@ -968,6 +968,17 @@ pub(crate) struct Add {
     #[arg(long, conflicts_with = "input_file", help_heading = "options")]
     pub(crate) no_sync: bool,
 
+    /// record that the dataset was made from another in data.toml, by its name; repeat it for
+    /// each. data.lock keeps their files as they are now, so status, lock --check and sync say
+    /// when those change. it only records: fetchloom never runs or checks how a dataset was made
+    #[arg(
+        long,
+        value_name = "dataset",
+        conflicts_with = "no_sync",
+        help_heading = "options"
+    )]
+    pub(crate) from: Vec<String>,
+
     #[command(flatten)]
     pub(crate) dry: DryRun,
 }
