@@ -353,10 +353,11 @@ fn exposed_on(root: &Path) -> Option<String> {
     }
 }
 
-/// whether users other than this one may write the url records of the cache at `root`, so one
-/// there may be theirs: its folder, or the `urls` folder in it, is another user's, or its group or
-/// every user may write it, as a group shares a lab's, setgid and writable by the group, as the
-/// clusters guide makes it.
+/// whether users other than this one may write the records of the cache at `root`, its url,
+/// MD5 and unpacked records, so one there may be theirs: its folder is another user's, or its
+/// group or every user may write it, as a group shares a lab's, setgid and writable by the group,
+/// as the clusters guide makes it; or they may enter it, and a folder of its records is another
+/// user's or one they may write.
 #[cfg(unix)]
 fn others_write(root: &Path) -> bool {
     others_write_as(root, rustix::process::geteuid().as_raw())
@@ -365,7 +366,15 @@ fn others_write(root: &Path) -> bool {
 /// [`others_write`] as the user `user` sees it.
 #[cfg(unix)]
 fn others_write_as(root: &Path, user: u32) -> bool {
-    others_may_write(root, user) || others_may_write(&root.join("urls"), user)
+    use std::os::unix::fs::MetadataExt;
+    // a cache only its owner may enter, as fetchloom makes one, keeps to itself the folders in it
+    // a umask of 002 left writable by the group
+    let entered = fs::metadata(root).is_ok_and(|found| found.mode() & 0o011 != 0);
+    others_may_write(root, user)
+        || entered
+            && ["urls", "stated", "stated/md5", "unpacked"]
+                .iter()
+                .any(|records| others_may_write(&root.join(records), user))
 }
 
 /// whether someone other than `user` may write `folder`: it is another user's, or its group or
@@ -3034,16 +3043,17 @@ pub(crate) mod tests {
             assert!(cache.vouched_url_record(url, was).is_some(), "{was:?}");
         }
         // the cache's folder as a group shares it, or its group or every user may write it, or
-        // the `urls` folder in it as every user may write it
+        // the `urls` folder in it as every user may enter the cache and write it
         let urls = cache.root.join("urls");
-        for (folder, mode) in [
-            (&cache.root, 0o770),
-            (&cache.root, 0o777),
-            (&urls, 0o777),
-            (&cache.root, 0o2770),
+        for (root, records) in [
+            (0o770, 0o700),
+            (0o777, 0o700),
+            (0o755, 0o777),
+            (0o2770, 0o700),
         ] {
-            fs::set_permissions(folder, fs::Permissions::from_mode(mode)).unwrap();
-            if fs::metadata(folder).unwrap().mode() & 0o7777 != mode {
+            fs::set_permissions(&urls, fs::Permissions::from_mode(records)).unwrap();
+            fs::set_permissions(&cache.root, fs::Permissions::from_mode(root)).unwrap();
+            if fs::metadata(&cache.root).unwrap().mode() & 0o7777 != root {
                 return crate::test_skips::skip("permissions", "this disk keeps no setgid folder");
             }
             let opened = Cache::open(cache.root.clone()).unwrap();
@@ -3055,8 +3065,7 @@ pub(crate) mod tests {
                 assert_eq!(
                     opened.vouched_url_record(url, was).is_some(),
                     stands,
-                    "{} {mode:o} {was:?}",
-                    folder.display()
+                    "{root:o} {records:o} {was:?}"
                 );
             }
             for folder in [&cache.root, &urls] {
@@ -3065,38 +3074,69 @@ pub(crate) mod tests {
         }
     }
 
-    /// others may write a cache whose folder, or `urls` folder, every user may write, though
-    /// its group may not, or that another user owns, as the user a run is sees it.
+    /// others may write a cache whose folder, or a folder of its records they may reach, every
+    /// user may write, though its group may not, or that another user owns, as the user a run is
+    /// sees it; a folder in a cache only its owner may enter is no one else's.
     #[cfg(unix)]
     #[test]
     fn a_cache_another_user_owns_or_every_user_may_write_is_written_by_others() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let (_dir, cache) = cache();
-        let (root, urls) = (cache.root.clone(), cache.root.join("urls"));
-        fs::create_dir_all(&urls).unwrap();
+        let root = cache.root.clone();
+        let records = [
+            ("its urls folder", root.join("urls")),
+            ("its MD5 folder", root.join("stated")),
+            ("its MD5 records folder", root.join("stated").join("md5")),
+            ("its unpacked folder", root.join("unpacked")),
+        ];
+        for (_, folder) in &records {
+            fs::create_dir_all(folder).unwrap();
+            fs::set_permissions(folder, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let mine = fs::metadata(&root).unwrap().uid();
         let mode = |folder: &Path, mode: u32| {
             fs::set_permissions(folder, fs::Permissions::from_mode(mode)).unwrap();
+            others_write_as(&root, mine)
         };
-        let mut seen = Vec::new();
-        for (case, folder) in [("its folder", &root), ("its urls folder", &urls)] {
-            mode(&root, 0o700);
-            mode(&urls, 0o700);
-            seen.push(("private".to_owned(), others_write_as(&root, mine)));
-            mode(folder, 0o757);
-            seen.push((
-                format!("{case}, every user writes"),
-                others_write_as(&root, mine),
-            ));
-            mode(folder, 0o700);
+        let mut seen = vec![
+            ("private".to_owned(), mode(&root, 0o700)),
+            ("private, every user enters".to_owned(), mode(&root, 0o755)),
+            (
+                "its folder, every user writes".to_owned(),
+                mode(&root, 0o757),
+            ),
+        ];
+        mode(&root, 0o700);
+        let another = others_write_as(&root, mine + 1);
+        seen.push(("its folder, another user's".to_owned(), another));
+        for (case, folder) in &records {
+            mode(&root, 0o755);
+            seen.push((format!("{case}, every user writes"), mode(folder, 0o757)));
+            let alone = mode(&root, 0o700);
+            seen.push((format!("{case}, in a cache only its owner enters"), alone));
+            mode(folder, 0o755);
             let another = others_may_write(folder, mine + 1);
             seen.push((format!("{case}, another user's"), another));
         }
-        let another = others_write_as(&root, mine + 1);
-        seen.push(("the cache, another user's".to_owned(), another));
+        let urls = &records[0].1;
+        mode(&root, 0o750);
+        let group = mode(urls, 0o770);
+        seen.push((
+            "its urls folder, in a cache its group enters".to_owned(),
+            group,
+        ));
+        mode(&root, 0o701);
+        let others = mode(urls, 0o707);
+        seen.push((
+            "its urls folder, in a cache every user enters".to_owned(),
+            others,
+        ));
         let expected: Vec<(String, bool)> = seen
             .iter()
-            .map(|(case, _)| (case.clone(), case != "private"))
+            .map(|(case, _)| {
+                let alone = case.starts_with("private") || case.ends_with("only its owner enters");
+                (case.clone(), !alone)
+            })
             .collect();
         assert_eq!(seen, expected);
     }

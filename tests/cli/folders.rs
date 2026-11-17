@@ -998,6 +998,20 @@ pub(crate) fn shared_cache(sandbox: &Sandbox) -> Result<bool> {
     Ok(fs::metadata(&cache)?.mode() & 0o7777 == 0o2770)
 }
 
+/// gives the group write on every folder in `folder`, as a umask of 002 makes them.
+#[cfg(unix)]
+fn group_writable(folder: &std::path::Path) -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    for entry in fs::read_dir(folder)? {
+        let path = entry?.path();
+        if fs::symlink_metadata(&path)?.is_dir() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o775))?;
+            group_writable(&path)?;
+        }
+    }
+    Ok(())
+}
+
 /// another member of the cache's group records `link` as serving [`FORGED`] under the `ETag`
 /// `"i1"` the server gives iris.csv: a run of their own while the server sent those bytes, as
 /// any member may write a record of their choosing. then the server sends iris.csv again, and
@@ -1424,7 +1438,9 @@ fn a_teammate_in_a_shared_cache_whose_records_agree_downloads_nothing() -> Resul
 }
 
 /// in a cache no group shares, only this user writes its records, so an add of a link it
-/// fetched before asks whether the file changed, and downloads nothing when it did not.
+/// fetched before asks whether the file changed, and downloads nothing when it did not. the
+/// folders in it may be group-writable, as a umask of 002 makes them: no one else may enter the
+/// cache's own folder, as fetchloom makes it.
 #[test]
 fn an_add_in_a_private_cache_asks_with_its_own_record() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1433,6 +1449,8 @@ fn an_add_in_a_private_cache_asks_with_its_own_record() -> Result {
     let elsewhere = sandbox.folder("elsewhere")?;
     let got = sandbox.command_in(&elsewhere, &["get", &link]).output()?;
     assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    #[cfg(unix)]
+    group_writable(&sandbox.cache())?;
     server.unchanged("/data/iris.csv", "\"i1\"");
     let before = server.requests().len();
     let added = sandbox.run(&["add", &link])?;
