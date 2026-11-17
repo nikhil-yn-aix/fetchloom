@@ -24,6 +24,7 @@ use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, Source};
 use crate::project::state::{Placed, State};
 use crate::stop::Stop;
+use crate::suggested::shell_word;
 use crate::{name, place, plan, units};
 
 /// the folder `start`, found below the project at `root`, as a path from the project's top with
@@ -315,14 +316,6 @@ fn read_line(walked: &Walked, cloned: bool, shown: &str) -> String {
     )
 }
 
-fn command(rest: &str) -> String {
-    super::super::project::command(rest)
-}
-
-fn shell(word: &str) -> String {
-    super::super::shell_word(word).into_owned()
-}
-
 /// refuses a folder that cannot be an output's: the project's own, or one data.toml could not
 /// name as `at`, by the rules a cloned data.toml's is held to.
 fn refuse_folder(manifest: &Manifest, at: &str, shown: &str) -> Result<(), Error> {
@@ -333,7 +326,7 @@ fn refuse_folder(manifest: &Manifest, at: &str, shown: &str) -> Result<(), Error
         )
         .help(format!(
             "pin the folder your pipeline writes, as in `{}`",
-            command("add data/processed --as processed")
+            crate::suggested::command("add data/processed --as processed")
         )));
     }
     let text = format!(
@@ -393,7 +386,7 @@ fn output_name<'m>(
         )
         .help(format!(
             "run `{}` to pin it again, or rename datasets.{owner} in data.toml",
-            command(&format!("add {} --as {owner}", shell(shown)))
+            crate::suggested::command(&format!("add {} --as {owner}", shell_word(shown)))
         ))),
         (_, Some((owner, entry))) => Ok((owner.clone(), Some(entry))),
         (Some(asked), None) => {
@@ -738,7 +731,7 @@ fn approved(
         return Ok(());
     }
     let output = &context.output;
-    let again = command(&format!("add {} --as {name} --yes", shell(shown)));
+    let again = crate::suggested::command(&format!("add {} --as {name} --yes", shell_word(shown)));
     if output.can_ask() {
         output.step("Changed", &format!("{name} · {}", changes.summary()));
         for line in changes.lines() {
@@ -761,7 +754,7 @@ fn approved(
             }
             Err(error.help(format!(
                 "run `{again}` to pin what it holds now, or `{}` to make it hold just the files {name} pins",
-                command(&format!("sync --force {name}"))
+                crate::suggested::command(&format!("sync --force {name}"))
             )))
         }
     }
