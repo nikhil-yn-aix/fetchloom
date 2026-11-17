@@ -902,8 +902,9 @@ pub(super) fn word_in_data_folder(typed: &str, here: &Path) -> Option<Error> {
         .then(|| in_data_folder((&start, typed), &project.root, &data_dir, here))
 }
 
-/// the refusal of `shown`, `start` inside `data_dir` of the project at `root`, seen from `here`,
-/// whose help moves it out and adds it back, or sets the `data_dir` that keeps it as it is.
+/// the refusal of `shown`, `start`, a file inside `data_dir` of the project at `root`, seen from
+/// `here`, whose help moves it out and adds it back, or sets the `data_dir` that keeps it as it
+/// is. a folder there is pinned where it is, as an output, and never refused here.
 fn in_data_folder(
     (start, shown): (&Path, &str),
     root: &Path,
@@ -925,8 +926,7 @@ fn in_data_folder(
         .manifest()
         .ok()
         .map(|(_, manifest)| manifest);
-    if start != root.join(data_dir)
-        && let Some(manifest) = &manifest
+    if let Some(manifest) = &manifest
         && let Some(owner) = owner(start, &root, manifest)
     {
         return error.help(format!(
@@ -937,8 +937,8 @@ fn in_data_folder(
     let named = start
         .file_name()
         .and_then(|own| own.to_str())
-        .zip(dataset_name(start, start.is_file()));
-    let Some((own, name)) = named.filter(|_| start != root.join(data_dir)) else {
+        .zip(dataset_name(start, true));
+    let Some((own, name)) = named else {
         return error.help(format!("move what you keep there out of it, or {keep}"));
     };
     // the name data.toml has already would make the add take the next free one
@@ -967,16 +967,12 @@ fn in_data_folder(
     } else {
         format!("{up}{out}")
     };
-    let renamed = if dataset_name(&root.join(&out), start.is_file()).as_deref() == Some(&name) {
+    let renamed = if dataset_name(&root.join(&out), true).as_deref() == Some(&name) {
         String::new()
     } else {
         format!(" --as {name}")
     };
-    // `mv .` cannot move the folder it stands in, so that one is named from its parent
-    let from = match here.strip_prefix(start) {
-        Ok(inside) => format!("{}{own}", "../".repeat(inside.components().count() + 1)),
-        Err(_) => shown.trim().to_owned(),
-    };
+    let from = shown.trim().to_owned();
     let to = moved.strip_prefix("./").unwrap_or(&moved).to_owned();
     // after -C the folder the person ran in is another, so the paths go whole
     let whole =
@@ -994,8 +990,8 @@ fn in_data_folder(
     ))
 }
 
-/// the dataset of `manifest` whose folder `start` is, or whose file there data.lock pins: an
-/// add of `start` would bring in what that dataset holds already.
+/// the dataset of `manifest` whose file at `start` data.lock pins: an add of `start` would bring
+/// in what that dataset holds already.
 fn owner(start: &Path, root: &Path, manifest: &Manifest) -> Option<String> {
     let lock = Project::at(root.to_path_buf()).lock().ok().flatten();
     manifest
@@ -1009,11 +1005,9 @@ fn owner(start: &Path, root: &Path, manifest: &Manifest) -> Option<String> {
                 return false;
             };
             let inside = inside.to_string_lossy().replace('\\', "/");
-            inside.is_empty()
-                || lock
-                    .as_ref()
-                    .and_then(|lock| lock.get(name))
-                    .is_some_and(|locked| locked.files.iter().any(|file| file.path == inside))
+            lock.as_ref()
+                .and_then(|lock| lock.get(name))
+                .is_some_and(|locked| locked.files.iter().any(|file| file.path == inside))
         })
         .cloned()
 }
