@@ -344,8 +344,8 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
     in_folders_with_shell_words(&sandbox, &weird)
 }
 
-/// a single compressed file added with `--decompress`, and a sync that decompresses what data.toml
-/// asks of it, each decoded by fetchloom itself.
+/// a single compressed file added with `--decompress`, a sync that decompresses what data.toml
+/// asks of it, and a get of each into a folder and at `-o`, each decoded by fetchloom itself.
 fn decompressing(sandbox: &Sandbox, planted: &Planted, routes: &Routes) -> Result {
     let work = sandbox.work();
     planted.ok(
@@ -369,6 +369,15 @@ fn decompressing(sandbox: &Sandbox, planted: &Planted, routes: &Routes) -> Resul
     )?;
     planted.ok(sandbox, &["sync", "notes"])?;
     assert_eq!(fs::read(work.join("data/notes/notes.txt"))?, b"n\n");
+    let got = sandbox.folder("decoded")?;
+    let reads = format!("{}/reads.csv.gz", routes.url);
+    let into = got.display().to_string();
+    planted.ok(sandbox, &["get", &reads, "--decompress", "--dir", &into])?;
+    assert_eq!(fs::read(got.join("reads.csv"))?, b"r\n");
+    let notes = format!("{}/notes.txt.bz2", routes.url);
+    let at = got.join("notes.txt").display().to_string();
+    planted.ok(sandbox, &["get", &notes, "--decompress", "-o", &at])?;
+    assert_eq!(fs::read(got.join("notes.txt"))?, b"n\n");
     Ok(())
 }
 
