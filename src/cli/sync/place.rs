@@ -1863,13 +1863,13 @@ fn output_gained(manifest: &Manifest, survey: &Survey) -> bool {
         .filter(|entry| entry.place)
         .filter_map(|entry| entry.at.as_deref())
         .collect();
+    // the folder first: a look into the records costs a search of them for every file
     !outputs.is_empty()
         && survey.disk.keys().any(|path| {
-            let name = path.rsplit('/').next().unwrap_or(path);
-            !survey.state.files.contains_key(path)
-                && outputs.iter().any(|at| super::disk::is_inside(path, at))
+            outputs.iter().any(|at| super::disk::is_inside(path, at))
+                && !survey.state.files.contains_key(path)
                 && !survey.made_by_system(path)
-                && !place::is_copy_temporary(name)
+                && !place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path))
                 && !passed_over(manifest, path)
         })
 }
