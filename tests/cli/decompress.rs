@@ -206,6 +206,21 @@ fn decompress_in_data_toml_switches_without_a_new_pin() -> Result {
     let lock_path = sandbox.work().join("data.lock");
     let first_lock = fs::read_to_string(&lock_path)?;
     assert!(!first_lock.contains("unpacks_to"), "{first_lock}");
+    // the same link added again asking for the other setting needs a person's choice
+    let again = sandbox.run(&["--json", "add", &server.url, "--decompress"])?;
+    assert_eq!(again.status.code(), Some(2), "{}", text(&again.stderr)?);
+    let error = &json(&again)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        format!(
+            "{} is already in data.toml as iris, with another decompress setting",
+            server.url
+        )
+    );
+    assert_eq!(
+        error["help"],
+        "change decompress on iris in data.toml, or pass --as <name> to add it a second time"
+    );
 
     fs::write(&manifest, format!("{plain}decompress = true\n"))?;
     ok(&sandbox.run(&["sync"])?)?;

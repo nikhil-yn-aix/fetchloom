@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::fs;
 
-use super::super::samples::{Scratch, compress, tar_of, zip_of, zstd_asking_for};
+use super::super::samples::{Scratch, compress, tar_of, xz_asking_for, zip_of, zstd_asking_for};
 use super::super::{Format, Limits};
 use super::*;
 use crate::cache::Member;
@@ -233,29 +233,38 @@ fn a_compressed_tar_or_a_plain_file_is_left_as_it_came() {
     }
 }
 
-/// a zstd frame asking for a window past what the memory setting allows is refused, naming the
-/// file and the setting, before it decompresses.
+/// an xz stream asking for more memory, or a zstd frame for a larger window, than the memory
+/// setting allows is refused, naming the file and the setting, before it decompresses.
 #[test]
-fn a_window_past_the_memory_allowed_is_refused() {
-    let scratch = Scratch::new();
-    let packed = zstd_asking_for(31, CSV);
+fn a_stream_past_the_memory_allowed_is_refused() {
     let limits = Limits {
         memory: 256 << 20,
         ..Limits::default()
     };
-    let err = decompress_in(&scratch, &packed, "iris.csv", &limits, &|_| false).unwrap_err();
-    assert_eq!(err.kind, Kind::SourceInvalid);
-    assert_eq!(
-        err.message,
-        "the file's zstd stream needs a window larger than 128.0 MiB to decompress"
-    );
-    assert_eq!(
-        err.help.as_deref(),
-        Some(
-            "if you trust the file, raise FETCHLOOM_MEMORY, which gives each file a quarter of it, or memory in the settings file. otherwise keep the file packed with decompress = false on its dataset in data.toml, or add it without --decompress"
-        )
-    );
-    assert_eq!(held(&scratch), (1, 0));
+    // a 512 MiB dictionary, and a window of 2 GiB
+    let xz = xz_asking_for(&compress(Format::TarXz, CSV), 34);
+    for (packed, message) in [
+        (
+            xz,
+            "the file's xz stream needs more than 256.0 MiB of memory to decompress",
+        ),
+        (
+            zstd_asking_for(31, CSV),
+            "the file's zstd stream needs a window larger than 128.0 MiB to decompress",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let err = decompress_in(&scratch, &packed, "iris.csv", &limits, &|_| false).unwrap_err();
+        assert_eq!(err.kind, Kind::SourceInvalid);
+        assert_eq!(err.message, message);
+        assert_eq!(
+            err.help.as_deref(),
+            Some(
+                "if you trust the file, raise FETCHLOOM_MEMORY, which gives each file a quarter of it, or memory in the settings file. otherwise keep the file packed with decompress = false on its dataset in data.toml, or add it without --decompress"
+            )
+        );
+        assert_eq!(held(&scratch), (1, 0));
+    }
 }
 
 /// what a file decompresses to counts against the room the cache's disk had free.
