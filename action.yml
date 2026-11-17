@@ -255,7 +255,12 @@ runs:
                 save=false
                 names=$(printf '%s' "$said" | sed -n 's/.*"asks":\[\([^]]*\)\].*/\1/p' |
                   sed 's/{"dataset":"\([^"]*\)","access":"[^"]*"}/\1/g; s/,/, /g' | tr -cd 'a-z0-9_, -')
-                echo "::notice title=fetchloom cache::the cache is not saved: anyone who opens a pull request on this public repository could read it, and these datasets may be private, since their source does not say anyone may read them or a key of this runner went with their files: $names. set the action's cache input to always to save it anyway, or to never to keep none without this note"
+                # a dry run that failed, or an answer this step cannot read, names no datasets
+                if [ -n "$names" ]; then
+                  echo "::notice title=fetchloom cache::the cache is not saved: anyone who opens a pull request on this public repository could read it, and these datasets may be private, since their source does not say anyone may read them or a key of this runner went with their files: $names. set the action's cache input to always to save it anyway, or to never to keep none without this note"
+                else
+                  echo "::notice title=fetchloom cache::the cache is not saved: fetchloom could not say who may read this project's data, so nothing is shared with this public repository's pull requests. set the action's cache input to always to save it anyway, or to never to keep none without this note"
+                fi
                 ;;
             esac
           fi

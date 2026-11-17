@@ -312,7 +312,11 @@ class CacheTests(unittest.TestCase):
         self.assertIsNone(run["failed"])
         self.assertIn("restore the cache", run["ran"])
         self.assertEqual(run["saved"], [])
-        self.assertEqual(len(run["notices"]), 1, run["said"])
+        self.assertEqual(run["notices"], [
+            "::notice title=fetchloom cache::the cache is not saved: fetchloom could not say who may read this "
+            "project's data, so nothing is shared with this public repository's pull requests. set the action's "
+            "cache input to always to save it anyway, or to never to keep none without this note"])
+        self.assertFalse([notice for notice in run["notices"] if ": ." in notice], "a list of no datasets")
 
     def test_a_cache_input_other_than_the_three_fails_the_run(self):
         run = self.walk(cache="sometimes")
