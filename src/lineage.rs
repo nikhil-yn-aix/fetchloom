@@ -26,7 +26,8 @@
 //! staleness is direct only: an input that is itself made from a changed dataset raises nothing
 //! until its own files change. a stale dataset is told once per run, naming each input that
 //! changed; status and `lock --check` also tell each input they cannot check, which sync leaves
-//! to them. either way the exit code stays as it was.
+//! to them. either way the exit code stays as it was, but for `lock --check --fail-on-stale`,
+//! which a stale dataset fails with `derived.stale`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -34,6 +35,7 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value};
 
 use crate::cache::Cache;
+use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
 use crate::project::lock::{Lock, Recorded, UNKNOWN};
 use crate::project::manifest::{Entry, Manifest};
@@ -264,27 +266,75 @@ fn pinned(manifest: &Manifest, lock: &Lock, name: &str) -> bool {
         .is_some_and(|locked| locked.drift(entry).is_none())
 }
 
-/// tells what `judged` found: for each dataset, once, the inputs whose files changed, and with
-/// `unchecked`, each input it cannot check. the exit code stays as it was.
-pub(crate) fn tell(output: &Output, judged: &[Judged], unchecked: bool) {
+/// the inputs of `judged` whose files changed, by the dataset made from them.
+fn changed(judged: &[Judged]) -> BTreeMap<&str, Vec<&Judged>> {
     let mut changed: BTreeMap<&str, Vec<&Judged>> = BTreeMap::new();
     for one in judged.iter().filter(|one| one.state == State::Changed) {
         changed.entry(one.dataset.as_str()).or_default().push(one);
     }
-    for (dataset, inputs) in changed {
-        let names: Vec<&str> = inputs.iter().map(|one| one.input.as_str()).collect();
+    changed
+}
+
+/// what a dataset made from `inputs`, whose files changed, says: that it may be stale, and how to
+/// pin it anew.
+fn said(dataset: &str, inputs: &[&Judged]) -> (String, String) {
+    let names: Vec<String> = inputs
+        .iter()
+        .map(|one| format!("{}'s", one.input))
+        .collect();
+    (
+        format!(
+            "{dataset} may be stale: {} files changed since {dataset} was pinned from them",
+            units::listed(&names, "and")
+        ),
+        format!("rerun your pipeline, then `{}`", inputs[0].again),
+    )
+}
+
+/// tells, once for each dataset of `judged`, the inputs whose files changed. the exit code stays
+/// as it was.
+pub(crate) fn tell_stale(output: &Output, judged: &[Judged]) {
+    for (dataset, inputs) in changed(judged) {
+        let (message, help) = said(dataset, &inputs);
         let facts = inputs.iter().map(|one| facts(one)).collect();
-        output.warn_facts(
-            Warning::DerivedStale,
-            &stale(dataset, &names),
-            &format!("rerun your pipeline, then `{}`", inputs[0].again),
-            &[],
-            facts,
-        );
+        output.warn_facts(Warning::DerivedStale, &message, &help, &[], facts);
     }
-    if !unchecked {
-        return;
-    }
+}
+
+/// the failure of a check told to fail while a dataset of `judged` may be stale, as
+/// `--fail-on-stale` asks, or none.
+pub(crate) fn stale_error(judged: &[Judged]) -> Option<Error> {
+    let changed = changed(judged);
+    let error = match changed.len() {
+        0 => return None,
+        1 => {
+            let (dataset, inputs) = changed.iter().next()?;
+            let (message, help) = said(dataset, inputs);
+            Error::new(Kind::DerivedStale, message).help(help)
+        }
+        _ => {
+            let names: Vec<&str> = changed.keys().copied().collect();
+            changed
+                .iter()
+                .map(|(dataset, inputs)| {
+                    let (message, help) = said(dataset, inputs);
+                    format!("{message}; {help}")
+                })
+                .fold(
+                    Error::new(
+                        Kind::DerivedStale,
+                        format!("{} may be stale", units::listed(&names, "and")),
+                    ),
+                    Error::detail,
+                )
+                .help("rerun the pipeline that makes each, then add it again, as its line says")
+        }
+    };
+    Some(error)
+}
+
+/// tells each input of `judged` whose state cannot be checked, with what would let it be.
+pub(crate) fn tell_unchecked(output: &Output, judged: &[Judged]) {
     for one in judged {
         let (dataset, input) = (one.dataset.as_str(), one.input.as_str());
         let (why, help, details) = match &one.state {
@@ -336,15 +386,6 @@ pub(crate) fn tell(output: &Output, judged: &[Judged], unchecked: bool) {
             vec![facts(one)],
         );
     }
-}
-
-/// what a stale `dataset` says of the inputs `names`, whose files changed.
-fn stale(dataset: &str, names: &[&str]) -> String {
-    let owned: Vec<String> = names.iter().map(|name| format!("{name}'s")).collect();
-    format!(
-        "{dataset} may be stale: {} files changed since {dataset} was pinned from them",
-        units::listed(&owned, "and")
-    )
 }
 
 /// the help that names the add that records `one`'s input as it is now.
@@ -614,5 +655,55 @@ mod tests {
             [],
             "a record data.toml no longer names is kept, and judges nothing"
         );
+    }
+
+    #[test]
+    fn a_check_told_to_fail_names_each_stale_dataset_and_its_inputs() {
+        let made = manifest(&[
+            ("processed", "from = [\"iris\", \"penguins\"]"),
+            ("summary", "from = [\"iris\"]"),
+            ("iris", ""),
+            ("penguins", ""),
+        ]);
+        let then = |name: &str| Some(tree_of(name, b"then"));
+        let pins = lock(vec![
+            pin(
+                &made,
+                "processed",
+                b"counts",
+                false,
+                vec![
+                    record("iris", then("iris")),
+                    record("penguins", then("penguins")),
+                ],
+            ),
+            pin(
+                &made,
+                "summary",
+                b"sums",
+                false,
+                vec![record("iris", then("iris"))],
+            ),
+            pin(&made, "iris", b"now", false, Vec::new()),
+            pin(&made, "penguins", b"now", false, Vec::new()),
+        ]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let judged = judge(&made, &pins, &cache);
+        let error = stale_error(&judged).unwrap();
+        assert_eq!(error.kind, Kind::DerivedStale);
+        assert_eq!(error.message, "processed and summary may be stale");
+        assert_eq!(
+            error.details,
+            [
+                "processed may be stale: iris's and penguins's files changed since processed was pinned from them; rerun your pipeline, then `fetchloom add <link> --as processed`",
+                "summary may be stale: iris's files changed since summary was pinned from them; rerun your pipeline, then `fetchloom add <link> --as summary`",
+            ]
+        );
+        let fresh = lock(vec![
+            pin(&made, "processed", b"counts", false, Vec::new()),
+            pin(&made, "iris", b"now", false, Vec::new()),
+        ]);
+        assert!(stale_error(&judge(&made, &fresh, &cache)).is_none());
     }
 }

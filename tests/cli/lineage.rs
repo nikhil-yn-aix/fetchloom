@@ -5,7 +5,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::support::{Result, Routes, Sandbox, file, json, ok, sha256_hex, text, warning, zip_of};
+use crate::support::{
+    Result, Routes, Sandbox, file, json, kinds, ok, sha256_hex, text, warning, zip_of,
+};
 
 const PATH: &str = "/files/iris.csv";
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -666,5 +668,69 @@ fn inputs_that_changed_together_make_one_line_and_a_warning_each() -> Result {
         .filter_map(|warning| warning["input"].as_str())
         .collect();
     assert_eq!(inputs, ["penguins", "iris"], "in the order from names them");
+    Ok(())
+}
+
+#[test]
+fn fail_on_stale_makes_lock_check_fail_with_a_code_of_its_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = made_from_iris(&sandbox)?;
+    ok(&sandbox.run(&["lock", "--check", "--fail-on-stale"])?)?;
+    iris_changed(&sandbox, &routes)?;
+    ok(&sandbox.run(&["lock", "--check"])?)?;
+    let output = sandbox.run(&["lock", "--check", "--fail-on-stale"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(60), "{stderr}");
+    assert!(
+        stderr.contains("error: processed may be stale: iris's files changed since processed was pinned from them\n"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("warning:"),
+        "the error says it once: {stderr}"
+    );
+    let output = sandbox.run(&["--json", "lock", "--check", "--fail-on-stale"])?;
+    assert_eq!(output.status.code(), Some(60));
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "derived.stale");
+    assert_eq!(
+        error["message"],
+        "processed may be stale: iris's files changed since processed was pinned from them"
+    );
+    assert_eq!(
+        error["help"],
+        "rerun your pipeline, then `fetchloom add <folder> --as processed`"
+    );
+    assert!(!kinds(&document).contains(&"derived.stale"), "{document}");
+    // a data.lock behind data.toml is what a check says first
+    let toml = format!(
+        "{}\n[datasets.extra]\nref = \"{}/files/extra.csv\"\n",
+        read(&sandbox, "data.toml")?,
+        routes.url
+    );
+    fs::write(sandbox.work().join("data.toml"), toml)?;
+    let output = sandbox.run(&["--json", "lock", "--check", "--fail-on-stale"])?;
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(json(&output)?["errors"][0]["kind"], "lock.outdated");
+    let output = sandbox.run(&["--json", "lock", "--fail-on-stale"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["message"], "--fail-on-stale only goes with --check");
+    assert_eq!(
+        error["help"],
+        "run `fetchloom lock --check --fail-on-stale`"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_input_no_one_can_check_never_fails_the_check() -> Result {
+    let sandbox = Sandbox::new()?;
+    made_from_iris(&sandbox)?;
+    ok(&sandbox.run(&["remove", "iris"])?)?;
+    let output = sandbox.run(&["--json", "lock", "--check", "--fail-on-stale"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(kinds(&json(&output)?), ["derived.unchecked"]);
     Ok(())
 }

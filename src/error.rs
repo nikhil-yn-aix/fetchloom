@@ -44,6 +44,9 @@ pub(crate) enum Kind {
     /// --check` found a file data.lock pins that no mirror or source serves, or a dataset its
     /// source no longer lists.
     NotReady,
+    /// `lock --check --fail-on-stale` found a dataset whose inputs' files changed since it was
+    /// pinned from them.
+    DerivedStale,
     Interrupted,
 }
 
@@ -70,6 +73,7 @@ impl Kind {
             Kind::ProjectChanged => "project.changed",
             Kind::Outdated => "lock.outdated",
             Kind::NotReady => "data.not_ready",
+            Kind::DerivedStale => "derived.stale",
             Kind::Interrupted => "interrupted",
         }
     }
@@ -91,6 +95,7 @@ impl Kind {
             Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,
             Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid | Kind::ProjectChanged => 50,
+            Kind::DerivedStale => 60,
             Kind::Interrupted => 130,
         }
     }
@@ -569,6 +574,7 @@ pub(crate) mod tests {
             ProjectChanged,
             Outdated,
             NotReady,
+            DerivedStale,
             Interrupted,
         ]
         .to_vec()

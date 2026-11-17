@@ -20,6 +20,7 @@ fetchloom lock [options]
 | option | effect |
 |---|---|
 | `--check` | check manifest membership, spec hashes and `extract`, without changing anything |
+| `--fail-on-stale` | with `--check`, fail with `derived.stale`, exit 60, when a dataset may be stale: the files of a dataset its `from` names changed since data.lock pinned it from them. without it, the check warns and passes |
 | `--upgrade [name ...]` | resolve named datasets again; with no names, consider every dataset |
 | `-n`, `--dry-run` | list what locking would change without writing `data.lock` or downloading |
 | `--ours <name>` | after a git merge or rebase, keep our side, as git names it, of a dataset the merge needs a choice for; repeat it for more |

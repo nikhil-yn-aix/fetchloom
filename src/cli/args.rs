@@ -1097,6 +1097,11 @@ pub(crate) struct Lock {
     #[arg(long, conflicts_with = "upgrade", help_heading = "options")]
     pub(crate) check: bool,
 
+    /// with --check, fail with exit 60 when a dataset may be stale: the files of a dataset its
+    /// from names changed since an add recorded them. without it, that is a warning
+    #[arg(long, help_heading = "options")]
+    pub(crate) fail_on_stale: bool,
+
     /// after a git merge or rebase, keep our side, as git names it, of a dataset the two sides
     /// changed each their own way. repeat it for more
     #[arg(long, value_name = "name", conflicts_with_all = ["check", "upgrade"], help_heading = "options")]
