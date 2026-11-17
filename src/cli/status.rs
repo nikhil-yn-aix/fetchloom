@@ -19,6 +19,7 @@ use crate::plan;
 use crate::project::lock::archives;
 use crate::project::lock::{Lock, LockedFile, Waiting};
 use crate::project::manifest::{self, Manifest};
+use crate::project::state::Look;
 use crate::project::{Project, native};
 use crate::stop::Stop;
 use crate::threads::Threads;
@@ -126,6 +127,10 @@ pub(super) struct Status {
     /// outdated files that are links to the cache's copy someone made writable.
     #[serde(skip)]
     unsealed: HashSet<String>,
+    /// files of outputs that hashing found holding their pinned bytes though they look otherwise
+    /// than recorded, each with its recorded look and its look now, which the state keeps.
+    #[serde(skip)]
+    verified_outputs: Vec<(String, Look, Look)>,
     /// the datasets among `unlocked` that data.lock pins under another name data.toml does not
     /// have, which a sync carries over, each with that name.
     #[serde(skip)]
@@ -667,6 +672,7 @@ fn check(
     }
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &manifest, &survey, &planned)?;
+    keep_verified(project, &status.verified_outputs, survey.started);
     // a dataset dropped here whose files a drop cut short left is told in one line
     let dropped: HashSet<&str> = status.dropped.iter().map(String::as_str).collect();
     for path in &status.unneeded {
@@ -872,6 +878,10 @@ fn compare(
                 place::Held::Pinned => {
                     if !target.copy || place::now_writable(&file) {
                         status.holding.insert(target.sha256);
+                        if record.output {
+                            let found = (target.path.clone(), record.look, *seen);
+                            status.verified_outputs.push(found);
+                        }
                         continue;
                     }
                     &mut status.outdated
@@ -1027,6 +1037,37 @@ fn kept_copies(extra: &[String], wanted: &HashSet<&str>) -> HashMap<String, Stri
                 .then(|| (path.clone(), file.to_owned()))
         })
         .collect()
+}
+
+/// keeps, for the next status, the look of each output file this one hashed and found holding its
+/// pinned bytes, so that one reads none of them again: written only while no other fetchloom holds
+/// the project, and only for records still as this run read them, of files still as it saw them.
+/// a project this account cannot write keeps nothing, and its next status hashes them again.
+fn keep_verified(project: &Project, verified: &[(String, Look, Look)], started: u64) {
+    if verified.is_empty() {
+        return;
+    }
+    let Ok(crate::project::Hold::Held(_held)) = project.hold("status") else {
+        return;
+    };
+    let (mut state, _) = project.state();
+    let mut kept = false;
+    for (path, recorded, seen) in verified {
+        let now = std::fs::symlink_metadata(native(&project.root, path))
+            .ok()
+            .map(|metadata| Look::of(&metadata));
+        if let Some(record) = state.files.get_mut(path)
+            && record.look == *recorded
+            && now == Some(*seen)
+        {
+            record.look = *seen;
+            record.checked = started;
+            kept = true;
+        }
+    }
+    if kept && let Err(error) = project.write_state(&state) {
+        tracing::debug!(message = %error.message, "the state could not keep what status verified");
+    }
 }
 
 /// the files in the data folder that no dataset places, sorted, but for the staging leftovers of an

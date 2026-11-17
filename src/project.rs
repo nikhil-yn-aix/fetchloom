@@ -79,7 +79,9 @@ struct Owner {
 }
 
 /// the commands that hold a project, the only ones an owner record names.
-const HOLDING: [&str; 7] = ["add", "drop", "exclude", "lock", "path", "remove", "sync"];
+const HOLDING: [&str; 8] = [
+    "add", "drop", "exclude", "lock", "path", "remove", "status", "sync",
+];
 
 /// the systems fetchloom is built for, which an owner record names besides this one.
 const SYSTEMS: [&str; 3] = ["linux", "macos", "windows"];
