@@ -1240,11 +1240,12 @@ pub(in crate::cli) fn filter(
         }));
     }
     // before any byte moves; a name a download may still change is refused once the file came
-    let refused = kept
-        .iter()
-        .filter(|file| source.decompress && !may_rename(file, &file.path))
-        .find_map(|file| archive::decompressed_name(&file.path)?.err());
-    if let Some(why) = refused {
+    if source.decompress
+        && let Some(why) = kept
+            .iter()
+            .filter(|file| !may_rename(file, &file.path))
+            .find_map(|file| archive::decompressed_name(&file.path)?.err())
+    {
         return Err(refused_name(name, why, written(entry)));
     }
     Ok(kept)

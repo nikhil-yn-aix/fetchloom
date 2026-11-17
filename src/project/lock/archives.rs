@@ -217,6 +217,27 @@ mod tests {
         assert_eq!((train.path(), train.key()), ("train.zip", files[4].sha256));
     }
 
+    /// a single compressed file pinned with what it unpacks to keys its record by the name it
+    /// decompresses to as well, while an archive's name, as `.tar.gz`, keeps its bytes' own hash.
+    #[test]
+    fn a_decompressed_file_keys_its_record_by_its_name_too() {
+        let files = [
+            file("raw/reads.fastq.gz", true),
+            file("flowers.tar.gz", true),
+        ];
+        let pinned = pinned(&files);
+        let [Pinned::Archive(reads), Pinned::Archive(flowers)] = pinned.as_slice() else {
+            panic!("{pinned:?}");
+        };
+        assert_eq!(reads.decompressed().as_deref(), Some("reads.fastq"));
+        assert_eq!(
+            reads.key(),
+            decompressed_key(&files[0].sha256, "reads.fastq")
+        );
+        assert_eq!(flowers.decompressed(), None);
+        assert_eq!(flowers.key(), files[1].sha256);
+    }
+
     #[test]
     fn parts_whose_first_does_not_unpack_are_files() {
         let packed = [file("scans.zip.001", false), file("scans.zip.002", false)];

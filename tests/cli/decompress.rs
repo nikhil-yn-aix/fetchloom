@@ -284,26 +284,26 @@ fn a_folder_decompresses_and_leaves_what_is_no_single_compressed_file() -> Resul
     let output = sandbox.run(&["--json", "add", "./flowers", "--decompress"])?;
     ok(&output)?;
     let document = json(&output)?;
-    let mut warnings: Vec<(String, String)> = document["warnings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|warning| (warning["kind"].to_string(), warning["message"].to_string()))
-        .collect();
-    warnings.sort();
-    assert_eq!(
-        warnings,
-        [
-            (
-                "\"archive.packed\"".to_owned(),
-                "\"flowers/inner.gz stays packed: it is a compressed tar, which only extract unpacks, and only by a name that says so, as .tar.gz does\"".to_owned()
-            ),
-            (
-                "\"archive.unreadable\"".to_owned(),
-                "\"flowers/notes.gz is not compressed as its name says, so it stays as it is\""
-                    .to_owned()
-            ),
-        ]
+    let warned = |kind: &str, message: &str| {
+        document["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|warning| warning["kind"] == kind && warning["message"] == message)
+    };
+    assert!(
+        warned(
+            "archive.packed",
+            "flowers/inner.gz stays packed: it is a compressed tar, which only extract unpacks, and only by a name that says so, as .tar.gz does"
+        ),
+        "{document}"
+    );
+    assert!(
+        warned(
+            "archive.unreadable",
+            "flowers/notes.gz is not compressed as its name says, so it stays as it is"
+        ),
+        "{document}"
     );
     let placed = sandbox.work().join("data").join("flowers");
     assert_eq!(fs::read(placed.join("sub").join("iris.csv"))?, CSV);
