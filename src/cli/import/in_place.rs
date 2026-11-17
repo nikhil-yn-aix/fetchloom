@@ -216,14 +216,25 @@ fn read<'m>(
     old: Option<&Lock>,
 ) -> Result<Read<'m>, Error> {
     let manifest = &adding.manifest;
-    if args.decompress {
-        return Err(Error::new(
-            Kind::Usage,
-            format!(
-                "{shown} is an output, kept as its pipeline wrote it, so it takes no --decompress"
-            ),
-        )
-        .help("leave out --decompress"));
+    for (given, flag, why) in [
+        (
+            args.decompress,
+            "--decompress",
+            "kept as its pipeline wrote it",
+        ),
+        (
+            args.web_page,
+            "--web-page",
+            "a folder of this project rather than a link",
+        ),
+    ] {
+        if given {
+            return Err(Error::new(
+                Kind::Usage,
+                format!("{shown} is an output, {why}, so it takes no {flag}"),
+            )
+            .help(format!("leave out {flag}")));
+        }
     }
     refuse_folder(manifest, at, shown)?;
     let (name, entry) = output_name(context, manifest, args, at, start, shown)?;
@@ -236,7 +247,7 @@ fn read<'m>(
     refuse_owned(manifest, old, &cache, &name, at, shown)?;
     let source = match entry {
         Some(entry) => {
-            refuse_patterns(args, &name)?;
+            refuse_other_patterns(args, &name, &entry.source)?;
             entry.source.clone()
         }
         None => new_source(args)?,
@@ -481,17 +492,27 @@ fn refuse_owned(
     }
 }
 
-/// refuses patterns on the command line for an output data.toml has, whose patterns stay its own.
-fn refuse_patterns(args: &Add, name: &str) -> Result<(), Error> {
-    if args.filter.select.is_empty() && args.filter.exclude.is_empty() && !args.no_extract {
+/// refuses patterns on the command line for an output data.toml has, `source`, but those it
+/// keeps: a pipeline that runs the same add each time gives them again. data.toml's stay its own.
+fn refuse_other_patterns(args: &Add, name: &str, source: &Source) -> Result<(), Error> {
+    let given = |typed: &[String], kept: &[crate::glob::Glob]| {
+        let mut typed = typed.to_vec();
+        let mut kept = texts_of(kept);
+        typed.sort_unstable();
+        kept.sort_unstable();
+        typed.is_empty() || typed == kept
+    };
+    if given(&args.filter.select, &source.select) && given(&args.filter.exclude, &source.exclude) {
         return Ok(());
     }
     Err(Error::new(
         Kind::Usage,
-        format!("{name} is in data.toml already, so its patterns come from there"),
+        format!(
+            "{name} is in data.toml already, with other --select and --exclude patterns than these"
+        ),
     )
     .help(format!(
-        "leave out --select, --exclude and --no-extract, or change datasets.{name} in data.toml"
+        "leave out --select and --exclude to keep data.toml's, or change them in datasets.{name} in data.toml"
     )))
 }
 

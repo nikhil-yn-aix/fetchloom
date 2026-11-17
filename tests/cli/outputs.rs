@@ -649,31 +649,91 @@ fn an_output_never_takes_in_another_datasets_files() -> Result {
     Ok(())
 }
 
-/// an output keeps the files its pipeline wrote, so `--decompress`, which places single compressed
-/// files unpacked, is refused for one, new or pinned, before anything is written.
+/// a pipeline runs one add after each of its runs, so the same command pins the output again
+/// every time: the --select and --exclude it gave the first time are data.toml's then, and
+/// --no-extract holds for every output, which is never unpacked. patterns other than data.toml's
+/// are refused, with advice about those two alone, before anything is written.
 #[test]
-fn an_output_takes_no_decompress() -> Result {
+fn a_pipelines_unchanged_add_pins_its_output_on_every_run() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     processed(&work)?;
-    let said = "error: data/processed is an output, kept as its pipeline wrote it, so it takes no --decompress";
-    let add = ["add", "data/processed", "--as", "processed", "--decompress"];
-    let refused = sandbox.run(&add)?;
+    fs::write(work.join("data/processed/run.log"), b"log\n")?;
+    let add = |patterns: &str| -> Result {
+        let add = format!("add data/processed --as processed {patterns} --no-extract --yes");
+        ok(&sandbox.run(&add.split(' ').collect::<Vec<_>>())?)
+    };
+    add("--exclude *.log --exclude *.tmp")?;
+    rerun(&work)?;
+    // a pattern's place in the line changes nothing
+    add("--exclude *.tmp --exclude *.log")?;
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(lock.contains("{ path = \"plot.png\""), "{lock}");
+    assert!(
+        !lock.contains("summary.txt") && !lock.contains("run.log"),
+        "{lock}"
+    );
+    let pinned = [fs::read_to_string(work.join("data.toml"))?, lock];
+    fs::write(work.join("data/processed/extra.csv"), b"x\n")?;
+    let other = [
+        "add",
+        "data/processed",
+        "--as",
+        "processed",
+        "--exclude",
+        "*.csv",
+    ];
+    let refused = sandbox.run(&other)?;
     let stderr = text(&refused.stderr)?;
     assert_eq!(refused.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains(said), "{stderr}");
-    assert!(!work.join("data.toml").exists(), "{stderr}");
-    ok(&sandbox.run(&add[..4])?)?;
+    assert!(
+        stderr.contains(
+            "error: processed is in data.toml already, with other --select and --exclude patterns than these\n  help: leave out --select and --exclude to keep data.toml's, or change them in datasets.processed in data.toml\n"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(work.join("data.toml"))?, pinned[0]);
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned[1]);
+    Ok(())
+}
+
+/// an output keeps the files its pipeline wrote, so `--decompress`, which places single compressed
+/// files unpacked, is refused for one, new or pinned, before anything is written, and so is
+/// `--web-page`, which keeps the page a link answers with: a folder of the project is no link.
+#[test]
+fn an_output_takes_no_decompress_or_web_page() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    let add = ["add", "data/processed", "--as", "processed"];
+    let flags = [
+        ("--decompress", "kept as its pipeline wrote it"),
+        ("--web-page", "a folder of this project rather than a link"),
+    ];
+    let refused = |flag: &str, why: &str| -> Result {
+        let refused = sandbox.run(&[&add[..], &[flag]].concat())?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(2), "{stderr}");
+        let said = format!(
+            "error: data/processed is an output, {why}, so it takes no {flag}\n  help: leave out {flag}\n"
+        );
+        assert!(stderr.contains(&said), "{stderr}");
+        Ok(())
+    };
+    for (flag, why) in flags {
+        refused(flag, why)?;
+        assert!(!work.join("data.toml").exists(), "{flag}");
+    }
+    ok(&sandbox.run(&add)?)?;
     let pinned = [
         fs::read_to_string(work.join("data.toml"))?,
         fs::read_to_string(work.join("data.lock"))?,
     ];
-    let refused = sandbox.run(&add)?;
-    let stderr = text(&refused.stderr)?;
-    assert_eq!(refused.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains(said), "{stderr}");
-    assert_eq!(fs::read_to_string(work.join("data.toml"))?, pinned[0]);
-    assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned[1]);
+    for (flag, why) in flags {
+        refused(flag, why)?;
+        assert_eq!(fs::read_to_string(work.join("data.toml"))?, pinned[0]);
+        assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned[1]);
+    }
     Ok(())
 }
 
