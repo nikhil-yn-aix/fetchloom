@@ -1024,9 +1024,10 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
         assert_eq!(error["message"], said, "{arguments:?}");
         assert_eq!(document["work"]["requests"], 0, "{arguments:?}");
     }
-    // without the zip's tree on the mirror, a fresh cache wants the zip itself, which no
-    // mirror holds
+    // without the zip's tree on the mirror or its files in place, a fresh cache wants the zip
+    // itself, which no mirror holds
     fs::remove_dir_all(root.join("trees"))?;
+    crate::support::delete_folder(&folder.join("data").join("dataset"))?;
     let output = sandbox
         .command_in(&folder, &["--json", "sync", "--locked"])
         .env("FETCHLOOM_CACHE", sandbox.folder("fresh-cache")?)

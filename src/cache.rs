@@ -39,7 +39,9 @@ pub(crate) use partial::partial_key;
 pub(crate) use partial::{Claim, Hashing, Partial, PartialWriter, SAVE_EVERY, names};
 use sharing::Sharing;
 pub(crate) use staging::Staging;
-pub(crate) use unpacked::{Member, decompressed_key, members_of, parts_key, tree, tree_hash};
+pub(crate) use unpacked::{
+    Member, decompressed_key, members_of, parts_key, tree, tree_hash, tree_key,
+};
 #[cfg(test)]
 pub(crate) use upkeep::Object;
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Unfinished};

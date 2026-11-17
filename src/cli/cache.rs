@@ -1270,6 +1270,9 @@ fn add_with_stop(
                 continue;
             };
             needed.unpacked.insert(archive.key());
+            if let Some(tree) = &archive.file.unpacks_to {
+                needed.unpacked.insert(crate::cache::tree_key(tree));
+            }
             needed
                 .archives
                 .extend(archive.files().into_iter().map(|file| file.sha256));

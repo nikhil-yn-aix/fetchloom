@@ -9,12 +9,14 @@ use serde::Serialize;
 
 use super::Context;
 use super::sync::disk::{Blocker, Entry, Survey};
+use super::sync::in_place::InPlace;
 use super::sync::{Scope, place};
 use crate::cache::Cache;
 use crate::digest::{self, Sha256};
 use crate::error::Error;
 use crate::output::{Output, Warning};
 use crate::plan;
+use crate::project::lock::archives::{self, Archive};
 use crate::project::lock::{Lock, LockedFile, Waiting};
 use crate::project::manifest::{self, Manifest};
 use crate::project::{Project, native};
@@ -516,6 +518,40 @@ fn imports(
     (imports, refused)
 }
 
+/// the plan for `lock`, with each archive the cache knows nothing of whose files sit in place
+/// standing for them, as a sync would take it, though nothing is recorded.
+fn planned<'l>(
+    project: &Project,
+    (manifest, lock): (&Manifest, &'l Lock),
+    cache: &Cache,
+    survey: &Survey,
+    (threads, stop): (Threads, &Stop),
+) -> Result<plan::Plan<'l>, Error> {
+    let planned = plan::from_cache(manifest, lock, cache)?;
+    if planned.unknown.is_empty() {
+        return Ok(planned);
+    }
+    let unknown: Vec<(String, &LockedFile)> = planned
+        .unknown
+        .iter()
+        .map(|(dataset, file)| ((*dataset).to_owned(), *file))
+        .collect();
+    let unknown = archives::of(lock, unknown);
+    let found = InPlace::find(
+        &project.root,
+        (manifest, lock),
+        survey,
+        &unknown,
+        (threads, stop),
+    )?;
+    if found.is_empty() {
+        return Ok(planned);
+    }
+    let members =
+        |archive: &Archive<'_>| archive.recorded(cache).or_else(|| found.members(archive));
+    plan::plan(manifest, lock, &members)
+}
+
 /// the dataset of each file and archive of `not_unpacked` that `planned` places.
 fn datasets_of(planned: &plan::Plan<'_>, not_unpacked: &[String]) -> HashMap<String, String> {
     let archives = planned
@@ -612,7 +648,13 @@ fn check(
         sort_extra(&mut status, &plan::Owned::of(&manifest));
         return Ok((status, manifest, lock_text));
     }
-    let planned = plan::from_cache(&manifest, &lock, &cache)?;
+    let planned = planned(
+        project,
+        (&manifest, &lock),
+        &cache,
+        &survey,
+        (threads, stop),
+    )?;
     status.not_unpacked = planned
         .unknown
         .iter()

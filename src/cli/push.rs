@@ -1248,7 +1248,7 @@ fn write_bucket(
         let Source::List(archive) = needed.source else {
             continue;
         };
-        let Some(members) = cache.unpacked(&archive, Some(&needed.item.digest)) else {
+        let Some(members) = cache.pinned_tree(&archive, &needed.item.digest) else {
             return Err(failed_list(
                 Failed::File(
                     uploads.len(),
@@ -1391,7 +1391,7 @@ fn put_lists(
     let source = |item: &Item| {
         let members = archives
             .get(&item.digest)
-            .and_then(|archive| cache.unpacked(archive, Some(&item.digest)))
+            .and_then(|archive| cache.pinned_tree(archive, &item.digest))
             .ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,

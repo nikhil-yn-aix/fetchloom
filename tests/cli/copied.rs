@@ -295,9 +295,21 @@ fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
 /// a settled project of one zip in the work folder, and the server that serves the zip
 /// `downloads` times, the add's included.
 fn zipped(sandbox: &Sandbox, downloads: usize) -> Result<Server> {
-    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
-    let responses = (0..downloads).map(|_| file(&zip, "\"z1\"")).collect();
-    let server = Server::start("/files/dataset.zip", responses)?;
+    archived(sandbox, "python.zip", "dataset.zip", downloads)
+}
+
+/// the bytes of the archive fixture `fixture`.
+fn fixture(fixture: &str) -> Result<Vec<u8>> {
+    let path = crate::support::workspace().join("tests/fixtures/archives");
+    Ok(fs::read(path.join(fixture))?)
+}
+
+/// a settled project of the archive fixture `fixture`, served as `name`, in the work folder, and
+/// the server that serves it `downloads` times, the add's included.
+fn archived(sandbox: &Sandbox, fixture: &str, name: &str, downloads: usize) -> Result<Server> {
+    let bytes = self::fixture(fixture)?;
+    let responses = (0..downloads).map(|_| file(&bytes, "\"z1\"")).collect();
+    let server = Server::start(&format!("/files/{name}"), responses)?;
     sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
@@ -394,14 +406,19 @@ fn status_of_a_zip_the_cache_never_held_says_its_files_are_not_checked() -> Resu
     Ok(())
 }
 
-/// in a copy no file has a record, so nothing tells the zip's files from others in its folder:
-/// status calls none of them the person's, as it says it does not check them. a file outside
-/// every dataset's folder is none of status's business.
+/// in a copy no file has a record, so a file of the person's own beside the zip's keeps its
+/// folder from proving the tree data.lock pins, and nothing tells the zip's files from others
+/// there: status calls none of them the person's, as it says it does not check them. a file
+/// outside every dataset's folder is none of status's business.
 #[test]
 fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra() -> Result {
     let sandbox = Sandbox::new()?;
     let (_server, two, cache) = copied_zip(&sandbox, 1)?;
     fs::write(two.join("data").join("notes.txt"), b"mine\n")?;
+    fs::write(
+        two.join("data").join("dataset").join("notes.txt"),
+        b"mine\n",
+    )?;
     let status = |args: &[&str]| {
         sandbox
             .command_in(&two, args)
@@ -570,5 +587,348 @@ fn a_push_asks_before_it_downloads_anything() -> Result {
         assert_eq!(files_below(&cache.join(folder))?, 0, "{folder}");
     }
     assert!(!mirror.exists());
+    Ok(())
+}
+
+/// the bytes of each file below `folder`, by its path there with `/` between folders.
+fn contents(folder: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut found = Vec::new();
+    let mut folders = vec![folder.to_path_buf()];
+    while let Some(at) = folders.pop() {
+        for entry in fs::read_dir(&at)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                folders.push(entry.path());
+                continue;
+            }
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(folder)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            found.push((relative, fs::read(&path)?));
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// the files the zip unpacked to in the copy's dataset folder, as placing put them there.
+const ZIP_FILES: [&str; 5] = [
+    "data/dataset/README.md",
+    "data/dataset/data/caf\u{e9}.csv",
+    "data/dataset/data/empty.txt",
+    "data/dataset/data/train.csv",
+    "data/dataset/long/a-file-name-longer-than-one-hundred-bytes-so-old-tar-headers-cannot-hold-it-and-pax-or-gnu-records-must.txt",
+];
+
+/// a copy's zip whose files sit where the zip unpacked them is checked against the tree data.lock
+/// pins and taken as placed: the sync sends no request and leaves every file as it was, the zip
+/// stays out of the cache, and status then has nothing to say.
+#[test]
+fn a_copied_zip_folder_is_checked_in_place_and_never_downloaded() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 1)?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let folder = two.join("data").join("dataset");
+    let before = contents(&folder)?;
+    let synced = run(&["--json", "sync"])?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    assert_eq!(document["work"]["bytes_down"], 0, "{document}");
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
+    assert_eq!(contents(&folder)?, before);
+    assert!(!object(&cache, &fixture("python.zip")?).exists());
+    let status = run(&["status"])?;
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock by size and time\n"
+    );
+    Ok(())
+}
+
+/// offline, as on a compute node, `fetchloom path` answers a copy's zip folder that holds what
+/// data.lock pins, and a sync takes it as placed, though the cache never held the zip.
+#[test]
+fn offline_a_copied_zip_folder_answers_path_and_syncs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 1)?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let path = run(&["--offline", "path", "dataset/data/train.csv"])?;
+    assert_eq!(path.status.code(), Some(0), "{}", text(&path.stderr)?);
+    let folder = two.join("data").join("dataset");
+    assert_eq!(
+        text(&path.stdout)?,
+        format!("{}\n", folder.join("data").join("train.csv").display())
+    );
+    let synced = run(&["--offline", "sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
+    Ok(())
+}
+
+/// status checks a copy's zip folder in place: its files hold what data.lock pins, so it names
+/// no zip unchecked and counts no download, and says in one line that a sync records them, as a
+/// dry run does.
+#[test]
+fn status_of_a_copied_zip_folder_finds_its_files_in_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (_server, two, cache) = copied_zip(&sandbox, 1)?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let output = run(&["status"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(text(&output.stdout)?, "");
+    assert_eq!(
+        text(&output.stderr)?,
+        "   In place 5 files already hold the pinned bytes; `fetchloom sync` records them as placed\n         Ok everything matches data.lock by size and time\n"
+    );
+    let document = json(&run(&["--json", "status"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["not_unpacked"], serde_json::json!([]), "{document}");
+    assert_eq!(
+        result["adoptable"],
+        serde_json::json!(ZIP_FILES),
+        "{document}"
+    );
+    assert_eq!(result["to_download"]["files"], 0, "{document}");
+    let dry = json(&run(&["--json", "sync", "--dry-run"])?)?;
+    let changes = &dry["result"]["changes"];
+    assert_eq!(changes["download"], serde_json::json!([]), "{dry}");
+    assert_eq!(changes["unpack"], serde_json::json!([]), "{dry}");
+    assert!(
+        !cache.join("unpacked").exists(),
+        "a dry run records nothing"
+    );
+    Ok(())
+}
+
+/// one file of the copy's zip folder that holds other bytes fails the check, since only the
+/// whole tree data.lock pins proves the files and it cannot say which one differs: the zip
+/// downloads whole, the other files are taken as placed, and the changed one stays, as a file
+/// fetchloom did not place does, until `sync --force`. offline, the sync stops as before.
+#[test]
+fn a_changed_file_of_a_copied_zip_folder_brings_the_zip_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 2)?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let changed = two
+        .join("data")
+        .join("dataset")
+        .join("data")
+        .join("train.csv");
+    edit(&changed, b"a,b\n9,9\n")?;
+    let status = json(&run(&["--json", "status"])?)?;
+    assert_eq!(
+        status["result"]["not_unpacked"],
+        serde_json::json!(["data/dataset/dataset.zip"]),
+        "{status}"
+    );
+    let offline = run(&["--json", "--offline", "sync"])?;
+    let document = json(&offline)?;
+    assert_eq!(offline.status.code(), Some(20), "{document}");
+    assert_eq!(
+        document["errors"][0]["kind"], "offline.missing",
+        "{document}"
+    );
+    let synced = run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(server.requests().len(), 2, "the zip again: {stderr}");
+    assert!(
+        stderr.contains("warning: data/dataset/data/train.csv holds other bytes than data.lock pins, and fetchloom did not place it, so it stays"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&changed)?, b"a,b\n9,9\n");
+    Ok(())
+}
+
+/// a copy's tar.gz folder is checked in place as a zip's is.
+#[test]
+fn a_copied_tar_folder_is_checked_in_place_too() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = archived(&sandbox, "python.tar.gz", "dataset.tar.gz", 1)?;
+    let (two, cache) = copied(&sandbox, "two")?;
+    let synced = sandbox
+        .command_in(&two, &["--json", "--offline", "sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
+    Ok(())
+}
+
+/// once the check took the files as placed, the zip stays out of the cache until a file of it is
+/// needed again: a file deleted after the check brings the zip, which puts it back.
+#[test]
+fn a_file_gone_after_the_check_brings_the_zip() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 2)?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let synced = run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
+    let readme = two.join("data").join("dataset").join("README.md");
+    let bytes = fs::read(&readme)?;
+    delete(&readme)?;
+    let again = run(&["sync"])?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the zip, once a file of it is needed"
+    );
+    assert_eq!(fs::read(&readme)?, bytes);
+    Ok(())
+}
+
+/// a push from a copy whose zip folder the check took sends the zip's files from the data folder,
+/// with the list of them the check recorded, and asks the source nothing.
+#[test]
+fn a_checked_zip_folder_pushes_its_files_and_their_list() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 1)?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let synced = run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let pushed = sandbox
+        .command_in(&two, &["--json", "--yes", "push", "--to"])
+        .arg(&mirror)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&pushed)?;
+    assert_eq!(pushed.status.code(), Some(0), "{document}");
+    assert_eq!(document["work"]["requests"], 0, "{document}");
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
+    let readme = fs::read(two.join("data").join("dataset").join("README.md"))?;
+    assert_eq!(fs::read(object(&mirror, &readme))?, readme);
+    assert_eq!(files_below(&mirror.join("trees"))?, 1, "the zip's list");
+    Ok(())
+}
+
+/// a zip beside another file of its dataset keeps the top folder its files share, and its folder
+/// there is checked in place as a lone zip's is: offline, nothing is asked of the source.
+#[test]
+fn a_copied_zip_beside_other_files_is_checked_in_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let html = "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for /set/</title>\n</head>\n<body>\n<h1>Directory listing for /set/</h1>\n<hr>\n<ul>\n<li><a href=\"flowers.zip\">flowers.zip</a></li>\n<li><a href=\"notes.csv\">notes.csv</a></li>\n</ul>\n<hr>\n</body>\n</html>\n";
+    let length = html.len().to_string();
+    let listing = crate::support::reply(
+        "200 OK",
+        &[
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Content-Length", &length),
+        ],
+        html.as_bytes(),
+    );
+    let routes = crate::support::Routes::start(vec![
+        ("/set/".to_owned(), listing),
+        (
+            "/set/flowers.zip".to_owned(),
+            file(&fixture("python.zip")?, "\"f1\""),
+        ),
+        ("/set/notes.csv".to_owned(), file(b"a,b\n1,2\n", "\"n1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    let added = sandbox.run(&["add", &format!("{}/set/", routes.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert!(sandbox.work().join("data/set/dataset/README.md").exists());
+    let (two, cache) = copied(&sandbox, "two")?;
+    let asked = routes.requests().len();
+    let synced = sandbox
+        .command_in(&two, &["--offline", "sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(routes.requests().len(), asked);
+    Ok(())
+}
+
+/// a single compressed file placed decompressed is checked in place by the one file it
+/// decompressed to.
+#[test]
+fn a_copied_decompressed_file_is_checked_in_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = crate::decompress::gz(b"read,1\n")?;
+    let server = Server::start("/files/reads.csv.gz", vec![file(&packed, "\"r1\"")])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url, "--decompress"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let (two, cache) = copied(&sandbox, "two")?;
+    let synced = sandbox
+        .command_in(&two, &["--offline", "sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        fs::read(two.join("data").join("reads").join("reads.csv"))?,
+        b"read,1\n"
+    );
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
+    Ok(())
+}
+
+/// the list the check recorded stays while the project pins its tree, through a gc that frees
+/// everything unneeded: a push after it still finds it and asks the source nothing.
+#[test]
+fn a_gc_keeps_the_list_a_check_in_place_recorded() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 1)?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    for args in [&["sync"][..], &["cache", "gc", "--now", "--yes"]] {
+        let output = run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let pushed = sandbox
+        .command_in(&two, &["--json", "--offline", "--yes", "push", "--to"])
+        .arg(&mirror)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&pushed)?;
+    assert_eq!(pushed.status.code(), Some(0), "{document}");
+    assert_eq!(files_below(&mirror.join("trees"))?, 1, "the zip's list");
+    assert_eq!(server.requests().len(), 1, "the add's download alone");
     Ok(())
 }

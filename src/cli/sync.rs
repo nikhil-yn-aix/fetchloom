@@ -5,6 +5,7 @@ pub(in crate::cli) mod cache_budget;
 pub(super) mod disk;
 mod draft;
 mod fill;
+pub(super) mod in_place;
 pub(super) mod place;
 pub(super) mod rename;
 pub(super) mod unpack;
@@ -19,6 +20,7 @@ use url::Url;
 
 use self::disk::Survey;
 use self::draft::Draft;
+use self::in_place::InPlace;
 use self::place::{Download, Placement, Placing, Preview};
 use self::rename::Rename;
 use super::Context;
@@ -367,6 +369,13 @@ impl<'a> Loop<'a> {
         let mut placing =
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
+        // an archive whose files the data folder holds in place needs neither a list from a
+        // mirror nor its own bytes
+        let found = self.in_place(manifest, lock, &placing)?;
+        if !found.is_empty() {
+            found.record(&self.cache, &self.context.output)?;
+            placing = self.placed_again(manifest, lock, force, placing)?;
+        }
         if self.verifies {
             placing.check_cached(&self.cache, &self.context.output)?;
         }
@@ -432,6 +441,27 @@ impl<'a> Loop<'a> {
             Some(error) => Err(*error),
             None => Ok(placing),
         }
+    }
+
+    /// the lists of files of the archives `placing` knows none of, as found where placing puts
+    /// their files and checked against the trees data.lock pins.
+    fn in_place(
+        &self,
+        manifest: &Manifest,
+        lock: &Lock,
+        placing: &Placing<'_>,
+    ) -> Result<InPlace, Error> {
+        let unknown = archives::of(lock, placing.unknown());
+        if unknown.is_empty() {
+            return Ok(InPlace::default());
+        }
+        InPlace::find(
+            &self.project.root,
+            (manifest, lock),
+            placing.survey(),
+            &unknown,
+            (self.context.threads, &self.context.stop),
+        )
     }
 
     /// `placing` made again from what the cache now knows, as once an archive's list of files
@@ -1152,6 +1182,19 @@ impl<'a> Loop<'a> {
         let mut placing =
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         placing.listed(self.unlisted());
+        // the archives whose files sit in place are known as the sync would know them, unrecorded
+        let found = self.in_place(manifest, lock, &placing)?;
+        if !found.is_empty() {
+            let survey = placing.into_survey();
+            let members = |archive: &Archive<'_>| {
+                archive
+                    .recorded(&self.cache)
+                    .or_else(|| found.members(archive))
+            };
+            let plan = plan::plan(manifest, lock, &members)?;
+            placing = Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
+            placing.listed(self.unlisted());
+        }
         // what the data folder holds a sync takes from there; only that sync hashes it
         let held: HashSet<Sha256> = placing
             .holding()

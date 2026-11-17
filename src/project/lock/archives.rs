@@ -39,10 +39,14 @@ impl<'a> Archive<'a> {
         archive::decompressed_name(&self.file.path)?.ok()
     }
 
-    /// what this machine recorded it unpacks to, when that is the tree data.lock pins. every plan
-    /// looks it up here, by [`Archive::key`], never by a split archive's first part alone.
+    /// what this machine recorded it unpacks to, when that is the tree data.lock pins, or that tree
+    /// as checked against the files placed from it. every plan looks it up here, by
+    /// [`Archive::key`], never by a split archive's first part alone.
     pub(crate) fn recorded(&self, cache: &Cache) -> Option<Vec<Member>> {
-        cache.unpacked(&self.key(), self.file.unpacks_to.as_ref())
+        match &self.file.unpacks_to {
+            Some(tree) => cache.pinned_tree(&self.key(), tree),
+            None => cache.unpacked(&self.key(), None),
+        }
     }
 
     /// the path it unpacks from as placing takes it: `raw/scans.zip` for the parts from

@@ -64,6 +64,14 @@ pub(crate) fn decompressed_key(packed: &Sha256, name: &str) -> Sha256 {
     digest::sha256(format!("fetchloom decompressed\n{packed}\n{name}\n").as_bytes())
 }
 
+/// the key the record of a tree checked against a project's placed files goes by: the SHA-256 of
+/// a `fetchloom tree` line, then the tree's hex SHA-256. never an archive's key, since files in a
+/// data folder anyone could have filled prove only the tree data.lock pins, not what any archive's
+/// bytes unpack to, so only a lookup that pins the tree finds it.
+pub(crate) fn tree_key(tree: &Sha256) -> Sha256 {
+    digest::sha256(format!("fetchloom tree\n{tree}\n").as_bytes())
+}
+
 impl Cache {
     /// records what `archive` unpacked to, and returns the tree hash.
     pub(crate) fn record_unpacked(
@@ -97,6 +105,13 @@ impl Cache {
     pub(crate) fn unpacked(&self, archive: &Sha256, tree: Option<&Sha256>) -> Option<Vec<Member>> {
         self.unpacked_with_tree(archive, tree)
             .map(|(_, members)| members)
+    }
+
+    /// what `archive` unpacks to where data.lock pins it to `tree`: its record of that tree, or a
+    /// record of the tree checked against a project's placed files, by [`tree_key`].
+    pub(crate) fn pinned_tree(&self, archive: &Sha256, tree: &Sha256) -> Option<Vec<Member>> {
+        self.unpacked(archive, Some(tree))
+            .or_else(|| self.unpacked(&tree_key(tree), Some(tree)))
     }
 
     /// whether every file `archive` unpacked to is in the cache, so its own bytes are not needed,

@@ -522,6 +522,11 @@ impl<'a> Placing<'a> {
         self.unlisted = unlisted;
     }
 
+    /// the data folder as the run found it.
+    pub(crate) fn survey(&self) -> &Survey {
+        &self.survey
+    }
+
     /// what the data folder held when this placing was decided, to decide again from.
     pub(crate) fn into_survey(self) -> Survey {
         self.survey
