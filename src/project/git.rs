@@ -305,12 +305,20 @@ fn is_object(name: &str) -> bool {
 }
 
 /// the files git has, tracked or staged, below `folder` in the work tree at `root`, by their paths
-/// from `root`. it reads only git's index. none when git cannot tell, as outside a repository.
+/// from `root`, the folder taken as written, never as a pattern. it reads only git's index. none
+/// when git cannot tell, as outside a repository.
 pub(crate) fn tracked(git: &Path, root: &Path, folder: &str) -> Option<HashSet<String>> {
     let listed = run(
         git,
         root,
-        &["ls-files", "-z", "--cached", "--", &format!("./{folder}")],
+        &[
+            "--literal-pathspecs",
+            "ls-files",
+            "-z",
+            "--cached",
+            "--",
+            &format!("./{folder}"),
+        ],
     )
     .ok()?;
     Some(
@@ -664,6 +672,27 @@ mod tests {
         assert!(at.join(".git/REBASE_HEAD").exists(), "git keeps it");
         assert_eq!(operation(&git, &root), None);
         assert_eq!(committed(&git, &root, "notes"), None, "no side to read");
+    }
+
+    /// a folder is read as named, never as a pattern git matches: `run*` holds none of `run1`'s
+    /// files, as an output's folder may be named so.
+    #[test]
+    fn tracked_reads_a_folder_as_named() {
+        let Some(git) = git() else {
+            return;
+        };
+        let repository = tempfile::tempdir().unwrap();
+        let at = repository.path();
+        std::fs::create_dir(at.join("run1")).unwrap();
+        std::fs::write(at.join("run1/a.csv"), "1\n").unwrap();
+        git_in(&git, at, &["init", "-q"]);
+        git_in(&git, at, &["add", "-A"]);
+        if !trusted(&git, at) {
+            return;
+        }
+        let one = HashSet::from(["run1/a.csv".to_owned()]);
+        assert_eq!(tracked(&git, at, "run1"), Some(one));
+        assert_eq!(tracked(&git, at, "run*"), Some(HashSet::new()));
     }
 
     /// a hook or `git rebase --exec` hands its own repository down in `GIT_DIR` and its kin; the
