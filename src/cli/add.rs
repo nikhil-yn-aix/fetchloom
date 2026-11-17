@@ -2111,7 +2111,7 @@ fn stored_reference(typed: &str, parsed: &Parsed) -> String {
 mod tests {
     use super::*;
     use crate::cache::Cache;
-    use crate::cli::import::tell_system;
+    use crate::cli::import::{Walked, tell_left_out};
     use crate::cli::project::tests::{listed, offline_context, pinned, pinned_file, stated};
     use crate::output::screen::Screen;
     use crate::output::{Level, Output, Style};
@@ -2409,8 +2409,9 @@ mod tests {
             accessible: false,
         };
         let output = Output::new(style, Level::Normal, false, false);
-        let system: Vec<String> = (0..1001).map(|n| format!("f{n}/.DS_Store")).collect();
-        tell_system(&output, "../photos", &system);
+        let mut walked = Walked::default();
+        walked.system = (0..1001).map(|n| format!("f{n}/.DS_Store")).collect();
+        tell_left_out(&output, "../photos", &walked);
         assert_eq!(
             output.said(),
             ["    Skipped f0/.DS_Store and 1,000 more the system makes in ../photos"]

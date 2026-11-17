@@ -623,9 +623,7 @@ fn walk_import(
         &context.stop,
     )?;
     let output = &context.output;
-    tell_skipped(output, shown, &walked.skipped);
-    tell_system(output, shown, &walked.system);
-    tell_dropped(output, shown, &walked.dropped);
+    tell_left_out(output, shown, &walked);
     if supplied.is_none()
         && source.extract
         && output.shows_hints()
@@ -665,39 +663,32 @@ fn tell_skipped(output: &Output, shown: &str, skipped: &[String]) {
     output.warn_detailed(Warning::ImportSkipped, &said, None, skipped);
 }
 
-/// says what an import left out as tools' own, such as vim's swap files.
-pub(super) fn tell_dropped(output: &Output, shown: &str, dropped: &[String]) {
-    match dropped {
-        [] => {}
-        [one] => output.step(
-            "Skipped",
-            &format!("{one} in {shown}, a working file of an editor or a tool"),
+/// says what an import left out of `walked`: links and special files, and what the system or a
+/// tool keeps beside files, such as finder's `.DS_Store` and vim's swap files.
+pub(super) fn tell_left_out(output: &Output, shown: &str, walked: &Walked) {
+    tell_skipped(output, shown, &walked.skipped);
+    let kept_beside = [
+        (
+            &walked.system,
+            "which the system makes",
+            "more the system makes",
         ),
-        [first, rest @ ..] => output.step(
-            "Skipped",
-            &format!(
-                "{first} and {} more working files of editors and tools in {shown}",
-                units::grouped(rest.len() as u64)
-            ),
+        (
+            &walked.dropped,
+            "a working file of an editor or a tool",
+            "more working files of editors and tools",
         ),
-    }
-}
-
-/// says what an import left out as the system's own, such as finder's `.DS_Store`.
-pub(super) fn tell_system(output: &Output, shown: &str, system: &[String]) {
-    match system {
-        [] => {}
-        [one] => output.step(
-            "Skipped",
-            &format!("{one} in {shown}, which the system makes"),
-        ),
-        [first, rest @ ..] => output.step(
-            "Skipped",
-            &format!(
-                "{first} and {} more the system makes in {shown}",
-                units::grouped(rest.len() as u64)
-            ),
-        ),
+    ];
+    for (paths, one, many) in kept_beside {
+        let said = match paths.as_slice() {
+            [] => continue,
+            [path] => format!("{path} in {shown}, {one}"),
+            [first, rest @ ..] => {
+                let more = units::grouped(rest.len() as u64);
+                format!("{first} and {more} {many} in {shown}")
+            }
+        };
+        output.step("Skipped", &said);
     }
 }
 

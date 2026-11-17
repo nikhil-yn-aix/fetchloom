@@ -298,18 +298,26 @@ fn supplying_the_same_folder_again_changes_no_pins() -> Result {
 }
 
 /// a mac writes `.DS_Store` into a folder a person opens and `._` files beside each file on a disk
-/// not its own; they are no data, so a supply after finder wrote more still matches the pins.
+/// not its own; they are no data, so a supply after finder wrote more still matches the pins. a
+/// link is left out too, with a warning, as fetchloom never follows one.
 #[test]
 fn files_the_system_makes_are_left_out_of_imports_and_supplies() -> Result {
     let sandbox = Sandbox::new()?;
     let folder = flowers(&sandbox)?;
     fs::write(folder.join(".DS_Store"), b"finder")?;
     fs::write(folder.join("._sepals.csv"), b"appledouble")?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("sepals.csv", folder.join("linked.csv"))?;
     let output = sandbox.run(&["add", "../flowers"])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(
         stderr.contains("Skipped .DS_Store and 1 more the system makes in ../flowers"),
+        "{stderr}"
+    );
+    #[cfg(unix)]
+    assert!(
+        stderr.contains("left out linked.csv in ../flowers, a link or a special file, which fetchloom never follows or imports"),
         "{stderr}"
     );
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;

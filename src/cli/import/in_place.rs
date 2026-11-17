@@ -14,10 +14,7 @@ use super::super::sync::disk;
 use super::super::sync::place::{Placement, tell_marked};
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
-use super::{
-    Found, Walked, dataset_name, into_cache, pinned, room, tell_dropped, tell_skipped, tell_system,
-    walk,
-};
+use super::{Found, Walked, dataset_name, into_cache, pinned, room, tell_left_out, walk};
 use crate::cache::Cache;
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
@@ -242,9 +239,7 @@ fn read<'m>(
         HashSet::new()
     };
     leave_out(&mut walked, &markers);
-    tell_skipped(&context.output, shown, &walked.skipped);
-    tell_system(&context.output, shown, &walked.system);
-    tell_dropped(&context.output, shown, &walked.dropped);
+    tell_left_out(&context.output, shown, &walked);
     Ok(Read {
         name,
         entry,
