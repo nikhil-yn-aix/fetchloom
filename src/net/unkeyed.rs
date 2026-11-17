@@ -101,10 +101,18 @@ impl Drop for First<'_> {
 #[cfg(test)]
 mod tests {
     use std::future::{Future, poll_fn};
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
     use std::pin::{Pin, pin};
+    use std::sync::Arc;
     use std::task::Poll;
 
+    use url::Url;
+
     use super::*;
+    use crate::cache::Cache;
+    use crate::error::{Error, Kind};
+    use crate::net::{Event, Fetch, Net, Offline, Options, Splitting};
 
     /// `turn`'s answer when it has one at once, none while it waits.
     async fn now<'a, F: Future<Output = Turn<'a>>>(mut turn: Pin<&mut F>) -> Option<Turn<'a>> {
@@ -167,5 +175,77 @@ mod tests {
             matches!(waiting.await, Turn::First(_)),
             "a first request that ended without an answer leaves the next to ask"
         );
+    }
+
+    /// a repository's first file asked without a key lets the rest of its files go out once its
+    /// bytes start, not after they end, as a repository made public since its pin serves them all.
+    #[tokio::test]
+    async fn a_first_file_served_lets_the_rest_go_while_its_bytes_come() {
+        let body: Vec<u8> = (0..=250u8).cycle().take(1 << 16).collect();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let url = Url::parse(&format!("http://{address}/blobs/first")).unwrap();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let sent = body.clone();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+                request.push(byte[0]);
+            }
+            let (first, rest) = sent.split_at(sent.len() / 2);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                sent.len()
+            );
+            let _ = stream.write_all(first);
+            let _ = stream.flush();
+            // the rest waits until the test has seen the next file's turn
+            let _ = held.recv();
+            let _ = stream.write_all(rest);
+        });
+        let options = Options {
+            offline: Offline::No,
+            jobs: 1,
+            credentials: Vec::new(),
+            split: Splitting::Never,
+        };
+        let mut net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        net.typed(&url);
+        net.rules.keyless = |url| {
+            url.path().starts_with("/blobs/").then(|| {
+                (
+                    "lab/public".to_owned(),
+                    Error::new(Kind::AuthRequired, "lab/public shows its files to a key"),
+                )
+            })
+        };
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let (started, on_started) = tokio::sync::oneshot::channel();
+        let started = Mutex::new(Some(started));
+        let on = |event: Event| {
+            if matches!(event, Event::Started { .. })
+                && let Some(started) = started.lock().unwrap().take()
+            {
+                let _ = started.send(());
+            }
+            Ok(())
+        };
+        let fetch = Fetch::new(url);
+        let second = async {
+            on_started.await.unwrap();
+            let turn = now(pin!(net.unkeyed.turn("lab/public"))).await;
+            let _ = release.send(());
+            turn
+        };
+        let (fetched, turn) = tokio::join!(net.download(&fetch, &cache, &on), second);
+        assert!(
+            matches!(turn, Some(Turn::Ask)),
+            "the next file goes out while the first one's bytes come"
+        );
+        assert_eq!(fetched.unwrap().size, body.len() as u64);
     }
 }
