@@ -289,6 +289,11 @@ pub(crate) fn patterns_of(texts: &[String]) -> Vec<Glob> {
         .unwrap_or_default()
 }
 
+/// the texts of `globs`, as data.toml writes them: what [`patterns_of`] reads.
+pub(crate) fn texts_of(globs: &[Glob]) -> Vec<String> {
+    globs.iter().map(|glob| glob.as_str().to_owned()).collect()
+}
+
 /// the one name `tokens` match, when they match only one: plain characters, and sets of one
 /// character such as `[*]`, as [`escape`] writes them.
 fn literal(tokens: &[Token]) -> Option<String> {

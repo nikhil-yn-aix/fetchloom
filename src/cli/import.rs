@@ -399,15 +399,12 @@ async fn import_new(
         files,
     } = imported;
     let text = adding.text.as_deref().unwrap_or_default();
-    let patterns = |globs: &[crate::glob::Glob]| -> Vec<String> {
-        globs.iter().map(|glob| glob.as_str().to_owned()).collect()
-    };
     let mut updated = manifest::with_dataset(
         text,
         name,
         local::IMPORTED,
-        &patterns(&source.select),
-        &patterns(&source.exclude),
+        &crate::glob::texts_of(&source.select),
+        &crate::glob::texts_of(&source.exclude),
         source.extract,
     )?;
     if source.decompress {

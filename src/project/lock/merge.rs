@@ -16,6 +16,7 @@ use serde::Serialize;
 use self::markers::Sides;
 use super::{Lock, Locked, LockedFile, Parsed, parse, spec};
 use crate::error::{Error, Kind};
+use crate::glob::texts_of;
 use crate::project::manifest::{self, Edit, Entry, Manifest};
 use crate::units;
 
@@ -548,17 +549,11 @@ fn merged_text(
 
 /// what decides a dataset's files and where they go, without the lines that cite them.
 fn values(entry: &Entry) -> impl PartialEq {
-    let patterns = |globs: &[crate::glob::Glob]| {
-        globs
-            .iter()
-            .map(|glob| glob.as_str().to_owned())
-            .collect::<Vec<_>>()
-    };
     let source = &entry.source;
     (
         source.reference.clone(),
-        patterns(&source.select),
-        patterns(&source.exclude),
+        texts_of(&source.select),
+        texts_of(&source.exclude),
         source.extract,
         source.decompress,
         entry.copy,

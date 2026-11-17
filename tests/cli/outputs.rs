@@ -990,6 +990,37 @@ fn push_sends_an_outputs_pinned_files_and_says_when_its_folder_changed() -> Resu
     Ok(())
 }
 
+/// data.toml keeps every pattern add is given, for an output and for an import alike, each
+/// dataset in its place by name.
+#[test]
+fn add_keeps_every_pattern_it_is_given() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    let flowers = sandbox.folder("flowers")?;
+    for (folder, name) in [
+        (work.join("results"), "r.csv"),
+        (work.join("results"), "run.log"),
+        (work.join("results"), "run.tmp"),
+        (flowers.clone(), "sepals.csv"),
+        (flowers.clone(), "petals.tsv"),
+        (flowers, "notes.txt"),
+    ] {
+        fs::write(folder.join(name), b"x\n")?;
+    }
+    for add in [
+        "add results --as results --exclude *.log --exclude *.tmp",
+        "add ../flowers --select *.csv --select *.tsv",
+    ] {
+        ok(&sandbox.run(&add.split(' ').collect::<Vec<_>>())?)?;
+    }
+    assert_eq!(
+        fs::read_to_string(work.join("data.toml"))?,
+        "[datasets.flowers]\nref = \"local\"\nselect = [\"*.csv\", \"*.tsv\"]\n\n[datasets.results]\nref = \"local\"\nat = \"results\"\nexclude = [\"*.log\", \"*.tmp\"]\n"
+    );
+    Ok(())
+}
+
 /// exclude takes a path in an output's folder, wherever it is: the pin leaves the file out, and
 /// the author's file stays, no difference since its pattern leaves it out.
 #[test]

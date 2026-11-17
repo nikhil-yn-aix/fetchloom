@@ -21,6 +21,7 @@ use super::{
 use crate::cache::Cache;
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
+use crate::glob::texts_of;
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, Source};
 use crate::project::state::{Placed, State};
@@ -155,10 +156,7 @@ async fn pin_new(
     (told, here, starting): (&str, &Path, bool),
 ) -> Result<Outcome<Placement>, Error> {
     let text = adding.text.as_deref().unwrap_or_default();
-    let patterns = |globs: &[crate::glob::Glob]| -> Vec<String> {
-        globs.iter().map(|glob| glob.as_str().to_owned()).collect()
-    };
-    let (select, exclude) = (patterns(&source.select), patterns(&source.exclude));
+    let (select, exclude) = (texts_of(&source.select), texts_of(&source.exclude));
     let updated = manifest::with_output(text, name, at, &select, &exclude)?;
     let manifest = Manifest::parse(&updated)?;
     let names = [name.to_owned()];
