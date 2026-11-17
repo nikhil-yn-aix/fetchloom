@@ -153,6 +153,12 @@ impl Location {
         options.open(&self.path)
     }
 
+    /// a new file as [`Location::create_file`] makes a writable one: its folder's access rules
+    /// decide who reads it, as for any file a person makes.
+    pub(super) fn create_shared_file(&self) -> io::Result<File> {
+        self.create_file(false)
+    }
+
     pub(super) fn create_folder(&self) -> io::Result<()> {
         fs::create_dir(&self.path)
     }

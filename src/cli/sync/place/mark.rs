@@ -192,7 +192,8 @@ fn make_one(root: &Path, placer: &mut Placer, folder: &str) -> io::Result<()> {
     let marker = native(root, &disk::marker(folder));
     placer.check_folders(&marker, true)?;
     let hidden = marker.with_file_name(place::copy_temporary_name());
-    let written = placer.create_file(&hidden, false).and_then(|mut file| {
+    // readable as the person's own files are, so git under another account reads it too
+    let written = placer.create_shared_file(&hidden).and_then(|mut file| {
         file.write_all(TEXT)?;
         file.sync_all()
     });

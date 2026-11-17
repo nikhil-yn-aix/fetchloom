@@ -156,12 +156,25 @@ impl Location {
     }
 
     pub(super) fn create_file(&self, readonly: bool) -> io::Result<File> {
-        let mode = if readonly { 0o444 } else { 0o600 };
+        self.create_with(Mode::from_bits_truncate(if readonly {
+            0o444
+        } else {
+            0o600
+        }))
+    }
+
+    /// creates a new file as a person's own editor makes one, readable and writable as the umask
+    /// allows: 0666 less it.
+    pub(super) fn create_shared_file(&self) -> io::Result<File> {
+        self.create_with(Mode::from_bits_truncate(0o666))
+    }
+
+    fn create_with(&self, mode: Mode) -> io::Result<File> {
         native::openat(
             &self.parent.file,
             &self.name,
             OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::from_bits_truncate(mode),
+            mode,
         )
         .map(File::from)
         .map_err(Into::into)

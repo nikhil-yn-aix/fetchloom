@@ -802,6 +802,14 @@ impl Placer {
         self.location(path, false)?.create_file(readonly)
     }
 
+    /// [`Placer::create_file`] of a writable file anyone may read who reads the person's own
+    /// files, as a file the person makes: on unix 0666 less the umask, where fetchloom's private
+    /// files are its user's alone.
+    pub(crate) fn create_shared_file(&self, path: &Path) -> io::Result<File> {
+        self.stop.check_io()?;
+        self.location(path, false)?.create_shared_file()
+    }
+
     /// renames between two checked parents below the pinned root, replacing a file at `to`, so it
     /// suits only a folder no one else writes; [`Placer::move_aside`] never replaces.
     pub(crate) fn rename_file(&self, from: &Path, to: &Path) -> io::Result<()> {

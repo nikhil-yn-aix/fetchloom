@@ -549,3 +549,26 @@ fn a_link_where_the_marker_goes_is_never_followed() -> Result {
     assert_eq!(fs::read(sandbox.work().join("data/iris/iris.csv"))?, IRIS);
     Ok(())
 }
+
+/// the .gitignore fetchloom makes is readable by everyone who can read a file the person makes
+/// there, so another account sharing the project folder reads it and git keeps the dataset out
+/// for them too.
+#[cfg(unix)]
+#[test]
+fn the_marker_is_readable_as_a_persons_own_files_are() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let server = iris_server()?;
+    with_iris(&sandbox, &server)?;
+    let theirs = sandbox.work().join("data/iris/notes.txt");
+    fs::write(&theirs, "mine\n")?;
+    let mode = |path: &std::path::Path| -> Result<u32> {
+        Ok(fs::metadata(path)?.permissions().mode() & 0o777)
+    };
+    let marker = sandbox.work().join("data/iris/.gitignore");
+    assert_eq!(
+        format!("{:o}", mode(&marker)?),
+        format!("{:o}", mode(&theirs)?)
+    );
+    Ok(())
+}
