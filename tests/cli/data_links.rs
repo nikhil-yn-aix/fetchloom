@@ -113,10 +113,11 @@ fn a_data_folder_linked_into_a_listed_folder_is_followed() -> Result {
 }
 
 /// a link a cloned project brings can aim anywhere, so a data folder link is followed only into a
-/// listed folder. one to the home folder or its autostart folder, one whose path climbs out of
-/// the listed folder with `..`, one through a link inside the listed folder that leads out, and
-/// one to a folder that is gone are refused before anything is written there; the refusal names
-/// the setting with the command that lists the folder, and a folder a link leads to is never made.
+/// listed folder. one to the home folder or its autostart folder, one into a folder whose name only
+/// begins as the listed one's does, one whose path climbs out of the listed folder with `..`, one
+/// through a link inside the listed folder that leads out, and one to a folder that is gone are
+/// refused before anything is written there; the refusal names the setting with the command that
+/// lists the folder, and a folder a link leads to is never made.
 #[test]
 fn a_data_folder_link_anywhere_else_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -143,6 +144,7 @@ fn a_data_folder_link_anywhere_else_is_refused() -> Result {
     for target in [
         home.clone(),
         autostart.clone(),
+        sandbox.folder("scratch2")?,
         scratch.join("..").join("outside"),
         inner.clone(),
     ] {
@@ -209,6 +211,31 @@ fn a_data_folder_link_anywhere_else_is_refused() -> Result {
         "{stderr}"
     );
     unlink(&data)?;
+    Ok(())
+}
+
+/// a listed folder counts as resolved, so a list naming scratch through a link to it, as a
+/// cluster's /scratch leads to /lustre/scratch, still holds a data folder linked into it.
+#[test]
+fn a_folder_listed_through_a_link_holds_what_lies_in_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir(&target)?;
+    let via = scratch.with_file_name("via");
+    if link_folder(&scratch, &via).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    link_folder(&target, &sandbox.work().join("data"))?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let link = format!("{}/iris.csv", routes.url);
+    let output = sandbox
+        .command(&["add", &link, "--as", "iris"])
+        .env("FETCHLOOM_DATA_LINKS", &via)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
     Ok(())
 }
 

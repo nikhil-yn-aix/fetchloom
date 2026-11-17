@@ -759,6 +759,41 @@ fn named(id: u32) -> String {
         .unwrap_or_else(|| format!("user {id}"))
 }
 
+/// a git repository's .git folder named as the cache by mistake stays refused, though its objects/
+/// holds two-hex folders as a cache's does: HEAD, config and refs/ are no cache's names, and gc,
+/// taking it for a cache whose tag is gone, would delete git's objects.
+#[test]
+fn a_git_folder_named_as_the_cache_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let git = sandbox.folder("repo")?.join(".git");
+    // a sha-256 repository names a loose object by 62 hex characters below its fan, as a cache does
+    let fan = git.join("objects").join("ab");
+    fs::create_dir_all(&fan)?;
+    let object = fan.join("c".repeat(62));
+    fs::write(&object, b"blob 4\0git\n")?;
+    fs::write(git.join("HEAD"), b"ref: refs/heads/main\n")?;
+    fs::write(
+        git.join("config"),
+        b"[core]\n\trepositoryformatversion = 1\n",
+    )?;
+    fs::create_dir_all(git.join("refs").join("heads"))?;
+    for args in [&["cache"][..], &["cache", "gc", "--now"]] {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_CACHE", &git)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("it holds other files and is not a fetchloom cache"),
+            "{args:?}: {stderr}"
+        );
+    }
+    assert_eq!(fs::read(&object)?, b"blob 4\0git\n");
+    assert!(!git.join("CACHEDIR.TAG").exists());
+    Ok(())
+}
+
 /// a scratch purge takes a cache's oldest files, its tag first, and leaves its folders. a folder
 /// that holds nothing but what fetchloom keeps there is plainly its cache, so every command goes
 /// on and says so once a run: one that writes to the cache puts the tag back, and one that only
