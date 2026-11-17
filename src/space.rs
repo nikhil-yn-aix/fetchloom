@@ -209,14 +209,16 @@ pub(crate) fn same_disk(one: &Path, other: &Path) -> Option<bool> {
     Some(disk(one)? == disk(other)?)
 }
 
+/// the number the system gives the disk holding `path`, which must exist; none when it does not
+/// say.
 #[cfg(unix)]
-fn disk(path: &Path) -> Option<u64> {
+pub(crate) fn disk(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).ok().map(|metadata| metadata.dev())
 }
 
 #[cfg(windows)]
-fn disk(path: &Path) -> Option<u64> {
+pub(crate) fn disk(path: &Path) -> Option<u64> {
     let handle = winapi_util::Handle::from_path_any(path).ok()?;
     winapi_util::file::information(&handle)
         .ok()
@@ -224,7 +226,7 @@ fn disk(path: &Path) -> Option<u64> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn disk(_: &Path) -> Option<u64> {
+pub(crate) fn disk(_: &Path) -> Option<u64> {
     None
 }
 

@@ -89,6 +89,8 @@ pub(crate) enum Once {
     Moved,
     /// a line of the project's .gitignore that hides the whole data folder: the line.
     Rule,
+    /// files copied rather than linked, and why: the number of the disk the data folder is on.
+    Copy,
     /// a folder the person shares with datasets that put more entries there than a marker names,
     /// so git sees them: the folder.
     Unnamed,
@@ -103,6 +105,7 @@ impl Once {
             Once::Refill => "refill",
             Once::Moved => "moved",
             Once::Rule => "rule",
+            Once::Copy => "copy",
             Once::Unnamed => "unnamed",
             Once::RPackage => "r_package",
         }

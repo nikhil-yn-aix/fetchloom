@@ -237,3 +237,43 @@ fn an_r_package_hears_once_where_raw_files_go() -> Result {
     );
     Ok(())
 }
+
+/// a project in a folder a sync client keeps, as onedrive, gets copies, since such a client breaks
+/// links. the first run that copies says why, with no advice to move the project, which is the
+/// person's choice, and later runs on that disk say nothing of it.
+#[test]
+fn the_copy_reason_is_told_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    if sandbox.links()?.reflink {
+        return crate::support::skipped("copies", "this disk clones files, so none is copied");
+    }
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let inside = |args: &[&str]| -> Result<String> {
+        let output = sandbox
+            .command(args)
+            .env("OneDrive", sandbox.work())
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        Ok(stderr)
+    };
+    let first = inside(&["add", &format!("{}{PATH}", server.url)])?;
+    assert!(
+        first.contains(
+            "warning: data is inside onedrive, which breaks links, so files were copied\n"
+        ),
+        "{first}"
+    );
+    assert!(!first.contains("outside onedrive"), "{first}");
+    let second = inside(&["add", &format!("{}/files/wine.csv", server.url)])?;
+    assert_eq!(
+        fs::read(sandbox.work().join("data/wine/wine.csv"))?,
+        b"a,b\n1,2\n"
+    );
+    assert!(!second.contains("inside onedrive"), "{second}");
+    Ok(())
+}

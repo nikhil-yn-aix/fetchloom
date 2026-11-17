@@ -253,9 +253,7 @@ impl Unlinked {
                 said: format!(
                     "{place} is inside {client}, which breaks links, so {subject} copied"
                 ),
-                help: Some(format!(
-                    "a folder outside {client} lets fetchloom try links"
-                )),
+                help: None,
             },
             Self::NoLinks => Because {
                 said: format!("the drive holding {place} cannot link files, so {subject} copied"),
@@ -268,7 +266,7 @@ impl Unlinked {
             Self::OtherDrive => Because {
                 said: format!("the cache is on another drive than {place}, so {subject} copied"),
                 help: Some(format!(
-                    "to link files instead, put both on one drive: move {place} to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of {place}. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
+                    "to link files instead, set FETCHLOOM_CACHE to a folder on the drive of {place}, or move {place} to the cache's drive. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
                 )),
             },
         }

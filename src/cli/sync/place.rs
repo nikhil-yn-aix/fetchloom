@@ -80,6 +80,10 @@ pub(crate) struct Placement {
     /// told of yet, each with how many entries its datasets put there.
     #[serde(skip)]
     pub(crate) unnamed: Vec<(String, usize)>,
+    /// why the run copied files rather than linking them, when no run told of it on the disk the
+    /// data folder is on, with that disk.
+    #[serde(skip)]
+    pub(crate) copied: Option<(crate::place::Unlinked, String)>,
     /// the datasets the run places or replaces files of.
     #[serde(skip)]
     pub(crate) filled: BTreeSet<String>,
@@ -368,7 +372,8 @@ fn edited_path(edit: &str) -> &str {
 
 /// records in `state` what `placement` told once, so later runs stay quiet of it: each edit kept,
 /// with how its file looks on `disk`, each folder told how to keep away, the data folder told how
-/// to keep elsewhere, and an R package told where raw files go. forgets the edits of `scope` this
+/// to keep elsewhere, an R package told where raw files go, each folder told it is too full to
+/// name, and why files were copied on the data folder's disk. forgets the edits of `scope` this
 /// run kept no more, and the folders no dataset has now. says whether the state changed.
 fn note_told(
     state: &mut State,
@@ -412,6 +417,9 @@ fn note_told(
     }
     for (folder, _) in &placement.unnamed {
         changed |= told.note(Once::Unnamed, folder);
+    }
+    if let Some((_, disk)) = &placement.copied {
+        changed |= told.note(Once::Copy, disk);
     }
     changed
 }
@@ -1328,6 +1336,17 @@ impl<'a> Placing<'a> {
         let marks = unmarked || marking || rewritten || told_rule || taken_back;
         // what a run that ends in an error never tells stays untold
         let telling = !stopped && failure.is_none();
+        placement.copied = tallies
+            .values()
+            .any(|tally| tally.unlinked > 0)
+            .then(|| placer.unlinked())
+            .flatten()
+            .map(|why| {
+                let disk =
+                    crate::space::disk(&data_dir).map_or_else(String::new, |disk| disk.to_string());
+                (why, disk)
+            })
+            .filter(|(_, disk)| !state.told.has(Once::Copy, disk));
         placement.r_package = telling
             && told.is_some_and(|names| !names.is_empty())
             && manifest.data_dir == crate::project::manifest::DATA_DIR
@@ -1348,9 +1367,7 @@ impl<'a> Placing<'a> {
         if let Some(error) = failure {
             return Err(ended(error));
         }
-        tell(
-            output, manifest, &placer, &tallies, &placement, told, &scope,
-        );
+        tell(output, manifest, &tallies, &placement, told, &scope);
         Ok(placement)
     }
 
@@ -1420,15 +1437,7 @@ impl<'a> Placing<'a> {
         // a person's file kept aside may be what keeps a folder, so it is named as sync names it
         tell::set_aside(output, manifest, &survey.state.aside);
         if told {
-            tell(
-                output,
-                manifest,
-                &placer,
-                &BTreeMap::new(),
-                &placement,
-                None,
-                &scope,
-            );
+            tell(output, manifest, &BTreeMap::new(), &placement, None, &scope);
         }
         Ok(placement)
     }

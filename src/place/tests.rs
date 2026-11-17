@@ -20,18 +20,20 @@ fn cache(read_only: bool) -> (TempDir, PathBuf) {
     (folder, object)
 }
 
+/// where the project lives is the person's choice, and no setting gives links inside a folder a
+/// sync client keeps, so the reason comes with no advice.
 #[test]
 fn synced_copy_advice_does_not_promise_zero_disk() {
     for (place, subject, expected) in [
         (
             "data",
             "files were",
-            "data is inside onedrive, which breaks links, so files were copied. a folder outside onedrive lets fetchloom try links",
+            "data is inside onedrive, which breaks links, so files were copied",
         ),
         (
             "iris",
             "the file was",
-            "iris is inside onedrive, which breaks links, so the file was copied. a folder outside onedrive lets fetchloom try links",
+            "iris is inside onedrive, which breaks links, so the file was copied",
         ),
     ] {
         assert_eq!(
@@ -60,20 +62,21 @@ fn copy_advice_on_drives_without_links_names_the_place() {
 }
 
 /// on a cluster the cache stays on scratch while a project may stay in home, so the advice
-/// offers both ways to one drive, and the page that helps choose.
+/// names first the cache on the project's drive, then the other way to one drive, and the page
+/// that helps choose.
 #[test]
 fn a_cache_on_another_drive_explains_the_copy_and_both_ways_to_links() {
     assert_eq!(
         Unlinked::OtherDrive
             .copied_because("the project", "files were")
             .to_string(),
-        "the cache is on another drive than the project, so files were copied. to link files instead, put both on one drive: move the project to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of the project. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
+        "the cache is on another drive than the project, so files were copied. to link files instead, set FETCHLOOM_CACHE to a folder on the drive of the project, or move the project to the cache's drive. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
     );
     assert_eq!(
         Unlinked::OtherDrive
             .copied_because("iris", "the file was")
             .to_string(),
-        "the cache is on another drive than iris, so the file was copied. to link files instead, put both on one drive: move iris to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of iris. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
+        "the cache is on another drive than iris, so the file was copied. to link files instead, set FETCHLOOM_CACHE to a folder on the drive of iris, or move iris to the cache's drive. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
     );
 }
 

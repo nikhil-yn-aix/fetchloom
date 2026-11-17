@@ -5,5 +5,4 @@ expression: stderr
 ---
  Downloaded iris.csv · 81 B in [time]
 warning: iris is inside onedrive, which breaks links, so the file was copied
-  help: a folder outside onedrive lets fetchloom try links
     Fetched iris.csv into iris · copied, 81 B

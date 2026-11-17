@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use super::put::Tally;
 use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope};
 use crate::output::{Output, Warning};
-use crate::place::{Because, Method, Placer, Unlinked};
+use crate::place::{Because, Method, Unlinked};
 use crate::plan;
 use crate::project::manifest::Manifest;
 use crate::units;
@@ -14,7 +14,6 @@ use crate::units;
 pub(super) fn tell(
     output: &Output,
     manifest: &Manifest,
-    placer: &Placer,
     tallies: &BTreeMap<&str, Tally>,
     placement: &Placement,
     told: Option<&BTreeSet<String>>,
@@ -83,9 +82,7 @@ pub(super) fn tell(
     tell_linked(output, manifest, placement);
     tell_removed(output, manifest, ["Retired", "Removed"], placement);
     warn_adopted_removed(output, &placement.removed_adopted, "removed");
-    if tallies.values().any(|tally| tally.unlinked > 0)
-        && let Some(why) = placer.unlinked()
-    {
+    if let Some((why, _)) = placement.copied {
         let because = copy_warning(why, &manifest.data_dir);
         match &because.help {
             Some(help) => output.warn_with(Warning::PlaceCopied, &because.said, help),
@@ -1192,12 +1189,10 @@ mod tests {
             false,
             false,
         );
-        let placer = Placer::new(std::path::Path::new("data"));
         let looked = LOOKS.get();
         tell(
             &output,
             &manifest,
-            &placer,
             &tallies,
             &Placement::default(),
             None,
@@ -1269,16 +1264,7 @@ mod tests {
                 refilled: ["data/d03".to_owned()].into(),
                 ..Placement::default()
             };
-            let placer = Placer::new(std::path::Path::new("data"));
-            tell(
-                &output,
-                &manifest,
-                &placer,
-                &tallies,
-                &placement,
-                None,
-                &Scope::All,
-            );
+            tell(&output, &manifest, &tallies, &placement, None, &Scope::All);
             let said = output.said();
             assert_eq!(said.len(), lines, "{datasets}: {said:?}");
             if lines == 1 {
