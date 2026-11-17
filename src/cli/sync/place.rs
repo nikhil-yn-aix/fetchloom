@@ -132,6 +132,10 @@ pub(crate) struct Placement {
     /// whether the project is in a git repository, where the lines for `marked` matter.
     #[serde(skip)]
     pub(crate) in_git: bool,
+    /// for an add pinning an output first, its folder when git tracks the person's files there,
+    /// which git keeps, so it gets no marker.
+    #[serde(skip)]
+    pub(crate) kept_in_git: Option<String>,
     /// dataset folders whose own .gitignore the run places where a marker would go, which no line
     /// of the project's .gitignore hides.
     #[serde(skip)]
@@ -1668,6 +1672,14 @@ impl<'a> Placing<'a> {
 
 /// the line for the dataset folders `placement` kept out of git with a .gitignore of fetchloom's.
 pub(crate) fn tell_marked(output: &Output, placement: &Placement) {
+    if let Some(folder) = &placement.kept_in_git {
+        output.step(
+            "Kept",
+            &format!(
+                "{folder} in git, which tracks files there; fetchloom pins it for sharing too"
+            ),
+        );
+    }
     mark::tell_made(output, &placement.marked, placement.in_git, "Ignored");
 }
 

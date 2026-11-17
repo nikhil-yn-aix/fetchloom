@@ -106,6 +106,9 @@ pub(crate) enum Once {
     Output,
     /// a data folder link git sees, with the .gitignore line that hides it: the line.
     Link,
+    /// an output's folder git tracked the person's files in at its first pin, which git keeps, so
+    /// fetchloom makes no marker there: the folder.
+    Tracked,
 }
 
 impl Once {
@@ -120,6 +123,7 @@ impl Once {
             Once::RPackage => "r_package",
             Once::Output => "output",
             Once::Link => "link",
+            Once::Tracked => "tracked",
         }
     }
 }

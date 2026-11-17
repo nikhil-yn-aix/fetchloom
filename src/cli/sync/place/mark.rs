@@ -43,13 +43,15 @@ pub(super) enum Content {
     /// no marker: the person shares the folder, and its datasets put this many entries at its
     /// top, more than a marker names one by one, while `*` would hide the person's files too.
     Unnamed(usize),
+    /// no marker: git keeps the folder, an output's, as [`kept_in_git`] finds.
+    Tracked,
 }
 
 /// what each dataset folder of `targets` should have for a marker: `*`, or for one the person
 /// shares, the data folder itself or one holding another dataset's folder, the top entries of
 /// the datasets placed there, anchored, and the marker itself, or none past [`MOST_NAMED`] of
-/// them. the files `state` records for a dataset of `unsure` count too, since they stay while
-/// nothing tells which it needs.
+/// them, and none in an output's folder git keeps. the files `state` records for a dataset of
+/// `unsure` count too, since they stay while nothing tells which it needs.
 pub(super) fn contents(
     manifest: &Manifest,
     targets: &[Target],
@@ -103,6 +105,7 @@ pub(super) fn contents(
         .into_iter()
         .map(|folder| {
             let content = match named.remove(folder) {
+                _ if kept_in_git(manifest, state, folder) => Content::Tracked,
                 None => Content::Text(TEXT.to_vec()),
                 Some(entries) => entries.content(),
             };
@@ -171,6 +174,16 @@ pub(super) fn unnamed(
             _ => None,
         })
         .collect()
+}
+
+/// whether git keeps `folder`, an output's, as its first pin found git tracking the person's files
+/// there and the state records: a marker would hide their next file there from git.
+fn kept_in_git(manifest: &Manifest, state: &State, folder: &str) -> bool {
+    state.told.has(Once::Tracked, folder)
+        && manifest
+            .datasets
+            .values()
+            .any(|entry| entry.at.as_deref() == Some(folder))
 }
 
 /// whether the person shares `folder`, a dataset's, with its datasets: the data folder itself, or
@@ -447,7 +460,7 @@ pub(super) fn would_make(
 fn text_of<'c>(contents: &'c BTreeMap<String, Content>, folder: &str) -> Option<&'c [u8]> {
     match contents.get(folder)? {
         Content::Text(text) => Some(text),
-        Content::Unnamed(_) => None,
+        Content::Unnamed(_) | Content::Tracked => None,
     }
 }
 
@@ -594,8 +607,8 @@ pub(super) fn take_back(
 }
 
 /// whether every dataset folder of `scope` holding files fetchloom placed has its marker, an
-/// entry of someone else's where the marker would go, or none as too full to name, and no record
-/// waits to be forgotten, as a run that changes nothing leaves the markers.
+/// entry of someone else's where the marker would go, or none as too full to name or as git's,
+/// and no record waits to be forgotten, as a run that changes nothing leaves the markers.
 pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bool {
     let state = &survey.state;
     let placed: BTreeSet<String> = manifest
@@ -618,6 +631,7 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
                 survey.disk.contains_key(&path)
                     || survey.entries.contains_key(&path)
                     || too_full(manifest, state, &folder)
+                    || kept_in_git(manifest, state, &folder)
             }
         });
     marked
@@ -902,7 +916,7 @@ mod tests {
     use crate::place::{Method, Placer};
     use crate::project::Project;
     use crate::project::manifest::Manifest;
-    use crate::project::state::{Look, Placed, State};
+    use crate::project::state::{Look, Once, Placed, State};
 
     /// a folder the person shares, filled past what a marker names, settles with no marker of
     /// fetchloom's, so a sync with nothing to do stays quick; one at the limit needs its marker.
@@ -921,28 +935,58 @@ mod tests {
             )
             .unwrap();
             for at in 0..count {
-                let placed = Placed {
-                    dataset: "many".to_owned(),
-                    sha256: digest::sha256(b"1\n"),
-                    method: Method::Copy,
-                    look: Look {
-                        size: 2,
-                        modified: 1,
-                    },
-                    writable: false,
-                    checked: 0,
-                    adopted: false,
-                    output: false,
-                    unlinkable: false,
-                    racy_intact: std::sync::OnceLock::new(),
-                };
                 survey
                     .state
                     .files
-                    .insert(format!("data/f{at:04}.csv"), placed);
+                    .insert(format!("data/f{at:04}.csv"), placed("many"));
             }
             assert_eq!(settled(&manifest, &survey, &Scope::All), quiet, "{count}");
         }
+    }
+
+    /// a file fetchloom placed for `dataset`.
+    fn placed(dataset: &str) -> Placed {
+        Placed {
+            dataset: dataset.to_owned(),
+            sha256: digest::sha256(b"1\n"),
+            method: Method::Copy,
+            look: Look {
+                size: 2,
+                modified: 1,
+            },
+            writable: false,
+            checked: 0,
+            adopted: false,
+            output: false,
+            unlinkable: false,
+            racy_intact: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// an output's folder git keeps settles with no marker, so a sync with nothing to do stays
+    /// quick there, while the same folder needs its marker without the record, or as a dataset's
+    /// that is no output.
+    #[test]
+    fn an_output_git_keeps_settles_with_no_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::at(dir.path().to_path_buf());
+        std::fs::create_dir_all(project.root.join("data/iris")).unwrap();
+        let output = "[datasets.iris]\nref = \"local\"\nat = \"data/iris\"\n";
+        let output = Manifest::parse(output).unwrap();
+        let dataset = Manifest::parse("[datasets.iris]\nref = \"x\"\n").unwrap();
+        let mut survey = Survey::read(
+            &project,
+            &Folders::of(&output),
+            crate::threads::Threads::default(),
+            &crate::stop::Stop::default(),
+        )
+        .unwrap();
+        let file = "data/iris/iris.csv".to_owned();
+        survey.state.files.insert(file, placed("iris"));
+        assert!(!settled(&output, &survey, &Scope::All));
+        survey.state.told.note(Once::Tracked, "data/iris");
+        assert!(settled(&output, &survey, &Scope::All));
+        assert!(!settled(&dataset, &survey, &Scope::All));
     }
 
     /// a record names fetchloom's marker only while the file holds what the record says, in the

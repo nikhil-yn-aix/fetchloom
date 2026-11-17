@@ -6,7 +6,7 @@ use std::fs;
 
 use crate::project::{IRIS, PATH};
 use crate::support::{
-    Result, Routes, Sandbox, add_ok, file, json, text, without_copy_warning, zip_of,
+    Result, Routes, Sandbox, add_ok, file, json, ok, text, without_copy_warning, zip_of,
 };
 
 /// a server answering iris at [`PATH`], as often as asked.
@@ -825,5 +825,85 @@ fn a_shared_folder_too_full_to_name_gets_no_wildcard() -> Result {
     let first = synced(&fresh)?;
     assert!(first.contains(&unnamed_warning("1,001")), "{first}");
     assert!(!fresh.work().join("data/.gitignore").exists());
+    Ok(())
+}
+
+/// n3: results/, an output's folder the person keeps in git with its tables committed, gets no
+/// .gitignore at its first pin, which would hide the next table from git: the add says once that
+/// git keeps it and fetchloom pins it too, and a sync or a pin again says nothing more of it. a
+/// folder git holds only a .gitkeep in is not kept in git and gets its .gitignore, and so do a
+/// teammate's clone of results/, since only a first pin looks at git, never a sync, and results/
+/// pinned first again once git no longer tracks it.
+#[test]
+fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
+    let sandbox = Sandbox::new()?;
+    write_all(
+        &sandbox,
+        &[
+            ("results/table1.csv", "a,b\n1,2\n"),
+            ("processed/.gitkeep", ""),
+        ],
+    )?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    crate::merge::ok(&sandbox, &["add", "-A"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "tables"])?;
+    let work = sandbox.work();
+    let added = sandbox.run(&["add", "results", "--as", "results"])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "       Kept results in git, which tracks files there; fetchloom pins it for sharing too\n"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Ignored"), "{stderr}");
+    assert!(!work.join("results/.gitignore").exists(), "{stderr}");
+    assert_eq!(
+        synced(&sandbox)?,
+        "         Ok all pinned files are in place by size and time, nothing to do\n"
+    );
+    let again = sandbox.run(&["add", "results", "--as", "results"])?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("in git"), "{stderr}");
+    let processed = sandbox.run(&["add", "processed", "--as", "processed"])?;
+    let stderr = text(&processed.stderr)?;
+    assert!(stderr.contains(&ignored_line("processed")), "{stderr}");
+    write_all(
+        &sandbox,
+        &[
+            ("results/table2.csv", "c,d\n3,4\n"),
+            ("processed/clean.csv", "x\n"),
+        ],
+    )?;
+    assert_eq!(
+        untracked(&sandbox)?.ok_or("git went away")?,
+        ["data.lock", "data.toml", "results/table2.csv"]
+    );
+    assert!(!work.join("results/.gitignore").exists());
+
+    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "pinned"])?;
+    let teammate = sandbox.folder("teammate")?;
+    let into = teammate.display().to_string();
+    let cloned =
+        crate::merge::git(&sandbox, &work, &["clone", "-q", ".", &into])?.ok_or("git went away")?;
+    assert!(cloned.status.success(), "{}", text(&cloned.stderr)?);
+    let placed = sandbox.command_in(&teammate, &["sync"]).output()?;
+    let stderr = text(&placed.stderr)?;
+    assert_eq!(placed.status.code(), Some(0), "{stderr}");
+    let marker = fs::read(teammate.join("results/.gitignore")).ok();
+    assert_eq!(marker.as_deref(), Some(&b"*\n"[..]), "{stderr}");
+
+    // once git lets go of the folder, its next first pin gives it a .gitignore
+    ok(&sandbox.run(&["remove", "results", "--yes"])?)?;
+    crate::merge::ok(&sandbox, &["rm", "-r", "-q", "--cached", "results"])?;
+    let added = sandbox.run(&["add", "results", "--as", "results"])?;
+    let stderr = text(&added.stderr)?;
+    assert!(stderr.contains(&ignored_line("results")), "{stderr}");
+    assert_eq!(fs::read(work.join("results/.gitignore"))?, b"*\n");
     Ok(())
 }
