@@ -306,7 +306,12 @@ fn a_changed_output_is_never_partly_healed() -> Result {
         "{document}"
     );
     let said = document["warnings"].to_string();
-    assert!(said.contains("fetchloom sync --force processed"), "{said}");
+    assert!(
+        said.contains(
+            "`fetchloom sync --force processed` to make it hold just the files processed pins"
+        ),
+        "{said}"
+    );
     assert!(
         said.contains("fetchloom add data/processed --as processed"),
         "{said}"
@@ -369,6 +374,12 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
     );
     assert!(
         stderr.contains("fetchloom add data/processed --as processed --yes"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "`fetchloom sync --force processed` to make it hold just the files processed pins"
+        ),
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned);

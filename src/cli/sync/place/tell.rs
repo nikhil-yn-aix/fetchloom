@@ -42,7 +42,7 @@ pub(super) fn tell(
                 changed.summary()
             ),
             &format!(
-                "run `{}` to put back the files {name} pins, or `{}` to pin what it holds now",
+                "run `{}` to make it hold just the files {name} pins, or `{}` to pin what it holds now",
                 crate::suggested::command(&format!("sync --force {name}")),
                 crate::suggested::command(&format!(
                     "add {} --as {name}",

@@ -817,7 +817,7 @@ fn approved(
                 error = error.detail(line);
             }
             Err(error.help(format!(
-                "run `{again}` to pin what it holds now, `{}` to compare only, or `{}` to put back the files {name} pins",
+                "run `{again}` to pin what it holds now, `{}` to compare only, or `{}` to make it hold just the files {name} pins",
                 command(&format!("add {} --as {name} --check", shell(shown))),
                 command(&format!("sync --force {name}"))
             )))
