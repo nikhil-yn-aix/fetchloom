@@ -627,6 +627,35 @@ fn a_dataset_alike_but_written_apart_keeps_our_text_and_says_so() {
     );
 }
 
+/// sides that differ in what decides a dataset's files, or where they go, differ in more than
+/// comments or spacing, so the dataset waits for a choice.
+#[test]
+fn a_dataset_whose_sides_differ_in_a_value_waits_for_a_choice() {
+    let locks = sides(lock(Vec::new()), lock(Vec::new()), None);
+    for (ours, theirs) in [
+        (
+            "ref = \"zenodo:1\"\nselect = \"*.csv\"",
+            "ref = \"zenodo:1\"\nselect = \"*.tsv\"",
+        ),
+        (
+            "ref = \"zenodo:1\"\nexclude = \"*.csv\"",
+            "ref = \"zenodo:1\"\nexclude = \"*.tsv\"",
+        ),
+        (
+            "ref = \"local\"\nat = \"results\"",
+            "ref = \"local\"\nat = \"outputs\"",
+        ),
+    ] {
+        let side = |table: &str| format!("[datasets.a]\n{table}\n");
+        let error = merged(&sides(side(ours), side(theirs), None), &locks, &[]);
+        assert_eq!(
+            error.err().map(|error| error.kind),
+            Some(Kind::Unconfirmed),
+            "{ours}"
+        );
+    }
+}
+
 /// git merged data.toml without beta, which one side removed while the other pinned other files
 /// for it. choosing the pinning side brings back its entry whole, note and folder too; the other
 /// side's choice removes it, and an unchanged pin goes with the removal.

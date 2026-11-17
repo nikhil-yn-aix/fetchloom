@@ -558,6 +558,7 @@ fn values(entry: &Entry) -> impl PartialEq {
         source.decompress,
         entry.copy,
         entry.path.clone(),
+        entry.at.clone(),
     )
 }
 
