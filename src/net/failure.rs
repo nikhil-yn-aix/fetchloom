@@ -354,8 +354,9 @@ impl Net {
     ) -> Failure {
         if status == StatusCode::NOT_FOUND
             && !self.sends_key(url)
-            && let Some(error) = (self.rules.keyless)(url)
+            && let Some((repository, error)) = (self.rules.keyless)(url)
         {
+            self.unkeyed.refused(&repository);
             return Failure::Final(error);
         }
         if matches!(

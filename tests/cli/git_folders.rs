@@ -839,6 +839,53 @@ fn a_teammate_without_the_key_is_told_which_when_github_refuses() -> Result {
     Ok(())
 }
 
+/// a repository answers alike for all its files, so a teammate without a key asks github for one
+/// file of a private repository's twelve, and its refusal stands for the rest, unasked: each
+/// request without a key spends one of the 60 an hour github allows an address.
+#[test]
+fn a_teammate_without_the_key_asks_github_once_a_repository() -> Result {
+    let sandbox = Sandbox::new()?;
+    let files: Vec<(String, Vec<u8>)> = (0..12)
+        .map(|part| {
+            (
+                format!("data/part-{part:02}.csv"),
+                format!("part,{part}\n").into_bytes(),
+            )
+        })
+        .collect();
+    let held: Vec<(&str, Held)> = files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), Held::File(bytes)))
+        .collect();
+    let routes = secret(&held)?;
+    let link = "https://github.com/lab/secret/tree/main/data";
+    ok(&sandbox
+        .command(&["add", link, "--as", "secret"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("GH_TOKEN", KEY)
+        .output()?)?;
+    let asked = routes.requests().len();
+    let (_, synced) = teammate_sync(&sandbox, &routes)?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(40), "{stderr}");
+    assert_eq!(stderr.matches("error: ").count(), 1, "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: github serves the files of the private repository lab/secret only to a key that can read it\n"
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains("the same for all 12 files\n"), "{stderr}");
+    let refusing = &routes.requests()[asked..];
+    assert_eq!(refusing.len(), 1, "one request a repository: {refusing:?}");
+    assert!(
+        target(&refusing[0]).starts_with(&format!("{SECRET_API}/git/blobs/")),
+        "{refusing:?}"
+    );
+    assert!(!refusing[0].contains("authorization:"), "{refusing:?}");
+    Ok(())
+}
+
 /// a pin made while its repository was private stays good once github shows the repository to
 /// anyone: a run without a key asks github's api for each file without one, and github's limit on
 /// such requests, 60 an hour, is told as the key that lifts it.

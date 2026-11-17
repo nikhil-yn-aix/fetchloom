@@ -277,7 +277,8 @@ fn githubs_api_links_to_files_ask_for_their_bytes_and_a_key() {
     ] {
         assert_eq!(accept(&Url::parse(link).unwrap()), Some(accepted), "{link}");
     }
-    let error = keyless(&Url::parse(blob).unwrap()).unwrap();
+    let (repository, error) = keyless(&Url::parse(blob).unwrap()).unwrap();
+    assert_eq!(repository, "lab/secret");
     assert_eq!(error.kind, Kind::AuthRequired);
     assert_eq!(
         error.message,
@@ -291,7 +292,7 @@ fn githubs_api_links_to_files_ask_for_their_bytes_and_a_key() {
     );
     assert_eq!(error.need.unwrap().account, Account::GitHub);
     assert_eq!(
-        keyless(&Url::parse(asset).unwrap()).unwrap().message,
+        keyless(&Url::parse(asset).unwrap()).unwrap().1.message,
         error.message,
         "one message for every file, which a run says once"
     );

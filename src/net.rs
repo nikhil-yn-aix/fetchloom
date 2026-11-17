@@ -23,6 +23,7 @@ pub(crate) mod s3;
 pub(crate) mod sign;
 pub(crate) mod site;
 pub(crate) mod speeds;
+mod unkeyed;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -266,6 +267,9 @@ pub(crate) struct Net {
     /// buckets that refused an old version this run, though the object as it is now matched its
     /// pin: they likely refuse every old version, so their objects are asked for as they are now.
     refuse_versions: Mutex<std::collections::HashSet<s3::Bucket>>,
+    /// the repositories asked without a key for files their source shows to a key alone, whose
+    /// first answer holds for the rest of their files.
+    unkeyed: unkeyed::Unkeyed,
     /// in mirror-only mode, the web mirrors' addresses, each ending in `/`: a request goes only
     /// below one of them, and only as a mirror's request.
     mirrors_only: Option<Vec<Url>>,
@@ -503,6 +507,7 @@ impl Net {
             google: Google::default(),
             azure: Azure::default(),
             refuse_versions: Mutex::default(),
+            unkeyed: unkeyed::Unkeyed::default(),
             mirrors_only: None,
             mirror_buckets: Vec::new(),
             hf_endpoint: None,

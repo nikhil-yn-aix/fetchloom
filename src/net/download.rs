@@ -14,6 +14,7 @@ use url::Url;
 
 use super::failure::{self, Failure, Retry};
 use super::headers::{self, NoVersion, if_range};
+use super::unkeyed::{First, Turn};
 use super::{Net, Splitting, host};
 use crate::cache::{
     Cache, Claim, Partial, PartialWriter, SAVE_EVERY, Stored, UrlRecord, Validators,
@@ -677,6 +678,19 @@ impl Net {
             };
             return recalled(record, Origin::Cache, on);
         }
+        // a repository answers alike for all its files: one asked without the key its source
+        // wants goes first, and its refusal holds for the rest, so they spend none of the
+        // requests the host allows an address
+        let first = self.keyless_turn(&fetch.from).await?;
+        let told = |event: Event| {
+            if let Some(first) = &first
+                && matches!(event, Event::Started { .. })
+            {
+                first.served();
+            }
+            on(event)
+        };
+        let on: Listener<'_> = &told;
         // a link the source gives only for a while is asked for afresh by the stable one
         let relinked;
         let fetch = match (self.rules.relink)(&fetch.from) {
@@ -751,6 +765,21 @@ impl Net {
                 Ok(fetched)
             }
             Err(error) => Err(unread(error, refused, &version)),
+        }
+    }
+
+    /// the turn of a download of `url` asked without the key its source wants: the first of its
+    /// repository's, which goes alone, or none, which goes as any other, or the refusal of one
+    /// its repository refused already.
+    async fn keyless_turn(&self, url: &Url) -> Result<Option<First<'_>>, Error> {
+        let keyless = (self.rules.keyless)(url).filter(|_| !self.sends_key(url));
+        let Some((repository, refusal)) = keyless else {
+            return Ok(None);
+        };
+        match self.unkeyed.turn(&repository).await {
+            Turn::Refused => Err(refusal),
+            Turn::Ask => Ok(None),
+            Turn::First(first) => Ok(Some(first)),
         }
     }
 

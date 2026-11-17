@@ -544,20 +544,20 @@ pub(super) fn lfs_help(url: &Url) -> Option<String> {
 }
 
 /// the refusal of `url`, a private repository's file at github's api, which github answered 404
-/// for a request without a github key, as it answers for a repository it has not. a repository
-/// made public since its pin serves the file to such a request.
-pub(super) fn keyless(url: &Url) -> Option<Error> {
+/// for a request without a github key, as it answers for a repository it has not, and that
+/// repository, as `<owner>/<name>`. a repository made public since its pin serves the file to
+/// such a request.
+pub(super) fn keyless(url: &Url) -> Option<(String, Error)> {
     let repository = served(url)?.1?;
-    Some(
-        Error::new(
-            Kind::AuthRequired,
-            format!(
-                "github serves the files of the private repository {repository} only to a key that can read it"
-            ),
-        )
-        .help("set GH_TOKEN or GITHUB_TOKEN to a github token that can read it, or sign in with `fetchloom auth login github`, then run the same command again")
-        .needs(Account::GitHub, None),
+    let refusal = Error::new(
+        Kind::AuthRequired,
+        format!(
+            "github serves the files of the private repository {repository} only to a key that can read it"
+        ),
     )
+    .help("set GH_TOKEN or GITHUB_TOKEN to a github token that can read it, or sign in with `fetchloom auth login github`, then run the same command again")
+    .needs(Account::GitHub, None);
+    Some((repository, refusal))
 }
 
 /// the error for github's limit on requests without a key, used up by downloads of files pinned

@@ -54,8 +54,9 @@ pub(crate) struct Rules {
     /// for: github's api answers a blob or a release asset with json about it otherwise.
     pub(crate) accept: fn(&Url) -> Option<&'static str>,
     /// a source's refusal of a link it answered 404 for when no key went with the request, as
-    /// github's api answers for a private repository's files, which it shows to a key alone.
-    pub(crate) keyless: fn(&Url) -> Option<Error>,
+    /// github's api answers for a private repository's files, which it shows to a key alone, and
+    /// the repository the link is in, whose every link it answers alike.
+    pub(crate) keyless: fn(&Url) -> Option<(String, Error)>,
 }
 
 /// a file a source links only for a while, by the stable link data.lock keeps: the request that
