@@ -263,6 +263,10 @@ pub(crate) struct Kept {
     /// it keeps an earlier version, as after a rebuild or an upgrade.
     #[serde(skip)]
     pub(crate) earlier: bool,
+    /// for reason `changed`, whether an earlier run told of this edit while the file looked as it
+    /// does now, so this one only counts it.
+    #[serde(skip)]
+    pub(crate) told: bool,
 }
 
 impl Kept {
@@ -273,10 +277,16 @@ impl Kept {
             blocker: None,
             dataset: None,
             earlier: false,
+            told: false,
         }
     }
 
     fn of(target: &Target, reason: Reason, survey: &Survey) -> Kept {
+        let told = reason == Reason::Changed
+            && survey
+                .disk
+                .get(&target.path)
+                .is_some_and(|look| survey.state.told.edits.get(&target.path) == Some(look));
         Kept {
             dataset: Some(target.dataset.to_owned()),
             earlier: survey
@@ -284,9 +294,42 @@ impl Kept {
                 .files
                 .get(&target.path)
                 .is_some_and(|placed| placed.sha256 != target.sha256),
+            told,
             ..Kept::new(target.path.clone(), reason)
         }
     }
+}
+
+/// records in `state` each edit of `kept` told of, with how its file looks on `disk`, so later
+/// runs only count it while it stays as it is, and forgets those of `scope` this run kept no
+/// more. says whether the state changed.
+fn note_told_edits(
+    state: &mut State,
+    kept: &[Kept],
+    disk: &HashMap<String, Look>,
+    scope: &Scope,
+) -> bool {
+    let edits: HashMap<&str, &Look> = kept
+        .iter()
+        .filter(|kept| kept.reason == Reason::Changed)
+        .filter_map(|kept| Some((kept.path.as_str(), disk.get(&kept.path)?)))
+        .collect();
+    let before = state.told.edits.len();
+    let files = &state.files;
+    state.told.edits.retain(|path, _| {
+        edits.contains_key(path.as_str())
+            || files
+                .get(path)
+                .is_some_and(|placed| !scope.includes(&placed.dataset))
+    });
+    let mut changed = state.told.edits.len() != before;
+    for (path, look) in edits {
+        if state.told.edits.get(path) != Some(look) {
+            state.told.edits.insert(path.to_owned(), *look);
+            changed = true;
+        }
+    }
+    changed
 }
 
 #[expect(
@@ -1193,12 +1236,13 @@ impl<'a> Placing<'a> {
         let recorded = removed || adopted || undone || kept_aside || linked || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
         let marks = unmarked || marking || rewritten || told_rule || taken_back;
+        let told_edits = note_told_edits(state, &placement.kept, &survey.disk, &scope);
         record(
             project,
             state,
             synced,
             recorded,
-            needs_writing || dropped || marks,
+            needs_writing || dropped || marks || told_edits,
         )
         .map_err(ended)?;
         if stopped {

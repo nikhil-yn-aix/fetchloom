@@ -27,6 +27,7 @@ mod folders;
 mod get;
 mod git_folders;
 mod google;
+mod habits;
 mod hints;
 mod import;
 mod inputs;

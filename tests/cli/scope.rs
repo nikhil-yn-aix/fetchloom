@@ -177,7 +177,7 @@ fn force_named_replaces_only_that_datasets_edits() -> Result {
 
     let stderr = text(&kept.stderr)?;
     assert!(
-        stderr.contains("help: `fetchloom sync --force small` replaces it"),
+        stderr.contains("`fetchloom sync --force small` discards your edit"),
         "{stderr}"
     );
     assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);

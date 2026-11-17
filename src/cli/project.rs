@@ -620,7 +620,8 @@ fn closing(
             next: None,
         };
     }
-    let (verb, text) = synced(manifest, scope, placement.kept.len(), &waiting);
+    let warned = placement.kept.iter().any(|kept| !kept.told);
+    let (verb, text) = synced(manifest, scope, (placement.kept.len(), warned), &waiting);
     // `path` answers only a dataset placed in the data folder, and the line names one this
     // sync just placed
     let first = placement.filled.iter().find(|name| {
@@ -660,18 +661,24 @@ fn waiting_named(waiting: &[lock::Waiting], manifest: &Manifest, scope: &Scope) 
         .collect()
 }
 
-/// the last line of a sync of `scope` that changed something, as its verb and text. the datasets
-/// `waiting` for their file lists were left as they were, so they are named apart.
+/// the last line of a sync of `scope` that changed something, as its verb and text, with the
+/// files it `kept` and whether a warning above tells of any. the datasets `waiting` for their file
+/// lists were left as they were, so they are named apart.
 fn synced(
     manifest: &Manifest,
     scope: &Scope,
-    kept: usize,
+    (kept, warned): (usize, bool),
     waiting: &[String],
 ) -> (&'static str, String) {
+    let see = if warned {
+        "; see the warnings above"
+    } else {
+        ""
+    };
     let kept = match kept {
         0 => String::new(),
         kept => format!(
-            ", {}; see the warnings above",
+            ", {}{see}",
             units::count(kept as u64, "file left unchanged", "files left unchanged")
         ),
     };
@@ -2360,7 +2367,7 @@ pub(crate) mod tests {
         ] {
             let mut manifest = Manifest::parse(&tables.join("\n")).unwrap();
             super::super::drop::left_out(&mut manifest, &BTreeSet::from(["raw".to_owned()]));
-            let (verb, text) = synced(&manifest, &Scope::All, kept, &[]);
+            let (verb, text) = synced(&manifest, &Scope::All, (kept, kept > 0), &[]);
             assert_eq!((verb, text.as_str()), said, "{tables:?}");
         }
     }

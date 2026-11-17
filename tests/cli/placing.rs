@@ -489,11 +489,9 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
         path.contains("data/iris/iris.csv has changed"),
         "path trusted the file without syncing: {path}"
     );
+    // `path` told of the edit once, so the sync after only counts it
     let synced = text(&sandbox.run(&["sync"])?.stderr)?;
-    assert!(
-        synced.contains("data/iris/iris.csv has changed"),
-        "{synced}"
-    );
+    assert!(synced.contains("1 file left unchanged"), "{synced}");
     assert_eq!(fs::read(&placed)?, edited, "the edit stays without --force");
     let forced = sandbox.run(&["sync", "--force"])?;
     assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);

@@ -80,6 +80,24 @@ pub(crate) struct State {
     /// same line is told of once.
     #[serde(default)]
     pub(crate) rule_told: Option<String>,
+    /// what runs told once, so later runs say it again only once it changes.
+    #[serde(default)]
+    pub(crate) told: Told,
+}
+
+/// what runs told once of things a person does on purpose, so later runs stay quiet about them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Told {
+    /// the edits a sync kept of files fetchloom placed, by path, each with how the file looked
+    /// when told, so an edit is told of again once it changes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) edits: BTreeMap<String, Look>,
+}
+
+impl Told {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.edits.is_empty()
+    }
 }
 
 /// what a sync noted when it found a cache holding none of the objects of a project's copies of
@@ -375,6 +393,10 @@ impl State {
             out.extend_from_slice(br#","rule_told":"#);
             serde_json::to_writer(&mut *out, rule)?;
         }
+        if !self.told.is_empty() {
+            out.extend_from_slice(br#","told":"#);
+            serde_json::to_writer(&mut *out, &self.told)?;
+        }
         out.extend_from_slice(br#","blocks":"#);
         serde_json::to_writer(&mut *out, &blocks)?;
         out.push(b'}');
@@ -407,7 +429,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         let (mut version, mut files, mut synced) = (None, false, false);
         let (mut dropped, mut freeing, mut folder, mut aside, mut replacing, mut uncached) =
             (false, false, false, false, false, false);
-        let (mut marked, mut listed, mut rule_told) = (false, false, false);
+        let (mut marked, mut listed, mut rule_told, mut told) = (false, false, false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -454,6 +476,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "rule_told" => {
                     state.rule_told = map.next_value()?;
                     std::mem::replace(&mut rule_told, true)
+                }
+                "told" => {
+                    state.told = map.next_value()?;
+                    std::mem::replace(&mut told, true)
                 }
                 _ => {
                     map.next_value::<serde::de::IgnoredAny>()?;
@@ -564,6 +590,8 @@ struct Tail {
     listed: BTreeMap<String, String>,
     #[serde(default)]
     rule_told: Option<String>,
+    #[serde(default)]
+    told: Told,
     blocks: Vec<Block>,
 }
 
@@ -678,6 +706,7 @@ fn indexed(
         marked,
         listed,
         rule_told,
+        told,
         blocks,
     } = match index(reading, ours)? {
         Indexed::Tail(tail) => *tail,
@@ -707,6 +736,7 @@ fn indexed(
         marked,
         listed,
         rule_told,
+        told,
     })
 }
 
@@ -727,6 +757,7 @@ fn by_blocks(
         marked,
         listed,
         rule_told,
+        told,
         blocks,
     } = match index(reading, ours)? {
         Indexed::Tail(tail) => *tail,
@@ -759,6 +790,7 @@ fn by_blocks(
         marked,
         listed,
         rule_told,
+        told,
     })
 }
 
@@ -1425,6 +1457,13 @@ mod tests {
         state.marked.insert("data".to_owned());
         state.listed.insert("data".to_owned(), "0".repeat(64));
         state.rule_told = Some("/data/".to_owned());
+        state.told.edits.insert(
+            "data/a/b".to_owned(),
+            Look {
+                size: 3,
+                modified: 9,
+            },
+        );
         state
     }
 
@@ -1453,6 +1492,7 @@ mod tests {
         assert_eq!(read.marked, whole.marked, "{case}");
         assert_eq!(read.listed, whole.listed, "{case}");
         assert_eq!(read.rule_told, whole.rule_told, "{case}");
+        assert_eq!(read.told, whole.told, "{case}");
         assert_eq!(read.version, whole.version, "{case}");
     }
 
@@ -1525,6 +1565,7 @@ mod tests {
             assert_eq!(read.marked, state.marked, "blocks of {block}");
             assert_eq!(read.listed, state.listed, "blocks of {block}");
             assert_eq!(read.rule_told, state.rule_told, "blocks of {block}");
+            assert_eq!(read.told, state.told, "blocks of {block}");
             for folders in FOLDERS {
                 let folders: Vec<String> = folders.iter().map(|&folder| folder.into()).collect();
                 let case = format!("{folders:?} in blocks of {block}");

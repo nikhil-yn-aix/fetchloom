@@ -325,7 +325,7 @@ fn a_force_after_a_run_with_c_names_its_project() -> Result {
     let project = fs::canonicalize(&work)?;
     let typed = work.to_string_lossy();
     for (args, then) in [
-        (["-C", &typed, "sync"], " sync --force` replaces it"),
+        (["-C", &typed, "sync"], " sync --force` discards your edit"),
         (["-C", &typed, "status"], " sync --force` to replace"),
     ] {
         let output = sandbox.command_in(&elsewhere, &args).output()?;
@@ -334,12 +334,15 @@ fn a_force_after_a_run_with_c_names_its_project() -> Result {
         let named = named_folder(&told, then).ok_or_else(|| format!("no -C in {told}"))?;
         assert_eq!(fs::canonicalize(named)?, project, "{told}");
     }
+    // an edit is told of once, so the sync inside tells of a new one
+    delete(&placed)?;
+    fs::write(&placed, "my own notes, again\n")?;
     let inside = text(&sandbox.run(&["sync"])?.stderr)?;
     assert!(
-        inside.contains("`fetchloom sync --force` replaces it"),
+        inside.contains("`fetchloom sync --force` discards your edit"),
         "{inside}"
     );
-    assert_eq!(fs::read_to_string(&placed)?, "my own notes\n");
+    assert_eq!(fs::read_to_string(&placed)?, "my own notes, again\n");
     Ok(())
 }
 

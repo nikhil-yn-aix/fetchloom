@@ -903,17 +903,22 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         );
         let (message, help) = match kept.reason {
             Reason::Blocked => continue,
+            Reason::Changed if kept.told => continue,
             Reason::Changed => match kept.dataset.as_deref() {
                 Some(dataset) if kept.earlier => (
                     format!(
                         "{} has changed, so it stays, but it is an edit of an earlier version of {dataset}, not what data.lock pins now",
                         kept.path
                     ),
-                    format!("`{force}` replaces it"),
+                    keeping_edits(dataset, &force),
                 ),
-                _ => (
+                Some(dataset) => (
                     format!("{} has changed, so it stays", kept.path),
-                    format!("`{force}` replaces it"),
+                    keeping_edits(dataset, &force),
+                ),
+                None => (
+                    format!("{} has changed, so it stays", kept.path),
+                    format!("`{force}` discards your edit"),
                 ),
             },
             Reason::Shared => (
@@ -940,6 +945,13 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         };
         output.warn_with(Warning::PlaceKept, &message, &help);
     }
+}
+
+/// the ways to keep an edit of a file of `dataset`, then `force`, the command that discards it.
+fn keeping_edits(dataset: &str, force: &str) -> String {
+    format!(
+        "keep your version as a file or dataset of your own, or set copy = true for {dataset} in data.toml to edit its files in place; `{force}` discards your edit"
+    )
 }
 
 /// the command replacing what a sync of `scope` kept of `datasets`: after a named sync, only the
