@@ -1024,7 +1024,8 @@ pub(crate) struct Sync {
     pub(crate) names: Vec<String>,
 
     /// replace edited files, and files fetchloom did not place, at the paths data.lock lists,
-    /// naming each. it finds changes by size and time; add --verify for changes that kept both
+    /// naming each; in an output's folder, also deletes each file data.lock does not list for it.
+    /// it finds changes by size and time; add --verify for changes that kept both
     #[arg(long, help_heading = "options")]
     pub(crate) force: bool,
 

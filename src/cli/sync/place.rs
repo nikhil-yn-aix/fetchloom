@@ -1101,6 +1101,14 @@ impl<'a> Placing<'a> {
     pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         self.preview_unwanted(&mut preview);
+        for (path, name) in &self.extras {
+            preview.placement.removed += 1;
+            preview
+                .placement
+                .cleared_outputs
+                .push((path.clone(), name.clone()));
+            preview.changes.remove.push(path.clone());
+        }
         preview.placement.notice(
             self.manifest,
             &self.targets,

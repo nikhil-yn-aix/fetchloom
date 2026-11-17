@@ -25,13 +25,7 @@ pub(super) fn tell(
             &format!("{path} · {} that was in the way", entry_name(*found)),
         );
     }
-    for (path, name) in &placement.cleared_outputs {
-        output.step_in(
-            "Removed",
-            &format!("{path} · a file {name}'s pin does not hold"),
-            crate::output::Tone::Warn,
-        );
-    }
+    tell_cleared(output, "Removed", &placement.cleared_outputs);
     for changed in &placement.changed_outputs {
         let name = &changed.name;
         output.warn_with(
@@ -568,15 +562,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
             ),
         );
     }
-    tell_removed(
-        output,
-        manifest,
-        ["Would retire", "Would remove"],
-        placement,
-    );
-    for path in &preview.changes.remove {
-        output.detail(path);
-    }
+    tell_would_remove(output, manifest, preview);
     warn_adopted_removed(output, &placement.removed_adopted, "would remove");
     left_behind(output, manifest, placement.left_behind.as_ref());
     warn_kept(output, manifest, scope, placement);
@@ -610,6 +596,41 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
         }
     }
     super::mark::warn_unmarked(output, manifest, placement);
+}
+
+/// a line, as `verb` says, for each file of `cleared`, by path, that an output's folder held beyond
+/// what its pin holds, with that output's name.
+fn tell_cleared(output: &Output, verb: &str, cleared: &[(String, String)]) {
+    for (path, name) in cleared {
+        output.step_in(
+            verb,
+            &format!("{path} · a file {name}'s pin does not hold"),
+            crate::output::Tone::Warn,
+        );
+    }
+}
+
+/// what a dry run would remove: each file an output's folder holds beyond its pin, by name, then
+/// the files no dataset needs, which `-v` lists.
+fn tell_would_remove(output: &Output, manifest: &Manifest, preview: &Preview) {
+    let placement = &preview.placement;
+    tell_cleared(output, "Would remove", &placement.cleared_outputs);
+    tell_removed(
+        output,
+        manifest,
+        ["Would retire", "Would remove"],
+        placement,
+    );
+    let cleared: HashSet<&str> = placement
+        .cleared_outputs
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect();
+    for path in &preview.changes.remove {
+        if !cleared.contains(path.as_str()) {
+            output.detail(path);
+        }
+    }
 }
 
 /// a line for each folder `folders` placed, or past a few dozen one line for the `datasets` in
@@ -707,9 +728,11 @@ fn tell_removed(output: &Output, manifest: &Manifest, verbs: [&str; 2], placemen
             if names.len() == 1 { "it" } else { "them" }
         ));
     }
+    // what an output's folder held beyond its pin is told file by file, as its own
     let unneeded = placement
         .removed
-        .saturating_sub(placement.cut_short.values().sum());
+        .saturating_sub(placement.cut_short.values().sum())
+        .saturating_sub(placement.cleared_outputs.len() as u64);
     if unneeded > 0 {
         output.step(
             verbs[1],

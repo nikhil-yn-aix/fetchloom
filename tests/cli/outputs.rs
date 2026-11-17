@@ -323,8 +323,40 @@ fn a_changed_output_is_never_partly_healed() -> Result {
         fs::read(folder.join("iris_clean.csv"))?,
         b"sepal,petal\n5.1,1.4\n4.9,1.4\n"
     );
+    let removing = "data/processed/plot.png · a file processed's pin does not hold";
+    let previewed = sandbox.run(&["sync", "--force", "processed", "--dry-run"])?;
+    let stderr = text(&previewed.stderr)?;
+    assert_eq!(previewed.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("Would remove {removing}\n")),
+        "{stderr}"
+    );
+    let document = json(&sandbox.run(&["--json", "sync", "--force", "processed", "-n"])?)?;
+    assert_eq!(
+        document["result"]["changes"]["remove"],
+        serde_json::json!(["data/processed/plot.png"]),
+        "{document}"
+    );
+    assert!(
+        folder.join("plot.png").exists(),
+        "a dry run deletes nothing"
+    );
     let forced = sandbox.run(&["sync", "--force", "processed"])?;
-    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("Removed {removing}\n")),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("that no dataset needs"), "{stderr}");
+    let help = text(&sandbox.run(&["sync", "--help"])?.stdout)?;
+    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        help.contains(
+            "in an output's folder, also deletes each file data.lock does not list for it"
+        ),
+        "{help}"
+    );
     assert_eq!(fs::read(folder.join("iris_clean.csv"))?, CLEAN);
     assert_eq!(fs::read(folder.join("summary.txt"))?, SUMMARY);
     assert!(!folder.join("plot.png").exists(), "the pinned tree, whole");
