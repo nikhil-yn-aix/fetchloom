@@ -475,6 +475,30 @@ fn a_marker_comes_back_but_never_over_a_persons_file() -> Result {
     Ok(())
 }
 
+/// a .gitignore of the person's own that holds just what fetchloom writes, `*`, is still theirs:
+/// fetchloom never takes a file for its own by what it holds, so status names it as theirs and
+/// removing the dataset leaves it, with the folder.
+#[test]
+fn a_persons_gitignore_like_fetchlooms_stays_theirs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = iris_server()?;
+    write_all(&sandbox, &[("data/iris/.gitignore", "*\n")])?;
+    with_iris(&sandbox, &server)?;
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        status["result"]["yours"],
+        serde_json::json!(["data/iris/.gitignore"]),
+        "{status}"
+    );
+    let removed = sandbox.run(&["remove", "iris"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data/iris/.gitignore"))?,
+        b"*\n"
+    );
+    Ok(())
+}
+
 /// a dataset whose files hold a .gitignore at the top of its folder places it, where no marker
 /// goes, and the run says which line keeps the folder out of git; with that line in the
 /// project's .gitignore, it says nothing.

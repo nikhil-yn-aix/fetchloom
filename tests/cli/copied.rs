@@ -311,6 +311,39 @@ fn copied_zip(sandbox: &Sandbox, downloads: usize) -> Result<(Server, PathBuf, P
     Ok((server, two, cache))
 }
 
+/// a copy carries the .gitignore each dataset folder keeps out of git with, and the record that
+/// fetchloom made it: a removal of another dataset there, whose cache never held the zip, cannot
+/// list the zip's files yet, and keeps that folder's marker all the same.
+#[test]
+fn a_copy_keeps_the_marker_of_a_folder_it_cannot_list() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _server = zipped(&sandbox, 1)?;
+    let iris = Server::start("/files/iris.csv", vec![file(b"a,b\n1,2\n", "\"i1\"")])?;
+    sandbox.allow(&iris.url);
+    let added = sandbox.run(&["add", &iris.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let (two, cache) = copied(&sandbox, "two")?;
+    let marker = two.join("data").join("dataset").join(".gitignore");
+    assert_eq!(fs::read(&marker)?, b"*\n");
+    let removed = sandbox
+        .command_in(&two, &["remove", "iris"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    assert_eq!(fs::read(&marker)?, b"*\n", "{}", text(&removed.stderr)?);
+    let status = sandbox
+        .command_in(&two, &["--json", "status"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&status)?;
+    assert_eq!(
+        document["result"]["yours"],
+        serde_json::json!([]),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// with no list of the zip's files, status calls neither the zip missing nor its files extra, and
 /// writes nothing; a file of the person's own beside them is theirs, kept. the list is missing for
 /// a second person sharing the folder, whose cache never held the zip. a copy would not do: its
