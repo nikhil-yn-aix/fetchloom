@@ -282,7 +282,7 @@ pub(super) fn coming_name(cache: &Cache, remote: &Remote) -> String {
 /// the name the link's file decompresses to when `--decompress` asks for it, judged by `name`, the
 /// name it comes by; a name no file may take is refused.
 fn decompressing(args: &Get, name: &str) -> Result<Option<String>, Error> {
-    match super::decompressed(args.decompress, name) {
+    match archive::decompressed_as(args.decompress, name) {
         Some(Ok(to)) => Ok(Some(to)),
         Some(Err(why)) => Err(super::refused_name(why, true)),
         None => Ok(None),

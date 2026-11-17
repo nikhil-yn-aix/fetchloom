@@ -974,6 +974,12 @@ pub(crate) fn may_wrap(url: &Url) -> bool {
     kaggle::may_wrap(url)
 }
 
+/// whether a download of `remote`, to be pinned at `path`, may give it another path: its server
+/// names it, or its source may wrap it in a zip.
+pub(crate) fn may_rename(remote: &Remote, path: &str) -> bool {
+    remote.named_by_server || (may_wrap(&remote.url) && crate::archive::by_name(path).is_none())
+}
+
 impl Reference {
     /// what this reference's source may ask and link to, and the key it takes.
     pub(crate) fn access(&self) -> &'static access::Access {

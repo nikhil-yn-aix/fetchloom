@@ -25,7 +25,9 @@ pub(crate) use detect::Format;
 pub(crate) use detect::{Detected, detect};
 pub(crate) use input::Input;
 pub(crate) use shards::{Shards, shards, toml_key};
-pub(crate) use single::{Decompressed, Left, decompress_cached, decompressed_name};
+pub(crate) use single::{
+    Decompressed, Left, decompress_cached, decompressed_as, decompressed_name,
+};
 
 use guard::{Guard, Meter};
 

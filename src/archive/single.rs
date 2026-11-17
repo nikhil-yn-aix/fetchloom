@@ -44,6 +44,12 @@ pub(crate) fn decompressed_name(path: &str) -> Option<Result<String, String>> {
     Some(Ok(stripped.to_owned()))
 }
 
+/// [`decompressed_name`] while `decompress` asks for it, as a dataset's setting or `--decompress`
+/// does.
+pub(crate) fn decompressed_as(decompress: bool, path: &str) -> Option<Result<String, String>> {
+    decompress.then(|| decompressed_name(path)).flatten()
+}
+
 /// why a file `decompress` was asked of stays as it came.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Left {

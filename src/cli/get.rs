@@ -271,21 +271,6 @@ fn refused_name(why: String, one: bool) -> Error {
     Error::new(Kind::SourceInvalid, why).help(help)
 }
 
-/// what `remote`, kept by `name`, decompresses to when `decompress` asks for it: none for a file no
-/// single compression names, or an archive's, which extract unpacks.
-fn decompressed(decompress: bool, name: &str) -> Option<Result<String, String>> {
-    decompress
-        .then(|| archive::decompressed_name(name))
-        .flatten()
-}
-
-/// whether downloading `remote` may still change the name it is kept by, as its server naming it
-/// or its source wrapping it in a zip does.
-fn renamed_by_download(remote: &Remote) -> bool {
-    remote.named_by_server
-        || (crate::source::may_wrap(&remote.url) && archive::by_name(&remote.path).is_none())
-}
-
 /// a link to fetch, and the SHA-256 its one file must have when one was given.
 #[derive(Clone)]
 struct Asked {
@@ -755,9 +740,9 @@ fn prepare(
     // before any byte moves; a name a download may still change is refused once the file came
     for remote in files
         .iter()
-        .filter(|remote| decompress && !renamed_by_download(remote))
+        .filter(|remote| decompress && !crate::source::may_rename(remote, &remote.path))
     {
-        if let Some(Err(why)) = decompressed(decompress, &remote.path) {
+        if let Some(Err(why)) = archive::decompressed_as(decompress, &remote.path) {
             return Err(refused_name(why, files.len() == 1));
         }
     }
@@ -782,7 +767,8 @@ fn prepare(
             let mut job = fetch::listed_job(remote, name, extract);
             job.fetch.listed = listing.listed(remote);
             job.fetch.page = args.web_page;
-            job.fetch.decompressed = decompressed(decompress, name).and_then(Result::ok);
+            job.fetch.decompressed =
+                archive::decompressed_as(decompress, name).and_then(Result::ok);
             // a line's MD5 is checked as the bytes arrive, as a source's is
             if let Some(Expected {
                 checksum: Checksum::Md5(md5),
@@ -1324,7 +1310,7 @@ fn foresee(
                 _ => paths = None,
             }
         } else if let Some(paths) = paths.as_mut() {
-            paths.push(match decompressed(decompress, &name) {
+            paths.push(match archive::decompressed_as(decompress, &name) {
                 Some(Ok(to)) => beside(&name, &to),
                 _ => name.clone(),
             });
@@ -1379,7 +1365,7 @@ fn vet(
         cache
             .trusted(&digest, size, &marks)
             .map_err(|doubt| doubtful(&doubt))?;
-        let key = match decompressed(decompress, name) {
+        let key = match archive::decompressed_as(decompress, name) {
             Some(Ok(to)) => Some(decompressed_key(&digest, &to)),
             _ => (extract && archive::by_name(name) == Some(Packed::Archive)).then_some(digest),
         };
@@ -1435,7 +1421,7 @@ async fn unpack(
                 tell_packed(&file.path, said);
                 continue;
             }
-            _ => match decompressed(decompress, &file.path) {
+            _ => match archive::decompressed_as(decompress, &file.path) {
                 Some(Ok(to)) => Some(to),
                 Some(Err(why)) => return Err(refused_name(why, one)),
                 None => continue,

@@ -135,7 +135,8 @@ impl Draft {
                 // says archive, or decompresses and the name says compressed; an upgrade pins
                 // this machine's record of them instead, so a tree another fetchloom version
                 // pinned is replaced without downloading again
-                let decompressed = decompressed_as(source.decompress, &path);
+                let decompressed =
+                    archive::decompressed_as(source.decompress, &path).and_then(Result::ok);
                 let unpacks = decompressed.is_some()
                     || source.extract && archive::by_name(&path) == Some(Packed::Archive);
                 let unpacks_to = earlier
@@ -989,15 +990,6 @@ fn split_archives(paths: &[&str], found: &mut Archives, taken: &mut [bool]) {
     }
 }
 
-/// the name the file at `path` decompresses to, while its dataset asks for `decompress` and the
-/// name is one a file may take.
-fn decompressed_as(decompress: bool, path: &str) -> Option<String> {
-    decompress
-        .then(|| archive::decompressed_name(path))
-        .flatten()?
-        .ok()
-}
-
 /// the key of the record of what the bytes `sha256` unpack to: their own hash for an archive, or
 /// for a file that decompresses to `name`, [`decompressed_key`] of both.
 fn record_key(sha256: Sha256, decompressed: Option<&str>) -> Sha256 {
@@ -1062,12 +1054,7 @@ fn stand_in(what: &str) -> Sha256 {
 /// whether downloading the file may still change its path, as [`Draft::learn`] does when a server
 /// names the file or a source wraps it in a zip.
 fn renamed_by_download(file: &DraftFile) -> bool {
-    file.known.is_none() && may_rename(&file.remote, &file.path)
-}
-
-/// whether a download of `remote`, to be pinned at `path`, may give it another path.
-fn may_rename(remote: &Remote, path: &str) -> bool {
-    remote.named_by_server || (source::may_wrap(&remote.url) && archive::by_name(path).is_none())
+    file.known.is_none() && source::may_rename(&file.remote, &file.path)
 }
 
 /// records each blob of `learned` as the object a download brought for it, all at once, where
@@ -1120,7 +1107,8 @@ fn unchanged(
     source: &Source,
 ) -> Option<UrlRecord> {
     let record = listed_record(cache, remote, was)?;
-    let decompressed = decompressed_as(source.decompress, &remote.path);
+    let decompressed =
+        archive::decompressed_as(source.decompress, &remote.path).and_then(Result::ok);
     let unpacks = decompressed.is_some()
         || source.extract && archive::by_name(&remote.path) == Some(Packed::Archive);
     let key = record_key(record.sha256, decompressed.as_deref());
@@ -1245,7 +1233,7 @@ pub(in crate::cli) fn filter(
     if source.decompress
         && let Some(why) = kept
             .iter()
-            .filter(|file| !may_rename(file, &file.path))
+            .filter(|file| !source::may_rename(file, &file.path))
             .find_map(|file| archive::decompressed_name(&file.path)?.err())
     {
         return Err(refused_name(name, why, written(entry)));

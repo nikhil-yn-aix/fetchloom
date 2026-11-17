@@ -8,8 +8,8 @@ use std::sync::Arc;
 use super::file::{self, Foreseen};
 use super::folder::{self, check};
 use super::{
-    Asked, Dry, Expected, Item, Report, Resolved, Taken, beside, decompressed, folder_for, foresee,
-    held, known, one_file, resolve_all, shown, tell_failed, unclaimed, unwrapped,
+    Asked, Dry, Expected, Item, Report, Resolved, Taken, beside, folder_for, foresee, held, known,
+    one_file, resolve_all, shown, tell_failed, unclaimed, unwrapped,
 };
 use crate::cache::{Cache, decompressed_key};
 use crate::cli::args::Get;
@@ -131,7 +131,7 @@ fn plan(
         let came = args.decompress.then(|| file::coming_name(cache, &remote));
         let to = came
             .as_deref()
-            .and_then(|came| decompressed(true, came)?.ok());
+            .and_then(|came| crate::archive::decompressed_as(true, came)?.ok());
         let mut planned = Planned {
             place: path.clone(),
             download: Vec::new(),
@@ -184,7 +184,8 @@ fn plan(
     for (remote, name) in files.iter().zip(&names) {
         let mut job = fetch::listed_job(remote, name, extract);
         job.fetch.listed = listing.listed(remote);
-        job.fetch.decompressed = decompressed(decompress, name).and_then(Result::ok);
+        job.fetch.decompressed =
+            crate::archive::decompressed_as(decompress, name).and_then(Result::ok);
         // an archive or a file never unpacked here, whose files only unpacking makes; the bytes are
         // looked up only for those
         let bytes = || {
