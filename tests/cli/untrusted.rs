@@ -339,6 +339,19 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
     ] {
         planted.ok(&sandbox, args)?;
     }
+    // a folder of the project pinned where it is, as an output: captured, pinned again after a
+    // rerun, checked, put back whole and untracked
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/r.csv"), b"r\n")?;
+    planted.ok(&sandbox, &["add", "results", "--as", "results"])?;
+    fs::write(work.join("results/r.csv"), b"rerun\n")?;
+    planted.ok(&sandbox, &["add", "results", "--as", "results", "--yes"])?;
+    planted.ok(&sandbox, &["add", "results", "--as", "results", "--check"])?;
+    fs::write(work.join("results/late.csv"), b"late\n")?;
+    planted.ok(&sandbox, &["sync", "--force", "results"])?;
+    assert!(!work.join("results/late.csv").exists());
+    planted.ok(&sandbox, &["remove", "results", "--yes"])?;
+    assert_eq!(fs::read(work.join("results/r.csv"))?, b"rerun\n");
     // a search reaches sites no test may ask, so it is run offline, where it fails
     planted.run_in(&sandbox, &work, &["--offline", "search", "iris"])?;
     in_folders_with_shell_words(&sandbox, &weird)

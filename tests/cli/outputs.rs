@@ -396,6 +396,53 @@ fn a_cloned_outputs_folder_is_held_to_the_data_folders_rules() -> Result {
         stderr.contains(".fetchloom-cache/objects is inside the cache folder"),
         "{stderr}"
     );
+    fs::write(
+        work.join("data.toml"),
+        "[datasets.out]\nref = \"local\"\nat = \"results\"\n",
+    )?;
+    let holding = sandbox
+        .command(&["sync"])
+        .env("FETCHLOOM_CACHE", work.join("results").join("cache"))
+        .output()?;
+    let stderr = text(&holding.stderr)?;
+    assert_eq!(holding.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains("is inside the output folder results, where datasets' files are placed"),
+        "{stderr}"
+    );
+    assert!(!work.join("data.lock").exists(), "{stderr}");
+    Ok(())
+}
+
+/// an add never pins a folder that is the cache, inside it or holding it as an output: refused
+/// before data.toml or data.lock exist, and nothing copied.
+#[test]
+fn an_add_never_pins_the_cache_as_an_output() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let cache = work.join("results").join(".cache");
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/r.csv"), b"r\n")?;
+    sandbox.make_cache(&cache)?;
+    fs::create_dir_all(cache.join("tmp/sub"))?;
+    fs::write(cache.join("tmp/sub/x.csv"), b"x\n")?;
+    for (folder, said) in [
+        ("results", "error: results holds the cache folder"),
+        (
+            "results/.cache/tmp/sub",
+            "error: results/.cache/tmp/sub is inside the cache folder",
+        ),
+    ] {
+        let refused = sandbox
+            .command(&["add", folder, "--as", "out"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(2), "{folder}: {stderr}");
+        assert!(stderr.contains(said), "{folder}: {stderr}");
+        assert!(!work.join("data.toml").exists(), "{folder}: {stderr}");
+        assert!(!work.join("data.lock").exists(), "{folder}: {stderr}");
+    }
     Ok(())
 }
 
