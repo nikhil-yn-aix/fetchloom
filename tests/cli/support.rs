@@ -520,6 +520,15 @@ pub(crate) fn zip_of(entries: &[(&str, &[u8])]) -> Result<Vec<u8>> {
     Ok(archive.finish()?.into_inner())
 }
 
+/// adds `link` to the project in `sandbox`, letting later runs reach its server too, and checks
+/// that the add succeeded.
+pub(crate) fn add_ok(sandbox: &Sandbox, link: &str) -> Result {
+    sandbox.allow(link);
+    let output = sandbox.run(&["add", link])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
 /// the tree of `files`, each a path and its bytes, as an archive's record lists them, written out
 /// here apart from fetchloom's code: a line of path, size and SHA-256 apart by tabs for each,
 /// sorted by path. its SHA-256 is the tree hash data.lock gives as `unpacks_to`.

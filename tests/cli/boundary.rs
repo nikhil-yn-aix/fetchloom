@@ -5,7 +5,7 @@
 use std::fs;
 
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Routes, Sandbox, file, json, text, without_copy_warning};
+use crate::support::{Result, Routes, Sandbox, add_ok, file, json, text, without_copy_warning};
 
 /// a server answering iris at [`PATH`], as often as asked.
 fn iris_server() -> Result<Routes> {
@@ -14,11 +14,7 @@ fn iris_server() -> Result<Routes> {
 
 /// iris added to the project in `sandbox` from `server`, its file at data/iris/iris.csv.
 fn with_iris(sandbox: &Sandbox, server: &Routes) -> Result {
-    let link = format!("{}{PATH}", server.url);
-    sandbox.allow(&link);
-    let added = sandbox.run(&["add", &link])?;
-    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    Ok(())
+    add_ok(sandbox, &format!("{}{PATH}", server.url))
 }
 
 /// writes each `(path, text)` below the project in `sandbox`, making its folders.

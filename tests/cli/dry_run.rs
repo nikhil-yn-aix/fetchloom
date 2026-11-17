@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::project::added;
 use crate::support::{Result, Routes, Sandbox, Server, file, json, reply, text, warning};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -28,15 +29,6 @@ fn tree(root: &Path) -> Result<BTreeMap<PathBuf, Option<Vec<u8>>>> {
         }
     }
     Ok(found)
-}
-
-/// a project with iris added from `server`, whose first response serves it, and whose later
-/// runs may reach it, as `allowed_origins` lets them.
-fn added(sandbox: &Sandbox, server: &Server) -> Result {
-    sandbox.allow(&server.url);
-    let output = sandbox.run(&["add", &server.url])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    Ok(())
 }
 
 #[test]

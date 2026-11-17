@@ -3,7 +3,8 @@
 use std::fs;
 
 use crate::support::{
-    Result, Routes, Sandbox, Server, delete, edit, file, json, reply, sha256_hex, text, zip_of,
+    Result, Routes, Sandbox, Server, add_ok, delete, edit, file, json, reply, sha256_hex, text,
+    zip_of,
 };
 #[cfg(unix)]
 use crate::support::{Running, wait_until};
@@ -14,10 +15,7 @@ pub(crate) const PATH: &str = "/files/iris.csv";
 /// a project with iris added from `server`, whose first response serves it. later commands may
 /// reach the server through data.toml and data.lock.
 pub(crate) fn added(sandbox: &Sandbox, server: &Server) -> Result {
-    sandbox.allow(&server.url);
-    let output = sandbox.run(&["add", &server.url])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    Ok(())
+    add_ok(sandbox, &server.url)
 }
 
 /// copies data.toml and data.lock into a new folder, as a fresh clone of the project would.
