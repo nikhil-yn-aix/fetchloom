@@ -667,6 +667,98 @@ fn gc_refuses_a_folder_with_a_caches_names_and_no_tag() -> Result {
     Ok(())
 }
 
+/// a folder of objects/ this user may not write, as each one a container run as root makes there
+/// is, refuses the files whose hash falls in it: the error names that folder, not objects/.
+#[cfg(unix)]
+#[test]
+fn a_cache_folder_that_refuses_a_write_is_named() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    let cache = sandbox.cache();
+    sandbox.make_cache(&cache)?;
+    let source = sandbox.folder("src")?;
+    // the SHA-256 of these bytes starts with 87
+    fs::write(source.join("a.csv"), b"a\n")?;
+    let fan = cache.join("objects").join("87");
+    fs::create_dir(&fan)?;
+    fs::set_permissions(&fan, fs::Permissions::from_mode(0o555))?;
+    let output = sandbox.run(&["add", "../src/a.csv"]);
+    fs::set_permissions(&fan, fs::Permissions::from_mode(0o755))?;
+    let output = output?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error: could not put a.csv in the cache: permission was denied in {}\n",
+            fan.display()
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a run as root takes no cache another user owns, as a person's own cache mounted into a
+/// container run as root is: what it made there would be root's, which the person's later runs
+/// could not change. it stops before writing anything, naming the folder, its owner and how to run
+/// as them, and a command that only reads, as status, goes on.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn root_takes_no_cache_another_user_owns() -> Result {
+    use std::os::unix::fs::MetadataExt;
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("src")?;
+    fs::write(source.join("a.csv"), b"a\n")?;
+    fs::write(source.join("b.csv"), b"b\n")?;
+    ok(&sandbox.run(&["add", "../src/a.csv"])?)?;
+    let cache = sandbox.cache();
+    let owner = fs::metadata(&cache)?.uid();
+    if owner == 0 {
+        return Ok(());
+    }
+    let before = entries(&cache)?;
+    let as_root = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_EUID", "0")
+            .output()
+    };
+    let output = as_root(&["add", "../src/b.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error: could not open the cache at {}: it belongs to {}, who could not change what this run, as root, would make there\n",
+            cache.display(),
+            named(owner)
+        )) && stderr.contains(
+            "help: run fetchloom as the cache's owner, as `docker run --user $(id -u):$(id -g)` runs a container as you, or give root a cache of its own with FETCHLOOM_CACHE\n"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(entries(&cache)?, before);
+    let status = as_root(&["--offline", "status"])?;
+    assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
+    Ok(())
+}
+
+/// the user `id` as the system names it, with `id -nu`, else by its number.
+#[cfg(unix)]
+fn named(id: u32) -> String {
+    std::process::Command::new("/usr/bin/id")
+        .arg("-nu")
+        .arg(id.to_string())
+        .output()
+        .ok()
+        .filter(|told| told.status.success())
+        .and_then(|told| String::from_utf8(told.stdout).ok())
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("user {id}"))
+}
+
 /// a scratch purge takes a cache's oldest files, its tag first, and leaves its folders. a folder
 /// that holds nothing but what fetchloom keeps there is plainly its cache, so every command goes
 /// on and says so once a run: one that writes to the cache puts the tag back, and one that only

@@ -167,7 +167,7 @@ impl Error {
     /// what to do when that reason is one a person can fix.
     pub(crate) fn io(doing: impl fmt::Display, err: &io::Error) -> Error {
         let error = Error::new(Kind::LocalIo, format!("{doing}: {}", said(err)));
-        match advice(err) {
+        match explained_help(err).or(advice(err)) {
             Some(help) => error.help(help),
             None => error,
         }
@@ -181,7 +181,7 @@ impl Error {
         path: &std::path::Path,
     ) -> Error {
         let error = Error::new(Kind::LocalIo, format!("{doing}: {}", said_at(err, path)));
-        match advice(err) {
+        match explained_help(err).or(advice(err)) {
             Some(help) => error.help(help),
             None => error,
         }
@@ -475,6 +475,33 @@ pub(crate) fn said(err: &io::Error) -> String {
             }
         }
     }
+}
+
+/// an io error in words that say what to fix, with the help that fits it better than its kind's,
+/// which keeps the error it explains as its source, so the system's own code stays within reach of
+/// [`io_cause`].
+#[derive(Debug)]
+pub(crate) struct Explained {
+    pub(crate) words: String,
+    pub(crate) help: Option<String>,
+    pub(crate) cause: io::Error,
+}
+
+impl fmt::Display for Explained {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.words)
+    }
+}
+
+impl std::error::Error for Explained {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
+/// the help an [`Explained`] error carries.
+fn explained_help(err: &io::Error) -> Option<&str> {
+    err.get_ref()?.downcast_ref::<Explained>()?.help.as_deref()
 }
 
 /// what a person can do about an io error, when its cause is one they can change.

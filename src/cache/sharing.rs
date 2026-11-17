@@ -121,7 +121,7 @@ impl Sharing {
 /// for it, when the root is setgid and that group may write it, and `member` says this user is in
 /// it.
 #[cfg(unix)]
-fn shared_with(mode: u32, id: u32, member: &dyn Fn(u32) -> bool) -> Option<(u32, u32)> {
+pub(super) fn shared_with(mode: u32, id: u32, member: &dyn Fn(u32) -> bool) -> Option<(u32, u32)> {
     (mode & 0o2020 == 0o2020 && member(id)).then_some((id, mode & 0o070))
 }
 
@@ -134,7 +134,7 @@ fn given(mode: u32, bits: u32) -> u32 {
 
 /// whether this process is in the group `id`, as its own group or one of its others.
 #[cfg(unix)]
-fn in_group(id: u32) -> bool {
+pub(super) fn in_group(id: u32) -> bool {
     rustix::process::getegid().as_raw() == id
         || rustix::process::getgroups()
             .unwrap_or_default()

@@ -1166,8 +1166,8 @@ fn out_of_reach(cache: &Cache, root: &Path) -> Error {
 /// is when it is another user's, who alone can fix it, as in a lab's shared cache.
 fn theirs(root: &Path, error: Error) -> Error {
     #[cfg(unix)]
-    if let Some(owner) = owner_besides(root, rustix::process::geteuid().as_raw()) {
-        let owner = user_name(owner).unwrap_or_else(|| format!("the user with id {owner}"));
+    if let Some(owner) = owner_besides(root, crate::cache::run_as()) {
+        let owner = crate::cache::said_user(owner);
         return error.help(format!(
             "{} belongs to {owner}: ask them to let your group read its data.toml, data.lock and \
              data.lock.d, or to fix them; until then gc keeps every file in the cache",
@@ -1184,32 +1184,11 @@ fn theirs(root: &Path, error: Error) -> Error {
 /// others read nothing inside it.
 #[cfg(unix)]
 fn owner_besides(root: &Path, me: u32) -> Option<u32> {
-    use std::os::unix::fs::MetadataExt;
     let manifest = root.join(crate::project::manifest::FILE);
-    let found = std::iter::once(manifest.as_path())
+    let owner = std::iter::once(manifest.as_path())
         .chain(root.ancestors())
-        .find_map(|path| fs::symlink_metadata(path).ok())?;
-    (found.uid() != me).then_some(found.uid())
-}
-
-/// the name of the user `id`, as `id -nu` tells it: a cluster's accounts are mostly kept in a
-/// directory service, which `/etc/passwd` does not list and only the system's own lookup asks.
-/// the system's own `id` comes first, then one in an absolute folder on PATH, never one a relative
-/// folder names: that would be wherever fetchloom runs, as in a cloned project.
-#[cfg(unix)]
-fn user_name(id: u32) -> Option<String> {
-    let program = crate::machine::installed(std::ffi::OsStr::new("/usr/bin:/bin"), "id")
-        .or_else(|| crate::machine::installed(&std::env::var_os("PATH")?, "id"))?;
-    let told = std::process::Command::new(program)
-        .arg("-nu")
-        .arg(id.to_string())
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    let name = String::from_utf8(told.stdout).ok()?;
-    let name = name.trim();
-    (told.status.success() && !name.is_empty()).then(|| name.to_owned())
+        .find_map(crate::cache::owner_of)?;
+    (owner != me).then_some(owner)
 }
 
 /// the most bytes a registered project's data.toml may hold for gc to read it: far more than any

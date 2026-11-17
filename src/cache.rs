@@ -421,6 +421,85 @@ fn exposure(owner: u32, mode: u32, user: u32, shared: bool) -> Option<&'static s
     }
 }
 
+/// who owns `path`, or what a link there leads to, by user id.
+#[cfg(unix)]
+pub(crate) fn owner_of(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).ok().map(|found| found.uid())
+}
+
+/// the user `id` in words: its name, else root by name and any other by the number `id -u` gives,
+/// as a container may know no name for a user of the machine it runs on.
+#[cfg(unix)]
+pub(crate) fn said_user(id: u32) -> String {
+    user_name(id).unwrap_or_else(|| match id {
+        0 => "root".to_owned(),
+        _ => format!("user {id}"),
+    })
+}
+
+/// the name of the user `id`, as `id -nu` tells it: a cluster's accounts are mostly kept in a
+/// directory service, which `/etc/passwd` does not list and only the system's own lookup asks.
+/// the system's own `id` comes first, then one in an absolute folder on PATH, never one a relative
+/// folder names: that would be wherever fetchloom runs, as in a cloned project.
+#[cfg(unix)]
+fn user_name(id: u32) -> Option<String> {
+    let program = crate::machine::installed(std::ffi::OsStr::new("/usr/bin:/bin"), "id")
+        .or_else(|| crate::machine::installed(&std::env::var_os("PATH")?, "id"))?;
+    let told = std::process::Command::new(program)
+        .arg("-nu")
+        .arg(id.to_string())
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8(told.stdout).ok()?;
+    let name = name.trim();
+    (told.status.success() && !name.is_empty()).then(|| name.to_owned())
+}
+
+/// why a run as root takes no cache at `root` that another user owns: what it would make there
+/// would be root's, which that user's runs could not change, failing them one hash at a time, as
+/// with each folder of objects/ root made. a cache a group root is in shares is taken, since what
+/// root makes there gets the group's write as any member's work does, and so is a new one.
+pub(crate) fn root_refusal(root: &Path) -> Option<String> {
+    #[cfg(unix)]
+    {
+        root_refusal_as(root, run_as(), &sharing::in_group)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        None
+    }
+}
+
+/// the user this run is, which a debug build's tests may give with `FETCHLOOM_TEST_EUID`, since
+/// no test runs as root.
+#[cfg(unix)]
+pub(crate) fn run_as() -> u32 {
+    crate::machine::pretended("FETCHLOOM_TEST_EUID")
+        .and_then(|id| u32::try_from(id).ok())
+        .unwrap_or_else(|| rustix::process::geteuid().as_raw())
+}
+
+/// [`root_refusal`] for a run as `user`, in the groups `member` says.
+#[cfg(unix)]
+fn root_refusal_as(root: &Path, user: u32, member: &dyn Fn(u32) -> bool) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    if user != 0 {
+        return None;
+    }
+    let found = fs::metadata(root).ok()?;
+    if found.uid() == 0 || sharing::shared_with(found.mode(), found.gid(), member).is_some() {
+        return None;
+    }
+    Some(format!(
+        "it belongs to {}, who could not change what this run, as root, would make there",
+        said_user(found.uid())
+    ))
+}
+
 /// the start of `CACHEDIR.TAG` in `root`, read without following a link.
 fn tag_text(root: &Path) -> Option<String> {
     let mut text = String::new();
@@ -1080,15 +1159,27 @@ impl Cache {
         }
     }
 
-    /// `err`, from writing in `folder`, in words that say what to fix: which folder refused, or
-    /// what unfinished downloads hold of a full disk, neither of which the system says.
+    /// `err`, from writing in `folder`, in words that say what to fix: which folder refused and,
+    /// when another user owns it, who, or what unfinished downloads hold of a full disk, none of
+    /// which the system says.
     pub(crate) fn explained(&self, folder: &Path, err: io::Error) -> io::Error {
         // an error fetchloom built already says what it concerns
         if err.raw_os_error().is_none() {
             return err;
         }
+        let mut taken = None;
         let words = match err.kind() {
-            io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => {
+            io::ErrorKind::PermissionDenied => {
+                let words = format!("{} in {}", crate::error::said(&err), folder.display());
+                match self.denied_by_owner(folder) {
+                    Some((owner, back)) => {
+                        taken = back;
+                        format!("{words}, which belongs to {owner}")
+                    }
+                    None => words,
+                }
+            }
+            io::ErrorKind::ReadOnlyFilesystem => {
                 format!("{} in {}", crate::error::said(&err), folder.display())
             }
             io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => {
@@ -1099,7 +1190,42 @@ impl Cache {
             }
             _ => return err,
         };
-        io::Error::new(err.kind(), Explained { words, cause: err })
+        io::Error::new(
+            err.kind(),
+            crate::error::Explained {
+                words,
+                help: taken,
+                cause: err,
+            },
+        )
+    }
+
+    /// the owner of `folder`, which refused a write, when it is another user than this run's, and
+    /// where root owns it in this user's own cache, as a container run as root leaves what it
+    /// makes, the help that takes the cache back. a group's cache is no one's to take.
+    fn denied_by_owner(&self, folder: &Path) -> Option<(String, Option<String>)> {
+        #[cfg(unix)]
+        {
+            let user = run_as();
+            let owner = owner_of(folder).filter(|owner| *owner != user)?;
+            let taken = (owner == 0
+                && owner_of(&self.root) == Some(user)
+                && !self.sharing.is_shared())
+            .then(|| {
+                // chown -R changes a link itself, never what it leads to
+                let root = fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
+                format!(
+                    "root made it, as a container run as root does: take the cache back with `sudo chown -R $(id -u):$(id -g) {}`, then run the command again",
+                    crate::suggested::shell_folder_path(&root)
+                )
+            });
+            Some((said_user(owner), taken))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (self, folder);
+            None
+        }
     }
 
     /// what unfinished downloads no run holds take of the cache's disk and how to free it, when
@@ -1326,14 +1452,15 @@ impl Cache {
         md5: Option<Md5>,
     ) -> io::Result<Stored> {
         let path = self.object_path(&digest);
+        let fan = path.parent().unwrap_or(&self.root);
         let first = usize::from(digest.bytes()[0]);
         if !self.checked[first].load(Ordering::Relaxed) {
-            if let Some(folder) = path.parent() {
-                make_folder(&self.root, folder, self.sharing)?;
-            }
+            make_folder(&self.root, fan, self.sharing).map_err(|err| self.explained(fan, err))?;
             self.checked[first].store(true, Ordering::Relaxed);
         }
-        let new = self.link_new(source, &path, &digest, size)?;
+        let new = self
+            .link_new(source, &path, &digest, size)
+            .map_err(|err| self.explained(fan, err))?;
         Ok(Stored {
             digest,
             size,
@@ -1548,26 +1675,6 @@ fn sync_publication(
         })?;
     }
     Ok(())
-}
-
-/// an io error in words that say what to fix, which keeps the error it explains as its source,
-/// so the system's own code stays within reach of [`crate::error::io_cause`].
-#[derive(Debug)]
-struct Explained {
-    words: String,
-    cause: io::Error,
-}
-
-impl std::fmt::Display for Explained {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.words)
-    }
-}
-
-impl std::error::Error for Explained {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.cause)
-    }
 }
 
 #[cfg(test)]
@@ -2301,6 +2408,83 @@ pub(crate) mod tests {
             );
         }
         assert!(!scratch.path().join("CACHEDIR.TAG").exists());
+    }
+
+    /// a run as root makes what it makes as root, which the owner of a cache that is another
+    /// user's could not change, so root refuses such a cache before writing there, unless a group
+    /// root is in shares it, which then gets the group's write as any member's work does. root's
+    /// own cache, a new one, and any cache for a run that is not root's are taken.
+    #[cfg(unix)]
+    #[test]
+    fn root_refuses_a_cache_another_user_owns() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("cache");
+        fs::create_dir(&root).unwrap();
+        let owner = owner_of(&root).unwrap();
+        if owner == 0 {
+            return;
+        }
+        let none = |_: u32| false;
+        assert_eq!(
+            root_refusal_as(&root, 0, &none),
+            Some(format!(
+                "it belongs to {}, who could not change what this run, as root, would make there",
+                said_user(owner)
+            ))
+        );
+        assert_eq!(root_refusal_as(&root, owner, &none), None);
+        assert_eq!(root_refusal_as(&dir.path().join("new"), 0, &none), None);
+        assert_eq!(root_refusal_as(Path::new("/"), 0, &none), None);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o2770)).unwrap();
+        let group = fs::metadata(&root).unwrap().gid();
+        assert_eq!(root_refusal_as(&root, 0, &|id| id == group), None);
+        assert!(root_refusal_as(&root, 0, &none).is_some());
+    }
+
+    /// a write refused in a folder another user owns names that owner, root by name, and where root
+    /// owns a folder of this user's own cache, as a container run as root leaves one, the help
+    /// takes the cache back; a folder this user owns is said as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_write_names_the_folder_and_its_owner() {
+        let (_dir, cache) = cache();
+        if owner_of(&cache.root) == Some(0) {
+            return;
+        }
+        let denied = || io::Error::from_raw_os_error(13);
+        let objects = cache.root.join("objects");
+        let error =
+            crate::error::Error::io("could not write", &cache.explained(&objects, denied()));
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "could not write: permission was denied in {}",
+                objects.display()
+            )
+        );
+        // "/" stands in for a folder root made in the cache
+        let error = crate::error::Error::io(
+            "could not write",
+            &cache.explained(Path::new("/"), denied()),
+        );
+        assert_eq!(
+            error.to_string(),
+            "could not write: permission was denied in /, which belongs to root"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                format!(
+                    "root made it, as a container run as root does: take the cache back with `sudo chown -R $(id -u):$(id -g) {}`, then run the command again",
+                    crate::suggested::shell_folder_path(&fs::canonicalize(&cache.root).unwrap())
+                )
+                .as_str()
+            )
+        );
+        // a user no name is known for, as a container's host user, by the number `id -u` gives;
+        // macos names 4294967294 nobody, and no system gives out this one
+        assert_eq!(said_user(3_999_999_999), "user 3999999999");
     }
 
     /// a team's cache may be another member's folder or one their group writes; only the owner

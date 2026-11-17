@@ -685,6 +685,13 @@ fn blocked(root: &std::path::Path) -> Result<(), Error> {
 fn open_unheld() -> Result<Cache, Error> {
     let root = cache_root()?;
     blocked(&root)?;
+    if let Some(why) = crate::cache::root_refusal(&root) {
+        return Err(Error::new(
+            Kind::LocalIo,
+            format!("could not open the cache at {}: {why}", root.display()),
+        )
+        .help("run fetchloom as the cache's owner, as `docker run --user $(id -u):$(id -g)` runs a container as you, or give root a cache of its own with FETCHLOOM_CACHE"));
+    }
     let existed = root.is_dir();
     let untagged = crate::cache::lost_tag(&root);
     let cache = Cache::open(root.clone()).map_err(|err| {
