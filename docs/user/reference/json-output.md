@@ -106,6 +106,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | kind | what it says |
 |---|---|
 | `archive.packed` | an archive stays packed: fetchloom does not unpack its format, it needs other parts, it came inside another archive, or `-o` saved it whole |
+| `archive.unproven` | files sit where an archive's files land, but they do not prove the list of files data.lock pins for it, as when one of them differs or a members table placed only some of them, so the archive is downloaded all the same |
 | `archive.unreadable` | a file named as an archive is no archive fetchloom can read, so it stays as it is |
 | `auth.key_remains` | after `auth logout`, another place still holds a key for the account, which requests go on using |
 | `auth.key_unsendable` | a key holds a character no request header can carry, such as a line break, so it is never sent |

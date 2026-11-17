@@ -372,6 +372,7 @@ impl<'a> Loop<'a> {
         // an archive whose files the data folder holds in place needs neither a list from a
         // mirror nor its own bytes
         let found = self.in_place(manifest, lock, &placing)?;
+        found.tell_unproven(&self.context.output, self.net.offline().enabled());
         if !found.is_empty() {
             found.record(&self.cache, &self.context.output)?;
             placing = self.placed_again(manifest, lock, force, placing)?;
@@ -1184,6 +1185,7 @@ impl<'a> Loop<'a> {
         placing.listed(self.unlisted());
         // the archives whose files sit in place are known as the sync would know them, unrecorded
         let found = self.in_place(manifest, lock, &placing)?;
+        found.tell_unproven(&self.context.output, self.net.offline().enabled());
         if !found.is_empty() {
             let survey = placing.into_survey();
             let members = |archive: &Archive<'_>| {

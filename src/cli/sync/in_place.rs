@@ -15,7 +15,7 @@ use super::disk::{Survey, hash_plain};
 use crate::cache::{Cache, Member, tree_hash, tree_key};
 use crate::digest::{Block, Sha256};
 use crate::error::Error;
-use crate::output::Output;
+use crate::output::{Output, Warning};
 use crate::project::lock::Lock;
 use crate::project::lock::archives::{self, Archive, Pinned};
 use crate::project::manifest::Manifest;
@@ -24,10 +24,40 @@ use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::{name, plan, units};
 
-/// the lists of files found in place, by the tree each hashes to.
+/// the lists of files found in place, by the tree each hashes to, and the archives whose files
+/// sit in place but prove no list.
 #[derive(Default)]
 pub(crate) struct InPlace {
     trees: HashMap<Sha256, Found>,
+    unproven: Vec<Unproven>,
+}
+
+/// an archive whose folder holds files that cannot stand for it, so it is downloaded.
+struct Unproven {
+    /// the archive, as `<dataset>/<path>`.
+    label: String,
+    /// the archive's path in the project, as status names it.
+    path: String,
+    /// the folder its files land below, relative to the project.
+    folder: String,
+    /// a members table placed only some of its files, which no tree can prove.
+    filtered: bool,
+    /// the files below `folder`, which say nothing of it if another archive's list took them.
+    placed: Vec<String>,
+}
+
+impl Unproven {
+    /// why the files in place cannot stand for the archive.
+    fn why(&self) -> String {
+        if self.filtered {
+            "its members table placed only some of its files, which cannot prove the list of files data.lock pins for it".to_owned()
+        } else {
+            format!(
+                "the files in {} do not match the list of files data.lock pins for it",
+                self.folder
+            )
+        }
+    }
 }
 
 /// an archive's list of files found in place.
@@ -54,6 +84,7 @@ impl InPlace {
         (threads, stop): (Threads, &Stop),
     ) -> Result<InPlace, Error> {
         let mut found = InPlace::default();
+        let mut claimed: HashSet<String> = HashSet::new();
         let mut hashed: HashMap<String, Option<Sha256>> = HashMap::new();
         let temporary: HashSet<&String> = survey.leftovers().collect();
         for (dataset, archive) in unknown {
@@ -70,7 +101,26 @@ impl InPlace {
                 .disk
                 .keys()
                 .filter(|placed| !temporary.contains(placed));
-            let guesses = guesses(&layout, &layout.below(files.map(String::as_str)));
+            let below = layout.below(files.map(String::as_str));
+            if below.is_empty() {
+                continue;
+            }
+            let placed: Vec<String> = below
+                .iter()
+                .map(|(placed, _)| (*placed).to_owned())
+                .collect();
+            let unproven = |filtered: bool| Unproven {
+                label: format!("{dataset}/{}", archive.file.path),
+                path: name::joined(&layout.folder, &archive.file.path),
+                folder: layout.base.clone(),
+                filtered,
+                placed: placed.clone(),
+            };
+            if layout.filtered {
+                found.unproven.push(unproven(true));
+                continue;
+            }
+            let guesses = guesses(&layout, &below);
             let fresh: Vec<&str> = guesses
                 .iter()
                 .flatten()
@@ -95,21 +145,58 @@ impl InPlace {
             };
             let proven = guesses.iter().find_map(|guess| {
                 let members: Vec<Member> = guess.iter().map(member).collect::<Option<_>>()?;
-                (tree_hash(&members) == tree).then_some(members)
+                (tree_hash(&members) == tree).then_some((guess, members))
             });
-            if let Some(members) = proven {
-                let label = format!("{dataset}/{}", archive.file.path);
-                found.trees.insert(
-                    tree,
-                    Found {
-                        members,
-                        label,
-                        folder: layout.base,
-                    },
-                );
-            }
+            let Some((guess, members)) = proven else {
+                found.unproven.push(unproven(false));
+                continue;
+            };
+            claimed.extend(guess.iter().map(|(placed, _)| placed.clone()));
+            let label = format!("{dataset}/{}", archive.file.path);
+            found.trees.insert(
+                tree,
+                Found {
+                    members,
+                    label,
+                    folder: layout.base,
+                },
+            );
         }
+        // files another archive's list took say nothing of an archive left unproven
+        found.unproven.retain(|unproven| {
+            unproven
+                .placed
+                .iter()
+                .any(|placed| !claimed.contains(placed))
+        });
+        found
+            .unproven
+            .sort_unstable_by(|a, b| a.label.cmp(&b.label));
         Ok(found)
+    }
+
+    /// says once of each archive whose folder holds files that cannot stand for it that it is
+    /// downloaded, and why; `offline`, that it must be.
+    pub(crate) fn tell_unproven(&self, output: &Output, offline: bool) {
+        let will = if offline { "must" } else { "will" };
+        for unproven in &self.unproven {
+            output.warn(
+                Warning::ArchiveUnproven,
+                &format!(
+                    "{} {will} be downloaded: {}",
+                    unproven.label,
+                    unproven.why()
+                ),
+            );
+        }
+    }
+
+    /// why each archive's files in place cannot stand for it, by its path in the project.
+    pub(crate) fn unproven(&self) -> HashMap<String, String> {
+        self.unproven
+            .iter()
+            .map(|unproven| (unproven.path.clone(), unproven.why()))
+            .collect()
     }
 
     /// whether no list was found.
@@ -156,8 +243,7 @@ impl InPlace {
     }
 }
 
-/// where placing put the files of an archive with no members table, as data.toml and data.lock
-/// lay its dataset out.
+/// where placing put the files of an archive, as data.toml and data.lock lay its dataset out.
 struct Layout {
     dataset: String,
     /// the dataset's folder, relative to the project.
@@ -171,6 +257,8 @@ struct Layout {
     alone: bool,
     /// the name a single compressed file decompresses to.
     decompressed: Option<String>,
+    /// a members table placed only some of its files.
+    filtered: bool,
     /// the paths of the dataset's files pinned whole, none of them the archive's.
     whole: HashSet<String>,
     /// the folders of the other datasets, each ending in `/`, whose files are none of the
@@ -179,17 +267,14 @@ struct Layout {
 }
 
 impl Layout {
-    /// where `archive`, a file of `dataset`, puts its files: none when a members table places only
-    /// some of them, which no tree can prove.
+    /// where `archive`, a file of `dataset`, puts its files.
     fn of(
         (manifest, lock): (&Manifest, &Lock),
         dataset: &str,
         archive: &Archive<'_>,
     ) -> Option<Layout> {
         let entry = manifest.datasets.get(dataset)?;
-        if entry.source.members.get(&archive.file.path).is_some() {
-            return None;
-        }
+        let filtered = entry.source.members.get(&archive.file.path).is_some();
         let pinned = archives::pinned(&lock.get(dataset)?.files);
         let folder = plan::folder(manifest, dataset);
         let whole = pinned
@@ -220,6 +305,7 @@ impl Layout {
             stem: crate::archive::stem(name).to_owned(),
             alone: pinned.len() == 1,
             decompressed: archive.decompressed(),
+            filtered,
             whole,
             others,
         })
@@ -265,12 +351,13 @@ fn guesses(layout: &Layout, below: &[(&str, &str)]) -> Vec<Guess> {
         }
         return guesses;
     }
-    // the .gitignore fetchloom keeps a dataset's folder out of git with, unless the archive holds it
-    let marker = format!("{}/.gitignore", layout.folder);
+    // a .gitignore in the dataset's folder is a person's, as the survey leaves out the one
+    // fetchloom keeps it out of git with, unless the archive holds it
+    let ignore_file = format!("{}/.gitignore", layout.folder);
     let unmarked: Vec<(&str, &str)> = below
         .iter()
         .copied()
-        .filter(|(placed, _)| *placed != marker)
+        .filter(|(placed, _)| *placed != ignore_file)
         .collect();
     if layout.alone {
         let mut tops = vec![None, Some(layout.stem.as_str())];
@@ -329,6 +416,7 @@ mod tests {
             stem: crate::archive::stem(name).to_owned(),
             alone,
             decompressed: None,
+            filtered: false,
             whole: HashSet::new(),
             others: Vec::new(),
         }
@@ -436,6 +524,7 @@ mod tests {
         let tree = tree_hash(&members);
         let archive = crate::digest::sha256(b"the archive's bytes");
         let found = InPlace {
+            unproven: Vec::new(),
             trees: HashMap::from([(
                 tree,
                 Found {

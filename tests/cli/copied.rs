@@ -357,11 +357,12 @@ fn a_copy_keeps_the_marker_of_a_folder_it_cannot_list() -> Result {
 }
 
 /// with no list of the zip's files, status calls neither the zip missing nor its files extra, and
-/// writes nothing; a file of the person's own beside them is theirs, kept. the list is missing for
-/// a second person sharing the folder, whose cache never held the zip. a copy would not do: its
+/// writes nothing; a file of the person's own beside them is theirs, kept, and keeps them from
+/// proving the list data.lock pins, which status says a sync downloads. the list is missing for a
+/// second person sharing the folder, whose cache never held the zip. a copy would not do: its
 /// state names the folder it came from, so it is not used, and no file has a record.
 #[test]
-fn status_of_a_zip_the_cache_never_held_says_its_files_are_not_checked() -> Result {
+fn status_of_a_zip_the_cache_never_held_says_why_its_files_cannot_stand_for_it() -> Result {
     let sandbox = Sandbox::new()?;
     let _server = zipped(&sandbox, 1)?;
     let (two, cache) = (sandbox.work(), sandbox.folder("their cache")?);
@@ -400,15 +401,15 @@ fn status_of_a_zip_the_cache_never_held_says_its_files_are_not_checked() -> Resu
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         text(&output.stdout)?,
-        "  Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked\n"
+        "  Unchecked data/dataset/dataset.zip · the files in data/dataset do not match the list of files data.lock pins for it, so a sync downloads it\n"
     );
     assert_eq!(fs::read(two.join(".fetchloom").join("state"))?, state);
     Ok(())
 }
 
 /// in a copy no file has a record, so a file of the person's own beside the zip's keeps its
-/// folder from proving the tree data.lock pins, and nothing tells the zip's files from others
-/// there: status calls none of them the person's, as it says it does not check them. a file
+/// folder from proving the list data.lock pins, and nothing tells the zip's files from others
+/// there: status calls none of them the person's, and says a sync downloads the zip. a file
 /// outside every dataset's folder is none of status's business.
 #[test]
 fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra() -> Result {
@@ -445,7 +446,7 @@ fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         text(&output.stdout)?,
-        "  Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked\n"
+        "  Unchecked data/dataset/dataset.zip · the files in data/dataset do not match the list of files data.lock pins for it, so a sync downloads it\n"
     );
     Ok(())
 }
@@ -737,12 +738,12 @@ fn a_changed_file_of_a_copied_zip_folder_brings_the_zip_again() -> Result {
         .join("data")
         .join("train.csv");
     edit(&changed, b"a,b\n9,9\n")?;
-    let status = json(&run(&["--json", "status"])?)?;
+    let status = run(&["status"])?;
     assert_eq!(
-        status["result"]["not_unpacked"],
-        serde_json::json!(["data/dataset/dataset.zip"]),
-        "{status}"
+        text(&status.stdout)?,
+        "  Unchecked data/dataset/dataset.zip · the files in data/dataset do not match the list of files data.lock pins for it, so a sync downloads it\n"
     );
+    let why = "the files in data/dataset do not match the list of files data.lock pins for it";
     let offline = run(&["--json", "--offline", "sync"])?;
     let document = json(&offline)?;
     assert_eq!(offline.status.code(), Some(20), "{document}");
@@ -750,10 +751,23 @@ fn a_changed_file_of_a_copied_zip_folder_brings_the_zip_again() -> Result {
         document["errors"][0]["kind"], "offline.missing",
         "{document}"
     );
+    let warned: Vec<&serde_json::Value> = document["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|warning| warning["kind"] == "archive.unproven")
+        .collect();
+    assert_eq!(warned.len(), 1, "{document}");
+    assert_eq!(
+        warned[0]["message"],
+        format!("dataset/dataset.zip must be downloaded: {why}")
+    );
     let synced = run(&["sync"])?;
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert_eq!(server.requests().len(), 2, "the zip again: {stderr}");
+    let told = format!("warning: dataset/dataset.zip will be downloaded: {why}\n");
+    assert_eq!(stderr.matches(&told).count(), 1, "{stderr}");
     assert!(
         stderr.contains("warning: data/dataset/data/train.csv holds other bytes than data.lock pins, and fetchloom did not place it, so it stays"),
         "{stderr}"
@@ -930,5 +944,97 @@ fn a_gc_keeps_the_list_a_check_in_place_recorded() -> Result {
     assert_eq!(pushed.status.code(), Some(0), "{document}");
     assert_eq!(files_below(&mirror.join("trees"))?, 1, "the zip's list");
     assert_eq!(server.requests().len(), 1, "the add's download alone");
+    Ok(())
+}
+
+/// a members table placed only some of the zip's files, which cannot prove the list data.lock
+/// pins for it: the sync of a copy says so once and downloads the zip.
+#[test]
+fn a_copied_zip_folder_a_members_table_filtered_is_downloaded_and_says_why() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = zipped(&sandbox, 2)?;
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!(
+            "{written}\n[datasets.dataset.members.\"dataset.zip\"]\nselect = [\"dataset/data/**\"]\n"
+        ),
+    )?;
+    let settled = sandbox.run(&["sync"])?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+    assert!(!sandbox.work().join("data/dataset/README.md").exists());
+    let (two, cache) = copied(&sandbox, "two")?;
+    let synced = sandbox
+        .command_in(&two, &["sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    let told = "warning: dataset/dataset.zip will be downloaded: its members table placed only some of its files, which cannot prove the list of files data.lock pins for it\n";
+    assert_eq!(stderr.matches(told).count(), 1, "{stderr}");
+    assert_eq!(server.requests().len(), 2, "the zip again");
+    Ok(())
+}
+
+/// two zips in one dataset, each in its own top folder: one whose files are gone is downloaded
+/// with nothing said of the other's files, which its own list took, and the other needs nothing.
+#[test]
+fn a_zip_whose_files_are_gone_says_nothing_of_another_zips_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let other = crate::support::zip_of(&[("other/x.csv", b"x\n"), ("other/y.csv", b"y\n")])?;
+    let html = "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for /set/</title>\n</head>\n<body>\n<h1>Directory listing for /set/</h1>\n<hr>\n<ul>\n<li><a href=\"flowers.zip\">flowers.zip</a></li>\n<li><a href=\"other.zip\">other.zip</a></li>\n</ul>\n<hr>\n</body>\n</html>\n";
+    let length = html.len().to_string();
+    let listing = crate::support::reply(
+        "200 OK",
+        &[
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Content-Length", &length),
+        ],
+        html.as_bytes(),
+    );
+    let routes = crate::support::Routes::start(vec![
+        ("/set/".to_owned(), listing),
+        (
+            "/set/flowers.zip".to_owned(),
+            file(&fixture("python.zip")?, "\"f1\""),
+        ),
+        ("/set/other.zip".to_owned(), file(&other, "\"o1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    let added = sandbox.run(&["add", &format!("{}/set/", routes.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let (two, cache) = copied(&sandbox, "two")?;
+    let gone = two.join("data").join("set").join("other");
+    crate::support::delete_folder(&gone)?;
+    let zips = |routes: &crate::support::Routes| {
+        let asked = routes.requests();
+        (
+            asked
+                .iter()
+                .filter(|head| head.contains("flowers.zip"))
+                .count(),
+            asked
+                .iter()
+                .filter(|head| head.contains("other.zip"))
+                .count(),
+        )
+    };
+    let before = zips(&routes);
+    let synced = sandbox
+        .command_in(&two, &["--json", "sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    let unproven = document["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|warning| warning["kind"] == "archive.unproven")
+        .count();
+    assert_eq!(unproven, 0, "{document}");
+    assert_eq!(zips(&routes), (before.0, before.1 + 1), "{document}");
+    assert_eq!(fs::read(gone.join("x.csv"))?, b"x\n");
     Ok(())
 }

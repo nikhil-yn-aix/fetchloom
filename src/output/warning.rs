@@ -7,6 +7,9 @@ pub(crate) enum Warning {
     /// an archive stays packed: fetchloom does not unpack its format, it needs other parts, it
     /// came inside another archive, or `-o` saved it whole.
     ArchivePacked,
+    /// files sit where an archive's files land, but they do not prove the list of files data.lock
+    /// pins for it, so the archive is downloaded all the same.
+    ArchiveUnproven,
     /// a file named as an archive is no archive fetchloom can read, so it stays as it is.
     ArchiveUnreadable,
     /// after a sign-out, another place still holds a key for the account.
@@ -160,6 +163,7 @@ impl Warning {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Warning::ArchivePacked => "archive.packed",
+            Warning::ArchiveUnproven => "archive.unproven",
             Warning::ArchiveUnreadable => "archive.unreadable",
             Warning::AuthKeyRemains => "auth.key_remains",
             Warning::AuthKeyUnsendable => "auth.key_unsendable",
@@ -250,6 +254,7 @@ mod tests {
     fn every_warning_kind_is_documented() {
         let kinds = every_kind![
             ArchivePacked,
+            ArchiveUnproven,
             ArchiveUnreadable,
             AuthKeyRemains,
             AuthKeyUnsendable,

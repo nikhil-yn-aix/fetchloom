@@ -70,6 +70,9 @@ pub(super) struct Status {
     unneeded: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
+    /// why the files in place of each of `not_unpacked` that has some cannot stand for it.
+    #[serde(skip)]
+    unproven: HashMap<String, String>,
     /// the imports with a file of `missing` whose bytes this machine's cache lacks, with those
     /// files: no link fetches them, so no sync places them.
     #[serde(skip)]
@@ -519,37 +522,43 @@ fn imports(
 }
 
 /// the plan for `lock`, with each archive the cache knows nothing of whose files sit in place
-/// standing for them, as a sync would take it, though nothing is recorded.
+/// standing for them, as a sync would take it, though nothing is recorded. the archives it still
+/// knows nothing of go in `status`, with why the files in place of any cannot stand for it.
 fn planned<'l>(
+    status: &mut Status,
     project: &Project,
     (manifest, lock): (&Manifest, &'l Lock),
-    cache: &Cache,
-    survey: &Survey,
+    (cache, survey): (&Cache, &Survey),
     (threads, stop): (Threads, &Stop),
 ) -> Result<plan::Plan<'l>, Error> {
-    let planned = plan::from_cache(manifest, lock, cache)?;
-    if planned.unknown.is_empty() {
-        return Ok(planned);
+    let mut planned = plan::from_cache(manifest, lock, cache)?;
+    if !planned.unknown.is_empty() {
+        let unknown: Vec<(String, &LockedFile)> = planned
+            .unknown
+            .iter()
+            .map(|(dataset, file)| ((*dataset).to_owned(), *file))
+            .collect();
+        let unknown = archives::of(lock, unknown);
+        let found = InPlace::find(
+            &project.root,
+            (manifest, lock),
+            survey,
+            &unknown,
+            (threads, stop),
+        )?;
+        status.unproven = found.unproven();
+        if !found.is_empty() {
+            let members =
+                |archive: &Archive<'_>| archive.recorded(cache).or_else(|| found.members(archive));
+            planned = plan::plan(manifest, lock, &members)?;
+        }
     }
-    let unknown: Vec<(String, &LockedFile)> = planned
+    status.not_unpacked = planned
         .unknown
         .iter()
-        .map(|(dataset, file)| ((*dataset).to_owned(), *file))
+        .map(|(dataset, file)| format!("{}/{}", plan::folder(manifest, dataset), file.path))
         .collect();
-    let unknown = archives::of(lock, unknown);
-    let found = InPlace::find(
-        &project.root,
-        (manifest, lock),
-        survey,
-        &unknown,
-        (threads, stop),
-    )?;
-    if found.is_empty() {
-        return Ok(planned);
-    }
-    let members =
-        |archive: &Archive<'_>| archive.recorded(cache).or_else(|| found.members(archive));
-    plan::plan(manifest, lock, &members)
+    Ok(planned)
 }
 
 /// the dataset of each file and archive of `not_unpacked` that `planned` places.
@@ -649,17 +658,12 @@ fn check(
         return Ok((status, manifest, lock_text));
     }
     let planned = planned(
+        &mut status,
         project,
         (&manifest, &lock),
-        &cache,
-        &survey,
+        (&cache, &survey),
         (threads, stop),
     )?;
-    status.not_unpacked = planned
-        .unknown
-        .iter()
-        .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
-        .collect();
     if status.sync_refused {
         status.dataset_of = datasets_of(&planned, &status.not_unpacked);
     }
@@ -1353,12 +1357,13 @@ fn list(output: &Output, status: &Status) {
         report_rows(output, verb, rows, shown);
     }
     for archive in &status.not_unpacked {
-        output.report(
-            "Unchecked",
-            &format!(
+        let said = match status.unproven.get(archive) {
+            Some(why) => format!("{archive} · {why}, so a sync downloads it"),
+            None => format!(
                 "{archive} · this machine has no list of the files it holds, so they are not checked"
             ),
-        );
+        };
+        output.report("Unchecked", &said);
     }
     let blocked = status
         .blocked
