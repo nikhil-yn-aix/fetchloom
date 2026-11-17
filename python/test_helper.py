@@ -305,6 +305,23 @@ class GetOptions(unittest.TestCase):
                 fetchloom.path("~iris", "~/project")
         self.assertEqual(run.call_args.args[0][3:], [f"-C={home}/project", "path", "--", "~iris"])
 
+    def test_decompress_asks_for_the_file_decompressed_in_one_word(self):
+        link = "https://example.org/iris.csv.gz"
+        for path, folder, flags, answer in [
+            ("iris.csv", None, ["--output=iris.csv"], "/work/iris.csv"),
+            (None, None, [], "/work/iris"),
+            (None, "flowers", ["--dir=flowers"], "/work/flowers"),
+        ]:
+            with self.subTest(path=path, folder=folder):
+                result = {"file": answer if path else None, "folder": answer, "files": [], "items": []}
+                actual, argv = self.run_get(result, link, path, folder=folder, decompress=True)
+                self.assertEqual(actual, Path(answer))
+                self.assertEqual(
+                    argv, ["fetchloom", "--json", "--progress", "-C=.", "get", *flags, "--decompress", "--", link]
+                )
+        _, argv = self.run_get({"file": None, "folder": "/work/iris", "files": [], "items": []}, link)
+        self.assertNotIn("--decompress", argv)
+
     def test_get_takes_a_path_or_a_folder_not_both(self):
         with patch.object(fetchloom, "_call") as run:
             with self.assertRaises(fetchloom.Error) as raised:
@@ -633,6 +650,13 @@ class Errors(unittest.TestCase):
                 "get",
                 "check the hash given to --sha256, or ask the file's owner which bytes are right",
                 "check the hash given to the sha256 argument, or ask the file's owner which bytes are right",
+            ),
+            (
+                "get",
+                "if you trust the file, raise FETCHLOOM_ARCHIVE_RATIO, or archive_ratio in the settings file. "
+                "otherwise leave out --decompress to keep the file packed",
+                "if you trust the file, raise FETCHLOOM_ARCHIVE_RATIO, or archive_ratio in the settings file. "
+                "otherwise leave out decompress=True to keep the file packed",
             ),
             (
                 "get",

@@ -152,6 +152,20 @@ test_that("download() names its path, hash and switches as fetchloom takes them"
   ))
 })
 
+test_that("download() asks for the file decompressed in one word", {
+  skip_on_os("windows")
+  folder <- stand_in('{"schema":1,"status":"ok","result":{"file":"/w/y.csv","folder":"/w"},"warnings":[],"errors":[]}')
+  expect_identical(download("https://e.org/y.csv.gz", "y.csv", decompress = TRUE), "/w/y.csv")
+  expect_identical(readLines(file.path(folder, "arguments")), c(
+    "--json", "--progress", "-C=.", "get", "--output=y.csv", "--decompress", "--",
+    "https://e.org/y.csv.gz"
+  ))
+  expect_identical(download("https://e.org/y.csv.gz", decompress = TRUE), "/w")
+  expect_identical(readLines(file.path(folder, "arguments")), c(
+    "--json", "--progress", "-C=.", "get", "--decompress", "--", "https://e.org/y.csv.gz"
+  ))
+})
+
 test_that("an error and a warning hold fetchloom's text with control characters escaped", {
   skip_on_os("windows")
   stand_in(paste0(

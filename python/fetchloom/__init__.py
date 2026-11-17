@@ -28,6 +28,7 @@ __all__ = ["Error", "get", "path", "sync"]
 # the flags the helpers pass for their keywords: a switch, as --force for force=True, and a flag
 # that takes a value, as -o for path
 _SWITCHES = {
+    "--decompress": "decompress",
     "--force": "force",
     "--yes": "yes",
     "--offline": "offline",
@@ -204,6 +205,7 @@ def get(
     *,
     folder: str | os.PathLike[str] | None = None,
     sha256: str | None = None,
+    decompress: bool = False,
     force: bool = False,
     yes: bool = False,
     offline: bool = False,
@@ -219,8 +221,13 @@ def get(
     ``folder``, and the folder is returned; giving both raises kind ``usage``. a leading ``~``
     in ``path`` or ``folder`` is your home folder, as pandas reads it. ``sha256`` is the hash
     the one file must have, and with ``path`` a file already holding it is kept without a
-    download. ``yes=True`` approves large downloads; ``offline=True`` prevents network
-    requests, and keeps a file at ``path`` that still holds what the link served last time.
+    download. ``decompress=True`` decompresses a single ``.gz``, ``.bz2``, ``.xz`` or ``.zst``
+    file: ``path`` then holds the decompressed bytes, and a folder holds the file under its name
+    without the ending. ``sha256`` still names the bytes as they downloaded, as pooch's
+    ``known_hash`` does. an archive, as ``.tar.gz``, is not decompressed: get unpacks it into
+    the folder, and ``path`` keeps it as it came. ``yes=True`` approves large downloads;
+    ``offline=True`` prevents network requests, and keeps a file at ``path`` that still holds
+    what the link served last time.
     """
     if path is not None and folder is not None:
         raise Error(
@@ -236,10 +243,12 @@ def get(
         arguments.append(f"--dir={_local(folder)}")
     if sha256 is not None:
         arguments.append(f"--sha256={sha256}")
+    if decompress:
+        arguments.append("--decompress")
     if force:
         arguments.append("--force")
     _options(arguments, yes, offline, False)
-    keywords = {"path", "folder", "sha256", "force", "yes", "offline"}
+    keywords = {"path", "folder", "sha256", "decompress", "force", "yes", "offline"}
     try:
         result = _run([*arguments, "--", link], ".", keywords)
     except Error as error:
@@ -248,7 +257,8 @@ def get(
             raise
         guessed, after = meant
         given = {"path": path, "folder": folder, "sha256": sha256}
-        call = _get_call(guessed, given, {"force": force, "yes": yes, "offline": offline})
+        switches = {"decompress": decompress, "force": force, "yes": yes, "offline": offline}
+        call = _get_call(guessed, given, switches)
         help = _escaped(f"did you mean `{call}`?{after}")
         details = _still_named(error.details, error.message, help)
         raise Error(error.kind, error.message, details, help, error.code, error.result) from None

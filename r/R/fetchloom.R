@@ -22,8 +22,8 @@ sync <- function(project = ".", names = character(), yes = FALSE, offline = FALS
   run(arguments, project)$project
 }
 
-download <- function(link, path = NULL, folder = NULL, sha256 = NULL, force = FALSE,
-                     yes = FALSE, offline = FALSE) {
+download <- function(link, path = NULL, folder = NULL, sha256 = NULL, decompress = FALSE,
+                     force = FALSE, yes = FALSE, offline = FALSE) {
   link <- one_string(link, "link")
   if (!is.null(path) && !is.null(folder)) {
     stop(fetchloom_error(
@@ -44,7 +44,11 @@ download <- function(link, path = NULL, folder = NULL, sha256 = NULL, force = FA
   if (!is.null(sha256)) {
     arguments <- c(arguments, paste0("--sha256=", one_string(sha256, "sha256")))
   }
-  arguments <- c(arguments, switches(force = force, yes = yes, offline = offline), "--", link)
+  arguments <- c(
+    arguments,
+    switches(decompress = decompress, force = force, yes = yes, offline = offline),
+    "--", link
+  )
   result <- run(arguments, ".")
   if (is.null(path)) result$folder else result$file
 }

@@ -7,8 +7,8 @@ does. it is not called \code{get}, which would hide \code{base::get} once the pa
 attached.
 }
 \usage{
-download(link, path = NULL, folder = NULL, sha256 = NULL, force = FALSE,
-         yes = FALSE, offline = FALSE)
+download(link, path = NULL, folder = NULL, sha256 = NULL, decompress = FALSE,
+         force = FALSE, yes = FALSE, offline = FALSE)
 }
 \arguments{
 \item{link}{a link, a DOI or an id such as \code{"zenodo:3608990"}.}
@@ -17,7 +17,12 @@ the same bytes stays as it is; one holding other bytes stops with kind \code{loc
 unless \code{force} is \code{TRUE}.}
 \item{folder}{the folder to fill, in place of a new folder named after the download. give
 \code{path} or \code{folder}, not both.}
-\item{sha256}{the hash the one file must have.}
+\item{sha256}{the hash the one file must have as it downloaded, before \code{decompress}, as
+pooch's \code{known_hash} names it.}
+\item{decompress}{\code{TRUE} decompresses a single \code{.gz}, \code{.bz2}, \code{.xz} or
+\code{.zst} file: \code{path} then holds the decompressed bytes, and a folder holds the file
+under its name without the ending. an archive, as \code{.tar.gz}, is not decompressed: it is
+unpacked into the folder, and \code{path} keeps it as it came.}
 \item{force}{\code{TRUE} replaces the file at \code{path}.}
 \item{yes}{\code{TRUE} approves a large download.}
 \item{offline}{\code{TRUE} prevents network requests.}
