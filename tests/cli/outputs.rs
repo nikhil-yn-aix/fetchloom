@@ -1507,8 +1507,8 @@ fn audit_and_diff_say_what_an_output_is() -> Result {
     Ok(())
 }
 
-/// push sends the files an output pins, never what its folder holds since, and says so when the
-/// folder changed.
+/// push asks first, as no source says who may read an output, and then sends the files an output
+/// pins, never what its folder holds since, and says so when the folder changed.
 #[test]
 fn push_sends_an_outputs_pinned_files_and_says_when_its_folder_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1518,6 +1518,12 @@ fn push_sends_an_outputs_pinned_files_and_says_when_its_folder_changed() -> Resu
     fs::write(work.join("data/processed/plot.png"), b"png")?;
     let mirror = sandbox.folder("mirror")?;
     let mirror = mirror.to_string_lossy().into_owned();
+    let asked = json(&sandbox.run(&["--json", "push", "--to", &mirror])?)?;
+    assert_eq!(
+        asked["errors"][0]["message"],
+        "fetchloom cannot tell who may read processed, an output of this project, so pushing it needs a yes",
+        "{asked}"
+    );
     let pushed = sandbox.run(&["--json", "push", "--to", &mirror, "--yes"])?;
     let document = json(&pushed)?;
     assert_eq!(pushed.status.code(), Some(0), "{document}");

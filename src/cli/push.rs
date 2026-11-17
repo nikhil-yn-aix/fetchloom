@@ -139,6 +139,8 @@ struct Asking {
     /// data.lock calls it public, but this machine keeps a key for where its files come from, or
     /// one went with their download, as the cache marks it.
     keyed: bool,
+    /// it is an output of the project, which no source says anything of.
+    output: bool,
 }
 
 /// where this machine keeps a key: hosts with a saved login or token, a `.netrc` line or a site
@@ -1112,11 +1114,13 @@ fn asking(lock: &Lock, datasets: &[String], keys: &Keys, marked: &BTreeSet<&str>
     datasets
         .iter()
         .filter_map(|name| {
-            let (access, keyed) = keys.access(lock.get(name)?, marked.contains(name.as_str()));
+            let locked = lock.get(name)?;
+            let (access, keyed) = keys.access(locked, marked.contains(name.as_str()));
             (access != Access::Public).then(|| Asking {
                 dataset: name.clone(),
                 access,
                 keyed,
+                output: locked.at.is_some(),
             })
         })
         .collect()
@@ -1221,11 +1225,24 @@ fn reasons(asks: &[Asking]) -> String {
             named(many)
         )),
     }
-    match alike(Access::Unknown).as_slice() {
+    let (outputs, sourced): (Vec<&str>, Vec<&str>) = alike(Access::Unknown)
+        .into_iter()
+        .partition(|name| asks.iter().any(|ask| ask.dataset == *name && ask.output));
+    match sourced.as_slice() {
         [] => {}
         [one] => reasons.push(format!("the source of {one} did not say who may read it")),
         many => reasons.push(format!(
             "the sources of {} did not say who may read them",
+            named(many)
+        )),
+    }
+    match outputs.as_slice() {
+        [] => {}
+        [one] => reasons.push(format!(
+            "fetchloom cannot tell who may read {one}, an output of this project"
+        )),
+        many => reasons.push(format!(
+            "fetchloom cannot tell who may read {}, outputs of this project",
             named(many)
         )),
     }
@@ -2086,6 +2103,7 @@ mod tests {
             dataset: dataset.to_owned(),
             access,
             keyed: false,
+            output: false,
         }
     }
 
