@@ -25,6 +25,7 @@ PROJECT = "/work/project"
 STAND_IN = """#!/bin/sh
 printf '%s\\n' "$*" >> "$ANSWERS/asked"
 case " $* " in
+  " --version ") echo "fetchloom 0.1.0" ;;
   *" settings "*) cat "$ANSWERS/settings.json" ;;
   *" push "*)
     if grep -q ' sync ' "$ANSWERS/asked"; then answer=push-after; else answer=push; fi
@@ -37,6 +38,12 @@ case " $* " in
   *) echo "the stand-in has no answer for: $*" >&2; exit 99 ;;
 esac
 """
+
+
+# every program a step of the action runs by name, each planted as a bait
+PROGRAMS = ["bash", "cat", "chmod", "cp", "curl", "cut", "echo", "env", "fetchloom", "find", "grep", "head",
+            "ls", "mkdir", "mv", "printf", "rm", "sed", "sh", "sha256sum", "shasum", "sort", "tail", "tar", "test",
+            "tr"]
 
 
 def document(command, result, status="ok", errors=()):
@@ -124,10 +131,14 @@ def holds(condition, context):
 @unittest.skipIf(os.name == "nt", "github runs the action's bash steps in git bash; the windows action lane runs them")
 class CacheTests(unittest.TestCase):
     def walk(self, cache=None, visibility="public", push=None, push_after=None, push_code=0,
-             projects=(PROJECT,), hit=False):
+             projects=(PROJECT,), hit=False, planted=False, project="project", mirrors=""):
         """the action's run with the ``cache`` input, in a repository of ``visibility``, fetchloom
         answering push --dry-run with ``push`` before a sync and ``push_after`` once one ran, and
-        its cache serving ``projects``; with ``hit``, github's cache holds the run's exact key."""
+        its cache serving ``projects``; with ``hit``, github's cache holds the run's exact key.
+
+        with ``planted``, the stand-in comes as the binary input names it, through the install
+        step and GITHUB_PATH, and the workspace and the project hold a bait for every program the
+        steps run, which PATH reaches first by relative folders."""
         folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
         answers, tools, temp = folder / "answers", folder / "bin", folder / "runner"
         for made in (answers, tools, temp):
@@ -142,15 +153,30 @@ class CacheTests(unittest.TestCase):
             (answers / name).write_text(text, encoding="utf-8")
         (tools / "fetchloom").write_text(STAND_IN, encoding="utf-8")
         (tools / "fetchloom").chmod(0o755)
-        (folder / "work/project").mkdir(parents=True)
-        (folder / "work/project/data.lock").write_text("version = 1\n", encoding="utf-8")
+        work = folder / "work"
+        (work / project).mkdir(parents=True)
+        (work / project / "data.lock").write_text("version = 1\n", encoding="utf-8")
+        marks = folder / "ran"
+        marks.mkdir()
+        if planted:
+            for place in (work, work / "bin", work / project):
+                place.mkdir(exist_ok=True)
+                for name in PROGRAMS:
+                    (place / name).write_text(f"#!/bin/sh\n: > '{marks / name}'\n", encoding="utf-8")
+                    (place / name).chmod(0o755)
         inputs = defaults()
-        inputs["project"] = str(folder / "work/project")
+        inputs["project"] = str(work / project)
+        inputs["mirrors"] = mirrors
+        if planted:
+            inputs["binary"] = str(tools / "fetchloom")
         if cache is not None:
             inputs["cache"] = cache
         context = {"inputs": inputs, "steps": {}, "runner": {"os": "Linux"},
                    "github": {"action_path": str(ROOT), "event": {"repository": {"visibility": visibility}}}}
         system = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if os.path.isabs(entry)]
+        base = [".", "bin", "", *system] if planted else [str(tools), *system]
+        added = folder / "path"
+        added.write_text("", encoding="utf-8")
         run = {"ran": [], "saved": [], "said": "", "failed": None}
         for step in action_steps():
             if not holds(step.get("if", ""), context):
@@ -161,20 +187,22 @@ class CacheTests(unittest.TestCase):
                 outputs["cache-hit"] = "true" if hit else ""
             elif step.get("uses", "").startswith("actions/cache/save@"):
                 run["saved"].append(expanded(step["with"]["key"], context))
-            elif step["name"] == "install fetchloom":
+            elif step["name"] == "install fetchloom" and not planted:
                 continue
             else:
                 self.assertEqual(step.get("shell"), "bash", step["name"])
                 said = folder / "output"
                 said.write_text("", encoding="utf-8")
-                env = {"PATH": os.pathsep.join([str(tools), *system]), "HOME": str(folder), "ANSWERS": str(answers),
-                       "RUNNER_TEMP": str(temp), "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64", "GITHUB_OUTPUT": str(said),
-                       "LC_ALL": "C"}
+                # each folder a step adds to GITHUB_PATH comes before the rest for the later steps
+                later = [line for line in added.read_text(encoding="utf-8").splitlines() if line]
+                env = {"PATH": os.pathsep.join([*reversed(later), *base]), "HOME": str(folder),
+                       "ANSWERS": str(answers), "RUNNER_TEMP": str(temp), "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64",
+                       "GITHUB_OUTPUT": str(said), "GITHUB_PATH": str(added), "LC_ALL": "C"}
                 env.update({name: expanded(value, context) for name, value in step.get("env", {}).items()})
                 script = folder / "step.sh"
                 script.write_text(step["run"], encoding="utf-8")
                 done = subprocess.run([shutil.which("bash"), "--noprofile", "--norc", "-eo", "pipefail", str(script)],
-                                      env=env, cwd=folder / "work", capture_output=True, text=True, timeout=60)
+                                      env=env, cwd=work, capture_output=True, text=True, timeout=60)
                 run["said"] += done.stdout
                 if done.returncode != 0:
                     run["failed"] = (step["name"], done.stdout + done.stderr)
@@ -184,6 +212,8 @@ class CacheTests(unittest.TestCase):
                 context["steps"][step["id"]] = {"outputs": outputs}
         run["asked"] = (answers / "asked").read_text(encoding="utf-8").splitlines()
         run["notices"] = [line for line in run["said"].splitlines() if line.startswith("::notice")]
+        run["baits"] = sorted(path.name for path in marks.iterdir())
+        run["project"] = inputs["project"]
         return run
 
     def assertKept(self, run):
@@ -274,6 +304,19 @@ class CacheTests(unittest.TestCase):
         self.assertIn("::error::", run["failed"][1])
         self.assertIn("auto, always or never", run["failed"][1])
         self.assertEqual(run["saved"], [])
+
+    def test_no_step_runs_a_program_the_workspace_holds(self):
+        # the workspace is the checked-out repository, which a pull request fills; the binary
+        # input is the one program a workflow names, so it is the one that runs
+        words = "p $(reboot);&'x `id` |id"
+        for cache in ("auto", "always", "never"):
+            with self.subTest(cache=cache):
+                run = self.walk(cache=cache, visibility="private", planted=True, project=words,
+                                mirrors="m $(reboot);|&'x")
+                self.assertIsNone(run["failed"])
+                self.assertEqual(run["baits"], [])
+                self.assertEqual(run["asked"][0], "--version")
+                self.assertIn(f"-C={run['project']} sync --locked --yes", run["asked"])
 
     def test_each_project_keeps_a_cache_of_its_own(self):
         first, second = self.walk(cache="auto"), self.walk(cache="auto")

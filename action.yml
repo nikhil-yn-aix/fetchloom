@@ -35,7 +35,8 @@ runs:
   using: composite
   steps:
     # every input reaches a script through the environment, never pasted into it. the folder added
-    # to PATH is the action's own, under RUNNER_TEMP
+    # to PATH is the action's own, under RUNNER_TEMP. each bash step keeps PATH's absolute folders
+    # alone: a relative one is the workspace, which a pull request fills
     - name: install fetchloom
       if: runner.os != 'Windows'
       shell: bash
@@ -45,6 +46,9 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: | # zizmor: ignore[github-env]
         set -eu
+        absolute='' rest=$PATH:
+        while [ -n "$rest" ]; do entry=${rest%%:*} rest=${rest#*:}; case $entry in /*) absolute=$absolute${absolute:+:}$entry ;; esac; done
+        PATH=$absolute
         if [ -n "$BINARY" ] && [ -n "$VERSION" ]; then
           echo "::error::give the fetchloom action a version or a binary, not both"
           exit 1
@@ -100,6 +104,9 @@ runs:
         PROJECT: ${{ inputs.project }}
       run: |
         set -eu
+        absolute='' rest=$PATH:
+        while [ -n "$rest" ]; do entry=${rest%%:*} rest=${rest#*:}; case $entry in /*) absolute=$absolute${absolute:+:}$entry ;; esac; done
+        PATH=$absolute
         if [ ! -d "$PROJECT" ]; then
           echo "::error::the project input names $PROJECT, which is not a folder"
           exit 1
@@ -151,6 +158,9 @@ runs:
         VISIBILITY: ${{ github.event.repository.visibility }}
       run: |
         set -eu
+        absolute='' rest=$PATH:
+        while [ -n "$rest" ]; do entry=${rest%%:*} rest=${rest#*:}; case $entry in /*) absolute=$absolute${absolute:+:}$entry ;; esac; done
+        PATH=$absolute
         case $CACHE in
           auto | always | never) ;;
           *)
@@ -196,6 +206,9 @@ runs:
         MIRRORS: ${{ inputs.mirrors }}
       run: |
         set -eu
+        absolute='' rest=$PATH:
+        while [ -n "$rest" ]; do entry=${rest%%:*} rest=${rest#*:}; case $entry in /*) absolute=$absolute${absolute:+:}$entry ;; esac; done
+        PATH=$absolute
         if [ -n "$MIRRORS" ]; then
           export FETCHLOOM_MIRRORS="$MIRRORS"
         fi
@@ -206,7 +219,12 @@ runs:
       shell: bash
       env:
         PROJECT: ${{ inputs.project }}
-      run: fetchloom -C="$PROJECT" cache gc --now --yes
+      run: |
+        set -eu
+        absolute='' rest=$PATH:
+        while [ -n "$rest" ]; do entry=${rest%%:*} rest=${rest#*:}; case $entry in /*) absolute=$absolute${absolute:+:}$entry ;; esac; done
+        PATH=$absolute
+        fetchloom -C="$PROJECT" cache gc --now --yes
     # the sync may have brought files with a key, and the cache folder may serve other projects of
     # this runner, whose files auto never hands on
     - name: decide whether to save the cache
@@ -219,6 +237,9 @@ runs:
         VISIBILITY: ${{ github.event.repository.visibility }}
       run: |
         set -eu
+        absolute='' rest=$PATH:
+        while [ -n "$rest" ]; do entry=${rest%%:*} rest=${rest#*:}; case $entry in /*) absolute=$absolute${absolute:+:}$entry ;; esac; done
+        PATH=$absolute
         save=true
         if [ "$CACHE" = auto ]; then
           if ! report=$(fetchloom -C="$PROJECT" --offline --json cache) ||
