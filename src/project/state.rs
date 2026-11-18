@@ -72,6 +72,10 @@ pub(crate) struct State {
     /// file goes unrecorded, and only one holding that is fetchloom's to rewrite or delete.
     #[serde(default)]
     pub(crate) markers: BTreeMap<String, String>,
+    /// the folders an output's move left holding files, whose markers stay while they hold any,
+    /// as a dropped dataset's do, and go with the folder once it empties.
+    #[serde(default)]
+    pub(crate) left: BTreeSet<String>,
     /// the folder each data folder link led to when fetchloom first followed it, resolved, by the
     /// link's path in the project: a link still leading there is this project's own, and one
     /// leading elsewhere is checked as at first.
@@ -499,6 +503,10 @@ impl State {
             out.extend_from_slice(br#","markers":"#);
             serde_json::to_writer(&mut *out, &self.markers)?;
         }
+        if !self.left.is_empty() {
+            out.extend_from_slice(br#","left":"#);
+            serde_json::to_writer(&mut *out, &self.left)?;
+        }
         if !self.followed.is_empty() {
             out.extend_from_slice(br#","followed":"#);
             serde_json::to_writer(&mut *out, &self.followed)?;
@@ -543,7 +551,8 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         let (mut version, mut files, mut synced) = (None, false, false);
         let (mut dropped, mut freeing, mut folder, mut aside, mut replacing, mut uncached) =
             (false, false, false, false, false, false);
-        let (mut markers, mut followed, mut told, mut id) = (false, false, false, false);
+        let (mut markers, mut left, mut followed, mut told, mut id) =
+            (false, false, false, false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -582,6 +591,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "markers" => {
                     state.markers = map.next_value()?;
                     std::mem::replace(&mut markers, true)
+                }
+                "left" => {
+                    state.left = map.next_value()?;
+                    std::mem::replace(&mut left, true)
                 }
                 "followed" => {
                     state.followed = map.next_value()?;
@@ -701,6 +714,8 @@ struct Tail {
     #[serde(default)]
     markers: BTreeMap<String, String>,
     #[serde(default)]
+    left: BTreeSet<String>,
+    #[serde(default)]
     followed: BTreeMap<String, String>,
     #[serde(default)]
     told: Told,
@@ -809,6 +824,7 @@ fn indexed(
         replacing,
         uncached,
         markers,
+        left,
         followed,
         told,
         id,
@@ -836,6 +852,7 @@ fn indexed(
         replacing,
         uncached,
         markers,
+        left,
         followed,
         told,
         id,
@@ -855,6 +872,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         replacing,
         uncached,
         markers,
+        left,
         followed,
         told,
         id,
@@ -885,6 +903,7 @@ fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'sta
         replacing,
         uncached,
         markers,
+        left,
         followed,
         told,
         id,
@@ -1505,6 +1524,7 @@ mod tests {
         });
         state.markers.insert("data/a".to_owned(), "0".repeat(64));
         state.markers.insert("data".to_owned(), "1".repeat(64));
+        state.left.insert("data/a".to_owned());
         state.told.note(Once::Rule, "/data/");
         state.told.note(Once::Refill, "data/a");
         state
@@ -1533,6 +1553,7 @@ mod tests {
         assert_eq!(read.replacing, whole.replacing, "{case}");
         assert_eq!(read.uncached, whole.uncached, "{case}");
         assert_eq!(read.markers, whole.markers, "{case}");
+        assert_eq!(read.left, whole.left, "{case}");
         assert_eq!(read.told, whole.told, "{case}");
         assert_eq!(read.version, whole.version, "{case}");
     }
@@ -1604,6 +1625,7 @@ mod tests {
             assert_eq!(read.replacing, state.replacing, "blocks of {block}");
             assert_eq!(read.uncached, state.uncached, "blocks of {block}");
             assert_eq!(read.markers, state.markers, "blocks of {block}");
+            assert_eq!(read.left, state.left, "blocks of {block}");
             assert_eq!(read.told, state.told, "blocks of {block}");
             for folders in FOLDERS {
                 let folders: Vec<String> = folders.iter().map(|&folder| folder.into()).collect();

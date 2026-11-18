@@ -407,7 +407,15 @@ pub(super) fn retire(
     kept: &[String],
 ) -> bool {
     let mut needed = needed(manifest, targets, unsure);
+    // a folder an output's move left keeps its marker while it holds a file, and is no longer
+    // left once it empties or a dataset of data.toml lives there again
+    survey.state.left.retain(|folder| {
+        !needed.contains(folder)
+            && survey.state.markers.contains_key(folder)
+            && holds_files(&native(root, folder), true)
+    });
     needed.extend(kept_for_files(root, manifest, kept));
+    needed.extend(survey.state.left.iter().cloned());
     let going: Vec<String> = survey
         .state
         .markers
@@ -846,7 +854,8 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
                     || kept_in_git(manifest, survey, &folder)
             }
         });
-    let kept = kept_for_files(survey.root(), manifest, &[]);
+    let left: Vec<String> = state.left.iter().cloned().collect();
+    let kept = kept_for_files(survey.root(), manifest, &left);
     marked
         && survey.marks.keys().all(|folder| {
             placed.contains(folder) || holds_placed(state, folder) || kept.contains(folder)

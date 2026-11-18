@@ -3283,15 +3283,10 @@ fn remove_unwanted(
         }
     }
     left_by_move(&mut placement.retired, &placement.kept);
-    // a folder an output's move left holding files keeps its marker, theirs from now on as the
-    // files are, so no later sync deletes it while they stay
+    // a folder an output's move left holding files keeps its marker while it holds any
     for retired in &placement.retired {
         if retired.output.is_some() && !retired.unplaced.is_empty() {
-            let folder = retired.folder.as_str();
-            survey
-                .state
-                .markers
-                .retain(|marked, _| !super::disk::is_inside(marked, folder));
+            survey.state.left.insert(retired.folder.clone());
         }
     }
     clear_system_made(project, placer, &placement.retired, &placement.kept);

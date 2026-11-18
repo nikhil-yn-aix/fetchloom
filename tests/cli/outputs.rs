@@ -163,7 +163,7 @@ fn a_teammate_gets_an_output_where_the_author_had_it_and_may_write_it() -> Resul
 /// a teammate pulling an output's moved folder gets its pin in the new folder, and the copies a
 /// sync placed in the old one go as any dataset's old placement goes, with the emptied folder and
 /// its marker. a copy changed there, or a file added, stays under the folder's marker, and one line
-/// names the folder, once.
+/// names the folder, once. the marker goes with the folder once those files go.
 #[test]
 fn a_moved_outputs_old_copies_go_from_a_teammates_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -226,6 +226,52 @@ fn a_moved_outputs_old_copies_go_from_a_teammates_folder() -> Result {
         b"*\n",
         "{stderr}"
     );
+    for file in ["summary.txt", "notes.txt"] {
+        fs::remove_file(old.join(file))?;
+    }
+    let emptied = sandbox.command_in(&edited, &["sync"]).output()?;
+    let stderr = text(&emptied.stderr)?;
+    assert_eq!(emptied.status.code(), Some(0), "{stderr}");
+    assert!(!old.exists(), "{stderr}");
+    Ok(())
+}
+
+/// an output moved back to the folder its move left is that folder's output again: removing it
+/// leaves the folder to git as removing any output does, though the move once kept its marker for
+/// the person's file there.
+#[test]
+fn an_output_moved_back_to_its_old_folder_is_removed_as_any_output() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    let old = teammate.join("data/processed");
+    let pull = || -> Result {
+        for file in ["data.toml", "data.lock"] {
+            fs::copy(work.join(file), teammate.join(file))?;
+        }
+        ok(&sandbox.command_in(&teammate, &["sync"]).output()?)
+    };
+    let move_to = |from: &str, to: &str| -> Result {
+        fs::rename(work.join(from), work.join(to))?;
+        let manifest = fs::read_to_string(work.join("data.toml"))?;
+        fs::write(work.join("data.toml"), manifest.replace(from, to))?;
+        ok(&sandbox.run(&["sync"])?)?;
+        pull()
+    };
+    pull()?;
+    fs::write(old.join("mine.txt"), b"mine\n")?;
+    move_to("data/processed", "data/proc2")?;
+    assert_eq!(crate::support::marker(&old.join(".gitignore"))?, b"*\n");
+    move_to("data/proc2", "data/processed")?;
+    let removed = sandbox
+        .command_in(&teammate, &["remove", "processed"])
+        .output()?;
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    assert!(!old.join(".gitignore").exists(), "{stderr}");
+    assert_eq!(fs::read(old.join("mine.txt"))?, b"mine\n");
     Ok(())
 }
 
