@@ -441,12 +441,13 @@ pub(crate) fn said_user(id: u32) -> String {
 
 /// the name of the user `id`, as `id -nu` tells it: a cluster's accounts are mostly kept in a
 /// directory service, which `/etc/passwd` does not list and only the system's own lookup asks.
-/// the system's own `id` comes first, then one in an absolute folder on PATH, never one a relative
-/// folder names: that would be wherever fetchloom runs, as in a cloned project.
 #[cfg(unix)]
 fn user_name(id: u32) -> Option<String> {
-    let program = crate::machine::installed(std::ffi::OsStr::new("/usr/bin:/bin"), "id")
-        .or_else(|| crate::machine::installed(&std::env::var_os("PATH")?, "id"))?;
+    let program = id_program(
+        std::ffi::OsStr::new("/usr/bin:/bin"),
+        &crate::machine::env,
+        None,
+    )?;
     let told = std::process::Command::new(program)
         .arg("-nu")
         .arg(id.to_string())
@@ -457,6 +458,19 @@ fn user_name(id: u32) -> Option<String> {
     let name = String::from_utf8(told.stdout).ok()?;
     let name = name.trim();
     (told.status.success() && !name.is_empty()).then(|| name.to_owned())
+}
+
+/// the `id` to ask: the system's own, in a folder of `system`, else the first on the PATH `var`
+/// gives past one inside `project`, or the project the run works in, as git, aws and az are found:
+/// a cloned project can hold a program in a folder PATH names.
+#[cfg(unix)]
+fn id_program(
+    system: &std::ffi::OsStr,
+    var: crate::machine::Var<'_>,
+    project: Option<&Path>,
+) -> Option<PathBuf> {
+    crate::machine::installed(system, "id")
+        .or_else(|| crate::machine::program(var, "id", project).ok())
 }
 
 /// why a run as root takes no cache at `root` that another user owns: what it would make there
@@ -2502,6 +2516,35 @@ pub(crate) mod tests {
         // a user no name is known for, as a container's host user, by the number `id -u` gives;
         // macos names 4294967294 nobody, and no system gives out this one
         assert_eq!(said_user(3_999_999_999), "user 3999999999");
+    }
+
+    /// where the system's folders hold no `id`, as on nixos, the one asked is never one the
+    /// project holds, even in a folder PATH names in full, as an activated environment's is.
+    #[cfg(unix)]
+    #[test]
+    fn the_id_asked_is_never_one_the_project_holds() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (system, project, outside) = (
+            root.join("system"),
+            root.join("project"),
+            root.join("outside"),
+        );
+        let planted = project.join(".venv").join("bin");
+        fs::create_dir(&system).unwrap();
+        for folder in [&planted, &outside] {
+            fs::create_dir_all(folder).unwrap();
+            let id = folder.join("id");
+            fs::write(&id, "#!/bin/sh\n").unwrap();
+            fs::set_permissions(&id, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths([&planted, &outside]).unwrap();
+        let var = |name: &str| (name == "PATH").then(|| path.clone());
+        assert_eq!(
+            id_program(system.as_os_str(), &var, Some(&project)),
+            Some(outside.join("id"))
+        );
     }
 
     /// a team's cache may be another member's folder or one their group writes; only the owner

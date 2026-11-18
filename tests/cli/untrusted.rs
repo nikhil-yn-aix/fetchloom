@@ -9,7 +9,8 @@
 //! AWS CLI (`buckets::a_listed_bucket_reads_with_the_aws_clis_default_chain`), the az CLI
 //! (`azure::a_listed_private_container_is_read_with_the_az_clis_login`) and git, each from an
 //! absolute folder on PATH outside the project (`buckets::an_aws_cli_inside_the_project_never_runs_and_is_named`,
-//! `azure::an_az_cli_inside_the_project_never_runs_and_is_named`); the system's own `id`. gcloud never runs: fetchloom
+//! `azure::an_az_cli_inside_the_project_never_runs_and_is_named`); the system's own `id`, else one
+//! on PATH outside the project (`cache::tests::the_id_asked_is_never_one_the_project_holds`). gcloud never runs: fetchloom
 //! reads the login it saves (`google::a_listed_private_bucket_is_read_with_application_default_credentials`).
 //! the tests here and beside those hold each of them to that boundary.
 
