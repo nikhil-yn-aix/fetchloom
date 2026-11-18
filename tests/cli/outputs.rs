@@ -288,6 +288,49 @@ fn a_renamed_outputs_folder_never_takes_its_marker_in() -> Result {
     Ok(())
 }
 
+/// a change of an output's `at` alone, as after the person moved its folder and said so in
+/// data.toml, takes no new pin: status says a sync moves the pin to the new folder, as it does,
+/// and names no add.
+#[test]
+fn a_moved_outputs_new_at_is_told_as_a_sync_moving_its_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    fs::rename(work.join("data/processed"), work.join("data/features"))?;
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    fs::write(
+        work.join("data.toml"),
+        manifest.replace("at = \"data/processed\"", "at = \"data/features\""),
+    )?;
+    let status = sandbox.run(&["status"])?;
+    let (stdout, stderr) = (text(&status.stdout)?, text(&status.stderr)?);
+    assert!(
+        stdout.contains("Unlocked processed · data.lock pins it at data/processed, and `fetchloom sync` moves that pin to data/features\n"),
+        "{stdout}"
+    );
+    assert!(!stderr.contains("fetchloom add"), "{stderr}");
+    let checked = sandbox.run(&["--json", "status", "--check"])?;
+    let document = json(&checked)?;
+    assert_eq!(checked.status.code(), Some(1), "{document}");
+    assert_eq!(
+        document["errors"][0]["details"],
+        serde_json::json!([
+            "processed is not pinned as data.toml asks: `fetchloom sync` pins and places it"
+        ]),
+        "{document}"
+    );
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert!(
+        stderr.contains("Locked processed · 2 files in data.lock\n"),
+        "{stderr}"
+    );
+    let checked = sandbox.run(&["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    Ok(())
+}
+
 /// an output's folder that is gone, as after a move data.toml does not know of yet or a failed
 /// run, is told as gone with the two ways back, and an add of it in any spelling says so rather
 /// than send the folder's name off as search words.

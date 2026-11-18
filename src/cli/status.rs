@@ -17,7 +17,7 @@ use crate::error::Error;
 use crate::output::{Output, Warning};
 use crate::plan;
 use crate::project::lock::archives;
-use crate::project::lock::{Lock, LockedFile, Waiting};
+use crate::project::lock::{Drift, Lock, LockedFile, Waiting};
 use crate::project::manifest::{self, Manifest};
 use crate::project::{Project, native};
 use crate::stop::Stop;
@@ -145,6 +145,10 @@ pub(super) struct Status {
     /// with whether data.lock pins it, so its entry in data.toml changed since.
     #[serde(skip)]
     imports: BTreeMap<String, bool>,
+    /// the outputs among `unlocked` whose `at` alone changed in data.toml, each with the folder
+    /// data.lock pins it at and the one data.toml names now, where a sync moves the pin.
+    #[serde(skip)]
+    moved: BTreeMap<String, (String, String)>,
     /// whether a plain sync is refused until an import is pinned, as one of `imports` is, or any
     /// import of a project with no data.lock, so no row or hint names one, and `--check` names
     /// the sync of each line's own dataset, which runs.
@@ -596,7 +600,8 @@ fn not_downloaded(
 /// the imports among `unlocked` that no sync pins, since no source lists their files, each with
 /// whether `lock` pins it, and whether a plain sync is refused for them, as it is for any import
 /// of a project with no data.lock, as `lockless` says. a dataset of `apart`, waiting for its
-/// file list or renamed, is told as such.
+/// file list or renamed, is told as such, and a sync pins one whose folder or unpacking alone
+/// changed, as the files it pins stay.
 fn imports(
     manifest: &Manifest,
     (lock, lockless): (&Lock, bool),
@@ -607,16 +612,36 @@ fn imports(
         .iter()
         .filter(|name| !lockless && !apart.0.contains_key(*name) && !apart.1.contains_key(*name))
         .filter(|name| {
-            manifest
-                .datasets
-                .get(*name)
-                .is_some_and(manifest::Entry::is_import)
+            manifest.datasets.get(*name).is_some_and(|entry| {
+                entry.is_import()
+                    && lock.get(name).is_none_or(|locked| {
+                        !matches!(locked.drift(entry), Some(Drift::At | Drift::Unpack { .. }))
+                    })
+            })
         })
         .map(|name| (name.clone(), lock.get(name).is_some()))
         .collect();
     let refused = !imports.is_empty()
         || (lockless && manifest.datasets.values().any(manifest::Entry::is_import));
     (imports, refused)
+}
+
+/// the outputs among `unlocked` whose `at` alone changed in `manifest` since `lock` pinned them,
+/// each with the folder the pin is at and the one data.toml names now.
+fn moved(
+    manifest: &Manifest,
+    lock: &Lock,
+    unlocked: &[String],
+) -> BTreeMap<String, (String, String)> {
+    unlocked
+        .iter()
+        .filter_map(|name| {
+            let entry = manifest.datasets.get(name)?;
+            let locked = lock.get(name)?;
+            (locked.drift(entry) == Some(Drift::At))
+                .then(|| Some((name.clone(), (locked.at.clone()?, entry.at.clone()?))))?
+        })
+        .collect()
 }
 
 /// the plan for `lock`, with each archive the cache knows nothing of whose files sit in place
@@ -711,11 +736,13 @@ fn check(
         &unlocked,
         (&waiting, &renamed),
     );
+    let moved = moved(&manifest, &lock, &unlocked);
     let mut status = Status {
         project: project.root.clone(),
         verified: verify.is_some(),
         sync_refused,
         lockless,
+        moved,
         unlocked,
         removed,
         not_downloaded,
@@ -1413,7 +1440,13 @@ fn tell_unlocked(output: &Output, status: &Status) {
             (None, Some(false)) => {
                 "imported from files, and data.lock holds no pin of them".to_owned()
             }
-            (None, None) => unpinned.to_owned(),
+            (None, None) => match status.moved.get(name) {
+                Some((from, to)) => format!(
+                    "data.lock pins it at {from}, and {} moves that pin to {to}",
+                    status.a_sync()
+                ),
+                None => unpinned.to_owned(),
+            },
         };
         output.report("Unlocked", &format!("{name} · {reason}"));
     }
