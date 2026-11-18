@@ -1370,9 +1370,9 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
         "{stderr}"
     );
     for line in [
-        "changed iris_clean.csv",
-        "added plot.png",
-        "removed summary.txt",
+        "edited iris_clean.csv",
+        "extra plot.png",
+        "missing summary.txt",
     ] {
         assert!(stderr.contains(line), "{line}: {stderr}");
     }
@@ -1381,13 +1381,7 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
         "an excluded file is no change: {stderr}"
     );
     assert!(
-        stderr.contains("fetchloom add ./data/processed --as processed --yes"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(
-            "`fetchloom sync --force processed` to make it hold just the files processed pins"
-        ),
+        stderr.contains("  help: `fetchloom add ./data/processed --as processed --yes` pins what it holds now, or `fetchloom sync --force processed` makes it hold just the files processed pins\n"),
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(work.join("data.lock"))?, pinned);
@@ -1395,7 +1389,7 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("Pinned processed · 1 file changed, 1 added, 1 removed"),
+        stderr.contains("Pinned processed · 1 edited file, 1 extra file, 1 missing file"),
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(work.join("data.toml"))?, table);
@@ -1567,15 +1561,15 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     let stderr = text(&dry.stderr)?;
     assert_eq!(dry.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("Would pin processed · 1 file changed, 1 added, 1 removed"),
+        stderr.contains("Would pin processed · 1 edited file, 1 extra file, 1 missing file"),
         "{stderr}"
     );
     let listed = sandbox.run(&["-v", "add", "data/processed", "--as", "processed", "-n"])?;
     let stderr = text(&listed.stderr)?;
     for line in [
-        "changed iris_clean.csv",
-        "added plot.png",
-        "removed summary.txt",
+        "edited iris_clean.csv",
+        "extra plot.png",
+        "missing summary.txt",
     ] {
         assert!(stderr.contains(line), "{line}: {stderr}");
     }
@@ -2554,7 +2548,7 @@ fn the_same_add_asks_at_a_terminal_before_it_pins_a_rerun() -> Result {
         return Ok(());
     };
     assert!(
-        screen.contains("Changed processed · 1 file changed, 1 added, 1 removed"),
+        screen.contains("Changed processed · 1 edited file, 1 extra file, 1 missing file"),
         "{screen}"
     );
     assert!(screen.contains(&format!("{asked} [y/N]")), "{screen}");

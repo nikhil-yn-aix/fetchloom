@@ -283,22 +283,9 @@ impl ChangedOutput {
         self
     }
 
-    /// `1 edited file, 2 extra files, 1 missing file`, as status lists them, leaving out what is
-    /// none.
+    /// what changed in its folder, as [`changes_said`] says it.
     pub(crate) fn summary(&self) -> String {
-        let counts = [
-            (self.changed, "edited"),
-            (self.added, "extra"),
-            (self.removed, "missing"),
-        ];
-        let said: Vec<String> = counts
-            .into_iter()
-            .filter(|(count, _)| *count > 0)
-            .map(|(count, how)| {
-                crate::units::count(count, &format!("{how} file"), &format!("{how} files"))
-            })
-            .collect();
-        said.join(", ")
+        changes_said(self.changed, self.added, self.removed)
     }
 
     /// the ways on from this output's folder, as it changed, is gone, or was left elsewhere.
@@ -307,7 +294,7 @@ impl ChangedOutput {
             Some(from) => Since::Left(from),
             None if self.gone => Since::Gone,
             None if !self.placed_here => Since::Unplaced,
-            None => Since::Changed,
+            None => Since::Changed { yes: false },
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
     }
@@ -329,6 +316,20 @@ impl ChangedOutput {
     fn is_changed(&self) -> bool {
         self.changed + self.added + self.removed > 0
     }
+}
+
+/// `1 edited file, 2 extra files, 1 missing file`: how an output's folder differs from its pin,
+/// in the words status lists its files by, leaving out what is none.
+pub(crate) fn changes_said(edited: u64, extra: u64, missing: u64) -> String {
+    let counts = [(edited, "edited"), (extra, "extra"), (missing, "missing")];
+    let said: Vec<String> = counts
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, how)| {
+            crate::units::count(count, &format!("{how} file"), &format!("{how} files"))
+        })
+        .collect();
+    said.join(", ")
 }
 
 /// the folder other than `at` where `state` recorded every file `pinned` gives the output `name`,

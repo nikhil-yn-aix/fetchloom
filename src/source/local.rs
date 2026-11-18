@@ -42,8 +42,9 @@ pub(crate) fn output_pin(name: &str, folder: &str) -> String {
 /// what became of an output's folder since it was pinned, as the ways on from it differ.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Since<'a> {
-    /// it holds other files than the pin.
-    Changed,
+    /// it holds other files than the pin; `yes` when the add that pins them must say yes ahead,
+    /// as a run that cannot ask a person does.
+    Changed { yes: bool },
     /// nothing is at it.
     Gone,
     /// nothing is at it, and the folder data.toml named before, as a command names it, still
@@ -60,9 +61,13 @@ pub(crate) enum Since<'a> {
 pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
     let force = crate::suggested::command(&format!("sync --force {name}"));
     match since {
-        Since::Changed => format!(
+        Since::Changed { yes } => format!(
             "`{}` pins what it holds now, or `{force}` makes it hold just the files {name} pins",
-            pinned_again(name, shown)
+            if yes {
+                pinned_yes(name, shown)
+            } else {
+                pinned_again(name, shown)
+            }
         ),
         Since::Gone => format!(
             "`{force}` puts back the files {name} pins, or if you moved it, {}",
@@ -90,6 +95,11 @@ pub(crate) fn set_moved(name: &str, output: bool) -> String {
 /// it, keeping its table in data.toml as written.
 fn pinned_again(name: &str, at: &str) -> String {
     crate::suggested::command(&output_pin(name, at))
+}
+
+/// [`pinned_again`] saying yes ahead, for a run that cannot ask a person.
+pub(crate) fn pinned_yes(name: &str, at: &str) -> String {
+    crate::suggested::command(&format!("{} --yes", output_pin(name, at)))
 }
 
 /// the refusal of a changed data.toml entry of `name`: an import, which only importing the files

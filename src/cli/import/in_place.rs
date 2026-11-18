@@ -25,7 +25,7 @@ use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, Source};
 use crate::project::state::{Placed, State};
 use crate::project::{Project, git};
-use crate::source::local::output_pin;
+use crate::source::local::{self, output_pin};
 use crate::stop::Stop;
 use crate::{name, place, plan, units};
 
@@ -632,43 +632,34 @@ impl Changes {
         self.changed.is_empty() && self.added.is_empty() && self.removed.is_empty()
     }
 
-    /// `1 file changed, 2 added, 1 removed`, leaving out what is none.
+    /// how the folder differs from the pin, as status and sync say it of an output.
     pub(super) fn summary(&self) -> String {
-        let counts = [
-            (self.changed.len(), "changed"),
-            (self.added.len(), "added"),
-            (self.removed.len(), "removed"),
-        ];
-        let mut parts: Vec<String> = Vec::new();
-        for (count, done) in counts.into_iter().filter(|(count, _)| *count > 0) {
-            let count = count as u64;
-            parts.push(if parts.is_empty() {
-                format!("{} {done}", units::count(count, "file", "files"))
-            } else {
-                format!("{} {done}", units::grouped(count))
-            });
-        }
-        parts.join(", ")
+        super::super::sync::place::changes_said(
+            self.changed.len() as u64,
+            self.added.len() as u64,
+            self.removed.len() as u64,
+        )
     }
 
-    /// a line for each file, as an error's details and a question list them.
+    /// a line for each file, in the words of [`Changes::summary`], as an error's details and a
+    /// question list them.
     pub(super) fn lines(&self) -> Vec<String> {
-        let changed = self.changed.iter().map(|(path, then, now)| {
+        let edited = self.changed.iter().map(|(path, then, now)| {
             format!(
-                "changed {path} · {} then, {} now",
+                "edited {path} · {} then, {} now",
                 units::size(*then),
                 units::size(*now)
             )
         });
-        let added = self
+        let extra = self
             .added
             .iter()
-            .map(|(path, size)| format!("added {path} · {}", units::size(*size)));
-        let removed = self
+            .map(|(path, size)| format!("extra {path} · {}", units::size(*size)));
+        let missing = self
             .removed
             .iter()
-            .map(|(path, size)| format!("removed {path} · {}", units::size(*size)));
-        changed.chain(added).chain(removed).collect()
+            .map(|(path, size)| format!("missing {path} · {}", units::size(*size)));
+        edited.chain(extra).chain(missing).collect()
     }
 }
 
@@ -717,7 +708,7 @@ fn approved(
         return Ok(());
     }
     let output = &context.output;
-    let again = crate::suggested::command(&format!("{} --yes", output_pin(name, shown)));
+    let again = local::pinned_yes(name, shown);
     if output.can_ask() {
         output.step("Changed", &format!("{name} · {}", changes.summary()));
         for line in changes.lines() {
@@ -738,9 +729,10 @@ fn approved(
             for line in changes.lines() {
                 error = error.detail(line);
             }
-            Err(error.help(format!(
-                "run `{again}` to pin what it holds now, or `{}` to make it hold just the files {name} pins",
-                crate::suggested::command(&format!("sync --force {name}"))
+            Err(error.help(local::ways_on(
+                name,
+                shown,
+                local::Since::Changed { yes: true },
             )))
         }
     }
@@ -961,9 +953,12 @@ mod tests {
             changes.removed,
             [("b/summary.txt".to_owned(), 8), ("d.csv".to_owned(), 1)]
         );
-        assert_eq!(changes.summary(), "1 file changed, 2 added, 2 removed");
+        assert_eq!(
+            changes.summary(),
+            "1 edited file, 2 extra files, 2 missing files"
+        );
         assert!(Changes::of(&pinned, &pinned).is_empty());
-        assert_eq!(Changes::of(&[], &pinned[..1]).summary(), "1 file removed");
-        assert_eq!(Changes::of(&found[..2], &[]).summary(), "2 files added");
+        assert_eq!(Changes::of(&[], &pinned[..1]).summary(), "1 missing file");
+        assert_eq!(Changes::of(&found[..2], &[]).summary(), "2 extra files");
     }
 }
