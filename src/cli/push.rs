@@ -413,16 +413,19 @@ fn tell_changed_outputs(
     let Ok(mut placing) = placing else {
         return;
     };
-    placing.note_lost(
-        |digest, size| cache.find(digest, Some(size)).is_some(),
-        !context.mirrors.mirrors.list.is_empty(),
-    );
+    placing.note_reach(cache, !context.mirrors.mirrors.list.is_empty());
     for changed in placing.changed_outputs() {
         let name = &changed.name;
+        // no cache or mirror here holds them, so the warning promises no send
+        let lost = changed.reach == place::Reach::Lost;
         let said = match changed.gone_said(&changed.at) {
-            // no cache or mirror here holds them, so the warning promises no send
-            Some(gone) if changed.gone == Some(place::Gone::Lost) => gone,
+            Some(gone) if lost => gone,
             Some(gone) => format!("{gone}, so push sends the files {name} pins"),
+            None if lost => format!(
+                "{} changed since {name} was pinned: {}",
+                changed.at,
+                changed.summary()
+            ),
             None => format!(
                 "{} changed since {name} was pinned: {}, so push sends the files {name} pins, not these",
                 changed.at,
@@ -432,7 +435,7 @@ fn tell_changed_outputs(
         context.output.warn_with(
             Warning::OutputChanged,
             &said,
-            &if changed.gone.is_some() {
+            &if changed.gone {
                 changed.ways_on()
             } else {
                 format!(

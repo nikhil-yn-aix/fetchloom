@@ -240,7 +240,8 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     }
     let mut project = found.unwrap_or_else(|| Project::at(here.clone()));
     project.data_links = super::project::data_links(context);
-    let mut request = request(&mut args, &project)?;
+    let mirrored = !context.mirrors.mirrors.list.is_empty();
+    let mut request = request(&mut args, &project, mirrored)?;
     if let Request::ListFile(path) = &request {
         request = Request::Link(list_in_project(path, &project.root, &here)?);
     }
@@ -309,7 +310,8 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
 
 /// what `args` ask to add in `project`: a list of links read or typed, checked whole before any
 /// request, a path, or one link or search words, refused when they name something on this machine.
-fn request(args: &mut Add, project: &Project) -> Result<Request, Error> {
+/// `mirrored` says a mirror is set, which may hold the files of an output whose folder is gone.
+fn request(args: &mut Add, project: &Project, mirrored: bool) -> Result<Request, Error> {
     if let Some(path) = args.input_file.take() {
         return Ok(Request::ListFile(path));
     }
@@ -335,7 +337,7 @@ fn request(args: &mut Add, project: &Project) -> Result<Request, Error> {
             )),
         );
     };
-    if let Some(refused) = output_gone(&link, project) {
+    if let Some(refused) = output_gone(&link, project, mirrored) {
         return Err(refused);
     }
     // with --as, a folder of the project is pinned where it is, as `add data/processed --as
@@ -376,8 +378,9 @@ fn names_project_folder(word: &str, project: &Project) -> bool {
 
 /// the refusal of `word`, typed here, when it names the folder of an output of `project` with
 /// nothing there, as after a move or a failed run: an add of it says so, whatever its spelling,
-/// rather than send the folder's name off as search words.
-fn output_gone(word: &str, project: &Project) -> Option<Error> {
+/// rather than send the folder's name off as search words. its ways on offer no `sync --force`
+/// when no cache here holds the files it pins and no mirror is set, as `mirrored` says.
+fn output_gone(word: &str, project: &Project, mirrored: bool) -> Option<Error> {
     if word.contains(':') && !local::is_path(word) {
         return None;
     }
@@ -415,9 +418,21 @@ fn output_gone(word: &str, project: &Project) -> Option<Error> {
         });
     let left = crate::cli::sync::place::left_at(&project.root, (output, at), pinned, &state)
         .map(|from| super::folder_from_here(&project.root, &from));
-    let since = left
-        .as_deref()
-        .map_or(local::Since::Gone, local::Since::Left);
+    // nothing is there, so a `sync --force` would put back every file it pins
+    let files = lock
+        .iter()
+        .flat_map(|lock| &lock.datasets)
+        .filter(|locked| locked.name == *output)
+        .flat_map(|locked| &locked.files)
+        .map(|file| (&file.sha256, file.size));
+    let lost = super::peek_cache().is_ok_and(|cache| {
+        crate::cli::sync::place::reach(files, &cache, mirrored)
+            == crate::cli::sync::place::Reach::Lost
+    });
+    let since = match left.as_deref() {
+        Some(from) => local::Since::Left { from, lost },
+        None => local::Since::Gone { lost },
+    };
     Some(
         Error::new(
             Kind::Usage,

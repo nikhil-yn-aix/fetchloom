@@ -229,8 +229,8 @@ pub(crate) struct ChangedOutput {
     /// folder moved keeping their times keeps them the person's.
     pub(crate) edits: Vec<String>,
     /// whether nothing is at its folder, as after a move or a run that deleted it, so pinning
-    /// what it holds now pins nothing, and then whether this machine reaches the files it pins.
-    pub(crate) gone: Option<Gone>,
+    /// what it holds now pins nothing.
+    pub(crate) gone: bool,
     /// the folder of a gone output that data.toml named before and that still holds its pin, as
     /// a command names it.
     pub(crate) left: Option<String>,
@@ -241,15 +241,35 @@ pub(crate) struct ChangedOutput {
     /// its changed or added files git tracks, which `--force` leaves as they are, so none is
     /// offered.
     pub(crate) tracked: Vec<String>,
+    /// the pinned files a `sync --force` would write there, as its folder lacks them or holds
+    /// them changed, each with its SHA-256 and size.
+    pub(crate) needed: Vec<(Sha256, u64)>,
+    /// whether a `sync --force` here can write `needed`.
+    pub(crate) reach: Reach,
 }
 
-/// the files a gone output's folder held, as this machine reaches them.
+/// whether a `sync --force` here can write the pinned files an output's folder lacks or holds
+/// changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Gone {
-    /// a cache here holds them, or a mirror to ask may, so `sync --force` puts them back.
+pub(crate) enum Reach {
+    /// a cache here holds each, or a mirror to ask may.
     Reachable,
-    /// no cache here holds them and no mirror is set to ask, so no sync puts them back.
+    /// no cache here holds one of them and no mirror is set to ask, so no sync writes it.
     Lost,
+}
+
+/// whether a sync here can write `files`, pinned files each with its SHA-256 and size, as `sync
+/// --force` would: `cache` holds each, or a mirror is set to ask, as `mirrored` says, which may.
+pub(crate) fn reach<'f>(
+    mut files: impl Iterator<Item = (&'f Sha256, u64)>,
+    cache: &Cache,
+    mirrored: bool,
+) -> Reach {
+    if mirrored || files.all(|(digest, size)| cache.find(digest, Some(size)).is_some()) {
+        Reach::Reachable
+    } else {
+        Reach::Lost
+    }
 }
 
 impl ChangedOutput {
@@ -265,10 +285,12 @@ impl ChangedOutput {
             change: String::new(),
             told: false,
             edits: Vec::new(),
-            gone: None,
+            gone: false,
             left: None,
             placed_here: false,
             tracked: Vec::new(),
+            needed: Vec::new(),
+            reach: Reach::Reachable,
         }
     }
 
@@ -281,9 +303,8 @@ impl ChangedOutput {
     ) -> Self {
         let root = survey.root();
         self.gone = fs::symlink_metadata(native(root, &self.at))
-            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-            .then_some(Gone::Reachable);
-        if self.gone.is_some() {
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound);
+        if self.gone {
             // `shown` is `at` as a command run here names it
             let up = self.shown.strip_suffix(&self.at).unwrap_or_default();
             self.left = left_at(root, (&self.name, &self.at), pinned, &survey.state)
@@ -308,21 +329,28 @@ impl ChangedOutput {
 
     /// that this output's folder, as `folder` names it, is gone, when nothing is at it.
     pub(crate) fn gone_said(&self, folder: &str) -> Option<String> {
-        self.gone.map(|_| format!("{folder} is gone"))
+        self.gone.then(|| format!("{folder} is gone"))
+    }
+
+    /// notes whether a `sync --force` here can write the pinned files its folder lacks or holds
+    /// changed, as [`reach`] says for `cache` and `mirrored`.
+    pub(crate) fn note_reach(&mut self, cache: &Cache, mirrored: bool) {
+        let needed = self.needed.iter().map(|(digest, size)| (digest, *size));
+        self.reach = reach(needed, cache, mirrored);
     }
 
     /// the ways on from this output's folder, as it changed, is gone, or was left elsewhere.
     pub(crate) fn ways_on(&self) -> String {
-        let since = match (&self.left, self.gone) {
-            (Some(from), _) => Since::Left(from),
-            (None, Some(Gone::Lost)) => Since::Lost,
-            (None, Some(Gone::Reachable)) => Since::Gone,
-            (None, None) if !self.placed_here => Since::Unplaced,
-            (None, None) if !self.tracked.is_empty() => Since::Tracked {
+        let lost = self.reach == Reach::Lost;
+        let since = match &self.left {
+            Some(from) => Since::Left { from, lost },
+            None if self.gone => Since::Gone { lost },
+            None if !self.placed_here => Since::Unplaced { yes: false },
+            None if !self.tracked.is_empty() => Since::Tracked {
                 files: &self.tracked,
                 yes: false,
             },
-            (None, None) => Since::Changed { yes: false },
+            None => Since::Changed { yes: false, lost },
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
     }
@@ -1186,23 +1214,11 @@ impl<'a> Placing<'a> {
         })
     }
 
-    /// notes each output of the changes whose folder is gone while `holds` says the cache lacks a
-    /// file it pins, with no mirror to ask, as `mirrored` says: no sync puts back its files.
-    pub(crate) fn note_lost(&mut self, holds: impl Fn(&Sha256, u64) -> bool, mirrored: bool) {
-        let targets = &self.targets;
-        for changed in self
-            .changed
-            .iter_mut()
-            .filter(|changed| changed.gone.is_some())
-        {
-            if !mirrored
-                && targets
-                    .iter()
-                    .filter(|target| target.dataset == changed.name)
-                    .any(|target| !holds(&target.sha256, target.size))
-            {
-                changed.gone = Some(Gone::Lost);
-            }
+    /// notes, for each output of the changes, whether a `sync --force` here can write the pinned
+    /// files its folder lacks or holds changed, as [`reach`] says for `cache` and `mirrored`.
+    pub(crate) fn note_reach(&mut self, cache: &Cache, mirrored: bool) {
+        for changed in &mut self.changed {
+            changed.note_reach(cache, mirrored);
         }
     }
 
@@ -3483,33 +3499,34 @@ pub(crate) fn changed_outputs(
         };
         let path = target.path.as_str();
         let ours = authored.contains(target.dataset);
-        match action {
+        let (how, count) = match action {
             Action::Leave(Reason::Changed | Reason::Foreign | Reason::Shared)
             | Action::Overwrite(_)
             | Action::Blocked(_)
             | Action::Unblock(_) => {
-                output.changed += 1;
-                changes.push(change("changed", path));
                 differ.push(path);
                 if let (Action::Leave(_), Some(look)) = (action, survey.disk.get(path)) {
                     output.edits.push(edited(path, look));
                 }
+                ("changed", &mut output.changed)
             }
             // hashing found other bytes than the look tells, which is a change all the same, and
             // so is the author's file of another run, as after a branch switch
             Action::Replace(stale)
                 if *stale == (Stale::Damaged { linked: false }) || adopted(&survey.state, path) =>
             {
-                output.changed += 1;
-                changes.push(change("changed", path));
                 differ.push(path);
+                ("changed", &mut output.changed)
             }
             Action::Place if ours || survey.state.files.contains_key(path) => {
-                output.removed += 1;
-                changes.push(change("removed", path));
+                ("removed", &mut output.removed)
             }
-            _ => {}
-        }
+            _ => continue,
+        };
+        *count += 1;
+        // a pinned file its folder lacks or holds changed, which a `sync --force` would write
+        output.needed.push((target.sha256, target.size));
+        changes.push(change(how, path));
     }
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
     let mut extras = Vec::new();

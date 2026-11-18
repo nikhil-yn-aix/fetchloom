@@ -286,14 +286,11 @@ impl<'a> Loop<'a> {
     }
 
     /// leaves out of `placing` the outputs of `elsewhere`, whose files this machine lacks, and
-    /// notes its gone outputs whose files the cache lacks with no mirror to ask, so their ways on
-    /// name no sync, which would put back nothing.
+    /// notes for its changed outputs whether a `sync --force` here can write the pinned files
+    /// their folders lack or hold changed, so their ways on offer none that would write nothing.
     fn leave_out(&self, placing: &mut Placing<'_>, elsewhere: Vec<Elsewhere>) {
         placing.leave_out(elsewhere);
-        placing.note_lost(
-            |digest, size| self.cache.find(digest, Some(size)).is_some(),
-            !self.context.mirrors.mirrors.list.is_empty(),
-        );
+        placing.note_reach(&self.cache, !self.context.mirrors.mirrors.list.is_empty());
     }
 
     /// the folder of `name` as a command run here names it.

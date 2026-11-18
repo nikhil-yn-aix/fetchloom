@@ -616,6 +616,16 @@ fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
         )),
         "{synced}"
     );
+    let adding = sandbox
+        .command(&["--offline", "add", "data/processed", "--as", "processed"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let gone = text(&adding.stderr)?;
+    assert_eq!(adding.status.code(), Some(2), "{gone}");
+    assert!(
+        gone.contains(&format!("error: data/processed is the folder of the output processed, and it is not there\n  help: {ways}\n")),
+        "{gone}"
+    );
     let forced = run(&["sync", "--force", "processed"])?;
     assert!(
         forced.contains("warning: processed was pinned here, and this machine's cache no longer holds its files\n  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`\n"),
@@ -624,6 +634,103 @@ fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
     run(&["sync", "--force", "processed", "--mirror", &mirror])?;
     assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
     assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
+    Ok(())
+}
+
+/// an output pinned here whose pinned bytes no cache here holds, as after a new `FETCHLOOM_CACHE`:
+/// an `at` changed without the folder moved, an edited folder and the folder a forced sync makes
+/// to wait for the pipeline are offered no `sync --force`, which would put back nothing, and push
+/// says it sends nothing it cannot. a folder whose only change is an extra file, which `--force`
+/// deletes, still is.
+#[test]
+fn a_changed_output_no_cache_holds_offers_no_force() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let cache = sandbox.folder("empty-cache")?;
+    let run = |args: &[&str]| -> Result<(Option<i32>, String)> {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        Ok((output.status.code(), text(&output.stderr)?))
+    };
+    let manifest = work.join("data.toml");
+    let table = fs::read_to_string(&manifest)?;
+    let moved = table.replace("at = \"data/processed\"", "at = \"results/processed\"");
+    assert_ne!(moved, table);
+    fs::write(&manifest, moved)?;
+    let (_, status) = run(&["status"])?;
+    assert!(
+        status.contains("hint: results/processed is gone: `mkdir -p results && mv data/processed results/processed` moves it where data.toml puts it now\n"),
+        "{status}"
+    );
+    fs::write(&manifest, &table)?;
+    fs::write(work.join("data/processed/extra.csv"), b"x")?;
+    let (_, extra) = run(&["status"])?;
+    assert!(
+        extra.contains("1 extra file: `fetchloom add ./data/processed --as processed` pins what it holds now, or `fetchloom sync --force processed` makes it hold just the files processed pins\n"),
+        "{extra}"
+    );
+    fs::remove_file(work.join("data/processed/extra.csv"))?;
+    fs::write(work.join("data/processed/iris_clean.csv"), b"edited")?;
+    let ways = "run your pipeline here, then `fetchloom add ./data/processed --as processed`, or that add alone pins what it holds now";
+    let (_, edited) = run(&["status"])?;
+    assert!(
+        edited.contains(&format!("1 edited file: {ways}\n")),
+        "{edited}"
+    );
+    let (code, synced) = run(&["sync"])?;
+    assert_eq!(code, Some(0), "{synced}");
+    assert!(
+        synced.contains(&format!("warning: data/processed changed since processed was pinned: 1 edited file, so sync leaves it as it is\n  help: {ways}\n")),
+        "{synced}"
+    );
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let (code, pushed) = run(&["push", "--to", &elsewhere.to_string_lossy(), "--yes"])?;
+    assert_eq!(code, Some(10), "{pushed}");
+    assert!(
+        pushed.contains("warning: data/processed changed since processed was pinned: 1 edited file\n  help: run `fetchloom add ./data/processed --as processed` first to pin what it holds now\n"),
+        "{pushed}"
+    );
+    assert!(
+        pushed.contains(
+            "error: processed was pinned here, and this machine's cache no longer holds its files\n"
+        ),
+        "{pushed}"
+    );
+    delete_folder(&work.join("data/processed"))?;
+    let (code, forced) = run(&["sync", "--force", "processed"])?;
+    assert_eq!(code, Some(0), "{forced}");
+    let (_, waiting) = run(&["status"])?;
+    assert!(
+        waiting.contains(&format!("2 missing files: {ways}\n")),
+        "{waiting}"
+    );
+    Ok(())
+}
+
+/// the same add without a terminal or --yes offers `sync --force` only where it puts the files
+/// back: with the pinned bytes in no cache here, it names the pipeline.
+#[test]
+fn the_same_add_offers_force_only_where_it_puts_files_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    rerun(&work)?;
+    let cache = sandbox.folder("empty-cache")?;
+    let lost = sandbox
+        .command(&["add", "data/processed", "--as", "processed"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let stderr = text(&lost.stderr)?;
+    assert_eq!(lost.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("  help: run your pipeline here, then `fetchloom add ./data/processed --as processed --yes`, or that add alone pins what it holds now\n"),
+        "{stderr}"
+    );
     Ok(())
 }
 

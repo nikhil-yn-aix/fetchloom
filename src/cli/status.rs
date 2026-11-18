@@ -189,8 +189,8 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         context.threads,
         &context.stop,
         verify.then_some(&context.output),
+        !context.mirrors.mirrors.list.is_empty(),
     )?;
-    status.note_lost(!context.mirrors.mirrors.list.is_empty());
     // what a sync refuses, status refuses alike, but for --check, where it is the one answer: the
     // sync places nothing through the link, so no list or sum of what it would do holds
     if let Some(refused) = status.refused.take() {
@@ -356,7 +356,9 @@ fn tell_imported_elsewhere(output: &Output, status: &Status, manifest: &Manifest
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
-    let (mut status, manifest, lock) = check(project, context.threads, &context.stop, None)?;
+    let mirrored = !context.mirrors.mirrors.list.is_empty();
+    let (mut status, manifest, lock) =
+        check(project, context.threads, &context.stop, None, mirrored)?;
     if let Some(refused) = status.refused.take() {
         return Err(refused);
     }
@@ -653,11 +655,13 @@ fn waiting(lock: &Lock, manifest: &Manifest) -> BTreeMap<String, Waiting> {
 /// compares the data folder with data.lock by what the disk says, or with `verify` by hashing every
 /// placed file under its bar. a settled project is answered as sync finds it, without a plan. it
 /// hands back data.toml and data.lock's text as it read them, so the warnings read neither again.
+/// `mirrored` says a mirror is set, which may hold the files a changed output's ways on put back.
 fn check(
     project: &Project,
     threads: Threads,
     stop: &Stop,
     verify: Option<&Output>,
+    mirrored: bool,
 ) -> Result<(Status, Manifest, Option<String>), Error> {
     let (text, manifest) = project.manifest()?;
     let (read, lock_text) = project.lock_and_text()?.unzip();
@@ -738,6 +742,9 @@ fn check(
     }
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &manifest, &survey, &planned)?;
+    for changed in &mut status.changed_outputs {
+        changed.note_reach(&cache, mirrored);
+    }
     // a dataset dropped here whose files a drop cut short left is told in one line
     let dropped: HashSet<&str> = status.dropped.iter().map(String::as_str).collect();
     for path in &status.unneeded {
@@ -1309,21 +1316,6 @@ impl Status {
         self.changed_outputs
             .iter()
             .any(|changed| disk::is_inside(path, &changed.at))
-    }
-
-    /// notes each gone output whose files this machine's cache lacks, with no mirror to ask, as
-    /// `mirrored` says: no sync puts back its files, so its ways on name none.
-    fn note_lost(&mut self, mirrored: bool) {
-        let lacking = &self.imported_elsewhere;
-        for changed in self
-            .changed_outputs
-            .iter_mut()
-            .filter(|changed| changed.gone.is_some())
-        {
-            if !mirrored && lacking.contains_key(&changed.name) {
-                changed.gone = Some(place::Gone::Lost);
-            }
-        }
     }
 
     /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.

@@ -39,23 +39,22 @@ pub(crate) fn output_pin(name: &str, folder: &str) -> String {
     format!("add {} --as {name}", crate::suggested::shell_word(&path))
 }
 
-/// what became of an output's folder since it was pinned, as the ways on from it differ.
+/// what became of an output's folder since it was pinned, as the ways on from it differ. `yes`
+/// when the add that pins what it holds must say yes ahead, as a run that cannot ask a person
+/// does, and `lost` when nothing here can write the pinned files it lacks or holds changed: no
+/// cache here holds one and no mirror is set to ask, so no `sync --force` puts them back.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Since<'a> {
-    /// it holds other files than the pin; `yes` when the add that pins them must say yes ahead,
-    /// as a run that cannot ask a person does.
-    Changed { yes: bool },
+    /// it holds other files than the pin.
+    Changed { yes: bool, lost: bool },
     /// nothing is at it.
-    Gone,
-    /// nothing is at it, and no cache or mirror here holds the files it pins, so no sync puts
-    /// them back.
-    Lost,
-    /// nothing is at it, and the folder data.toml named before, as a command names it, still
-    /// holds the pin.
-    Left(&'a str),
+    Gone { lost: bool },
+    /// nothing is at it, and the folder data.toml named before, `from` as a command names it,
+    /// still holds the pin.
+    Left { from: &'a str, lost: bool },
     /// it holds other files than the pin, and this machine placed none of the output there, as a
     /// clone whose data.toml may name a folder of code: nothing offered deletes them.
-    Unplaced,
+    Unplaced { yes: bool },
     /// it holds other files than the pin, and git tracks `files` of them, which `--force` leaves as
     /// they are; `yes` as for [`Since::Changed`].
     Tracked { files: &'a [String], yes: bool },
@@ -91,35 +90,50 @@ pub(crate) fn git_ways(name: &str, shown: &str, yes: bool) -> String {
 }
 
 /// the ways on for the output `name`, whose folder, `shown` as a command names it, is not as it
-/// was pinned: what it holds now pinned again, or the files it pins put back; a folder that is
-/// gone is moved from where it was left, else put back or named where it went.
+/// was pinned: what it holds now pinned again, or the files it pins put back, which only its
+/// pipeline makes again once they are lost; a folder that is gone is moved from where it was
+/// left, else put back or named where it went.
 pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
     let force = crate::suggested::command(&format!("sync --force {name}"));
+    let pin = |yes: bool| {
+        if yes {
+            pinned_yes(name, shown)
+        } else {
+            pinned_again(name, shown)
+        }
+    };
     match since {
-        Since::Changed { yes } => format!(
+        Since::Changed { yes, lost: false } => format!(
             "`{}` pins what it holds now, or `{force}` makes it hold just the files {name} pins",
-            if yes {
-                pinned_yes(name, shown)
-            } else {
-                pinned_again(name, shown)
-            }
+            pin(yes)
         ),
-        Since::Gone => format!(
+        Since::Changed { yes, lost: true } => format!(
+            "run your pipeline here, then `{}`, or that add alone pins what it holds now",
+            pin(yes)
+        ),
+        Since::Gone { lost: false } => format!(
             "`{force}` puts back the files {name} pins, or if you moved it, {}",
             set_moved(name, true)
         ),
-        Since::Lost => format!(
+        Since::Gone { lost: true } => format!(
             "run your pipeline here, then `{}`, or if you moved it, {}",
-            pinned_again(name, shown),
+            pin(false),
             set_moved(name, true)
         ),
-        Since::Left(from) => format!(
-            "`{}` moves it where data.toml puts it now, or `{force}` puts back the files {name} pins",
-            crate::suggested::moving(from, shown)
-        ),
-        Since::Unplaced => format!(
+        Since::Left { from, lost } => {
+            let moved = format!(
+                "`{}` moves it where data.toml puts it now",
+                crate::suggested::moving(from, shown)
+            );
+            if lost {
+                moved
+            } else {
+                format!("{moved}, or `{force}` puts back the files {name} pins")
+            }
+        }
+        Since::Unplaced { yes } => format!(
             "no file there is one fetchloom placed on this machine, so check that `at` for {name} in data.toml names its folder; `{}` pins what it holds now",
-            pinned_again(name, shown)
+            pin(yes)
         ),
         Since::Tracked { files, yes } => format!(
             "{}; {}",

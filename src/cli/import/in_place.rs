@@ -11,7 +11,7 @@ use super::super::args::Add;
 use super::super::diff::{self, Change, Pinned};
 use super::super::project::{Outcome, Report, dry_run_done};
 use super::super::sync::disk;
-use super::super::sync::place::{Placement, is_marker_form, tell_marked};
+use super::super::sync::place::{Placement, Reach, is_marker_form, reach, tell_marked};
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
 use super::{
@@ -101,8 +101,11 @@ pub(super) async fn pin_held(
     })?;
     let told = read_line(walked, &copied, shown);
     let changes = pin.map(|pin| Changes::of(&copied.files, &pin.files));
-    if let Some(changes) = changes.as_ref().filter(|changes| !changes.is_empty()) {
-        approved(context, (&project.root, &at), (&name, shown), changes)?;
+    if let (Some(pin), Some(changes)) =
+        (pin, changes.as_ref().filter(|changes| !changes.is_empty()))
+    {
+        let held = (changes, &pin.files[..], &cache);
+        approved(context, (&project.root, &at), (&name, shown), held)?;
     }
     adding.seed(seeds(&name, &at, walked, &copied.files));
     adding.git_keeps(&at, git::keeps(&project.root, &at));
@@ -696,14 +699,37 @@ fn preview(work: &Loop<'_>, (name, shown): (&str, &str), changes: Option<&Change
     }
 }
 
-/// asks to pin `changes`, what the folder read holds, in place of the output's pin: a yes at a
-/// terminal or `--yes`, else refused as unconfirmed. a script that means to check runs
-/// `status --verify --check`.
+/// the ways on a refused re-pin offers, as sync's for its folder: no `sync --force` where nothing
+/// here can write the files of `pinned` the folder lacks or holds changed, as `changes` names
+/// them, since `cache` lacks one and no mirror is set, as `mirrored` says.
+fn repinned(
+    pinned: &[LockedFile],
+    changes: &Changes,
+    (cache, mirrored): (&Cache, bool),
+) -> local::Since<'static> {
+    let needed: HashSet<&str> = changes
+        .changed
+        .iter()
+        .map(|(path, _, _)| path.as_str())
+        .chain(changes.removed.iter().map(|(path, _)| path.as_str()))
+        .collect();
+    let files = pinned
+        .iter()
+        .filter(|file| needed.contains(file.path.as_str()))
+        .map(|file| (&file.sha256, file.size));
+    let lost = reach(files, cache, mirrored) == Reach::Lost;
+    local::Since::Changed { yes: true, lost }
+}
+
+/// asks to pin `changes`, what the folder `at` read holds, in place of the output's pin of
+/// `pinned`: a yes at a terminal or `--yes`, else refused as unconfirmed, with the ways on sync
+/// offers for the folder, `cache` telling whether a `sync --force` could write the pin. a script
+/// that means to check runs `status --verify --check`.
 fn approved(
     context: &Context,
     (root, at): (&Path, &str),
     (name, shown): (&str, &str),
-    changes: &Changes,
+    (changes, pinned, cache): (&Changes, &[LockedFile], &Cache),
 ) -> Result<(), Error> {
     if context.yes {
         return Ok(());
@@ -740,13 +766,13 @@ fn approved(
                 .collect();
             let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
             let tracked = crate::cli::sync::place::git_tracked(root, at, &paths);
-            let since = if tracked.is_empty() {
-                local::Since::Changed { yes: true }
-            } else {
-                local::Since::Tracked {
+            let mirrored = !context.mirrors.mirrors.list.is_empty();
+            let since = match repinned(pinned, changes, (cache, mirrored)) {
+                local::Since::Changed { .. } if !tracked.is_empty() => local::Since::Tracked {
                     files: &tracked,
                     yes: true,
-                }
+                },
+                since => since,
             };
             Err(error.help(local::ways_on(name, shown, since)))
         }
