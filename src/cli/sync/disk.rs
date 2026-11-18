@@ -953,6 +953,11 @@ impl Survey {
         path.rsplit('/').next() == Some(".gitignore") && is_marker_form(&native(&self.root, path))
     }
 
+    /// the project's folder, which the survey's paths are below.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// the files an interrupted placement left under the hidden names it stages files in, which
     /// no record claims. only placement makes such names.
     pub(crate) fn leftovers(&self) -> impl Iterator<Item = &String> {

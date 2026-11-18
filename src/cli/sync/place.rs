@@ -902,8 +902,8 @@ pub(crate) struct Placing<'a> {
     /// the folders of the outputs a removal takes out of data.toml that no folder the run lists
     /// holds, whose markers it deletes by name.
     unmarking: Vec<String>,
-    /// the folders of outputs a drop frees here, whose markers stay, as data.lock still pins what
-    /// they hold.
+    /// the folders of the datasets a drop frees here, whose markers stay while files are there:
+    /// an output's, as data.lock still pins what it holds, or any keeping a person's file.
     still_marked: Vec<String>,
     /// the outputs left out, as no cache or mirror this machine reaches holds their files.
     elsewhere: Vec<Elsewhere>,
@@ -1047,8 +1047,8 @@ impl<'a> Placing<'a> {
         self.unmarking = folders;
     }
 
-    /// says the run's manifest leaves out the outputs at `folders` though data.toml still names
-    /// them, as a drop's does, so their markers stay.
+    /// says the run's manifest leaves out the datasets at `folders` though data.toml still names
+    /// them, as a drop's does, so their markers stay while files are there.
     pub(crate) fn keep_marked(&mut self, folders: Vec<String>) {
         self.still_marked = folders;
     }

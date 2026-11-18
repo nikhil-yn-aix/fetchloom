@@ -1043,7 +1043,7 @@ fn free(
     let scope = Scope::Only(freeing.clone());
     let mut placing =
         place::Placing::new(project, &without, &unpinned, &cache, false, &scope, survey)?;
-    placing.keep_marked(outputs_at(manifest, freeing));
+    placing.keep_marked(folders_of(manifest, freeing));
     // what the cache keeps for every other dataset and project is read before anything changes,
     // so a record that cannot be read refuses the drop with nothing dropped
     let objects = held(&cache, lock, freeing);
@@ -1112,11 +1112,13 @@ fn free(
     Ok(())
 }
 
-/// the folders of the outputs among `freeing`, which keep the files data.lock pins.
-fn outputs_at(manifest: &Manifest, freeing: &BTreeSet<String>) -> Vec<String> {
+/// the folders of `freeing`: an output's keeps the files data.lock pins, and any may keep a
+/// person's file.
+fn folders_of(manifest: &Manifest, freeing: &BTreeSet<String>) -> Vec<String> {
     freeing
         .iter()
-        .filter_map(|name| manifest.datasets.get(name)?.at.clone())
+        .filter(|name| manifest.datasets.contains_key(*name))
+        .map(|name| crate::plan::folder(manifest, name))
         .collect()
 }
 

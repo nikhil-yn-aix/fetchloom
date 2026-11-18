@@ -765,6 +765,33 @@ pub(crate) fn synced(sandbox: &Sandbox) -> Result<String> {
     Ok(without_copy_warning(&stderr))
 }
 
+/// a drop keeps the .gitignore of a dataset's folder that still holds a person's file, so git goes
+/// on ignoring what it ignored, through the syncs after; it goes once the folder holds nothing.
+#[test]
+fn a_drop_keeps_the_marker_while_the_folder_holds_a_persons_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let server = iris_server()?;
+    with_iris(&sandbox, &server)?;
+    let folder = sandbox.work().join("data/iris");
+    fs::write(folder.join("notes.txt"), "mine\n")?;
+    let dropped = sandbox.run(&["drop", "iris", "--yes"])?;
+    let stderr = text(&dropped.stderr)?;
+    assert_eq!(dropped.status.code(), Some(0), "{stderr}");
+    let marker = crate::support::marker(&folder.join(".gitignore")).ok();
+    assert_eq!(marker.as_deref(), Some(&b"*\n"[..]), "{stderr}");
+    let seen = untracked(&sandbox)?.ok_or("git went away")?;
+    assert_eq!(seen, ["data.lock", "data.toml"]);
+    synced(&sandbox)?;
+    assert_eq!(crate::support::marker(&folder.join(".gitignore"))?, b"*\n");
+    fs::remove_file(folder.join("notes.txt"))?;
+    synced(&sandbox)?;
+    assert!(!folder.exists());
+    Ok(())
+}
+
 /// a zip of `count` small csv files at its top, named f0000.csv and on.
 fn many_files(count: usize) -> Result<Vec<u8>> {
     let names: Vec<String> = (0..count).map(|at| format!("f{at:04}.csv")).collect();

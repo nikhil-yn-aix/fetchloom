@@ -356,6 +356,32 @@ fn needed(manifest: &Manifest, targets: &[Target], unsure: Unsure<'_>) -> BTreeS
     needed
 }
 
+/// the folders of `kept` and of the datasets `manifest` leaves unplaced, as dropped here, that
+/// hold a file of the person's, whose markers stay so git goes on ignoring what it ignored.
+fn kept_for_files(root: &Path, manifest: &Manifest, kept: &[String]) -> BTreeSet<String> {
+    let dropped = manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| !entry.place)
+        .map(|(name, _)| plan::folder(manifest, name));
+    kept.iter()
+        .cloned()
+        .chain(dropped)
+        .filter(|folder| holds_files(&native(root, folder), true))
+        .collect()
+}
+
+/// whether `folder` holds a file or a link, at any depth, besides its marker at the `top`.
+fn holds_files(folder: &Path, top: bool) -> bool {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return false;
+    };
+    entries.flatten().any(|entry| match entry.file_type() {
+        Ok(kind) if kind.is_dir() => holds_files(&entry.path(), false),
+        _ => !(top && entry.file_name() == ".gitignore"),
+    })
+}
+
 /// whether the state records a file fetchloom placed in `folder` or below it.
 fn holds_placed(state: &State, folder: &str) -> bool {
     let below = format!("{folder}/");
@@ -367,10 +393,11 @@ fn holds_placed(state: &State, folder: &str) -> bool {
 }
 
 /// forgets the marker of each folder the state records that no dataset of `targets` or `unsure`
-/// places files in, that is none of `kept`, and that holds no file fetchloom placed, as after a
-/// dataset's removal or move, and deletes it while it holds what fetchloom wrote, with the folders
-/// it leaves empty. one a person changed stays theirs, and so does one outside the folders the run
-/// lists, where a sync deletes nothing. says whether the state changed.
+/// places files in, that holds no file fetchloom placed, and that is none of `kept` or a dropped
+/// dataset's holding a file still, as after a dataset's removal or move, and deletes it while it
+/// holds what fetchloom wrote, with the folders it leaves empty. one a person changed stays
+/// theirs, and so does one outside the folders the run lists, where a sync deletes nothing. says
+/// whether the state changed.
 pub(super) fn retire(
     root: &Path,
     manifest: &Manifest,
@@ -380,7 +407,7 @@ pub(super) fn retire(
     kept: &[String],
 ) -> bool {
     let mut needed = needed(manifest, targets, unsure);
-    needed.extend(kept.iter().cloned());
+    needed.extend(kept_for_files(root, manifest, kept));
     let going: Vec<String> = survey
         .state
         .markers
@@ -793,11 +820,11 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
                     || kept_in_git(manifest, survey, &folder)
             }
         });
+    let kept = kept_for_files(survey.root(), manifest, &[]);
     marked
-        && survey
-            .marks
-            .keys()
-            .all(|folder| placed.contains(folder) || holds_placed(state, folder))
+        && survey.marks.keys().all(|folder| {
+            placed.contains(folder) || holds_placed(state, folder) || kept.contains(folder)
+        })
 }
 
 /// whether the files `state` records in `folder`, one the person shares, put more entries at its
@@ -1286,6 +1313,36 @@ mod tests {
         .unwrap();
         assert!(survey.marks.contains_key("results"));
         assert!(settled(&manifest, &survey, &Scope::All));
+    }
+
+    /// a dropped dataset's marker stays while a person's file is in its folder, which leaves the
+    /// project settled; with nothing else there, a run takes the marker.
+    #[test]
+    fn a_dropped_folder_settles_while_a_persons_file_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::at(dir.path().to_path_buf());
+        std::fs::create_dir_all(project.root.join("data/iris")).unwrap();
+        std::fs::write(project.root.join("data/iris/.gitignore"), TEXT).unwrap();
+        let mut state = State::default();
+        let wrote = digest::sha256(TEXT).hex();
+        state.markers.insert("data/iris".to_owned(), wrote);
+        project.write_state(&state).unwrap();
+        let text = "[datasets.iris]\nref = \"https://lab.example/iris.csv\"\n";
+        let mut manifest = Manifest::parse(text).unwrap();
+        manifest.datasets.get_mut("iris").unwrap().place = false;
+        let settles = || {
+            let survey = Survey::read(
+                &project,
+                &Folders::of(&manifest),
+                crate::threads::Threads::default(),
+                &crate::stop::Stop::default(),
+            )
+            .unwrap();
+            settled(&manifest, &survey, &Scope::All)
+        };
+        assert!(!settles());
+        std::fs::write(project.root.join("data/iris/notes.txt"), "mine\n").unwrap();
+        assert!(settles());
     }
 
     /// a line hides a folder whole as git reads it: the folder or one holding it, with or without
