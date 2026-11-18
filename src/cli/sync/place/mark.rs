@@ -495,14 +495,27 @@ pub(crate) enum Whose {
     Unnamed,
 }
 
+impl Whose {
+    /// whether the marker names the project of `id`.
+    pub(crate) fn names(&self, id: &str) -> bool {
+        matches!(self, Whose::Project(named) if named == id)
+    }
+}
+
 /// whose marker `file`, a .gitignore, is, never following a link: none when it holds no marker in
 /// the form fetchloom writes.
 pub(crate) fn marker_of(file: &Path) -> Option<Whose> {
+    let held = read_marker(file)?;
+    in_marker_form(&held)
+        .then(|| project_of(&held).map_or(Whose::Unnamed, |id| Whose::Project(id.to_owned())))
+}
+
+/// what the .gitignore at `file` holds, read no further than a marker goes, never through a link.
+fn read_marker(file: &Path) -> Option<Vec<u8>> {
     let mut held = Vec::new();
     let opened = crate::volume::read_unfollowed(file).ok()?;
     opened.take(READ_MOST + 1).read_to_end(&mut held).ok()?;
-    in_marker_form(&held)
-        .then(|| project_of(&held).map_or(Whose::Unnamed, |id| Whose::Project(id.to_owned())))
+    Some(held)
 }
 
 /// deletes the marker of `folder` while it holds what fetchloom wrote, `wrote` its SHA-256, and
@@ -575,10 +588,20 @@ pub(super) fn to_write(
     contents: &BTreeMap<String, Content>,
 ) -> (Planned, bool) {
     let planned = planned(survey, wanted, contents);
+    let root = survey.root().to_path_buf();
     let state = &mut survey.state;
     let mut changed = false;
     for folder in &planned.forget {
         changed |= forget(state, folder);
+    }
+    // a lost marker taken as this project's is noted as found, so it is written again naming it
+    for (folder, _) in planned.write.iter().filter(|(_, there)| *there) {
+        if !state.markers.contains_key(folder)
+            && let Some(held) = read_marker(&native(&root, &disk::marker(folder)))
+        {
+            note(state, folder, &held);
+            changed = true;
+        }
     }
     for (folder, _) in planned.write.iter().filter(|(_, there)| !there) {
         if let Some(text) = text_of(contents, folder) {

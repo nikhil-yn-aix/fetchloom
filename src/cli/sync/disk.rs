@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use super::Scope;
-use super::place::{Whose, is_marker_form, local, marker_of, passed_over};
+use super::place::{is_marker_form, local, marker_of, passed_over};
 use crate::cache::{self, Cache};
 use crate::digest::{Block, Sha256};
 use crate::error::Error;
@@ -958,12 +958,22 @@ impl Survey {
     }
 
     /// whether the listed .gitignore at `folder`'s marker path is this project's marker though no
-    /// record names it, as when a run forgot the record: one naming this project's id, which no
-    /// other project's or copy's names, as a first follow takes it too.
+    /// record names it, as after the state was lost: in a data folder no link leads to, any in the
+    /// form fetchloom writes, which a sync writes again naming this project; behind a link, only one
+    /// naming this project's id, as a foreign id there may be another project's.
     pub(crate) fn unrecorded_marker(&self, folder: &str) -> bool {
         let path = marker(folder);
-        let ours = |id: &str| matches!(marker_of(&native(&self.root, &path)), Some(Whose::Project(named)) if named == id);
-        self.disk.contains_key(&path) && self.state.id.as_deref().is_some_and(ours)
+        if !self.disk.contains_key(&path) {
+            return false;
+        }
+        let Some(whose) = marker_of(&native(&self.root, &path)) else {
+            return false;
+        };
+        let linked = self
+            .followed
+            .iter()
+            .any(|link| is_inside(&path, &link.path));
+        !linked || self.state.id.as_deref().is_some_and(|id| whose.names(id))
     }
 
     /// whether `path`, a listed file, is a .gitignore in the form fetchloom writes its marker in,

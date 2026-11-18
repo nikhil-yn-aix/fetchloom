@@ -3,7 +3,7 @@
 
 mod follow;
 mod mark;
-pub(crate) use mark::{Whose, is_marker_form, marker_of};
+pub(crate) use mark::{is_marker_form, marker_of};
 #[cfg(test)]
 #[cfg(unix)]
 mod model_tests;

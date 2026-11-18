@@ -9,9 +9,10 @@ use crate::support::{
     Result, Routes, Sandbox, add_ok, file, json, ok, text, without_copy_warning, zip_of,
 };
 
-/// a marker of this project's whose record a run forgot is fetchloom's still, as it names the
-/// project's id: status never names it as the person's, the next sync records it again, and
-/// removing the dataset takes it with the folder.
+/// a marker whose record went with a lost state is fetchloom's still, in a data folder no link
+/// leads to, though it names the id the lost state held: status never names it as the person's,
+/// the next sync writes it again naming the project's new id, and removing the dataset takes it
+/// with the folder.
 #[test]
 fn a_marker_whose_record_was_lost_is_fetchlooms() -> Result {
     let sandbox = Sandbox::new()?;
@@ -20,13 +21,13 @@ fn a_marker_whose_record_was_lost_is_fetchlooms() -> Result {
     ok(&sandbox.run(&["add", "../flowers"])?)?;
     let work = sandbox.work();
     let folder = work.join("data/flowers");
-    let path = work.join(".fetchloom/state");
-    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
-    let forgot = state["markers"]
-        .as_object_mut()
-        .and_then(|markers| markers.remove("data/flowers"));
-    assert!(forgot.is_some(), "{state}");
-    fs::write(&path, serde_json::to_vec(&state)?)?;
+    let state = work.join(".fetchloom/state");
+    let id = |state: &std::path::Path| -> Result<String> {
+        let document: serde_json::Value = serde_json::from_slice(&fs::read(state)?)?;
+        Ok(document["id"].as_str().ok_or("an id")?.to_owned())
+    };
+    let before = id(&state)?;
+    fs::remove_file(&state)?;
     for args in [&["--json", "status"][..], &["sync"], &["--json", "status"]] {
         let output = sandbox.run(args)?;
         let stderr = text(&output.stderr)?;
@@ -40,8 +41,13 @@ fn a_marker_whose_record_was_lost_is_fetchlooms() -> Result {
             );
         }
     }
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
-    assert!(state["markers"]["data/flowers"].is_string(), "{state}");
+    let after = id(&state)?;
+    assert_ne!(after, before);
+    let marker = fs::read_to_string(folder.join(".gitignore"))?;
+    assert!(
+        marker.ends_with(&format!("# fetchloom project {after}\n")),
+        "{marker}"
+    );
     let removed = sandbox.run(&["--json", "remove", "flowers", "--yes"])?;
     let document = json(&removed)?;
     assert_eq!(removed.status.code(), Some(0), "{document}");
@@ -538,27 +544,25 @@ fn a_marker_comes_back_but_never_over_a_persons_file() -> Result {
     Ok(())
 }
 
-/// a .gitignore of the person's own that holds just what fetchloom writes, `*`, is still theirs:
-/// fetchloom never takes a file for its own by what it holds, so status names it as theirs and
-/// removing the dataset leaves it, with the folder.
+/// a .gitignore that holds just what fetchloom writes, `*`, in a dataset's folder of a data folder
+/// no link leads to, is taken as its marker, as one whose record was lost is, and written again
+/// naming the project: status names none as the person's, and removing the dataset takes it with
+/// the folder.
 #[test]
-fn a_persons_gitignore_like_fetchlooms_stays_theirs() -> Result {
+fn a_gitignore_like_fetchlooms_is_taken_as_its_marker() -> Result {
     let sandbox = Sandbox::new()?;
     let server = iris_server()?;
     write_all(&sandbox, &[("data/iris/.gitignore", "*\n")])?;
     with_iris(&sandbox, &server)?;
     let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["yours"], serde_json::json!([]), "{status}");
     assert_eq!(
-        status["result"]["yours"],
-        serde_json::json!(["data/iris/.gitignore"]),
-        "{status}"
+        crate::support::marker(&sandbox.work().join("data/iris/.gitignore"))?,
+        b"*\n"
     );
     let removed = sandbox.run(&["remove", "iris"])?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
-    assert_eq!(
-        fs::read(sandbox.work().join("data/iris/.gitignore"))?,
-        b"*\n"
-    );
+    assert!(!sandbox.work().join("data/iris").exists());
     Ok(())
 }
 

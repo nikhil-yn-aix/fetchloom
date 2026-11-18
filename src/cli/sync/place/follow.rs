@@ -190,7 +190,7 @@ fn refuse_marked(
     let one = marked.len() == 1;
     if marked
         .values()
-        .all(|whose| matches!(whose, Whose::Project(id) if Some(id.as_str()) == copied))
+        .all(|whose| copied.is_some_and(|copied| whose.names(copied)))
     {
         let why = if one {
             "marks a dataset folder of the project this one was copied or moved from"
@@ -256,7 +256,7 @@ fn marked(
         .filter(|path| inside(path))
         .filter_map(|path| {
             let whose = mark::marker_of(&native(&project.root, &path))?;
-            let ours = matches!(&whose, Whose::Project(named) if Some(named.as_str()) == id);
+            let ours = id.is_some_and(|id| whose.names(id));
             (!ours).then_some((path, whose))
         })
         .collect()
