@@ -3307,7 +3307,7 @@ pub(crate) fn passed_over(manifest: &Manifest, survey: &Survey, path: &str) -> b
 /// record placed there that is gone, or a file there no pin places that the output's patterns
 /// keep, with those last files. links, special files and what a system, a repository or a tool
 /// makes there are never an output's, as a capture never takes them.
-fn changed_outputs(
+pub(crate) fn changed_outputs(
     (root, manifest): (&Path, &Manifest),
     targets: &[Target],
     actions: &[Action],

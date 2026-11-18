@@ -245,58 +245,6 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
     Ok(status)
 }
 
-/// the outputs whose folders `status` found holding other files than their pins, as sync judges
-/// them, counted from the lists a person reads: a file of other bytes or in a file's way, one no
-/// pin places, one gone. where the author's own files are, as `state` records the capture, a file
-/// of another pin is a change too, and so is a pinned file never there, as after a branch switch.
-fn changed_outputs(
-    status: &Status,
-    (manifest, lock): (&Manifest, &Lock),
-    survey: &Survey,
-) -> Vec<place::ChangedOutput> {
-    let (root, state) = (survey.root(), &survey.state);
-    let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
-    let up = super::up_to(root, &here);
-    let authored = place::authored(state);
-    let adopted = |path: &&String| state.files.get(*path).is_some_and(|placed| placed.adopted);
-    manifest
-        .datasets
-        .iter()
-        .filter(|(_, entry)| entry.place)
-        .filter_map(|(name, entry)| {
-            let at = entry.at.as_deref()?;
-            let count = |paths: &mut dyn Iterator<Item = &String>| {
-                paths.filter(|path| disk::is_inside(path, at)).count() as u64
-            };
-            let blocked = status.blocked.iter().map(|blocker| &blocker.path);
-            let ours = authored.contains(name.as_str());
-            let mut output = place::ChangedOutput::new(name, at, format!("{up}{at}"));
-            output.changed = count(
-                &mut status
-                    .edited
-                    .iter()
-                    .chain(&status.untracked)
-                    .chain(&status.damaged)
-                    .chain(blocked)
-                    .chain(status.outdated.iter().filter(adopted)),
-            );
-            output.added = count(&mut status.extra.iter());
-            output.removed = count(
-                &mut status
-                    .missing
-                    .iter()
-                    .filter(|path| ours || state.files.contains_key(*path)),
-            );
-            let pinned = lock.datasets.iter().flat_map(|locked| {
-                let name = locked.name.as_str();
-                locked.files.iter().map(move |file| (name, file))
-            });
-            (output.changed + output.added + output.removed > 0)
-                .then(|| output.looked_at(survey, pinned))
-        })
-        .collect()
-}
-
 /// what the hints that name a sync say first while one is refused, after the steps that pin an
 /// import.
 const FIRST: &str = "once the steps above are done, ";
@@ -762,7 +710,6 @@ fn check(
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
         status.extra = extra(&survey, &recorded, &manifest);
         sort_unplaced(&mut status, &survey, &manifest, &recorded);
-        status.changed_outputs = changed_outputs(&status, (&manifest, &lock), &survey);
         return Ok((status, manifest, lock_text));
     }
     let planned = planned(
@@ -797,7 +744,6 @@ fn check(
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     drop(planned);
-    status.changed_outputs = changed_outputs(&status, (&manifest, &lock), &survey);
     Ok((status, manifest, lock_text))
 }
 
@@ -971,42 +917,42 @@ fn compare(
     };
     let freeing = OnceCell::new();
     let mut listed = HashSet::new();
+    let mut actions = Vec::with_capacity(targets.len());
     for target in targets {
         let file = native(&project.root, &target.path);
         let record = survey.state.files.get(&target.path);
         // sync's own decision for the file, without --force, listed by what a sync does with it
-        let list = match place::decide(target, survey, false, &file)? {
-            Action::Place => &mut status.missing,
+        let mut action = place::decide(target, survey, false, &file)?;
+        let list = match &action {
+            Action::Place => Some(&mut status.missing),
             // what sync removes before it places anything stands in no file's way
             Action::Blocked(blocker) | Action::Unblock(blocker) | Action::Freed(blocker) => {
                 if freeing
                     .get_or_init(|| survey.freeing(going_now()))
-                    .frees(&blocker)
+                    .frees(blocker)
                 {
-                    &mut status.missing
+                    action = Action::Freed(blocker.clone());
+                    Some(&mut status.missing)
                 } else {
                     if listed.insert(blocker.path.clone()) {
-                        status.blocked.push(blocker);
+                        status.blocked.push(blocker.clone());
                     }
-                    continue;
+                    None
                 }
             }
             Action::Keep | Action::Vouch(_) => {
                 status.holding.insert(target.sha256);
-                continue;
+                None
             }
             Action::Adopt(_) => {
                 status.holding.insert(target.sha256);
-                if record.is_some() {
-                    continue;
-                }
-                &mut status.adoptable
+                record.is_none().then_some(&mut status.adoptable)
             }
             Action::Replace(Stale::Damaged { linked }) => {
-                if linked {
+                if *linked {
                     status.linked.insert(target.path.clone());
                 }
-                &mut status.damaged
+                Some(&mut status.damaged)
             }
             Action::Replace(Stale::Outdated) => {
                 // a link to the cache's copy, unless someone made it writable
@@ -1017,21 +963,24 @@ fn compare(
                 }) {
                     status.unsealed.insert(target.path.clone());
                 }
-                &mut status.outdated
+                Some(&mut status.outdated)
             }
             Action::Leave(Reason::Foreign) | Action::Overwrite(Reason::Foreign) => {
-                &mut status.untracked
+                Some(&mut status.untracked)
             }
             Action::Leave(reason) | Action::Overwrite(reason) => {
-                if reason == Reason::Shared {
+                if *reason == Reason::Shared {
                     status.shared.insert(target.path.clone());
                 }
-                &mut status.edited
+                Some(&mut status.edited)
             }
-            Action::Unreadable(_) => &mut status.unreadable,
-            Action::Unselected => continue,
+            Action::Unreadable(_) => Some(&mut status.unreadable),
+            Action::Unselected => None,
         };
-        list.push(target.path.clone());
+        if let Some(list) = list {
+            list.push(target.path.clone());
+        }
+        actions.push(action);
     }
     let mut wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
     // a file in the way is listed as blocking, not also as extra
@@ -1055,6 +1004,9 @@ fn compare(
         })
         .partition(|path| going.contains(path));
     sort_unplaced(status, survey, manifest, &wanted);
+    let root = (project.root.as_path(), manifest);
+    (status.changed_outputs, _) =
+        place::changed_outputs(root, targets, &actions, survey, &Scope::All);
     status.committed = committed(&project.root, manifest, &status.untracked);
     Ok(())
 }

@@ -933,7 +933,8 @@ fn a_branch_switch_between_two_pinned_runs_mixes_no_runs() -> Result {
 /// an output's extra files, what `sync --force` deletes as its snapshot lacks them, are those no
 /// record names: a person's file a forced run kept aside there, a file another dataset's record
 /// names and one the output's own record names that changed since all stay, while the file no one
-/// recorded goes. status lists another dataset's file as no change to the output.
+/// recorded goes. status lists another dataset's file as no change to the output, and counts the
+/// change as sync does.
 #[test]
 fn force_on_an_output_keeps_a_file_kept_aside_and_another_datasets_file() -> Result {
     let sandbox = Sandbox::new()?;
@@ -977,10 +978,19 @@ fn force_on_an_output_keeps_a_file_kept_aside_and_another_datasets_file() -> Res
         ],
         "{document}"
     );
+    let changes = "1 edited file, 1 extra file";
     let dry = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
     assert!(
-        dry.contains("warning: data/processed changed since processed was pinned: 1 edited file, 1 extra file, so sync leaves it as it is"),
+        dry.contains(&format!("warning: data/processed changed since processed was pinned: {changes}, so sync leaves it as it is")),
         "{dry}"
+    );
+    let checked = json(&sandbox.run(&["--json", "status", "--check"])?)?;
+    assert_eq!(
+        checked["errors"][0]["details"],
+        serde_json::json!([format!(
+            "data/processed changed since processed was pinned, {changes}: `fetchloom add ./data/processed --as processed` pins what it holds now, or `fetchloom sync --force processed` makes it hold just the files processed pins"
+        )]),
+        "{checked}"
     );
     let forced = sandbox.run(&["sync", "--force", "processed"])?;
     let stderr = text(&forced.stderr)?;
