@@ -1101,7 +1101,7 @@ impl<'a> Placing<'a> {
         let mut extras = if force { extras } else { Vec::new() };
         if force {
             outputs.tracked = keep_tracked(
-                (&project.root, manifest),
+                (&project.root, manifest, &survey.state),
                 (&plan.targets, &mut actions),
                 &mut extras,
                 &changed,
@@ -3530,11 +3530,7 @@ pub(crate) fn changed_outputs(
                 }
                 ("changed", &mut output.changed)
             }
-            // hashing found other bytes than the look tells, which is a change all the same, and
-            // so is the author's file of another run, as after a branch switch
-            Action::Replace(stale)
-                if *stale == (Stale::Damaged { linked: false }) || adopted(&survey.state, path) =>
-            {
+            Action::Replace(stale) if stale_change(*stale, &survey.state, path) => {
                 differ.push(path);
                 ("changed", &mut output.changed)
             }
@@ -3622,19 +3618,25 @@ fn clear_extras(
     Ok(!placement.cleared_outputs.is_empty())
 }
 
-/// takes out of what `sync --force` does to outputs' folders the files git tracks, which stay as
-/// they are: those of `extras`, which it deletes, and those of `targets` it overwrites or replaces,
-/// as `actions` decide them, which it keeps, as data.toml may name a folder of code as an output's
-/// and a tracked file may hold edits not committed. one git run for each output's folder holding
-/// one. each output keeping one, as `changed` found it, counting and naming just those.
+/// takes out of what `sync --force` alone does to outputs' folders the files git tracks, which
+/// stay as they are: those of `extras`, which it deletes, and those of `targets` it overwrites, or
+/// replaces as they changed in place, as `actions` and `state` tell, which it keeps, as data.toml
+/// may name a folder of code as an output's and a tracked file may hold edits not committed. a copy
+/// a sync placed that no one changed it updates as a plain sync does. one git run for each output's
+/// folder holding one. each output of `changed` keeping one, counting and naming just those.
 fn keep_tracked(
-    (root, manifest): (&Path, &Manifest),
+    (root, manifest, state): (&Path, &Manifest, &State),
     (targets, actions): (&[Target], &mut [Action]),
     extras: &mut Vec<(String, String)>,
     changed: &[ChangedOutput],
 ) -> Vec<ChangedOutput> {
     let replaced = |target: &Target, action: &Action| {
-        matches!(action, Action::Overwrite(_) | Action::Replace(_))
+        let alone = match action {
+            Action::Overwrite(_) => true,
+            Action::Replace(why) => stale_change(*why, state, &target.path),
+            _ => false,
+        };
+        alone
             && manifest
                 .datasets
                 .get(target.dataset)
@@ -3674,40 +3676,35 @@ fn keep_tracked(
             stay.push((target.dataset.to_owned(), target.path.clone(), false));
         }
     }
-    let mut held: BTreeMap<String, ChangedOutput> = BTreeMap::new();
-    for (name, path, extra) in stay {
-        let output = held.entry(name).or_insert_with_key(|name| {
-            let at = manifest
-                .datasets
-                .get(name)
-                .and_then(|entry| entry.at.as_deref())
-                .unwrap_or_default();
-            let found = changed.iter().find(|output| output.name == *name);
-            let shown = found.map_or_else(|| as_named(root, at), |found| found.shown.clone());
-            ChangedOutput {
-                // a file sync replaces is one it placed
-                placed_here: found.is_none_or(|found| found.placed_here),
-                ..ChangedOutput::new(name, at, shown)
+    // every file that stays changed its output, so the output is one of `changed`
+    let mut held = Vec::new();
+    for output in changed {
+        let mut kept = ChangedOutput {
+            placed_here: output.placed_here,
+            ..ChangedOutput::new(&output.name, &output.at, output.shown.clone())
+        };
+        for (_, path, extra) in stay.iter().filter(|(name, ..)| *name == output.name) {
+            if *extra {
+                kept.added += 1;
+            } else {
+                kept.changed += 1;
             }
-        });
-        if extra {
-            output.added += 1;
-        } else {
-            output.changed += 1;
+            kept.tracked.push(path.clone());
         }
-        output.tracked.push(path);
+        if !kept.tracked.is_empty() {
+            kept.tracked.sort_unstable();
+            held.push(kept);
+        }
     }
-    held.into_values()
-        .map(|mut output| {
-            output.tracked.sort_unstable();
-            output
-        })
-        .collect()
+    held
 }
 
-/// whether `state` records the file at `path` as the author's own, found in place.
-fn adopted(state: &State, path: &str) -> bool {
-    state.files.get(path).is_some_and(|placed| placed.adopted)
+/// whether the file of an output at `path`, stale for `why`, is a change to the output rather than
+/// a copy a sync brings up to date: hashing found other bytes than its look tells, which is a change
+/// all the same, or `state` records it as the author's own, as after a branch switch.
+fn stale_change(why: Stale, state: &State, path: &str) -> bool {
+    why == (Stale::Damaged { linked: false })
+        || state.files.get(path).is_some_and(|placed| placed.adopted)
 }
 
 /// the files of `paths` in the output folder `at` that git tracks, in path order: none outside a

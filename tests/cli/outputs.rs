@@ -1392,6 +1392,7 @@ fn a_changed_output_is_never_partly_healed() -> Result {
         stderr.contains(&format!("Would remove {removing}\n")),
         "{stderr}"
     );
+    assert!(!stderr.contains("git tracks"), "{stderr}");
     let document = json(&sandbox.run(&["--json", "sync", "--force", "processed", "-n"])?)?;
     assert_eq!(
         document["result"]["changes"]["remove"],
@@ -1410,6 +1411,7 @@ fn a_changed_output_is_never_partly_healed() -> Result {
         "{stderr}"
     );
     assert!(!stderr.contains("that no dataset needs"), "{stderr}");
+    assert!(!stderr.contains("git tracks"), "{stderr}");
     let help = text(&sandbox.run(&["sync", "--help"])?.stdout)?;
     let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
@@ -2714,7 +2716,7 @@ fn force_never_deletes_what_git_tracks_in_an_outputs_folder() -> Result {
         );
         assert!(!stderr.contains("--force"), "{args:?}: {stderr}");
     }
-    let said = "2 files git tracks stay in derived's folder, such as src/iris.csv, as `sync --force` never deletes or overwrites a file git tracks";
+    let said = "2 files git tracks stay in derived's folder, such as src/iris.csv, as `sync --force` never deletes or overwrites a file git tracks that a plain sync keeps";
     let dry = sandbox.run(&["sync", "--force", "derived", "--dry-run"])?;
     let stderr = text(&dry.stderr)?;
     assert_eq!(dry.status.code(), Some(0), "{stderr}");
@@ -2731,7 +2733,7 @@ fn force_never_deletes_what_git_tracks_in_an_outputs_folder() -> Result {
     assert!(!work.join("src/wip.py").exists(), "{stderr}");
     let status = text(&sandbox.run(&["status"])?.stdout)?;
     assert!(
-        status.contains("Committed src/iris.csv · git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never deletes or overwrites a file git tracks"),
+        status.contains("Committed src/iris.csv · git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never deletes or overwrites a file git tracks that a plain sync keeps"),
         "{status}"
     );
     Ok(())
@@ -2763,7 +2765,7 @@ fn a_file_git_tracks_that_force_keeps_leaves_the_data_not_ready() -> Result {
         .command_in(&clone, &["add", "./results", "--as", "results", "--yes"])
         .output()?)?;
     fs::copy(clone.join("data.lock"), work.join("data.lock"))?;
-    let stays = "results/a.csv stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks";
+    let stays = "results/a.csv stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks that a plain sync keeps";
     let ways = "`fetchloom add ./results --as results` pins what it holds now, or make git's copy match data.lock";
     let forced = sandbox.run(&["sync", "--force"])?;
     let stderr = text(&forced.stderr)?;
@@ -2816,7 +2818,7 @@ fn a_tracked_output_file_a_rerun_changed_is_never_offered_to_force() -> Result {
     crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
     ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
     fs::write(work.join("results/table.csv"), b"rerun\n")?;
-    let stays = "results/table.csv stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks";
+    let stays = "results/table.csv stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks that a plain sync keeps";
     let ways = "`fetchloom add ./results --as results` pins what it holds now, or make git's copy match data.lock";
     for (args, code) in [
         (&["status"][..], 0),
@@ -2887,7 +2889,7 @@ fn a_tracked_file_an_outputs_pin_lacks_stays_named() -> Result {
     ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
     fs::write(work.join("results/notes.md"), b"mine\n")?;
     crate::merge::ok(&sandbox, &["add", "results/notes.md"])?;
-    let stays = "results/notes.md stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks";
+    let stays = "results/notes.md stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks that a plain sync keeps";
     let ways = "`fetchloom add ./results --as results` pins what it holds now, or make git's copy match data.lock";
     for (args, closing) in [
         (
@@ -2917,6 +2919,59 @@ fn a_tracked_file_an_outputs_pin_lacks_stays_named() -> Result {
     assert!(!stderr.contains("fetchloom sync --force"), "{stderr}");
     crate::merge::ok(&sandbox, &["rm", "-qf", "results/notes.md"])?;
     ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
+/// `sync --force` does all a plain sync does: a copy of an output a sync placed, which the teammate
+/// then tracks in git, follows the author's new pin as any placed file does, since no one changed
+/// it. only what `--force` alone replaces or deletes stays for git, as an edit, even one that kept
+/// the file's size and time.
+#[test]
+fn force_updates_a_tracked_copy_sync_placed_as_a_plain_sync_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/a.csv"), b"v1\n")?;
+    let pin = |args: &[&str]| -> Result { ok(&sandbox.command_in(&author, args).output()?) };
+    pin(&["add", "results", "--as", "results"])?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    ok(&sandbox.run(&["sync"])?)?;
+    crate::merge::ok(&sandbox, &["add", "-f", "results/a.csv"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "track the output"])?;
+    fs::write(author.join("results/a.csv"), b"v2\n")?;
+    pin(&["add", "./results", "--as", "results", "--yes"])?;
+    fs::copy(author.join("data.lock"), work.join("data.lock"))?;
+    let forced = sandbox.run(&["sync", "--force"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("git tracks"), "{stderr}");
+    assert_eq!(fs::read(work.join("results/a.csv"))?, b"v2\n", "{stderr}");
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    // bytes changed under the same size and time, as only hashing finds, are an edit all the same
+    let placed = work.join("results/a.csv");
+    let state = work.join(".fetchloom").join("state");
+    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
+    fs::write(&state, fs::read(&state)?)?;
+    let modified = fs::metadata(&placed)?.modified()?;
+    crate::support::edit(&placed, b"v8\n")?;
+    fs::File::options()
+        .write(true)
+        .open(&placed)?
+        .set_modified(modified)?;
+    let verified = sandbox.run(&["sync", "--force", "--verify"])?;
+    let stderr = text(&verified.stderr)?;
+    assert_eq!(verified.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("results/a.csv stays, as git tracks it"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&placed)?, b"v8\n", "{stderr}");
     Ok(())
 }
 

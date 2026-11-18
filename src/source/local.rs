@@ -63,7 +63,7 @@ pub(crate) enum Since<'a> {
 /// why `sync --force` leaves a file git tracks in an output's folder as it is, in every line that
 /// tells of one.
 pub(crate) const FORCE_KEEPS_GIT: &str =
-    "`sync --force` never deletes or overwrites a file git tracks";
+    "`sync --force` never deletes or overwrites a file git tracks that a plain sync keeps";
 
 /// that `sync --force` leaves `files`, which git tracks in the folder of the output `name`.
 pub(crate) fn kept_by_git(name: &str, files: &[String]) -> String {
