@@ -166,7 +166,8 @@ fn marked<'s>(
 /// the files `inside` takes at paths `targets` place that hold other bytes than pinned, as
 /// `actions` decided them or, for a dataset the run leaves alone, which a later run places
 /// trusting the folder, as a placing would, but for an edit the state told of while its file
-/// looked as it does now; and the files where they place a folder.
+/// looked as it does now; and the files where they place a folder, which `sync --force` always
+/// removes.
 fn replaced<'s>(
     project: &Project,
     (targets, actions): (&'s [Target], &'s [Action]),
@@ -176,9 +177,7 @@ fn replaced<'s>(
     let mut replaced = BTreeSet::new();
     let mut in_the_way = BTreeSet::new();
     let unrecorded_file = |blocker: &Blocker| {
-        blocker.clearable
-            && blocker.found == Entry::File
-            && !survey.state.files.contains_key(&blocker.path)
+        blocker.found == Entry::File && !survey.state.files.contains_key(&blocker.path)
     };
     let told = |path: &str| {
         survey

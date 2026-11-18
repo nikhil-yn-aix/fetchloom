@@ -804,6 +804,23 @@ fn a_file_downloaded_by_hand_is_adopted_only_with_the_pinned_bytes() -> Result {
         }
         assert_eq!(fs::read(&put)?, bytes, "{folder}");
     }
+    // a link where data.lock pins a folder holds nothing of the person's: no first follow refuses
+    // it, and `sync --force` takes the link away, never what it leads to, and places the file
+    let linked = scratch.join("linked");
+    let elsewhere = scratch.join("elsewhere");
+    fs::create_dir_all(&linked)?;
+    fs::create_dir_all(&elsewhere)?;
+    fs::write(elsewhere.join("notes.txt"), b"mine\n")?;
+    link_folder(&elsewhere, &linked.join("iris"))?;
+    unlink(&data)?;
+    link_folder(&linked, &data)?;
+    let kept = sandbox.run(&["--offline", "sync"])?;
+    let stderr = text(&kept.stderr)?;
+    assert!(!stderr.contains("places nothing through it"), "{stderr}");
+    assert_eq!(kept.status.code(), Some(0), "{stderr}");
+    ok(&sandbox.run(&["--offline", "sync", "--force"])?)?;
+    assert_eq!(fs::read(linked.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(fs::read(elsewhere.join("notes.txt"))?, b"mine\n");
     Ok(())
 }
 
@@ -851,6 +868,52 @@ fn a_told_edit_moved_with_its_data_folder_is_followed() -> Result {
         b"sl,sw,pl,pw,species\n"
     );
     assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&moved)?));
+    Ok(())
+}
+
+/// once a link's first follow is recorded, the folder is this project's data folder as any other:
+/// a person's edit of a pinned file and a pipeline's new file in an output's folder are told as
+/// anywhere, and no sync refuses the link for them.
+#[test]
+fn a_recorded_link_takes_edits_as_any_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir(&target)?;
+    let data = sandbox.work().join("data");
+    if link_folder(&target, &data).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    fs::create_dir(data.join("processed"))?;
+    fs::write(data.join("processed").join("clean.csv"), b"clean\n")?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
+    let placed = data.join("iris").join("iris.csv");
+    delete(&placed)?;
+    fs::write(&placed, b"sl,sw,pl,pw,species\n")?;
+    fs::write(data.join("processed").join("new.csv"), b"new\n")?;
+    let synced = sandbox.run(&["--offline", "sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: data/iris/iris.csv has changed, so it stays\n"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("warning: data/processed changed since processed was pinned: "),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&placed)?, b"sl,sw,pl,pw,species\n");
+    assert_eq!(fs::read(data.join("processed").join("new.csv"))?, b"new\n");
     Ok(())
 }
 
