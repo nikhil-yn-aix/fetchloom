@@ -30,6 +30,16 @@ pub(super) fn refuse_harm(
     survey: &Survey,
     link: &Followed,
 ) -> Result<(), Error> {
+    #[cfg(unix)]
+    if let Some((entry, owner)) = not_owned(
+        &project.root,
+        survey,
+        link,
+        crate::cache::run_as(),
+        &owner_of,
+    ) {
+        return Err(project.cloned_link(&link.path, theirs(link, entry, owner)));
+    }
     let inside = |path: &str| {
         is_inside(path, &link.path)
             && !project
@@ -304,6 +314,65 @@ fn deleted<'m, 's>(
         .collect()
 }
 
+/// the folder `link` leads to when another user than `me` owns it, else the first entry `survey`
+/// lists there, by its path below that folder, that another user owns, with that user, as
+/// `owner` tells who owns an entry: a first follow takes only a folder this user owns, whole, as
+/// others share bytes through a cache rather than a data folder. windows keeps no user id, so
+/// there a folder anyone owns is followed.
+#[cfg(unix)]
+fn not_owned<'s>(
+    root: &Path,
+    survey: &'s Survey,
+    link: &Followed,
+    me: u32,
+    owner: &dyn Fn(&Path) -> Option<u32>,
+) -> Option<(Option<&'s str>, u32)> {
+    let theirs = |path: &Path| owner(path).filter(|owner| *owner != me);
+    if let Some(owner) = theirs(&link.found) {
+        return Some((None, owner));
+    }
+    let entries: BTreeSet<&str> = survey
+        .disk
+        .keys()
+        .chain(survey.entries.keys())
+        .map(String::as_str)
+        .filter(|path| *path != link.path && is_inside(path, &link.path))
+        .collect();
+    entries.into_iter().find_map(|path| {
+        let owner = theirs(&native(root, path))?;
+        Some((path.get(link.path.len() + 1..), owner))
+    })
+}
+
+/// who owns the entry at `path`, itself and never what a link there leads to, by user id.
+#[cfg(unix)]
+fn owner_of(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|found| found.uid())
+}
+
+/// the refusal of the first follow of `link` into a folder of the user `owner`, or one holding
+/// `entry` of theirs.
+#[cfg(unix)]
+fn theirs(link: &Followed, entry: Option<&str>, owner: u32) -> Error {
+    let owner = crate::cache::said_user(owner);
+    let why = match entry {
+        Some(entry) => format!("where {entry} belongs to {owner}"),
+        None => format!("which belongs to {owner}"),
+    };
+    Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "{} is a link to {}, {why}, so fetchloom places nothing through it",
+            link.at.display(),
+            crate::machine::plain(&link.found).display()
+        ),
+    )
+    .help("point the link at a folder of your own; to share bytes with others, share a cache (FETCHLOOM_CACHE) rather than a data folder")
+}
+
 /// the refusal of the first follow of `link`, where `why` says what a run could harm, with `help`.
 fn refused(link: &Followed, why: &str, help: &str) -> Error {
     Error::new(
@@ -339,5 +408,60 @@ mod tests {
         );
         let mixed = BTreeSet::from(["data/processed/clean.csv", "data/iris/iris.csv"]);
         assert_eq!(outputs_holding(&manifest, &mixed), None);
+    }
+
+    /// a first follow takes only a folder this user owns whole: another user's folder is named
+    /// first, then the first entry of theirs the survey lists there by path, a file or a folder,
+    /// as its path below the folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_first_follow_names_the_folder_or_the_first_entry_of_another_user() {
+        use std::fs;
+        use std::path::Path;
+
+        use super::not_owned;
+        use crate::cli::sync::disk::{Folders, Survey};
+        use crate::project::{Followed, Project};
+        use crate::stop::Stop;
+        use crate::threads::Threads;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("p");
+        let data = root.join("data");
+        fs::create_dir_all(data.join("iris")).unwrap();
+        fs::create_dir(data.join("raw")).unwrap();
+        fs::write(data.join("iris").join("iris.csv"), b"a\n").unwrap();
+        fs::write(data.join("notes.txt"), b"mine\n").unwrap();
+        let project = Project::at(root.clone());
+        let survey = Survey::read(
+            &project,
+            &Folders::data("data"),
+            Threads::default(),
+            &Stop::default(),
+        )
+        .unwrap();
+        let found = fs::canonicalize(&data).unwrap();
+        let link = Followed {
+            at: data.clone(),
+            path: "data".to_owned(),
+            found: found.clone(),
+            first: true,
+        };
+        let (me, other) = (1000, 1001);
+        let check = |theirs: &[&Path]| {
+            not_owned(&root, &survey, &link, me, &|path: &Path| {
+                Some(if theirs.contains(&path) { other } else { me })
+            })
+        };
+        let (notes, raw, iris) = (
+            data.join("notes.txt"),
+            data.join("raw"),
+            data.join("iris").join("iris.csv"),
+        );
+        assert_eq!(check(&[]), None);
+        assert_eq!(check(&[&raw, &notes]), Some((Some("notes.txt"), other)));
+        assert_eq!(check(&[&raw]), Some((Some("raw"), other)));
+        assert_eq!(check(&[&iris]), Some((Some("iris/iris.csv"), other)));
+        assert_eq!(check(&[&notes, &found]), Some((None, other)));
     }
 }

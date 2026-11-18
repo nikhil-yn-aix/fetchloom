@@ -690,6 +690,21 @@ pub(crate) fn without_copy_warning(stderr: &str) -> String {
         .collect()
 }
 
+/// the user `id` as the system names it, with `id -nu`, else by its number.
+#[cfg(unix)]
+pub(crate) fn user_named(id: u32) -> String {
+    std::process::Command::new("/usr/bin/id")
+        .arg("-nu")
+        .arg(id.to_string())
+        .output()
+        .ok()
+        .filter(|told| told.status.success())
+        .and_then(|told| String::from_utf8(told.stdout).ok())
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("user {id}"))
+}
+
 /// deletes the file at `path` as a person can, clearing its read-only flag only where removal
 /// needs that, as on windows' FAT32 and exFAT: a placed hardlink shares the flag with the cache.
 pub(crate) fn delete(path: &Path) -> Result {

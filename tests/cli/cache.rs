@@ -732,7 +732,7 @@ fn root_takes_no_cache_another_user_owns() -> Result {
         stderr.contains(&format!(
             "error: could not open the cache at {}: it belongs to {}, who could not change what this run, as root, would make there\n",
             cache.display(),
-            named(owner)
+            crate::support::user_named(owner)
         )) && stderr.contains(
             "help: run fetchloom as the cache's owner, as `docker run --user $(id -u):$(id -g)` runs a container as you, or give root a cache of its own with FETCHLOOM_CACHE\n"
         ),
@@ -742,21 +742,6 @@ fn root_takes_no_cache_another_user_owns() -> Result {
     let status = as_root(&["--offline", "status"])?;
     assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
     Ok(())
-}
-
-/// the user `id` as the system names it, with `id -nu`, else by its number.
-#[cfg(unix)]
-fn named(id: u32) -> String {
-    std::process::Command::new("/usr/bin/id")
-        .arg("-nu")
-        .arg(id.to_string())
-        .output()
-        .ok()
-        .filter(|told| told.status.success())
-        .and_then(|told| String::from_utf8(told.stdout).ok())
-        .map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| format!("user {id}"))
 }
 
 /// a git repository's .git folder named as the cache by mistake stays refused, though its objects/

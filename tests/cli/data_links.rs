@@ -432,10 +432,64 @@ fn a_cloned_link_into_another_projects_data_folder_is_refused() -> Result {
     Ok(())
 }
 
+/// a cloned commit's `data` link may lead into another user's folder under a listed root, as
+/// carol's, holding the iris.csv she fetched by hand. a first follow takes only a folder this user
+/// owns, the folder and each entry there, so neither a sync nor a remove writes or deletes
+/// anything of hers, and the refusal names whose it is. its owner follows the same folder as any
+/// folder of their own.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_link_into_another_users_folder_is_refused() -> Result {
+    use std::os::unix::fs::MetadataExt;
+    let sandbox = Sandbox::new()?;
+    let root = sandbox.folder("scratch-root")?;
+    let carol = root.join("carol").join("data");
+    fs::create_dir_all(carol.join("iris"))?;
+    fs::write(carol.join("iris").join("iris.csv"), IRIS)?;
+    link_folder(&carol, &sandbox.work().join("data"))?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    cloned(&sandbox, &format!("{}/iris.csv", routes.url))?;
+    ok(&sandbox.run(&["settings", "set", "data_links", &root.display().to_string()])?)?;
+    let owner = fs::metadata(&carol)?.uid();
+    let before = listing(&carol)?;
+    // no test runs as two users, so a debug build is told it runs as one who owns nothing here
+    let as_another = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_EUID", "3999999999")
+            .output()
+    };
+    for args in [&["sync"][..], &["remove", "iris"]] {
+        let output = as_another(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                " is a link to {}, which belongs to {}, so fetchloom places nothing through it\n",
+                real(&carol)?,
+                crate::support::user_named(owner)
+            )) && stderr.contains(
+                "help: point the link at a folder of your own; to share bytes with others, share a cache (FETCHLOOM_CACHE) rather than a data folder\n"
+            ),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(listing(&carol)?, before, "{args:?}");
+    }
+    assert_eq!(fs::read(carol.join("iris").join("iris.csv"))?, IRIS);
+    let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    assert!(manifest.contains("[datasets.iris]"), "{manifest}");
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Adopted data/iris"), "{stderr}");
+    Ok(())
+}
+
 /// a teammate's clone holds the author's data link when it was committed before the line that
-/// hides it. refused as not on this machine or not listed, a link git tracks is said to have come
-/// with the clone, with the way to a plain data folder: deleting it, and committing that. a link
-/// git does not track gets no such line.
+/// hides it. refused as not on this machine, not listed or another user's, a link git tracks is
+/// said to have come with the clone, with the way to a plain data folder: deleting it, and
+/// committing that. a link git does not track gets no such line.
 #[cfg(unix)]
 #[test]
 fn a_refused_link_git_tracks_says_it_came_with_the_clone() -> Result {
@@ -471,6 +525,15 @@ fn a_refused_link_git_tracks_says_it_came_with_the_clone() -> Result {
     assert!(!said.contains(came), "not in git yet: {said}");
     commit("link data elsewhere")?;
     let said = refused(&["sync"], None, unlisted)?;
+    assert!(said.contains(came), "{said}");
+    let root = sandbox.folder("scratch-root")?;
+    let theirs = root.join("author");
+    fs::create_dir(&theirs)?;
+    ok(&sandbox.run(&["settings", "set", "data_links", &root.display().to_string()])?)?;
+    unlink(&data)?;
+    link_folder(&theirs, &data)?;
+    commit("link data to the author's")?;
+    let said = refused(&["sync"], Some("3999999999"), ", which belongs to ")?;
     assert!(said.contains(came), "{said}");
     unlink(&data)?;
     link_folder(&sandbox.folder("gone")?.join("data"), &data)?;
