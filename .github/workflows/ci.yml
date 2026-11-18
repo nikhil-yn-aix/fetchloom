@@ -40,7 +40,7 @@ env:
 
 jobs:
   ci:
-    needs: [quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts, action, r]
+    needs: [verified, quality, docs, test, windows, windows-build, windows-fs, snapshots, artifacts, action, r]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -53,7 +53,14 @@ jobs:
           python3 - <<'PY'
           import json, os
           results = json.loads(os.environ['RESULTS'])
-          left_out = {'artifacts', 'action', 'r'} if os.environ['SCOPE'] == 'tests' else set()
+          verified = results.pop('verified', {})
+          print(f"verified: {verified.get('result')}")
+          if verified.get('result') == 'success' and verified.get('outputs', {}).get('found') == 'true':
+              # a pull request run of ci passed on this commit, and so every job here was skipped
+              print(f"ci passed on this commit in {verified['outputs'].get('run')}")
+              left_out = set(results)
+          else:
+              left_out = {'artifacts', 'action', 'r'} if os.environ['SCOPE'] == 'tests' else set()
           for name, result in results.items():
               print(f"{name}: {result['result']}")
           if not results or any(result['result'] != 'success'
@@ -62,7 +69,34 @@ jobs:
               raise SystemExit('every required job must succeed')
           PY
 
+  # on a push to main, whether a pull request's run of ci already passed on this exact commit, as
+  # it has when main fast-forwards to that pull request's head; every other job runs only where
+  # none did, so main does not run the same jobs again. on every other trigger it is skipped, and
+  # every job runs.
+  verified:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # to list the runs of ci.yml on this commit
+      contents: read
+    outputs:
+      found: ${{ steps.check.outputs.found }}
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: .github/scripts/ci-verified.sh "$REPOSITORY" "$SHA"
+
   quality:
+    needs: verified
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -109,7 +143,7 @@ jobs:
         run: typos
       - name: shellcheck
         if: always()
-        run: shellcheck -s dash install.sh && shellcheck .github/scripts/apt-install.sh .github/scripts/macos-filesystem.sh
+        run: shellcheck -s dash install.sh && shellcheck .github/scripts/*.sh
       - name: PSScriptAnalyzer
         if: always()
         shell: pwsh
@@ -127,6 +161,8 @@ jobs:
         run: python3 -m unittest discover -s bench
 
   docs:
+    needs: verified
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -170,11 +206,14 @@ jobs:
           lychee --offline --include-fragments=anchor-only --no-ignore --index-files index.html --root-dir "$RUNNER_TEMP/pages" 'site/**/*.html'
 
   artifacts:
-    if: inputs.scope != 'tests'
+    needs: verified
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' && inputs.scope != 'tests' }}
     uses: $/.github/workflows/artifacts.yml
 
   test:
     name: ${{ matrix.os }}
+    needs: verified
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -309,6 +348,8 @@ jobs:
 
   windows:
     name: windows-2025
+    needs: verified
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' }}
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -347,6 +388,8 @@ jobs:
   # the windows job above runs the native suite
   windows-build:
     name: windows test build
+    needs: verified
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -378,7 +421,8 @@ jobs:
           retention-days: 1
 
   snapshots:
-    needs: [test, windows, windows-fs]
+    needs: [verified, test, windows, windows-fs]
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -394,7 +438,8 @@ jobs:
 
   windows-fs:
     name: windows ${{ matrix.filesystem }}
-    needs: windows-build
+    needs: [verified, windows-build]
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' }}
     runs-on: windows-2025
     timeout-minutes: 20
     strategy:
@@ -436,7 +481,8 @@ jobs:
   # later runs place both from the caches they restore, and cache: never restores none
   action:
     name: action on ${{ matrix.os }}
-    if: inputs.scope != 'tests'
+    needs: verified
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' && inputs.scope != 'tests' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -545,7 +591,8 @@ jobs:
   # the R package in r/, checked by R CMD check against the fetchloom this job builds; the check
   # fails on a warning, and a skipped test fails the job too
   r:
-    if: inputs.scope != 'tests'
+    needs: verified
+    if: ${{ !cancelled() && !failure() && needs.verified.outputs.found != 'true' && inputs.scope != 'tests' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

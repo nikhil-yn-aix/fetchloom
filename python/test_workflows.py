@@ -2,9 +2,12 @@
 on named images, and keep the supply-chain rules docs/dev/engineering/ci.md lists."""
 
 import itertools
+import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import sys
 import tomllib
 import unittest
 
@@ -162,6 +165,60 @@ class WorkflowTests(unittest.TestCase):
         """cargo-deny only warns about a release its authors withdrew unless told to refuse it."""
         deny = tomllib.loads((ROOT / ".config/deny.toml").read_text(encoding="utf-8"))
         self.assertEqual(deny["advisories"].get("yanked"), "deny")
+
+    def test_a_push_to_main_runs_again_only_what_no_pull_request_run_proved(self):
+        """on a push to main, verified asks whether a pull request's run of ci already passed on the
+        same commit; every other job needs it and runs unless it found one, under a condition that
+        also runs the job where verified is skipped, as on every other trigger. the ci job needs
+        them all."""
+        ci = jobs("ci.yml")
+        gate = "!cancelled() && !failure() && needs.verified.outputs.found != 'true'"
+        self.assertIn("    if: github.event_name == 'push'\n", ci["verified"])
+        self.assertIn(".github/scripts/ci-verified.sh", ci["verified"])
+        for name, text in ci.items():
+            if name in ("verified", "ci"):
+                continue
+            with self.subTest(job=name):
+                needs = re.search(r"(?m)^    needs: \[?([^\]\n]*)\]?$", text)
+                self.assertIsNotNone(needs, "every job needs verified")
+                self.assertIn("verified", [need.strip() for need in needs[1].split(",")])
+                self.assertRegex(text, r"(?m)^    if: \$\{\{ " + re.escape(gate) + r"(?: && [^\n]*)? \}\}$")
+        needed = re.search(r"(?m)^    needs: \[([^\]]+)\]$", ci["ci"])[1]
+        self.assertEqual({need.strip() for need in needed.split(",")}, set(ci) - {"ci"})
+
+    def test_the_ci_job_passes_a_commit_ci_proved_here_or_in_its_pull_request(self):
+        """the ci job, which branch protection and the badge read, passes when every job passed, or
+        when verified found a pull request run that passed on the commit and so every job skipped;
+        a failure, or a skip the run did not ask for, fails it."""
+        script = re.search(r"python3 - <<'PY'\n(.*?)\n *PY\n", jobs("ci.yml")["ci"], re.DOTALL)[1]
+        script = "\n".join(line[10:] for line in script.splitlines())
+        others = ["quality", "docs", "test", "windows", "windows-build", "windows-fs", "snapshots",
+                  "artifacts", "action", "r"]
+        found = {"result": "success", "outputs": {"found": "true", "run": "https://example.org/runs/1"}}
+        searched = {"result": "success", "outputs": {"found": "false"}}
+        skipped = {"result": "skipped", "outputs": {}}
+        def results(verified, **changed):
+            jobs_ = {name: {"result": changed.get(name, "success"), "outputs": {}} for name in others}
+            return {"verified": verified, **jobs_}
+        everything_skipped = {name: "skipped" for name in others}
+        for case, needs, scope, passes in [
+            ("a pull request run", results(skipped), "", True),
+            ("a push no pull request run proved", results(searched), "", True),
+            ("a push a pull request run proved", results(found, **everything_skipped), "", True),
+            ("a failure", results(skipped, test="failure"), "", False),
+            ("a failure where a run was found", results(found, test="failure"), "", False),
+            ("a skip no run was found for", results(searched, **everything_skipped), "", False),
+            ("a skip with no reason", results(skipped, artifacts="skipped"), "", False),
+            ("a skip the tests scope asks for", results(skipped, artifacts="skipped", action="skipped",
+                                                        r="skipped"), "tests", True),
+            ("verified failing", results({"result": "failure", "outputs": {}}, **everything_skipped), "", False),
+            ("a run found by a failed check", results({**found, "result": "failure"}, **everything_skipped), "",
+             False),
+        ]:
+            with self.subTest(case=case):
+                env = dict(os.environ, RESULTS=json.dumps(needs), SCOPE=scope)
+                ran = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+                self.assertEqual(ran.returncode == 0, passes, ran.stdout + ran.stderr)
 
 
 if __name__ == "__main__":
