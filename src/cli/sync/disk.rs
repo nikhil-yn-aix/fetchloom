@@ -9,14 +9,14 @@ use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use super::Scope;
-use super::place::{is_marker_form, local};
+use super::place::{is_marker_form, local, passed_over};
 use crate::cache::{self, Cache};
 use crate::digest::{Block, Sha256};
 use crate::error::Error;
 use crate::output::Output;
 use crate::place::{self, Method};
 use crate::plan::Target;
-use crate::project::manifest::Manifest;
+use crate::project::manifest::{self, Manifest};
 use crate::project::state::{Look, Once, State, Told};
 use crate::project::{Project, native};
 use crate::settings::Level;
@@ -956,6 +956,35 @@ impl Survey {
     /// the project's folder, which the survey's paths are below.
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// the extra files of the outputs of `manifest`, each with its output's name and folder: those
+    /// in its folder that no pin places, as `wanted` tells, that the output's patterns take, and
+    /// that no record names but the output's own of its author's file of another run, as after a
+    /// branch switch, while it looks as recorded. none is kept aside for the person, made by a
+    /// system or a tool, or a staging name. they make the output changed, and `sync --force`
+    /// deletes them, as the output's snapshot lacks them; a link's first follow guards those this
+    /// project's state does not record.
+    pub(crate) fn output_extras<'s, 'm>(
+        &'s self,
+        manifest: &'m Manifest,
+        wanted: impl Fn(&str) -> bool,
+    ) -> impl Iterator<Item = (&'s str, (&'m str, &'m str))> {
+        // a project with no output lists none, without a look at its files
+        let outputs = manifest.datasets.values().any(manifest::Entry::is_output);
+        let disk = outputs.then_some(&self.disk);
+        disk.into_iter().flatten().filter_map(move |(path, look)| {
+            let (name, at) = manifest.output_holding(path)?;
+            let extra = !wanted(path)
+                && self.state.files.get(path).is_none_or(|placed| {
+                    placed.dataset == name && placed.adopted && placed.look == *look
+                })
+                && !self.state.aside.contains_key(path)
+                && !self.made_by_system(path)
+                && !place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path))
+                && !passed_over(manifest, self, path);
+            extra.then_some((path.as_str(), (name, at)))
+        })
     }
 
     /// the files an interrupted placement left under the hidden names it stages files in, which

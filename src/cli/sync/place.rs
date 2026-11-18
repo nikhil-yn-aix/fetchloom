@@ -2133,21 +2133,11 @@ fn make_waiting(root: &Path, manifest: &Manifest, placer: &mut Placer, elsewhere
 /// whether the folder of an output holds a file no record names that the output would take in, as
 /// a person's new figure: the output changed though every recorded file looks as recorded.
 fn output_gained(manifest: &Manifest, survey: &Survey) -> bool {
-    let outputs: Vec<&str> = manifest
-        .datasets
-        .values()
-        .filter(|entry| entry.place)
-        .filter_map(|entry| entry.at.as_deref())
-        .collect();
-    // the folder first: a look into the records costs a search of them for every file
-    !outputs.is_empty()
-        && survey.disk.keys().any(|path| {
-            outputs.iter().any(|at| super::disk::is_inside(path, at))
-                && !survey.state.files.contains_key(path)
-                && !survey.made_by_system(path)
-                && !place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path))
-                && !passed_over(manifest, survey, path)
-        })
+    // a settled project's records name every file its pins place
+    survey
+        .output_extras(manifest, |path| survey.state.files.contains_key(path))
+        .next()
+        .is_some()
 }
 
 /// a file sync may link to the cache's copy of its bytes once placing is done.
@@ -3386,36 +3376,31 @@ fn changed_outputs(
     }
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
     let mut extras = Vec::new();
-    for (path, look) in &survey.disk {
-        if wanted.contains(path.as_str()) || survey.made_by_system(path) {
-            continue;
-        }
-        let Some((output, changes)) = found
-            .values_mut()
-            .find(|(output, _)| super::disk::is_inside(path, &output.at))
+    for (path, (name, _)) in survey.output_extras(manifest, |path| wanted.contains(path)) {
+        let (Some((output, changes)), Some(look)) = (found.get_mut(name), survey.disk.get(path))
         else {
             continue;
         };
-        let inside = &path[output.at.len() + 1..];
-        let name = inside.rsplit('/').next().unwrap_or(inside);
-        if place::is_copy_temporary(name) || passed_over(manifest, survey, path) {
+        output.added += 1;
+        changes.push(change("added", path));
+        extras.push((path.to_owned(), output.name.clone()));
+        output.edits.push(edited(path, look));
+    }
+    // a file the output's record names that no pin places now, changed since, stays: a change
+    for (path, placed) in &survey.state.files {
+        let Some((output, changes)) = found.get_mut(placed.dataset.as_str()) else {
             continue;
-        }
-        match survey.state.files.get(path) {
-            // placed for an older pin and unchanged, which removal takes
-            Some(placed)
-                if placed.dataset == output.name && placed.look == *look && !placed.adopted => {}
-            Some(placed) if placed.dataset == output.name && placed.look != *look => {
-                output.changed += 1;
-                changes.push(change("changed", path));
-            }
-            // the author's file of another run, which no pin places now, is an addition too
-            _ => {
-                output.added += 1;
-                changes.push(change("added", path));
-                extras.push((path.clone(), output.name.clone()));
-                output.edits.push(edited(path, look));
-            }
+        };
+        if !wanted.contains(path.as_str())
+            && super::disk::is_inside(path, &output.at)
+            && survey
+                .disk
+                .get(path)
+                .is_some_and(|look| *look != placed.look)
+            && !passed_over(manifest, survey, path)
+        {
+            output.changed += 1;
+            changes.push(change("changed", path));
         }
     }
     extras.sort_unstable();
@@ -4699,7 +4684,8 @@ mod tests {
     }
 
     /// the marker a renamed output folder took along, in fetchloom's form, is no file the output
-    /// gained, so a settled sync stays on its quick way; a person's new file is one.
+    /// gained, so a settled sync stays on its quick way, and nor is a file its records name; a
+    /// person's new file is one.
     #[test]
     fn a_marker_a_renamed_output_took_along_is_no_gain() {
         let dir = tempfile::tempdir().unwrap();
@@ -4707,13 +4693,32 @@ mod tests {
         let folder = project.root.join("data").join("features");
         fs::create_dir_all(&folder).unwrap();
         fs::write(folder.join(".gitignore"), b"*\n").unwrap();
+        fs::write(folder.join("clean.csv"), b"1\n").unwrap();
         let manifest =
             Manifest::parse("[datasets.processed]\nref = \"local\"\nat = \"data/features\"\n")
                 .unwrap();
+        let recorded = || {
+            let mut survey = surveyed(&project);
+            let placed = Placed {
+                dataset: "processed".to_owned(),
+                sha256: crate::digest::sha256(b"1\n"),
+                method: Method::Copy,
+                look: survey.disk["data/features/clean.csv"],
+                writable: true,
+                checked: 0,
+                adopted: true,
+                output: true,
+                unlinkable: false,
+                racy_intact: std::sync::OnceLock::new(),
+            };
+            let path = "data/features/clean.csv".to_owned();
+            survey.state.files.insert(path, placed);
+            survey
+        };
 
-        assert!(!output_gained(&manifest, &surveyed(&project)));
+        assert!(!output_gained(&manifest, &recorded()));
         fs::write(folder.join("notes.md"), b"mine").unwrap();
-        assert!(output_gained(&manifest, &surveyed(&project)));
+        assert!(output_gained(&manifest, &recorded()));
     }
 
     /// a copy damaged to another size says nothing of data.lock, even one the cache trusts unread

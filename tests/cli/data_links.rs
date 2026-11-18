@@ -1395,6 +1395,48 @@ fn a_cookiecutter_data_folder_on_scratch_is_followed() -> Result {
     Ok(())
 }
 
+/// a file this project's own state records is its own, so a first follow takes the folder holding
+/// it, though `sync --force` would delete it from the output: the author's file of an earlier pin,
+/// left by a branch switch, then moved with its data folder to where a link leads.
+#[test]
+fn a_first_follow_takes_a_file_the_own_state_records() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let processed = work.join("data").join("processed");
+    fs::create_dir_all(&processed)?;
+    fs::write(processed.join("a.csv"), b"a\n")?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    // the other branch pins the output as its folder held b.csv there instead
+    let other = sandbox.folder("other")?;
+    fs::create_dir_all(other.join("data").join("processed"))?;
+    fs::write(other.join("data").join("processed").join("b.csv"), b"b\n")?;
+    let pinned = sandbox
+        .command_in(&other, &["add", "data/processed", "--as", "processed"])
+        .output()?;
+    assert_eq!(pinned.status.code(), Some(0), "{}", text(&pinned.stderr)?);
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(other.join(name), work.join(name))?;
+    }
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::rename(work.join("data"), &target)?;
+    if link_folder(&target, &work.join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let synced = sandbox.run(&["--offline", "sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("places nothing through it"), "{stderr}");
+    assert_eq!(fs::read(target.join("processed").join("a.csv"))?, b"a\n");
+    Ok(())
+}
+
 /// a file in the folder of an output this project declares that `sync --force` would harm, one no
 /// pin of the output places, which it deletes as the output's snapshot lacks it, or a rerun's at a
 /// path the pin holds, which it replaces, refuses a link's first follow of the folder holding it,

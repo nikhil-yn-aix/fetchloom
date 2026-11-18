@@ -6,10 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use super::mark::{self, Whose};
-use super::{Action, Reason, decide, passed_over};
+use super::{Action, Reason, decide};
 use crate::cli::sync::disk::{Blocker, Entry, Mark, Survey, is_inside};
 use crate::error::Error;
-use crate::place;
 use crate::plan::Target;
 use crate::project::manifest::Manifest;
 use crate::project::{Followed, Project, native};
@@ -318,11 +317,11 @@ fn told(survey: &Survey, path: &str) -> bool {
     survey.told_edit(path, &survey.state.told)
 }
 
-/// the files `inside` takes in the folder of an output of `manifest` that no pin of `targets`
-/// places, the state does not record and no run told of as an edit while it looked as it does now,
-/// which `sync --force` deletes as the output's snapshot lacks them, each with its output's name and
-/// folder. what a system, git or a tool puts there, and what the output's patterns leave out, is
-/// no file of the output.
+/// the extra files of the outputs of `manifest` that `inside` takes, as no pin of `targets`
+/// places them, which `sync --force` deletes, each with its output's name and folder, but this
+/// project's own: those its state records, as the author's file of an earlier pin, and those a run
+/// told of as an edit while they looked as they do now. what `--force` deletes and what a first
+/// follow leaves to use are two questions; a copied state's records answer neither.
 fn deleted<'m, 's>(
     manifest: &'m Manifest,
     targets: &[Target],
@@ -330,27 +329,10 @@ fn deleted<'m, 's>(
     inside: &impl Fn(&str) -> bool,
 ) -> BTreeMap<&'s str, (&'m str, &'m str)> {
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-    let outputs: Vec<(&str, &str)> = manifest
-        .datasets
-        .iter()
-        .filter_map(|(name, entry)| Some((name.as_str(), entry.at.as_deref()?)))
-        .collect();
     survey
-        .disk
-        .keys()
-        .filter(|path| {
-            inside(path)
-                && !wanted.contains(path.as_str())
-                && !survey.state.files.contains_key(*path)
-                && !survey.state.aside.contains_key(*path)
-                && !told(survey, path)
-                && !survey.made_by_system(path)
-                && !place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path))
-                && !passed_over(manifest, survey, path)
-        })
-        .filter_map(|path| {
-            let output = outputs.iter().find(|(_, at)| is_inside(path, at))?;
-            Some((path.as_str(), *output))
+        .output_extras(manifest, |path| wanted.contains(path))
+        .filter(|(path, _)| {
+            inside(path) && !survey.state.files.contains_key(*path) && !told(survey, path)
         })
         .collect()
 }

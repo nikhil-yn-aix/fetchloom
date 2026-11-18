@@ -254,6 +254,18 @@ impl Entry {
 }
 
 impl Manifest {
+    /// the output whose folder holds `path`, a path in the project, with that folder as data.toml
+    /// spells it: every file there is the output's.
+    pub(crate) fn output_holding(&self, path: &str) -> Option<(&str, &str)> {
+        self.datasets.iter().find_map(|(name, entry)| {
+            let at = entry.at.as_deref()?;
+            let inside = path
+                .strip_prefix(at)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+            inside.then_some((name.as_str(), at))
+        })
+    }
+
     pub(crate) fn parse(text: &str) -> Result<Manifest, Error> {
         #[cfg(test)]
         tests::reading();

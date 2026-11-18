@@ -930,6 +930,75 @@ fn a_branch_switch_between_two_pinned_runs_mixes_no_runs() -> Result {
     Ok(())
 }
 
+/// an output's extra files, what `sync --force` deletes as its snapshot lacks them, are those no
+/// record names: a person's file a forced run kept aside there, a file another dataset's record
+/// names and one the output's own record names that changed since all stay, while the file no one
+/// recorded goes. status lists another dataset's file as no change to the output.
+#[test]
+fn force_on_an_output_keeps_a_file_kept_aside_and_another_datasets_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let folder = work.join("data/processed");
+    let hidden = ".fetchloom-0123456789abcdef.old";
+    for (name, bytes) in [
+        (hidden, "my notes\n"),
+        ("theirs.csv", "theirs\n"),
+        ("old.csv", "old, changed\n"),
+        ("plot.png", "png"),
+    ] {
+        fs::write(folder.join(name), bytes)?;
+    }
+    let state_path = work.join(".fetchloom/state");
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
+    // a forced run cut off left the person's file aside, its own name taken since
+    state["aside"] = serde_json::json!({
+        format!("data/processed/{hidden}"): "data/processed/iris_clean.csv"
+    });
+    for (path, dataset) in [("theirs.csv", "raw"), ("old.csv", "processed")] {
+        state["files"][format!("data/processed/{path}")] = serde_json::json!({
+            "dataset": dataset,
+            "sha256": "0".repeat(64),
+            "method": "copy",
+            "look": { "size": 1, "modified": 1 },
+            "writable": false,
+            "checked": 0
+        });
+    }
+    fs::write(&state_path, serde_json::to_vec(&state)?)?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        listed(&document, "extra"),
+        [
+            format!("data/processed/{hidden}"),
+            "data/processed/old.csv".to_owned(),
+            "data/processed/plot.png".to_owned(),
+        ],
+        "{document}"
+    );
+    let dry = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
+    assert!(
+        dry.contains("warning: data/processed changed since processed was pinned: 1 edited file, 1 extra file, so sync leaves it as it is"),
+        "{dry}"
+    );
+    let forced = sandbox.run(&["sync", "--force", "processed"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(!folder.join("plot.png").exists(), "{stderr}");
+    let kept = |name: &str| fs::read(folder.join(name)).ok();
+    assert_eq!(
+        (kept(hidden), kept("theirs.csv"), kept("old.csv")),
+        (
+            Some(b"my notes\n".to_vec()),
+            Some(b"theirs\n".to_vec()),
+            Some(b"old, changed\n".to_vec())
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a teammate's clone holds no file of an output before its first sync: status says sync places
 /// them, never that the output changed, and never offers to pin the empty folder.
 #[test]
@@ -1848,7 +1917,8 @@ fn a_pin_leaves_out_what_tools_keep_beside_files() -> Result {
 }
 
 /// a dropping coming or going is no change: an output pinned while an editor had a file open is
-/// unchanged once the editor closes, and once a notebook and an office suite leave theirs.
+/// unchanged once the editor closes, and once a notebook and an office suite leave theirs, the
+/// system its own, and a stopped run a copy under the name it stages files in.
 #[test]
 fn a_dropping_coming_or_going_is_no_change_to_an_output() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1866,6 +1936,8 @@ fn a_dropping_coming_or_going_is_no_change_to_an_output() -> Result {
         CLEAN,
     )?;
     fs::write(folder.join(".~lock.summary.txt#"), b"lock")?;
+    fs::write(folder.join(".DS_Store"), b"finder")?;
+    fs::write(folder.join(".fetchloom-0123456789abcdef.copy"), CLEAN)?;
     let checked = sandbox.run(&["status", "--verify", "--check"])?;
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
     let document = json(&sandbox.run(&["--json", "status"])?)?;

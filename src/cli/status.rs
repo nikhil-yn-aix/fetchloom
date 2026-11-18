@@ -761,9 +761,7 @@ fn check(
     if place::untouched(project, &manifest, &survey, &seen, false, &Scope::All)?.is_some() {
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
         status.extra = extra(&survey, &recorded, &manifest);
-        status.kept_copies = kept_copies(&status.extra, &recorded);
-        status.set_aside = set_aside(&status.extra, &survey);
-        sort_extra(&mut status, &plan::Owned::of(&manifest));
+        sort_unplaced(&mut status, &survey, &manifest, &recorded);
         status.changed_outputs = changed_outputs(&status, (&manifest, &lock), &survey);
         return Ok((status, manifest, lock_text));
     }
@@ -1037,7 +1035,8 @@ fn compare(
     }
     let mut wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
     // a file in the way is listed as blocking, not also as extra
-    wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
+    let blocked: Vec<String> = status.blocked.iter().map(|b| b.path.clone()).collect();
+    wanted.extend(blocked.iter().map(String::as_str));
     let going = going_now();
     // what fetchloom placed of a dataset whose archive's list this machine lacks may be that
     // archive's files, which only the list tells, and so may what it placed of a dataset waiting
@@ -1055,11 +1054,26 @@ fn compare(
                 .any(|folder| path.starts_with(folder.as_str())),
         })
         .partition(|path| going.contains(path));
-    status.kept_copies = kept_copies(&status.extra, &wanted);
-    status.set_aside = set_aside(&status.extra, survey);
-    sort_extra(status, &plan::Owned::of(manifest));
+    sort_unplaced(status, survey, manifest, &wanted);
     status.committed = committed(&project.root, manifest, &status.untracked);
     Ok(())
+}
+
+/// sorts `extra` of `status`, the files no dataset places, `wanted` naming those placed: a changed
+/// copy sync kept and a file kept aside stay, an output's folder keeps its own files, and a
+/// dataset's folder the person's, in `yours`.
+fn sort_unplaced(
+    status: &mut Status,
+    survey: &Survey,
+    manifest: &Manifest,
+    wanted: &HashSet<&str>,
+) {
+    outputs_own(&mut status.extra, survey, manifest, &|path| {
+        wanted.contains(path)
+    });
+    status.kept_copies = kept_copies(&status.extra, wanted);
+    status.set_aside = set_aside(&status.extra, survey);
+    sort_extra(status, &plan::Owned::of(manifest));
 }
 
 /// leaves in `extra` only the files fetchloom did not place that count as differences: a changed
@@ -1169,6 +1183,34 @@ fn extra(survey: &Survey, wanted: &HashSet<&str>, manifest: &Manifest) -> Vec<St
         .collect();
     extra.sort();
     extra
+}
+
+/// keeps in `extra`, of the files in an output's folder, those that are the output's: its extra
+/// files, as the survey decides them, a person's file kept aside, which its own row names, and a
+/// file the output's own record names that sync keeps. another dataset's file kept there is no
+/// change to the output. `wanted` tells the files a pin places.
+fn outputs_own(
+    extra: &mut Vec<String>,
+    survey: &Survey,
+    manifest: &Manifest,
+    wanted: &dyn Fn(&str) -> bool,
+) {
+    let extras: HashSet<&str> = survey
+        .output_extras(manifest, wanted)
+        .map(|(path, _)| path)
+        .collect();
+    extra.retain(|path| match manifest.output_holding(path) {
+        Some((name, _)) => {
+            extras.contains(path.as_str())
+                || survey.state.aside.contains_key(path)
+                || survey
+                    .state
+                    .files
+                    .get(path)
+                    .is_some_and(|placed| placed.dataset == name)
+        }
+        None => true,
+    });
 }
 
 fn blocker_paths<S: serde::Serializer>(
