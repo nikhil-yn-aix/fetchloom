@@ -857,6 +857,55 @@ fn a_told_edit_keeps_its_words_when_a_first_sync_of_a_copy_writes_ahead() -> Res
     Ok(())
 }
 
+/// a copy's first sync takes an id of its own, saved before it rewrites the markers the copy
+/// brought to name it: a run cut short after that rewrite, before the state's last write, leaves
+/// the next run taking those markers as its own still, never as the person's.
+#[cfg(debug_assertions)]
+#[test]
+fn a_first_sync_of_a_copy_cut_short_keeps_its_markers_its_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let links = sandbox.links()?;
+    // the run is held as it links its copies to the cache, after the markers are written
+    if !links.hardlink && !links.reflink {
+        return crate::support::skipped(
+            "hardlinks",
+            "this disk makes neither reflinks nor hardlinks",
+        );
+    }
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server)?;
+    let (two, _) = copied(&sandbox, "two")?;
+    let marker = two.join("inputs").join("iris").join(".gitignore");
+    let original = fs::read_to_string(&marker)?;
+    let stop = sandbox.folder("hold")?;
+    let (release, held) = (stop.join("release"), stop.join("release.held"));
+    let mut command = sandbox.command_in(&two, &["sync", "--offline"]);
+    command.env("FETCHLOOM_TEST_HOLD_LINK", &release);
+    let mut running = crate::support::Running::start(&mut command)?;
+    crate::support::wait_until("the copy's sync to link its copies", || Ok(held.exists()))?;
+    assert_ne!(fs::read_to_string(&marker)?, original);
+    running.kill()?;
+    let synced = sandbox.command_in(&two, &["sync", "--offline"]).output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let document = json(&sandbox.command_in(&two, &["--json", "status"]).output()?)?;
+    assert_eq!(
+        document["result"]["yours"],
+        serde_json::json!([]),
+        "{document}"
+    );
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(two.join(".fetchloom").join("state"))?)?;
+    let id = state["id"].as_str().unwrap_or_default();
+    let now = fs::read_to_string(&marker)?;
+    assert!(
+        state["markers"]["inputs/iris"].is_string()
+            && !id.is_empty()
+            && now.ends_with(&format!("# fetchloom project {id}\n")),
+        "{state} {now}"
+    );
+    Ok(())
+}
+
 /// a copy's tar.gz folder is checked in place as a zip's is.
 #[test]
 fn a_copied_tar_folder_is_checked_in_place_too() -> Result {
