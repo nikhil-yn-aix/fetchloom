@@ -618,6 +618,7 @@ fn closing(
         && placement.changed_outputs.is_empty()
         && placement.adopted.is_empty()
         && placement.relinked.is_empty()
+        && placement.made_waiting.is_empty()
     {
         let absent: Vec<String> = waiting.iter().chain(&elsewhere).cloned().collect();
         let found = in_place(manifest, scope, verified, &absent);
@@ -643,7 +644,12 @@ fn closing(
         .map(|changed| changed.name.as_str())
         .collect();
     let kept = (placement.kept.len(), left.as_slice(), warned);
-    let (verb, text) = synced(manifest, scope, kept, (&waiting, &elsewhere));
+    let (verb, text) = synced(
+        manifest,
+        scope,
+        kept,
+        (&waiting, &elsewhere, &placement.made_waiting),
+    );
     // `path` answers only a dataset placed in the data folder, and the line names one this
     // sync just placed
     let first = placement.filled.iter().find(|name| {
@@ -687,12 +693,12 @@ fn waiting_named(waiting: &[lock::Waiting], manifest: &Manifest, scope: &Scope) 
 /// files it `kept`, the outputs it `left` whole as they changed since they were pinned, and
 /// whether a warning above tells of any. the datasets `waiting` for their file lists were left as
 /// they were, and so were the outputs made `elsewhere`, whose files this machine lacks, so they
-/// are named apart.
+/// are named apart, though one whose folder the run `made` counts too.
 fn synced(
     manifest: &Manifest,
     scope: &Scope,
     (kept, left, warned): (usize, &[&str], bool),
-    (waiting, elsewhere): (&[String], &[String]),
+    (waiting, elsewhere, made): (&[String], &[String], &[String]),
 ) -> (&'static str, String) {
     let mut unchanged = Vec::new();
     if kept > 0 {
@@ -731,7 +737,9 @@ fn synced(
                 .datasets
                 .iter()
                 .filter(|(name, entry)| {
-                    entry.place && !waiting.contains(*name) && !elsewhere.contains(*name)
+                    entry.place
+                        && !waiting.contains(*name)
+                        && (!elsewhere.contains(*name) || made.contains(*name))
                 })
                 .count();
             if placed == 0 {
@@ -2495,7 +2503,12 @@ pub(crate) mod tests {
         ] {
             let mut manifest = Manifest::parse(&tables.join("\n")).unwrap();
             super::super::drop::left_out(&mut manifest, &BTreeSet::from(["raw".to_owned()]));
-            let (verb, text) = synced(&manifest, &Scope::All, (kept, &[], kept > 0), (&[], &[]));
+            let (verb, text) = synced(
+                &manifest,
+                &Scope::All,
+                (kept, &[], kept > 0),
+                (&[], &[], &[]),
+            );
             assert_eq!((verb, text.as_str()), said, "{tables:?}");
         }
     }

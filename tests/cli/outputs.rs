@@ -622,6 +622,45 @@ fn status_names_the_outputs_made_elsewhere_in_one_hint() -> Result {
     Ok(())
 }
 
+/// a sync that makes the folder of an output made elsewhere, for the pipeline run here, counts it
+/// in its last line rather than say it had nothing to do; with the folder there, it has nothing to
+/// do.
+#[test]
+fn a_sync_that_makes_a_waiting_outputs_folder_counts_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    let cache = sandbox.folder("teammate-cache")?;
+    let sync = || -> Result<String> {
+        let output = sandbox
+            .command_in(&teammate, &["sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        Ok(stderr)
+    };
+    let made = "     Synced 1 dataset into data · processed waits for its files\n";
+    let first = sync()?;
+    assert!(first.contains(made), "{first}");
+    let second = sync()?;
+    assert!(
+        second.contains(
+            "         Ok all pinned files but processed's are in place by size and time, nothing to do\n"
+        ),
+        "{second}"
+    );
+    delete_folder(&teammate.join("data/processed"))?;
+    let again = sync()?;
+    assert!(again.contains(made), "{again}");
+    Ok(())
+}
+
 /// a teammate without an output's bytes is told once per output and pin, by sync and path alike,
 /// that it was made on another machine; each sync's last line still names it, and json says it on
 /// every run, as a script reads each run alone. a run of another dataset alone, as a notebook's

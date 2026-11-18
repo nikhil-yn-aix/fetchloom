@@ -155,6 +155,9 @@ pub(crate) struct Placement {
     /// leaves out.
     #[serde(skip)]
     pub(crate) elsewhere: Vec<Elsewhere>,
+    /// those of `elsewhere` whose folder the run made, ready for the pipeline run here.
+    #[serde(skip)]
+    pub(crate) made_waiting: Vec<String>,
 }
 
 /// an output whose files no cache or mirror the run reaches holds, which it leaves out, as one a
@@ -1703,6 +1706,7 @@ impl<'a> Placing<'a> {
         };
         copied_edits(&survey, &mut placement.kept);
         survey.smudge_edited();
+        let unmade = unmade(&project.root, manifest, &placement.elsewhere);
         // before the files land, so git never sees a dataset's folder while it fills
         let (rewritten, made) = mark::write(
             &project.root,
@@ -1712,6 +1716,10 @@ impl<'a> Placing<'a> {
             &contents,
         );
         make_waiting(&project.root, manifest, &mut placer, &placement.elsewhere);
+        placement.made_waiting = unmade
+            .into_iter()
+            .filter(|name| !unmade_folder(&project.root, manifest, name))
+            .collect();
         placement.marked = mark::untold(&survey.state, &made);
         placement.kept_in_git = survey
             .git_keeps
@@ -2061,6 +2069,20 @@ pub(crate) fn untouched(
         unchanged: unchanged as u64,
         ..Placement::default()
     }))
+}
+
+/// the outputs of `elsewhere` whose folder is not there.
+fn unmade(root: &Path, manifest: &Manifest, elsewhere: &[Elsewhere]) -> Vec<String> {
+    elsewhere
+        .iter()
+        .filter(|left| unmade_folder(root, manifest, &left.name))
+        .map(|left| left.name.clone())
+        .collect()
+}
+
+/// whether nothing is at the folder of `name`.
+fn unmade_folder(root: &Path, manifest: &Manifest, name: &str) -> bool {
+    fs::symlink_metadata(native(root, &plan::folder(manifest, name))).is_err()
 }
 
 /// makes the folder of each output of `elsewhere`, whose files this machine lacks, as a placed
