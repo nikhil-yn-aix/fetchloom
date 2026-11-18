@@ -262,15 +262,18 @@ impl Folder {
     }
 
     /// whether a record written for `recorded` was written for `here`, the folder as it is now, as
-    /// [`Folder::matches`] tells it; what `untold` says when either side cannot be told.
+    /// [`Folder::matches`] tells it. a record that names no folder was written for another, since
+    /// every one this build writes names its folder wherever the folder can be told; `untold` says
+    /// what a record is when this folder cannot be told.
     pub(crate) fn written_here(
         recorded: Option<&Folder>,
         here: Option<&Folder>,
         untold: Untold,
     ) -> bool {
-        match recorded.zip(here) {
-            Some((recorded, here)) => recorded.matches(here),
-            None => untold == Untold::Here,
+        match (recorded, here) {
+            (Some(recorded), Some(here)) => recorded.matches(here),
+            (None, Some(_)) => false,
+            (_, None) => untold == Untold::Here,
         }
     }
 
@@ -289,7 +292,7 @@ impl Folder {
     }
 }
 
-/// what a record counts as when the folder it was written for, or this one, cannot be told.
+/// what a record counts as when this folder cannot be told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Untold {
     /// another folder's, so a record that vouches for files here is not used.

@@ -1990,6 +1990,7 @@ pub(crate) mod tests {
             "pid": 42,
             "started": "2026-10-30T12:00:00Z",
             "command": "sync",
+            "folder": crate::project::state::Folder::of(&project.root),
         });
         std::fs::write(
             project.own_folder().join("owner"),
