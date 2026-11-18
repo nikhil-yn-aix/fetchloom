@@ -432,6 +432,64 @@ fn a_cloned_link_into_another_projects_data_folder_is_refused() -> Result {
     Ok(())
 }
 
+/// a teammate's clone holds the author's data link when it was committed before the line that
+/// hides it. refused as not on this machine or not listed, a link git tracks is said to have come
+/// with the clone, with the way to a plain data folder: deleting it, and committing that. a link
+/// git does not track gets no such line.
+#[cfg(unix)]
+#[test]
+fn a_refused_link_git_tracks_says_it_came_with_the_clone() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    cloned(&sandbox, &format!("{}/iris.csv", routes.url))?;
+    let data = sandbox.work().join("data");
+    let came = "the link came with the clone, as git tracks it: deleting it with `git rm -- data`, and committing that, gives this project a plain data folder";
+    let commit = |message: &str| -> Result {
+        crate::merge::ok(&sandbox, &["add", "-A"])?;
+        crate::merge::ok(&sandbox, &["commit", "-qm", message])?;
+        Ok(())
+    };
+    let refused = |args: &[&str], euid: Option<&str>, why: &str| -> Result<String> {
+        let mut command = sandbox.command(args);
+        if let Some(euid) = euid {
+            command.env("FETCHLOOM_TEST_EUID", euid);
+        }
+        let output = command.output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{why}: {stderr}");
+        assert!(stderr.contains(why), "{why}: {stderr}");
+        Ok(stderr)
+    };
+    let elsewhere = sandbox.folder("elsewhere")?;
+    link_folder(&elsewhere, &data)?;
+    let unlisted = "which no folder in data_links holds, so fetchloom places nothing through it";
+    let said = refused(&["sync"], None, unlisted)?;
+    assert!(!said.contains(came), "not in git yet: {said}");
+    commit("link data elsewhere")?;
+    let said = refused(&["sync"], None, unlisted)?;
+    assert!(said.contains(came), "{said}");
+    unlink(&data)?;
+    link_folder(&sandbox.folder("gone")?.join("data"), &data)?;
+    commit("link data to a disk this machine lacks")?;
+    let said = refused(
+        &["sync"],
+        None,
+        "which does not exist: its disk may be unmounted",
+    )?;
+    assert!(said.contains(came), "{said}");
+    crate::merge::ok(&sandbox, &["rm", "-q", "--", "data"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "a plain data folder"])?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert!(fs::symlink_metadata(&data)?.is_dir());
+    assert_eq!(fs::read(data.join("iris").join("iris.csv"))?, IRIS);
+    Ok(())
+}
+
 /// a person who moves their own data folder to scratch and links it back keeps working: the folder
 /// holds what this project placed, the markers it made and what a system writes by itself, so the
 /// first follow takes it and the state records it.

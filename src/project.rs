@@ -1069,10 +1069,33 @@ impl Project {
             };
             if fs::symlink_metadata(&folder).is_ok_and(|metadata| metadata.file_type().is_symlink())
             {
-                self.follow(&folder, &path, &mut followed)?;
+                self.follow(&folder, &path, &mut followed)
+                    .map_err(|error| self.cloned_link(&path, error))?;
             }
         }
         Ok((folder, followed))
+    }
+
+    /// `error`, refusing the link `path` in the project, with the way to end it for good when git
+    /// tracks the link, as a teammate's clone holds one its author committed: it came with the
+    /// clone, and deleting it, and committing that, gives a plain data folder. asking git takes a
+    /// run of it, which only a refusal makes.
+    pub(crate) fn cloned_link(&self, path: &str, error: Error) -> Error {
+        let tracked = Project::repository(&self.root).is_some()
+            && std::env::var_os("PATH")
+                .and_then(|search| git::find(Some(&search), &self.root))
+                .and_then(|program| git::tracked(&program, &self.root, path))
+                .is_some_and(|tracked| tracked.contains(path));
+        if !tracked {
+            return error;
+        }
+        let delete = crate::suggested::git(
+            &self.root,
+            &format!("rm -- {}", crate::suggested::shell_word(path)),
+        );
+        error.detail(format!(
+            "the link came with the clone, as git tracks it: deleting it with `{delete}`, and committing that, gives this project a plain data folder"
+        ))
     }
 
     /// where the data folder `data_dir` is when [`Project::follow`] follows the one link on the
