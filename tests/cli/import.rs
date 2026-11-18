@@ -91,7 +91,7 @@ fn an_import_tells_what_it_copied_and_that_the_folder_is_unchanged() -> Result {
         .unwrap_or_default();
     assert!(
         line.starts_with("   Imported flowers · 2 files · 32 B, ")
-            && line.ends_with(" into the cache; ../flowers is unchanged"),
+            && line.ends_with(" into the cache; ../flowers stays where it is"),
         "{stderr}"
     );
     assert!(

@@ -1355,15 +1355,15 @@ pub(super) fn room(
 }
 
 /// what reading the folder `shown` did: its files and bytes, copied or cloned into the cache, or
-/// nothing new to copy when the cache held them all.
+/// held there already, and the folder left where it is, never moved or changed.
 fn read_line(walked: &Walked, copied: &Copied, shown: &str) -> String {
     let how = match (copied.new, copied.cloned) {
-        (false, _) => "nothing new to copy",
+        (false, _) => "the cache held the bytes already",
         (true, true) => "cloned into the cache",
         (true, false) => "copied into the cache",
     };
     format!(
-        "{} · {}, {how}; {shown} is unchanged",
+        "{} · {}, {how}; {shown} stays where it is",
         units::count(walked.files.len() as u64, "file", "files"),
         units::size(walked.bytes())
     )

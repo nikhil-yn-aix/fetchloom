@@ -342,7 +342,7 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
     assert_eq!(again.status.code(), Some(0), "{stderr}");
     assert!(
         stderr.contains(
-            "      Read results · 2 files · 29 B, nothing new to copy; results is unchanged\n"
+            "      Read results · 2 files · 29 B, the cache held the bytes already; results stays where it is\n"
         ),
         "{stderr}"
     );
@@ -1692,6 +1692,10 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
     let output = sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(", the cache held the bytes already; data/processed stays where it is\n"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("Pinned processed · 1 edited file, 1 extra file, 1 missing file"),
         "{stderr}"
