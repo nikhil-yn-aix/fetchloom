@@ -213,6 +213,9 @@ pub(crate) struct ChangedOutput {
     pub(crate) change: String,
     /// whether an earlier run told of this change, so this one only counts it.
     pub(crate) told: bool,
+    /// its files at pinned paths a run leaves as they are, as their edits are told of, so a folder
+    /// moved keeping their times keeps them the person's.
+    pub(crate) edits: Vec<String>,
 }
 
 impl ChangedOutput {
@@ -227,6 +230,7 @@ impl ChangedOutput {
             removed: 0,
             change: String::new(),
             told: false,
+            edits: Vec::new(),
         }
     }
 
@@ -536,12 +540,13 @@ fn edited_path(edit: &str) -> &str {
 }
 
 /// records in `state` what `placement` told once, so later runs stay quiet of it: each edit kept,
-/// with how its file looks on `disk`, each change of an output left whole, each folder told how to
-/// keep away, the data folder told how to keep elsewhere, an R package told where raw files go,
-/// each folder told it is too full to name, why files were copied on the data folder's disk, the
-/// lines of the markers made, and whether git keeps the folder of an output pinned now, as
-/// `git_keeps` reads it. forgets the edits and output changes of `scope` this run found no more,
-/// and the folders, and their markers' lines, no dataset has now. says whether the state changed.
+/// with how its file looks on `disk`, each change of an output left whole, with how each of its
+/// files at a pinned path looks, each folder told how to keep away, the data folder told how to
+/// keep elsewhere, an R package told where raw files go, each folder told it is too full to name,
+/// why files were copied on the data folder's disk, the lines of the markers made, and whether git
+/// keeps the folder of an output pinned now, as `git_keeps` reads it. forgets the edits and output
+/// changes of `scope` this run found no more, and the folders, and their markers' lines, no dataset
+/// has now. says whether the state changed.
 fn note_told(
     state: &mut State,
     manifest: &Manifest,
@@ -554,6 +559,12 @@ fn note_told(
         .iter()
         .filter(|kept| kept.reason == Reason::Changed)
         .filter_map(|kept| Some(edited(&kept.path, disk.get(&kept.path)?)))
+        .chain(
+            placement
+                .changed_outputs
+                .iter()
+                .flat_map(|output| output.edits.iter().cloned()),
+        )
         .collect();
     let folders: BTreeSet<String> = manifest
         .datasets
@@ -3191,6 +3202,9 @@ fn changed_outputs(
             | Action::Unblock(_) => {
                 output.changed += 1;
                 changes.push(change("changed", path));
+                if let (Action::Leave(_), Some(look)) = (action, survey.disk.get(path)) {
+                    output.edits.push(edited(path, look));
+                }
             }
             // hashing found other bytes than the look tells, which is a change all the same, and
             // so is the author's file of another run, as after a branch switch

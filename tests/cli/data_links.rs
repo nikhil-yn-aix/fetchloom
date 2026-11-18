@@ -871,6 +871,66 @@ fn a_told_edit_moved_with_its_data_folder_is_followed() -> Result {
     Ok(())
 }
 
+/// w1: an output its pipeline wrote again, which sync told of and left whole, moves with its data
+/// folder onto scratch keeping its times: the changed file is the person's, as a told edit is, so
+/// the link's first follow takes the folder with it.
+#[test]
+fn a_told_output_change_moved_with_its_data_folder_is_followed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let probe = sandbox.work().join("probe");
+    if link_folder(&scratch, &probe).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    unlink(&probe)?;
+    let data = sandbox.work().join("data");
+    let features = data.join("processed").join("features.csv");
+    fs::create_dir_all(data.join("processed"))?;
+    fs::write(&features, b"x,y\n")?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    fs::write(&features, b"x,y,z\n")?;
+    let told = sandbox.run(&["sync"])?;
+    let said = text(&told.stderr)?;
+    assert!(
+        said.contains("warning: data/processed changed since processed was pinned"),
+        "{said}"
+    );
+    let moved = scratch.join("project-data");
+    fs::rename(&data, &moved)?;
+    link_folder(&moved, &data)?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(moved.join("processed").join("features.csv"))?,
+        b"x,y,z\n"
+    );
+    // pinned again, the file is the pin's, and its record as an edit goes
+    let edits = || -> Result<usize> {
+        let state = fs::read(sandbox.work().join(".fetchloom").join("state"))?;
+        let state: serde_json::Value = serde_json::from_slice(&state)?;
+        Ok(state["told"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|told| {
+                told.as_str()
+                    .is_some_and(|told| told.starts_with("edit:data/processed/features.csv:"))
+            })
+            .count())
+    };
+    assert_eq!(edits()?, 1);
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?)?;
+    assert_eq!(edits()?, 0);
+    Ok(())
+}
+
 /// once a link's first follow is recorded, the folder is this project's data folder as any other:
 /// a person's edit of a pinned file and a pipeline's new file in an output's folder are told as
 /// anywhere, and no sync refuses the link for them.
