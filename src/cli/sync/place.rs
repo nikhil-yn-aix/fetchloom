@@ -3418,6 +3418,12 @@ fn left_by_move(retired: &mut [Retired], kept: &[Kept]) {
     }
 }
 
+/// whether `state` records a file of the dataset `name` placed or pinned on this machine. without
+/// one, as in a fresh clone, nothing its folder holds is the dataset's here.
+pub(crate) fn placed_here(state: &State, name: &str) -> bool {
+    state.files.values().any(|placed| placed.dataset == name)
+}
+
 /// the outputs whose folders hold the author's own files, as `state` recorded their capture there:
 /// every difference from the pin in such a folder is the author's, so sync renews no file there and
 /// fills in none, which would mix two runs of a pipeline in one folder.

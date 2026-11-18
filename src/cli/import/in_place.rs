@@ -11,7 +11,9 @@ use super::super::args::Add;
 use super::super::diff::{self, Change, Pinned};
 use super::super::project::{Outcome, Report, dry_run_done};
 use super::super::sync::disk;
-use super::super::sync::place::{Placement, Reach, is_marker_form, reach, tell_marked};
+use super::super::sync::place::{
+    Placement, Reach, is_marker_form, placed_here, reach, tell_marked,
+};
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
 use super::{
@@ -105,7 +107,7 @@ pub(super) async fn pin_held(
         (pin, changes.as_ref().filter(|changes| !changes.is_empty()))
     {
         let held = (changes, &pin.files[..], &cache);
-        approved(context, (&project.root, &at), (&name, shown), held)?;
+        approved(context, (project, &at), (&name, shown), held)?;
     }
     adding.seed(seeds(&name, &at, walked, &copied.files));
     adding.git_keeps(&at, git::keeps(&project.root, &at));
@@ -699,14 +701,21 @@ fn preview(work: &Loop<'_>, (name, shown): (&str, &str), changes: Option<&Change
     }
 }
 
-/// the ways on a refused re-pin offers, as sync's for its folder: no `sync --force` where nothing
+/// the ways on a refused re-pin of the output `name` offers, as sync's for its folder: no
+/// `sync --force` where this machine placed none of the output, as in a clone, or where nothing
 /// here can write the files of `pinned` the folder lacks or holds changed, as `changes` names
 /// them, since `cache` lacks one and no mirror is set, as `mirrored` says.
 fn repinned(
+    project: &Project,
+    name: &str,
     pinned: &[LockedFile],
     changes: &Changes,
     (cache, mirrored): (&Cache, bool),
 ) -> local::Since<'static> {
+    let (state, _) = project.state();
+    if !placed_here(&state, name) {
+        return local::Since::Unplaced { yes: true };
+    }
     let needed: HashSet<&str> = changes
         .changed
         .iter()
@@ -727,7 +736,7 @@ fn repinned(
 /// that means to check runs `status --verify --check`.
 fn approved(
     context: &Context,
-    (root, at): (&Path, &str),
+    (project, at): (&Project, &str),
     (name, shown): (&str, &str),
     (changes, pinned, cache): (&Changes, &[LockedFile], &Cache),
 ) -> Result<(), Error> {
@@ -765,9 +774,9 @@ fn approved(
                 .map(|path| format!("{at}/{path}"))
                 .collect();
             let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-            let tracked = crate::cli::sync::place::git_tracked(root, at, &paths);
+            let tracked = crate::cli::sync::place::git_tracked(&project.root, at, &paths);
             let mirrored = !context.mirrors.mirrors.list.is_empty();
-            let since = match repinned(pinned, changes, (cache, mirrored)) {
+            let since = match repinned(project, name, pinned, changes, (cache, mirrored)) {
                 local::Since::Changed { .. } if !tracked.is_empty() => local::Since::Tracked {
                     files: &tracked,
                     yes: true,

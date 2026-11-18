@@ -712,7 +712,8 @@ fn a_changed_output_no_cache_holds_offers_no_force() -> Result {
 }
 
 /// the same add without a terminal or --yes offers `sync --force` only where it puts the files
-/// back: with the pinned bytes in no cache here, it names the pipeline.
+/// back: with the pinned bytes in no cache here, it names the pipeline, and in a clone, where no
+/// file there is one fetchloom placed, it names checking `at`, as sync does.
 #[test]
 fn the_same_add_offers_force_only_where_it_puts_files_back() -> Result {
     let sandbox = Sandbox::new()?;
@@ -729,6 +730,21 @@ fn the_same_add_offers_force_only_where_it_puts_files_back() -> Result {
     assert_eq!(lost.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains("  help: run your pipeline here, then `fetchloom add ./data/processed --as processed --yes`, or that add alone pins what it holds now\n"),
+        "{stderr}"
+    );
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    fs::create_dir_all(teammate.join("data/processed"))?;
+    fs::write(teammate.join("data/processed/iris_clean.csv"), b"mine")?;
+    let cloned = sandbox
+        .command_in(&teammate, &["add", "data/processed", "--as", "processed"])
+        .output()?;
+    let stderr = text(&cloned.stderr)?;
+    assert_eq!(cloned.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("  help: no file there is one fetchloom placed on this machine, so check that `at` for processed in data.toml names its folder; `fetchloom add ./data/processed --as processed --yes` pins what it holds now\n"),
         "{stderr}"
     );
     Ok(())
