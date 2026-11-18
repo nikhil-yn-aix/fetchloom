@@ -152,12 +152,7 @@ async fn import_held(
     }
     room(context, &cache, &walked, shown)?;
     let copied = into_cache(context, &cache, &walked, &|_| Ok(()))?;
-    let how = if copied.cloned { "cloned" } else { "copied" };
-    let told = format!(
-        "{} · {}, {how} into the cache; {shown} is unchanged",
-        units::count(walked.files.len() as u64, "file", "files"),
-        units::size(walked.bytes())
-    );
+    let told = read_line(&walked, &copied, shown);
     // the walk's list of files is read for the last time above; freed here, it stays out of the
     // peak of placing them
     drop(walked);
@@ -1362,11 +1357,28 @@ pub(super) fn room(
     )
 }
 
+/// what reading the folder `shown` did: its files and bytes, copied or cloned into the cache, or
+/// nothing new to copy when the cache held them all.
+fn read_line(walked: &Walked, copied: &Copied, shown: &str) -> String {
+    let how = match (copied.new, copied.cloned) {
+        (false, _) => "nothing new to copy",
+        (true, true) => "cloned into the cache",
+        (true, false) => "copied into the cache",
+    };
+    format!(
+        "{} · {}, {how}; {shown} is unchanged",
+        units::count(walked.files.len() as u64, "file", "files"),
+        units::size(walked.bytes())
+    )
+}
+
 /// the files copied into the cache, in the order found, pinned with no link: no source has them.
 pub(super) struct Copied {
     pub(super) files: Vec<LockedFile>,
     /// whether every file is a clone sharing its blocks, which takes no room of its own.
     pub(super) cloned: bool,
+    /// whether the cache held none of the files' bytes before.
+    pub(super) new: bool,
 }
 
 /// copies every file `walked` found into the cache and pins each. none is in the cache under its
@@ -1419,6 +1431,7 @@ fn into_cache(
     });
     drop(finishing);
     let mut files = Vec::with_capacity(found.len());
+    let mut new = false;
     for (file, stored) in found.iter().zip(published) {
         let stored = stored
             .ok_or_else(|| Error::new(Kind::LocalIo, "importing stopped unexpectedly"))?
@@ -1430,6 +1443,7 @@ fn into_cache(
             })?;
         if stored.new {
             context.work.wrote(&stored.digest);
+            new = true;
         }
         files.push(LockedFile {
             path: file.path.clone(),
@@ -1444,7 +1458,7 @@ fn into_cache(
     cache
         .mark_imported(&digests)
         .map_err(|err| Error::io("could not record the imported files in the cache", &err))?;
-    Ok(Copied { files, cloned })
+    Ok(Copied { files, cloned, new })
 }
 
 /// a copy of each file an import found, sealed in a staging folder of the cache and waiting to be

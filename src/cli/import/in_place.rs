@@ -14,7 +14,9 @@ use super::super::sync::disk;
 use super::super::sync::place::{Placement, is_marker_form, tell_marked};
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
-use super::{Found, Walked, dataset_name, into_cache, pinned, room, tell_left_out, walk};
+use super::{
+    Found, Walked, dataset_name, into_cache, pinned, read_line, room, tell_left_out, walk,
+};
 use crate::cache::Cache;
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
@@ -97,7 +99,7 @@ pub(super) async fn pin_held(
     let copied = into_cache(context, &cache, walked, &|copies| {
         reread(context, &walk, (start, shown), &source, copies)
     })?;
-    let told = read_line(walked, copied.cloned, shown);
+    let told = read_line(walked, &copied, shown);
     let changes = pin.map(|pin| Changes::of(&copied.files, &pin.files));
     if let Some(changes) = changes.as_ref().filter(|changes| !changes.is_empty()) {
         approved(context, (&name, shown), changes)?;
@@ -317,16 +319,6 @@ fn compared(
     reread(context, walk, (start, shown), source, &read)?;
     let changes = Changes::of(&hashed, pin.map_or(&[][..], |pin| &pin.files));
     Ok(preview(work, (name, shown), Some(&changes)))
-}
-
-/// what reading the folder `shown` did: its files and bytes, copied or `cloned` into the cache.
-fn read_line(walked: &Walked, cloned: bool, shown: &str) -> String {
-    let how = if cloned { "cloned" } else { "copied" };
-    format!(
-        "{} · {}, {how} into the cache; {shown} is unchanged",
-        units::count(walked.files.len() as u64, "file", "files"),
-        units::size(walked.bytes())
-    )
 }
 
 /// refuses a folder that cannot be an output's: the project's own, or one data.toml could not

@@ -183,6 +183,12 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
     let stderr = text(&again.stderr)?;
     assert_eq!(again.status.code(), Some(0), "{stderr}");
     assert!(
+        stderr.contains(
+            "      Read results · 2 files · 29 B, nothing new to copy; results is unchanged\n"
+        ),
+        "{stderr}"
+    );
+    assert!(
         stderr.contains("results is pinned as results holds it"),
         "{stderr}"
     );
