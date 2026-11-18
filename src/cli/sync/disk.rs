@@ -91,9 +91,10 @@ pub(crate) struct Survey {
     pub(crate) marks: HashMap<String, Mark>,
     /// whether the data folder was not there when the listing began, as after it was moved away.
     pub(crate) data_gone: bool,
-    /// for an add pinning an output, its folder and whether git tracks the person's files there
-    /// now, which the run's markers follow over the state's record of the last pin.
-    pub(crate) git_keeps: Option<(String, bool)>,
+    /// output folders git was asked of this run, by an add pinning one or before a first marker,
+    /// each with whether git tracks the person's files there, which the run's markers follow over
+    /// the state's record.
+    pub(crate) git_keeps: BTreeMap<String, bool>,
 }
 
 /// what stands where fetchloom made a folder's .gitignore, by the state's record.
@@ -422,7 +423,7 @@ impl Survey {
             outside: Vec::new(),
             marks,
             data_gone,
-            git_keeps: None,
+            git_keeps: BTreeMap::new(),
         };
         if survey.state.id.is_none() {
             survey.state.id = Some(project.fresh_id().to_owned());

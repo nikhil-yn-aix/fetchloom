@@ -330,6 +330,27 @@ pub(crate) fn tracked(git: &Path, root: &Path, folder: &str) -> Option<HashSet<S
     )
 }
 
+/// the files git users commit only to keep a folder, or its rules, in git.
+const HOLDERS: [&str; 3] = [".gitkeep", ".keep", ".gitignore"];
+
+/// whether git tracks files of the person's in `folder` of the project at `root`, besides
+/// [`HOLDERS`]: a folder they keep in git, where a marker would hide their next file. no
+/// repository, no git and no answer are no.
+pub(crate) fn keeps(root: &Path, folder: &str) -> bool {
+    super::Project::repository(root).is_some()
+        && std::env::var_os("PATH")
+            .and_then(|path| find(Some(&path), root))
+            .and_then(|program| tracked(&program, root, folder))
+            .is_some_and(|tracked| {
+                tracked.iter().any(|path| {
+                    let name = path
+                        .rsplit_once('/')
+                        .map_or(path.as_str(), |(_, name)| name);
+                    !HOLDERS.contains(&name)
+                })
+            })
+}
+
 /// what git knows of the files below some paths of a work tree, by their paths from its root
 /// with `/` between folders. a file in neither set is one an ignore rule leaves out.
 #[derive(Debug, Default)]

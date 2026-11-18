@@ -208,18 +208,54 @@ pub(super) fn unnamed(
         .collect()
 }
 
-/// whether git keeps `folder`, an output's, tracking the person's files there: as the pin this run
-/// makes found, or else as the state records the last pin found. a marker would hide their next
-/// file there from git.
+/// whether git keeps `folder`, an output's, tracking the person's files there: as git said this
+/// run, or else as the state records it said before. a marker would hide their next file there
+/// from git.
 fn kept_in_git(manifest: &Manifest, survey: &Survey, folder: &str) -> bool {
-    let kept = match &survey.git_keeps {
-        Some((at, kept)) if at == folder => *kept,
-        _ => survey.state.told.has(Once::Tracked, folder),
+    let kept = match survey.git_keeps.get(folder) {
+        Some(kept) => *kept,
+        None => survey.state.told.has(Once::Tracked, folder),
     };
     kept && manifest
         .datasets
         .values()
         .any(|entry| entry.at.as_deref() == Some(folder))
+}
+
+/// asks git, as a pin does, of each output folder of `wanted` that is to get its first marker, or
+/// one again after it went, which neither git this run nor the state's record decides: one git
+/// run for each, and none without a repository or git.
+pub(super) fn ask_git(
+    root: &Path,
+    manifest: &Manifest,
+    survey: &mut Survey,
+    wanted: &BTreeSet<String>,
+) {
+    for folder in wanted {
+        let output = manifest
+            .datasets
+            .values()
+            .any(|entry| entry.at.as_deref() == Some(folder.as_str()));
+        let first = match survey.marks.get(folder) {
+            Some(Mark::Gone) => true,
+            Some(Mark::Made(_) | Mark::Taken) => false,
+            None => bare(survey, folder),
+        };
+        if output
+            && first
+            && !survey.git_keeps.contains_key(folder)
+            && !survey.state.told.has(Once::Tracked, folder)
+        {
+            let kept = crate::project::git::keeps(root, folder);
+            survey.git_keeps.insert(folder.clone(), kept);
+        }
+    }
+}
+
+/// whether nothing stands where the marker of `folder` goes, as the listing saw it.
+fn bare(survey: &Survey, folder: &str) -> bool {
+    let path = disk::marker(folder);
+    !survey.disk.contains_key(&path) && !survey.entries.contains_key(&path)
 }
 
 /// whether the person shares `folder`, a dataset's, with its datasets: the data folder itself, or
@@ -483,8 +519,7 @@ pub(super) fn planned(
             Some(Mark::Taken) => planned.forget.push(folder.clone()),
             None if none => {}
             None => {
-                let path = disk::marker(folder);
-                if !survey.disk.contains_key(&path) && !survey.entries.contains_key(&path) {
+                if bare(survey, folder) {
                     planned.write.push((folder.clone(), false));
                 }
             }

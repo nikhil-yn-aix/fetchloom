@@ -137,10 +137,10 @@ pub(crate) struct Placement {
     /// whether the project is in a git repository, where the lines for `marked` matter.
     #[serde(skip)]
     pub(crate) in_git: bool,
-    /// for an add pinning an output, its folder when git tracks the person's files there now and did
-    /// not at the last pin, which git keeps, so it gets no marker.
+    /// the output folders git tracks the person's files in now, as asked this run, that it did
+    /// not as the state recorded, which git keeps, so they get no marker.
     #[serde(skip)]
-    pub(crate) kept_in_git: Option<String>,
+    pub(crate) kept_in_git: Vec<String>,
     /// dataset folders whose own .gitignore the run places where a marker would go, which no line
     /// of the project's .gitignore hides.
     #[serde(skip)]
@@ -625,7 +625,7 @@ fn note_told(
     state: &mut State,
     manifest: &Manifest,
     placement: &Placement,
-    (disk, git_keeps): (&HashMap<String, Look>, Option<&(String, bool)>),
+    (disk, git_keeps): (&HashMap<String, Look>, &BTreeMap<String, bool>),
     scope: &Scope,
 ) -> bool {
     let edits: HashSet<String> = placement
@@ -709,16 +709,16 @@ fn note_told(
         changed |= mark::note_said(told, &placement.marked);
     }
     changed |= mark::forget_left(told, manifest);
-    match git_keeps {
-        // a folder git lets go of later is told of again with the marker it gets then
-        Some((at, true)) => {
+    for (at, kept) in git_keeps {
+        if *kept {
+            // a folder git lets go of later is told of again with the marker it gets then
             changed |= told.note(Once::Tracked, at);
             for said in [Once::Hidden, Once::Named] {
                 changed |= told.retain(said, |folder| folder != at);
             }
+        } else {
+            changed |= told.retain(Once::Tracked, |folder| folder != at);
         }
-        Some((at, false)) => changed |= told.retain(Once::Tracked, |folder| folder != at),
-        None => {}
     }
     changed
 }
@@ -1358,7 +1358,7 @@ impl<'a> Placing<'a> {
 
     /// what [`Placing::apply`] would do, writing nothing. a file already where one goes whose hash
     /// is a stand-in, `guessed` as `<dataset>/<path>`, is one to check: only its download tells.
-    pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
+    pub(crate) fn preview(&mut self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         preview.placement.elsewhere.clone_from(&self.elsewhere);
         self.preview_unwanted(&mut preview);
@@ -1472,8 +1472,9 @@ impl<'a> Placing<'a> {
 
     /// notes in `placement` the dataset folders a run would keep out of git, and those whose own
     /// .gitignore it would place.
-    fn preview_marks(&self, placement: &mut Placement) {
+    fn preview_marks(&mut self, placement: &mut Placement) {
         let wanted = mark::wanted(self.manifest, &self.targets, &self.actions, &self.elsewhere);
+        mark::ask_git(&self.project.root, self.manifest, &mut self.survey, &wanted);
         let contents = mark::contents(
             self.manifest,
             &self.targets,
@@ -1674,8 +1675,9 @@ impl<'a> Placing<'a> {
         );
         // the state written ahead must not vouch for the size and time an edit kept
         survey.smudge_edited();
-        let contents = mark::contents(manifest, &targets, (&survey, (&unknown, &waiting)));
         let wanted_marks = mark::wanted(manifest, &targets, &actions, &placement.elsewhere);
+        mark::ask_git(&project.root, manifest, &mut survey, &wanted_marks);
+        let contents = mark::contents(manifest, &targets, (&survey, (&unknown, &waiting)));
         placement.unnamed = untold_unnamed(&survey.state, &wanted_marks, &contents);
         let (to_mark, marking) = mark::to_write(&mut survey, &wanted_marks, &contents);
         placement.unmarkable = mark::unmarkable(&project.root, manifest, &targets, &actions);
@@ -1713,9 +1715,10 @@ impl<'a> Placing<'a> {
         placement.marked = mark::untold(&survey.state, &made);
         placement.kept_in_git = survey
             .git_keeps
-            .as_ref()
-            .filter(|(at, kept)| *kept && !survey.state.told.has(Once::Tracked, at))
-            .map(|(at, _)| at.clone());
+            .iter()
+            .filter(|(at, kept)| **kept && !survey.state.told.has(Once::Tracked, at))
+            .map(|(at, _)| at.clone())
+            .collect();
         placement.in_git = Project::repository(&project.root).is_some();
         // git keeps a link as a file and never looks behind it, so no line hides what lies there
         let through_link = survey.followed.iter().any(|link| {
@@ -1818,7 +1821,7 @@ impl<'a> Placing<'a> {
             && manifest.data_dir == crate::project::manifest::DATA_DIR
             && !state.told.has(Once::RPackage, &manifest.data_dir)
             && project.is_r_package();
-        let git_keeps = survey.git_keeps.as_ref();
+        let git_keeps = &survey.git_keeps;
         let noted = telling
             && note_told(
                 state,
@@ -1929,7 +1932,7 @@ impl<'a> Placing<'a> {
 
 /// the line for the dataset folders `placement` kept out of git with a .gitignore of fetchloom's.
 pub(crate) fn tell_marked(output: &Output, placement: &Placement) {
-    if let Some(folder) = &placement.kept_in_git {
+    for folder in &placement.kept_in_git {
         output.step(
             "Kept",
             &format!(

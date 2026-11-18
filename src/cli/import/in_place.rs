@@ -103,7 +103,7 @@ pub(super) async fn pin_held(
         approved(context, (&name, shown), changes)?;
     }
     adding.seed(seeds(&name, &at, walked, &copied.files));
-    adding.git_keeps(&at, git_tracks(&project.root, &at));
+    adding.git_keeps(&at, git::keeps(&project.root, &at));
     let work = Loop::new(context, project, net, cache).adding(&name);
     let mut locked = pinned(&name, &source, copied.files);
     locked.at = Some(at.clone());
@@ -145,27 +145,6 @@ pub(super) async fn pin_held(
         placement: Some(outcome.placed),
         ..Report::default()
     })
-}
-
-/// the files git users commit only to keep a folder, or its rules, in git.
-const HOLDERS: [&str; 3] = [".gitkeep", ".keep", ".gitignore"];
-
-/// whether git tracks files of the person's in the output folder `at` of the project at `root`,
-/// besides [`HOLDERS`]: a folder they keep in git, where a marker would hide their next file. read
-/// at each pin of an output alone, so no sync runs git.
-fn git_tracks(root: &Path, at: &str) -> bool {
-    Project::repository(root).is_some()
-        && std::env::var_os("PATH")
-            .and_then(|path| git::find(Some(&path), root))
-            .and_then(|program| git::tracked(&program, root, at))
-            .is_some_and(|tracked| {
-                tracked.iter().any(|path| {
-                    let name = path
-                        .rsplit_once('/')
-                        .map_or(path.as_str(), |(_, name)| name);
-                    !HOLDERS.contains(&name)
-                })
-            })
 }
 
 /// pins `locked`, the new output `name` at `at` with `source`'s patterns, writing its table into

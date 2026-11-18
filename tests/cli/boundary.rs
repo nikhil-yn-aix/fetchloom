@@ -857,8 +857,7 @@ fn a_shared_folder_too_full_to_name_gets_no_wildcard() -> Result {
 /// .gitignore at its first pin, which would hide the next table from git: the add says once that
 /// git keeps it and fetchloom pins it too, and a sync or a pin again says nothing more of it. a
 /// folder git holds only a .gitkeep, a .keep or a .gitignore in, at any depth, is not kept in git
-/// and gets its .gitignore, and so do a teammate's clone of results/, since only a first pin looks
-/// at git, never a sync, and results/ pinned first again once git no longer tracks it.
+/// and gets its .gitignore, and so does results/ pinned first again once git no longer tracks it.
 #[test]
 fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
     let sandbox = Sandbox::new()?;
@@ -916,19 +915,6 @@ fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
     );
     assert!(!work.join("results/.gitignore").exists());
 
-    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock"])?;
-    crate::merge::ok(&sandbox, &["commit", "-qm", "pinned"])?;
-    let teammate = sandbox.folder("teammate")?;
-    let into = teammate.display().to_string();
-    let cloned =
-        crate::merge::git(&sandbox, &work, &["clone", "-q", ".", &into])?.ok_or("git went away")?;
-    assert!(cloned.status.success(), "{}", text(&cloned.stderr)?);
-    let placed = sandbox.command_in(&teammate, &["sync"]).output()?;
-    let stderr = text(&placed.stderr)?;
-    assert_eq!(placed.status.code(), Some(0), "{stderr}");
-    let marker = crate::support::marker(&teammate.join("results/.gitignore")).ok();
-    assert_eq!(marker.as_deref(), Some(&b"*\n"[..]), "{stderr}");
-
     // once git lets go of the folder, its next first pin gives it a .gitignore
     ok(&sandbox.run(&["remove", "results", "--yes"])?)?;
     crate::merge::ok(&sandbox, &["rm", "-r", "-q", "--cached", "results"])?;
@@ -939,6 +925,69 @@ fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
         crate::support::marker(&work.join("results/.gitignore"))?,
         b"*\n"
     );
+    Ok(())
+}
+
+/// a teammate's clone of an output's folder git tracks gets no .gitignore either: the sync that
+/// would make it asks git first, as the author's pin did, and says once that git keeps the
+/// folder, so the teammate's next table reaches git. an output whose files wait for the
+/// teammate's own pipeline run is asked the same before its folder is made ready.
+#[test]
+fn a_clone_asks_git_before_it_marks_an_outputs_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    write_all(
+        &sandbox,
+        &[
+            ("results/table1.csv", "a,b\n1,2\n"),
+            ("features/README.md", "made by make features\n"),
+        ],
+    )?;
+    crate::merge::ok(&sandbox, &["add", "-A"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "tables"])?;
+    write_all(&sandbox, &[("features/train.csv", "x,y\n0,1\n")])?;
+    for output in ["results", "features"] {
+        ok(&sandbox.run(&["add", output, "--as", output])?)?;
+    }
+    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "pinned"])?;
+    let teammate = sandbox.folder("teammate")?;
+    let into = teammate.display().to_string();
+    let cloned = crate::merge::git(&sandbox, &sandbox.work(), &["clone", "-q", ".", &into])?
+        .ok_or("git went away")?;
+    assert!(cloned.status.success(), "{}", text(&cloned.stderr)?);
+    let cache = sandbox.folder("teammate-cache")?;
+    let sync = || {
+        sandbox
+            .command_in(&teammate, &["sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let placed = sync()?;
+    let stderr = text(&placed.stderr)?;
+    assert_eq!(placed.status.code(), Some(0), "{stderr}");
+    for output in ["results", "features"] {
+        assert!(
+            stderr.contains(&format!(
+                "       Kept {output} in git, which tracks files there; fetchloom pins it for sharing too\n"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            !teammate.join(output).join(".gitignore").exists(),
+            "{stderr}"
+        );
+    }
+    assert!(!stderr.contains("Ignored"), "{stderr}");
+    let again = text(&sync()?.stderr)?;
+    assert!(!again.contains("in git"), "{again}");
+    fs::write(teammate.join("results/table2.csv"), "c,d\n3,4\n")?;
+    let status = crate::merge::git(&sandbox, &teammate, &["status", "--porcelain", "-uall"])?
+        .ok_or("git went away")?;
+    let seen = text(&status.stdout)?;
+    assert!(seen.contains("?? results/table2.csv\n"), "{seen}");
     Ok(())
 }
 
@@ -1024,7 +1073,7 @@ fn kept_line(folder: &str) -> String {
 /// .gitkeep at the first pin, gets its .gitignore then; once the person takes it out and commits a
 /// figure there, the next pin leaves the folder to git and says so once, so a new figure shows in
 /// git. when git lets go of the figure, a pin gives the folder its .gitignore back, said again,
-/// and the syncs after keep it.
+/// and the syncs after keep it: a sync asks git only before it makes one.
 #[test]
 fn every_pin_reads_whether_git_keeps_an_outputs_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1066,11 +1115,17 @@ fn every_pin_reads_whether_git_keeps_an_outputs_folder() -> Result {
     crate::merge::ok(&sandbox, &["rm", "-q", "--cached", "figures/fig1.png"])?;
     pin(false)?;
     assert_eq!(crate::support::marker(&marker)?, b"*\n");
-    // the syncs after, which read no git, keep what the pin found: a marker that goes comes back
+    // a marker that goes comes back while git tracks none of the person's files there
     fs::remove_file(&marker)?;
     synced(&sandbox)?;
     let back = crate::support::marker(&marker).ok();
     assert_eq!(back.as_deref(), Some(&b"*\n"[..]));
+    // one that stands is the pin's to change, though a sync reads the folder's files again
+    crate::merge::ok(&sandbox, &["add", "-f", "figures/fig2.png"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "a forced figure"])?;
+    write_all(&sandbox, &[("figures/fig2.png", "png 2\n")])?;
+    synced(&sandbox)?;
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
     Ok(())
 }
 

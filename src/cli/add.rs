@@ -1349,11 +1349,13 @@ pub(super) async fn sync_add(
         survey.state.files.insert(path, placed);
         survey.needs_writing = true;
     }
-    survey.git_keeps = adding
-        .git_keeps
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
+    survey.git_keeps.extend(
+        adding
+            .git_keeps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take(),
+    );
     let restored = place::restore_aside(project, &manifest.data_dir, &mut survey, false);
     place::restored_aside(&work.context.output, &restored, false);
     survey.check_doubted(&project.root, &work.cache)?;
