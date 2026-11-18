@@ -49,8 +49,9 @@ pub(crate) fn git(root: &std::path::Path, words: &str) -> String {
     }
 }
 
-/// `mv` of `from` to `to`, each as a command run here names it: after a run given `-C`, whole, so
-/// the move finds them from the folder the person ran in.
+/// `mv` of `from` to `to`, each as a command run here names it, after a `mkdir -p` of the folder
+/// `to` goes in when it is not there, as `mv` makes none: after a run given `-C`, the paths go
+/// whole, so the move finds them from the folder the person ran in.
 pub(crate) fn moving(from: &str, to: &str) -> String {
     let named = |path: &str| {
         if ran_elsewhere() {
@@ -60,7 +61,15 @@ pub(crate) fn moving(from: &str, to: &str) -> String {
             path.to_owned()
         }
     };
-    format!("mv {} {}", shell_word(&named(from)), shell_word(&named(to)))
+    let (from, to) = (named(from), named(to));
+    let moved = format!("mv {} {}", shell_word(&from), shell_word(&to));
+    match std::path::Path::new(&to).parent() {
+        Some(parent) if !parent.as_os_str().is_empty() && !parent.exists() => format!(
+            "mkdir -p {} && {moved}",
+            shell_word(&parent.to_string_lossy())
+        ),
+        _ => moved,
+    }
 }
 
 /// `fetchloom` and `words`, for a command that reads no project, as `auth` and `help` do, so it

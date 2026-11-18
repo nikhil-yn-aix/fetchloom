@@ -555,6 +555,43 @@ fn an_at_changed_without_the_folder_moved_names_the_move() -> Result {
     Ok(())
 }
 
+/// an output's `at` changed to a folder whose parent is not there yet: the help makes the parent
+/// before the move, which then works.
+#[test]
+fn a_move_into_a_missing_folder_makes_it_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let manifest = work.join("data.toml");
+    let table = fs::read_to_string(&manifest)?;
+    let moved = table.replace(
+        "at = \"data/processed\"",
+        "at = \"results/final/processed\"",
+    );
+    assert_ne!(moved, table);
+    fs::write(&manifest, moved)?;
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        status.contains("hint: results/final/processed is gone: `mkdir -p results/final && mv data/processed results/final/processed` moves it where data.toml puts it now, or `fetchloom sync --force processed` puts back the files processed pins\n"),
+        "{status}"
+    );
+    fs::create_dir_all(work.join("results/final"))?;
+    fs::rename(
+        work.join("data/processed"),
+        work.join("results/final/processed"),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("is gone"), "{stderr}");
+    assert_eq!(
+        fs::read(work.join("results/final/processed/iris_clean.csv"))?,
+        CLEAN
+    );
+    Ok(())
+}
+
 /// an output's folder that is gone, as after a move data.toml does not know of yet or a failed
 /// run, is told as gone with the two ways back, and an add of it in any spelling says so rather
 /// than send the folder's name off as search words.
