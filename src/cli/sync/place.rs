@@ -1829,13 +1829,10 @@ impl<'a> Placing<'a> {
             .collect();
         placement.in_git = Project::repository(&project.root).is_some();
         // git keeps a link as a file and never looks behind it, so no line hides what lies there
-        let through_link = survey.followed.iter().any(|link| {
-            manifest.data_dir == link.path
-                || manifest
-                    .data_dir
-                    .strip_prefix(&link.path)
-                    .is_some_and(|rest| rest.starts_with('/'))
-        });
+        let through_link = survey
+            .followed
+            .iter()
+            .any(|link| super::disk::is_inside(&manifest.data_dir, &link.path));
         let told_rule = !made.is_empty()
             && !through_link
             && mark::tell_hiding_line(output, &project.root, &manifest.data_dir, &mut survey.state);
