@@ -94,6 +94,22 @@ pub(crate) struct Source {
 }
 
 impl Source {
+    /// whether an output with these patterns never takes the file at `inside`, a path in its
+    /// folder: what a repository, the system or a tool keeps there, git's placeholder, what the
+    /// patterns leave out, and a .gitignore in the form of fetchloom's marker, as `marker_form`
+    /// tells once it reads one.
+    pub(crate) fn leaves_out(&self, inside: &str, marker_form: impl FnOnce() -> bool) -> bool {
+        let file = inside.rsplit('/').next().unwrap_or(inside);
+        name::metadata(inside).is_some()
+            || inside
+                .split('/')
+                .any(|part| name::made_by_system(part) || name::made_by_tool(part))
+            || name::git_placeholder(file)
+            || !(self.select.is_empty() || self.select.iter().any(|glob| glob.matches(inside)))
+            || self.exclude.iter().any(|glob| glob.matches(inside))
+            || (file == ".gitignore" && marker_form())
+    }
+
     /// whether `other` takes the same files of its source as this: the same patterns, and
     /// archives and compressed files unpacked alike.
     pub(crate) fn same_settings(&self, other: &Source) -> bool {

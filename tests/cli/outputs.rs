@@ -1928,7 +1928,8 @@ fn a_pin_leaves_out_what_tools_keep_beside_files() -> Result {
 
 /// a dropping coming or going is no change: an output pinned while an editor had a file open is
 /// unchanged once the editor closes, and once a notebook and an office suite leave theirs, the
-/// system its own, and a stopped run a copy under the name it stages files in.
+/// system its own, a disk's trash what a person deleted there, a repository its metadata, and a
+/// stopped run a copy under the name it stages files in.
 #[test]
 fn a_dropping_coming_or_going_is_no_change_to_an_output() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1947,6 +1948,10 @@ fn a_dropping_coming_or_going_is_no_change_to_an_output() -> Result {
     )?;
     fs::write(folder.join(".~lock.summary.txt#"), b"lock")?;
     fs::write(folder.join(".DS_Store"), b"finder")?;
+    fs::create_dir_all(folder.join(".Trash-1000/files"))?;
+    fs::write(folder.join(".Trash-1000/files/old.csv"), CLEAN)?;
+    fs::create_dir_all(folder.join(".hg"))?;
+    fs::write(folder.join(".hg/dirstate"), b"hg")?;
     fs::write(folder.join(".fetchloom-0123456789abcdef.copy"), CLEAN)?;
     let checked = sandbox.run(&["status", "--verify", "--check"])?;
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
@@ -2164,6 +2169,28 @@ fn add_keeps_every_pattern_it_is_given() -> Result {
     assert_eq!(
         fs::read_to_string(work.join("data.toml"))?,
         "[datasets.flowers]\nref = \"local\"\nselect = [\"*.csv\", \"*.tsv\"]\n\n[datasets.results]\nref = \"local\"\nat = \"results\"\nexclude = [\"*.log\", \"*.tmp\"]\n"
+    );
+    Ok(())
+}
+
+/// select keeps an output to the files it names: one it leaves out, there at the pin or written
+/// after, is no change to the output.
+#[test]
+fn select_leaves_an_outputs_other_files_out() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/r.csv"), b"r\n")?;
+    fs::write(work.join("results/run.log"), b"log\n")?;
+    ok(&sandbox.run(&["add", "results", "--as", "results", "--select", "*.csv"])?)?;
+    fs::write(work.join("results/plot.png"), b"png\n")?;
+    let checked = sandbox.run(&["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        listed(&document, "extra"),
+        Vec::<String>::new(),
+        "{document}"
     );
     Ok(())
 }

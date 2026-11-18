@@ -255,7 +255,7 @@ fn read<'m>(
     } else {
         HashSet::new()
     };
-    leave_out(&mut walked, &markers);
+    leave_out(&mut walked, &source, &markers);
     tell_left_out(&context.output, shown, &walked);
     Ok(Read {
         name,
@@ -282,14 +282,12 @@ fn markers_in(state: &State, at: &str) -> HashSet<String> {
         .collect()
 }
 
-/// takes the files at `markers` out of `walked`, any other .gitignore in the form fetchloom writes
-/// its marker in, as one a renamed folder took along, and git's placeholders, never part of an
-/// output.
-fn leave_out(walked: &mut Walked, markers: &HashSet<String>) {
+/// takes out of `walked` what an output with `source`'s patterns never takes, and the files at
+/// `markers`, never part of an output.
+fn leave_out(walked: &mut Walked, source: &Source, markers: &HashSet<String>) {
     walked.files.retain(|file| {
-        let name = file.path.rsplit('/').next().unwrap_or(&file.path);
-        let marker = name == ".gitignore" && is_marker_form(&file.source);
-        !markers.contains(&file.path) && !name::git_placeholder(name) && !marker
+        !markers.contains(&file.path)
+            && !source.leaves_out(&file.path, || is_marker_form(&file.source))
     });
 }
 
@@ -544,7 +542,7 @@ fn reread(
     crate::stop::hold("FETCHLOOM_TEST_HOLD_CAPTURE");
     let most = context.settings.most_files.value;
     let again = super::walk(start, shown, source, most, &context.stop).map(|mut again| {
-        leave_out(&mut again, &walk.markers);
+        leave_out(&mut again, source, &walk.markers);
         again
     });
     let now = |file: &Found| {
