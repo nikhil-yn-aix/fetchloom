@@ -251,9 +251,9 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
 fn changed_outputs(
     status: &Status,
     (manifest, lock): (&Manifest, &Lock),
-    root: &std::path::Path,
-    state: &crate::project::state::State,
+    survey: &Survey,
 ) -> Vec<place::ChangedOutput> {
+    let (root, state) = (survey.root(), &survey.state);
     let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
     let up = super::up_to(root, &here);
     let authored = place::authored(state);
@@ -286,13 +286,12 @@ fn changed_outputs(
                     .iter()
                     .filter(|path| ours || state.files.contains_key(*path)),
             );
-            let pinned = lock
-                .datasets
-                .iter()
-                .filter(|locked| locked.name == *name)
-                .flat_map(|locked| &locked.files);
+            let pinned = lock.datasets.iter().flat_map(|locked| {
+                let name = locked.name.as_str();
+                locked.files.iter().map(move |file| (name, file))
+            });
             (output.changed + output.added + output.removed > 0)
-                .then(|| output.looked_at(root, pinned, state))
+                .then(|| output.looked_at(survey, pinned))
         })
         .collect()
 }
@@ -767,8 +766,7 @@ fn check(
         status.kept_copies = kept_copies(&status.extra, &recorded);
         status.set_aside = set_aside(&status.extra, &survey);
         sort_extra(&mut status, &plan::Owned::of(&manifest));
-        status.changed_outputs =
-            changed_outputs(&status, (&manifest, &lock), &project.root, &survey.state);
+        status.changed_outputs = changed_outputs(&status, (&manifest, &lock), &survey);
         return Ok((status, manifest, lock_text));
     }
     let planned = planned(
@@ -803,9 +801,7 @@ fn check(
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     drop(planned);
-    status.changed_outputs =
-        changed_outputs(&status, (&manifest, &lock), &project.root, &survey.state);
-    status.committed = committed(&project.root, &manifest, &status.untracked);
+    status.changed_outputs = changed_outputs(&status, (&manifest, &lock), &survey);
     Ok((status, manifest, lock_text))
 }
 
@@ -1072,6 +1068,7 @@ fn compare(
     status.kept_copies = kept_copies(&status.extra, &wanted);
     status.set_aside = set_aside(&status.extra, survey);
     sort_extra(status, &plan::Owned::of(manifest));
+    status.committed = committed(&project.root, manifest, &status.untracked);
     Ok(())
 }
 

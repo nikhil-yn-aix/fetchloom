@@ -246,20 +246,20 @@ impl ChangedOutput {
         }
     }
 
-    /// this output, as its folder in the project at `root` is there or gone, and when gone, where
-    /// `state` recorded its `pinned` files still held.
+    /// this output, as its folder is there or gone, and when gone, where the state of `survey`
+    /// recorded its files of `pinned`, each with its dataset, still held.
     pub(crate) fn looked_at<'f>(
         mut self,
-        root: &Path,
-        pinned: impl IntoIterator<Item = &'f LockedFile>,
-        state: &State,
+        survey: &Survey,
+        pinned: impl IntoIterator<Item = (&'f str, &'f LockedFile)>,
     ) -> Self {
+        let root = survey.root();
         self.gone = fs::symlink_metadata(native(root, &self.at))
             .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound);
         if self.gone {
             // `shown` is `at` as a command run here names it
             let up = self.shown.strip_suffix(&self.at).unwrap_or_default();
-            self.left = left_at(root, (&self.name, &self.at), pinned, state)
+            self.left = left_at(root, (&self.name, &self.at), pinned, &survey.state)
                 .map(|from| format!("{up}{from}"));
         }
         self
@@ -321,16 +321,20 @@ impl ChangedOutput {
     }
 }
 
-/// the folder other than `at` where `state` recorded every file of `pinned`, the files of the
-/// output `name` as its dataset names them, each looking as recorded: the folder data.toml moved
-/// the output from, which still holds its pin.
+/// the folder other than `at` where `state` recorded every file `pinned` gives the output `name`,
+/// as its dataset names them, each looking as recorded: the folder data.toml moved the output
+/// from, which still holds its pin.
 pub(crate) fn left_at<'f>(
     root: &Path,
     (name, at): (&str, &str),
-    pinned: impl IntoIterator<Item = &'f LockedFile>,
+    pinned: impl IntoIterator<Item = (&'f str, &'f LockedFile)>,
     state: &State,
 ) -> Option<String> {
-    let pinned: Vec<&LockedFile> = pinned.into_iter().collect();
+    let pinned: Vec<&LockedFile> = pinned
+        .into_iter()
+        .filter(|(dataset, _)| *dataset == name)
+        .map(|(_, file)| file)
+        .collect();
     let first = pinned.first()?;
     let suffix = format!("/{}", first.path);
     let from = state.files.iter().find_map(|(path, placed)| {
@@ -3392,18 +3396,13 @@ fn changed_outputs(
         }
     }
     extras.sort_unstable();
+    let told = &survey.state.told;
     let changed: Vec<ChangedOutput> = found
         .into_values()
         .filter(|(output, _)| output.is_changed())
         .map(|(output, changes)| {
-            let pinned: Vec<&LockedFile> = targets
-                .iter()
-                .filter(|target| target.dataset == output.name)
-                .map(|target| target.file)
-                .collect();
-            output
-                .told_of(changes, &survey.state.told)
-                .looked_at(root, pinned, &survey.state)
+            let pinned = targets.iter().map(|target| (target.dataset, target.file));
+            output.told_of(changes, told).looked_at(survey, pinned)
         })
         .collect();
     let left: HashSet<&str> = changed.iter().map(|output| output.name.as_str()).collect();

@@ -353,6 +353,10 @@ fn a_moved_outputs_new_at_is_told_as_a_sync_moving_its_pin() -> Result {
 fn an_at_changed_without_the_folder_moved_names_the_move() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
+    // an output pinned before it, whose files no move of processed is about
+    fs::create_dir_all(work.join("data/aaa"))?;
+    fs::write(work.join("data/aaa/a.csv"), b"a\n")?;
+    ok(&sandbox.run(&["add", "data/aaa", "--as", "aaa"])?)?;
     processed(&work)?;
     ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
     let manifest = work.join("data.toml");

@@ -405,8 +405,10 @@ fn output_gone(word: &str, project: &Project) -> Option<Error> {
     let pinned = lock
         .iter()
         .flat_map(|lock| &lock.datasets)
-        .filter(|locked| locked.name == *output)
-        .flat_map(|locked| &locked.files);
+        .flat_map(|locked| {
+            let name = locked.name.as_str();
+            locked.files.iter().map(move |file| (name, file))
+        });
     let left = crate::cli::sync::place::left_at(&project.root, (output, at), pinned, &state)
         .map(|from| super::folder_from_here(&project.root, &from));
     let since = left
