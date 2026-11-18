@@ -11,6 +11,7 @@ use crate::cli::sync::disk::is_inside;
 use crate::cli::sync::place::{ChangedOutput, Placement, Reason};
 use crate::error::{Error, Kind};
 use crate::project::lock::Waiting;
+use crate::project::manifest::Manifest;
 
 /// the most files and datasets the error names; the command's result lists them all.
 const NAMED: usize = 20;
@@ -55,6 +56,9 @@ pub(in crate::cli) enum Unready {
     /// an output whose files this machine lacks, as a clone of the project that made it does,
     /// which sync leaves out: its name, and its folder as a command names it.
     Elsewhere { name: String, shown: String },
+    /// an import with files this machine lacks, missing or damaged, which no link fetches, so no
+    /// sync brings them: its name, and its folder.
+    Imported { name: String, folder: String },
 }
 
 impl Unready {
@@ -120,6 +124,9 @@ impl Unready {
             } else {
                 crate::source::local::unpinned(name, at.as_deref())
             }),
+            Unready::Imported { name, folder } => line(crate::source::local::imported_elsewhere(
+                name, folder, false,
+            )),
             Unready::NotDownloaded { name, by } => format!(
                 "{name} is pinned by its source's {by}, not downloaded yet: `{}` downloads and checks it",
                 command(&format!("sync {name}"))
@@ -249,10 +256,9 @@ fn elsewhere<'o>(
 }
 
 /// the outputs of `status` whose files this machine lacks, made on another machine, each with its
-/// folder as a command names it, and those files. a changed output is none, as sync leaves it
-/// whole.
-fn lacking_outputs(status: &Status) -> (Vec<(&String, &String)>, HashSet<&String>) {
-    let made: Vec<(&String, &String)> = status
+/// folder as a command names it. a changed output is none, as sync leaves it whole.
+fn lacking_outputs(status: &Status) -> Vec<(&String, &String)> {
+    status
         .outputs
         .iter()
         .filter(|(name, _)| {
@@ -262,22 +268,17 @@ fn lacking_outputs(status: &Status) -> (Vec<(&String, &String)>, HashSet<&String
                     .iter()
                     .any(|changed| changed.name == **name)
         })
-        .collect();
-    let lacking = made
-        .iter()
-        .filter_map(|(name, _)| status.imported_elsewhere.get(*name))
-        .flatten()
-        .collect();
-    (made, lacking)
+        .collect()
 }
 
-/// what keeps the data of every dataset from being ready, as `status` found the data folder: each
-/// output whose folder holds other files than it pins is one line for all its files, as sync
-/// leaves such a folder whole, and so is each output whose files this machine lacks, made on
-/// another machine.
-pub(super) fn of_status(status: &Status) -> Vec<Unready> {
+/// what keeps the data of every dataset from being ready, as `status` found the data folder of
+/// `manifest`'s datasets: each output whose folder holds other files than it pins is one line for
+/// all its files, as sync leaves such a folder whole, and so is each import, output or not, whose
+/// files this machine lacks, as no sync brings them.
+pub(super) fn of_status(status: &Status, manifest: &Manifest) -> Vec<Unready> {
     let outputs = &status.changed_outputs;
-    let (made, lacking) = lacking_outputs(status);
+    let made = lacking_outputs(status);
+    let lacking: HashSet<&String> = status.imported_elsewhere.values().flatten().collect();
     let mut unready = Vec::new();
     if status.lockless {
         unready.push(Unready::Lockless(status.pins_lockless.clone()));
@@ -324,26 +325,14 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
             .collect::<Vec<_>>()
     };
     unready.extend(each(&status.missing, Unready::Missing));
-    unready.extend(
-        status
-            .edited
-            .iter()
-            .filter(alone)
-            .map(|path| Unready::Kept {
-                path: path.clone(),
-                placed: true,
-            }),
-    );
-    unready.extend(
-        status
-            .untracked
-            .iter()
-            .filter(alone)
-            .map(|path| Unready::Kept {
-                path: path.clone(),
-                placed: false,
-            }),
-    );
+    unready.extend(each(&status.edited, |path| Unready::Kept {
+        path,
+        placed: true,
+    }));
+    unready.extend(each(&status.untracked, |path| Unready::Kept {
+        path,
+        placed: false,
+    }));
     unready.extend(each(&status.unreadable, Unready::Unreadable));
     unready.extend(each(&status.outdated, Unready::Outdated));
     unready.extend(each(&status.not_unpacked, Unready::Unpacked));
@@ -370,6 +359,16 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
             .map(|changed| Unready::Output(Box::new(changed.clone()))),
     );
     unready.extend(elsewhere(made));
+    unready.extend(
+        status
+            .imported_elsewhere
+            .keys()
+            .filter(|name| !status.outputs.contains_key(*name))
+            .map(|name| Unready::Imported {
+                name: name.clone(),
+                folder: crate::plan::folder(manifest, name),
+            }),
+    );
     unready
 }
 

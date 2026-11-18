@@ -81,8 +81,8 @@ pub(super) struct Status {
     /// the outputs whose folders hold other files than their pins, as sync judges them.
     #[serde(skip)]
     changed_outputs: Vec<place::ChangedOutput>,
-    /// the imports with a file of `missing` whose bytes this machine's cache lacks, with those
-    /// files: no link fetches them, so no sync places them.
+    /// the imports with files this machine cannot give back, missing or damaged, with those files:
+    /// no link fetches them, so no sync places them.
     #[serde(skip)]
     imported_elsewhere: BTreeMap<String, Vec<String>>,
     /// each output's folder as a command run here names it, by name, for the step that pins it
@@ -220,7 +220,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
                 super::project::command("sync")
             ));
         }
-        tell_imported_elsewhere(output, &status);
+        tell_imported_elsewhere(output, &status, &manifest);
         tell_repairs(output, &status);
     }
     if status.unfinished > 0 {
@@ -237,7 +237,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         ));
     }
     if strict {
-        ready::ready_by(&ready::of_status(&status), &|line| {
+        ready::ready_by(&ready::of_status(&status, &manifest), &|line| {
             status.only_sync_of(line)
         })
         .map_err(|error| error.with_report(&status))?;
@@ -310,10 +310,10 @@ fn tell_imports(output: &Output, status: &Status) {
     }
 }
 
-/// how to bring the missing files of each import of `status` whose bytes this machine lacks,
-/// which no sync fetches. an output, made on another machine, comes from a mirror, or from
-/// running its pipeline here.
-fn tell_imported_elsewhere(output: &Output, status: &Status) {
+/// how to bring the files of each import of `status` whose bytes this machine lacks, which no sync
+/// fetches, in the words of sync's refusal. an output, made on another machine, comes from a
+/// mirror, or from running its pipeline here.
+fn tell_imported_elsewhere(output: &Output, status: &Status, manifest: &Manifest) {
     let (outputs, names): (Vec<&str>, Vec<&str>) = status
         .imported_elsewhere
         .keys()
@@ -328,19 +328,12 @@ fn tell_imported_elsewhere(output: &Output, status: &Status) {
         let refused = crate::source::local::made_elsewhere(&made, false);
         output.hint(&ready::line(refused));
     }
-    let text = match names.as_slice() {
+    let refused = match names.as_slice() {
         [] => return,
-        [one] => format!(
-            "{one} was imported from files, which no sync fetches: `{}` brings them from where they are",
-            super::project::command(&format!("add <folder> --as {one}"))
-        ),
-        many => format!(
-            "{} were imported from files, which no sync fetches: `{}` brings each one's from where they are",
-            units::listed(many, "and"),
-            super::project::command("add <folder> --as <name>")
-        ),
+        [one] => crate::source::local::imported_elsewhere(one, &plan::folder(manifest, one), false),
+        many => crate::source::local::several_imported_elsewhere(many, false),
     };
-    output.hint(&text);
+    output.hint(&ready::line(refused));
 }
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
@@ -739,7 +732,7 @@ fn check(
         }
     }
     status.downloads = downloads(&status, &planned, &cache);
-    status.imported_elsewhere = imported_elsewhere(&status.missing, &manifest, &planned, &cache);
+    status.imported_elsewhere = imported_elsewhere(&status, &manifest, &planned, &cache);
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
@@ -840,23 +833,27 @@ fn downloads(
         .collect()
 }
 
-/// the imports of `planned` with a file of `missing` whose bytes `cache` lacks, each with those
-/// files.
+/// the imports of `planned` with a file of `status` this machine cannot give back, each with those
+/// files: a missing or damaged one whose bytes `cache` lacks, as when an edit through a link
+/// changed the cache's copy with it.
 fn imported_elsewhere(
-    missing: &[String],
+    status: &Status,
     manifest: &Manifest,
     planned: &plan::Plan<'_>,
     cache: &Cache,
 ) -> BTreeMap<String, Vec<String>> {
-    let missing: HashSet<&str> = missing.iter().map(String::as_str).collect();
+    let missing: HashSet<&str> = status.missing.iter().map(String::as_str).collect();
+    let damaged: HashSet<&str> = status.damaged.iter().map(String::as_str).collect();
     let mut lacking: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for target in &planned.targets {
-        if missing.contains(target.path.as_str())
+        let path = target.path.as_str();
+        let lost = (missing.contains(path) || damaged.contains(path))
+            && cache.find(&target.sha256, Some(target.size)).is_none();
+        if lost
             && manifest
                 .datasets
                 .get(target.dataset)
                 .is_some_and(manifest::Entry::is_import)
-            && cache.find(&target.sha256, Some(target.size)).is_none()
         {
             lacking
                 .entry(target.dataset.to_owned())
@@ -1274,12 +1271,13 @@ impl Status {
                 .all(|path| !self.hashed_only.contains(path))
     }
 
-    /// whether a file of `missing` is one a sync can bring, as no import this cache lacks is.
-    fn fetchable_missing(&self) -> bool {
+    /// whether a file of `paths` is one a plain sync can bring, as no import this cache lacks is,
+    /// nor a damaged one only hashing found.
+    fn fetchable(&self, paths: &[String]) -> bool {
         let elsewhere: HashSet<&String> = self.imported_elsewhere.values().flatten().collect();
-        self.missing
-            .iter()
-            .any(|path| !elsewhere.contains(path) && !self.left_whole(path))
+        paths.iter().any(|path| {
+            !elsewhere.contains(path) && !self.hashed_only.contains(path) && !self.left_whole(path)
+        })
     }
 
     /// whether `path` is in the folder of an output a sync leaves whole, as it changed since it
@@ -1298,17 +1296,14 @@ impl Status {
                 .unlocked
                 .iter()
                 .any(|name| !self.waiting.contains_key(name) && !self.imports.contains_key(name))
-            || self.fetchable_missing()
+            || self.fetchable(&self.missing)
             || !self.not_unpacked.is_empty()
             || self
                 .outdated
                 .iter()
                 .chain(&self.untracked)
                 .any(|path| !self.left_whole(path))
-            || self
-                .damaged
-                .iter()
-                .any(|path| !self.hashed_only.contains(path) && !self.left_whole(path))
+            || self.fetchable(&self.damaged)
     }
 }
 

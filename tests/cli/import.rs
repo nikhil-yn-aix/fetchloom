@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{Result, Sandbox, json, look, text, warned, zip_of};
+use crate::support::{Result, Sandbox, edit, json, look, skipped, text, warned, zip_of};
 
 /// a folder of two files, one of them in a folder of its own.
 fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
@@ -1017,8 +1017,13 @@ fn a_dry_run_of_a_switched_import_names_the_archive_it_would_unpack() -> Result 
     Ok(())
 }
 
+/// what status says of an import's files this machine cannot give back, missing or damaged, as
+/// sync's refusal says it, with the ways that bring them: never that a sync places them.
+const NO_SYNC_BRINGS: &str = "flowers was imported from files, and this machine's cache does not hold them: a folder mirror that holds them brings them back, as `fetchloom sync flowers --mirror <folder>`; else copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are";
+
 /// status in a clone whose cache lacks an import's files lists them missing, but never says a
-/// sync places them, since no link fetches them: it says how to bring them from where they are.
+/// sync places them, since no link fetches them: it says how to bring them, as sync does, and
+/// `--check` says it is what makes the data ready.
 #[test]
 fn status_says_how_to_bring_an_import_no_sync_can_get() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1034,7 +1039,56 @@ fn status_says_how_to_bring_an_import_no_sync_can_get() -> Result {
     assert!(stdout.contains("Missing"), "{stdout}");
     assert!(!stderr.contains("`fetchloom sync` places"), "{stderr}");
     assert!(
-        stderr.contains("flowers was imported from files, which no sync fetches: `fetchloom add <folder> --as flowers` brings them from where they are"),
+        stderr.contains(&format!("hint: {NO_SYNC_BRINGS}\n")),
+        "{stderr}"
+    );
+    let checked = sandbox
+        .command_in(&clone, &["status", "--check"])
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!("  {NO_SYNC_BRINGS}\n")),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("places it"), "{stderr}");
+    Ok(())
+}
+
+/// a file of an import edited through its link takes the cache's copy with it, so no sync puts
+/// it back: status says so as sync does, never that a sync puts it back.
+#[test]
+fn status_says_no_sync_puts_back_a_damaged_import() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlinks_read_only() {
+        // an edit of a clone or a copy leaves the cache's copy, which a sync puts back
+        return skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
+    }
+    flowers(&sandbox)?;
+    crate::support::ok(&sandbox.run(&["add", "../flowers"])?)?;
+    // as long as the pinned bytes, so only the link tells the cache's copy changed
+    edit(
+        &sandbox.work().join("data/flowers/sepals.csv"),
+        b"length,width\n9.9,9.9\n",
+    )?;
+    let checked = sandbox.run(&["status", "--check"])?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!("  {NO_SYNC_BRINGS}\n")),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("puts them back"), "{stderr}");
+    assert!(!stderr.contains("`fetchloom sync` places"), "{stderr}");
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains("help: a folder mirror that holds them brings them back"),
         "{stderr}"
     );
     Ok(())
