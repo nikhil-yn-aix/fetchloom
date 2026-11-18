@@ -4,8 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
-use super::{Action, Held, Reason, edited, held, local, mark, passed_over, reads_as_target};
-use crate::cli::sync::disk::{Blocker, Entry, Survey, is_inside};
+use super::mark::{self, Whose};
+use super::{Action, Held, Reason, edited, held, local, passed_over, reads_as_target};
+use crate::cli::sync::disk::{Blocker, Entry, Mark, Survey, is_inside};
 use crate::error::{Error, Kind};
 use crate::place;
 use crate::plan::Target;
@@ -14,8 +15,9 @@ use crate::project::state::{Look, Once};
 use crate::project::{Followed, Project, native};
 
 /// refuses the first follow of `link` before anything is written through it when the folder it
-/// leads to holds what a run could harm: a .gitignore in the form of fetchloom's markers that the
-/// state does not record, a dataset folder of another fetchloom project; a file at a path
+/// leads to holds what a run could harm: a .gitignore in the form of fetchloom's markers that names
+/// another project than this one, or none, whatever the state records of its folder, a dataset
+/// folder of another fetchloom project, or of the one this one was copied or moved from; a file at a path
 /// `targets` place holding other bytes, a record of the path there or not, as one could be of the
 /// folder the link led to before, or a file where they place a folder, which `sync --force`
 /// replaces; or a file in an output's folder that no pin places and the state does not record,
@@ -54,27 +56,7 @@ pub(super) fn refuse_harm(
             .collect();
         crate::units::some_of(&below, 3)
     };
-    let marked = marked(project, survey, &inside);
-    if !marked.is_empty() {
-        let (why, those) = if marked.len() == 1 {
-            (
-                "marks a dataset folder of another fetchloom project",
-                "that .gitignore",
-            )
-        } else {
-            (
-                "mark dataset folders of other fetchloom projects",
-                "those .gitignore files",
-            )
-        };
-        return Err(refused(
-            link,
-            &format!("{} {why}", named(&marked)),
-            &format!(
-                "point the link at a folder of this project's own, or delete {those} if no other project places files there now"
-            ),
-        ));
-    }
+    refuse_marked(project, survey, link, (&inside, &named))?;
     let (replaced, blockers) = replaced(project, (targets, actions), survey, &inside)?;
     let in_the_way: BTreeSet<&str> = blockers.iter().map(String::as_str).collect();
     let move_away = |files: &BTreeSet<&str>| {
@@ -191,19 +173,86 @@ fn keeping(project: &Project, outputs: &BTreeSet<(&str, &str)>, count: usize) ->
     )
 }
 
-/// the .gitignore files `inside` takes that are in the form of fetchloom's markers, which the
-/// survey lists as the state records none of them.
-fn marked<'s>(
+/// refuses the first follow of `link` when the folder it leads to holds a marker of fetchloom's that
+/// names another project than this one, or none, as [`marked`] finds them, `named` listing them:
+/// one of the project this one was copied or moved from, as the copied state's id says, with the
+/// way out of each reading, or of another project.
+fn refuse_marked(
     project: &Project,
-    survey: &'s Survey,
+    survey: &Survey,
+    link: &Followed,
+    (inside, named): (&impl Fn(&str) -> bool, &impl Fn(&BTreeSet<&str>) -> String),
+) -> Result<(), Error> {
+    let marked = marked(project, survey, inside);
+    if marked.is_empty() {
+        return Ok(());
+    }
+    let paths: BTreeSet<&str> = marked.keys().map(String::as_str).collect();
+    let copied = survey.state.copied.id.as_deref();
+    let one = marked.len() == 1;
+    if marked
+        .values()
+        .all(|whose| matches!(whose, Whose::Project(id) if Some(id.as_str()) == copied))
+    {
+        let why = if one {
+            "marks a dataset folder of the project this one was copied or moved from"
+        } else {
+            "mark dataset folders of the project this one was copied or moved from"
+        };
+        return Err(refused(
+            link,
+            &format!("{} {why}", named(&paths)),
+            "if this is a copy, give it a data folder of its own: the cache keeps each file's bytes once. if you moved the project here and no other copy uses that folder, delete those .gitignore files, and sync makes them again",
+        ));
+    }
+    let (why, those) = if one {
+        (
+            "marks a dataset folder of another fetchloom project",
+            "that .gitignore",
+        )
+    } else {
+        (
+            "mark dataset folders of other fetchloom projects",
+            "those .gitignore files",
+        )
+    };
+    Err(refused(
+        link,
+        &format!("{} {why}", named(&paths)),
+        &format!(
+            "point the link at a folder of this project's own, or delete {those} if no other project places files there now"
+        ),
+    ))
+}
+
+/// the .gitignore files `inside` takes, those the state records as markers and those it does not,
+/// that are in the form of fetchloom's markers and name another project than this one, or none,
+/// each with the id it names: the state records markers by their folder in the project, which a
+/// copy's state or a link pointed elsewhere shares with another project's.
+fn marked(
+    project: &Project,
+    survey: &Survey,
     inside: &impl Fn(&str) -> bool,
-) -> BTreeSet<&'s str> {
-    survey
+) -> BTreeMap<String, Whose> {
+    let id = survey.state.id.as_deref();
+    let recorded = survey
+        .marks
+        .iter()
+        .filter(|(_, found)| matches!(found, Mark::Made(_)))
+        .map(|(folder, _)| crate::cli::sync::disk::marker(folder));
+    let unrecorded = survey
         .disk
         .keys()
-        .filter(|path| inside(path) && path.ends_with("/.gitignore"))
-        .filter(|path| mark::is_marker_form(&native(&project.root, path)))
-        .map(String::as_str)
+        .filter(|path| path.ends_with("/.gitignore"))
+        .cloned();
+    recorded
+        .chain(unrecorded)
+        .filter(|path| inside(path))
+        .filter_map(|path| {
+            let whose = mark::marker_of(&native(&project.root, &path))?;
+            let ours = matches!(&whose, Whose::Project(named) if Some(named.as_str()) == id);
+            (!ours).then_some((path, whose))
+        })
         .collect()
 }
 

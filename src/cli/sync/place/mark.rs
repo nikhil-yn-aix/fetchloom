@@ -27,6 +27,11 @@ const TEXT: &[u8] = b"*\n";
 /// the first line of a marker that names the datasets' entries.
 const NAMES: &str = "# fetchloom keeps the dataset files placed here out of git, and rewrites this list as they change\n";
 
+/// how the last line of a marker starts, which names the project it is of: a marker is this
+/// project's only while it names this project's id, so another project's, a copy's or a moved
+/// root's, which name another, are never taken for its own.
+const PROJECT: &str = "# fetchloom project ";
+
 /// the most entries a marker names one by one: git matches every line against every path it
 /// looks at, so a folder the person shares with more gets no marker.
 const MOST_NAMED: usize = 1000;
@@ -58,6 +63,7 @@ pub(super) fn contents(
     (survey, unsure): (&Survey, Unsure<'_>),
 ) -> BTreeMap<String, Content> {
     let state = &survey.state;
+    let id = state.id.as_deref();
     let unsure = super::unsure(unsure);
     // the plan lists each dataset's targets together, so each run of them is looked at once
     let runs: Vec<&[Target]> = targets
@@ -107,8 +113,8 @@ pub(super) fn contents(
         .map(|folder| {
             let content = match named.remove(folder) {
                 _ if kept_in_git(manifest, survey, folder) => Content::Tracked,
-                None => Content::Text(TEXT.to_vec()),
-                Some(entries) => entries.content(),
+                None => Content::Text(named_for(TEXT.to_vec(), id)),
+                Some(entries) => entries.content(id),
             };
             (folder.to_owned(), content)
         })
@@ -142,8 +148,8 @@ impl<'a> Entries<'a> {
         }
     }
 
-    /// the marker naming each entry, or none past [`MOST_NAMED`] of them.
-    fn content(mut self) -> Content {
+    /// the marker naming each entry, of the project `id`, or none past [`MOST_NAMED`] of them.
+    fn content(mut self, id: Option<&str>) -> Content {
         if self.again {
             self.files.sort_unstable();
             self.files.dedup();
@@ -158,8 +164,33 @@ impl<'a> Entries<'a> {
             .map(|file| (*file, false))
             .chain(self.folders.iter().map(|folder| (*folder, true)))
             .collect();
-        Content::Text(names(&entries))
+        Content::Text(named_for(names(&entries), id))
     }
+}
+
+/// `text`, a marker's, with its last line naming the project `id`.
+fn named_for(mut text: Vec<u8>, id: Option<&str>) -> Vec<u8> {
+    if let Some(id) = id {
+        text.extend_from_slice(format!("{PROJECT}{id}\n").as_bytes());
+    }
+    text
+}
+
+/// the project id `text`, a marker's, names on its last line: none in a marker written before
+/// markers named one.
+fn project_of(text: &[u8]) -> Option<&str> {
+    let line = std::str::from_utf8(text)
+        .ok()?
+        .strip_suffix('\n')?
+        .rsplit('\n')
+        .next()?;
+    let id = line.strip_prefix(PROJECT)?;
+    (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(id)
+}
+
+/// whether `text`, a marker's, names the datasets' entries rather than hiding all of its folder.
+fn is_named(text: &[u8]) -> bool {
+    text.starts_with(NAMES.as_bytes())
 }
 
 /// the folders of `wanted` that `contents` gives no marker, as too full to name, each with how
@@ -358,29 +389,57 @@ pub(super) fn retire_removed(project: &Project, state: &mut State, folders: &[St
 /// SHA-256, in the form fetchloom writes, so a record that came with a copied state takes no
 /// other .gitignore.
 fn holds(root: &Path, placer: &Placer, folder: &str, wrote: &str) -> bool {
+    held(root, placer, folder)
+        .is_some_and(|held| in_marker_form(&held) && digest::sha256(&held).hex() == wrote)
+}
+
+/// what the marker of `folder` holds, read no further than a marker goes, none when it cannot be
+/// read as a plain file.
+fn held(root: &Path, placer: &Placer, folder: &str) -> Option<Vec<u8>> {
     let file = native(root, &disk::marker(folder));
     let mut held = Vec::new();
-    placer.open_read(&file).is_ok_and(|opened| {
-        opened.take(READ_MOST + 1).read_to_end(&mut held).is_ok()
-            && in_marker_form(&held)
-            && digest::sha256(&held).hex() == wrote
-    })
+    let opened = placer.open_read(&file).ok()?;
+    opened.take(READ_MOST + 1).read_to_end(&mut held).ok()?;
+    Some(held)
 }
 
 /// whether `text`, a .gitignore's, is in the form fetchloom writes a marker in: `*`, or the
-/// datasets' entries under its first line, no longer than a marker is read.
+/// datasets' entries under its first line, either with the line naming its project or, as
+/// written before markers named one, without, no longer than a marker is read.
 fn in_marker_form(text: &[u8]) -> bool {
-    text.len() as u64 <= READ_MOST && (text == TEXT || text.starts_with(NAMES.as_bytes()))
+    // `*` alone, or with the one line naming its project after it
+    let star = text.strip_prefix(TEXT).is_some_and(|rest| {
+        rest.is_empty()
+            || project_of(rest).is_some()
+                && rest.iter().position(|byte| *byte == b'\n') == Some(rest.len() - 1)
+    });
+    text.len() as u64 <= READ_MOST && (star || is_named(text))
 }
 
 /// whether `file`, a .gitignore, holds a marker in the form fetchloom writes, whatever the state
 /// records of it, as one a folder took along when it was renamed: fetchloom's own, so never part
 /// of an output, nor a change to one. a link is not followed.
 pub(crate) fn is_marker_form(file: &Path) -> bool {
+    marker_of(file).is_some()
+}
+
+/// whose a marker in the form fetchloom writes is, by the project id its last line names.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Whose {
+    /// the project of this id.
+    Project(String),
+    /// none named, as in a marker written before markers named one.
+    Unnamed,
+}
+
+/// whose marker `file`, a .gitignore, is, never following a link: none when it holds no marker in
+/// the form fetchloom writes.
+pub(crate) fn marker_of(file: &Path) -> Option<Whose> {
     let mut held = Vec::new();
-    crate::volume::read_unfollowed(file).is_ok_and(|opened| {
-        opened.take(READ_MOST + 1).read_to_end(&mut held).is_ok() && in_marker_form(&held)
-    })
+    let opened = crate::volume::read_unfollowed(file).ok()?;
+    opened.take(READ_MOST + 1).read_to_end(&mut held).ok()?;
+    in_marker_form(&held)
+        .then(|| project_of(&held).map_or(Whose::Unnamed, |id| Whose::Project(id.to_owned())))
 }
 
 /// deletes the marker of `folder` while it holds what fetchloom wrote, `wrote` its SHA-256, and
@@ -476,7 +535,7 @@ pub(super) fn would_make(
         .write
         .iter()
         .filter(|(_, there)| !there)
-        .filter_map(|(folder, _)| Some((folder.clone(), text_of(contents, folder)? != TEXT)))
+        .filter_map(|(folder, _)| Some((folder.clone(), is_named(text_of(contents, folder)?))))
         .collect()
 }
 
@@ -545,7 +604,6 @@ pub(super) fn write(
     planned: &[(String, bool)],
     contents: &BTreeMap<String, Content>,
 ) -> (bool, Vec<(String, bool)>) {
-    let star = digest::sha256(TEXT).hex();
     let mut changed = false;
     let mut told = Vec::new();
     for (folder, there) in planned {
@@ -557,10 +615,10 @@ pub(super) fn write(
             changed |= forget(state, folder);
             continue;
         };
-        let named = text != TEXT;
+        let named = is_named(text);
+        let was_named = *there && held(root, placer, folder).is_some_and(|held| is_named(&held));
         match put(root, placer, state, folder, text, *there) {
             Ok(Put::Written) => {
-                let was_named = before.as_ref().is_some_and(|wrote| *wrote != star);
                 if !there || named != was_named {
                     told.push((folder.clone(), named));
                 }
@@ -978,7 +1036,9 @@ pub(super) fn tell_made(output: &Output, made: &[(String, bool)], in_git: bool, 
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{MOST_NAMED, TEXT, hiding_line, holds, names, settled};
+    use super::{
+        MOST_NAMED, TEXT, hiding_line, holds, in_marker_form, named_for, names, project_of, settled,
+    };
     use crate::cli::sync::Scope;
     use crate::cli::sync::disk::{Folders, Survey};
     use crate::digest;
@@ -1056,6 +1116,34 @@ mod tests {
         survey.state.told.note(Once::Tracked, "data/iris");
         assert!(settled(&output, &survey, &Scope::All));
         assert!(!settled(&dataset, &survey, &Scope::All));
+    }
+
+    /// a marker names the project it is of on its last line, so `*` and the datasets' entries are
+    /// fetchloom's form with that line or, as written before markers named one, without; a
+    /// person's .gitignore that only starts like one, or names a project oddly, is not.
+    #[test]
+    fn a_marker_names_its_project_on_its_last_line() {
+        let entries = names(&BTreeSet::from([("iris.csv", false)]));
+        let star = named_for(TEXT.to_vec(), Some("0a1b"));
+        let listed = named_for(entries.clone(), Some("0a1b"));
+        for (text, form, project) in [
+            (star.as_slice(), true, Some("0a1b")),
+            (listed.as_slice(), true, Some("0a1b")),
+            (TEXT, true, None),
+            (entries.as_slice(), true, None),
+            (b"*\n!notes.txt\n".as_slice(), false, None),
+            (b"*\n# fetchloom project \n".as_slice(), false, None),
+            (
+                b"*\n# fetchloom project 0a1b\n# fetchloom project 0a1b\n".as_slice(),
+                false,
+                Some("0a1b"),
+            ),
+            (b"*\n# fetchloom project not-hex\n".as_slice(), false, None),
+        ] {
+            let shown = String::from_utf8_lossy(text);
+            assert_eq!(in_marker_form(text), form, "{shown}");
+            assert_eq!(project_of(text), project, "{shown}");
+        }
     }
 
     /// a record names fetchloom's marker only while the file holds what the record says, in the

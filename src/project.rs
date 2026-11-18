@@ -7,6 +7,7 @@ pub(crate) mod manifest;
 pub(crate) mod overlap;
 pub(crate) mod state;
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use self::lock::Lock;
 use self::manifest::Manifest;
-use self::state::{Folder, Look, State, Synced, Told};
+use self::state::{Folder, Look, State, Synced};
 use crate::cache::names;
 use crate::error::{Error, Kind};
 use crate::volume::Volume;
@@ -55,6 +56,11 @@ pub(crate) struct Project {
     /// link's first follow its files are this project's, as the person claims them and a capture
     /// only reads them.
     pub(crate) captured: Option<String>,
+    /// where each data folder link led when the state last recorded it, read once a run and kept
+    /// as the run writes the state, so following a link reads no state again.
+    followed: std::sync::Mutex<Option<BTreeMap<String, String>>>,
+    /// the id this run gives a state that names none, as one a copy or a moved root brought.
+    fresh: std::sync::OnceLock<String>,
 }
 
 /// the project lock, held while a command changes the project. dropping it lets others in.
@@ -295,7 +301,16 @@ impl Project {
             root,
             data_links: DataLinks::default(),
             captured: None,
+            followed: std::sync::Mutex::new(None),
+            fresh: std::sync::OnceLock::new(),
         }
+    }
+
+    /// the id a state of this project takes when it names none: one for the whole run, so each
+    /// marker the run writes and the state it saves name the same, and none from two runs alike.
+    pub(crate) fn fresh_id(&self) -> &str {
+        self.fresh
+            .get_or_init(|| format!("{:032x}", fastrand::u128(..)))
     }
 
     pub(crate) fn find(start: &Path) -> Option<Project> {
@@ -467,8 +482,8 @@ impl Project {
         folders: &[String],
         keep: &dyn Fn(&str) -> bool,
     ) -> (State, u64) {
-        self.read_opened(self.open_state(), |file, _, ours| {
-            State::read_within(file, folders, keep, ours)
+        self.read_opened(self.open_state(), |file, _| {
+            State::read_within(file, folders, keep)
         })
     }
 
@@ -492,78 +507,49 @@ impl Project {
 
     /// the state as `read` makes it from the opened file and its length, and when it was written.
     /// a missing or unreadable state is empty, and so is one written for another folder, as a
-    /// clone or a copy of the project brings it: every file is then checked by its hash. only the
-    /// dataset folders it marked for git stay, since a copy brings their .gitignore files too.
-    /// `read` gets whether a folder a state names is this one, so it reads no record of another's.
+    /// clone, a copy or a moved root of the project brings it: every file is then checked by its
+    /// hash. what it still tells this one comes back in the same read as [`State::copied`], and
+    /// only the dataset folders it marked for git stay, since a copy brings their .gitignore files
+    /// too: whose a marker is, its id says.
     pub(crate) fn read_opened(
         &self,
         opened: io::Result<(fs::File, Look)>,
-        read: impl FnOnce(
-            &mut fs::File,
-            u64,
-            &dyn Fn(Option<&Folder>) -> bool,
-        ) -> io::Result<(State, u64)>,
+        read: impl FnOnce(&mut fs::File, u64) -> io::Result<(State, u64)>,
     ) -> (State, u64) {
         static TOLD: std::sync::Once = std::sync::Once::new();
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
-        let is_ours = self.is_ours();
         let (state, written) = opened
             .and_then(|(mut file, found)| {
-                let (state, bytes) = read(&mut file, found.size, &is_ours)?;
+                let (state, bytes) = read(&mut file, found.size)?;
                 span.record("bytes", bytes);
                 Ok((state, found.modified))
             })
             .unwrap_or_default();
-        let ours = is_ours(state.folder.as_ref());
+        let here = Folder::of(&self.root);
+        let ours = state
+            .folder
+            .as_ref()
+            .zip(here.as_ref())
+            .is_some_and(|(recorded, here)| recorded.matches(here));
         if !state.was_read() || ours {
             return (state, written);
         }
         TOLD.call_once(|| {
             tracing::debug!(folder = %self.root.display(), "the state was written for another folder, so it is not used");
         });
-        // a forged record can at most hide a .gitignore in the data folder, or rewrite or delete
-        // one in the form fetchloom writes
+        let copied = crate::project::state::Copied {
+            id: state.id,
+            files: state
+                .files
+                .into_iter()
+                .map(|(path, placed)| (path, placed.dataset))
+                .collect(),
+            told: state.told,
+        };
         let mut kept = State::default();
         kept.markers = state.markers;
+        kept.copied = copied;
         (kept, 0)
-    }
-
-    /// whether the folder a state names, `recorded`, is this project's folder as it is now.
-    fn is_ours(&self) -> impl Fn(Option<&Folder>) -> bool {
-        let here = Folder::of(&self.root);
-        move |recorded: Option<&Folder>| {
-            recorded
-                .zip(here.as_ref())
-                .is_some_and(|(recorded, here)| recorded.matches(here))
-        }
-    }
-
-    /// [`State::copied`] of the state: the files it records as placed, of the paths at or below
-    /// `folders` that `keep` accepts, each with its dataset, when it was written for another
-    /// folder, as a copy of the project brings it. they only say which files to try. none from
-    /// this folder's own state, or from a missing or unreadable one.
-    pub(crate) fn copied_records(
-        &self,
-        folders: &[String],
-        keep: &dyn Fn(&str) -> bool,
-    ) -> Vec<(String, String)> {
-        let is_ours = self.is_ours();
-        self.open_state()
-            .and_then(|(mut file, _)| State::copied(&mut file, folders, keep, &is_ours))
-            .unwrap_or_default()
-    }
-
-    /// the told record of the state a copy of the project brought, as [`Project::copied_records`]
-    /// reads it. anyone could have written it, so it only words a line. empty for this folder's own
-    /// state, or a missing or unreadable one.
-    pub(crate) fn copied_told(&self) -> Told {
-        let is_ours = self.is_ours();
-        self.open_state()
-            .and_then(|(mut file, _)| State::read_within(&mut file, &[], &|_| false, &|_| true))
-            .ok()
-            .filter(|(state, _)| state.was_read() && !is_ours(state.folder.as_ref()))
-            .map(|(state, _)| state.told)
-            .unwrap_or_default()
     }
 
     /// fetchloom's own folder in the project, which holds no data a person works with.
@@ -865,7 +851,12 @@ impl Project {
             } else {
                 error
             }
-        })
+        })?;
+        *self
+            .followed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state.followed.clone());
+        Ok(())
     }
 
     /// takes the project lock and owner record for `command`, unless another fetchloom holds it.
@@ -1285,8 +1276,13 @@ impl Project {
     /// whether following the link `path` in the project to `found` is its first follow: the state
     /// records the link leading elsewhere or nowhere.
     fn first_follow(&self, path: &str, found: &Path) -> bool {
-        let recorded = self.state_within(&[], &|_| false).0.followed.remove(path);
-        recorded.as_deref() != Some(&*found.to_string_lossy())
+        let mut followed = self
+            .followed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let recorded =
+            followed.get_or_insert_with(|| self.state_within(&[], &|_| false).0.followed);
+        recorded.get(path).map(String::as_str) != Some(&*found.to_string_lossy())
     }
 
     /// the folder of another project that `found`, the folder a data folder link leads to, lies
@@ -2789,6 +2785,68 @@ mod tests {
         fs::create_dir(project.root.join(lock::FILE)).unwrap();
         assert_eq!(project.manifest().unwrap_err().kind, Kind::LocalIo);
         assert_eq!(project.lock().unwrap_err().kind, Kind::LocalIo);
+    }
+
+    /// a state another folder wrote, as a copy or a moved root brings it, is read once: its markers
+    /// stay, as a copy brings their .gitignore files too, and the rest comes back as what it still
+    /// tells this folder, its id, its records as hints and its told keys, never as its own. this
+    /// folder's own state is read as it is.
+    #[test]
+    fn a_state_another_folder_wrote_tells_this_one_what_it_kept() {
+        use crate::place::Method;
+        use crate::project::state::{Once, Placed};
+
+        let (_dir, project) = project(&[]);
+        let mut state = State::default();
+        state.files.insert(
+            "data/set/a".to_owned(),
+            Placed {
+                dataset: "set".to_owned(),
+                sha256: crate::digest::sha256(b"a"),
+                method: Method::Copy,
+                look: Look {
+                    size: 1,
+                    modified: 42,
+                },
+                writable: false,
+                checked: 43,
+                adopted: false,
+                output: false,
+                unlinkable: false,
+                racy_intact: std::sync::OnceLock::new(),
+            },
+        );
+        state
+            .markers
+            .insert("data/set".to_owned(), "wrote".to_owned());
+        state.id = Some("ab12".to_owned());
+        state.told.note(Once::Edit, "data/set/a:1:42");
+        project.write_state(&state).unwrap();
+        let (own, _) = project.state();
+        assert_eq!(own.id.as_deref(), Some("ab12"));
+        assert_eq!(own.files.len(), 1);
+        assert!(own.copied.files.is_empty() && own.copied.id.is_none());
+        // the same state as another folder holds it: another number and creation time
+        let path = project.own_folder().join("state");
+        let mut moved: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for number in ["inode", "created"] {
+            if let Some(value) = moved["folder"][number].as_u64() {
+                moved["folder"][number] = (value + 1).into();
+            }
+        }
+        fs::write(&path, moved.to_string()).unwrap();
+        let (copied, written) = project.state();
+        assert_eq!(written, 0);
+        assert!(copied.files.is_empty() && copied.told.is_empty());
+        assert_eq!(copied.id, None);
+        assert_eq!(copied.markers, state.markers);
+        assert_eq!(copied.copied.id.as_deref(), Some("ab12"));
+        assert_eq!(
+            copied.copied.files.into_iter().collect::<Vec<_>>(),
+            [("data/set/a".to_owned(), "set".to_owned())]
+        );
+        assert!(copied.copied.told.has(Once::Edit, "data/set/a:1:42"));
     }
 
     #[test]

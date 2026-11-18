@@ -19,7 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use crate::support::{Result, Routes, Sandbox, file, text, zip_of};
+use crate::support::{Result, Routes, Sandbox, file, marker, text, zip_of};
 
 /// what fetchloom, or a tool it might start, could look for by name.
 const TOOLS: [&str; 31] = [
@@ -290,7 +290,7 @@ fn no_command_runs_a_program_the_project_holds() -> Result {
         b"words\n"
     );
     for folder in ["data/iris", "data/raw/$(reboot);&'x"] {
-        assert_eq!(fs::read(work.join(folder).join(".gitignore"))?, b"*\n");
+        assert_eq!(marker(&work.join(folder).join(".gitignore"))?, b"*\n");
     }
     assert!(!work.join("data/weird").exists());
     planted.ok(

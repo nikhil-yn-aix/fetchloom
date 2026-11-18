@@ -80,6 +80,24 @@ pub(crate) struct State {
     /// what runs told a person once, so later runs say it again only of a new subject.
     #[serde(default)]
     pub(crate) told: Told,
+    /// the project this state is of, which each marker of fetchloom's here names, so a marker is
+    /// this project's only while it names this id. none in a state written before ids were kept.
+    #[serde(default)]
+    pub(crate) id: Option<String>,
+    /// what a state written for another folder still tells this one, read with it.
+    #[serde(skip)]
+    pub(crate) copied: Copied,
+}
+
+/// what a state written for another folder, as a copy or a moved root of the project brings it,
+/// still tells this one. anyone could have written it, so it grants nothing: its id names the
+/// project it was copied or moved from, its records only say which files to try, each with its
+/// dataset, and its told record only words a line.
+#[derive(Debug, Default)]
+pub(crate) struct Copied {
+    pub(crate) id: Option<String>,
+    pub(crate) files: BTreeMap<String, String>,
+    pub(crate) told: Told,
 }
 
 /// what a run tells a person once, said again only once its subject changes.
@@ -318,21 +336,18 @@ impl State {
     /// the state in `file` with only the records `keep` accepts, passing the others over without
     /// building them, reading only the parts that can hold a record at or below `folders`, with
     /// how many bytes it read; a state whose index does not fit is read whole, so
-    /// the records are always a whole read's. one `ours` refuses by the folder it was written
-    /// for, as a clone or a copy brings it, gives none of its records. fails when `file` cannot
-    /// be read.
+    /// the records are always a whole read's. fails when `file` cannot be read.
     pub(crate) fn read_within(
         file: &mut (impl Read + Seek),
         folders: &[String],
         keep: &dyn Fn(&str) -> bool,
-        ours: &dyn Fn(Option<&Folder>) -> bool,
     ) -> io::Result<(State, u64)> {
         let mut reading = Reading { file, bytes: 0 };
-        match indexed(&mut reading, folders, keep, ours) {
+        match indexed(&mut reading, folders, keep) {
             Ok(state) => return Ok((state, reading.bytes)),
             Err(reason) => tracing::debug!(reason, "the state is read whole"),
         }
-        reading.streamed(keep, ours)
+        reading.streamed(keep)
     }
 
     /// [`State::parse`] of `file`, `length` bytes from its start, with how many bytes it read. a
@@ -340,11 +355,10 @@ impl State {
     pub(crate) fn read_whole(
         file: &mut (impl Read + Seek),
         length: u64,
-        ours: &dyn Fn(Option<&Folder>) -> bool,
     ) -> io::Result<(State, u64)> {
         // through the index, its header, tail and block would take three reads and three seeks
         if length > BLOCK as u64 {
-            return State::read_blocks(file, ours);
+            return State::read_blocks(file);
         }
         let mut bytes = vec![0; usize::try_from(length).unwrap_or_default()];
         let mut filled = 0;
@@ -362,40 +376,14 @@ impl State {
 
     /// [`State::parse`] of `file`, read a block at a time through its index, so the document is
     /// never held whole, with how many bytes it read; a state whose index does not fit is read
-    /// whole, and one `ours` refuses gives none of its records.
-    fn read_blocks(
-        file: &mut (impl Read + Seek),
-        ours: &dyn Fn(Option<&Folder>) -> bool,
-    ) -> io::Result<(State, u64)> {
+    /// whole.
+    fn read_blocks(file: &mut (impl Read + Seek)) -> io::Result<(State, u64)> {
         let mut reading = Reading { file, bytes: 0 };
-        match by_blocks(&mut reading, ours) {
+        match by_blocks(&mut reading) {
             Ok(state) => return Ok((state, reading.bytes)),
             Err(reason) => tracing::debug!(reason, "the state is read whole"),
         }
-        reading.streamed(&|_| true, ours)
-    }
-
-    /// each file the state in `file` records as placed, of the paths at or below `folders` that
-    /// `keep` accepts, read as [`State::read_within`] reads them, with the dataset it was placed
-    /// for, when the state was written for a folder `ours` refuses, as a copy of the project brings
-    /// it. anyone could have written such a state, so these only say which files to try, never
-    /// what one holds. none from a state of this folder, or one that is no state of this version.
-    /// fails when `file` cannot be read.
-    pub(crate) fn copied(
-        file: &mut (impl Read + Seek),
-        folders: &[String],
-        keep: &dyn Fn(&str) -> bool,
-        ours: &dyn Fn(Option<&Folder>) -> bool,
-    ) -> io::Result<Vec<(String, String)>> {
-        let (state, _) = State::read_within(file, folders, keep, &|_| true)?;
-        if !state.was_read() || ours(state.folder.as_ref()) {
-            return Ok(Vec::new());
-        }
-        Ok(state
-            .files
-            .into_iter()
-            .map(|(path, placed)| (path, placed.dataset))
-            .collect())
+        reading.streamed(&|_| true)
     }
 
     /// drops the mark of each dataset `manifest` no longer has, and says whether any went.
@@ -499,6 +487,10 @@ impl State {
             out.extend_from_slice(br#","told":"#);
             serde_json::to_writer(&mut *out, &self.told)?;
         }
+        if let Some(id) = &self.id {
+            out.extend_from_slice(br#","id":"#);
+            serde_json::to_writer(&mut *out, id)?;
+        }
         out.extend_from_slice(br#","blocks":"#);
         serde_json::to_writer(&mut *out, &blocks)?;
         out.push(b'}');
@@ -531,7 +523,7 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
         let (mut version, mut files, mut synced) = (None, false, false);
         let (mut dropped, mut freeing, mut folder, mut aside, mut replacing, mut uncached) =
             (false, false, false, false, false, false);
-        let (mut markers, mut followed, mut told) = (false, false, false);
+        let (mut markers, mut followed, mut told, mut id) = (false, false, false, false);
         while let Some(key) = map.next_key::<String>()? {
             let twice = match key.as_str() {
                 "version" => version.replace(map.next_value()?).is_some(),
@@ -578,6 +570,10 @@ impl<'de> serde::de::Visitor<'de> for Only<'_> {
                 "told" => {
                     state.told = map.next_value()?;
                     std::mem::replace(&mut told, true)
+                }
+                "id" => {
+                    state.id = map.next_value()?;
+                    std::mem::replace(&mut id, true)
                 }
                 _ => {
                     map.next_value::<serde::de::IgnoredAny>()?;
@@ -688,6 +684,8 @@ struct Tail {
     followed: BTreeMap<String, String>,
     #[serde(default)]
     told: Told,
+    #[serde(default)]
+    id: Option<String>,
     blocks: Vec<Block>,
 }
 
@@ -735,18 +733,12 @@ impl<R: Read + Seek> Reading<'_, R> {
 
     /// the state read whole from its start as it is parsed, of the records `keep` accepts, for
     /// one whose index does not fit: a file that is no state, as one of zeros a clone can hold,
-    /// stops at its first byte rather than being held whole, and one `ours` refuses by the
-    /// folder it names gives none of its records.
-    fn streamed(
-        &mut self,
-        keep: &dyn Fn(&str) -> bool,
-        ours: &dyn Fn(Option<&Folder>) -> bool,
-    ) -> io::Result<(State, u64)> {
-        let owner: Option<Owner> =
+    /// stops at its first byte rather than being held whole.
+    fn streamed(&mut self, keep: &dyn Fn(&str) -> bool) -> io::Result<(State, u64)> {
+        let version: Option<Version> =
             self.parsed(|deserializer| serde::Deserialize::deserialize(deserializer))?;
-        let state = match owner {
-            Some(owner) if owner.version != Some(VERSION) => State::default(),
-            Some(owner) if !ours(owner.folder.as_ref()) => foreign(owner.folder, owner.markers),
+        let state = match version {
+            Some(found) if found.version != Some(VERSION) => State::default(),
             Some(_) => self
                 .parsed(|deserializer| {
                     serde::de::DeserializeSeed::deserialize(Only(keep), deserializer)
@@ -787,7 +779,6 @@ fn indexed(
     reading: &mut Reading<'_, impl Read + Seek>,
     folders: &[String],
     keep: &dyn Fn(&str) -> bool,
-    ours: &dyn Fn(Option<&Folder>) -> bool,
 ) -> Result<State, &'static str> {
     let Tail {
         synced,
@@ -800,11 +791,9 @@ fn indexed(
         markers,
         followed,
         told,
+        id,
         blocks,
-    } = match index(reading, ours)? {
-        Indexed::Tail(tail) => *tail,
-        Indexed::Foreign(folder, marks) => return Ok(foreign(folder, marks)),
-    };
+    } = index(reading)?;
     let mut files = BTreeMap::new();
     let mut bytes = Vec::new();
     for run in runs(&blocks, folders) {
@@ -829,15 +818,14 @@ fn indexed(
         markers,
         followed,
         told,
+        id,
+        copied: Copied::default(),
     })
 }
 
 /// every record, read a block at a time through the state's index into one list in path order,
 /// which builds the map at once, or why it declines as [`indexed`] does.
-fn by_blocks(
-    reading: &mut Reading<'_, impl Read + Seek>,
-    ours: &dyn Fn(Option<&Folder>) -> bool,
-) -> Result<State, &'static str> {
+fn by_blocks(reading: &mut Reading<'_, impl Read + Seek>) -> Result<State, &'static str> {
     let Tail {
         synced,
         dropped,
@@ -849,11 +837,9 @@ fn by_blocks(
         markers,
         followed,
         told,
+        id,
         blocks,
-    } = match index(reading, ours)? {
-        Indexed::Tail(tail) => *tail,
-        Indexed::Foreign(folder, marks) => return Ok(foreign(folder, marks)),
-    };
+    } = index(reading)?;
     let mut records = Vec::new();
     let mut bytes = Vec::new();
     for at in 0..blocks.len() {
@@ -881,59 +867,31 @@ fn by_blocks(
         markers,
         followed,
         told,
+        id,
+        copied: Copied::default(),
     })
 }
 
 /// what follows a state's records, once its blocks are found to cover them.
-fn index(
-    reading: &mut Reading<'_, impl Read + Seek>,
-    ours: &dyn Fn(Option<&Folder>) -> bool,
-) -> Result<Indexed, &'static str> {
+fn index(reading: &mut Reading<'_, impl Read + Seek>) -> Result<Tail, &'static str> {
     let mut head = Vec::new();
     reading
         .append(0, START as u64, &mut head)
         .map_err(|_| "it is shorter than its header")?;
     let at = records_end(&head).ok_or("its header is not this version's")?;
-    // the folder first, so nothing more of another folder's state, as a clone brings it, is read
-    let owner: Owner = reading.tail(at)?;
-    if !ours(owner.folder.as_ref()) {
-        return Ok(Indexed::Foreign(owner.folder, owner.markers));
-    }
     let found: Tail = reading.tail(at)?;
     if !chained(&found.blocks, at) {
         return Err("its blocks do not cover its records");
     }
-    Ok(Indexed::Tail(Box::new(found)))
+    Ok(found)
 }
 
-/// what [`index`] found after a state's records: the index of one written for this folder, or
-/// the folder another one names, with the folders it marked for git.
-enum Indexed {
-    Tail(Box<Tail>),
-    Foreign(Option<Folder>, BTreeMap<String, String>),
-}
-
-/// the version and the folder a state records, read before anything else of it, and the folders
-/// it marked for git, every other field passed over unheld.
+/// the version a state records, read before anything else of it, every other field passed over
+/// unheld.
 #[derive(Deserialize)]
-struct Owner {
+struct Version {
     #[serde(default)]
     version: Option<u32>,
-    #[serde(default)]
-    folder: Option<Folder>,
-    #[serde(default)]
-    markers: BTreeMap<String, String>,
-}
-
-/// a state written for another folder, `folder`, with none of its records but the folders it
-/// marked for git, `markers`: the reader drops the rest.
-fn foreign(folder: Option<Folder>, markers: BTreeMap<String, String>) -> State {
-    State {
-        version: VERSION,
-        folder,
-        markers,
-        ..State::default()
-    }
 }
 
 /// a reader that counts the bytes read through it.
@@ -1264,13 +1222,9 @@ mod tests {
             bytes: 0,
         };
         let folders = ["data/tiny".to_owned()];
-        let (read, _) = State::read_within(
-            &mut file,
-            &folders,
-            &|path| path.starts_with("data/tiny/"),
-            &|_| true,
-        )
-        .unwrap();
+        let (read, _) =
+            State::read_within(&mut file, &folders, &|path| path.starts_with("data/tiny/"))
+                .unwrap();
         assert_eq!(
             read.files.keys().collect::<Vec<_>>(),
             ["data/tiny/payload.bin"]
@@ -1432,94 +1386,9 @@ mod tests {
             );
             let folders = ["data".to_owned()];
             let (within, _) =
-                State::read_within(&mut io::Cursor::new(&bytes), &folders, &|_| true, &|_| true)
-                    .unwrap();
+                State::read_within(&mut io::Cursor::new(&bytes), &folders, &|_| true).unwrap();
             assert!(within.files.is_empty() && within.synced.is_none());
         }
-    }
-
-    /// a state another folder wrote, as a clone or a copy brings it, is dropped from its index
-    /// alone: none of its records is read, however many it holds. its own folder reads them all.
-    #[test]
-    fn a_state_written_for_another_folder_has_no_record_read() {
-        let mut state = crowded();
-        for number in 0..2_000 {
-            let path = format!("data/big/{number:05}");
-            state.files.insert(path, placed("big", number));
-        }
-        let there = Folder {
-            inode: Some(7),
-            created: None,
-        };
-        let bytes = state.render_for(Some(&there));
-        assert!(bytes.len() > 4 * BLOCK, "{} bytes", bytes.len());
-        let here = Folder {
-            inode: Some(8),
-            created: None,
-        };
-        for (folder, all) in [(&here, false), (&there, true)] {
-            let ours = |recorded: Option<&Folder>| {
-                recorded.is_some_and(|recorded| recorded.matches(folder))
-            };
-            let mut file = Counted {
-                inner: io::Cursor::new(&bytes),
-                bytes: 0,
-            };
-            let (read, _) = State::read_whole(&mut file, bytes.len() as u64, &ours).unwrap();
-            assert_eq!(read.folder.as_ref(), Some(&there));
-            if all {
-                assert_eq!(read.files.len(), state.files.len());
-            } else {
-                assert!(read.files.is_empty());
-                assert!(
-                    file.bytes < BLOCK,
-                    "{} of {} bytes",
-                    file.bytes,
-                    bytes.len()
-                );
-            }
-        }
-    }
-
-    /// a state written for another folder names its files, each with its dataset, of the paths
-    /// a read keeps, and nothing else of them; this folder's own state names none that way, and
-    /// a file that is no state names none.
-    #[test]
-    fn a_state_written_for_another_folder_names_its_files_with_their_datasets_alone() {
-        let mut state = State::default();
-        state
-            .files
-            .insert("data/a/x.csv".to_owned(), placed("a", 1));
-        state
-            .files
-            .insert("data/a/y.csv".to_owned(), placed("b", 2));
-        state
-            .files
-            .insert("data/c/z.csv".to_owned(), placed("c", 3));
-        let there = Folder {
-            inode: Some(7),
-            created: None,
-        };
-        let bytes = state.render_for(Some(&there));
-        let folders = ["data/a".to_owned()];
-        let keep = |path: &str| path.starts_with("data/a/");
-        let named = |bytes: &[u8], inode: u64| {
-            let here = Folder {
-                inode: Some(inode),
-                created: None,
-            };
-            let ours = |recorded: Option<&Folder>| {
-                recorded.is_some_and(|recorded| recorded.matches(&here))
-            };
-            State::copied(&mut io::Cursor::new(bytes), &folders, &keep, &ours).unwrap()
-        };
-        let pair = |path: &str, dataset: &str| (path.to_owned(), dataset.to_owned());
-        assert_eq!(
-            named(&bytes, 8),
-            [pair("data/a/x.csv", "a"), pair("data/a/y.csv", "b")]
-        );
-        assert_eq!(named(&bytes, 7), []);
-        assert_eq!(named(&[0; 64], 8), []);
     }
 
     /// a state that is no state at all, as a file of zeros a clone can hold, is found so at its
@@ -1531,7 +1400,7 @@ mod tests {
             inner: io::Cursor::new(&zeros),
             bytes: 0,
         };
-        let (read, _) = State::read_whole(&mut file, zeros.len() as u64, &|_| true).unwrap();
+        let (read, _) = State::read_whole(&mut file, zeros.len() as u64).unwrap();
         assert!(!read.was_read());
         assert!(
             file.bytes < BLOCK,
@@ -1677,7 +1546,7 @@ mod tests {
                 file: &mut file,
                 bytes: 0,
             };
-            let read = by_blocks(&mut reading, &|_| true).expect("its index fits");
+            let read = by_blocks(&mut reading).expect("its index fits");
             assert_same(&read, &State::parse(&bytes), &format!("blocks of {block}"));
             assert_eq!(read.aside, state.aside, "blocks of {block}");
             assert_eq!(read.replacing, state.replacing, "blocks of {block}");
@@ -1693,7 +1562,7 @@ mod tests {
                     file: &mut file,
                     bytes: 0,
                 };
-                let read = indexed(&mut reading, &folders, &keep, &|_| true).expect(&case);
+                let read = indexed(&mut reading, &folders, &keep).expect(&case);
                 assert_same(&read, &whole_within(&bytes, &folders), &case);
             }
         }
@@ -1732,7 +1601,7 @@ mod tests {
                 reads: 0,
                 seeks: 0,
             };
-            let (read, counted) = State::read_whole(&mut file, length as u64, &|_| true).unwrap();
+            let (read, counted) = State::read_whole(&mut file, length as u64).unwrap();
             assert_same(
                 &read,
                 &State::parse(&bytes[..length]),
@@ -1827,7 +1696,7 @@ mod tests {
             .collect();
         sets.push(vec![first]);
         for (number, state) in states.iter().enumerate() {
-            let (read, _) = State::read_blocks(&mut io::Cursor::new(state), &|_| true).unwrap();
+            let (read, _) = State::read_blocks(&mut io::Cursor::new(state)).unwrap();
             assert_same(
                 &read,
                 &State::parse(state),
@@ -1836,8 +1705,7 @@ mod tests {
             for folders in &sets {
                 let keep = |path: &str| inside(path, folders);
                 let (read, _) =
-                    State::read_within(&mut io::Cursor::new(state), folders, &keep, &|_| true)
-                        .unwrap();
+                    State::read_within(&mut io::Cursor::new(state), folders, &keep).unwrap();
                 let case = format!("change {number}, {folders:?}");
                 assert_same(&read, &whole_within(state, folders), &case);
             }

@@ -62,6 +62,9 @@ pub(crate) struct Survey {
     /// them for later runs, or a record moved to another spelling of its path, or a data folder
     /// link was first followed, which the state is to record.
     pub(crate) needs_writing: bool,
+    /// whether the state named no project, as a copy's, a moved root's or a new one, so the id
+    /// it names now is this run's: a writing run saves it before any marker names it.
+    pub(crate) fresh_id: bool,
     /// the data folder links the survey followed into folders `data_links` lists.
     pub(crate) followed: Vec<crate::project::Followed>,
     /// files under the hidden names placement stages files in.
@@ -395,6 +398,7 @@ impl Survey {
             alone,
             alone_index: OnceLock::new(),
             needs_writing: false,
+            fresh_id: false,
             followed: Vec::new(),
             temporaries,
             entries,
@@ -407,6 +411,10 @@ impl Survey {
             data_gone,
             git_keeps: None,
         };
+        if survey.state.id.is_none() {
+            survey.state.id = Some(project.fresh_id().to_owned());
+            survey.fresh_id = true;
+        }
         for link in followed.iter().filter(|link| link.first) {
             let found = link.found.to_string_lossy().into_owned();
             survey.state.followed.insert(link.path.clone(), found);

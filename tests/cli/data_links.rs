@@ -590,6 +590,194 @@ fn a_refused_link_git_tracks_says_it_came_with_the_clone() -> Result {
     Ok(())
 }
 
+/// the project at `from`, whose data folder is a link to `target`, copied to the folder `name` as
+/// `cp -a` copies it: data.toml, data.lock and fetchloom's own folder, the state in it, and a link
+/// leading where the original's does.
+fn copied_with_link(sandbox: &Sandbox, from: &Path, name: &str, target: &Path) -> Result<PathBuf> {
+    let to = sandbox.folder(name)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(from.join(file), to.join(file))?;
+    }
+    crate::copied::copy_tree(&from.join(".fetchloom"), &to.join(".fetchloom"))?;
+    link_folder(target, &to.join("data"))?;
+    Ok(to)
+}
+
+/// the refusal of a first follow into the linked data folder of the project this one was copied or
+/// moved from, whose markers its copied state names, for `markers`, with the two ways out.
+fn taken_over(target: &Path, markers: &str) -> Result<[String; 2]> {
+    Ok([
+        format!(
+            " is a link to {}, where {markers} marks a dataset folder of the project this one was copied or moved from, so fetchloom places nothing through it\n",
+            real(target)?
+        ),
+        "help: if this is a copy, give it a data folder of its own: the cache keeps each file's bytes once. if you moved the project here and no other copy uses that folder, delete those .gitignore files, and sync makes them again\n".to_owned(),
+    ])
+}
+
+/// a copy of a project whose data folder is a link, as `cp -a` makes one beside the original, keeps
+/// the link to the folder the original still uses, with a state whose markers name that folder's
+/// datasets. a copied state grants nothing there: the copy's sync, add, path and remove refuse the
+/// folder as the data folder of the project it was copied or moved from, and the original's files
+/// stay as they are.
+#[test]
+fn a_copy_never_takes_over_its_originals_linked_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("a-data");
+    fs::create_dir(&target)?;
+    let original = sandbox.work();
+    if link_folder(&target, &original.join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![
+        ("/iris.csv".to_owned(), file(IRIS, "\"1\"")),
+        ("/wine.csv".to_owned(), file(b"wine\n", "\"2\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    let copy = copied_with_link(&sandbox, &original, "copy", &target)?;
+    let before = listing(&target)?;
+    let wine = format!("{}/wine.csv", routes.url);
+    let said = taken_over(&target, "iris/.gitignore")?;
+    for args in [
+        &["sync"][..],
+        &["add", &wine, "--as", "wine"],
+        &["path", "iris"],
+        &["remove", "iris"],
+    ] {
+        let output = sandbox.command_in(&copy, args).output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            said.iter().all(|line| stderr.contains(line.as_str())),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(listing(&target)?, before, "{args:?}");
+    }
+    let status = sandbox.run(&["--offline", "status"])?;
+    let stderr = text(&status.stderr)?;
+    assert!(
+        stderr.contains("Ok everything matches data.lock"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a project root moved to another disk reads its state as another folder's, as a copy's, so its
+/// data link to the folder it used refuses the first follow alike. once the person, knowing no
+/// other copy uses that folder, deletes the .gitignore files the refusal names, sync takes the
+/// folder and makes them again.
+#[test]
+fn a_moved_project_root_takes_its_linked_folder_once_its_markers_go() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("a-data");
+    fs::create_dir(&target)?;
+    let before = sandbox.folder("before")?;
+    if link_folder(&target, &before.join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let added = sandbox
+        .command_in(
+            &before,
+            &["add", &format!("{}/iris.csv", routes.url), "--as", "iris"],
+        )
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let moved = copied_with_link(&sandbox, &before, "moved", &target)?;
+    unlink(&before.join("data"))?;
+    fs::remove_dir_all(&before)?;
+    let refused = sandbox.command_in(&moved, &["sync"]).output()?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(50), "{stderr}");
+    let said = taken_over(&target, "iris/.gitignore")?;
+    assert!(
+        said.iter().all(|line| stderr.contains(line.as_str())),
+        "{stderr}"
+    );
+    let marker = target.join("iris").join(".gitignore");
+    fs::remove_file(&marker)?;
+    let synced = sandbox.command_in(&moved, &["sync"]).output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(recorded(&moved, "data")?, Some(resolved(&target)?));
+    Ok(())
+}
+
+/// a project's own state records its dataset folders by their path in the project, so one that
+/// points its own data link at another project's folder finds that project's markers where it
+/// records its own. a marker names the project that wrote it, and a first follow takes only those
+/// naming this one, so its sync and remove refuse that folder and leave it as it was.
+#[test]
+fn a_link_repointed_at_another_projects_folder_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let (theirs, ours) = (scratch.join("a-data"), scratch.join("b-data"));
+    fs::create_dir(&theirs)?;
+    fs::create_dir(&ours)?;
+    let other = sandbox.folder("a")?;
+    let data = sandbox.work().join("data");
+    if link_folder(&theirs, &other.join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    link_folder(&ours, &data)?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let link = format!("{}/iris.csv", routes.url);
+    let added = sandbox
+        .command_in(&other, &["add", &link, "--as", "iris"])
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    ok(&sandbox.run(&["add", &link, "--as", "iris"])?)?;
+    unlink(&data)?;
+    link_folder(&theirs, &data)?;
+    let before = listing(&theirs)?;
+    for args in [&["sync"][..], &["remove", "iris"]] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                " is a link to {}, where iris/.gitignore marks a dataset folder of another fetchloom project, so fetchloom places nothing through it\n",
+                real(&theirs)?
+            )),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(listing(&theirs)?, before, "{args:?}");
+    }
+    let status = sandbox
+        .command_in(&other, &["--offline", "status"])
+        .output()?;
+    let stderr = text(&status.stderr)?;
+    assert!(
+        stderr.contains("Ok everything matches data.lock"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a person who moves their own data folder to scratch and links it back keeps working: the folder
 /// holds what this project placed, the markers it made and what a system writes by itself, so the
 /// first follow takes it and the state records it.

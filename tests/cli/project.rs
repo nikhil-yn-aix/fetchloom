@@ -1300,7 +1300,7 @@ fn a_project_started_outside_git_keeps_its_data_out_of_a_later_commit() -> Resul
         assert!(!stderr.contains("Ignored"), "{command}: {stderr}");
         assert!(!work.join(".gitignore").exists(), "{command}");
         assert_eq!(
-            fs::read(work.join(data_dir).join("iris").join(".gitignore"))?,
+            crate::support::marker(&work.join(data_dir).join("iris").join(".gitignore"))?,
             b"*\n",
             "{command}"
         );
@@ -1340,7 +1340,10 @@ fn a_linked_gitignore_is_never_read_or_edited() -> Result {
         Vec::<&str>::new(),
         "{document}"
     );
-    assert_eq!(fs::read(work.join("data/iris/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&work.join("data/iris/.gitignore"))?,
+        b"*\n"
+    );
     Ok(())
 }
 
@@ -1389,7 +1392,11 @@ fn every_command_that_places_files_keeps_the_dataset_folder_out_of_git() -> Resu
         let stderr = text(&output.stderr)?;
         assert!(output.status.success(), "{command}: {stderr}");
         assert!(stderr.contains(&line), "{command}: {stderr}");
-        assert_eq!(fs::read(folder.join(".gitignore"))?, b"*\n", "{command}");
+        assert_eq!(
+            crate::support::marker(&folder.join(".gitignore"))?,
+            b"*\n",
+            "{command}"
+        );
         assert!(!work.join(".gitignore").exists(), "{command}");
         match command {
             "add" => assert!(stderr.contains("iris is already in data.toml"), "{stderr}"),

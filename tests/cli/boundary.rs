@@ -167,7 +167,7 @@ fn a_clean_root_leaves_git_all_but_the_dataset_folders() -> Result {
     assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
     assert!(!sandbox.work().join(".gitignore").exists());
     assert_eq!(
-        fs::read(sandbox.work().join("data/iris/.gitignore"))?,
+        crate::support::marker(&sandbox.work().join("data/iris/.gitignore"))?,
         b"*\n"
     );
     write_all(
@@ -304,7 +304,7 @@ fn an_upgraded_project_gets_its_folders_marked_and_the_line_explained() -> Resul
     assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
     assert!(!stderr.contains("keeps all of data/"), "{stderr}");
     assert_eq!(
-        fs::read(sandbox.work().join("data/iris/.gitignore"))?,
+        crate::support::marker(&sandbox.work().join("data/iris/.gitignore"))?,
         b"*\n"
     );
     assert_eq!(
@@ -399,7 +399,10 @@ fn a_marker_goes_with_its_dataset() -> Result {
     let server = iris_server()?;
     with_iris(&sandbox, &server)?;
     let data = sandbox.work().join("data");
-    assert_eq!(fs::read(data.join("iris/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&data.join("iris/.gitignore"))?,
+        b"*\n"
+    );
 
     let toml = fs::read_to_string(sandbox.work().join("data.toml"))?;
     fs::write(
@@ -412,7 +415,10 @@ fn a_marker_goes_with_its_dataset() -> Result {
     let moved = sandbox.run(&["sync"])?;
     assert_eq!(moved.status.code(), Some(0), "{}", text(&moved.stderr)?);
     assert!(!data.join("iris").exists(), "the old folder went whole");
-    assert_eq!(fs::read(data.join("raw/iris/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&data.join("raw/iris/.gitignore"))?,
+        b"*\n"
+    );
 
     let removed = sandbox.run(&["remove", "iris"])?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
@@ -468,7 +474,7 @@ fn a_marker_comes_back_but_never_over_a_persons_file() -> Result {
     let synced = sandbox.run(&["sync"])?;
     let stderr = text(&synced.stderr)?;
     assert!(!stderr.contains("Ignored"), "{stderr}");
-    assert_eq!(fs::read(&marker)?, b"*\n");
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
 
     let theirs = sandbox.work().join("data/wine/.gitignore");
     write_all(&sandbox, &[("data/wine/.gitignore", "")])?;
@@ -627,14 +633,17 @@ fn a_marker_in_a_folder_shared_with_the_person_names_the_datasets_entries() -> R
     let header = "# fetchloom keeps the dataset files placed here out of git, and rewrites this list as they change\n";
     let data = sandbox.work().join("data");
     assert_eq!(
-        fs::read_to_string(data.join(".gitignore"))?,
+        String::from_utf8(crate::support::marker(&data.join(".gitignore"))?)?,
         format!("{header}/.gitignore\n/images/\n/iris.csv\n/labels.csv\n")
     );
     assert_eq!(
-        fs::read_to_string(data.join("nested/.gitignore"))?,
+        String::from_utf8(crate::support::marker(&data.join("nested/.gitignore"))?)?,
         format!("{header}/.gitignore\n/inner.csv\n")
     );
-    assert_eq!(fs::read(data.join("nested/inner/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&data.join("nested/inner/.gitignore"))?,
+        b"*\n"
+    );
     if in_git {
         write_all(&sandbox, &[("data/scores.csv", "0.9\n")])?;
         assert_eq!(
@@ -657,13 +666,16 @@ fn a_marker_in_a_folder_shared_with_the_person_names_the_datasets_entries() -> R
     let removed = sandbox.run(&["remove", "pack"])?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
     assert_eq!(
-        fs::read_to_string(data.join(".gitignore"))?,
+        String::from_utf8(crate::support::marker(&data.join(".gitignore"))?)?,
         format!("{header}/.gitignore\n/iris.csv\n")
     );
     let removed = sandbox.run(&["remove", "inner"])?;
     let stderr = text(&removed.stderr)?;
     assert_eq!(removed.status.code(), Some(0), "{stderr}");
-    assert_eq!(fs::read(data.join("nested/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&data.join("nested/.gitignore"))?,
+        b"*\n"
+    );
     if in_git {
         assert!(stderr.contains(&ignored_line("data/nested")), "{stderr}");
         // the remove said it, so the marker made again says nothing more
@@ -697,7 +709,8 @@ fn a_listed_marker_the_person_changed_is_theirs() -> Result {
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     let marker = sandbox.work().join("data/.gitignore");
     let mut theirs = fs::read_to_string(&marker)?;
-    assert!(theirs.ends_with("/iris.csv\n/wine.csv\n"), "{theirs}");
+    let (listed, _) = crate::support::unnamed(theirs.as_bytes());
+    assert!(listed.ends_with(b"/iris.csv\n/wine.csv\n"), "{theirs}");
     theirs.push_str("/scratch/\n");
     fs::write(&marker, &theirs)?;
     for args in [&["remove", "wine"][..], &["remove", "iris"]] {
@@ -735,10 +748,11 @@ fn a_listed_marker_keeps_the_files_of_a_dataset_not_known_here() -> Result {
         .env("FETCHLOOM_CACHE", &cold)
         .output()?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
-    let marker = fs::read_to_string(sandbox.work().join("data/.gitignore"))?;
+    let marker = crate::support::marker(&sandbox.work().join("data/.gitignore"))?;
     assert!(
-        marker.ends_with("/.gitignore\n/images/\n/iris.csv\n/labels.csv\n"),
-        "{marker}"
+        marker.ends_with(b"/.gitignore\n/images/\n/iris.csv\n/labels.csv\n"),
+        "{}",
+        String::from_utf8_lossy(&marker)
     );
     Ok(())
 }
@@ -804,10 +818,11 @@ fn a_shared_folder_too_full_to_name_gets_no_wildcard() -> Result {
     let lines = fs::read_to_string(&marker)?;
     assert_eq!(
         lines.lines().count(),
-        1002,
-        "the header, itself and each entry"
+        1003,
+        "the header, itself, each entry and the project"
     );
-    assert!(lines.ends_with("/f0999.csv\n"), "{lines}");
+    let (listed, _) = crate::support::unnamed(lines.as_bytes());
+    assert!(listed.ends_with(b"/f0999.csv\n"), "{lines}");
 
     pin("more.zip")?;
     let unnamed = synced(&sandbox)?;
@@ -911,7 +926,7 @@ fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
     let placed = sandbox.command_in(&teammate, &["sync"]).output()?;
     let stderr = text(&placed.stderr)?;
     assert_eq!(placed.status.code(), Some(0), "{stderr}");
-    let marker = fs::read(teammate.join("results/.gitignore")).ok();
+    let marker = crate::support::marker(&teammate.join("results/.gitignore")).ok();
     assert_eq!(marker.as_deref(), Some(&b"*\n"[..]), "{stderr}");
 
     // once git lets go of the folder, its next first pin gives it a .gitignore
@@ -920,7 +935,10 @@ fn an_output_the_person_keeps_in_git_gets_no_marker() -> Result {
     let added = sandbox.run(&["add", "results", "--as", "results"])?;
     let stderr = text(&added.stderr)?;
     assert!(stderr.contains(&ignored_line("results")), "{stderr}");
-    assert_eq!(fs::read(work.join("results/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&work.join("results/.gitignore"))?,
+        b"*\n"
+    );
     Ok(())
 }
 
@@ -946,7 +964,11 @@ fn the_marker_line_is_said_once_per_folder() -> Result {
         assert!(!dry.contains("in git"), "{rerun}: {dry}");
         let stderr = synced(&sandbox)?;
         assert!(!stderr.contains("in git"), "{rerun}: {stderr}");
-        assert_eq!(fs::read(folder.join(".gitignore"))?, b"*\n", "{rerun}");
+        assert_eq!(
+            crate::support::marker(&folder.join(".gitignore"))?,
+            b"*\n",
+            "{rerun}"
+        );
     }
     Ok(())
 }
@@ -1026,7 +1048,7 @@ fn every_pin_reads_whether_git_keeps_an_outputs_folder() -> Result {
         Ok(())
     };
     pin(false)?;
-    assert_eq!(fs::read(&marker)?, b"*\n");
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
     fs::remove_file(&marker)?;
     crate::merge::ok(&sandbox, &["add", "figures/fig1.png"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "a figure"])?;
@@ -1043,11 +1065,11 @@ fn every_pin_reads_whether_git_keeps_an_outputs_folder() -> Result {
     assert!(!stderr.contains("in git"), "said once: {stderr}");
     crate::merge::ok(&sandbox, &["rm", "-q", "--cached", "figures/fig1.png"])?;
     pin(false)?;
-    assert_eq!(fs::read(&marker)?, b"*\n");
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
     // the syncs after, which read no git, keep what the pin found: a marker that goes comes back
     fs::remove_file(&marker)?;
     synced(&sandbox)?;
-    let back = fs::read(&marker).ok();
+    let back = crate::support::marker(&marker).ok();
     assert_eq!(back.as_deref(), Some(&b"*\n"[..]));
     Ok(())
 }
@@ -1090,7 +1112,7 @@ fn a_remove_says_no_marker_line_the_person_heard() -> Result {
     assert_eq!(removed.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains("Ignored"), "{stderr}");
     let marker = sandbox.work().join("data/nested/.gitignore");
-    assert_eq!(fs::read(marker)?, b"*\n");
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
     Ok(())
 }
 

@@ -143,7 +143,7 @@ impl PlacedArchives {
                 (threads, stop),
             )?;
             if proven.is_none() && layout.decompressed.is_none() {
-                let recorded = recorded.get_or_insert_with(|| copied(project, manifest, unknown));
+                let recorded = recorded.get_or_insert_with(|| copied(survey));
                 let named = recorded.get(dataset.as_str());
                 if let Some(hinted) = named.and_then(|named| hinted(&below, &layout.base, named)) {
                     tracing::debug!(
@@ -302,28 +302,15 @@ fn first_proven(
     }))
 }
 
-/// the files a copy's state records as placed in the folders of the datasets of `unknown`, by
-/// path in the project, in sets by dataset.
-fn copied(
-    project: &Project,
-    manifest: &Manifest,
-    unknown: &[(String, Archive<'_>)],
-) -> HashMap<String, HashSet<String>> {
-    let folders: Vec<String> = unknown
-        .iter()
-        .map(|(dataset, _)| plan::folder(manifest, dataset))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let keep = |path: &str| {
-        folders.iter().any(|folder| {
-            path.strip_prefix(folder.as_str())
-                .is_some_and(|rest| rest.starts_with('/'))
-        })
-    };
+/// the files the state a copy of the project brought records as placed, by path in the project, in
+/// sets by dataset, as the survey read them.
+fn copied(survey: &Survey) -> HashMap<String, HashSet<String>> {
     let mut by_dataset: HashMap<String, HashSet<String>> = HashMap::new();
-    for (path, dataset) in project.copied_records(&folders, &keep) {
-        by_dataset.entry(dataset).or_default().insert(path);
+    for (path, dataset) in &survey.state.copied.files {
+        by_dataset
+            .entry(dataset.clone())
+            .or_default()
+            .insert(path.clone());
     }
     by_dataset
 }

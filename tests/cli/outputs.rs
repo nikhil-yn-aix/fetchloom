@@ -171,7 +171,10 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
     fs::write(work.join("results/iris_clean.csv"), CLEAN)?;
     fs::write(work.join("results/summary.txt"), SUMMARY)?;
     ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
-    assert_eq!(fs::read(work.join("results/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&work.join("results/.gitignore"))?,
+        b"*\n"
+    );
     let lock = fs::read_to_string(work.join("data.lock"))?;
     assert_eq!(lock.matches("{ path = ").count(), 2, "{lock}");
     let checked = sandbox.run(&["status", "--verify", "--check"])?;
@@ -190,7 +193,10 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
     }
     let synced = sandbox.command_in(&teammate, &["sync"]).output()?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    assert_eq!(fs::read(teammate.join("results/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&teammate.join("results/.gitignore"))?,
+        b"*\n"
+    );
     for project in [&work, &teammate] {
         let status = sandbox
             .command_in(project, &["--json", "status"])
@@ -237,7 +243,10 @@ fn a_renamed_outputs_folder_never_takes_its_marker_in() -> Result {
     let lock = fs::read_to_string(work.join("data.lock"))?;
     assert!(lock.contains("path = \"patterns.txt\""), "{lock}");
     fs::rename(work.join("data/processed"), work.join("data/features"))?;
-    assert_eq!(fs::read(work.join("data/features/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&work.join("data/features/.gitignore"))?,
+        b"*\n"
+    );
     let manifest = fs::read_to_string(work.join("data.toml"))?;
     fs::write(
         work.join("data.toml"),
@@ -420,7 +429,7 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
     assert_eq!(elsewhere["message"], said, "{document}");
     assert_eq!(elsewhere["help"], ways, "{document}");
     assert_eq!(fs::read(teammate.join("data/iris/iris.csv"))?, IRIS);
-    let marker = fs::read(folder.join(".gitignore")).ok();
+    let marker = crate::support::marker(&folder.join(".gitignore")).ok();
     assert_eq!(marker, Some(b"*\n".to_vec()), "{document}");
     assert_eq!(fs::read_dir(&folder)?.count(), 1, "{document}");
     let synced = sync(&["sync"])?;
@@ -696,7 +705,7 @@ fn a_changed_output_is_never_partly_healed() -> Result {
     assert_eq!(fs::read(folder.join("iris_clean.csv"))?, CLEAN);
     assert_eq!(fs::read(folder.join("summary.txt"))?, SUMMARY);
     assert!(!folder.join("plot.png").exists(), "the pinned tree, whole");
-    assert_eq!(fs::read(folder.join(".gitignore"))?, b"*\n");
+    assert_eq!(crate::support::marker(&folder.join(".gitignore"))?, b"*\n");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     for kind in ["missing", "edited", "extra"] {
         assert_eq!(
@@ -1549,7 +1558,10 @@ fn removing_an_output_keeps_the_authors_files() -> Result {
     ] {
         ok(&sandbox.run(&["add", at, "--as", name])?)?;
     }
-    assert_eq!(fs::read(work.join("results/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&work.join("results/.gitignore"))?,
+        b"*\n"
+    );
     let changed = work.join("data/processed/.gitignore");
     fs::write(&changed, b"*\n!summary.txt\n")?;
     let file = work.join("data/processed/iris_clean.csv");
@@ -1603,7 +1615,10 @@ fn removing_an_output_deletes_no_marker_through_a_link() -> Result {
     fs::create_dir_all(work.join("out/results"))?;
     fs::write(work.join("out/results/summary.txt"), SUMMARY)?;
     ok(&sandbox.run(&["add", "out/results", "--as", "results"])?)?;
-    assert_eq!(fs::read(work.join("out/results/.gitignore"))?, b"*\n");
+    assert_eq!(
+        crate::support::marker(&work.join("out/results/.gitignore"))?,
+        b"*\n"
+    );
     let elsewhere = sandbox.folder("elsewhere")?;
     fs::create_dir_all(elsewhere.join("results"))?;
     let theirs = elsewhere.join("results/.gitignore");
@@ -1966,7 +1981,7 @@ fn dropping_an_output_keeps_its_folder() -> Result {
     assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
     assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
     let marker = work.join("data/processed/.gitignore");
-    assert_eq!(fs::read(&marker)?, b"*\n");
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     for kind in ["missing", "edited", "extra", "unneeded"] {
         assert_eq!(
@@ -1977,7 +1992,7 @@ fn dropping_an_output_keeps_its_folder() -> Result {
     }
     ok(&sandbox.run(&["sync"])?)?;
     assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
-    assert_eq!(fs::read(&marker)?, b"*\n");
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
     Ok(())
 }
 

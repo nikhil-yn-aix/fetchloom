@@ -705,6 +705,45 @@ pub(crate) fn user_named(id: u32) -> String {
         .unwrap_or_else(|| format!("user {id}"))
 }
 
+/// how the last line of each marker fetchloom writes starts, naming the project it is of.
+const PROJECT_LINE: &[u8] = b"# fetchloom project ";
+
+/// `text`, a .gitignore's, without the last line naming the project a marker of fetchloom's is of,
+/// which each project's id makes its own, and whether it had one.
+pub(crate) fn unnamed(text: &[u8]) -> (Vec<u8>, bool) {
+    let Some(body) = text.strip_suffix(b"\n") else {
+        return (text.to_vec(), false);
+    };
+    let start = body
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |at| at + 1);
+    let named = body[start..].starts_with(PROJECT_LINE)
+        && body[start + PROJECT_LINE.len()..]
+            .iter()
+            .all(u8::is_ascii_hexdigit)
+        && body.len() > start + PROJECT_LINE.len();
+    if named {
+        (text[..start].to_vec(), true)
+    } else {
+        (text.to_vec(), false)
+    }
+}
+
+/// the marker fetchloom wrote at `path`, whose last line names the project it is of, without
+/// that line: `*`, or the datasets' entries under their first line.
+pub(crate) fn marker(path: &Path) -> Result<Vec<u8>> {
+    let text = std::fs::read(path)?;
+    let (rest, named) = unnamed(&text);
+    assert!(
+        named,
+        "{} names no project: {}",
+        path.display(),
+        String::from_utf8_lossy(&text)
+    );
+    Ok(rest)
+}
+
 /// deletes the file at `path` as a person can, clearing its read-only flag only where removal
 /// needs that, as on windows' FAT32 and exFAT: a placed hardlink shares the flag with the cache.
 pub(crate) fn delete(path: &Path) -> Result {

@@ -676,17 +676,14 @@ fn note_told(
 
 /// marks each file of `kept` fetchloom did not place, never told of here, whose very edit the
 /// state a copy of the project brought told of while the file looked as it does now, so its help
-/// is a kept edit's. that state only chooses words: anyone could have written it.
-fn copied_edits(project: &Project, survey: &Survey, kept: &mut [Kept]) {
-    let mut untold = kept
+/// is a kept edit's. that state only chooses words: anyone could have written it. it is read with
+/// the survey, before a run writes this folder's own state.
+fn copied_edits(survey: &Survey, kept: &mut [Kept]) {
+    let told = &survey.state.copied.told;
+    for kept in kept
         .iter_mut()
         .filter(|kept| kept.reason == Reason::Foreign && !kept.told)
-        .peekable();
-    if untold.peek().is_none() {
-        return;
-    }
-    let told = project.copied_told();
-    for kept in untold {
+    {
         kept.copied_edit = survey
             .disk
             .get(&kept.path)
@@ -1409,7 +1406,7 @@ impl<'a> Placing<'a> {
             }
         }
         self.preview_marks(&mut preview.placement);
-        copied_edits(self.project, &self.survey, &mut preview.placement.kept);
+        copied_edits(&self.survey, &mut preview.placement.kept);
         preview
     }
 
@@ -1656,7 +1653,7 @@ impl<'a> Placing<'a> {
             Ok((todo, adopted)) => (todo, adopted, None),
             Err(error) => (Vec::new(), true, Some(error)),
         };
-        copied_edits(project, &survey, &mut placement.kept);
+        copied_edits(&survey, &mut placement.kept);
         survey.smudge_edited();
         // before the files land, so git never sees a dataset's folder while it fills
         let (rewritten, made) = mark::write(
@@ -2571,9 +2568,14 @@ fn write_ahead(
         }
     }
     // a first follow's record goes before any file, so a run cut off leaves no file of its own
-    // that the next run's first look takes for another's
+    // that the next run's first look takes for another's, and a new id before any marker names it
     let followed = survey.followed.iter().any(|link| link.first);
-    if placement.aside_names.is_empty() && replacing.is_empty() && !marking && !followed {
+    if placement.aside_names.is_empty()
+        && replacing.is_empty()
+        && !marking
+        && !followed
+        && !survey.fresh_id
+    {
         return Ok(());
     }
     let state = &mut survey.state;

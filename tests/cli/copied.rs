@@ -171,9 +171,29 @@ fn a_copied_project_differs_in_nothing_until_a_sync_records_it() -> Result {
         serde_json::json!(["inputs/iris/iris.csv"])
     );
     assert_eq!(document["result"]["untracked"], serde_json::json!([]));
+    let state = |root: &Path| -> Result<serde_json::Value> {
+        Ok(serde_json::from_slice(&fs::read(
+            root.join(".fetchloom").join("state"),
+        )?)?)
+    };
+    let original = state(&sandbox.work())?["id"].clone();
+    assert!(original.is_string(), "{original}");
+    // status never takes an id for the copy, as it writes no state
+    assert_eq!(state(&two)?["id"], original);
     let synced = run(&["sync"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     assert_eq!(text(&run(&["status"])?.stderr)?, ok);
+    // the copy owns its copied data folder, which is no link, and so the markers there: its first
+    // writing sync takes an id of its own, which they name from then on
+    let copied = state(&two)?;
+    assert!(copied["markers"]["inputs/iris"].is_string(), "{copied}");
+    let id = copied["id"].as_str().unwrap_or_default();
+    assert!(!id.is_empty() && copied["id"] != original, "{copied}");
+    let marker = fs::read_to_string(two.join("inputs").join("iris").join(".gitignore"))?;
+    assert!(
+        marker.ends_with(&format!("# fetchloom project {id}\n")),
+        "{marker}"
+    );
     Ok(())
 }
 
@@ -336,13 +356,18 @@ fn a_copy_keeps_the_marker_of_a_folder_it_cannot_list() -> Result {
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let (two, cache) = copied(&sandbox, "two")?;
     let marker = two.join("data").join("dataset").join(".gitignore");
-    assert_eq!(fs::read(&marker)?, b"*\n");
+    assert_eq!(crate::support::marker(&marker)?, b"*\n");
     let removed = sandbox
         .command_in(&two, &["remove", "iris"])
         .env("FETCHLOOM_CACHE", &cache)
         .output()?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
-    assert_eq!(fs::read(&marker)?, b"*\n", "{}", text(&removed.stderr)?);
+    assert_eq!(
+        crate::support::marker(&marker)?,
+        b"*\n",
+        "{}",
+        text(&removed.stderr)?
+    );
     let status = sandbox
         .command_in(&two, &["--json", "status"])
         .env("FETCHLOOM_CACHE", &cache)
@@ -606,7 +631,9 @@ fn contents(folder: &Path) -> Result<Vec<(String, Vec<u8>)>> {
                 .strip_prefix(folder)?
                 .to_string_lossy()
                 .replace('\\', "/");
-            found.push((relative, fs::read(&path)?));
+            // each project's markers name it, so a copy's are its own
+            let (bytes, _) = crate::support::unnamed(&fs::read(&path)?);
+            found.push((relative, bytes));
         }
     }
     found.sort();
@@ -801,6 +828,32 @@ fn a_told_edit_in_a_copied_project_is_told_once_as_an_edit() -> Result {
     let stderr = text(&second.stderr)?;
     assert_eq!(second.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains(kept), "told once: {stderr}");
+    Ok(())
+}
+
+/// w4 where the copy's first sync writes its own state before it places anything, as when a
+/// marker the copy brought is gone: the edit the copied state told of keeps a kept edit's words in
+/// the real run, as the dry run shows them, since the copied state is read with the copy's first
+/// look and not again.
+#[test]
+fn a_told_edit_keeps_its_words_when_a_first_sync_of_a_copy_writes_ahead() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server)?;
+    let placed = sandbox.work().join("inputs/iris/iris.csv");
+    delete(&placed)?;
+    fs::write(&placed, b"sepal_length,species\n5.1,setosa\n4.9,setosa\n")?;
+    let told = sandbox.run(&["sync"])?;
+    assert_eq!(told.status.code(), Some(0), "{}", text(&told.stderr)?);
+    let (copy, _) = copied(&sandbox, "copy")?;
+    fs::remove_file(copy.join("inputs").join("iris").join(".gitignore"))?;
+    let help = "warning: inputs/iris/iris.csv holds other bytes than data.lock pins, and fetchloom did not place it, so it stays\n  help: keep your version as a file or dataset of your own, or set copy = true for iris in data.toml to edit its files in place; `fetchloom sync --force` discards your edit\n";
+    for args in [&["sync", "--dry-run"][..], &["sync"]] {
+        let output = sandbox.command_in(&copy, args).output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(stderr.contains(help), "{args:?}: {stderr}");
+    }
     Ok(())
 }
 
