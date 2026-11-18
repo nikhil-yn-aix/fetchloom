@@ -45,15 +45,16 @@ fn a_kept_edit_is_told_once_with_the_ways_that_keep_it() -> Result {
     Ok(())
 }
 
-/// a dataset's folder deleted whole, to free room, comes back with the next sync, which says once
-/// how to keep it off this machine.
+/// a dataset's folder deleted whole, to free room, or renamed, comes back with the next sync,
+/// which says once how to keep it off this machine, or to name the new folder in data.toml: it
+/// cannot tell which, as a tool that deletes it before its own run does it too.
 #[test]
 fn a_deleted_dataset_folder_names_drop_once() -> Result {
     let sandbox = Sandbox::new()?;
     let server = iris_server()?;
     with_iris(&sandbox, &server)?;
     let folder = sandbox.work().join("data/iris");
-    let hint = "  hint: to keep iris off this machine, run `fetchloom drop iris`\n";
+    let hint = "  hint: if you deleted data/iris to free space, `fetchloom drop iris` keeps it off this machine, or if you renamed it, set path = \"<new folder>\" for iris in data.toml\n";
     delete_folder(&folder)?;
     let first = synced(&sandbox)?;
     assert!(first.contains(hint), "{first}");
