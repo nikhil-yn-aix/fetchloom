@@ -4,7 +4,6 @@
 //! failure means no answer.
 
 use std::collections::{BTreeMap, HashSet};
-use std::ffi::OsStr;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -35,16 +34,12 @@ const REPOSITORY_VARIABLES: [&str; 15] = [
     "GIT_COMMON_DIR",
 ];
 
-/// git as [`find`] finds it on this run's PATH, outside the project at `project`.
+/// git on this run's PATH, past one inside the project at `project`, as
+/// [`crate::machine::program`] finds every program fetchloom runs: a cloned repository could have
+/// put one in a folder PATH names.
 pub(crate) fn on_path(project: &Path) -> Option<PathBuf> {
-    find(std::env::var_os("PATH").as_deref(), project)
-}
-
-/// git, as the first absolute folder on `path` that holds it outside `project`: a cloned
-/// repository could have put one inside, in a folder PATH names.
-pub(crate) fn find(path: Option<&OsStr>, project: &Path) -> Option<PathBuf> {
     let name = if cfg!(windows) { "git.exe" } else { "git" };
-    crate::machine::outside(path?, name, project)
+    crate::machine::program(&crate::machine::env, name, Some(project)).ok()
 }
 
 /// a file as each side of an unfinished merge has it, and as their merge base had it.
@@ -486,7 +481,7 @@ mod tests {
     /// git as the machine running the tests has it, of any version.
     fn git() -> Option<PathBuf> {
         let elsewhere = tempfile::tempdir().ok()?;
-        let found = find(std::env::var_os("PATH").as_deref(), elsewhere.path());
+        let found = on_path(elsewhere.path());
         if found.is_none() {
             crate::test_skips::skip("git", "git is not installed");
         }
@@ -541,43 +536,9 @@ mod tests {
     #[test]
     fn no_git_gives_no_sides() {
         let folder = tempfile::tempdir().unwrap();
-        assert_eq!(find(None, folder.path()), None);
-        assert_eq!(find(Some(OsStr::new("")), folder.path()), None);
-        assert_eq!(
-            find(Some(OsStr::new("relative/bin")), folder.path()),
-            None,
-            "a folder named relative to wherever fetchloom runs is never searched"
-        );
         let absent = folder.path().join("no-git-here");
         assert_eq!(stages(&absent, folder.path(), "data.toml"), None);
         assert_eq!(committed(&absent, folder.path(), "data.toml"), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_git_inside_the_project_is_never_run() {
-        use std::os::unix::fs::PermissionsExt;
-        let project = tempfile::tempdir().unwrap();
-        let bin = project.path().join("bin");
-        std::fs::create_dir(&bin).unwrap();
-        let planted = bin.join("git");
-        std::fs::write(&planted, "#!/bin/sh\necho planted\n").unwrap();
-        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        assert_eq!(find(Some(bin.as_os_str()), project.path()), None);
-        assert_eq!(
-            find(Some(bin.as_os_str()), outside.path()),
-            Some(planted.clone()),
-            "the same git outside the project is found"
-        );
-        let installed = outside.path().join("git");
-        std::fs::copy(&planted, &installed).unwrap();
-        let path = std::env::join_paths([&bin, &outside.path().to_path_buf()]).unwrap();
-        assert_eq!(
-            find(Some(&path), project.path()),
-            Some(installed),
-            "the project's git hides none later on PATH"
-        );
     }
 
     /// a repository in `at` whose branch theirs and main each wrote `study/data.toml` their own
