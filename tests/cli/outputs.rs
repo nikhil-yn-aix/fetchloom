@@ -416,7 +416,8 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
             .env("FETCHLOOM_CACHE", &cache)
             .output()
     };
-    let said = "processed was made on another machine, and its files are in no mirror this machine reaches";
+    let said =
+        "processed was made on another machine, and this machine's cache does not hold its files";
     let ways = "push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`";
     let folder = teammate.join("data").join("processed");
     let dry = sync(&["sync", "--dry-run"])?;
@@ -442,7 +443,7 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
         ),
         "{stderr}"
     );
-    let not_ready = "processed was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `fetchloom add ./data/processed --as processed`";
+    let not_ready = format!("{said}: {ways}");
     for args in [
         ["--json", "sync", "--strict"],
         ["--json", "status", "--check"],
@@ -527,6 +528,50 @@ fn a_waiting_output_with_its_own_gitignore_gets_its_folder_alone() -> Result {
     assert_eq!(fs::read_dir(&folder)?.count(), 0, "{stderr}");
     let path = run(&["path", "processed"])?;
     assert_eq!(text(&path.stdout)?, format!("{}\n", folder.display()));
+    Ok(())
+}
+
+/// a teammate's status names every output made on another machine in one hint, with the ways on
+/// for each, and as it asks no mirror, says only what the cache lacks; a sync that asked one says
+/// so.
+#[test]
+fn status_names_the_outputs_made_elsewhere_in_one_hint() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    for name in ["a", "b"] {
+        let folder = work.join("data").join(name);
+        fs::create_dir_all(&folder)?;
+        fs::write(folder.join("x.csv"), name)?;
+        ok(&sandbox.run(&["add", &format!("data/{name}"), "--as", name])?)?;
+    }
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    let cache = sandbox.folder("teammate-cache")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&teammate, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let stderr = text(&run(&["status"])?.stderr)?;
+    assert!(
+        stderr.contains("  hint: a and b were made on another machine, and this machine's cache does not hold their files: push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add <folder> --as <name>` for each\n"),
+        "{stderr}"
+    );
+    let mirror = sandbox.folder("mirror")?;
+    let document = json(&run(&[
+        "--json",
+        "sync",
+        "--mirror",
+        &mirror.to_string_lossy(),
+    ])?)?;
+    assert_eq!(
+        warning(&document, "output.elsewhere")["message"],
+        "a was made on another machine, and neither this machine's cache nor a mirror holds its files",
+        "{document}"
+    );
     Ok(())
 }
 

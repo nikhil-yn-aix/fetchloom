@@ -123,14 +123,12 @@ pub(crate) fn no_newer(name: &str, at: Option<&str>) -> Error {
 /// the error for files of `name`, an import, that this machine's cache lacks, as a clone's does,
 /// and the mirrors too when `mirrored`: no link fetches them. `folder` is where they go.
 pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Error {
-    let lacking = if mirrored {
-        "neither this machine's cache nor a mirror holds them"
-    } else {
-        "this machine's cache does not hold them"
-    };
     Error::new(
         Kind::ReferenceUnresolved,
-        format!("{name} was imported from files, and {lacking}"),
+        format!(
+            "{name} was imported from files, and {}",
+            lacking(mirrored, "them")
+        ),
     )
     .help(format!(
         "a folder mirror that holds them brings them back, as `{}`; else copy them to {folder} by hand, then run `{}`, or run `{}` where they are",
@@ -140,37 +138,53 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
     ))
 }
 
-/// the error for the output `name`, its folder `at` as a command run here names it, whose files
-/// neither this machine's cache nor a mirror it reaches holds, as a clone's: git carries
-/// data.lock, never the bytes, which only the machine that made them has.
-pub(crate) fn made_elsewhere(name: &str, at: &str) -> Error {
-    Error::new(
-        Kind::ReferenceUnresolved,
-        format!(
-            "{name} was made on another machine, and its files are in no mirror this machine reaches"
+/// the error for the outputs of `made`, each with its folder as a command run here names it,
+/// whose files this machine's cache lacks, and the mirrors too when `mirrored`, as a clone's: git
+/// carries data.lock, never the bytes, which only the machine that made them has.
+pub(crate) fn made_elsewhere(made: &[(&str, &str)], mirrored: bool) -> Error {
+    let names: Vec<&str> = made.iter().map(|(name, _)| *name).collect();
+    let (was, files, pin) = match made {
+        [(name, at)] => ("was", "its files", format!("`{}`", pinned_again(name, at))),
+        _ => (
+            "were",
+            "their files",
+            format!(
+                "`{}` for each",
+                crate::suggested::command("add <folder> --as <name>")
+            ),
         ),
-    )
-    .help(format!(
-        "push them from the machine that made them with `{}` and add that mirror here with `{}`, or run your pipeline here, then `{}`",
+    };
+    let message = format!(
+        "{} {was} made on another machine, and {}",
+        crate::units::listed(&names, "and"),
+        lacking(mirrored, files)
+    );
+    Error::new(Kind::ReferenceUnresolved, message).help(format!(
+        "push them from the machine that made them with `{}` and add that mirror here with `{}`, or run your pipeline here, then {pin}",
         crate::suggested::command("push --to <mirror>"),
         crate::suggested::command("settings set mirrors <mirror>"),
-        pinned_again(name, at)
     ))
+}
+
+/// where files no link fetches are not, `files` naming them: this machine's cache, and every
+/// mirror too when `mirrored`, as a run that asked them knows.
+fn lacking(mirrored: bool, files: &str) -> String {
+    if mirrored {
+        format!("neither this machine's cache nor a mirror holds {files}")
+    } else {
+        format!("this machine's cache does not hold {files}")
+    }
 }
 
 /// [`imported_elsewhere`] for several imports, `names`, whose files this machine lacks, in one
 /// error, so a teammate supplies them all in one round rather than learn of one a run.
 pub(crate) fn several_imported_elsewhere(names: &[&str], mirrored: bool) -> Error {
-    let lacking = if mirrored {
-        "neither this machine's cache nor a mirror holds them"
-    } else {
-        "this machine's cache does not hold them"
-    };
     Error::new(
         Kind::ReferenceUnresolved,
         format!(
-            "{} were imported from files, and {lacking}",
-            crate::units::listed(names, "and")
+            "{} were imported from files, and {}",
+            crate::units::listed(names, "and"),
+            lacking(mirrored, "them")
         ),
     )
     .help(format!(

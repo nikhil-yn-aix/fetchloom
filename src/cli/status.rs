@@ -375,17 +375,14 @@ fn tell_imported_elsewhere(output: &Output, status: &Status) {
         .keys()
         .map(String::as_str)
         .partition(|name| status.outputs.contains_key(*name));
-    let made = match outputs.as_slice() {
-        [] => None,
-        [one] => Some(ready::made_elsewhere(one, &status.outputs[*one])),
-        many => Some(format!(
-            "{} were made on another machine, so only a mirror that holds their files brings them here, or your pipeline run here, then `{}` for each",
-            units::listed(many, "and"),
-            super::project::command("add <folder> --as <name>")
-        )),
-    };
-    if let Some(made) = made {
-        output.hint(&made);
+    if !outputs.is_empty() {
+        let made: Vec<(&str, &str)> = outputs
+            .iter()
+            .map(|name| (*name, status.outputs[*name].as_str()))
+            .collect();
+        // status asks no mirror, so it says only what the cache lacks
+        let refused = crate::source::local::made_elsewhere(&made, false);
+        output.hint(&ready::line(refused));
     }
     let text = match names.as_slice() {
         [] => return,

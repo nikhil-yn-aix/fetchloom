@@ -121,17 +121,11 @@ impl Unready {
                 "{name} is not pinned as data.toml asks: `{}` pins and places it",
                 command(sync)
             ),
-            Unready::Import { name, pinned, at } => {
-                let refused = if *pinned {
-                    crate::source::local::changed(name, at.as_deref())
-                } else {
-                    crate::source::local::unpinned(name, at.as_deref())
-                };
-                match refused.help {
-                    Some(help) => format!("{}: {help}", refused.message),
-                    None => refused.message,
-                }
-            }
+            Unready::Import { name, pinned, at } => line(if *pinned {
+                crate::source::local::changed(name, at.as_deref())
+            } else {
+                crate::source::local::unpinned(name, at.as_deref())
+            }),
             Unready::NotDownloaded { name, by } => format!(
                 "{name} is pinned by its source's {by}, not downloaded yet: `{}` downloads and checks it",
                 command(&format!("sync {name}"))
@@ -159,7 +153,10 @@ impl Unready {
                 command(&crate::source::local::output_pin(name, shown)),
                 command(&format!("sync --force {name}"))
             ),
-            Unready::Elsewhere { name, shown } => made_elsewhere(name, shown),
+            Unready::Elsewhere { name, shown } => line(crate::source::local::made_elsewhere(
+                &[(name, shown)],
+                false,
+            )),
         }
     }
 
@@ -176,13 +173,12 @@ impl Unready {
     }
 }
 
-/// how the files of the output `name`, made on another machine, come here, `shown` being its
-/// folder as a command names it: from a mirror that holds them, or from its pipeline run here.
-pub(super) fn made_elsewhere(name: &str, shown: &str) -> String {
-    format!(
-        "{name} was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `{}`",
-        command(&crate::source::local::output_pin(name, shown))
-    )
+/// the refusal of a file no link fetches as one line, what is wrong and then the ways on.
+pub(super) fn line(refused: Error) -> String {
+    match refused.help {
+        Some(help) => format!("{}: {help}", refused.message),
+        None => refused.message,
+    }
 }
 
 /// fails with `data.not_ready` naming each of `unready` with what to do; only when a plain sync

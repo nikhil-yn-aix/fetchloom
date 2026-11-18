@@ -295,8 +295,9 @@ impl<'a> Loop<'a> {
     /// reads alone.
     fn warn_elsewhere(&self, elsewhere: &[Elsewhere]) {
         let output = &self.context.output;
+        let mirrored = !self.context.mirrors.mirrors.list.is_empty();
         for left in elsewhere.iter().filter(|left| output.json() || !left.told) {
-            let said = local::made_elsewhere(&left.name, &left.shown);
+            let said = local::made_elsewhere(&[(&left.name, &left.shown)], mirrored);
             output.warn_with(
                 Warning::OutputElsewhere,
                 &said.message,
@@ -758,14 +759,12 @@ impl<'a> Loop<'a> {
             .chain(imported)
             .find(|(_, file)| file.url.is_empty())
         {
+            let mirrored = !self.context.mirrors.mirrors.list.is_empty();
             if manifest.datasets.get(dataset).is_some_and(Entry::is_output) {
-                return Err(local::made_elsewhere(
-                    dataset,
-                    &self.shown(manifest, dataset),
-                ));
+                let shown = self.shown(manifest, dataset);
+                return Err(local::made_elsewhere(&[(dataset, &shown)], mirrored));
             }
             let folder = plan::folder(manifest, dataset);
-            let mirrored = !self.context.mirrors.mirrors.list.is_empty();
             return Err(
                 local::imported_elsewhere(dataset, &folder, mirrored).help(format!(
                     "copy them to {folder} and push again, or run `{}` where they are",
