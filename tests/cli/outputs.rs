@@ -1311,7 +1311,7 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
     fs::write(work.join("data/processed/run.log"), b"log")?;
     let asked = sandbox.run(&["add", "data/processed", "--as", "processed"])?;
     let stderr = text(&asked.stderr)?;
-    assert_eq!(asked.status.code(), Some(2), "{stderr}");
+    assert_eq!(asked.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains("error: data/processed holds other files than processed pins"),
         "{stderr}"

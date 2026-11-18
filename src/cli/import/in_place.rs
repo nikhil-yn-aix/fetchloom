@@ -706,7 +706,8 @@ fn preview(work: &Loop<'_>, (name, shown): (&str, &str), changes: Option<&Change
 }
 
 /// asks to pin `changes`, what the folder read holds, in place of the output's pin: a yes at a
-/// terminal or `--yes`, else refused as usage, since a script that meant to check would repin.
+/// terminal or `--yes`, else refused as unconfirmed. a script that means to check runs
+/// `status --verify --check`.
 fn approved(
     context: &Context,
     (name, shown): (&str, &str),
@@ -731,7 +732,7 @@ fn approved(
         ),
         None => {
             let mut error = Error::new(
-                Kind::Usage,
+                Kind::Unconfirmed,
                 format!("{shown} holds other files than {name} pins"),
             );
             for line in changes.lines() {
