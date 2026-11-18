@@ -151,10 +151,10 @@ pub(crate) struct Placement {
     /// files no pin places that `--force` removed from outputs' folders, each with its output.
     #[serde(skip)]
     pub(crate) cleared_outputs: Vec<(String, String)>,
-    /// files no pin places in outputs' folders that `--force` left, as git tracks them, each with
-    /// its output.
+    /// the outputs whose folders still differ from their pins after `--force`, as git tracks the
+    /// files that differ, each counting and naming just those.
     #[serde(skip)]
-    pub(crate) tracked: Vec<(String, String)>,
+    pub(crate) tracked: Vec<ChangedOutput>,
     /// the outputs whose files no cache or mirror this machine reaches holds, which the run
     /// leaves out.
     #[serde(skip)]
@@ -238,6 +238,9 @@ pub(crate) struct ChangedOutput {
     /// clone, nothing its folder holds is the output's here, and data.toml may name a folder of
     /// code, so no `--force` is offered.
     pub(crate) placed_here: bool,
+    /// its changed or added files git tracks, which `--force` leaves as they are, so none is
+    /// offered.
+    pub(crate) tracked: Vec<String>,
 }
 
 /// the files a gone output's folder held, as this machine reaches them.
@@ -265,6 +268,7 @@ impl ChangedOutput {
             gone: None,
             left: None,
             placed_here: false,
+            tracked: Vec::new(),
         }
     }
 
@@ -314,6 +318,10 @@ impl ChangedOutput {
             (None, Some(Gone::Lost)) => Since::Lost,
             (None, Some(Gone::Reachable)) => Since::Gone,
             (None, None) if !self.placed_here => Since::Unplaced,
+            (None, None) if !self.tracked.is_empty() => Since::Tracked {
+                files: &self.tracked,
+                yes: false,
+            },
             (None, None) => Since::Changed { yes: false },
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
@@ -391,9 +399,8 @@ pub(crate) struct Outputs {
     named: HashSet<String>,
     /// the outputs a sync leaves whole, by name.
     left: HashSet<String>,
-    /// files in forced outputs' folders that `--force` leaves as they are, as git tracks them, each
-    /// with its output.
-    tracked: Vec<(String, String)>,
+    /// the forced outputs whose folders hold files `--force` leaves as they are, as git tracks them.
+    tracked: Vec<ChangedOutput>,
 }
 
 impl Outputs {
@@ -848,6 +855,7 @@ impl Preview {
         placement.placed + placement.replaced + placement.removed == 0
             && placement.kept.is_empty()
             && placement.changed_outputs.is_empty()
+            && placement.tracked.is_empty()
             && self.changes.download.is_empty()
             && self.changes.unpack.is_empty()
             && self
@@ -885,6 +893,8 @@ pub(crate) enum Reason {
     /// another entry is in its way: a link or special file at its path, or a file where a folder on
     /// its way belongs. `--force` replaces it, though never a folder that holds anything.
     Blocked,
+    /// git tracks it, in an output's folder, and `--force` never overwrites such a file.
+    Tracked,
 }
 
 /// what a run does with a file data.lock places, as [`decide`] decides it.
@@ -1061,6 +1071,7 @@ impl<'a> Placing<'a> {
                 (&project.root, manifest),
                 (&plan.targets, &mut actions),
                 &mut extras,
+                &changed,
             );
         }
         Ok(Placing {
@@ -3446,17 +3457,16 @@ pub(crate) fn changed_outputs(
     survey: &Survey,
     scope: &Scope,
 ) -> (Vec<ChangedOutput>, Vec<(String, String)>) {
-    let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
-    let up = crate::cli::up_to(root, &here);
-    // each output with the files that changed in its folder, each as a run tells it once
-    let mut found: BTreeMap<&str, (ChangedOutput, Vec<String>)> = manifest
+    // each output with the files that changed in its folder, each as a run tells it once, and
+    // those of them on disk, which git may track
+    let mut found: BTreeMap<&str, (ChangedOutput, Vec<String>, Vec<&str>)> = manifest
         .datasets
         .iter()
         .filter(|(name, entry)| entry.place && scope.includes(name))
         .filter_map(|(name, entry)| {
             let at = entry.at.as_deref()?;
-            let output = ChangedOutput::new(name, at, format!("{up}{at}"));
-            Some((name.as_str(), (output, Vec::new())))
+            let output = ChangedOutput::new(name, at, as_named(root, at));
+            Some((name.as_str(), (output, Vec::new(), Vec::new())))
         })
         .collect();
     if found.is_empty() {
@@ -3467,15 +3477,8 @@ pub(crate) fn changed_outputs(
         None => format!("{how} {path}"),
     };
     let authored = authored(&survey.state);
-    let adopted = |path: &str| {
-        survey
-            .state
-            .files
-            .get(path)
-            .is_some_and(|placed| placed.adopted)
-    };
     for (target, action) in targets.iter().zip(actions) {
-        let Some((output, changes)) = found.get_mut(target.dataset) else {
+        let Some((output, changes, differ)) = found.get_mut(target.dataset) else {
             continue;
         };
         let path = target.path.as_str();
@@ -3487,6 +3490,7 @@ pub(crate) fn changed_outputs(
             | Action::Unblock(_) => {
                 output.changed += 1;
                 changes.push(change("changed", path));
+                differ.push(path);
                 if let (Action::Leave(_), Some(look)) = (action, survey.disk.get(path)) {
                     output.edits.push(edited(path, look));
                 }
@@ -3494,10 +3498,11 @@ pub(crate) fn changed_outputs(
             // hashing found other bytes than the look tells, which is a change all the same, and
             // so is the author's file of another run, as after a branch switch
             Action::Replace(stale)
-                if *stale == (Stale::Damaged { linked: false }) || adopted(path) =>
+                if *stale == (Stale::Damaged { linked: false }) || adopted(&survey.state, path) =>
             {
                 output.changed += 1;
                 changes.push(change("changed", path));
+                differ.push(path);
             }
             Action::Place if ours || survey.state.files.contains_key(path) => {
                 output.removed += 1;
@@ -3509,19 +3514,21 @@ pub(crate) fn changed_outputs(
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
     let mut extras = Vec::new();
     for (path, (name, _)) in survey.output_extras(manifest, |path| wanted.contains(path)) {
-        let (Some((output, changes)), Some(look)) = (found.get_mut(name), survey.disk.get(path))
+        let (Some((output, changes, differ)), Some(look)) =
+            (found.get_mut(name), survey.disk.get(path))
         else {
             continue;
         };
         output.added += 1;
         changes.push(change("added", path));
+        differ.push(path);
         extras.push((path.to_owned(), output.name.clone()));
         output.edits.push(edited(path, look));
     }
     // a file the output's record names that no pin places now, changed since, stays: a change.
     // any record says this machine placed some of the output
     for (path, placed) in &survey.state.files {
-        let Some((output, changes)) = found.get_mut(placed.dataset.as_str()) else {
+        let Some((output, changes, differ)) = found.get_mut(placed.dataset.as_str()) else {
             continue;
         };
         output.placed_here = true;
@@ -3535,16 +3542,19 @@ pub(crate) fn changed_outputs(
         {
             output.changed += 1;
             changes.push(change("changed", path));
+            differ.push(path);
         }
     }
     extras.sort_unstable();
     let told = &survey.state.told;
     let changed: Vec<ChangedOutput> = found
         .into_values()
-        .filter(|(output, _)| output.is_changed())
-        .map(|(output, changes)| {
+        .filter(|(output, ..)| output.is_changed())
+        .map(|(output, changes, differ)| {
             let pinned = targets.iter().map(|target| (target.dataset, target.file));
-            output.told_of(changes, told).looked_at(survey, pinned)
+            let mut output = output.told_of(changes, told).looked_at(survey, pinned);
+            output.tracked = git_tracked(root, &output.at, &differ);
+            output
         })
         .collect();
     let left: HashSet<&str> = changed.iter().map(|output| output.name.as_str()).collect();
@@ -3579,14 +3589,15 @@ fn clear_extras(
 
 /// takes out of what `sync --force` does to outputs' folders the files git tracks, which stay as
 /// they are: those of `extras`, which it deletes, and those of `targets` it overwrites or replaces,
-/// as `actions` decide them, as data.toml may name a folder of code as an output's and a tracked
-/// file may hold edits not committed. one git run for each output's folder holding one. the files
-/// that stay, each with its output's name.
+/// as `actions` decide them, which it keeps, as data.toml may name a folder of code as an output's
+/// and a tracked file may hold edits not committed. one git run for each output's folder holding
+/// one. each output keeping one, as `changed` found it, counting and naming just those.
 fn keep_tracked(
     (root, manifest): (&Path, &Manifest),
     (targets, actions): (&[Target], &mut [Action]),
     extras: &mut Vec<(String, String)>,
-) -> Vec<(String, String)> {
+    changed: &[ChangedOutput],
+) -> Vec<ChangedOutput> {
     let replaced = |target: &Target, action: &Action| {
         matches!(action, Action::Overwrite(_) | Action::Replace(_))
             && manifest
@@ -3613,22 +3624,71 @@ fn keep_tracked(
             .collect();
         crate::project::git::tracked_among(root, &outputs, &paths)
     };
+    // each file that stays, with its output and whether no pin places it
     let mut stay = Vec::new();
     extras.retain(|(path, name)| {
         let kept = tracked.contains(path);
         if kept {
-            stay.push((path.clone(), name.clone()));
+            stay.push((name.clone(), path.clone(), true));
         }
         !kept
     });
     for (target, action) in targets.iter().zip(actions.iter_mut()) {
         if tracked.contains(&target.path) && replaced(target, action) {
-            *action = Action::Unselected;
-            stay.push((target.path.clone(), target.dataset.to_owned()));
+            *action = Action::Leave(Reason::Tracked);
+            stay.push((target.dataset.to_owned(), target.path.clone(), false));
         }
     }
-    stay.sort_unstable();
-    stay
+    let mut held: BTreeMap<String, ChangedOutput> = BTreeMap::new();
+    for (name, path, extra) in stay {
+        let output = held.entry(name).or_insert_with_key(|name| {
+            let at = manifest
+                .datasets
+                .get(name)
+                .and_then(|entry| entry.at.as_deref())
+                .unwrap_or_default();
+            let found = changed.iter().find(|output| output.name == *name);
+            let shown = found.map_or_else(|| as_named(root, at), |found| found.shown.clone());
+            ChangedOutput {
+                // a file sync replaces is one it placed
+                placed_here: found.is_none_or(|found| found.placed_here),
+                ..ChangedOutput::new(name, at, shown)
+            }
+        });
+        if extra {
+            output.added += 1;
+        } else {
+            output.changed += 1;
+        }
+        output.tracked.push(path);
+    }
+    held.into_values()
+        .map(|mut output| {
+            output.tracked.sort_unstable();
+            output
+        })
+        .collect()
+}
+
+/// whether `state` records the file at `path` as the author's own, found in place.
+fn adopted(state: &State, path: &str) -> bool {
+    state.files.get(path).is_some_and(|placed| placed.adopted)
+}
+
+/// the files of `paths` in the output folder `at` that git tracks, in path order: none outside a
+/// repository, and no git run when none is in that folder.
+pub(crate) fn git_tracked(root: &Path, at: &str, paths: &[&str]) -> Vec<String> {
+    let mut tracked: Vec<String> = crate::project::git::tracked_among(root, &[at], paths)
+        .into_iter()
+        .collect();
+    tracked.sort_unstable();
+    tracked
+}
+
+/// `at`, a folder in the project at `root`, as a command run in the current folder names it.
+fn as_named(root: &Path, at: &str) -> String {
+    let here = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
+    format!("{}{at}", crate::cli::up_to(root, &here))
 }
 
 /// marks the records of the files `targets` place for outputs as an output's, so they are never

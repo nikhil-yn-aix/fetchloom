@@ -102,7 +102,7 @@ pub(super) async fn pin_held(
     let told = read_line(walked, &copied, shown);
     let changes = pin.map(|pin| Changes::of(&copied.files, &pin.files));
     if let Some(changes) = changes.as_ref().filter(|changes| !changes.is_empty()) {
-        approved(context, (&name, shown), changes)?;
+        approved(context, (&project.root, &at), (&name, shown), changes)?;
     }
     adding.seed(seeds(&name, &at, walked, &copied.files));
     adding.git_keeps(&at, git::keeps(&project.root, &at));
@@ -701,6 +701,7 @@ fn preview(work: &Loop<'_>, (name, shown): (&str, &str), changes: Option<&Change
 /// `status --verify --check`.
 fn approved(
     context: &Context,
+    (root, at): (&Path, &str),
     (name, shown): (&str, &str),
     changes: &Changes,
 ) -> Result<(), Error> {
@@ -729,11 +730,25 @@ fn approved(
             for line in changes.lines() {
                 error = error.detail(line);
             }
-            Err(error.help(local::ways_on(
-                name,
-                shown,
-                local::Since::Changed { yes: true },
-            )))
+            // `--force` never changes a file git tracks, so it is no way on for one
+            let paths: Vec<String> = changes
+                .changed
+                .iter()
+                .map(|(path, ..)| path)
+                .chain(changes.added.iter().map(|(path, _)| path))
+                .map(|path| format!("{at}/{path}"))
+                .collect();
+            let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+            let tracked = crate::cli::sync::place::git_tracked(root, at, &paths);
+            let since = if tracked.is_empty() {
+                local::Since::Changed { yes: true }
+            } else {
+                local::Since::Tracked {
+                    files: &tracked,
+                    yes: true,
+                }
+            };
+            Err(error.help(local::ways_on(name, shown, since)))
         }
     }
 }

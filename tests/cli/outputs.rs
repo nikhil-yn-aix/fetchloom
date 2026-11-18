@@ -2436,9 +2436,192 @@ fn force_never_deletes_what_git_tracks_in_an_outputs_folder() -> Result {
     assert!(!work.join("src/wip.py").exists(), "{stderr}");
     let status = text(&sandbox.run(&["status"])?.stdout)?;
     assert!(
-        status.contains("Committed src/iris.csv · git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never replaces a file git tracks"),
+        status.contains("Committed src/iris.csv · git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never deletes or overwrites a file git tracks"),
         "{status}"
     );
+    Ok(())
+}
+
+/// a file git tracks that `sync --force` keeps stays unresolved: when a teammate commits a data.lock
+/// pinning other bytes than git's copy of an output's file, the forced run never says the files
+/// are in place nor marks the data ready, and every readiness check after it, hashing or not, names
+/// the file and why it stayed, never offering a `--force` that cannot change it.
+#[test]
+fn a_file_git_tracks_that_force_keeps_leaves_the_data_not_ready() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/a.csv"), b"v1\n")?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    let clone = sandbox.folder("clone")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), clone.join(file))?;
+    }
+    fs::create_dir_all(clone.join("results"))?;
+    fs::write(clone.join("results/a.csv"), b"v2\n")?;
+    ok(&sandbox
+        .command_in(&clone, &["add", "./results", "--as", "results", "--yes"])
+        .output()?)?;
+    fs::copy(clone.join("data.lock"), work.join("data.lock"))?;
+    let stays = "results/a.csv stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks";
+    let ways = "`fetchloom add ./results --as results` pins what it holds now, or make git's copy match data.lock";
+    let forced = sandbox.run(&["sync", "--force"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{stays}\n  help: {ways}\n")),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("in place"), "{stderr}");
+    assert_eq!(fs::read(work.join("results/a.csv"))?, b"v1\n");
+    for args in [
+        &["status", "--check"][..],
+        &["status", "--verify", "--check"],
+        &["sync", "--strict"],
+    ] {
+        let checked = sandbox.run(args)?;
+        let stderr = text(&checked.stderr)?;
+        assert_eq!(checked.status.code(), Some(1), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("error: the data is not ready to use"),
+            "{args:?}: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("{stays}; {ways}")),
+            "{args:?}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("fetchloom sync --force"),
+            "{args:?}: {stderr}"
+        );
+    }
+    Ok(())
+}
+
+/// an output's folder git keeps, as a person may on purpose: a rerun that changes a file there
+/// changes the output, and no line offers the `--force` that cannot change that file, not even the
+/// re-pin that waits for a yes. each names the pin of what the folder holds now, or git's copy
+/// brought back to data.lock, and a forced run keeps the file, as kept, never calling it in place
+/// nor blaming `at`.
+#[test]
+fn a_tracked_output_file_a_rerun_changed_is_never_offered_to_force() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/table.csv"), b"v1\n")?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    fs::write(work.join("results/table.csv"), b"rerun\n")?;
+    let stays = "results/table.csv stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks";
+    let ways = "`fetchloom add ./results --as results` pins what it holds now, or make git's copy match data.lock";
+    for (args, code) in [
+        (&["status"][..], 0),
+        (&["status", "--check"], 1),
+        (&["sync"], 0),
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{stays}; {ways}")),
+            "{args:?}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("fetchloom sync --force"),
+            "{args:?}: {stderr}"
+        );
+    }
+    let asked = sandbox.run(&["add", "./results", "--as", "results"])?;
+    let stderr = text(&asked.stderr)?;
+    assert_eq!(asked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "{stays}; `fetchloom add ./results --as results --yes` pins what it holds now, or make git's copy match data.lock"
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("fetchloom sync --force"), "{stderr}");
+    let forced = json(&sandbox.run(&["--json", "sync", "--force", "results"])?)?;
+    assert_eq!(
+        forced["result"]["placement"]["kept"],
+        serde_json::json!([{"path": "results/table.csv", "reason": "tracked"}]),
+        "{forced}"
+    );
+    let warned = forced["warnings"].as_array().and_then(|warnings| {
+        warnings
+            .iter()
+            .find(|warning| warning["kind"] == "place.kept")
+    });
+    assert_eq!(
+        warned.map(|warning| (&warning["message"], &warning["help"])),
+        Some((&serde_json::json!(stays), &serde_json::json!(ways))),
+        "{forced}"
+    );
+    assert_eq!(fs::read(work.join("results/table.csv"))?, b"rerun\n");
+    let strict = sandbox.run(&["sync", "--force", "--strict"])?;
+    let stderr = text(&strict.stderr)?;
+    assert_eq!(strict.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains(&format!("{stays}; {ways}")), "{stderr}");
+    assert!(!stderr.contains("in place"), "{stderr}");
+    Ok(())
+}
+
+/// a file git tracks in an output's folder that its pin does not hold stays through `sync --force`,
+/// a dry run of it too, and neither says the run has nothing left to do; status names it as a file
+/// `--force` leaves, with the pin that takes it in, until git's copy matches data.lock again.
+#[test]
+fn a_tracked_file_an_outputs_pin_lacks_stays_named() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/table.csv"), b"v1\n")?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    fs::write(work.join("results/notes.md"), b"mine\n")?;
+    crate::merge::ok(&sandbox, &["add", "results/notes.md"])?;
+    let stays = "results/notes.md stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks";
+    let ways = "`fetchloom add ./results --as results` pins what it holds now, or make git's copy match data.lock";
+    for (args, closing) in [
+        (
+            &["sync", "--force", "--dry-run"][..],
+            "Ok dry run, nothing was changed",
+        ),
+        (
+            &["sync", "--force"],
+            "Synced 1 dataset into data, 1 file left unchanged; see the warnings above",
+        ),
+    ] {
+        let forced = sandbox.run(args)?;
+        let stderr = text(&forced.stderr)?;
+        assert_eq!(forced.status.code(), Some(0), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{stays}\n  help: {ways}\n")),
+            "{args:?}: {stderr}"
+        );
+        assert!(stderr.contains(closing), "{args:?}: {stderr}");
+        assert!(!stderr.contains("in place"), "{args:?}: {stderr}");
+    }
+    assert!(work.join("results/notes.md").exists());
+    let checked = sandbox.run(&["status", "--check"])?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains(&format!("{stays}; {ways}")), "{stderr}");
+    assert!(!stderr.contains("fetchloom sync --force"), "{stderr}");
+    crate::merge::ok(&sandbox, &["rm", "-qf", "results/notes.md"])?;
+    ok(&sandbox.run(&["status", "--check"])?)?;
     Ok(())
 }
 

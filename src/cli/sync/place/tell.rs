@@ -10,6 +10,7 @@ use crate::output::{Output, Warning};
 use crate::place::Method;
 use crate::plan;
 use crate::project::manifest::Manifest;
+use crate::source::local;
 use crate::units;
 
 pub(super) fn tell(
@@ -585,29 +586,22 @@ fn tell_cleared(output: &Output, verb: &str, cleared: &[(String, String)]) {
 }
 
 /// a warning for each output whose folder holds files git tracks that `sync --force` left there,
-/// as it never deletes one: data.toml may name a folder of code as an output's.
+/// as it never deletes or overwrites one, with the ways on; one this machine placed none of may be
+/// a folder of code data.toml names as an output's.
 fn warn_tracked(output: &Output, placement: &Placement) {
-    let mut by_output: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (path, name) in &placement.tracked {
-        by_output.entry(name).or_default().push(path);
-    }
-    for (name, paths) in by_output {
-        let said = match paths.as_slice() {
-            [] => continue,
-            [only] => format!(
-                "{only} stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks"
-            ),
-            [first, ..] => format!(
-                "{} files git tracks stay in {name}'s folder, such as {first}, as `sync --force` never deletes or overwrites a file git tracks",
-                paths.len()
-            ),
+    for held in &placement.tracked {
+        let help = if held.placed_here {
+            local::git_ways(&held.name, &held.shown, false)
+        } else {
+            format!(
+                "check that `at` for {} in data.toml names the folder its pipeline writes",
+                held.name
+            )
         };
         output.warn_with(
             Warning::PlaceKept,
-            &said,
-            &format!(
-                "check that `at` for {name} in data.toml names the folder its pipeline writes"
-            ),
+            &local::kept_by_git(&held.name, &held.tracked),
+            &help,
         );
     }
 }
@@ -1013,7 +1007,8 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
             &kept.dataset.iter().map(String::as_str).collect(),
         );
         let (message, help) = match kept.reason {
-            Reason::Blocked => continue,
+            // told with its entry in the way above, or with its output's other files git tracks
+            Reason::Blocked | Reason::Tracked => continue,
             Reason::Unneeded if moved(&kept.path) => continue,
             Reason::Changed | Reason::Foreign if kept.told => continue,
             Reason::Changed => match kept.dataset.as_deref() {
@@ -1134,6 +1129,7 @@ fn overwritten_what(reason: Reason) -> &'static str {
         Reason::Shared => "an edit through a link other projects share",
         Reason::Foreign => "a file fetchloom did not place",
         Reason::Changed | Reason::Unneeded | Reason::Blocked => "your edit",
+        Reason::Tracked => "a file git tracks",
     }
 }
 

@@ -610,6 +610,7 @@ fn closing(
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
         && placement.changed_outputs.is_empty()
+        && placement.tracked.is_empty()
         && placement.adopted.is_empty()
         && placement.relinked.is_empty()
         && placement.made_waiting.is_empty()
@@ -628,6 +629,7 @@ fn closing(
         };
     }
     let warned = placement.kept.iter().any(|kept| !kept.told)
+        || !placement.tracked.is_empty()
         || placement
             .changed_outputs
             .iter()
@@ -637,7 +639,13 @@ fn closing(
         .iter()
         .map(|changed| changed.name.as_str())
         .collect();
-    let kept = (placement.kept.len(), left.as_slice(), warned);
+    // the files git tracks that no pin places stay too, beside the kept ones
+    let extra: u64 = placement.tracked.iter().map(|held| held.added).sum();
+    let kept = (
+        placement.kept.len() + usize::try_from(extra).unwrap_or(usize::MAX),
+        left.as_slice(),
+        warned,
+    );
     let (verb, text) = synced(
         manifest,
         scope,

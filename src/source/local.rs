@@ -56,6 +56,38 @@ pub(crate) enum Since<'a> {
     /// it holds other files than the pin, and this machine placed none of the output there, as a
     /// clone whose data.toml may name a folder of code: nothing offered deletes them.
     Unplaced,
+    /// it holds other files than the pin, and git tracks `files` of them, which `--force` leaves as
+    /// they are; `yes` as for [`Since::Changed`].
+    Tracked { files: &'a [String], yes: bool },
+}
+
+/// why `sync --force` leaves a file git tracks in an output's folder as it is, in every line that
+/// tells of one.
+pub(crate) const FORCE_KEEPS_GIT: &str =
+    "`sync --force` never deletes or overwrites a file git tracks";
+
+/// that `sync --force` leaves `files`, which git tracks in the folder of the output `name`.
+pub(crate) fn kept_by_git(name: &str, files: &[String]) -> String {
+    match files {
+        [one] => format!("{one} stays, as git tracks it, and {FORCE_KEEPS_GIT}"),
+        _ => format!(
+            "{} files git tracks stay in {name}'s folder, such as {}, as {FORCE_KEEPS_GIT}",
+            files.len(),
+            files.first().map_or("", String::as_str)
+        ),
+    }
+}
+
+/// the ways on from files git tracks that differ from the pin of the output `name`, whose folder
+/// a command names `shown`: pinning what it holds now, saying yes ahead for `yes`, or bringing
+/// git's copy to the pin.
+pub(crate) fn git_ways(name: &str, shown: &str, yes: bool) -> String {
+    let pin = if yes {
+        pinned_yes(name, shown)
+    } else {
+        pinned_again(name, shown)
+    };
+    format!("`{pin}` pins what it holds now, or make git's copy match data.lock")
 }
 
 /// the ways on for the output `name`, whose folder, `shown` as a command names it, is not as it
@@ -88,6 +120,11 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
         Since::Unplaced => format!(
             "no file there is one fetchloom placed on this machine, so check that `at` for {name} in data.toml names its folder; `{}` pins what it holds now",
             pinned_again(name, shown)
+        ),
+        Since::Tracked { files, yes } => format!(
+            "{}; {}",
+            kept_by_git(name, files),
+            git_ways(name, shown, yes)
         ),
     }
 }

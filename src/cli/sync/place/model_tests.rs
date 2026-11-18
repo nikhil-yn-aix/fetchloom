@@ -70,6 +70,7 @@ fn choice(action: &Action) -> Choice {
         Action::Leave(Reason::Shared) => Choice::Shared,
         Action::Leave(Reason::Foreign) => Choice::Foreign,
         Action::Leave(Reason::Unneeded) => panic!("a wanted target was called unneeded"),
+        Action::Leave(Reason::Tracked) => panic!("the model keeps nothing in git"),
         Action::Leave(Reason::Blocked)
         | Action::Blocked(_)
         | Action::Unblock(_)

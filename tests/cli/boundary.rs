@@ -1087,7 +1087,7 @@ fn status_names_gits_copy_of_an_outputs_file() -> Result {
     let status = sandbox.command_in(&teammate, &["status"]).output()?;
     assert_eq!(
         text(&status.stdout)?,
-        "  Committed results/table1.csv · git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never replaces a file git tracks\n",
+        "  Committed results/table1.csv · git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never deletes or overwrites a file git tracks\n",
         "{}",
         text(&status.stderr)?
     );

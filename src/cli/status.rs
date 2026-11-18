@@ -1220,10 +1220,10 @@ impl Status {
             (
                 "Committed",
                 committed,
-                Some(
-                    "git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never replaces a file git tracks"
-                        .to_owned(),
-                ),
+                Some(format!(
+                    "git's copy holds other bytes than data.lock pins, and it stays, as {}",
+                    crate::source::local::FORCE_KEEPS_GIT
+                )),
             ),
             (
                 "Unreadable",

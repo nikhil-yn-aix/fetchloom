@@ -226,9 +226,16 @@ pub(in crate::cli) fn after_sync(
                 placed: false,
             }),
             Reason::Blocked => Some(Unready::Blocked(kept.path.clone())),
-            Reason::Unneeded => None,
+            // named with its output's other files git tracks, below
+            Reason::Unneeded | Reason::Tracked => None,
         })
         .collect();
+    unready.extend(
+        placement
+            .tracked
+            .iter()
+            .map(|held| Unready::Output(Box::new(held.clone()))),
+    );
     unready.extend(
         placement
             .changed_outputs
