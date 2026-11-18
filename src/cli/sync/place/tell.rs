@@ -27,6 +27,7 @@ pub(super) fn tell(
         );
     }
     tell_cleared(output, "Removed", &placement.cleared_outputs);
+    warn_tracked(output, placement);
     warn_changed_outputs(output, placement);
     // what is discarded was the person's, so the line asks for attention, not a finished step
     for overwritten in &placement.overwritten {
@@ -583,11 +584,40 @@ fn tell_cleared(output: &Output, verb: &str, cleared: &[(String, String)]) {
     }
 }
 
+/// a warning for each output whose folder holds files git tracks that `sync --force` left there,
+/// as it never deletes one: data.toml may name a folder of code as an output's.
+fn warn_tracked(output: &Output, placement: &Placement) {
+    let mut by_output: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (path, name) in &placement.tracked {
+        by_output.entry(name).or_default().push(path);
+    }
+    for (name, paths) in by_output {
+        let said = match paths.as_slice() {
+            [] => continue,
+            [only] => format!(
+                "{only} stays, as git tracks it, and `sync --force` never deletes a file git tracks"
+            ),
+            [first, ..] => format!(
+                "{} files git tracks stay in {name}'s folder, such as {first}, as `sync --force` never deletes a file git tracks",
+                paths.len()
+            ),
+        };
+        output.warn_with(
+            Warning::PlaceKept,
+            &said,
+            &format!(
+                "check that `at` for {name} in data.toml names the folder its pipeline writes"
+            ),
+        );
+    }
+}
+
 /// what a dry run would remove: each file an output's folder holds beyond its pin, by name, then
 /// the files no dataset needs, which `-v` lists.
 fn tell_would_remove(output: &Output, manifest: &Manifest, preview: &Preview) {
     let placement = &preview.placement;
     tell_cleared(output, "Would remove", &placement.cleared_outputs);
+    warn_tracked(output, placement);
     tell_removed(
         output,
         manifest,

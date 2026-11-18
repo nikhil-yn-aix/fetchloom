@@ -151,6 +151,10 @@ pub(crate) struct Placement {
     /// files no pin places that `--force` removed from outputs' folders, each with its output.
     #[serde(skip)]
     pub(crate) cleared_outputs: Vec<(String, String)>,
+    /// files no pin places in outputs' folders that `--force` left, as git tracks them, each with
+    /// its output.
+    #[serde(skip)]
+    pub(crate) tracked: Vec<(String, String)>,
     /// the outputs whose files no cache or mirror this machine reaches holds, which the run
     /// leaves out.
     #[serde(skip)]
@@ -226,6 +230,10 @@ pub(crate) struct ChangedOutput {
     /// the folder of a gone output that data.toml named before and that still holds its pin, as
     /// a command names it.
     pub(crate) left: Option<String>,
+    /// whether this machine placed or recorded a file of the output. without one, as in a fresh
+    /// clone, nothing its folder holds is the output's here, and data.toml may name a folder of
+    /// code, so no `--force` is offered.
+    pub(crate) placed_here: bool,
 }
 
 impl ChangedOutput {
@@ -243,6 +251,7 @@ impl ChangedOutput {
             edits: Vec::new(),
             gone: false,
             left: None,
+            placed_here: false,
         }
     }
 
@@ -297,6 +306,7 @@ impl ChangedOutput {
         let since = match &self.left {
             Some(from) => Since::Left(from),
             None if self.gone => Since::Gone,
+            None if !self.placed_here => Since::Unplaced,
             None => Since::Changed,
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
@@ -1485,7 +1495,12 @@ impl<'a> Placing<'a> {
     /// files in its folder that its pin does not hold.
     fn preview_outputs(&self, preview: &mut Preview) {
         preview.placement.changed_outputs.clone_from(&self.changed);
+        let tracked = git_tracked(&self.project.root, self.manifest, &self.extras);
         for (path, name) in &self.extras {
+            if tracked.contains(path.as_str()) {
+                preview.placement.tracked.push((path.clone(), name.clone()));
+                continue;
+            }
             preview.placement.removed += 1;
             preview
                 .placement
@@ -1686,7 +1701,13 @@ impl<'a> Placing<'a> {
             (&scope, &outputs),
             &mut placement,
         )?;
-        let cleared = clear_extras(project, &mut placer, &survey, &extras, &mut placement)?;
+        let cleared = clear_extras(
+            (project, manifest),
+            &mut placer,
+            &survey,
+            &extras,
+            &mut placement,
+        )?;
         // told at once, since the state no longer records those files once this run writes it
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
         // after the files went, so the folders they leave go with the markers
@@ -3455,11 +3476,13 @@ pub(crate) fn changed_outputs(
         extras.push((path.to_owned(), output.name.clone()));
         output.edits.push(edited(path, look));
     }
-    // a file the output's record names that no pin places now, changed since, stays: a change
+    // a file the output's record names that no pin places now, changed since, stays: a change.
+    // any record says this machine placed some of the output
     for (path, placed) in &survey.state.files {
         let Some((output, changes)) = found.get_mut(placed.dataset.as_str()) else {
             continue;
         };
+        output.placed_here = true;
         if !wanted.contains(path.as_str())
             && manifest.output_holding(path).map(|(name, _)| name) == Some(placed.dataset.as_str())
             && survey
@@ -3491,14 +3514,19 @@ pub(crate) fn changed_outputs(
 /// each holds its pinned tree whole again, unless one changed since the survey. says whether any
 /// went.
 fn clear_extras(
-    project: &Project,
+    (project, manifest): (&Project, &Manifest),
     placer: &mut Placer,
     survey: &Survey,
     extras: &[(String, String)],
     placement: &mut Placement,
 ) -> Result<bool, Error> {
+    let tracked = git_tracked(&project.root, manifest, extras);
     for (path, name) in extras {
         placer.stop().check()?;
+        if tracked.contains(path.as_str()) {
+            placement.tracked.push((path.clone(), name.clone()));
+            continue;
+        }
         let file = native(&project.root, path);
         if now(&file).is_none_or(|look| survey.disk.get(path) != Some(&look)) {
             continue;
@@ -3510,6 +3538,37 @@ fn clear_extras(
         placement.cleared_outputs.push((path.clone(), name.clone()));
     }
     Ok(!placement.cleared_outputs.is_empty())
+}
+
+/// the files of `extras`, each with its output's name, that git tracks in the project at `root`,
+/// which `sync --force` never deletes, as data.toml may name a folder of code as an output's: one
+/// git run for each output's folder, none outside a repository or without git.
+fn git_tracked<'e>(
+    root: &Path,
+    manifest: &Manifest,
+    extras: &'e [(String, String)],
+) -> HashSet<&'e str> {
+    let mut tracked = HashSet::new();
+    if extras.is_empty() || Project::repository(root).is_none() {
+        return tracked;
+    }
+    let outputs: BTreeSet<&str> = extras.iter().map(|(_, name)| name.as_str()).collect();
+    for name in outputs {
+        let listed = manifest
+            .datasets
+            .get(name)
+            .and_then(|entry| entry.at.as_deref())
+            .and_then(|at| crate::project::git::tracked(root, at));
+        if let Some(listed) = listed {
+            tracked.extend(
+                extras
+                    .iter()
+                    .filter(|(path, _)| listed.contains(path))
+                    .map(|(path, _)| path.as_str()),
+            );
+        }
+    }
+    tracked
 }
 
 /// marks the records of the files `targets` place for outputs as an output's, so they are never

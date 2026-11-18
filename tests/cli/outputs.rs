@@ -2208,6 +2208,66 @@ fn audit_and_diff_say_what_an_output_is() -> Result {
     Ok(())
 }
 
+/// data.toml comes with a clone, so an output's `at` may name a folder of code: sync and status
+/// offer no `--force` while nothing there is a file this machine placed, and `--force` never
+/// deletes a file git tracks, though it deletes the rest its pin lacks.
+#[test]
+fn force_never_deletes_what_git_tracks_in_an_outputs_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("src"))?;
+    fs::write(work.join("src/main.py"), b"print(1)\n")?;
+    crate::merge::ok(&sandbox, &["add", "src/main.py"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "code"])?;
+    fs::create_dir_all(work.join("tmpout"))?;
+    fs::write(work.join("tmpout/iris.csv"), CLEAN)?;
+    ok(&sandbox.run(&["add", "tmpout", "--as", "derived"])?)?;
+    for file in ["data.toml", "data.lock"] {
+        let written = fs::read_to_string(work.join(file))?;
+        fs::write(
+            work.join(file),
+            written.replace("at = \"tmpout\"", "at = \"src\""),
+        )?;
+    }
+    // as a fresh clone has it: no state, and no folder of the pipeline's
+    delete_folder(&work.join(".fetchloom"))?;
+    delete_folder(&work.join("tmpout"))?;
+    fs::write(work.join("src/wip.py"), b"work in progress\n")?;
+    for (args, code) in [
+        (&["sync"][..], 0),
+        (&["status"], 0),
+        (&["status", "--check"], 1),
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("no file there is one fetchloom placed on this machine"),
+            "{args:?}: {stderr}"
+        );
+        assert!(!stderr.contains("--force"), "{args:?}: {stderr}");
+    }
+    let said =
+        "src/main.py stays, as git tracks it, and `sync --force` never deletes a file git tracks";
+    let dry = sandbox.run(&["sync", "--force", "derived", "--dry-run"])?;
+    let stderr = text(&dry.stderr)?;
+    assert_eq!(dry.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(said), "{stderr}");
+    assert!(!stderr.contains("Would remove src/main.py"), "{stderr}");
+    assert!(stderr.contains("Would remove src/wip.py"), "{stderr}");
+    let forced = sandbox.run(&["sync", "--force", "derived"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(said), "{stderr}");
+    assert_eq!(fs::read(work.join("src/main.py"))?, b"print(1)\n");
+    assert!(!work.join("src/wip.py").exists(), "{stderr}");
+    assert_eq!(fs::read(work.join("src/iris.csv"))?, CLEAN);
+    Ok(())
+}
+
 /// push asks first, as no source says who may read an output, and then sends the files an output
 /// pins, never what its folder holds since, and says so when the folder changed, with the pin that
 /// sends the folder's files instead; a folder that is gone gets the ways back.

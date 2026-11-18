@@ -49,6 +49,9 @@ pub(crate) enum Since<'a> {
     /// nothing is at it, and the folder data.toml named before, as a command names it, still
     /// holds the pin.
     Left(&'a str),
+    /// it holds other files than the pin, and this machine placed none of the output there, as a
+    /// clone whose data.toml may name a folder of code: nothing offered deletes them.
+    Unplaced,
 }
 
 /// the ways on for the output `name`, whose folder, `shown` as a command names it, is not as it
@@ -67,6 +70,10 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
         Since::Left(from) => format!(
             "`{}` moves it where data.toml puts it now, or `{force}` puts back the files {name} pins",
             crate::suggested::moving(from, shown)
+        ),
+        Since::Unplaced => format!(
+            "no file there is one fetchloom placed on this machine, so check that `at` for {name} in data.toml names its folder; `{}` pins what it holds now",
+            pinned_again(name, shown)
         ),
     }
 }
