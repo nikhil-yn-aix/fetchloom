@@ -910,4 +910,35 @@ mod tests {
         assert!(cache.find(&pin, None).is_none());
         assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
     }
+
+    /// a file that grows or shrinks while it is read is not read whole, so no digest stands for it:
+    /// what was read is not the `size` bytes it held when opened. one longer than a block is cut
+    /// after its first, since a shorter one is read in one go.
+    #[test]
+    fn a_file_that_changes_size_while_read_is_not_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("changing");
+        let stop = Stop::default();
+        // whether a file of `size` bytes, which `change` changes after its first block, is read whole
+        let read_changing = |size: u64, change: &dyn Fn(&Path)| {
+            fs::write(&path, vec![7; usize::try_from(size).unwrap()]).unwrap();
+            let mut first = true;
+            read_whole(&path, size, &stop, |_| {
+                if std::mem::take(&mut first) {
+                    change(&path);
+                }
+            })
+            .unwrap()
+        };
+        let grown = read_changing(10, &|path| {
+            let mut file = OpenOptions::new().append(true).open(path).unwrap();
+            file.write_all(b"more").unwrap();
+        });
+        assert!(!grown, "a file that grew while read was read whole");
+        let shrunk = read_changing(crate::digest::BLOCK as u64 + 10, &|path| {
+            let file = OpenOptions::new().write(true).open(path).unwrap();
+            file.set_len(0).unwrap();
+        });
+        assert!(!shrunk, "a file that shrank while read was read whole");
+    }
 }
