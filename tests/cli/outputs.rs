@@ -599,7 +599,14 @@ fn a_gone_outputs_folder_is_told_as_gone_and_never_searched_for() -> Result {
             "{typed:?}: {stderr}"
         );
     }
-    ok(&sandbox.run(&["sync", "--force", "processed"])?)?;
+    // the folder put back is told as any dataset's, by the key that names an output's folder
+    let forced = sandbox.run(&["sync", "--force", "processed"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("  hint: if you deleted data/processed to free space, `fetchloom drop processed` keeps it off this machine, or if you moved it, set at = \"<new folder>\" for processed in data.toml\n"),
+        "{stderr}"
+    );
     assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
     Ok(())
 }

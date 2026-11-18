@@ -54,7 +54,7 @@ fn a_deleted_dataset_folder_names_drop_once() -> Result {
     let server = iris_server()?;
     with_iris(&sandbox, &server)?;
     let folder = sandbox.work().join("data/iris");
-    let hint = "  hint: if you deleted data/iris to free space, `fetchloom drop iris` keeps it off this machine, or if you renamed it, set path = \"<new folder>\" for iris in data.toml\n";
+    let hint = "  hint: if you deleted data/iris to free space, `fetchloom drop iris` keeps it off this machine, or if you moved it, set path = \"<new folder>\" for iris in data.toml\n";
     delete_folder(&folder)?;
     let first = synced(&sandbox)?;
     assert!(first.contains(hint), "{first}");

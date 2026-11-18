@@ -65,7 +65,8 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
             pinned_again(name, shown)
         ),
         Since::Gone => format!(
-            "`{force}` puts back the files {name} pins, or if you moved it, set at = \"<new folder>\" for {name} in data.toml"
+            "`{force}` puts back the files {name} pins, or if you moved it, {}",
+            set_moved(name, true)
         ),
         Since::Left(from) => format!(
             "`{}` moves it where data.toml puts it now, or `{force}` puts back the files {name} pins",
@@ -76,6 +77,13 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
             pinned_again(name, shown)
         ),
     }
+}
+
+/// the step that names the folder of `name` a person moved on purpose: `at` for an output, whose
+/// folder data.toml names whole, else `path`, inside the data folder.
+pub(crate) fn set_moved(name: &str, output: bool) -> String {
+    let key = if output { "at" } else { "path" };
+    format!("set {key} = \"<new folder>\" for {name} in data.toml")
 }
 
 /// the command that pins what the folder of the output `name` holds now, `at` as a command names

@@ -686,26 +686,35 @@ fn tell_refilled(output: &Output, manifest: &Manifest, placement: &Placement) {
         ));
         return;
     }
-    let datasets: Vec<&str> = placement
+    // an output's folder is named by another key, so outputs are told apart
+    let (outputs, others): (Vec<&str>, Vec<&str>) = placement
         .filled
         .iter()
         .filter(|name| placement.to_drop.contains(&plan::folder(manifest, name)))
         .map(String::as_str)
-        .collect();
-    if datasets.is_empty() {
-        return;
+        .partition(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(crate::project::manifest::Entry::is_output)
+        });
+    for (datasets, outputs) in [(others, false), (outputs, true)] {
+        let drop = crate::cli::project::command(&format!("drop {}", datasets.join(" ")));
+        let moved = |name: &str| crate::source::local::set_moved(name, outputs);
+        output.hint(&match datasets.as_slice() {
+            [] => continue,
+            [one] => format!(
+                "if you deleted {} to free space, `{drop}` keeps it off this machine, or if you moved it, {}",
+                plan::folder(manifest, one),
+                moved(one)
+            ),
+            many => format!(
+                "if you deleted their folders to free space, `{drop}` keeps {} off this machine, or if you moved one, {}",
+                units::listed(many, "and"),
+                moved("its dataset")
+            ),
+        });
     }
-    let drop = crate::cli::project::command(&format!("drop {}", datasets.join(" ")));
-    output.hint(&match datasets.as_slice() {
-        [one] => format!(
-            "if you deleted {} to free space, `{drop}` keeps it off this machine, or if you renamed it, set path = \"<new folder>\" for {one} in data.toml",
-            plan::folder(manifest, one)
-        ),
-        many => format!(
-            "if you deleted their folders to free space, `{drop}` keeps {} off this machine, or if you renamed one, set path = \"<new folder>\" for its dataset in data.toml",
-            units::listed(many, "and")
-        ),
-    });
 }
 
 /// how many files `tally` placed, and how: `3 files linked to the cache`, `1 file cloned from the
@@ -1388,10 +1397,11 @@ mod tests {
         }
     }
 
-    /// dataset folders gone at once, deleted or renamed, are named in one hint.
+    /// dataset folders gone at once, deleted or moved, are named in one hint, and an output's
+    /// apart, as data.toml names its folder by `at`.
     #[test]
     fn folders_gone_at_once_are_named_in_one_hint() {
-        let text = "[datasets.iris]\nref = \"x\"\n\n[datasets.pets]\nref = \"y\"\n";
+        let text = "[datasets.iris]\nref = \"x\"\n\n[datasets.pets]\nref = \"y\"\n\n[datasets.processed]\nref = \"local\"\nat = \"data/processed\"\n";
         let manifest = Manifest::parse(text).unwrap();
         let style = Style {
             color: false,
@@ -1401,19 +1411,33 @@ mod tests {
             links: false,
             accessible: false,
         };
-        let output = Output::new(style, Level::Normal, false, false);
-        let placement = Placement {
-            filled: ["iris".to_owned(), "pets".to_owned()].into(),
-            to_drop: ["data/iris".to_owned(), "data/pets".to_owned()].into(),
-            ..Placement::default()
-        };
-        tell_refilled(&output, &manifest, &placement);
-        assert_eq!(
-            output.said(),
-            [
-                "  hint: if you deleted their folders to free space, `fetchloom drop iris pets` keeps iris and pets off this machine, or if you renamed one, set path = \"<new folder>\" for its dataset in data.toml"
-            ]
-        );
+        for (filled, hints) in [
+            (
+                &["iris", "pets"][..],
+                &[
+                    "  hint: if you deleted their folders to free space, `fetchloom drop iris pets` keeps iris and pets off this machine, or if you moved one, set path = \"<new folder>\" for its dataset in data.toml",
+                ][..],
+            ),
+            (
+                &["iris", "processed"],
+                &[
+                    "  hint: if you deleted data/iris to free space, `fetchloom drop iris` keeps it off this machine, or if you moved it, set path = \"<new folder>\" for iris in data.toml",
+                    "  hint: if you deleted data/processed to free space, `fetchloom drop processed` keeps it off this machine, or if you moved it, set at = \"<new folder>\" for processed in data.toml",
+                ],
+            ),
+        ] {
+            let output = Output::new(style, Level::Normal, false, false);
+            let placement = Placement {
+                filled: filled.iter().map(|name| (*name).to_owned()).collect(),
+                to_drop: filled
+                    .iter()
+                    .map(|name| plan::folder(&manifest, name))
+                    .collect(),
+                ..Placement::default()
+            };
+            tell_refilled(&output, &manifest, &placement);
+            assert_eq!(output.said(), hints, "{filled:?}");
+        }
     }
 
     /// a dry run names the folder of each of a few dozen datasets it would place; past that one
