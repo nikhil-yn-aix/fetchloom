@@ -48,6 +48,9 @@ elif name == 'apt-get':
         signal.pause()
     if mode == 'always_fail' or mode == 'failure_once' and operation == 'update' and number == 1:
         sys.exit(100)
+elif name == 'lslocks':
+    if count('lslocks') <= settings.get('locked', 0):
+        print('42 dpkg /var/lib/dpkg/lock-frontend')
 elif name == 'hdiutil':
     mount = root / 'runner' / settings.get('volume', 'hfs')
     if args[0] == 'attach':
@@ -88,7 +91,7 @@ class PlatformScripts(unittest.TestCase):
         (root / 'runner').mkdir()
         settings.update(bash=shutil.which('bash'), python=sys.executable, real_timeout=shutil.which('timeout'))
         (root / 'settings.json').write_text(json.dumps(settings), encoding='utf-8')
-        for name in ['sudo', 'apt-get', 'timeout', 'hdiutil', 'diskutil', 'mdutil', 'sleep', 'python3']:
+        for name in ['sudo', 'apt-get', 'timeout', 'lslocks', 'hdiutil', 'diskutil', 'mdutil', 'sleep', 'python3']:
             path = root / 'bin' / name
             path.write_text(f'#!{sys.executable}\n' + FAKE_COMMAND, encoding='utf-8')
             path.chmod(0o755)
@@ -130,6 +133,19 @@ class PlatformScripts(unittest.TestCase):
         self.assertIn('timed out', output)
         self.assertEqual((root / 'resolver.txt').read_text(), 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n')
         self.assertEqual(len([call for call in calls if call[0] == 'timeout']), 2)
+
+    def test_a_held_lock_is_waited_for_within_the_attempt_and_told(self):
+        # the dpkg an attempt cut short leaves running holds dpkg's lock, which apt-get fails on at once
+        code, output, calls, _ = self.run_script('apt-install.sh', attempt='5s', apt='success', locked=3)
+        self.assertEqual(code, 0, output)
+        self.assertIn('apt (runner): waiting up to 5s for /var/lib/dpkg/lock-frontend, held by dpkg (pid 42)\n',
+                      output)
+        self.assertIn('::notice::apt (runner) waited 2s for /var/lib/dpkg/lock-frontend, held by dpkg (pid 42)\n',
+                      output)
+        update, install = [call for call in calls if call[0] == 'apt-get']
+        self.assertIn('DPkg::Lock::Timeout=5', update)
+        self.assertIn('DPkg::Lock::Timeout=3', install)
+        self.assertEqual([call[4] for call in calls if call[0] == 'timeout'], ['5s'])
 
     def test_hfs_cleanup_uses_the_device_and_preserves_failures(self):
         for busy, test_exit, force_exit, expected in [(0, 0, 0, 0), (2, 0, 0, 0),
