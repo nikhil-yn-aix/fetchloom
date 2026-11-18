@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use super::mark::{self, Whose};
-use super::{Action, Held, Reason, edited, held, local, passed_over, reads_as_target};
+use super::{Action, Held, Reason, held, local, passed_over, reads_as_target};
 use crate::cli::sync::disk::{Blocker, Entry, Mark, Survey, is_inside};
 use crate::error::Error;
 use crate::place;
 use crate::plan::Target;
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Once};
+use crate::project::state::Look;
 use crate::project::{Followed, Project, native};
 
 /// refuses the first follow of `link` before anything is written through it when the folder it
@@ -313,10 +313,7 @@ fn replaced<'s>(
 /// whether the state told of the file at `path` as an edit while it looked as it does now, which
 /// makes it the person's own, moved with their folder.
 fn told(survey: &Survey, path: &str) -> bool {
-    survey
-        .disk
-        .get(path)
-        .is_some_and(|look| survey.state.told.has(Once::Edit, &edited(path, look)))
+    survey.told_edit(path, &survey.state.told)
 }
 
 /// whether the file at `path`, seen as `look`, holds other bytes than `target` pins, and than those

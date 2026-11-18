@@ -20,7 +20,7 @@ use self::put::put_all;
 use self::tell::tell;
 pub(crate) use self::tell::{emptied, holding, restored_aside, tell_preview};
 use super::Scope;
-use super::disk::{Blocker, Entry, Freeing, LeftBehind, Retired, Survey, hash_plain};
+use super::disk::{Blocker, Entry, Freeing, LeftBehind, Retired, Survey, edited, hash_plain};
 use crate::cache::{Cache, Doubt};
 use crate::digest::{Block, Sha256};
 use crate::error::{Error, Kind};
@@ -537,10 +537,7 @@ impl Kept {
 
     fn of(target: &Target, reason: Reason, survey: &Survey) -> Kept {
         let told = matches!(reason, Reason::Changed | Reason::Foreign)
-            && survey.disk.get(&target.path).is_some_and(|look| {
-                let edit = edited(&target.path, look);
-                survey.state.told.has(Once::Edit, &edit)
-            });
+            && survey.told_edit(&target.path, &survey.state.told);
         Kept {
             dataset: Some(target.dataset.to_owned()),
             earlier: survey
@@ -552,11 +549,6 @@ impl Kept {
             ..Kept::new(target.path.clone(), reason)
         }
     }
-}
-
-/// what an edit of the file at `path` is told of as: the path and how the file looks.
-fn edited(path: &str, look: &Look) -> String {
-    format!("{path}:{}:{}", look.size, look.modified)
 }
 
 /// the path of an edit [`edited`] names.
@@ -684,10 +676,7 @@ fn copied_edits(survey: &Survey, kept: &mut [Kept]) {
         .iter_mut()
         .filter(|kept| kept.reason == Reason::Foreign && !kept.told)
     {
-        kept.copied_edit = survey
-            .disk
-            .get(&kept.path)
-            .is_some_and(|look| told.has(Once::Edit, &edited(&kept.path, look)));
+        kept.copied_edit = survey.told_edit(&kept.path, told);
     }
 }
 

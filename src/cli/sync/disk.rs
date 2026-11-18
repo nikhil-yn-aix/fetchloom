@@ -17,7 +17,7 @@ use crate::output::Output;
 use crate::place::{self, Method};
 use crate::plan::Target;
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, State};
+use crate::project::state::{Look, Once, State, Told};
 use crate::project::{Project, native};
 use crate::settings::Level;
 use crate::stop::Stop;
@@ -288,7 +288,20 @@ fn beside(size: u64, from: u64, threads: Threads, level: Level) -> bool {
     size >= from && threads.limit(2) >= 2 && level != Level::Lean
 }
 
+/// what an edit of the file at `path` is told of as: the path and how the file looks.
+pub(crate) fn edited(path: &str, look: &Look) -> String {
+    format!("{path}:{}:{}", look.size, look.modified)
+}
+
 impl Survey {
+    /// whether `told` records an edit of the file at `path` as the survey saw it: a file told of
+    /// while it looked as it does now.
+    pub(crate) fn told_edit(&self, path: &str, told: &Told) -> bool {
+        self.disk
+            .get(path)
+            .is_some_and(|look| told.has(Once::Edit, &edited(path, look)))
+    }
+
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
     ///
