@@ -12,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE_COMMAND = r'''
-import json, os, plistlib, re, signal, sys
+import json, os, plistlib, re, signal, subprocess, sys
 from pathlib import Path
 root = Path(os.environ['CI_TEST_ROOT'])
 settings = json.loads((root / 'settings.json').read_text())
@@ -56,6 +56,24 @@ elif name == 'apt-get':
         signal.pause()
     if mode == 'always_fail' or mode == 'failure_once' and operation == 'update' and number == 1:
         sys.exit(100)
+elif name == 'gh':
+    # github's runs api as it answered on 2026-11-18: a status filter finds no run of a commit
+    # while any run of it is in progress, as main's own push run is when it asks
+    if settings.get('gh_fails'):
+        print('gh: Bad credentials (HTTP 401)', file=sys.stderr)
+        sys.exit(1)
+    query = dict(args[i + 1].split('=', 1) for i, arg in enumerate(args) if arg == '-f')
+    runs = [run for run in settings['runs'] if run['head_sha'] == query['head_sha']]
+    if 'event' in query:
+        runs = [run for run in runs if run['event'] == query['event']]
+    if 'status' in query:
+        unfinished = any(run['status'] != 'completed' for run in settings['runs']
+                         if run['head_sha'] == query['head_sha'])
+        runs = [] if unfinished else [run for run in runs if query['status'] in (run['status'], run['conclusion'])]
+    answer = json.dumps({'total_count': len(runs), 'workflow_runs': runs})
+    jq = subprocess.run(['jq', '-r', args[args.index('--jq') + 1]], input=answer, capture_output=True, text=True)
+    sys.stdout.write(jq.stdout)
+    sys.exit(jq.returncode)
 elif name == 'lslocks':
     if count('lslocks') <= settings.get('locked', 0):
         print('42 dpkg /var/lib/dpkg/lock-frontend')
@@ -99,7 +117,8 @@ class PlatformScripts(unittest.TestCase):
         (root / 'runner').mkdir()
         settings.update(bash=shutil.which('bash'), python=sys.executable, real_timeout=shutil.which('timeout'))
         (root / 'settings.json').write_text(json.dumps(settings), encoding='utf-8')
-        for name in ['sudo', 'apt-get', 'timeout', 'lslocks', 'hdiutil', 'diskutil', 'mdutil', 'sleep', 'python3']:
+        for name in ['sudo', 'apt-get', 'timeout', 'lslocks', 'gh', 'hdiutil', 'diskutil', 'mdutil', 'sleep',
+                     'python3']:
             path = root / 'bin' / name
             path.write_text(f'#!{sys.executable}\n' + FAKE_COMMAND, encoding='utf-8')
             path.chmod(0o755)
@@ -107,7 +126,7 @@ class PlatformScripts(unittest.TestCase):
             (root / 'apt-mirrors.txt').write_text(settings['mirrors'], encoding='utf-8')
         env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
                    CI_TEST_ROOT=str(root), RUNNER_TEMP=str(root / 'runner'), CI_APT_ATTEMPT_TIMEOUT=attempt,
-                   CI_APT_MIRRORS=str(root / 'apt-mirrors.txt'))
+                   CI_APT_MIRRORS=str(root / 'apt-mirrors.txt'), GITHUB_OUTPUT=str(root / 'github-output'))
         process = subprocess.Popen(['bash', str(ROOT / '.github/scripts' / script), *arguments],
                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
@@ -166,6 +185,36 @@ class PlatformScripts(unittest.TestCase):
                 code, output, _, root = self.run_script('apt-install.sh', apt=mode, mirrors=mirrors)
                 self.assertEqual(code, 0, output)
                 self.assertEqual((root / 'apt-mirrors.txt').read_text(encoding='utf-8'), kept)
+
+    @unittest.skipUnless(shutil.which('jq'), 'jq, which answers for the fake api')
+    def test_a_pull_request_run_that_passed_is_found_while_main_runs_on_the_commit(self):
+        sha = 'a' * 40
+        runs = [{'event': 'push', 'status': 'in_progress', 'conclusion': None, 'head_sha': sha,
+                 'html_url': 'https://example.org/runs/2'},
+                {'event': 'pull_request', 'status': 'completed', 'conclusion': 'success', 'head_sha': sha,
+                 'html_url': 'https://example.org/runs/1'}]
+        code, output, _, root = self.run_script('ci-verified.sh', arguments=['lab/fetchloom', sha], runs=runs)
+        self.assertEqual(code, 0, output)
+        self.assertEqual((root / 'github-output').read_text(), 'found=true\nrun=https://example.org/runs/1\n', output)
+
+    @unittest.skipUnless(shutil.which('jq'), 'jq, which answers for the fake api')
+    def test_no_other_run_proves_a_commit(self):
+        sha = 'a' * 40
+        def run(**changed):
+            return {'event': 'pull_request', 'status': 'completed', 'conclusion': 'success', 'head_sha': sha,
+                    'html_url': 'https://example.org/runs/1', **changed}
+        for case, runs, settings in [
+            ('a dispatched run', [run(event='workflow_dispatch')], {}),
+            ('a failed pull request run', [run(conclusion='failure')], {}),
+            ('an unfinished pull request run', [run(status='in_progress', conclusion=None)], {}),
+            ("another commit's run", [run(head_sha='b' * 40)], {}),
+            ('an api that does not answer', [run()], {'gh_fails': True}),
+        ]:
+            with self.subTest(case=case):
+                code, output, _, root = self.run_script('ci-verified.sh', arguments=['lab/fetchloom', sha],
+                                                        runs=runs, **settings)
+                self.assertEqual(code, 0, output)
+                self.assertEqual((root / 'github-output').read_text(), 'found=false\n', output)
 
     def test_hfs_cleanup_uses_the_device_and_preserves_failures(self):
         for busy, test_exit, force_exit, expected in [(0, 0, 0, 0), (2, 0, 0, 0),

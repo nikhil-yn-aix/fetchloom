@@ -15,8 +15,10 @@ if [[ ! $repository =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ || ! $sha =~ ^[0-9a-f]{
 fi
 output=${GITHUB_OUTPUT:-/dev/stdout}
 
+# the api finds no run for a status or conclusion filter while any run of the commit is in
+# progress, as this one is, so the runs are asked for by commit alone and chosen here
 if ! run=$(gh api --method GET "repos/$repository/actions/workflows/ci.yml/runs" \
-  -f head_sha="$sha" -f event=pull_request -f status=success -f per_page=100 \
+  -f head_sha="$sha" -f per_page=100 \
   --jq "[.workflow_runs[] | select(.head_sha == \"$sha\" and .event == \"pull_request\" and .conclusion == \"success\")][0].html_url // empty"); then
   echo "::warning::github's api did not say which runs of ci.yml passed on $sha, so every job runs"
   echo "found=false" >> "$output"
