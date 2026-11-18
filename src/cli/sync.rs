@@ -771,7 +771,7 @@ impl<'a> Loop<'a> {
             if manifest.datasets.get(dataset).is_some_and(Entry::is_output) {
                 let shown = self.shown(manifest, dataset);
                 let (state, _) = self.project.state();
-                let here = place::authored(&state).contains(dataset.as_str());
+                let here = place::placed_here(&state, dataset);
                 return Err(local::made_elsewhere(&[(dataset, &shown)], mirrored, here));
             }
             let folder = plan::folder(manifest, dataset);

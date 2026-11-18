@@ -416,11 +416,15 @@ fn tell_changed_outputs(
     placing.note_reach(cache, !context.mirrors.mirrors.list.is_empty());
     for changed in placing.changed_outputs() {
         let name = &changed.name;
-        // no cache or mirror here holds them, so the warning promises no send
         let lost = changed.reach == place::Reach::Lost;
+        // a gone folder whose files no cache or mirror here holds is told once, by the refusal
+        // that push has none of them to send
+        if changed.gone && lost {
+            continue;
+        }
         let said = match changed.gone_said(&changed.at) {
-            Some(gone) if lost => gone,
             Some(gone) => format!("{gone}, so push sends the files {name} pins"),
+            // no cache or mirror here holds them, so the warning promises no send
             None if lost => format!(
                 "{} changed since {name} was pinned: {}",
                 changed.at,

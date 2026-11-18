@@ -613,7 +613,12 @@ fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
         .output()?;
     let refused = text(&pushed.stderr)?;
     assert!(
-        refused.contains(&format!("warning: data/processed is gone\n  help: {ways}\nerror: processed was pinned here, and this machine's cache no longer holds its files\n")),
+        refused.contains("error: processed was pinned here, and this machine's cache no longer holds its files\n  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`\n"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused.matches("run your pipeline here").count(),
+        1,
         "{refused}"
     );
     let synced = run(&["sync"])?;
@@ -641,6 +646,44 @@ fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
     run(&["sync", "--force", "processed", "--mirror", &mirror])?;
     assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
     assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
+    Ok(())
+}
+
+/// an output captured here, put back by `sync --force` and then lost with its cache, is told as
+/// this machine's, as a file this machine placed of it says: `sync --force` names this machine's
+/// cache, never another machine, and push says the loss once.
+#[test]
+fn a_restored_output_lost_again_is_told_as_this_machines() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    delete_folder(&work.join("data/processed"))?;
+    ok(&sandbox.run(&["sync", "--force", "processed"])?)?;
+    assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
+    delete_folder(&work.join("data/processed"))?;
+    let cache = sandbox.folder("empty-cache")?;
+    let lost = "processed was pinned here, and this machine's cache no longer holds its files\n  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`\n";
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let pushed = sandbox
+        .command(&["push", "--to", &elsewhere.to_string_lossy(), "--yes"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let stderr = text(&pushed.stderr)?;
+    assert_eq!(pushed.status.code(), Some(10), "{stderr}");
+    assert!(stderr.contains(&format!("error: {lost}")), "{stderr}");
+    assert_eq!(
+        stderr.matches("run your pipeline here").count(),
+        1,
+        "{stderr}"
+    );
+    let forced = sandbox
+        .command(&["sync", "--force", "processed"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&format!("warning: {lost}")), "{stderr}");
     Ok(())
 }
 

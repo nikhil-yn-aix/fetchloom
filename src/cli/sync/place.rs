@@ -175,8 +175,8 @@ pub(crate) struct Elsewhere {
     pub(crate) pin: String,
     /// whether an earlier run told of this pin, so this one names it in its last line alone.
     pub(crate) told: bool,
-    /// whether the state records the output's capture on this machine, whose cache lost its
-    /// bytes, rather than another machine's.
+    /// whether the state records a file of the output placed or pinned on this machine, as
+    /// [`placed_here`] says, so its cache lost the bytes, rather than another machine made them.
     pub(crate) here: bool,
 }
 
@@ -1126,15 +1126,9 @@ impl<'a> Placing<'a> {
     /// holds: their folders stay as they are, and the run settles nothing, since their files are
     /// still to come. each is told of once per pin, as the state records.
     pub(crate) fn leave_out(&mut self, mut elsewhere: Vec<Elsewhere>) {
-        // every sync comes here, so the state's records are read only for an output left out
-        let captured = if elsewhere.is_empty() {
-            HashSet::new()
-        } else {
-            authored(&self.survey.state)
-        };
         for output in &mut elsewhere {
             output.told = self.survey.state.told.has(Once::Elsewhere, &output.pin);
-            output.here = captured.contains(output.name.as_str());
+            output.here = placed_here(&self.survey.state, &output.name);
         }
         let names: HashSet<&str> = elsewhere
             .iter()
@@ -3419,7 +3413,8 @@ fn left_by_move(retired: &mut [Retired], kept: &[Kept]) {
 }
 
 /// whether `state` records a file of the dataset `name` placed or pinned on this machine. without
-/// one, as in a fresh clone, nothing its folder holds is the dataset's here.
+/// one, as in a fresh clone, nothing its folder holds is the dataset's here. [`changed_outputs`]
+/// answers the same for each output in its one pass over the records.
 pub(crate) fn placed_here(state: &State, name: &str) -> bool {
     state.files.values().any(|placed| placed.dataset == name)
 }
