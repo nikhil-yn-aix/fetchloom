@@ -795,6 +795,7 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
 
 /// the next sync still finds the file left out, though nothing the first one recorded changed, and
 /// counts it without telling of it again, as the first told of it while it looked as it does now.
+/// status names no sync that places files, as a sync keeps that file and places nothing.
 #[test]
 fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     let sandbox = Sandbox::new()?;
@@ -824,6 +825,11 @@ fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     assert_eq!(
         text(&status.stdout)?,
         "  Untracked data/iris/iris.csv · holds other bytes than data.lock pins\n"
+    );
+    let stderr = text(&status.stderr)?;
+    assert!(
+        !stderr.contains("places missing or updated files"),
+        "{stderr}"
     );
     Ok(())
 }

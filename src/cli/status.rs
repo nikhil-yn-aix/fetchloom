@@ -1320,7 +1320,7 @@ impl Status {
 
     /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.
     /// an output it leaves whole, as its folder changed or is gone, it pins anew at most, placing
-    /// nothing.
+    /// nothing, and a file fetchloom did not place it keeps, placing nothing there either.
     fn places(&self) -> bool {
         let left = |name: &String| {
             self.changed_outputs
@@ -1334,11 +1334,7 @@ impl Status {
             })
             || self.fetchable(&self.missing)
             || !self.not_unpacked.is_empty()
-            || self
-                .outdated
-                .iter()
-                .chain(&self.untracked)
-                .any(|path| !self.left_whole(path))
+            || self.outdated.iter().any(|path| !self.left_whole(path))
             || self.fetchable(&self.damaged)
     }
 }
@@ -1694,13 +1690,11 @@ mod tests {
                 _ => &mut status.extra,
             };
             paths.push("data/set/file.csv".to_owned());
-            assert_eq!(status.needs_sync(), category < 7, "category {category}");
-            // an untracked file is a person's own until they say otherwise
-            assert_eq!(
-                status.sync_repairs_all(),
-                category < 7 && category != 5,
-                "category {category}"
-            );
+            // an untracked file is a person's own until they say otherwise, so a sync keeps it
+            // and places nothing
+            let placed = category < 7 && category != 5;
+            assert_eq!(status.needs_sync(), placed, "category {category}");
+            assert_eq!(status.sync_repairs_all(), placed, "category {category}");
             assert!(sum_up(&output, &status), "category {category}");
         }
         // a file that holds the pinned bytes is no difference, though sync records it
