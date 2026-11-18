@@ -55,7 +55,11 @@ pub(in crate::cli) enum Unready {
     Output(Box<ChangedOutput>),
     /// an output whose files this machine lacks, as a clone of the project that made it does,
     /// which sync leaves out: its name, and its folder as a command names it.
-    Elsewhere { name: String, shown: String },
+    Elsewhere {
+        name: String,
+        shown: String,
+        here: bool,
+    },
     /// an import with files this machine lacks, missing or damaged, which no link fetches, so no
     /// sync brings them: its name, and its folder.
     Imported { name: String, folder: String },
@@ -142,10 +146,9 @@ impl Unready {
                 waiting.name, waiting.part
             ),
             Unready::Output(changed) => changed.said(),
-            Unready::Elsewhere { name, shown } => line(&crate::source::local::made_elsewhere(
-                &[(name, shown)],
-                false,
-            )),
+            Unready::Elsewhere { name, shown, here } => line(
+                &crate::source::local::made_elsewhere(&[(name, shown)], false, *here),
+            ),
         }
     }
 
@@ -236,7 +239,7 @@ pub(in crate::cli) fn after_sync(
         placement
             .elsewhere
             .iter()
-            .map(|left| (&left.name, &left.shown)),
+            .map(|left| (&left.name, &left.shown, left.here)),
     ));
     unready.extend(
         waiting
@@ -248,19 +251,22 @@ pub(in crate::cli) fn after_sync(
 }
 
 /// a line for each output of `outputs`, whose files this machine lacks, with its folder as a
-/// command names it.
+/// command names it and whether the state records its capture here.
 fn elsewhere<'o>(
-    outputs: impl IntoIterator<Item = (&'o String, &'o String)>,
+    outputs: impl IntoIterator<Item = (&'o String, &'o String, bool)>,
 ) -> impl Iterator<Item = Unready> {
-    outputs.into_iter().map(|(name, shown)| Unready::Elsewhere {
-        name: name.clone(),
-        shown: shown.clone(),
-    })
+    outputs
+        .into_iter()
+        .map(|(name, shown, here)| Unready::Elsewhere {
+            name: name.clone(),
+            shown: shown.clone(),
+            here,
+        })
 }
 
 /// the outputs of `status` whose files this machine lacks, made on another machine, each with its
 /// folder as a command names it. a changed output is none, as sync leaves it whole.
-fn lacking_outputs(status: &Status) -> Vec<(&String, &String)> {
+pub(super) fn lacking_outputs(status: &Status) -> Vec<(&String, &String)> {
     status
         .outputs
         .iter()
@@ -365,7 +371,10 @@ pub(super) fn of_status(status: &Status, manifest: &Manifest) -> Vec<Unready> {
             .iter()
             .map(|changed| Unready::Output(Box::new(changed.clone()))),
     );
-    unready.extend(elsewhere(made));
+    // a capture here whose files went is a changed output, so these were made elsewhere
+    unready.extend(elsewhere(
+        made.into_iter().map(|(name, shown)| (name, shown, false)),
+    ));
     unready.extend(
         status
             .imported_elsewhere

@@ -175,6 +175,9 @@ pub(crate) struct Elsewhere {
     pub(crate) pin: String,
     /// whether an earlier run told of this pin, so this one names it in its last line alone.
     pub(crate) told: bool,
+    /// whether the state records the output's capture on this machine, whose cache lost its
+    /// bytes, rather than another machine's.
+    pub(crate) here: bool,
 }
 
 impl Elsewhere {
@@ -200,6 +203,7 @@ impl Elsewhere {
             shown,
             pin: format!("{name}:{}", crate::cache::tree_hash(&members).hex()),
             told: false,
+            here: false,
         }
     }
 }
@@ -225,8 +229,8 @@ pub(crate) struct ChangedOutput {
     /// folder moved keeping their times keeps them the person's.
     pub(crate) edits: Vec<String>,
     /// whether nothing is at its folder, as after a move or a run that deleted it, so pinning
-    /// what it holds now pins nothing.
-    pub(crate) gone: bool,
+    /// what it holds now pins nothing, and then whether this machine reaches the files it pins.
+    pub(crate) gone: Option<Gone>,
     /// the folder of a gone output that data.toml named before and that still holds its pin, as
     /// a command names it.
     pub(crate) left: Option<String>,
@@ -234,6 +238,15 @@ pub(crate) struct ChangedOutput {
     /// clone, nothing its folder holds is the output's here, and data.toml may name a folder of
     /// code, so no `--force` is offered.
     pub(crate) placed_here: bool,
+}
+
+/// the files a gone output's folder held, as this machine reaches them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Gone {
+    /// a cache here holds them, or a mirror to ask may, so `sync --force` puts them back.
+    Reachable,
+    /// no cache here holds them and no mirror is set to ask, so no sync puts them back.
+    Lost,
 }
 
 impl ChangedOutput {
@@ -249,7 +262,7 @@ impl ChangedOutput {
             change: String::new(),
             told: false,
             edits: Vec::new(),
-            gone: false,
+            gone: None,
             left: None,
             placed_here: false,
         }
@@ -264,8 +277,9 @@ impl ChangedOutput {
     ) -> Self {
         let root = survey.root();
         self.gone = fs::symlink_metadata(native(root, &self.at))
-            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound);
-        if self.gone {
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+            .then_some(Gone::Reachable);
+        if self.gone.is_some() {
             // `shown` is `at` as a command run here names it
             let up = self.shown.strip_suffix(&self.at).unwrap_or_default();
             self.left = left_at(root, (&self.name, &self.at), pinned, &survey.state)
@@ -290,16 +304,17 @@ impl ChangedOutput {
 
     /// that this output's folder, as `folder` names it, is gone, when nothing is at it.
     pub(crate) fn gone_said(&self, folder: &str) -> Option<String> {
-        self.gone.then(|| format!("{folder} is gone"))
+        self.gone.map(|_| format!("{folder} is gone"))
     }
 
     /// the ways on from this output's folder, as it changed, is gone, or was left elsewhere.
     pub(crate) fn ways_on(&self) -> String {
-        let since = match &self.left {
-            Some(from) => Since::Left(from),
-            None if self.gone => Since::Gone,
-            None if !self.placed_here => Since::Unplaced,
-            None => Since::Changed { yes: false },
+        let since = match (&self.left, self.gone) {
+            (Some(from), _) => Since::Left(from),
+            (None, Some(Gone::Lost)) => Since::Lost,
+            (None, Some(Gone::Reachable)) => Since::Gone,
+            (None, None) if !self.placed_here => Since::Unplaced,
+            (None, None) => Since::Changed { yes: false },
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
     }
@@ -1072,8 +1087,15 @@ impl<'a> Placing<'a> {
     /// holds: their folders stay as they are, and the run settles nothing, since their files are
     /// still to come. each is told of once per pin, as the state records.
     pub(crate) fn leave_out(&mut self, mut elsewhere: Vec<Elsewhere>) {
+        // every sync comes here, so the state's records are read only for an output left out
+        let captured = if elsewhere.is_empty() {
+            HashSet::new()
+        } else {
+            authored(&self.survey.state)
+        };
         for output in &mut elsewhere {
             output.told = self.survey.state.told.has(Once::Elsewhere, &output.pin);
+            output.here = captured.contains(output.name.as_str());
         }
         let names: HashSet<&str> = elsewhere
             .iter()
@@ -1151,6 +1173,26 @@ impl<'a> Placing<'a> {
                 .map(|found| found.is_some())
                 .map_err(|doubt| doubtful(&doubt))
         })
+    }
+
+    /// notes each output of the changes whose folder is gone while `holds` says the cache lacks a
+    /// file it pins, with no mirror to ask, as `mirrored` says: no sync puts back its files.
+    pub(crate) fn note_lost(&mut self, holds: impl Fn(&Sha256, u64) -> bool, mirrored: bool) {
+        let targets = &self.targets;
+        for changed in self
+            .changed
+            .iter_mut()
+            .filter(|changed| changed.gone.is_some())
+        {
+            if !mirrored
+                && targets
+                    .iter()
+                    .filter(|target| target.dataset == changed.name)
+                    .any(|target| !holds(&target.sha256, target.size))
+            {
+                changed.gone = Some(Gone::Lost);
+            }
+        }
     }
 
     /// the datasets with a file placing needs whose bytes `holds` says the cache lacks, whatever was

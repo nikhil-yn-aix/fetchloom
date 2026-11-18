@@ -245,7 +245,7 @@ impl<'a> Loop<'a> {
         // changed, stays small
         match Box::pin(self.prepare(manifest, lock, plan, force, survey)).await {
             Ok(mut placing) => {
-                placing.leave_out(self.elsewhere(manifest, lock));
+                self.leave_out(&mut placing, self.elsewhere(manifest, lock));
                 let placement = self.apply(manifest, lock, placing, synced)?;
                 self.warn_elsewhere(&placement.elsewhere);
                 Ok(placement)
@@ -285,6 +285,17 @@ impl<'a> Loop<'a> {
             .collect()
     }
 
+    /// leaves out of `placing` the outputs of `elsewhere`, whose files this machine lacks, and
+    /// notes its gone outputs whose files the cache lacks with no mirror to ask, so their ways on
+    /// name no sync, which would put back nothing.
+    fn leave_out(&self, placing: &mut Placing<'_>, elsewhere: Vec<Elsewhere>) {
+        placing.leave_out(elsewhere);
+        placing.note_lost(
+            |digest, size| self.cache.find(digest, Some(size)).is_some(),
+            !self.context.mirrors.mirrors.list.is_empty(),
+        );
+    }
+
     /// the folder of `name` as a command run here names it.
     fn shown(&self, manifest: &Manifest, name: &str) -> String {
         super::folder_from_here(&self.project.root, &plan::folder(manifest, name))
@@ -297,7 +308,7 @@ impl<'a> Loop<'a> {
         let output = &self.context.output;
         let mirrored = !self.context.mirrors.mirrors.list.is_empty();
         for left in elsewhere.iter().filter(|left| output.json() || !left.told) {
-            let said = local::made_elsewhere(&[(&left.name, &left.shown)], mirrored);
+            let said = local::made_elsewhere(&[(&left.name, &left.shown)], mirrored, left.here);
             output.warn_with(
                 Warning::OutputElsewhere,
                 &said.message,
@@ -422,7 +433,7 @@ impl<'a> Loop<'a> {
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let scope = Scope::Only(whole.clone());
         let mut placing = Placing::from_plan(self.project, manifest, plan, force, &scope, survey)?;
-        placing.leave_out(self.elsewhere(manifest, lock));
+        self.leave_out(&mut placing, self.elsewhere(manifest, lock));
         let placement = self.apply(manifest, lock, placing, synced)?;
         Ok(Some(Partial {
             placed: whole.into_iter().collect(),
@@ -762,7 +773,9 @@ impl<'a> Loop<'a> {
             let mirrored = !self.context.mirrors.mirrors.list.is_empty();
             if manifest.datasets.get(dataset).is_some_and(Entry::is_output) {
                 let shown = self.shown(manifest, dataset);
-                return Err(local::made_elsewhere(&[(dataset, &shown)], mirrored));
+                let (state, _) = self.project.state();
+                let here = place::authored(&state).contains(dataset.as_str());
+                return Err(local::made_elsewhere(&[(dataset, &shown)], mirrored, here));
             }
             let folder = plan::folder(manifest, dataset);
             return Err(
@@ -1296,7 +1309,7 @@ impl<'a> Loop<'a> {
             .into_iter()
             .partition(|(dataset, _)| manifest.datasets.get(dataset).is_some_and(Entry::is_output));
         let (mirrored, elsewhere) = self.made_where(manifest, lock, made).await?;
-        placing.leave_out(elsewhere);
+        self.leave_out(&mut placing, elsewhere);
         let archives = archives::of(lock, wanted);
         for (dataset, archive) in &archives {
             if archive.file.unpacks_to.is_some() {

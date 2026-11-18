@@ -410,12 +410,18 @@ fn tell_changed_outputs(
     let placing = survey.and_then(|survey| {
         place::Placing::new(project, manifest, lock, cache, false, &scope, survey)
     });
-    let Ok(placing) = placing else {
+    let Ok(mut placing) = placing else {
         return;
     };
+    placing.note_lost(
+        |digest, size| cache.find(digest, Some(size)).is_some(),
+        !context.mirrors.mirrors.list.is_empty(),
+    );
     for changed in placing.changed_outputs() {
         let name = &changed.name;
         let said = match changed.gone_said(&changed.at) {
+            // no cache or mirror here holds them, so the warning promises no send
+            Some(gone) if changed.gone == Some(place::Gone::Lost) => gone,
             Some(gone) => format!("{gone}, so push sends the files {name} pins"),
             None => format!(
                 "{} changed since {name} was pinned: {}, so push sends the files {name} pins, not these",
@@ -426,7 +432,7 @@ fn tell_changed_outputs(
         context.output.warn_with(
             Warning::OutputChanged,
             &said,
-            &if changed.gone {
+            &if changed.gone.is_some() {
                 changed.ways_on()
             } else {
                 format!(

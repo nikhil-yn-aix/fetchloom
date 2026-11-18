@@ -190,6 +190,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         &context.stop,
         verify.then_some(&context.output),
     )?;
+    status.note_lost(!context.mirrors.mirrors.list.is_empty());
     // what a sync refuses, status refuses alike, but for --check, where it keeps data from ready
     if !strict && let Some(refused) = status.refused.take() {
         return Err(refused);
@@ -322,18 +323,20 @@ fn tell_imports(output: &Output, status: &Status) {
 /// fetches, in the words of sync's refusal. an output, made on another machine, comes from a
 /// mirror, or from running its pipeline here.
 fn tell_imported_elsewhere(output: &Output, status: &Status, manifest: &Manifest) {
-    let (outputs, names): (Vec<&str>, Vec<&str>) = status
+    let names: Vec<&str> = status
         .imported_elsewhere
         .keys()
         .map(String::as_str)
-        .partition(|name| status.outputs.contains_key(*name));
-    if !outputs.is_empty() {
-        let made: Vec<(&str, &str)> = outputs
-            .iter()
-            .map(|name| (*name, status.outputs[*name].as_str()))
-            .collect();
+        .filter(|name| !status.outputs.contains_key(*name))
+        .collect();
+    // a changed or gone output is told with its own ways on, as sync leaves it whole
+    let made: Vec<(&str, &str)> = ready::lacking_outputs(status)
+        .into_iter()
+        .map(|(name, shown)| (name.as_str(), shown.as_str()))
+        .collect();
+    if !made.is_empty() {
         // status asks no mirror, so it says only what the cache lacks
-        let refused = crate::source::local::made_elsewhere(&made, false);
+        let refused = crate::source::local::made_elsewhere(&made, false, false);
         output.hint(&ready::line(&refused));
     }
     let refused = match names.as_slice() {
@@ -1299,6 +1302,21 @@ impl Status {
         self.changed_outputs
             .iter()
             .any(|changed| disk::is_inside(path, &changed.at))
+    }
+
+    /// notes each gone output whose files this machine's cache lacks, with no mirror to ask, as
+    /// `mirrored` says: no sync puts back its files, so its ways on name none.
+    fn note_lost(&mut self, mirrored: bool) {
+        let lacking = &self.imported_elsewhere;
+        for changed in self
+            .changed_outputs
+            .iter_mut()
+            .filter(|changed| changed.gone.is_some())
+        {
+            if !mirrored && lacking.contains_key(&changed.name) {
+                changed.gone = Some(place::Gone::Lost);
+            }
+        }
     }
 
     /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.

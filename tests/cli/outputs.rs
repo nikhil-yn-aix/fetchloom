@@ -555,6 +555,78 @@ fn an_at_changed_without_the_folder_moved_names_the_move() -> Result {
     Ok(())
 }
 
+/// an output pinned here whose folder is gone while no cache here holds its files, as after a new
+/// `FETCHLOOM_CACHE`: the ways on name its pipeline, not a sync that would put back nothing, and no
+/// line says it was made on another machine. with a mirror, which may hold them, they name the
+/// sync, which puts them back from it.
+#[test]
+fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_string_lossy().into_owned();
+    ok(&sandbox.run(&["push", "--to", &mirror, "--yes"])?)?;
+    delete_folder(&work.join("data/processed"))?;
+    let cache = sandbox.folder("empty-cache")?;
+    let run = |args: &[&str]| -> Result<String> {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        Ok(stderr)
+    };
+    let ways = "run your pipeline here, then `fetchloom add ./data/processed --as processed`, or if you moved it, set at = \"<new folder>\" for processed in data.toml";
+    let status = run(&["status"])?;
+    assert!(
+        status.contains(&format!("hint: data/processed is gone: {ways}\n")),
+        "{status}"
+    );
+    assert!(!status.contains("another machine"), "{status}");
+    let back = "`fetchloom sync --force processed` puts back the files processed pins, or if you moved it, set at = \"<new folder>\" for processed in data.toml";
+    let mirrored = run(&["status", "--mirror", &mirror])?;
+    assert!(
+        mirrored.contains(&format!("hint: data/processed is gone: {back}\n")),
+        "{mirrored}"
+    );
+    let previewed = run(&["sync", "--dry-run", "--mirror", &mirror])?;
+    assert!(
+        previewed.contains(&format!(
+            "warning: data/processed is gone\n  help: {back}\n"
+        )),
+        "{previewed}"
+    );
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let pushed = sandbox
+        .command(&["push", "--to", &elsewhere.to_string_lossy(), "--yes"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let refused = text(&pushed.stderr)?;
+    assert!(
+        refused.contains(&format!("warning: data/processed is gone\n  help: {ways}\nerror: processed was pinned here, and this machine's cache no longer holds its files\n")),
+        "{refused}"
+    );
+    let synced = run(&["sync"])?;
+    assert!(
+        synced.contains(&format!(
+            "warning: data/processed is gone\n  help: {ways}\n"
+        )),
+        "{synced}"
+    );
+    let forced = run(&["sync", "--force", "processed"])?;
+    assert!(
+        forced.contains("warning: processed was pinned here, and this machine's cache no longer holds its files\n  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`\n"),
+        "{forced}"
+    );
+    run(&["sync", "--force", "processed", "--mirror", &mirror])?;
+    assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
+    assert_eq!(fs::read(work.join("data/processed/summary.txt"))?, SUMMARY);
+    Ok(())
+}
+
 /// an output's `at` changed to a folder whose parent is not there yet: the help makes the parent
 /// before the move, which then works, and status, whose only differences are that output's, which
 /// sync leaves whole, names no sync that places files.

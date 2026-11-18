@@ -47,6 +47,9 @@ pub(crate) enum Since<'a> {
     Changed { yes: bool },
     /// nothing is at it.
     Gone,
+    /// nothing is at it, and no cache or mirror here holds the files it pins, so no sync puts
+    /// them back.
+    Lost,
     /// nothing is at it, and the folder data.toml named before, as a command names it, still
     /// holds the pin.
     Left(&'a str),
@@ -71,6 +74,11 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
         ),
         Since::Gone => format!(
             "`{force}` puts back the files {name} pins, or if you moved it, {}",
+            set_moved(name, true)
+        ),
+        Since::Lost => format!(
+            "run your pipeline here, then `{}`, or if you moved it, {}",
+            pinned_again(name, shown),
             set_moved(name, true)
         ),
         Since::Left(from) => format!(
@@ -196,9 +204,10 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
 }
 
 /// the error for the outputs of `made`, each with its folder as a command run here names it,
-/// whose files this machine's cache lacks, and the mirrors too when `mirrored`, as a clone's: git
-/// carries data.lock, never the bytes, which only the machine that made them has.
-pub(crate) fn made_elsewhere(made: &[(&str, &str)], mirrored: bool) -> Error {
+/// whose files this machine's cache lacks, and the mirrors too when `mirrored`: made on another
+/// machine, as in a clone, since git carries data.lock and never the bytes, or pinned `here`, as
+/// the state records, whose bytes this machine's cache lost.
+pub(crate) fn made_elsewhere(made: &[(&str, &str)], mirrored: bool, here: bool) -> Error {
     let names: Vec<&str> = made.iter().map(|(name, _)| *name).collect();
     let (was, files, pin) = match made {
         [(name, at)] => ("was", "its files", format!("`{}`", pinned_again(name, at))),
@@ -211,13 +220,26 @@ pub(crate) fn made_elsewhere(made: &[(&str, &str)], mirrored: bool) -> Error {
             ),
         ),
     };
+    let names = crate::units::listed(&names, "and");
+    let pipeline = format!("run your pipeline here, then {pin}");
+    if here {
+        let lost = if mirrored {
+            lacking(mirrored, files)
+        } else {
+            format!("this machine's cache no longer holds {files}")
+        };
+        return Error::new(
+            Kind::ReferenceUnresolved,
+            format!("{names} {was} pinned here, and {lost}"),
+        )
+        .help(pipeline);
+    }
     let message = format!(
-        "{} {was} made on another machine, and {}",
-        crate::units::listed(&names, "and"),
+        "{names} {was} made on another machine, and {}",
         lacking(mirrored, files)
     );
     Error::new(Kind::ReferenceUnresolved, message).help(format!(
-        "push them from the machine that made them with `{}` and add that mirror here with `{}`, or run your pipeline here, then {pin}",
+        "push them from the machine that made them with `{}` and add that mirror here with `{}`, or {pipeline}",
         crate::suggested::command("push --to <mirror>"),
         crate::suggested::command("settings set mirrors <mirror>"),
     ))
