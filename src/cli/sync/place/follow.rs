@@ -179,7 +179,8 @@ fn keeping(project: &Project, outputs: &BTreeSet<(&str, &str)>, count: usize) ->
 /// refuses the first follow of `link` when the folder it leads to holds a marker of fetchloom's that
 /// names another project than this one, or none, as [`marked`] finds them, `named` listing them:
 /// one of the project this one was copied or moved from, as the copied state's id says, with the
-/// way out of each reading, or of another project or another copy.
+/// way out of each reading, or of another project, another copy or this project before its
+/// .fetchloom folder was lost.
 fn refuse_marked(
     project: &Project,
     survey: &Survey,
@@ -209,23 +210,29 @@ fn refuse_marked(
             "if this is a copy, give it a data folder of its own: the cache keeps each file's bytes once. if you moved the project here and no other copy uses that folder, delete those .gitignore files, and sync makes them again",
         ));
     }
-    let (why, those) = if one {
+    // a project that lost its .fetchloom folder lost its id too, so its own markers read alike
+    let (why, those, again) = if one {
         (
             "marks another project's or another copy's dataset folder",
             "that .gitignore",
+            "if it was this project's own, sync makes it again",
         )
     } else {
         (
             "mark other projects' or other copies' dataset folders",
             "those .gitignore files",
+            "if they were this project's own, sync makes them again",
         )
     };
     Err(refused(
         project,
         link,
-        &format!("where {} {why}", named(&paths)),
         &format!(
-            "point the link at a folder of this project's own, or delete {those} if no other project or copy places files there now"
+            "where {} {why}, or this project's own, from before its .fetchloom folder was lost",
+            named(&paths)
+        ),
+        &format!(
+            "point the link at a folder of this project's own, or delete {those} if no other project or copy places files there now: {again}"
         ),
     ))
 }

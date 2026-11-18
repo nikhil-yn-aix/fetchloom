@@ -774,7 +774,7 @@ fn a_link_repointed_at_another_projects_folder_is_refused() -> Result {
         assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
         assert!(
             stderr.contains(&format!(
-                " is a link to {}, where iris/.gitignore marks another project's or another copy's dataset folder, so fetchloom places nothing through it\n",
+                " is a link to {}, where iris/.gitignore marks another project's or another copy's dataset folder, or this project's own, from before its .fetchloom folder was lost, so fetchloom places nothing through it\n",
                 real(&theirs)?
             )),
             "{args:?}: {stderr}"
@@ -1504,7 +1504,7 @@ fn a_folder_another_projects_marker_holds_is_refused() -> Result {
     assert_eq!(output.status.code(), Some(50), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            " is a link to {}, where results/.gitignore marks another project's or another copy's dataset folder, so fetchloom places nothing through it\n",
+            " is a link to {}, where results/.gitignore marks another project's or another copy's dataset folder, or this project's own, from before its .fetchloom folder was lost, so fetchloom places nothing through it\n",
             real(&target)?
         )),
         "{stderr}"
@@ -1527,7 +1527,7 @@ fn a_folder_another_projects_marker_holds_is_refused() -> Result {
     assert_eq!(synced.status.code(), Some(50), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            " is a link to {}, where results/.gitignore marks another project's or another copy's dataset folder, so fetchloom places nothing through it\n",
+            " is a link to {}, where results/.gitignore marks another project's or another copy's dataset folder, or this project's own, from before its .fetchloom folder was lost, so fetchloom places nothing through it\n",
             real(&moved)?
         )),
         "{stderr}"
@@ -1577,10 +1577,10 @@ fn a_data_folder_another_clone_filled_is_taken_once_its_markers_go() -> Result {
     assert_eq!(refused.status.code(), Some(50), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            " is a link to {}, where iris/.gitignore and pets/.gitignore mark other projects' or other copies' dataset folders, so fetchloom places nothing through it\n",
+            " is a link to {}, where iris/.gitignore and pets/.gitignore mark other projects' or other copies' dataset folders, or this project's own, from before its .fetchloom folder was lost, so fetchloom places nothing through it\n",
             real(&target)?
         )) && stderr.contains(
-            "help: point the link at a folder of this project's own, or delete those .gitignore files if no other project or copy places files there now\n"
+            "help: point the link at a folder of this project's own, or delete those .gitignore files if no other project or copy places files there now: if they were this project's own, sync makes them again\n"
         ),
         "{stderr}"
     );
@@ -1588,6 +1588,57 @@ fn a_data_folder_another_clone_filled_is_taken_once_its_markers_go() -> Result {
     for name in ["iris", "pets"] {
         fs::remove_file(target.join(name).join(".gitignore"))?;
     }
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        crate::support::marker(&target.join("iris").join(".gitignore"))?,
+        b"*\n"
+    );
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
+    Ok(())
+}
+
+/// a project that lost its .fetchloom folder reads no state, so the markers it made through its
+/// data link name an id no state knows, as another project's or another copy's would. its first
+/// follow refuses them, naming that third reading too, and the help's one step, deleting them, lets
+/// sync make them again.
+#[test]
+fn a_project_that_lost_its_own_folder_hears_its_markers_may_be_its_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir(&target)?;
+    if link_folder(&target, &sandbox.work().join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    crate::support::delete_folder(&sandbox.work().join(".fetchloom"))?;
+    let before = listing(&target)?;
+    for args in [&["sync"][..], &["path", "iris"]] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                " is a link to {}, where iris/.gitignore marks another project's or another copy's dataset folder, or this project's own, from before its .fetchloom folder was lost, so fetchloom places nothing through it\n",
+                real(&target)?
+            )) && stderr.contains(
+                "help: point the link at a folder of this project's own, or delete that .gitignore if no other project or copy places files there now: if it was this project's own, sync makes it again\n"
+            ),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(listing(&target)?, before, "{args:?}");
+    }
+    fs::remove_file(target.join("iris").join(".gitignore"))?;
     let synced = sandbox.run(&["sync"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     assert_eq!(
