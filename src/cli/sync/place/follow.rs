@@ -16,12 +16,12 @@ use crate::project::{Followed, Project, native};
 
 /// refuses the first follow of `link` before anything is written through it when the folder it
 /// leads to holds what a run could harm: a .gitignore in the form of fetchloom's markers that names
-/// another project than this one, or none, whatever the state records of its folder, a dataset
-/// folder of another fetchloom project, or of the one this one was copied or moved from; a file at a path
-/// `targets` place holding other bytes, a record of the path there or not, as one could be of the
-/// folder the link led to before, or a file where they place a folder, which `sync --force`
-/// replaces; or a file in an output's folder that no pin places and the state does not record,
-/// which `sync --force` deletes. `actions` are those decided for `targets`. a file of the pinned
+/// another project than this one, or none, whatever the state records of its folder, as it marks
+/// a dataset folder of another project or another copy, or of the project this one was copied or
+/// moved from; a file at a path `targets` place holding other bytes, a record of the path there or
+/// not, as one could be of the folder the link led to before, or a file where they place a folder,
+/// which `sync --force` replaces; or a file in an output's folder that no pin places and the state
+/// does not record, which `sync --force` deletes. `actions` are those decided for `targets`. a file of the pinned
 /// bytes is taken as placed, an edit the state told of, by its path, size and time, is the
 /// person's own moved with their folder, what the folder an output's capture pins holds is the
 /// person's claim, and everything else there is theirs, as anywhere in a data folder.
@@ -179,7 +179,7 @@ fn keeping(project: &Project, outputs: &BTreeSet<(&str, &str)>, count: usize) ->
 /// refuses the first follow of `link` when the folder it leads to holds a marker of fetchloom's that
 /// names another project than this one, or none, as [`marked`] finds them, `named` listing them:
 /// one of the project this one was copied or moved from, as the copied state's id says, with the
-/// way out of each reading, or of another project.
+/// way out of each reading, or of another project or another copy.
 fn refuse_marked(
     project: &Project,
     survey: &Survey,
@@ -211,12 +211,12 @@ fn refuse_marked(
     }
     let (why, those) = if one {
         (
-            "marks a dataset folder of another fetchloom project",
+            "marks another project's or another copy's dataset folder",
             "that .gitignore",
         )
     } else {
         (
-            "mark dataset folders of other fetchloom projects",
+            "mark other projects' or other copies' dataset folders",
             "those .gitignore files",
         )
     };
@@ -225,7 +225,7 @@ fn refuse_marked(
         link,
         &format!("where {} {why}", named(&paths)),
         &format!(
-            "point the link at a folder of this project's own, or delete {those} if no other project places files there now"
+            "point the link at a folder of this project's own, or delete {those} if no other project or copy places files there now"
         ),
     ))
 }

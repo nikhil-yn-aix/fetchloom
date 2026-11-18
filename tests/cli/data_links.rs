@@ -774,7 +774,7 @@ fn a_link_repointed_at_another_projects_folder_is_refused() -> Result {
         assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
         assert!(
             stderr.contains(&format!(
-                " is a link to {}, where iris/.gitignore marks a dataset folder of another fetchloom project, so fetchloom places nothing through it\n",
+                " is a link to {}, where iris/.gitignore marks another project's or another copy's dataset folder, so fetchloom places nothing through it\n",
                 real(&theirs)?
             )),
             "{args:?}: {stderr}"
@@ -1474,8 +1474,8 @@ fn a_file_force_would_harm_in_an_outputs_folder_refuses_the_first_follow() -> Re
     Ok(())
 }
 
-/// a .gitignore in fetchloom's own marker form that this project's state does not record marks a
-/// dataset folder of another fetchloom project, so a first follow refuses the folder holding it,
+/// a .gitignore in fetchloom's own marker form that this project's state does not record marks
+/// another project's or another copy's dataset folder, so a first follow refuses the folder holding it,
 /// whatever else lies beside it: a fresh link's, and a settled project's whose data folder moved
 /// there, which a sync with nothing to place checks as well.
 #[test]
@@ -1504,7 +1504,7 @@ fn a_folder_another_projects_marker_holds_is_refused() -> Result {
     assert_eq!(output.status.code(), Some(50), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            " is a link to {}, where results/.gitignore marks a dataset folder of another fetchloom project, so fetchloom places nothing through it\n",
+            " is a link to {}, where results/.gitignore marks another project's or another copy's dataset folder, so fetchloom places nothing through it\n",
             real(&target)?
         )),
         "{stderr}"
@@ -1527,12 +1527,75 @@ fn a_folder_another_projects_marker_holds_is_refused() -> Result {
     assert_eq!(synced.status.code(), Some(50), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            " is a link to {}, where results/.gitignore marks a dataset folder of another fetchloom project, so fetchloom places nothing through it\n",
+            " is a link to {}, where results/.gitignore marks another project's or another copy's dataset folder, so fetchloom places nothing through it\n",
             real(&moved)?
         )),
         "{stderr}"
     );
     assert_eq!(listing(&moved)?, before);
+    Ok(())
+}
+
+/// a data folder copied from another clone of the project, as rsync brings a laptop's to a
+/// cluster's scratch, holds markers naming that clone. a first follow refuses them as another
+/// project's or another copy's, and the help's one step, deleting them when no other project or
+/// copy places files there, lets sync take the folder and its files.
+#[test]
+fn a_data_folder_another_clone_filled_is_taken_once_its_markers_go() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let laptop = sandbox.folder("laptop")?;
+    let routes = Routes::start(vec![
+        ("/iris.csv".to_owned(), file(IRIS, "\"1\"")),
+        ("/pets.csv".to_owned(), file(b"name\nrex\n", "\"2\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    for name in ["iris", "pets"] {
+        let link = format!("{}/{name}.csv", routes.url);
+        let added = sandbox
+            .command_in(&laptop, &["add", &link, "--as", name])
+            .output()?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(laptop.join(name), sandbox.work().join(name))?;
+    }
+    let target = scratch.join("data");
+    crate::copied::copy_tree(&laptop.join("data"), &target)?;
+    if link_folder(&target, &sandbox.work().join("data")).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let before = listing(&target)?;
+    let refused = sandbox.run(&["sync"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            " is a link to {}, where iris/.gitignore and pets/.gitignore mark other projects' or other copies' dataset folders, so fetchloom places nothing through it\n",
+            real(&target)?
+        )) && stderr.contains(
+            "help: point the link at a folder of this project's own, or delete those .gitignore files if no other project or copy places files there now\n"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(listing(&target)?, before);
+    for name in ["iris", "pets"] {
+        fs::remove_file(target.join(name).join(".gitignore"))?;
+    }
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        crate::support::marker(&target.join("iris").join(".gitignore"))?,
+        b"*\n"
+    );
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
     Ok(())
 }
 
