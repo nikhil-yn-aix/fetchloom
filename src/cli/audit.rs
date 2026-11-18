@@ -321,10 +321,11 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
     let Some(lock) = lock else {
         report.lockless = true;
         report.pins_lockless = super::project::unpinned(&manifest);
-        tell(output, &report);
+        // a check says it once, as its error
         if args.check {
             ready(&report).map_err(|error| error.with_report(&report))?;
         }
+        tell(output, &report);
         return Ok(report);
     };
     let waiting: Vec<Waiting> = lock

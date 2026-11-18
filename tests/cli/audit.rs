@@ -30,6 +30,37 @@ fn missing() -> Vec<crate::support::Part> {
     reply("404 Not Found", &[("Content-Length", "0")], b"")
 }
 
+/// with no data.lock, a check says once that nothing pins files to audit, as its error, with no
+/// Ok line before it; a plain audit says it as its Ok line.
+#[test]
+fn a_check_without_data_lock_says_it_once_as_its_error() -> Result {
+    let sandbox = Sandbox::new()?;
+    std::fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.x]\nref = \"https://example.org/iris.csv\"\n",
+    )?;
+    let checked = sandbox.run(&["audit", "--check"])?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.starts_with("error: there is no data.lock, so nothing pins files to audit\n"),
+        "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("there is no data.lock").count(),
+        1,
+        "{stderr}"
+    );
+    let plain = sandbox.run(&["audit"])?;
+    let stderr = text(&plain.stderr)?;
+    assert_eq!(plain.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok there is no data.lock, so nothing pins files to audit"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn each_pinned_file_is_served_or_says_why_not() -> Result {
     let sandbox = Sandbox::new()?;
