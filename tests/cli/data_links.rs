@@ -1550,15 +1550,25 @@ fn status_checks_a_first_follow_as_a_sync_does() -> Result {
         assert_eq!(refused.status.code(), Some(50), "{args:?}: {stderr}");
         assert!(stderr.contains(&refusal), "{args:?}: {stderr}");
     }
+    // the refusal is --check's one answer: neither what a sync would record nor an ok
+    let checked = sandbox.run(&["status", "--check"])?;
+    let said = format!("{}{}", text(&checked.stdout)?, text(&checked.stderr)?);
+    assert_eq!(checked.status.code(), Some(1), "{said}");
+    assert!(said.contains(&refusal), "{said}");
+    assert!(!said.contains("records it as placed"), "{said}");
+    assert!(!said.contains("everything matches data.lock"), "{said}");
     let checked = sandbox.run(&["--json", "status", "--check"])?;
     let document: serde_json::Value = serde_json::from_slice(&checked.stdout)?;
     assert_eq!(checked.status.code(), Some(1), "{document}");
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "data.not_ready", "{document}");
     assert!(
-        error["details"][0]
-            .as_str()
-            .is_some_and(|line| line.contains(&refusal)),
+        error["details"]
+            .as_array()
+            .is_some_and(|lines| lines.len() == 1
+                && lines[0]
+                    .as_str()
+                    .is_some_and(|line| line.contains(&refusal))),
         "{document}"
     );
     assert_eq!(

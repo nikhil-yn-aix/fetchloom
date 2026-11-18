@@ -191,9 +191,16 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         verify.then_some(&context.output),
     )?;
     status.note_lost(!context.mirrors.mirrors.list.is_empty());
-    // what a sync refuses, status refuses alike, but for --check, where it keeps data from ready
-    if !strict && let Some(refused) = status.refused.take() {
-        return Err(refused);
+    // what a sync refuses, status refuses alike, but for --check, where it is the one answer: the
+    // sync places nothing through the link, so no list or sum of what it would do holds
+    if let Some(refused) = status.refused.take() {
+        if !strict {
+            return Err(refused);
+        }
+        let unready = [ready::Unready::Refused(ready::line(&refused))];
+        if let Err(error) = ready::ready(&unready) {
+            return Err(error.with_report(&status));
+        }
     }
     let downloads = super::fetch::askable(context, std::mem::take(&mut status.downloads));
     status.to_download = super::fetch::planned(context, downloads);

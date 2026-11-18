@@ -288,11 +288,7 @@ pub(super) fn of_status(status: &Status, manifest: &Manifest) -> Vec<Unready> {
     let outputs = &status.changed_outputs;
     let made = lacking_outputs(status);
     let lacking: HashSet<&String> = status.imported_elsewhere.values().flatten().collect();
-    let mut unready: Vec<Unready> = status
-        .refused
-        .iter()
-        .map(|refused| Unready::Refused(line(refused)))
-        .collect();
+    let mut unready = Vec::new();
     if status.lockless {
         unready.push(Unready::Lockless(status.pins_lockless.clone()));
     } else {
