@@ -71,33 +71,47 @@ const SYSTEM_NAMES: [&str; 7] = [
     "$RECYCLE.BIN",
 ];
 
+/// what [`adoptable`] found of fetchloom's tag in the folder it takes as the cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tag {
+    Whole,
+    /// none yet, in a new folder or one that holds nothing but what [`left_before_tag`] passes.
+    None,
+    /// none, in a cache whose tag is gone, as [`lost_its_tag`] says.
+    Lost,
+}
+
 /// refuses `root` as the cache unless it holds fetchloom's tag, nothing but what a system keeps
 /// there, fetchloom's own state and what a first run stopped before its tag was whole leaves: the
 /// start of the tag and macos's mark against indexing, or only what a cache whose tag is gone
 /// holds, as [`lost_its_tag`] says. gc clears old files from tmp/, and the tag tells backup tools
 /// to skip the whole folder, which a folder of a person's own files must not get, as a home named
 /// by mistake, or a scratch folder whose folders have a cache's names.
-fn adoptable(root: &Path) -> io::Result<()> {
+fn adoptable(root: &Path) -> io::Result<Tag> {
     if is_cache(root) {
-        return Ok(());
+        return Ok(Tag::Whole);
     }
     meanwhile();
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Tag::None),
         Err(err) => return Err(err),
     };
     for entry in entries {
+        if left_before_tag(root, &entry?.file_name()) {
+            continue;
+        }
         // a run making the cache at the same time writes its whole tag before any folder of it,
         // so a folder that has the tag by now is that cache
-        if !left_before_tag(root, &entry?.file_name()) && !is_cache(root) {
-            if lost_its_tag(root) {
-                return Ok(());
-            }
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, Foreign));
+        if is_cache(root) {
+            return Ok(Tag::Whole);
         }
+        if lost_its_tag(root) {
+            return Ok(Tag::Lost);
+        }
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, Foreign));
     }
-    Ok(())
+    Ok(Tag::None)
 }
 
 /// the refusal of a folder of other files as the cache, which an empty or a new folder avoids.
@@ -173,27 +187,10 @@ fn lost_its_tag(root: &Path) -> bool {
         })
 }
 
-/// whether `root` is a cache whose tag is gone, as [`lost_its_tag`] says, which [`Cache::open`]
-/// tags again and [`Cache::unopened`] reads as it is.
-pub(crate) fn lost_tag(root: &Path) -> bool {
-    !is_cache(root) && lost_its_tag(root)
-}
-
-/// whether `root` is a fetchloom cache: it holds fetchloom's tag, never only a cache's folder names.
-pub(crate) fn is_cache(root: &Path) -> bool {
-    tagged(root)
-}
-
-/// the file on the way to `root`, or `root` itself, where a folder of the cache's path must be,
-/// which no run can make the cache through, said as a reason.
-pub(crate) fn in_the_way(root: &Path) -> Option<String> {
-    crate::error::file_in_the_way(root)
-}
-
 /// why a run would refuse `root` as the cache, read as it is with nothing created: none for a
 /// cache, an empty folder or one not there yet.
 pub(crate) fn refused(root: &Path) -> Option<String> {
-    in_the_way(root).or_else(|| {
+    crate::error::file_in_the_way(root).or_else(|| {
         Cache::unopened(root.to_path_buf())
             .err()
             .map(|err| crate::error::said(&err))
@@ -231,7 +228,7 @@ fn own_state(root: &Path, name: &std::ffi::OsStr) -> bool {
 /// [`left_before_tag`] passes. a command that only reads or frees a cache makes none there, where
 /// another makes one.
 pub(crate) fn absent(root: &Path) -> bool {
-    if tagged(root) {
+    if is_cache(root) {
         return false;
     }
     match fs::read_dir(root) {
@@ -513,6 +510,7 @@ fn root_refusal_as(root: &Path, user: u32, member: &dyn Fn(u32) -> bool) -> Opti
 
 /// the start of `CACHEDIR.TAG` in `root`, read without following a link.
 fn tag_text(root: &Path) -> Option<String> {
+    let _span = tracing::debug_span!("read_tag").entered();
     let mut text = String::new();
     read_unfollowed(&root.join("CACHEDIR.TAG"))
         .and_then(|file| file.take(4096).read_to_string(&mut text))
@@ -520,9 +518,9 @@ fn tag_text(root: &Path) -> Option<String> {
     Some(text)
 }
 
-/// whether `root` holds the tag fetchloom writes in its cache, perhaps after the byte order mark
-/// some windows tools start a file with.
-fn tagged(root: &Path) -> bool {
+/// whether `root` is a fetchloom cache: it holds the tag fetchloom writes in its cache, perhaps
+/// after the byte order mark some windows tools start a file with, never only a cache's folders.
+pub(crate) fn is_cache(root: &Path) -> bool {
     tag_text(root).is_some_and(|text| {
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         text.lines().next() == TAG.lines().next() && text.contains("fetchloom")
@@ -534,18 +532,22 @@ fn tag_begun(root: &Path) -> bool {
     tag_text(root).is_some_and(|text| TAG.starts_with(&text))
 }
 
-/// writes the tag backup tools look for with `write`, unless one is there, before any folder of
-/// the cache, since a folder without it is no cache; true when this call wrote it. a failed write
-/// passes once a whole tag is in place, as another run opening the cache may have written it
-/// meanwhile.
-fn tag(root: &Path, write: impl FnOnce(&Path, &[u8]) -> io::Result<()>) -> io::Result<bool> {
-    if tagged(root) {
+/// writes the tag backup tools look for with `write`, unless `found` is a whole one, before any
+/// folder of the cache, since a folder without it is no cache; true when this call wrote it. a
+/// failed write passes once a whole tag is in place, as another run opening the cache may have
+/// written it meanwhile.
+fn tag(
+    root: &Path,
+    found: Tag,
+    write: impl FnOnce(&Path, &[u8]) -> io::Result<()>,
+) -> io::Result<bool> {
+    if found == Tag::Whole {
         return Ok(false);
     }
     #[cfg(target_os = "macos")]
     exclude_native_backup_and_indexing(root)?;
     match write(&root.join("CACHEDIR.TAG"), TAG.as_bytes()) {
-        Err(_) if tagged(root) => Ok(false),
+        Err(_) if is_cache(root) => Ok(false),
         written => written.map(|()| true),
     }
 }
@@ -759,6 +761,8 @@ pub(crate) struct Cache {
     sharing: Sharing,
     /// whether users other than this one may write the cache's url records.
     others_write: bool,
+    /// whether the cache had lost its tag when this run opened it, as [`lost_its_tag`] says.
+    pub(crate) lost_tag: bool,
     /// on windows, what removes the cache's files, shared by every clone.
     #[cfg(not(unix))]
     remover: Arc<Remover>,
@@ -923,9 +927,9 @@ impl Cache {
         }
         #[cfg(not(unix))]
         fs::create_dir_all(&root)?;
-        adoptable(&root)?;
+        let found = adoptable(&root)?;
         let sharing = Sharing::of(&root);
-        if tag(&root, write)? {
+        if tag(&root, found, write)? {
             sharing.share_file(&root.join("CACHEDIR.TAG"));
             #[cfg(target_os = "macos")]
             sharing.share_file(&root.join(NEVER_INDEX));
@@ -936,6 +940,7 @@ impl Cache {
         Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             others_write: others_write(&root),
+            lost_tag: found == Tag::Lost,
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
@@ -963,7 +968,7 @@ impl Cache {
             Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
             _ => {}
         }
-        adoptable(&root)?;
+        let found = adoptable(&root)?;
         for folder in FOLDERS {
             let path = root.join(folder);
             match fs::symlink_metadata(&path) {
@@ -976,6 +981,7 @@ impl Cache {
         Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             others_write: others_write(&root),
+            lost_tag: found == Tag::Lost,
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
@@ -2149,12 +2155,13 @@ pub(crate) mod tests {
         let (_dir, cache) = cache();
         let tag = cache.root.join("CACHEDIR.TAG");
         let denied = || io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
-        super::tag(&cache.root, |_, _| {
+        let found = super::adoptable(&cache.root).unwrap();
+        super::tag(&cache.root, found, |_, _| {
             panic!("a tag that is there is not written again")
         })
         .unwrap();
         fs::remove_file(&tag).unwrap();
-        super::tag(&cache.root, |path, bytes| {
+        super::tag(&cache.root, Tag::None, |path, bytes| {
             // the other run's tag lands first, and this run's write is refused
             fs::write(path, bytes)?;
             Err(denied())
@@ -2162,7 +2169,7 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(fs::read_to_string(&tag).unwrap(), TAG);
         fs::remove_file(&tag).unwrap();
-        let refused = super::tag(&cache.root, |_, _| Err(denied())).unwrap_err();
+        let refused = super::tag(&cache.root, Tag::None, |_, _| Err(denied())).unwrap_err();
         assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
         assert!(!tag.exists());
     }
@@ -2345,7 +2352,7 @@ pub(crate) mod tests {
         assert!(absent(&root));
         assert_eq!(entries(&root), before);
         Cache::open(root.clone()).unwrap();
-        assert!(tagged(&root));
+        assert!(is_cache(&root));
         assert!(state.join("speeds.json").is_file());
         #[cfg(unix)]
         {
@@ -2394,12 +2401,12 @@ pub(crate) mod tests {
             fs::create_dir(stopped.path().join(folder)).unwrap();
         }
         for root in [cache.root.clone(), stopped.path().to_path_buf()] {
-            assert!(lost_tag(&root), "{}", root.display());
-            Cache::unopened(root.clone()).unwrap();
+            let read = Cache::unopened(root.clone()).unwrap();
+            assert!(read.lost_tag, "{}", root.display());
             assert!(!root.join("CACHEDIR.TAG").exists(), "{}", root.display());
-            Cache::open(root.clone()).unwrap();
+            assert!(Cache::open(root.clone()).unwrap().lost_tag);
             assert_eq!(fs::read_to_string(root.join("CACHEDIR.TAG")).unwrap(), TAG);
-            assert!(!lost_tag(&root), "{}", root.display());
+            assert!(!Cache::open(root.clone()).unwrap().lost_tag);
         }
         let scratch = tempfile::tempdir().unwrap();
         for file in ["tmp/notes.txt", "objects/pack1"] {
@@ -2407,7 +2414,6 @@ pub(crate) mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, b"mine").unwrap();
         }
-        assert!(!lost_tag(scratch.path()));
         let refusals = [
             Cache::open(scratch.path().to_path_buf()).unwrap_err(),
             Cache::unopened(scratch.path().to_path_buf()).unwrap_err(),

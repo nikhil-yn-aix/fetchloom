@@ -14,6 +14,48 @@ const NOTES: &[u8] = b"measured on the gaspe peninsula\n";
 #[cfg(unix)]
 const SHARED: &str = "help: the cache is read-only for you, as a shared cache may be: set FETCHLOOM_CACHE to a folder you may write to, or ask whoever keeps the shared cache to add what you need";
 
+/// a run reads the cache's tag once, however many of its steps ask whether the folder is the
+/// cache: one that opens the cache to place a file, one that only reads it, and the first.
+#[test]
+fn a_run_reads_the_caches_tag_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("src")?;
+    fs::write(source.join("a.csv"), b"a\n")?;
+    let traces = sandbox.folder("traces")?;
+    let placed = sandbox.work().join("data").join("src").join("a.csv");
+    for (run, args) in [
+        &["add", "../src"][..],
+        &["sync"],
+        &["status"],
+        &["sync", "--dry-run"],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if run == 1 {
+            crate::support::delete(&placed)?;
+        }
+        let trace = traces.join(format!("{run}.json"));
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_TRACE", &trace)
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+        let events: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&trace)?)?;
+        let reads = events
+            .iter()
+            .filter(|event| event["ph"] == "B" && event["name"] == "read_tag")
+            .count();
+        assert_eq!(reads, 1, "{args:?}");
+    }
+    Ok(())
+}
+
 /// one line counts the projects, so ten long paths never fill the screen.
 #[test]
 fn many_projects_are_counted_and_named_with_v() -> Result {

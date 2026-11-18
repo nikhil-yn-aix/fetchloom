@@ -673,7 +673,7 @@ fn moved_by_variable(error: Error, err: &std::io::Error, root: &std::path::Path)
 
 /// refuses the cache at `root` when a file stands where it or a folder on the way to it must be.
 fn blocked(root: &std::path::Path) -> Result<(), Error> {
-    match crate::cache::in_the_way(root) {
+    match crate::error::file_in_the_way(root) {
         Some(why) => Err(moved_by_variable(
             Error::new(
                 Kind::LocalIo,
@@ -698,7 +698,6 @@ fn open_unheld() -> Result<Cache, Error> {
         .help("run fetchloom as the cache's owner, as `docker run --user $(id -u):$(id -g)` runs a container as you, or give root a cache of its own with FETCHLOOM_CACHE"));
     }
     let existed = root.is_dir();
-    let untagged = crate::cache::lost_tag(&root);
     let cache = Cache::open(root.clone()).map_err(|err| {
         let error = Error::io(
             format_args!("could not open the cache at {}", root.display()),
@@ -711,7 +710,7 @@ fn open_unheld() -> Result<Cache, Error> {
         }
         moved_by_variable(error, &err, &root)
     })?;
-    if untagged {
+    if cache.lost_tag {
         tell_untagged(&root, true);
     }
     Ok(cache)
@@ -736,7 +735,7 @@ fn peek_cache() -> Result<Cache, Error> {
     if let Some((output, _)) = WAITS.get() {
         tell_exposed(output, cache.root());
     }
-    if crate::cache::lost_tag(cache.root()) {
+    if cache.lost_tag {
         tell_untagged(cache.root(), false);
     }
     Ok(cache)

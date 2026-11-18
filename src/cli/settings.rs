@@ -184,7 +184,7 @@ fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Vec<Stops> {
             Kind::Usage,
             format!("cache cannot take the folder {}: {why}", folder.display()),
         );
-        let error = if folder.is_dir() && crate::cache::in_the_way(&folder).is_none() {
+        let error = if folder.is_dir() && crate::error::file_in_the_way(&folder).is_none() {
             let inside = folder.join("fetchloom-cache");
             error.help(format!(
                 "choose an empty folder or a new one, as in `fetchloom settings set cache {}`",
