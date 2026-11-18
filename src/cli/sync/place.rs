@@ -3279,14 +3279,11 @@ pub(crate) fn authored(state: &State) -> HashSet<&str> {
 /// output: one the output never takes, as its capture leaves it out, or one of an output dropped
 /// here, its files the author's still.
 pub(crate) fn passed_over(manifest: &Manifest, survey: &Survey, path: &str) -> bool {
-    manifest.datasets.values().any(|entry| {
-        let Some(inside) = entry
-            .at
-            .as_deref()
-            .and_then(|at| path.strip_prefix(at)?.strip_prefix('/'))
-        else {
-            return false;
-        };
+    let Some((name, at)) = manifest.output_holding(path) else {
+        return false;
+    };
+    let entry = &manifest.datasets[name];
+    path.get(at.len() + 1..).is_some_and(|inside| {
         !entry.place
             || entry
                 .source
@@ -3384,7 +3381,7 @@ pub(crate) fn changed_outputs(
             continue;
         };
         if !wanted.contains(path.as_str())
-            && super::disk::is_inside(path, &output.at)
+            && manifest.output_holding(path).map(|(name, _)| name) == Some(placed.dataset.as_str())
             && survey
                 .disk
                 .get(path)

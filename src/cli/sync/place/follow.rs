@@ -144,12 +144,7 @@ fn outputs_holding<'m>(
 ) -> Option<BTreeSet<(&'m str, &'m str)>> {
     paths
         .iter()
-        .map(|path| {
-            manifest.datasets.iter().find_map(|(name, entry)| {
-                let at = entry.at.as_deref()?;
-                is_inside(path, at).then_some((name.as_str(), at))
-            })
-        })
+        .map(|path| manifest.output_holding(path))
         .collect()
 }
 
