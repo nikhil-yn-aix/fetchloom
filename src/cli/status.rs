@@ -19,7 +19,7 @@ use crate::plan;
 use crate::project::lock::archives;
 use crate::project::lock::{Drift, Lock, LockedFile, Waiting};
 use crate::project::manifest::{self, Manifest};
-use crate::project::{Project, native};
+use crate::project::{Project, git, native};
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
@@ -43,6 +43,10 @@ pub(super) struct Status {
     edited: Vec<String>,
     /// files fetchloom did not place at paths the lock places, with other bytes than it pins.
     untracked: Vec<String>,
+    /// those of `untracked` in outputs' folders that git tracks: git's own copies, as in a clone
+    /// of a project whose author pinned a file again without committing it.
+    #[serde(skip)]
+    committed: HashSet<String>,
     /// files fetchloom did not place that hold the pinned bytes, as in a copy of the project: no
     /// difference, since `sync` records them as placed.
     adoptable: Vec<String>,
@@ -801,7 +805,35 @@ fn check(
     drop(planned);
     status.changed_outputs =
         changed_outputs(&status, (&manifest, &lock), &project.root, &survey.state);
+    status.committed = committed(&project.root, &manifest, &status.untracked);
     Ok((status, manifest, lock_text))
+}
+
+/// the files of `untracked` in outputs' folders that git tracks: one git run for each such folder,
+/// and none without such a file, a repository or git.
+fn committed(root: &std::path::Path, manifest: &Manifest, untracked: &[String]) -> HashSet<String> {
+    let folders: Vec<&str> = manifest
+        .datasets
+        .values()
+        .filter_map(|entry| entry.at.as_deref())
+        .filter(|at| untracked.iter().any(|path| disk::is_inside(path, at)))
+        .collect();
+    if folders.is_empty() || Project::repository(root).is_none() {
+        return HashSet::new();
+    }
+    let Some(git) = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), root)) else {
+        return HashSet::new();
+    };
+    let tracked: HashSet<String> = folders
+        .into_iter()
+        .filter_map(|at| git::tracked(&git, root, at))
+        .flatten()
+        .collect();
+    untracked
+        .iter()
+        .filter(|path| tracked.contains(*path))
+        .cloned()
+        .collect()
 }
 
 /// the folder of each output of `manifest`, by name, as a command run here names it.
@@ -1195,25 +1227,34 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 
 impl Status {
     /// each kind of file difference with its verb and what follows each path, if anything.
-    fn lists(&self) -> [(&'static str, &Vec<String>, Option<String>); 7] {
+    fn lists(&self) -> [(&'static str, Vec<&String>, Option<String>); 8] {
+        let (committed, untracked) = self
+            .untracked
+            .iter()
+            .partition(|path| self.committed.contains(*path));
         [
-            ("Missing", &self.missing, None),
-            ("Edited", &self.edited, None),
+            ("Missing", self.missing.iter().collect(), None),
+            ("Edited", self.edited.iter().collect(), None),
             (
                 "Untracked",
-                &self.untracked,
+                untracked,
                 Some("holds other bytes than data.lock pins".to_owned()),
             ),
             (
+                "Committed",
+                committed,
+                Some("git's copy holds other bytes than data.lock pins".to_owned()),
+            ),
+            (
                 "Unreadable",
-                &self.unreadable,
+                self.unreadable.iter().collect(),
                 Some("this account cannot read it, so what it holds is unknown".to_owned()),
             ),
-            ("Outdated", &self.outdated, None),
-            ("Extra", &self.extra, None),
+            ("Outdated", self.outdated.iter().collect(), None),
+            ("Extra", self.extra.iter().collect(), None),
             (
                 "Extra",
-                &self.unneeded,
+                self.unneeded.iter().collect(),
                 Some(format!(
                     "fetchloom placed it and no dataset needs it now, so {} removes it",
                     self.a_sync()
@@ -1468,7 +1509,7 @@ fn list(output: &Output, status: &Status) {
     for (verb, paths, said) in status.lists() {
         let mut rows: Vec<(String, u64)> = Vec::new();
         let mut folders: HashMap<&str, usize> = HashMap::new();
-        for path in paths.iter().filter(|path| !retiring.contains(path)) {
+        for path in paths.into_iter().filter(|path| !retiring.contains(path)) {
             if let Some(folder) = status.gone.get(path).filter(|_| shown.is_some()) {
                 // a folder that held one file is named by that file
                 let at = *folders.entry(folder).or_insert_with(|| {

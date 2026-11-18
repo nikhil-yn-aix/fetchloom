@@ -1018,6 +1018,46 @@ fn a_clone_asks_git_before_it_marks_an_outputs_folder() -> Result {
     Ok(())
 }
 
+/// m4: a teammate's clone holds git's copy of an output's file the author pinned again without
+/// committing it: status names it as git's copy, not as a file nothing tracks.
+#[test]
+fn status_names_gits_copy_of_an_outputs_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    write_all(&sandbox, &[("results/table1.csv", "a,b\n1,2\n")])?;
+    crate::merge::ok(&sandbox, &["add", "-A"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "tables"])?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    write_all(&sandbox, &[("results/table1.csv", "a,b\n1,2\n3,4\n")])?;
+    ok(&sandbox.run(&["add", "results", "--as", "results", "--yes"])?)?;
+    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "pinned"])?;
+    let teammate = sandbox.folder("teammate")?;
+    let into = teammate.display().to_string();
+    let cloned = crate::merge::git(&sandbox, &sandbox.work(), &["clone", "-q", ".", &into])?
+        .ok_or("git went away")?;
+    assert!(cloned.status.success(), "{}", text(&cloned.stderr)?);
+    let status = sandbox.command_in(&teammate, &["status"]).output()?;
+    assert_eq!(
+        text(&status.stdout)?,
+        "  Committed results/table1.csv · git's copy holds other bytes than data.lock pins\n",
+        "{}",
+        text(&status.stderr)?
+    );
+    // once git lets go of it, it is a file nothing tracks
+    let args = ["rm", "-q", "--cached", "results/table1.csv"];
+    let untracked = crate::merge::git(&sandbox, &teammate, &args)?.ok_or("git went away")?;
+    assert!(untracked.status.success(), "{}", text(&untracked.stderr)?);
+    let status = sandbox.command_in(&teammate, &["status"]).output()?;
+    assert_eq!(
+        text(&status.stdout)?,
+        "  Untracked results/table1.csv · holds other bytes than data.lock pins\n"
+    );
+    Ok(())
+}
+
 /// n8: a pipeline that deletes its output's folder before it writes it again, as `rm -rf` before
 /// a rerun does, gets the folder's .gitignore back from the next sync, as it was, with no line:
 /// the add said it once for the folder, and neither the sync nor its dry run says it again.
