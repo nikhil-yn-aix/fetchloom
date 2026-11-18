@@ -278,10 +278,7 @@ fn warn_in_git(output: &Output, root: &Path, (start, shown): (&Path, &str)) {
     let Some(inside) = slashed(&top) else {
         return;
     };
-    let Some(known) = std::env::var_os("PATH")
-        .and_then(|path| crate::project::git::find(Some(&path), &top))
-        .and_then(|git| crate::project::git::known(&git, &top, &[&inside]))
-    else {
+    let Some(known) = crate::project::git::known(&top, &[&inside]) else {
         return;
     };
     // .gitignore beside data.toml, or at the top for a folder outside the project

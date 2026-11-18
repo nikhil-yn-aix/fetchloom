@@ -1073,10 +1073,7 @@ impl Project {
     /// run of it, which only a refusal makes.
     pub(crate) fn cloned_link(&self, path: &str, error: Error) -> Error {
         let tracked = Project::repository(&self.root).is_some()
-            && std::env::var_os("PATH")
-                .and_then(|search| git::find(Some(&search), &self.root))
-                .and_then(|program| git::tracked(&program, &self.root, path))
-                .is_some_and(|tracked| tracked.contains(path));
+            && git::tracked(&self.root, path).is_some_and(|tracked| tracked.contains(path));
         if !tracked {
             return error;
         }

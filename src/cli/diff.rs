@@ -144,15 +144,13 @@ pub(super) fn run(context: &Arc<Context>, args: args::Diff) -> Result<Report, Er
 fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
     let project = super::project::find(context)?;
     let root = &project.root;
-    let git = std::env::var_os("PATH")
-        .and_then(|path| git::find(Some(&path), root))
-        .ok_or_else(|| {
-            Error::new(
-                Kind::Usage,
-                "fetchloom diff reads data.lock's history from git, and git is not on PATH",
-            )
-            .help("install git, or add the folder that holds it to PATH")
-        })?;
+    let git = git::on_path(root).ok_or_else(|| {
+        Error::new(
+            Kind::Usage,
+            "fetchloom diff reads data.lock's history from git, and git is not on PATH",
+        )
+        .help("install git, or add the folder that holds it to PATH")
+    })?;
     let from = args.from.as_deref().unwrap_or("HEAD");
     let from_commit = commit(&git, root, from)?;
     let to_commit = match args.to.as_deref() {

@@ -451,10 +451,7 @@ fn warn_unnamed(output: &Output, project: &Project, lock: Option<&str>) {
         return;
     }
     unnamed.sort();
-    let tracked = std::env::var_os("PATH")
-        .and_then(|path| crate::project::git::find(Some(&path), &project.root))
-        .and_then(|git| crate::project::git::tracked(&git, &project.root, lists::FOLDER))
-        .unwrap_or_default();
+    let tracked = crate::project::git::tracked(&project.root, lists::FOLDER).unwrap_or_default();
     let (in_git, loose): (Vec<String>, Vec<String>) =
         unnamed.into_iter().partition(|part| tracked.contains(part));
     for (parts, is_tracked) in [(in_git, true), (loose, false)] {
@@ -817,12 +814,9 @@ fn committed(root: &std::path::Path, manifest: &Manifest, untracked: &[String]) 
     if folders.is_empty() || Project::repository(root).is_none() {
         return HashSet::new();
     }
-    let Some(git) = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), root)) else {
-        return HashSet::new();
-    };
     let tracked: HashSet<String> = folders
         .into_iter()
-        .filter_map(|at| git::tracked(&git, root, at))
+        .filter_map(|at| git::tracked(root, at))
         .flatten()
         .collect();
     untracked

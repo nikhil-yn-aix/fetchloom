@@ -35,6 +35,11 @@ const REPOSITORY_VARIABLES: [&str; 15] = [
     "GIT_COMMON_DIR",
 ];
 
+/// git as [`find`] finds it on this run's PATH, outside the project at `project`.
+pub(crate) fn on_path(project: &Path) -> Option<PathBuf> {
+    find(std::env::var_os("PATH").as_deref(), project)
+}
+
 /// git, as the first absolute folder on `path` that holds it outside `project`: a cloned
 /// repository could have put one inside, in a folder PATH names.
 pub(crate) fn find(path: Option<&OsStr>, project: &Path) -> Option<PathBuf> {
@@ -305,11 +310,11 @@ fn is_object(name: &str) -> bool {
 }
 
 /// the files git has, tracked or staged, below `folder` in the work tree at `root`, by their paths
-/// from `root`, the folder taken as written, never as a pattern. it reads only git's index. none
-/// when git cannot tell, as outside a repository.
-pub(crate) fn tracked(git: &Path, root: &Path, folder: &str) -> Option<HashSet<String>> {
+/// from `root`, the folder taken as written, never as a pattern. it reads only git's index, with
+/// the git [`on_path`] finds. none when there is none or it cannot tell, as outside a repository.
+pub(crate) fn tracked(root: &Path, folder: &str) -> Option<HashSet<String>> {
     let listed = run(
-        git,
+        &on_path(root)?,
         root,
         &[
             "--literal-pathspecs",
@@ -338,17 +343,14 @@ const HOLDERS: [&str; 3] = [".gitkeep", ".keep", ".gitignore"];
 /// repository, no git and no answer are no.
 pub(crate) fn keeps(root: &Path, folder: &str) -> bool {
     super::Project::repository(root).is_some()
-        && std::env::var_os("PATH")
-            .and_then(|path| find(Some(&path), root))
-            .and_then(|program| tracked(&program, root, folder))
-            .is_some_and(|tracked| {
-                tracked.iter().any(|path| {
-                    let name = path
-                        .rsplit_once('/')
-                        .map_or(path.as_str(), |(_, name)| name);
-                    !HOLDERS.contains(&name)
-                })
+        && tracked(root, folder).is_some_and(|tracked| {
+            tracked.iter().any(|path| {
+                let name = path
+                    .rsplit_once('/')
+                    .map_or(path.as_str(), |(_, name)| name);
+                !HOLDERS.contains(&name)
             })
+        })
 }
 
 /// what git knows of the files below some paths of a work tree, by their paths from its root
@@ -363,8 +365,9 @@ pub(crate) struct Known {
 }
 
 /// what git knows of the files below `paths` in the work tree at `root`, each path taken as
-/// written, never as a pattern, from its index and ignore rules. none when git cannot tell.
-pub(crate) fn known(git: &Path, root: &Path, paths: &[&str]) -> Option<Known> {
+/// written, never as a pattern, from its index and ignore rules, as the git [`on_path`] finds
+/// reads them. none when there is none or it cannot tell.
+pub(crate) fn known(root: &Path, paths: &[&str]) -> Option<Known> {
     let specs: Vec<String> = paths.iter().map(|path| format!("./{path}")).collect();
     let mut arguments = vec![
         "--literal-pathspecs",
@@ -377,7 +380,7 @@ pub(crate) fn known(git: &Path, root: &Path, paths: &[&str]) -> Option<Known> {
         "--",
     ];
     arguments.extend(specs.iter().map(String::as_str));
-    let listed = run(git, root, &arguments).ok()?;
+    let listed = run(&on_path(root)?, root, &arguments).ok()?;
     let mut known = Known::default();
     // each entry is `<tag> <path>`, where `?` tags a file git does not have
     for entry in listed.split(|byte| *byte == 0) {
@@ -712,8 +715,8 @@ mod tests {
             return;
         }
         let one = HashSet::from(["run1/a.csv".to_owned()]);
-        assert_eq!(tracked(&git, at, "run1"), Some(one));
-        assert_eq!(tracked(&git, at, "run*"), Some(HashSet::new()));
+        assert_eq!(tracked(at, "run1"), Some(one));
+        assert_eq!(tracked(at, "run*"), Some(HashSet::new()));
     }
 
     /// a hook or `git rebase --exec` hands its own repository down in `GIT_DIR` and its kin; the

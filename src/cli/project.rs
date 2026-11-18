@@ -122,10 +122,7 @@ pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -
     if parts.is_empty() {
         return Vec::new();
     }
-    let Some(tracked) = std::env::var_os("PATH")
-        .and_then(|path| git::find(Some(&path), root))
-        .and_then(|program| git::tracked(&program, root, lock::lists::FOLDER))
-    else {
+    let Some(tracked) = git::tracked(root, lock::lists::FOLDER) else {
         return Vec::new();
     };
     parts.sort_unstable();
@@ -156,10 +153,7 @@ pub(super) fn names_lists(project: &Project) -> bool {
 
 /// whether git has lists in data.lock.d, which is gone from the project at `root`.
 fn lists_gone(root: &Path) -> bool {
-    std::env::var_os("PATH")
-        .and_then(|path| git::find(Some(&path), root))
-        .and_then(|program| git::tracked(&program, root, lock::lists::FOLDER))
-        .is_some_and(|tracked| !tracked.is_empty())
+    git::tracked(root, lock::lists::FOLDER).is_some_and(|tracked| !tracked.is_empty())
 }
 
 /// `sync`, failing with `--strict` when the data asked for is not ready once it is done.

@@ -57,7 +57,7 @@ pub(super) fn merge(
     let Some(conflicted) = read(project)? else {
         return Ok(None);
     };
-    let program = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &project.root));
+    let program = git::on_path(&project.root);
     if conflicted.manifest_sides.is_none() && conflicted.lock_sides.is_none() {
         if choices.is_empty() {
             return Ok(None);
